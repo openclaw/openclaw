@@ -650,9 +650,7 @@ struct OpenClawProMark: View {
     var shadowRadius: CGFloat = 10
 
     var body: some View {
-        Image("OpenClawIcon")
-            .resizable()
-            .scaledToFit()
+        OpenClawMascotView()
             .frame(width: self.size, height: self.size)
             .shadow(color: OpenClawBrand.accent.opacity(0.18), radius: self.shadowRadius, y: self.shadowRadius / 3)
             .accessibilityLabel("OpenClaw")

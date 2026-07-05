@@ -749,6 +749,26 @@ describe("slackPlugin outbound", () => {
     expect(result).toEqual({ channel: "slack", messageId: "m-text" });
   });
 
+  it("forwards agent identity through the registered text sender", async () => {
+    const sendText = requireSlackSendText();
+
+    await sendText({
+      cfg,
+      to: "C123",
+      text: "heartbeat alert",
+      accountId: "default",
+      identity: { name: "Pulse", emoji: "📟" },
+    });
+
+    expectRecordFields(requireMockCallArg(sendMessageSlackMock, 0, 2), "send options", {
+      identity: {
+        username: "Pulse",
+        iconUrl: undefined,
+        iconEmoji: "📟",
+      },
+    });
+  });
+
   it("forwards partial-send progress through the registered Slack sender", async () => {
     const sendSlack = vi.fn(async (...args: unknown[]) => {
       const options = args[2] as {

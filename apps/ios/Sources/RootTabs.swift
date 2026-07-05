@@ -496,6 +496,10 @@ struct RootTabs: View {
                 headerTitle: "Cron Jobs",
                 openSettings: { self.selectSidebarDestination(.gateway) })
                 .id(self.selectedSidebarDestination.id)
+        case .terminal:
+            TerminalHubScreen(
+                headerLeadingAction: self.sidebarHeaderLeadingAction,
+                gatewayAction: { self.selectSidebarDestination(.gateway) })
         case .docs:
             OpenClawDocsScreen(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,

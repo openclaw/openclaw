@@ -169,15 +169,28 @@ export function isFollowupRunAborted(
 }
 
 const enqueuedFollowupLifecycles = new WeakSet<QueuedReplyLifecycle>();
+const retiredFollowupCancellationLifecycles = new WeakSet<QueuedReplyLifecycle>();
 const completedFollowupLifecycles = new WeakSet<QueuedReplyLifecycle>();
 
-export function markFollowupRunEnqueued(run: Pick<FollowupRun, "queuedLifecycle">): void {
+export function markFollowupRunEnqueued(run: Pick<FollowupRun, "queuedLifecycle">): boolean {
   const lifecycle = run.queuedLifecycle;
   if (!lifecycle || enqueuedFollowupLifecycles.has(lifecycle)) {
-    return;
+    return true;
+  }
+  if (lifecycle.onEnqueued?.() === false) {
+    return false;
   }
   enqueuedFollowupLifecycles.add(lifecycle);
-  lifecycle.onEnqueued?.();
+  return true;
+}
+
+export function retireFollowupRunCancellation(run: Pick<FollowupRun, "queuedLifecycle">): void {
+  const lifecycle = run.queuedLifecycle;
+  if (!lifecycle || retiredFollowupCancellationLifecycles.has(lifecycle)) {
+    return;
+  }
+  retiredFollowupCancellationLifecycles.add(lifecycle);
+  lifecycle.onCancellationRetired?.();
 }
 
 export function completeFollowupRunLifecycle(run: Pick<FollowupRun, "queuedLifecycle">): void {

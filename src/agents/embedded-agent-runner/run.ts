@@ -3620,6 +3620,7 @@ async function runEmbeddedAgentInternal(
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
             assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
+            assistantTranscriptOwned: attempt.assistantTranscriptOwned,
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
             currentAssistant: currentAttemptAssistant ?? null,

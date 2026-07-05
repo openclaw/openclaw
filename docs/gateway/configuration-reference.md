@@ -6,42 +6,31 @@ read_when:
   - You are validating channel, model, gateway, or tool config blocks
 ---
 
-Core config reference for `~/.openclaw/openclaw.json`. For a task-oriented overview, see [Configuration](/gateway/configuration).
+Field-level reference for `~/.openclaw/openclaw.json`: keys, defaults, and links to deeper subsystem pages. For task-oriented setup guidance, see [Configuration](/gateway/configuration). Channel- and plugin-owned command catalogs and deep memory/QMD knobs live on their own pages, not here.
 
-Covers the main OpenClaw config surfaces and links out when a subsystem has its own deeper reference. Channel- and plugin-owned command catalogs and deep memory/QMD knobs live on their own pages rather than on this one.
+Config format is **JSON5** (comments + trailing commas allowed). All fields are optional; OpenClaw uses safe defaults when omitted.
 
-Code truth:
+Code truth beats this page:
 
-- `openclaw config schema` prints the live JSON Schema used for validation and Control UI, with bundled/plugin/channel metadata merged in when available
-- `config.schema.lookup` returns one path-scoped schema node for drill-down tooling
-- `pnpm config:docs:check` / `pnpm config:docs:gen` validate the config-doc baseline hash against the current schema surface
-
-Agent lookup path: use the `gateway` tool action `config.schema.lookup` for
-exact field-level docs and constraints before edits. Use
-[Configuration](/gateway/configuration) for task-oriented guidance and this page
-for the broader field map, defaults, and links to subsystem references.
+- `openclaw config schema` prints the live JSON Schema used for validation and Control UI, with bundled/plugin/channel metadata merged in.
+- Agents should call the `gateway` tool action `config.schema.lookup` for one exact path-scoped schema node before editing config.
+- `pnpm config:docs:check` / `pnpm config:docs:gen` validate this doc's baseline hash against the current schema surface.
 
 Dedicated deep references:
 
-- [Memory configuration reference](/reference/memory-config) for `agents.defaults.memorySearch.*`, `memory.qmd.*`, `memory.citations`, and dreaming config under `plugins.entries.memory-core.config.dreaming`
-- [Slash commands](/tools/slash-commands) for the current built-in + bundled command catalog
-- owning channel/plugin pages for channel-specific command surfaces
-
-Config format is **JSON5** (comments + trailing commas allowed). All fields are optional - OpenClaw uses safe defaults when omitted.
+- [Memory configuration reference](/reference/memory-config) for `agents.defaults.memorySearch.*`, `memory.qmd.*`, `memory.citations`, and dreaming config under `plugins.entries.memory-core.config.dreaming`.
+- [Slash commands](/tools/slash-commands) for the current built-in + bundled command catalog.
+- Owning channel/plugin pages for channel-specific command surfaces.
 
 ---
 
 ## Channels
 
-Per-channel config keys moved to a dedicated page - see
-[Configuration - channels](/gateway/config-channels) for `channels.*`,
-including Slack, Discord, Telegram, WhatsApp, Matrix, iMessage, and other
-bundled channels (auth, access control, multi-account, mention gating).
+Per-channel config keys live in [Configuration - channels](/gateway/config-channels): `channels.*` for Slack, Discord, Telegram, WhatsApp, Matrix, iMessage, and other bundled channels (auth, access control, multi-account, mention gating).
 
 ## Agent defaults, multi-agent, sessions, and messages
 
-Moved to a dedicated page - see
-[Configuration - agents](/gateway/config-agents) for:
+See [Configuration - agents](/gateway/config-agents) for:
 
 - `agents.defaults.*` (workspace, model, thinking, heartbeat, memory, media, skills, sandbox)
 - `multiAgent.*` (multi-agent routing and bindings)
@@ -57,7 +46,7 @@ Moved to a dedicated page - see
 ## Tools and custom providers
 
 Tool policy, experimental toggles, provider-backed tool config, and custom
-provider / base-URL setup moved to a dedicated page - see
+provider / base-URL setup live in
 [Configuration - tools and custom providers](/gateway/config-tools).
 
 ## Models
@@ -231,6 +220,8 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
   installs do not require it.
 - `entries.<skillKey>.enabled: false` disables a skill even if bundled/installed.
 - `entries.<skillKey>.apiKey`: convenience for skills declaring a primary env var (plaintext string or SecretRef object).
+- `limits.maxCandidatesPerRoot`, `limits.maxSkillsLoadedPerSource`, `limits.maxSkillsInPrompt`, `limits.maxSkillsPromptChars`, `limits.maxSkillFileBytes`: bound skill discovery and the model-facing skills prompt.
+- Skill Workshop autonomy/approval settings (`workshop.autonomous.enabled`, `workshop.approvalPolicy`, `workshop.maxPending`, `workshop.maxSkillBytes`) are documented in [Skills configuration](/tools/skills-config).
 
 ---
 
@@ -715,7 +706,7 @@ See [Multiple Gateways](/gateway/multiple-gateways).
   - `"restart"`: always restart the gateway process on config change.
   - `"hot"`: apply changes in-process without restarting.
   - `"hybrid"` (default): try hot reload first; fall back to restart if required.
-- `debounceMs`: debounce window in ms before config changes are applied (non-negative integer).
+- `debounceMs`: debounce window in ms before config changes are applied (non-negative integer; default: `300`).
 - `deferralTimeoutMs`: optional maximum time in ms to wait for in-flight operations before forcing a restart or channel hot reload. Omit it to use the default bounded wait (`300000`); set `0` to wait indefinitely and log periodic still-pending warnings.
 
 ---
@@ -872,11 +863,12 @@ Validation and safety notes:
 }
 ```
 
-- `minimal` (default when the bundled `bonjour` plugin is enabled): omit `cliPath` + `sshPort` from TXT records.
+- `minimal` (default): omit `cliPath` + `sshPort` from TXT records.
 - `full`: include `cliPath` + `sshPort`; LAN multicast advertising still requires the bundled `bonjour` plugin to be enabled.
 - `off`: suppress LAN multicast advertising without changing plugin enablement.
 - The bundled `bonjour` plugin auto-starts on macOS hosts and is opt-in on Linux, Windows, and containerized Gateway deployments.
 - Hostname defaults to the system hostname when it is a valid DNS label, falling back to `openclaw`. Override with `OPENCLAW_MDNS_HOSTNAME`.
+- `OPENCLAW_DISABLE_BONJOUR=1` disables mDNS advertising outright, overriding `discovery.mdns.mode`.
 
 ### Wide-area (DNS-SD)
 
@@ -1142,7 +1134,7 @@ Notes:
 
 - `enabled`: master toggle for instrumentation output (default: `true`).
 - `flags`: array of flag strings enabling targeted log output (supports wildcards like `"telegram.*"` or `"*"`).
-- `stuckSessionWarnMs`: no-progress age threshold in ms for classifying long-running processing sessions as `session.long_running`, `session.stalled`, or `session.stuck`. Reply, tool, status, block, and ACP progress reset the timer; repeated `session.stuck` diagnostics back off while unchanged.
+- `stuckSessionWarnMs`: no-progress age threshold in ms for classifying long-running processing sessions as `session.long_running`, `session.stalled`, or `session.stuck` (default: `120000`). Reply, tool, status, block, and ACP progress reset the timer; repeated `session.stuck` diagnostics back off while unchanged.
 - `stuckSessionAbortMs`: no-progress age threshold in ms before eligible stalled active work may be abort-drained for recovery. When unset, OpenClaw uses the safer extended embedded-run window of at least 5 minutes and 3x `stuckSessionWarnMs`.
 - `memoryPressureSnapshot`: captures a redacted pre-OOM stability snapshot when memory pressure reaches `critical` (default: `false`). Set to `true` to add the stability bundle file scan/write while keeping normal memory pressure events.
 - `otel.enabled`: enables the OpenTelemetry export pipeline (default: `false`). For the full configuration, signal catalog, and privacy model, see [OpenTelemetry export](/gateway/opentelemetry).
@@ -1183,9 +1175,7 @@ Notes:
 }
 ```
 
-- `channel`: release channel - `"stable"`, `"extended-stable"`, `"beta"`, or
-  `"dev"`. Extended-stable is a package-only, foreground/on-demand channel; it
-  is skipped by startup checks and background auto-update.
+- `channel`: release channel - `"stable"`, `"extended-stable"`, `"beta"`, or `"dev"`. Extended-stable is a package-only, foreground/on-demand channel; it is skipped by startup checks and background auto-update.
 - `checkOnStart`: check for npm updates when the gateway starts (default: `true`).
 - `auto.enabled`: enable background auto-update for package installs (default: `false`).
 - `auto.stableDelayHours`: minimum delay in hours before stable-channel auto-apply (default: `6`; max: `168`).
@@ -1202,6 +1192,7 @@ Notes:
     enabled: true,
     dispatch: { enabled: true },
     backend: "acpx",
+    fallbacks: ["acpx-secondary"],
     defaultAgent: "main",
     allowedAgents: ["main", "ops"],
     maxConcurrentSessions: 10,
@@ -1227,6 +1218,7 @@ Notes:
 - `dispatch.enabled`: independent gate for ACP session turn dispatch (default: `true`). Set `false` to keep ACP commands available while blocking execution.
 - `backend`: default ACP runtime backend id (must match a registered ACP runtime plugin).
   Install the backend plugin first, and if `plugins.allow` is set, include the backend plugin id (for example `acpx`) or the ACP backend will not load.
+- `fallbacks`: ordered list of fallback ACP backend ids tried when the primary backend fails early with a transient-looking error (unavailable, rate-limited, quota exhausted, or overloaded) before it produced any output. Each entry must match a registered ACP runtime plugin backend.
 - `defaultAgent`: fallback ACP target agent id when spawns do not specify an explicit target.
 - `allowedAgents`: allowlist of agent ids permitted for ACP runtime sessions; empty means no additional restriction.
 - `maxConcurrentSessions`: maximum concurrently active ACP sessions.
@@ -1458,16 +1450,16 @@ Split config into multiple files:
 - Array of files: deep-merged in order (later overrides earlier).
 - Sibling keys: merged after includes (override included values).
 - Nested includes: up to 10 levels deep.
-- Paths: resolved relative to the including file, but must stay inside the top-level config directory (`dirname` of `openclaw.json`). Absolute/`../` forms are allowed only when they still resolve inside that boundary. Paths must not contain null bytes and must be strictly shorter than 4096 characters before and after resolution.
+- Paths: resolved relative to the including file, but must stay inside the top-level config directory (`dirname` of `openclaw.json`). Absolute/`../` forms are allowed only when they still resolve inside that boundary. Set `OPENCLAW_INCLUDE_ROOTS` (absolute paths) to allow additional roots outside the config directory.
+- Limits: paths must not contain null bytes and must be strictly shorter than 4096 characters before and after resolution; each included file is capped at 2 MB.
 - OpenClaw-owned writes that change only one top-level section backed by a single-file include write through to that included file. For example, `plugins install` updates `plugins: { $include: "./plugins.json5" }` in `plugins.json5` and leaves `openclaw.json` intact.
 - Root includes, include arrays, and includes with sibling overrides are read-only for OpenClaw-owned writes; those writes fail closed instead of flattening the config.
 - Errors: clear messages for missing files, parse errors, circular includes, invalid path format, and excessive length.
 
 ---
 
-_Related: [Configuration](/gateway/configuration) · [Configuration Examples](/gateway/configuration-examples) · [Doctor](/gateway/doctor)_
-
 ## Related
 
 - [Configuration](/gateway/configuration)
 - [Configuration examples](/gateway/configuration-examples)
+- [Doctor](/gateway/doctor)

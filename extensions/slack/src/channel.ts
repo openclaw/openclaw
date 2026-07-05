@@ -15,11 +15,7 @@ import {
   resolveOutboundSendDep,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
-import {
-  attachChannelToResult,
-  createAttachedChannelResultAdapter,
-  type ChannelOutboundAdapter,
-} from "openclaw/plugin-sdk/channel-send-result";
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
@@ -263,6 +259,25 @@ async function setSlackHeartbeatThreadStatus(params: {
   }
 }
 
+function withSlackSendOverride(params: {
+  deps?: { [channelId: string]: unknown } | null;
+  send: SlackSendFn;
+  tokenOverride?: string;
+}) {
+  return {
+    ...params.deps,
+    slack: async (
+      to: Parameters<SlackSendFn>[0],
+      text: Parameters<SlackSendFn>[1],
+      opts: Parameters<SlackSendFn>[2],
+    ) =>
+      await params.send(to, text, {
+        ...opts,
+        ...(params.tokenOverride ? { token: params.tokenOverride } : {}),
+      }),
+  };
+}
+
 function resolveSlackRouteTarget(raw: string) {
   const target = parseSlackTarget(raw, { defaultKind: "channel" });
   if (!target) {
@@ -495,76 +510,41 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
       ...ctx,
       replyToId: threadTsValue,
       threadId: null,
-      deps: {
-        ...ctx.deps,
-        slack: async (
-          to: Parameters<SlackSendFn>[0],
-          text: Parameters<SlackSendFn>[1],
-          opts: Parameters<SlackSendFn>[2],
-        ) =>
-          await send(to, text, {
-            ...opts,
-            ...(tokenOverride ? { token: tokenOverride } : {}),
-          }),
-      },
+      deps: withSlackSendOverride({ deps: ctx.deps, send, tokenOverride }),
     });
   },
-  ...createAttachedChannelResultAdapter({
-    channel: "slack",
-    sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg, onDeliveryResult }) => {
-      const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
-        cfg,
-        accountId: accountId ?? undefined,
-        deps,
-        replyToId,
-        threadId,
-      });
-      return await send(to, text, {
-        cfg,
-        threadTs: threadTsValue,
-        accountId: accountId ?? undefined,
-        onDeliveryResult: onDeliveryResult
-          ? async (result) => {
-              await onDeliveryResult(attachChannelToResult("slack", result));
-            }
-          : undefined,
-        ...(tokenOverride ? { token: tokenOverride } : {}),
-      });
-    },
-    sendMedia: async ({
-      to,
-      text,
-      mediaUrl,
-      mediaLocalRoots,
-      accountId,
-      deps,
-      replyToId,
-      threadId,
-      cfg,
-      onDeliveryResult,
-    }) => {
-      const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
-        cfg,
-        accountId: accountId ?? undefined,
-        deps,
-        replyToId,
-        threadId,
-      });
-      return await send(to, text, {
-        cfg,
-        mediaUrl,
-        mediaLocalRoots,
-        threadTs: threadTsValue,
-        accountId: accountId ?? undefined,
-        onDeliveryResult: onDeliveryResult
-          ? async (result) => {
-              await onDeliveryResult(attachChannelToResult("slack", result));
-            }
-          : undefined,
-        ...(tokenOverride ? { token: tokenOverride } : {}),
-      });
-    },
-  }),
+  sendText: async (ctx) => {
+    const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
+      cfg: ctx.cfg,
+      accountId: ctx.accountId ?? undefined,
+      deps: ctx.deps,
+      replyToId: ctx.replyToId,
+      threadId: ctx.threadId,
+    });
+    const { slackOutbound } = await loadSlackOutboundAdapterModule();
+    return await slackOutbound.sendText!({
+      ...ctx,
+      replyToId: threadTsValue,
+      threadId: null,
+      deps: withSlackSendOverride({ deps: ctx.deps, send, tokenOverride }),
+    });
+  },
+  sendMedia: async (ctx) => {
+    const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
+      cfg: ctx.cfg,
+      accountId: ctx.accountId ?? undefined,
+      deps: ctx.deps,
+      replyToId: ctx.replyToId,
+      threadId: ctx.threadId,
+    });
+    const { slackOutbound } = await loadSlackOutboundAdapterModule();
+    return await slackOutbound.sendMedia!({
+      ...ctx,
+      replyToId: threadTsValue,
+      threadId: null,
+      deps: withSlackSendOverride({ deps: ctx.deps, send, tokenOverride }),
+    });
+  },
 };
 
 const slackMessageAdapter = createChannelMessageAdapterFromOutbound({

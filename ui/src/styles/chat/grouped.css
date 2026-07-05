@@ -225,15 +225,15 @@ img.chat-avatar {
   word-wrap: break-word;
 }
 
-/* Width-only shell: bubble chrome (border/background/padding) comes from
-   .chat-bubble above. */
+/* Tool messages render flat rows, not bubbles: the shell only constrains
+   width; all bubble chrome (border/background/padding) is reset. */
 .chat-bubble--tool-shell {
   align-self: stretch;
   width: min(100%, 760px);
-}
-
-.chat-bubble--tool-shell:hover {
+  padding: 0;
+  border: 0;
   background: transparent;
+  box-shadow: none;
 }
 
 .chat-bubble.has-copy {
@@ -381,10 +381,6 @@ img.chat-avatar {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
-.chat-bubble--tool-shell:hover {
-  background: transparent;
-}
-
 /* User bubbles have different styling */
 .chat-group.user .chat-bubble {
   background: var(--accent-subtle);
@@ -405,6 +401,8 @@ img.chat-avatar {
 }
 
 :root[data-theme-mode="light"] .chat-bubble--tool-shell {
+  border-color: transparent;
+  background: transparent;
   box-shadow: none;
 }
 

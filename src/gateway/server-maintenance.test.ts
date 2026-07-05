@@ -535,6 +535,52 @@ describe("startGatewayMaintenanceTimers", () => {
     stopMaintenanceTimers(timers);
   });
 
+  it("keeps queued chat dedupe entries past the normal ttl", async () => {
+    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
+    const runId = "queued-chat";
+    deps.chatQueuedTurns.set(runId, {
+      controller: new AbortController(),
+      sessionId: "session-main",
+      sessionKey: "agent:main:main",
+    });
+    deps.dedupe.set(`chat:${runId}`, {
+      ts: now - DEDUPE_TTL_MS - 1,
+      ok: true,
+      payload: { runId, status: "ok" },
+    });
+
+    const timers = startGatewayMaintenanceTimers(deps);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deps.dedupe.has(`chat:${runId}`)).toBe(true);
+    stopMaintenanceTimers(timers);
+  });
+
+  it("keeps queued chat dedupe entries while trimming overflow", async () => {
+    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
+    const runId = "queued-oldest";
+    seedStableDedupeEntries(deps, now);
+    deps.chatQueuedTurns.set(runId, {
+      controller: new AbortController(),
+      sessionId: "session-main",
+      sessionKey: "agent:main:main",
+    });
+    deps.dedupe.set(`chat:${runId}`, {
+      ts: now - 10_000,
+      ok: true,
+      payload: { runId, status: "ok" },
+    });
+    deps.dedupe.set("overflow-newest", { ts: now, ok: true });
+
+    const timers = startGatewayMaintenanceTimers(deps);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deps.dedupe.size).toBe(DEDUPE_MAX);
+    expect(deps.dedupe.has(`chat:${runId}`)).toBe(true);
+    expect(deps.dedupe.has("stable-0")).toBe(false);
+    stopMaintenanceTimers(timers);
+  });
+
   it("evicts dedupe overflow by oldest timestamp even after reinsertion", async () => {
     const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
 

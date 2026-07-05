@@ -497,6 +497,44 @@ describe("inspectPortUsage on Windows", () => {
     );
   });
 
+  it("reports localized Windows listener rows without requiring English state text", async () => {
+    setPlatform("win32");
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const [command] = argv;
+      if (command === getWindowsSystem32ExePath("netstat.exe")) {
+        return {
+          stdout:
+            "  TCP    127.0.0.1:18789    0.0.0.0:0        ABHOEREN       4242\r\n" +
+            "  TCP    [::1]:18789        [::]:0           ABHOEREN       4243\r\n" +
+            "  TCP    127.0.0.1:18789    127.0.0.1:0      ABHOEREN       8999\r\n" +
+            "  TCP    127.0.0.1:18789    127.0.0.1:50123  HERGESTELLT    9000\r\n",
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === getWindowsSystem32ExePath("tasklist.exe")) {
+        return { stdout: "Image Name: node.exe\r\n", stderr: "", code: 0 };
+      }
+      if (command === getWindowsPowerShellExePath()) {
+        return {
+          stdout: "node.exe C:\\openclaw\\dist\\index.js gateway run\r\n",
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const result = await inspectPortUsage(18789);
+
+    expect(result.status).toBe("busy");
+    expect(result.listeners.map((listener) => listener.pid)).toEqual([4242, 4243]);
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+      [getWindowsSystem32ExePath("netstat.exe"), "-ano"],
+      expect.anything(),
+    );
+  });
+
   it("does not match Windows listener ports by substring", async () => {
     setPlatform("win32");
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {

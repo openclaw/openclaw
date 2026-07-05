@@ -4,7 +4,7 @@ import {
   refreshDevicePairSetup,
   type DevicePairSetup,
   type DevicePairSetupState,
-} from "./index.ts";
+} from "./device-pair-setup.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

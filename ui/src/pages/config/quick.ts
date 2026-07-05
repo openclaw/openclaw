@@ -73,6 +73,8 @@ export type QuickSettingsProps = {
   // Security
   security: QuickSettingsSecurity;
   onSecurityConfigure?: () => void;
+  canPairDevice?: boolean;
+  onPairMobile?: () => void;
   onBrowserEnabledToggle?: (enabled: boolean) => void;
   onToolProfileChange?: (profile: string) => void;
 
@@ -601,6 +603,17 @@ function renderSecurityCard(props: QuickSettingsProps) {
               >${deviceAuth ? "Enabled" : "Disabled"}</span
             >
           </span>
+        </div>
+        <div class="qs-row">
+          <span class="qs-row__label">${t("nodes.pairing.title")}</span>
+          <button
+            class="qs-row__value qs-row__value--action"
+            title=${props.canPairDevice ? "" : t("nodes.pairing.adminRequired")}
+            ?disabled=${!props.canPairDevice}
+            @click=${props.onPairMobile}
+          >
+            ${icons.smartphone} ${t("nodes.pairing.button")}
+          </button>
         </div>
       </div>
     </div>

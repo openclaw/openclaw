@@ -343,6 +343,23 @@ openclaw-logs-page {
   border-color: var(--border-strong);
 }
 
+.qs-row__value--action:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.qs-row__value--action svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+}
+
+.qs-row__value--action svg * {
+  stroke: currentColor;
+  fill: none;
+}
+
 .qs-row__value--action:focus-visible {
   outline: none;
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border) 45%);

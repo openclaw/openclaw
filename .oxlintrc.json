@@ -117,6 +117,7 @@
     "unicorn/consistent-date-clone": "error",
     "unicorn/consistent-empty-array-spread": "error",
     "unicorn/consistent-function-scoping": "off",
+    "unicorn/no-array-fill-with-reference-type": "error",
     "unicorn/no-console-spaces": "error",
     "unicorn/no-empty-file": "error",
     "unicorn/no-invalid-fetch-options": "error",
