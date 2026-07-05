@@ -3,6 +3,7 @@ import SwiftUI
 
 struct AboutSettings: View {
     weak var updater: UpdaterProviding?
+    @Environment(\.colorScheme) private var colorScheme
     @State private var iconHover = false
     @AppStorage("autoUpdateEnabled") private var autoCheckEnabled = true
     @State private var didLoadUpdaterState = false
@@ -14,10 +15,16 @@ struct AboutSettings: View {
                     NSWorkspace.shared.open(url)
                 }
             } label: {
+                // Hero treatment from openclaw.ai: coral silhouette glow at 10% of
+                // size, teal glow at 15% plus scale 1.1 on hover.
                 OpenClawMascotView()
                     .frame(width: 160, height: 160)
-                    .shadow(color: self.iconHover ? .accentColor.opacity(0.25) : .clear, radius: 10)
-                    .scaleEffect(self.iconHover ? 1.05 : 1.0)
+                    .shadow(
+                        color: OpenClawMascotView.heroGlowColor(
+                            for: self.colorScheme,
+                            hovering: self.iconHover),
+                        radius: self.iconHover ? 24 : 16)
+                    .scaleEffect(self.iconHover ? 1.1 : 1.0)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("OpenClaw on GitHub")
