@@ -56,7 +56,11 @@ import {
 } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { createCronExitWatchers, type CronExitResult } from "./cron-exit-watchers.js";
+import {
+  createCronExitWatchers,
+  type CronExitResult,
+  type CronExitWatchers,
+} from "./cron-exit-watchers.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronFailureAlert,
@@ -68,6 +72,8 @@ export type GatewayCronState = {
   cronEnabled: boolean;
   reconcileExitWatchers?: () => Promise<void>;
   stopExitWatchers?: () => void;
+  /** Exposed so config reload can transfer in-flight watchers to the rebuilt state. */
+  exitWatchers?: CronExitWatchers;
 };
 
 function formatOnExitRunSummary(exit: CronExitResult): string {
@@ -191,6 +197,8 @@ export function buildGatewayCronService(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  /** Reuse existing exit watchers so in-flight watched commands survive config reload. */
+  existingExitWatchers?: CronExitWatchers;
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
   const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
@@ -746,22 +754,19 @@ export function buildGatewayCronService(params: {
     },
   });
 
-  exitWatchersRef.current = createCronExitWatchers({
-    getProcessSupervisor,
-    persistCompletion: async (jobId) => {
-      await cron.update(jobId, { enabled: false });
-    },
-    fireOnExit: (job, exit) =>
-      fireOnExitJob(job, exit, {
-        run: (jobId, payload) => cron.run(jobId, "force", payload ? { payload } : undefined),
-      }),
-    logger: cronLogger,
-  });
-  const stopCron = cron.stop.bind(cron);
-  cron.stop = () => {
-    stopCron();
-    exitWatchersRef.current?.cancelAll();
-  };
+  exitWatchersRef.current =
+    params.existingExitWatchers ??
+    createCronExitWatchers({
+      getProcessSupervisor,
+      persistCompletion: async (jobId) => {
+        await cron.update(jobId, { enabled: false });
+      },
+      fireOnExit: (job, exit) =>
+        fireOnExitJob(job, exit, {
+          run: (jobId, payload) => cron.run(jobId, "force", payload ? { payload } : undefined),
+        }),
+      logger: cronLogger,
+    });
 
   return {
     cron,
@@ -769,5 +774,6 @@ export function buildGatewayCronService(params: {
     cronEnabled,
     reconcileExitWatchers,
     stopExitWatchers: () => exitWatchersRef.current?.cancelAll(),
+    exitWatchers: exitWatchersRef.current,
   };
 }

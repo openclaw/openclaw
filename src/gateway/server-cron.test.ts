@@ -311,7 +311,7 @@ describe("buildGatewayCronService", () => {
     });
   });
 
-  it("stops on-exit watcher children when the direct cron service stops", async () => {
+  it("stops on-exit watcher children via stopExitWatchers (cron.stop no longer coupled)", async () => {
     vi.stubEnv("OPENCLAW_SKIP_CRON", "0");
     const cancelRun = vi.fn();
     const cancelScope = vi.fn();
@@ -342,7 +342,7 @@ describe("buildGatewayCronService", () => {
 
     try {
       await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1));
-      state.cron.stop();
+      state.stopExitWatchers?.();
       expect(cancelRun).toHaveBeenCalledWith("manual-cancel");
       expect(cancelScope).toHaveBeenCalledWith(`cron-exit:${job.id}`, "manual-cancel");
     } finally {

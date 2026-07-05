@@ -1055,6 +1055,7 @@ export async function startGatewayServer(
       pluginServices: runtimeState.pluginServices,
       postReadySidecars: runtimeState.postReadySidecars,
       cron: runtimeState.cronState.cron,
+      stopExitWatchers: runtimeState.cronState.stopExitWatchers,
       heartbeatRunner: runtimeState.heartbeatRunner,
       updateCheckStop: runtimeState.stopGatewayUpdateCheck,
       stopTaskRegistryMaintenance: stopTaskRegistryMaintenanceOnDemand,

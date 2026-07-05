@@ -466,12 +466,15 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
     if (plan.restartCron) {
       params.onCronRestart?.();
+      // Preserve in-flight exit watchers so a running watched command is not
+      // killed and re-spawned when only the cron scheduler config changed.
+      const existingExitWatchers = state.cronState.exitWatchers;
       state.cronState.cron.stop();
-      state.cronState.stopExitWatchers?.();
       nextState.cronState = buildGatewayCronService({
         cfg: nextConfig,
         deps: params.deps,
         broadcast: params.broadcast,
+        existingExitWatchers,
       });
       startGatewayCronWithLogging({
         cron: nextState.cronState.cron,

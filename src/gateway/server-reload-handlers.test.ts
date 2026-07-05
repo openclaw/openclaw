@@ -248,7 +248,7 @@ afterEach(() => {
 });
 
 describe("gateway hot reload model state", () => {
-  it("stops old cron exit watchers and reconciles rebuilt ones after cron restart", async () => {
+  it("preserves exit watchers and reconciles rebuilt cron after restart-cron reload", async () => {
     const newCron = { start: vi.fn(async () => {}), stop: vi.fn() };
     const newReconcileExitWatchers = vi.fn(async () => {});
     const rebuiltCronState = {
@@ -259,7 +259,7 @@ describe("gateway hot reload model state", () => {
       stopExitWatchers: vi.fn(),
     };
     hoisted.buildGatewayCronService.mockReturnValueOnce(rebuiltCronState);
-    const { applyHotReload, cron, setState, stopExitWatchers } = createReloadHandlersForTest();
+    const { applyHotReload, cron, setState } = createReloadHandlersForTest();
 
     await applyHotReload(
       {
@@ -281,7 +281,6 @@ describe("gateway hot reload model state", () => {
     );
 
     expect(cron.stop).toHaveBeenCalledTimes(1);
-    expect(stopExitWatchers).toHaveBeenCalledTimes(1);
     expect(newCron.start).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(newReconcileExitWatchers).toHaveBeenCalledTimes(1));
     expect(setState).toHaveBeenCalledWith(

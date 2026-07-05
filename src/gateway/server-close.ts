@@ -679,6 +679,7 @@ export function createGatewayCloseHandler(
     disposeSessionMcpRuntimes?: () => Promise<void>;
     disposeBundleLspRuntimes?: () => Promise<void>;
     cron: { stop: () => void };
+    stopExitWatchers?: () => void;
     heartbeatRunner: HeartbeatRunner;
     updateCheckStop?: (() => void) | null;
     stopTaskRegistryMaintenance?: (() => Promise<void> | void) | null;
@@ -872,6 +873,7 @@ export function createGatewayCloseHandler(
         shutdownStep("gmail-watcher", () => stopGmailWatcherOnDemand(), warnings),
       );
       params.cron.stop();
+      params.stopExitWatchers?.();
       params.heartbeatRunner.stop();
       await shutdownStep(
         "task-registry-maintenance",
