@@ -1250,7 +1250,6 @@ def ensure_pi_isolation_supported(args: argparse.Namespace, repo: Path) -> str:
     required_flags = [
         "--print",
         *pi_review_isolation_flags(),
-        "--tools",
         "--no-tools",
         "--thinking",
     ]
@@ -1531,6 +1530,11 @@ def cursor_local_mcp_paths(repo: Path) -> list[Path]:
     return [path for path in candidates if path.exists()]
 
 
+def cursor_local_hook_paths(repo: Path) -> list[Path]:
+    candidates = [repo / ".cursor" / "hooks.json"]
+    return [path for path in candidates if path.exists()]
+
+
 def format_repo_paths(repo: Path, paths: list[Path]) -> str:
     return "; ".join(str(path.relative_to(repo)) for path in paths)
 
@@ -1637,6 +1641,13 @@ def run_cursor(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         raise SystemExit("--no-web-search is not supported by the cursor engine; Cursor CLI does not expose a documented per-run web-search disable flag")
     instruction_paths = cursor_workspace_instruction_paths(repo)
     local_mcp_paths = cursor_local_mcp_paths(repo)
+    local_hook_paths = cursor_local_hook_paths(repo)
+    if local_hook_paths:
+        raise SystemExit(
+            "cursor engine refused project-local hooks: "
+            + format_repo_paths(repo, local_hook_paths)
+            + ". Cursor hooks execute host commands outside review tool permissions."
+        )
     if (instruction_paths or local_mcp_paths) and not args.cursor_allow_workspace_instructions:
         paths = instruction_paths + local_mcp_paths
         raise SystemExit(
@@ -1705,10 +1716,9 @@ def run_pi(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         cmd.extend(["--model", args.model])
     if args.thinking:
         cmd.extend(["--thinking", args.thinking])
-    if args.tools:
-        cmd.extend(["--tools", "read,grep,find,ls"])
-    else:
-        cmd.append("--no-tools")
+    # Pi's built-in read tools accept absolute paths and have no repository
+    # confinement, so an untrusted review prompt must never receive them.
+    cmd.append("--no-tools")
     with tempfile.TemporaryDirectory(prefix="autoreview-pi-run.") as tempdir:
         result = run_with_heartbeat(
             cmd,
@@ -2436,9 +2446,12 @@ def self_test_engine_isolation() -> int:
             run_pi(args, repo, f"review hostile patch\nRepository: {repo}")
             pi_record = json.loads(record_path.read_text())
             pi_argv = pi_record["argv"]
-            for required in ["--print", *pi_review_isolation_flags(), "--tools", "read,grep,find,ls"]:
+            for required in ["--print", *pi_review_isolation_flags(), "--no-tools"]:
                 if required not in pi_argv:
                     raise SystemExit(f"pi isolation self-test failed: missing {required}")
+            for forbidden in ["--tools", "read,grep,find,ls"]:
+                if forbidden in pi_argv:
+                    raise SystemExit(f"pi isolation self-test failed: unsafe {forbidden}")
             if Path(pi_record["cwd"]).resolve() == repo.resolve():
                 raise SystemExit("pi isolation self-test failed: review ran inside hostile repo")
             if str(repo) not in pi_record["stdin"]:

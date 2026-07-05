@@ -219,6 +219,24 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
                 AUTOREVIEW.run_cursor(args, repo, "prompt")
             self.assertIn("cursor engine refused project-local MCP config", str(exc_info.exception))
 
+    def test_cursor_local_hooks_are_always_refused(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="autoreview-cursor-test.") as tmpdir:
+            repo = Path(tmpdir)
+            (repo / ".cursor").mkdir()
+            (repo / ".cursor" / "hooks.json").write_text("{}\n")
+            args = argparse.Namespace(
+                thinking=None,
+                tools=True,
+                web_search=True,
+                cursor_allow_workspace_instructions=True,
+                cursor_bin="cursor-agent",
+                model="auto",
+                stream_engine_output=False,
+            )
+            with self.assertRaises(SystemExit) as exc_info:
+                AUTOREVIEW.run_cursor(args, repo, "prompt")
+            self.assertIn("cursor engine refused project-local hooks", str(exc_info.exception))
+
     def test_cursor_command_uses_current_print_contract(self) -> None:
         with tempfile.TemporaryDirectory(prefix="autoreview-cursor-test.") as tmpdir:
             root = Path(tmpdir)
