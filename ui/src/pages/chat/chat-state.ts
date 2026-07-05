@@ -90,7 +90,7 @@ import {
   type ChatInputHistoryKeyInput,
   type ChatInputHistoryKeyResult,
 } from "./input-history.ts";
-import { applyModelCatalogResult } from "./models.ts";
+import { applyModelCatalogResult, loadModels } from "./models.ts";
 import {
   handleAbortChat,
   reconcileChatRunFromCurrentSessionRow,
@@ -470,9 +470,42 @@ function applyChatMetadataResult(
   return { commands: commandsApplied, models: Boolean(models) };
 }
 
+function ownsChatMetadataRequest(
+  host: ChatPageHost,
+  client: GatewayBrowserClient,
+  agentId: string | null | undefined,
+  requestVersion: number,
+): boolean {
+  return (
+    host.client === client &&
+    host.connected &&
+    host.chatMetadataRequestVersion === requestVersion &&
+    resolveChatAgentId(host) === agentId
+  );
+}
+
+async function refreshCompatibilityModelCatalog(
+  host: ChatPageHost,
+  client: GatewayBrowserClient,
+  agentId: string | null | undefined,
+  requestVersion: number,
+) {
+  const models = await loadModels(client);
+  if (ownsChatMetadataRequest(host, client, agentId, requestVersion)) {
+    host.chatModelCatalog = models;
+  }
+}
+
+function canUseCompatibilityModelCatalog(
+  host: ChatPageHost,
+  agentId: string | null | undefined,
+): boolean {
+  return agentId === resolveUiDefaultAgentId(host);
+}
+
 export async function refreshChatMetadata(
   host: ChatPageHost,
-  opts?: { preserveModelCatalogWhenUnavailable?: boolean },
+  opts?: { preserveModelCatalogOnFallback?: boolean },
 ) {
   const requestVersion = ++host.chatMetadataRequestVersion;
   if (!host.client || !host.connected) {
@@ -482,37 +515,58 @@ export async function refreshChatMetadata(
   }
   const client = host.client;
   const agentId = resolveChatAgentId(host);
-  if (isGatewayMethodAdvertised(host as unknown as ChatState, "chat.metadata") === false) {
-    host.chatModelsLoading = false;
-    if (!opts?.preserveModelCatalogWhenUnavailable) {
-      host.chatModelCatalog = [];
-    }
-    await Promise.allSettled([refreshChatCommands(host)]);
-    return;
-  }
-
+  const shouldRefreshCompatibilityModels =
+    !opts?.preserveModelCatalogOnFallback && canUseCompatibilityModelCatalog(host, agentId);
+  const shouldClearUnresolvedModels =
+    !opts?.preserveModelCatalogOnFallback && !shouldRefreshCompatibilityModels;
   host.chatModelsLoading = true;
   try {
+    if (isGatewayMethodAdvertised(host as unknown as ChatState, "chat.metadata") === false) {
+      if (shouldClearUnresolvedModels) {
+        host.chatModelCatalog = [];
+      }
+      await Promise.allSettled([
+        ...(shouldRefreshCompatibilityModels
+          ? [refreshCompatibilityModelCatalog(host, client, agentId, requestVersion)]
+          : []),
+        refreshChatCommands(host),
+      ]);
+      return;
+    }
+
     const result = await client.request<ChatMetadataResult>(
       "chat.metadata",
       agentId ? { agentId } : {},
     );
-    if (
-      host.client !== client ||
-      !host.connected ||
-      host.chatMetadataRequestVersion !== requestVersion ||
-      resolveChatAgentId(host) !== agentId
-    ) {
+    if (!ownsChatMetadataRequest(host, client, agentId, requestVersion)) {
       return;
     }
     const metadataApplied = applyChatMetadataResult(host, client, agentId, result);
-    if (!metadataApplied.commands) {
-      await Promise.allSettled([refreshChatCommands(host)]);
+    if (!metadataApplied.models && shouldClearUnresolvedModels) {
+      host.chatModelCatalog = [];
+    }
+    if (!metadataApplied.models || !metadataApplied.commands) {
+      await Promise.allSettled([
+        ...(!metadataApplied.models && shouldRefreshCompatibilityModels
+          ? [refreshCompatibilityModelCatalog(host, client, agentId, requestVersion)]
+          : []),
+        ...(metadataApplied.commands ? [] : [refreshChatCommands(host)]),
+      ]);
     }
   } catch {
-    await Promise.allSettled([refreshChatCommands(host)]);
+    if (ownsChatMetadataRequest(host, client, agentId, requestVersion)) {
+      if (shouldClearUnresolvedModels) {
+        host.chatModelCatalog = [];
+      }
+      await Promise.allSettled([
+        ...(shouldRefreshCompatibilityModels
+          ? [refreshCompatibilityModelCatalog(host, client, agentId, requestVersion)]
+          : []),
+        refreshChatCommands(host),
+      ]);
+    }
   } finally {
-    if (host.client === client && host.chatMetadataRequestVersion === requestVersion) {
+    if (ownsChatMetadataRequest(host, client, agentId, requestVersion)) {
       host.chatModelsLoading = false;
     }
   }
@@ -668,7 +722,7 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
         return Promise.allSettled([
           refreshChatAvatar(host),
           refreshChatMetadata(host, {
-            preserveModelCatalogWhenUnavailable: opts?.startup === true && metadataApplied.models,
+            preserveModelCatalogOnFallback: opts?.startup === true && metadataApplied.models,
           }),
         ]);
       })

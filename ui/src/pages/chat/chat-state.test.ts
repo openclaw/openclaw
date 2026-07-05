@@ -225,8 +225,14 @@ describe("refreshChatMetadata", () => {
     ]);
   });
 
-  it("clears stale metadata when the gateway does not advertise chat metadata", async () => {
-    const request = vi.fn(async (method: string) => {
+  it("loads compatibility models when the gateway does not advertise chat metadata", async () => {
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "models.list") {
+        expect(params).toEqual({ view: "configured" });
+        return {
+          models: [{ id: "compat-model", name: "Compat Model", provider: "openai" }],
+        };
+      }
       expect(method).toBe("commands.list");
       return { commands: [] };
     });
@@ -239,15 +245,17 @@ describe("refreshChatMetadata", () => {
       client: { request },
       connected: true,
       hello: { features: { methods: [] } },
-      sessionKey: "agent:work:main",
+      sessionKey: "agent:main:main",
     } as unknown as ChatPageHost;
 
     await refreshChatMetadata(state);
 
     expect(state.chatMetadataRequestVersion).toBe(3);
-    expect(state.chatModelCatalog).toEqual([]);
+    expect(state.chatModelCatalog).toEqual([
+      { id: "compat-model", name: "Compat Model", provider: "openai" },
+    ]);
     expect(state.chatModelsLoading).toBe(false);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("preserves startup models when the gateway does not advertise chat metadata", async () => {
@@ -270,10 +278,34 @@ describe("refreshChatMetadata", () => {
       sessionKey: "agent:work:main",
     } as unknown as ChatPageHost;
 
-    await refreshChatMetadata(state, { preserveModelCatalogWhenUnavailable: true });
+    await refreshChatMetadata(state, { preserveModelCatalogOnFallback: true });
 
     expect(state.chatMetadataRequestVersion).toBe(5);
     expect(state.chatModelCatalog).toBe(startupCatalog);
+    expect(state.chatModelsLoading).toBe(false);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not load unscoped compatibility models for a non-default agent", async () => {
+    const request = vi.fn(async (method: string) => {
+      expect(method).toBe("commands.list");
+      return { commands: [] };
+    });
+    const state = {
+      agentsList: { defaultId: "main" },
+      assistantAgentId: "main",
+      chatMetadataRequestVersion: 0,
+      chatModelCatalog: [{ id: "stale-model", name: "Stale Model", provider: "openai" }],
+      chatModelsLoading: false,
+      client: { request },
+      connected: true,
+      hello: { features: { methods: [] } },
+      sessionKey: "agent:work:main",
+    } as unknown as ChatPageHost;
+
+    await refreshChatMetadata(state);
+
+    expect(state.chatModelCatalog).toEqual([]);
     expect(state.chatModelsLoading).toBe(false);
     expect(request).toHaveBeenCalledTimes(1);
   });

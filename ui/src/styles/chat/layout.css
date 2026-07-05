@@ -839,6 +839,12 @@ openclaw-chat-page {
   color: var(--muted);
 }
 
+@media (hover: none) and (pointer: coarse) {
+  .agent-chat__composer-combobox > textarea {
+    font-size: var(--control-ui-input-text-size);
+  }
+}
+
 .agent-chat__composer-status-stack {
   display: flex;
   flex-wrap: wrap;
