@@ -524,6 +524,15 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       registerDiscordListener(client.listeners, new DiscordVoiceReadyListener(voiceManager));
       registerDiscordListener(client.listeners, new DiscordVoiceResumedListener(voiceManager));
       registerDiscordListener(client.listeners, new DiscordVoiceStateUpdateListener(voiceManager));
+      // The gateway can reach READY while the lazy voice runtime is loading. This synchronous
+      // check closes that listener-registration race; later READY/RESUMED events use the listeners.
+      if (lifecycleGateway?.isConnected) {
+        void voiceManager
+          .autoJoin()
+          .catch((err: unknown) =>
+            logger.warn(`discord voice: autoJoin failed: ${formatErrorMessage(err)}`),
+          );
+      }
     }
 
     const messageHandler = discordProviderSessionRuntime.createDiscordMessageHandler({
