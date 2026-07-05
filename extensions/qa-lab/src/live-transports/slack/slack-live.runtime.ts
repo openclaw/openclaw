@@ -1845,27 +1845,26 @@ async function startCodexApprovalAgentRun(params: {
   context: Omit<SlackQaScenarioContext, "sentTs">;
   primaryModel: string;
   run: SlackQaCodexApprovalScenarioRun;
+  runId: string;
   scenario: SlackQaScenarioDefinition;
+  sessionKey: string;
   sutAccountId: string;
 }) {
-  const sessionKey = buildCodexApprovalSessionKey({
-    scenario: params.scenario,
-    token: params.run.token,
-  });
   const result = await params.context.gateway.call(
     "agent",
     {
       accountId: params.sutAccountId,
       agentId: "qa",
       channel: "slack",
+      cleanupBundleMcpOnRunEnd: true,
       deliver: false,
-      idempotencyKey: `slack-qa-codex-approval-${randomUUID()}`,
+      idempotencyKey: params.runId,
       message: buildCodexApprovalInstruction({
         appServerMethod: params.run.appServerMethod,
         token: params.run.token,
       }),
       model: params.primaryModel,
-      sessionKey,
+      sessionKey: params.sessionKey,
       thinking: "low",
       timeout: Math.ceil(params.scenario.timeoutMs / 1_000),
       to: `channel:${params.channelId}`,
@@ -1874,7 +1873,10 @@ async function startCodexApprovalAgentRun(params: {
       timeoutMs: SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
     },
   );
-  return { runId: readAcceptedAgentRunId(result), sessionKey };
+  const acceptedRunId = readAcceptedAgentRunId(result);
+  if (acceptedRunId !== params.runId) {
+    throw new Error(`Codex agent run id was ${acceptedRunId} instead of ${params.runId}`);
+  }
 }
 
 function buildCodexApprovalSessionKey(params: {
@@ -1902,6 +1904,34 @@ async function waitForCodexApprovalAgentRun(params: {
   return readAgentWaitStatus(result);
 }
 
+async function quiesceCodexApprovalAgentRun(params: {
+  context: Omit<SlackQaScenarioContext, "sentTs">;
+  preserveDebugArtifacts: boolean;
+  runId: string;
+  sessionKey: string;
+  stopGateway: (preserveDebugArtifacts: boolean) => Promise<void>;
+}) {
+  try {
+    await params.context.gateway.call(
+      "chat.abort",
+      { runId: params.runId, sessionKey: params.sessionKey },
+      { timeoutMs: 10_000 },
+    );
+  } catch {
+    // The bounded terminal wait and gateway process-group teardown do not depend on this ack.
+  }
+  try {
+    await params.context.gateway.call(
+      "agent.wait",
+      { runId: params.runId, timeoutMs: 10_000 },
+      { timeoutMs: 15_000 },
+    );
+  } catch {
+    // QA-owned Codex app-server processes inherit the gateway cleanup process group.
+  }
+  await params.stopGateway(params.preserveDebugArtifacts);
+}
+
 async function runSlackCodexApprovalScenario(params: {
   channelId: string;
   context: Omit<SlackQaScenarioContext, "sentTs">;
@@ -1909,20 +1939,62 @@ async function runSlackCodexApprovalScenario(params: {
   primaryModel: string;
   run: SlackQaCodexApprovalScenarioRun;
   scenario: SlackQaScenarioDefinition;
+  stopGateway: (preserveDebugArtifacts: boolean) => Promise<void>;
   sutAccountId: string;
 }) {
-  if (params.run.appServerMethod !== "item/fileChange/requestApproval") {
-    return await runSlackCodexApprovalScenarioInner(params);
-  }
-  const targetPath = resolveCodexFileApprovalTargetPath(params.run.token);
-  // The probe must remain outside Codex's workspace roots, and every exit path
-  // must remove the approved write so live QA never leaves host state behind.
-  await fs.rm(targetPath, { force: true });
-  try {
-    return await runSlackCodexApprovalScenarioInner(params);
-  } finally {
+  const codexRun = {
+    runId: `slack-qa-codex-approval-${randomUUID()}`,
+    sessionKey: buildCodexApprovalSessionKey({
+      scenario: params.scenario,
+      token: params.run.token,
+    }),
+  };
+  const targetPath =
+    params.run.appServerMethod === "item/fileChange/requestApproval"
+      ? resolveCodexFileApprovalTargetPath(params.run.token)
+      : undefined;
+  if (targetPath) {
     await fs.rm(targetPath, { force: true });
   }
+  const outcome = await runSlackCodexApprovalScenarioInner({ ...params, codexRun }).then(
+    (result) => ({ kind: "success", result }) as const,
+    (error: unknown) => ({ error, kind: "failure" }) as const,
+  );
+  // Kill the gateway process tree before deleting the probe. Agent completion
+  // does not prove the native Codex turn has stopped writing after an interrupt.
+  const cleanupErrors: unknown[] = [];
+  try {
+    await quiesceCodexApprovalAgentRun({
+      context: params.context,
+      preserveDebugArtifacts: outcome.kind === "failure",
+      stopGateway: params.stopGateway,
+      ...codexRun,
+    });
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  if (cleanupErrors.length === 0 && targetPath) {
+    try {
+      await fs.rm(targetPath, { force: true });
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
+  if (cleanupErrors.length > 0) {
+    const cleanupSummary = cleanupErrors.map(formatErrorMessage).join("; ");
+    if (outcome.kind === "failure") {
+      throw new AggregateError(
+        [outcome.error, ...cleanupErrors],
+        `Codex approval scenario failed: ${formatErrorMessage(outcome.error)}; cleanup also failed: ${cleanupSummary}`,
+        { cause: outcome.error },
+      );
+    }
+    throw new AggregateError(cleanupErrors, `Codex approval cleanup failed: ${cleanupSummary}`);
+  }
+  if (outcome.kind === "failure") {
+    throw outcome.error;
+  }
+  return outcome.result;
 }
 
 function resolveCodexFileApprovalTargetPath(token: string) {
@@ -1931,6 +2003,7 @@ function resolveCodexFileApprovalTargetPath(token: string) {
 
 async function runSlackCodexApprovalScenarioInner(params: {
   channelId: string;
+  codexRun: { runId: string; sessionKey: string };
   context: Omit<SlackQaScenarioContext, "sentTs">;
   observedMessages: SlackObservedMessage[];
   primaryModel: string;
@@ -1940,12 +2013,14 @@ async function runSlackCodexApprovalScenarioInner(params: {
 }) {
   const requestStartedAt = new Date();
   const oldestTs = ((requestStartedAt.getTime() - 5_000) / 1_000).toFixed(6);
-  const codexRun = await startCodexApprovalAgentRun({
+  await startCodexApprovalAgentRun({
     channelId: params.channelId,
     context: params.context,
     primaryModel: params.primaryModel,
     run: params.run,
+    runId: params.codexRun.runId,
     scenario: params.scenario,
+    sessionKey: params.codexRun.sessionKey,
     sutAccountId: params.sutAccountId,
   });
   const expectedTitle =
@@ -1976,7 +2051,7 @@ async function runSlackCodexApprovalScenarioInner(params: {
     appServerMethod: params.run.appServerMethod,
     channelId: params.channelId,
     context: params.context,
-    sessionKey: codexRun.sessionKey,
+    sessionKey: params.codexRun.sessionKey,
     sutAccountId: params.sutAccountId,
   });
   const pendingCheckpoint = await writeSlackApprovalCheckpoint({
@@ -1996,18 +2071,18 @@ async function runSlackCodexApprovalScenarioInner(params: {
   });
   const finalCodexTurnStatus = await waitForCodexApprovalAgentRun({
     context: params.context,
-    runId: codexRun.runId,
+    runId: params.codexRun.runId,
     timeoutMs: params.scenario.timeoutMs,
   });
   if (finalCodexTurnStatus !== "ok") {
     throw new Error(
-      `Codex approval run ${codexRun.runId} finished with status ${finalCodexTurnStatus}`,
+      `Codex approval run ${params.codexRun.runId} finished with status ${finalCodexTurnStatus}`,
     );
   }
   await assertCodexApprovalOperationSucceeded({
     context: params.context,
     run: params.run,
-    sessionKey: codexRun.sessionKey,
+    sessionKey: params.codexRun.sessionKey,
   });
   const resolved = await waitForSlackApprovalResolvedUpdate({
     approvalKind: params.run.approvalKind,
@@ -2314,11 +2389,13 @@ async function preserveSlackGatewayDebugArtifacts(params: {
   gatewayDebugDirPath: string;
   gatewayHarness: SlackQaGatewayHarness;
 }) {
-  await params.gatewayHarness
-    .stop({ preserveToDir: params.gatewayDebugDirPath })
-    .catch((error: unknown) => {
-      appendLiveLaneIssue(params.cleanupIssues, "gateway debug preservation failed", error);
-    });
+  try {
+    await params.gatewayHarness.stop({ preserveToDir: params.gatewayDebugDirPath });
+    return true;
+  } catch (error) {
+    appendLiveLaneIssue(params.cleanupIssues, "gateway debug preservation failed", error);
+    return false;
+  }
 }
 
 export async function runSlackQaLive(params: {
@@ -2395,6 +2472,9 @@ export async function runSlackQaLive(params: {
       let scenarioAttempt = 1;
       while (true) {
         let gatewayHarness: SlackQaGatewayHarness | undefined;
+        let codexProbeCleanupPath: string | undefined;
+        let preserveAttemptGatewayDebug = false;
+        let retryScenario = false;
         try {
           assertLeaseHealthy();
           gatewayHarness = await startQaLiveLaneGateway({
@@ -2422,6 +2502,12 @@ export async function runSlackQaLive(params: {
           });
           const activeGatewayHarness = gatewayHarness;
           const scenarioRun = scenario.buildRun(sutIdentity.userId);
+          if (
+            scenarioRun.kind === "codex-approval" &&
+            scenarioRun.appServerMethod === "item/fileChange/requestApproval"
+          ) {
+            codexProbeCleanupPath = resolveCodexFileApprovalTargetPath(scenarioRun.token);
+          }
           const readinessMode: SlackChannelReadinessMode =
             scenarioRun.kind === "approval" || scenarioRun.kind === "codex-approval"
               ? "started"
@@ -2492,6 +2578,18 @@ export async function runSlackQaLive(params: {
               primaryModel,
               run: scenarioRun,
               scenario,
+              stopGateway: async (preserveDebugArtifacts) => {
+                await activeGatewayHarness.stop(
+                  preserveDebugArtifacts ? { preserveToDir: gatewayDebugDirPath } : undefined,
+                );
+                await new Promise((resolve) => {
+                  setTimeout(resolve, SLACK_QA_GATEWAY_STOP_SETTLE_MS);
+                });
+                gatewayHarness = undefined;
+                if (preserveDebugArtifacts) {
+                  preservedGatewayDebugArtifacts = true;
+                }
+              },
               sutAccountId,
             });
             scenarioResults.push({
@@ -2602,40 +2700,80 @@ export async function runSlackQaLive(params: {
             isRetryableSlackQaScenarioError(error)
           ) {
             scenarioAttempt += 1;
-            continue;
-          }
-          scenarioResults.push({
-            id: scenario.id,
-            title: scenario.title,
-            standardId: scenario.standardId,
-            status: "fail",
-            details:
-              scenarioAttempt > 1
-                ? `${formatErrorMessage(error)}; retried ${scenarioAttempt - 1}x`
-                : formatErrorMessage(error),
-          });
-          preservedGatewayDebugArtifacts = true;
-          if (gatewayHarness) {
-            await preserveSlackGatewayDebugArtifacts({
-              cleanupIssues,
-              gatewayDebugDirPath,
-              gatewayHarness,
+            retryScenario = true;
+          } else {
+            scenarioResults.push({
+              id: scenario.id,
+              title: scenario.title,
+              standardId: scenario.standardId,
+              status: "fail",
+              details:
+                scenarioAttempt > 1
+                  ? `${formatErrorMessage(error)}; retried ${scenarioAttempt - 1}x`
+                  : formatErrorMessage(error),
             });
+            preserveAttemptGatewayDebug = true;
+            preservedGatewayDebugArtifacts = true;
+            if (gatewayHarness) {
+              const stopped = await preserveSlackGatewayDebugArtifacts({
+                cleanupIssues,
+                gatewayDebugDirPath,
+                gatewayHarness,
+              });
+              if (stopped) {
+                gatewayHarness = undefined;
+              }
+            }
           }
-          break;
         } finally {
-          if (!preservedGatewayDebugArtifacts && gatewayHarness) {
-            await gatewayHarness.stop().catch((error: unknown) => {
-              appendLiveLaneIssue(cleanupIssues, "gateway stop failed", error);
-            });
-            await new Promise((resolve) => {
-              setTimeout(resolve, SLACK_QA_GATEWAY_STOP_SETTLE_MS);
+          if (gatewayHarness) {
+            await gatewayHarness
+              .stop(
+                preserveAttemptGatewayDebug ? { preserveToDir: gatewayDebugDirPath } : undefined,
+              )
+              .then(() => {
+                gatewayHarness = undefined;
+                if (preserveAttemptGatewayDebug) {
+                  preservedGatewayDebugArtifacts = true;
+                }
+              })
+              .catch((error: unknown) => {
+                appendLiveLaneIssue(cleanupIssues, "gateway stop failed", error);
+                retryScenario = false;
+                const details = `gateway stop failed: ${formatErrorMessage(error)}`;
+                const currentResult = scenarioResults.at(-1);
+                if (currentResult?.id === scenario.id) {
+                  scenarioResults[scenarioResults.length - 1] = {
+                    ...currentResult,
+                    status: "fail",
+                    details: `${currentResult.details}; ${details}`,
+                  };
+                } else {
+                  scenarioResults.push({
+                    id: scenario.id,
+                    title: scenario.title,
+                    standardId: scenario.standardId,
+                    status: "fail",
+                    details,
+                  });
+                }
+              });
+            if (!gatewayHarness) {
+              await new Promise((resolve) => {
+                setTimeout(resolve, SLACK_QA_GATEWAY_STOP_SETTLE_MS);
+              });
+            }
+          }
+          if (!gatewayHarness && codexProbeCleanupPath) {
+            await fs.rm(codexProbeCleanupPath, { force: true }).catch((error: unknown) => {
+              appendLiveLaneIssue(cleanupIssues, "Codex approval probe cleanup failed", error);
             });
           }
         }
-        if (scenarioResults.at(-1)?.id === scenario.id) {
-          break;
+        if (retryScenario) {
+          continue;
         }
+        break;
       }
       if (scenarioResults.at(-1)?.status === "fail") {
         break;
@@ -2756,6 +2894,7 @@ export const testing = {
   matchesSlackApprovalPromptText,
   parseSlackQaCredentialPayload,
   preserveSlackGatewayDebugArtifacts,
+  quiesceCodexApprovalAgentRun,
   readAcceptedAgentRunId,
   resolveCodexFileApprovalTargetPath,
   resolveSlackChannelReadySince,

@@ -328,6 +328,51 @@ describe("Slack live QA runtime helpers", () => {
     ).toThrow("Codex command result did not contain marker");
   });
 
+  it("aborts, awaits terminal cleanup, and stops the gateway process tree before cleanup", async () => {
+    const call = vi
+      .fn()
+      .mockResolvedValueOnce({ aborted: true, runIds: ["run-123"] })
+      .mockResolvedValueOnce({ endedAt: 123, runId: "run-123", status: "ok" });
+    const stopGateway = vi.fn();
+
+    await testing.quiesceCodexApprovalAgentRun({
+      context: { gateway: { call } } as never,
+      preserveDebugArtifacts: false,
+      runId: "run-123",
+      sessionKey: "agent:qa:approval",
+      stopGateway,
+    });
+
+    expect(call).toHaveBeenNthCalledWith(
+      1,
+      "chat.abort",
+      { runId: "run-123", sessionKey: "agent:qa:approval" },
+      { timeoutMs: 10_000 },
+    );
+    expect(call).toHaveBeenNthCalledWith(
+      2,
+      "agent.wait",
+      { runId: "run-123", timeoutMs: 10_000 },
+      { timeoutMs: 15_000 },
+    );
+    expect(stopGateway).toHaveBeenCalledWith(false);
+  });
+
+  it("preserves debug artifacts when abort and terminal acknowledgements fail", async () => {
+    const call = vi.fn().mockRejectedValue(new Error("gateway unavailable"));
+    const stopGateway = vi.fn();
+
+    await testing.quiesceCodexApprovalAgentRun({
+      context: { gateway: { call } } as never,
+      preserveDebugArtifacts: true,
+      runId: "run-123",
+      sessionKey: "agent:qa:approval",
+      stopGateway,
+    });
+
+    expect(stopGateway).toHaveBeenCalledWith(true);
+  });
+
   it("matches pending Codex plugin approvals by id, route, and Slack turn source", () => {
     expect(
       testing.findPendingCodexPluginApprovalRecord({
