@@ -335,7 +335,7 @@ describe("markdownToTelegramHtml", () => {
   it("strips standalone <parameter> wrappers (#98557)", () => {
     const input =
       'Some text <parameter name="assumptions">\n• Assumption one\n</parameter> more text';
-    const sanitized = sanitizeTelegramRichHtml(input);
+    const sanitized = normalizeTelegramOutboundRichHtml(input).html;
     expect(sanitized).not.toContain("parameter");
     expect(sanitized).toContain("Some text");
     expect(sanitized).toContain("more text");
@@ -344,19 +344,19 @@ describe("markdownToTelegramHtml", () => {
 
   it("strips <parameter> with unquoted attributes (#98557)", () => {
     const input = "<parameter name=assumptions>content</parameter>";
-    const sanitized = sanitizeTelegramRichHtml(input);
+    const sanitized = normalizeTelegramOutboundRichHtml(input).html;
     expect(sanitized).toBe("content");
   });
 
   it("preserves <parameter> inside <code> blocks (#98557)", () => {
     const input = "Use <code>&lt;parameter&gt;value&lt;/parameter&gt;</code> in XML";
-    const sanitized = sanitizeTelegramRichHtml(input);
+    const sanitized = normalizeTelegramOutboundRichHtml(input).html;
     expect(sanitized).toBe(input);
   });
 
   it("escapes literal <parameter> inside <code> instead of stripping (#98557)", () => {
     const input = '<code><parameter name="x">value</parameter></code>';
-    const sanitized = sanitizeTelegramRichHtml(input);
+    const sanitized = normalizeTelegramOutboundRichHtml(input).html;
     // Should be escaped (not stripped) inside code block
     expect(sanitized).toContain("&lt;parameter");
     expect(sanitized).toContain("value");
@@ -365,7 +365,7 @@ describe("markdownToTelegramHtml", () => {
 
   it("escapes literal <parameter> inside <pre> instead of stripping (#98557)", () => {
     const input = '<pre><parameter name="x">value</parameter></pre>';
-    const sanitized = sanitizeTelegramRichHtml(input);
+    const sanitized = normalizeTelegramOutboundRichHtml(input).html;
     expect(sanitized).toContain("&lt;parameter");
     expect(sanitized).toContain("value");
     expect(sanitized).toContain("&lt;/parameter&gt;");
@@ -373,14 +373,14 @@ describe("markdownToTelegramHtml", () => {
 
   it("preserves <parameter> inside <code> nested in <pre> (#98557)", () => {
     const input = '<pre>Code: <code><parameter name="x">value</parameter></code></pre>';
-    const sanitized = sanitizeTelegramRichHtml(input);
+    const sanitized = normalizeTelegramOutboundRichHtml(input).html;
     expect(sanitized).toContain("&lt;parameter");
     expect(sanitized).toContain("value");
   });
 
   it("does not affect normal paragraphs (#98557)", () => {
     const input = "<b>Summary:</b> no parameter tags here";
-    const sanitized = sanitizeTelegramRichHtml(input);
+    const sanitized = normalizeTelegramOutboundRichHtml(input).html;
     expect(sanitized).toBe(input);
   });
 

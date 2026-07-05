@@ -808,14 +808,6 @@ export function normalizeTelegramOutboundRichHtml(
     degradationReasons: tableNormalized.degradationReasons,
   };
 }
-    ),
-    TELEGRAM_RICH_NESTING_LIMIT,
-  );
-  return {
-    html: safeHtml,
-    degradationReasons: tableNormalized.degradationReasons,
-  };
-}
 
 function escapeUnsupportedTelegramHtmlWithTableFallback(html: string): string {
   return escapeUnsupportedTelegramHtml(
