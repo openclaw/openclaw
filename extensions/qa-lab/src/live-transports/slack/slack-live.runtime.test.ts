@@ -94,6 +94,30 @@ describe("Slack live QA runtime helpers", () => {
     );
   });
 
+  it("accepts only Codex harness providers for Codex approval scenarios", () => {
+    expect(() => testing.assertSlackCodexApprovalModelSupported("openai/gpt-5.5")).not.toThrow();
+    expect(() => testing.assertSlackCodexApprovalModelSupported("codex/gpt-5.5")).not.toThrow();
+    expect(() =>
+      testing.assertSlackCodexApprovalModelSupported("anthropic/claude-sonnet-4-6"),
+    ).toThrow(
+      'Slack Codex approval scenarios require an openai/* or codex/* model; received "anthropic/claude-sonnet-4-6".',
+    );
+  });
+
+  it("rejects an incompatible Codex approval model before credential acquisition", async () => {
+    const outputDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-slack-codex-model-"));
+    await expect(
+      runSlackQaLive({
+        credentialSource: "convex",
+        outputDir,
+        primaryModel: "anthropic/claude-sonnet-4-6",
+        scenarioIds: ["slack-codex-approval-exec-native"],
+      }),
+    ).rejects.toThrow(
+      'Slack Codex approval scenarios require an openai/* or codex/* model; received "anthropic/claude-sonnet-4-6".',
+    );
+  });
+
   it("enables Slack native exec and plugin approval delivery for approval scenarios", () => {
     const cfg = testing.buildSlackQaConfig(
       {},

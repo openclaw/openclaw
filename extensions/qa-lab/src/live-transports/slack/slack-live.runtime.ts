@@ -14,6 +14,7 @@ import { createQaArtifactRunId } from "../../artifact-run-id.js";
 import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { isTruthyOptIn } from "../../mantis-options.runtime.js";
+import { splitQaModelRef } from "../../model-selection.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import {
   defaultQaModelForMode,
@@ -65,6 +66,8 @@ const SLACK_QA_GATEWAY_STOP_SETTLE_MS = 3_000;
 const SLACK_QA_RETRYABLE_SCENARIO_ATTEMPTS = 2;
 const SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS = 30_000;
 const SLACK_QA_APPROVAL_CHECKPOINT_DEFAULT_TIMEOUT_MS = 120_000;
+// These scenarios force the Codex harness, whose default provider set is intentionally narrow.
+const SLACK_QA_CODEX_PROVIDER_IDS = new Set(["codex", "openai"]);
 
 type SlackQaScenarioId =
   | "slack-allowlist-block"
@@ -84,6 +87,16 @@ type SlackQaApprovalDecision = "allow-always" | "allow-once" | "deny";
 type SlackQaCodexApprovalMethod =
   | "item/commandExecution/requestApproval"
   | "item/fileChange/requestApproval";
+
+function assertSlackCodexApprovalModelSupported(modelRef: string) {
+  const provider = splitQaModelRef(modelRef)?.provider.trim().toLowerCase();
+  if (provider && SLACK_QA_CODEX_PROVIDER_IDS.has(provider)) {
+    return;
+  }
+  throw new Error(
+    `Slack Codex approval scenarios require an openai/* or codex/* model; received "${modelRef}".`,
+  );
+}
 
 type SlackQaMessageScenarioRun = {
   kind?: "message";
@@ -2252,6 +2265,9 @@ export async function runSlackQaLive(params: {
   const alternateModel = params.alternateModel?.trim() || defaultQaModelForMode(providerMode, true);
   const sutAccountId = params.sutAccountId?.trim() || "sut";
   const scenarios = findScenario(params.scenarioIds);
+  if (scenarios.some((scenario) => scenario.configOverrides?.codexApproval === true)) {
+    assertSlackCodexApprovalModelSupported(primaryModel);
+  }
   const requestedCredentialSource = inferSlackCredentialSource(params.credentialSource);
   const redactPublicMetadata = isTruthyOptIn(process.env[QA_REDACT_PUBLIC_METADATA_ENV]);
   const includeObservedMessageContent = isTruthyOptIn(process.env[SLACK_QA_CAPTURE_CONTENT_ENV]);
@@ -2643,6 +2659,7 @@ export async function runSlackQaLive(params: {
 }
 
 export const testing = {
+  assertSlackCodexApprovalModelSupported,
   buildCodexApprovalInstruction,
   buildSlackApprovalCheckpointMessage,
   buildSlackQaConfig,
