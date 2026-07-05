@@ -214,6 +214,48 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
+  fun resolveGatewayControlPageAuthFallsBackToStoredOperatorToken() {
+    val resolved =
+      resolveGatewayControlPageAuth(
+        auth = NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
+        storedOperatorToken = " stored-token ",
+      )
+
+    assertEquals(
+      NodeRuntime.GatewayConnectAuth(token = "stored-token", bootstrapToken = null, password = null),
+      resolved,
+    )
+  }
+
+  @Test
+  fun resolveGatewayControlPageAuthPrefersExplicitSharedAuth() {
+    assertEquals(
+      NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = null, password = null),
+      resolveGatewayControlPageAuth(
+        auth =
+          NodeRuntime.GatewayConnectAuth(
+            token = " shared-token ",
+            bootstrapToken = "bootstrap-1",
+            password = "shared-password",
+          ),
+        storedOperatorToken = "stored-token",
+      ),
+    )
+    assertEquals(
+      NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = "shared-password"),
+      resolveGatewayControlPageAuth(
+        auth =
+          NodeRuntime.GatewayConnectAuth(
+            token = null,
+            bootstrapToken = "bootstrap-1",
+            password = " shared-password ",
+          ),
+        storedOperatorToken = "stored-token",
+      ),
+    )
+  }
+
+  @Test
   fun operatorConnectScopesForAuthUsesNativeScopesWhenNoStoredOperatorMetadata() {
     assertEquals(
       ConnectionManager.nativeClientOperatorScopes,

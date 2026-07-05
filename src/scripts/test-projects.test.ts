@@ -834,7 +834,7 @@ describe("test-projects args", () => {
   it("routes unit ui targets to the unit ui config", () => {
     expect(buildVitestRunPlans(["ui/src/ui/views/channels.test.ts"])).toEqual([
       {
-        config: "test/vitest/vitest.unit-ui.config.ts",
+        config: "test/vitest/vitest.ui.config.ts",
         forwardedArgs: [],
         includePatterns: ["ui/src/ui/views/channels.test.ts"],
         watchMode: false,
@@ -859,6 +859,8 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.unit-fast.config.ts",
         forwardedArgs: [],
         includePatterns: [
+          "src/agents/command/attempt-execution.shared.test.ts",
+          "src/auto-reply/reply/session-entry-persistence.test.ts",
           "src/crestodian/operations.test.ts",
           "src/install-sh-version.test.ts",
           "src/proxy-capture/store.sqlite.test.ts",
@@ -937,7 +939,9 @@ describe("test-projects args", () => {
           "src/gateway/hooks-mapping.test.ts",
           "src/gateway/server-methods/chat.abort-persistence.test.ts",
           "src/gateway/server.agent.gateway-server-agent-b.test.ts",
+          "src/gateway/server.chat.gateway-server-chat-b.test.ts",
           "src/gateway/server.sessions.permissions-hooks.test.ts",
+          "src/gateway/terminal/launch.test.ts",
         ],
         watchMode: false,
       },
@@ -966,6 +970,17 @@ describe("test-projects args", () => {
         watchMode: false,
       },
       {
+        config: "test/vitest/vitest.auto-reply.config.ts",
+        forwardedArgs: [],
+        includePatterns: [
+          "src/auto-reply/reply/get-reply-native-slash-fast-path.test.ts",
+          "src/auto-reply/reply/get-reply.auto-fallback.test.ts",
+          "src/auto-reply/reply/reply-turn-admission.test.ts",
+          "src/auto-reply/reply/session-updates.test.ts",
+        ],
+        watchMode: false,
+      },
+      {
         config: "test/vitest/vitest.agents.config.ts",
         forwardedArgs: [],
         includePatterns: [
@@ -975,6 +990,8 @@ describe("test-projects args", () => {
           "src/agents/cli-runner.reliability.test.ts",
           "src/agents/models-config.file-mode.test.ts",
           "src/agents/sandbox/ssh.test.ts",
+          "src/agents/sessions/tools/find.fd.test.ts",
+          "src/agents/sessions/tools/read.test.ts",
         ],
         watchMode: false,
       },

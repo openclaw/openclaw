@@ -14,8 +14,8 @@ const emptySnapshot: StatusPluginHealthSnapshot = {
 };
 
 describe("plugin health status formatting", () => {
-  it("shows a tiny OK line when there are no plugin health problems", () => {
-    expect(formatCompactPluginHealthLine(emptySnapshot)).toBe("🔌 Plugins: OK");
+  it("omits the compact line when there are no plugin health problems", () => {
+    expect(formatCompactPluginHealthLine(emptySnapshot)).toBeUndefined();
   });
 
   it("summarizes plugin errors and context engine quarantines in the compact line", () => {
@@ -119,7 +119,7 @@ describe("plugin health status formatting", () => {
           },
         ],
       }),
-    ).toBe("🔌 Plugins: OK");
+    ).toBeUndefined();
   });
 
   it("merges runtime health into installed plugin snapshots for detailed status", () => {

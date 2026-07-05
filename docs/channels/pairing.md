@@ -106,7 +106,25 @@ or per-topic overrides depending on the channel).
 Nodes connect to the Gateway as **devices** with `role: node`. The Gateway
 creates a device pairing request that must be approved.
 
-### Pair via Telegram (recommended for iOS)
+### Pair from the Control UI (recommended)
+
+Use an already connected Control UI session with `operator.admin` access:
+
+1. Open the Control UI and select **Nodes**.
+2. In **Devices**, click **Pair mobile device**.
+3. On your phone, open the OpenClaw app → **Settings** → **Gateway**.
+4. Scan the QR code or paste the setup code, then connect.
+
+Official OpenClaw iOS and Android apps are approved automatically when their
+setup-code metadata matches. If **Devices** shows a pending request (for
+example, for a non-official client or mismatched metadata), review its role and
+scopes before approving it.
+
+The button is disabled when the current Control UI session does not have
+administrator access. Use the CLI approval flow below from the Gateway host in
+that case.
+
+### Pair via Telegram
 
 If you use the `device-pair` plugin, you can do first-time device pairing entirely from Telegram:
 
@@ -114,7 +132,8 @@ If you use the `device-pair` plugin, you can do first-time device pairing entire
 2. The bot replies with two messages: an instruction message and a separate **setup code** message (easy to copy/paste in Telegram).
 3. On your phone, open the OpenClaw iOS app → Settings → Gateway.
 4. Scan the QR code or paste the setup code and connect.
-5. Back in Telegram: `/pair pending` (review request IDs, role, and scopes), then approve.
+5. The official mobile app connects automatically. If `/pair pending` shows a
+   request, review its role and scopes before approving it.
 
 The setup code is a base64-encoded JSON payload that contains:
 

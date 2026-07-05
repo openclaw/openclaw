@@ -49,6 +49,7 @@ function createReplyOperation(): TestReplyOperation {
     terminalRecovery: false,
     phase: "queued",
     result: null,
+    hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
     setPhase: vi.fn<ReplyOperation["setPhase"]>(),
     updateSessionId: vi.fn<ReplyOperation["updateSessionId"]>(),
     attachBackend: vi.fn(),

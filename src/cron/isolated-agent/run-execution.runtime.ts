@@ -31,6 +31,14 @@ export async function getCliSessionId(
   return runtime.getCliSessionId(...args);
 }
 
+/** Lazily resolves complete CLI bindings so cron continuations preserve reuse metadata. */
+export async function getCliSessionBinding(
+  ...args: Parameters<typeof import("../../agents/cli-session.js").getCliSessionBinding>
+): Promise<ReturnType<typeof import("../../agents/cli-session.js").getCliSessionBinding>> {
+  const runtime = await loadCronExecutionCliRuntime();
+  return runtime.getCliSessionBinding(...args);
+}
+
 /** Lazily runs the CLI-backed agent path used by isolated cron execution. */
 export async function runCliAgent(
   ...args: Parameters<typeof import("../../agents/cli-runner.js").runCliAgent>

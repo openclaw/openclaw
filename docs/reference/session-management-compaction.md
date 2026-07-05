@@ -191,6 +191,18 @@ Key fields (not exhaustive):
   time for idle freshness.
 - `updatedAt`: last store-row mutation timestamp, used for listing, pruning, and
   bookkeeping. It is not the authority for daily/idle reset freshness.
+- `archivedAt`: optional archive timestamp. Archived sessions stay in the store
+  with their transcript intact and are excluded from normal active listings.
+- `pinnedAt`: optional pin timestamp. Active pinned sessions sort ahead of
+  unpinned sessions; archiving a session clears its pin.
+- Codex thread interop: both fields follow the Codex thread-management shape —
+  the `archived`/`pinned` booleans on the wire are always derived from the
+  timestamp and stamped server-side, matching Codex `threads.archived_at`
+  semantics and camelCase serialization. OpenClaw timestamps are epoch
+  milliseconds while Codex uses epoch seconds, so bridges convert at the codex
+  plugin seam. Codex has no pin API yet (`thread/archive`/`thread/unarchive`
+  only); pinned state stays OpenClaw-side until one exists, at which point the
+  matching shape lets bound sessions round-trip pin state mechanically.
 - `sessionFile`: optional explicit transcript path override
 - `chatType`: `direct | group | room` (helps UIs and send policy)
 - `provider`, `subject`, `room`, `space`, `displayName`: metadata for group/channel labeling

@@ -668,7 +668,14 @@ export const OpenClawSchema = z
     crestodian: CrestodianSchema,
     update: z
       .object({
-        channel: z.union([z.literal("stable"), z.literal("beta"), z.literal("dev")]).optional(),
+        channel: z
+          .union([
+            z.literal("stable"),
+            z.literal("extended-stable"),
+            z.literal("beta"),
+            z.literal("dev"),
+          ])
+          .optional(),
         checkOnStart: z.boolean().optional(),
         auto: z
           .object({
@@ -1084,6 +1091,14 @@ export const OpenClawSchema = z
             dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
             allowInsecureAuth: z.boolean().optional(),
             dangerouslyDisableDeviceAuth: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+        terminal: z
+          .object({
+            enabled: z.boolean().optional(),
+            shell: z.string().optional(),
+            detachedSessionTimeoutSeconds: z.number().int().min(0).optional(),
           })
           .strict()
           .optional(),

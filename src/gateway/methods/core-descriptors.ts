@@ -174,6 +174,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "device.pair.remove", scope: "operator.pairing" },
   { name: "device.token.rotate", scope: "operator.pairing" },
   { name: "device.token.revoke", scope: "operator.pairing" },
+  { name: "device.pair.setupCode", scope: "operator.admin", advertise: false },
   { name: "node.rename", scope: "operator.pairing" },
   { name: "node.list", scope: "operator.read" },
   { name: "node.describe", scope: "operator.read" },
@@ -209,6 +210,12 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "chat.message.get", scope: "operator.read", startup: true },
   { name: "chat.abort", scope: "operator.write" },
   { name: "chat.send", scope: "operator.write" },
+  // Operator terminal: admin-only PTY surface. Appended to the advertised block
+  // so existing advertised method indices stay stable for older clients.
+  { name: "terminal.open", scope: "operator.admin" },
+  { name: "terminal.input", scope: "operator.admin" },
+  { name: "terminal.resize", scope: "operator.admin" },
+  { name: "terminal.close", scope: "operator.admin" },
   { name: "assistant.media.get", scope: "operator.read", advertise: false },
   { name: "sessions.get", scope: "operator.read", advertise: false },
   { name: "sessions.resolve", scope: "operator.read", advertise: false },
@@ -230,6 +237,12 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "nativeHook.invoke", scope: "operator.admin", advertise: false },
   { name: "web.login.start", scope: "operator.admin", advertise: false },
   { name: "web.login.wait", scope: "operator.admin", advertise: false },
+  // Terminal detach/reattach surface. Appended at the end (not next to the
+  // other terminal.* methods) so previously advertised method indices stay
+  // stable for older clients.
+  { name: "terminal.attach", scope: "operator.admin" },
+  { name: "terminal.list", scope: "operator.admin" },
+  { name: "terminal.text", scope: "operator.admin" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

@@ -14,7 +14,6 @@ import {
   resolveDirectNodeVitestArgs,
   resolveExplicitTestFileNoPassArgs,
   resolveImplicitVitestArgs,
-  resolveLinkedSourceBundledPluginsEnv,
   resolveMissingVitestDependencyMessage,
   resolveMissingExplicitTestFiles,
   resolveRunVitestSpawnEnv,
@@ -31,34 +30,6 @@ import {
 } from "../../scripts/run-vitest.mjs";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
-
-function createRunVitestFs(params: { nodeModulesSymlink: boolean; bundledPlugin: boolean }) {
-  return {
-    existsSync: (filePath: string) => {
-      const normalized = filePath.replaceAll("\\", "/");
-      return (
-        normalized === "/repo/extensions" ||
-        (params.bundledPlugin &&
-          (normalized === "/repo/extensions/codex/package.json" ||
-            normalized === "/repo/extensions/codex/openclaw.plugin.json"))
-      );
-    },
-    lstatSync: (filePath: string) => {
-      if (filePath.replaceAll("\\", "/") !== "/repo/node_modules") {
-        throw new Error(`unexpected lstat path: ${filePath}`);
-      }
-      return {
-        isSymbolicLink: () => params.nodeModulesSymlink,
-      };
-    },
-    readdirSync: (filePath: string) => {
-      if (filePath.replaceAll("\\", "/") !== "/repo/extensions") {
-        throw new Error(`unexpected readdir path: ${filePath}`);
-      }
-      return params.bundledPlugin ? [{ name: "codex", isDirectory: () => true }] : [];
-    },
-  };
-}
 
 describe("scripts/run-vitest", () => {
   it("adds --no-maglev to vitest child processes by default", () => {
@@ -177,27 +148,11 @@ describe("scripts/run-vitest", () => {
     ).toContain("[vitest] Vitest is not installed in node_modules.");
   });
 
-  it("routes explicit unit ui tests through the narrow unit ui config", () => {
-    expect(
-      resolveImplicitVitestArgs([
-        "ui/src/ui/controllers/chat.test.ts",
-        "-t",
-        "keeps optimistic user attachment previews",
-      ]),
-    ).toEqual([
-      "--config",
-      "test/vitest/vitest.unit-ui.config.ts",
-      "ui/src/ui/controllers/chat.test.ts",
-      "-t",
-      "keeps optimistic user attachment previews",
-    ]);
-  });
-
   it("does not override explicit vitest configs", () => {
     const argv = [
       "--config",
       "test/vitest/vitest.ui.config.ts",
-      "ui/src/ui/controllers/chat.test.ts",
+      "ui/src/pages/chat/chat-send.test.ts",
     ];
     expect(resolveImplicitVitestArgs(argv)).toBe(argv);
   });
@@ -429,27 +384,13 @@ describe("scripts/run-vitest", () => {
     ).toEqual([]);
   });
 
-  it("keeps the run subcommand first when routing unit ui tests", () => {
-    expect(resolveImplicitVitestArgs(["run", "ui/src/ui/controllers/chat.test.ts"])).toEqual([
-      "run",
-      "--config",
-      "test/vitest/vitest.unit-ui.config.ts",
-      "ui/src/ui/controllers/chat.test.ts",
-    ]);
-  });
-
   it("routes explicit non-e2e ui tests through the ui config", () => {
-    expect(resolveImplicitVitestArgs(["run", "ui/src/ui/app-gateway.node.test.ts"])).toEqual([
+    expect(resolveImplicitVitestArgs(["run", "ui/src/pages/chat/chat-send.test.ts"])).toEqual([
       "run",
       "--config",
       "test/vitest/vitest.ui.config.ts",
-      "ui/src/ui/app-gateway.node.test.ts",
+      "ui/src/pages/chat/chat-send.test.ts",
     ]);
-  });
-
-  it("keeps mixed unit ui and broader ui targets on existing routing", () => {
-    const argv = ["ui/src/ui/controllers/chat.test.ts", "ui/src/ui/app-gateway.node.test.ts"];
-    expect(resolveImplicitVitestArgs(argv)).toBe(argv);
   });
 
   it("allows opting back into Maglev explicitly", () => {
@@ -614,45 +555,6 @@ describe("scripts/run-vitest", () => {
     ).toEqual({
       PATH: "/usr/bin",
     });
-  });
-
-  it("points symlinked source worktree Vitest runs at local bundled plugins", () => {
-    expect(
-      resolveLinkedSourceBundledPluginsEnv(
-        { PATH: "/usr/bin", PWD: "/repo" },
-        {
-          baseDir: "/repo",
-          fsImpl: createRunVitestFs({ nodeModulesSymlink: true, bundledPlugin: true }),
-        },
-      ),
-    ).toEqual({
-      OPENCLAW_BUNDLED_PLUGINS_DIR: nodePath.join("/repo", "extensions"),
-      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-    });
-  });
-
-  it("keeps explicit bundled plugin env ahead of symlinked worktree defaults", () => {
-    expect(
-      resolveLinkedSourceBundledPluginsEnv(
-        { OPENCLAW_BUNDLED_PLUGINS_DIR: "/custom/extensions", PATH: "/usr/bin", PWD: "/repo" },
-        {
-          baseDir: "/repo",
-          fsImpl: createRunVitestFs({ nodeModulesSymlink: true, bundledPlugin: true }),
-        },
-      ),
-    ).toEqual({});
-  });
-
-  it("does not add bundled plugin env for normal dependency installs", () => {
-    expect(
-      resolveLinkedSourceBundledPluginsEnv(
-        { PATH: "/usr/bin", PWD: "/repo" },
-        {
-          baseDir: "/repo",
-          fsImpl: createRunVitestFs({ nodeModulesSymlink: false, bundledPlugin: true }),
-        },
-      ),
-    ).toEqual({});
   });
 
   it("does not default explicit watch runs to the stall watchdog", () => {
