@@ -693,6 +693,25 @@ describe("qa cli runtime", () => {
     expect(runQaSuite).not.toHaveBeenCalled();
   });
 
+  it.each(["signal", "mattermost", "matrix"])(
+    "rejects unsupported Crabline channel %s",
+    async (channel) => {
+      await expect(
+        runQaSuiteCommand({
+          repoRoot: "/tmp/openclaw-repo",
+          providerMode: "mock-openai",
+          channelDriver: "crabline",
+          channel,
+          scenarioIds: ["channel-chat-baseline"],
+        }),
+      ).rejects.toThrow(
+        `--channel must be one of telegram for --channel-driver crabline, got "${channel}".`,
+      );
+      expect(runQaSuite).not.toHaveBeenCalled();
+      expect(runQaMultipass).not.toHaveBeenCalled();
+    },
+  );
+
   it("passes explicit suite plugin enablements into the host gateway run", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
