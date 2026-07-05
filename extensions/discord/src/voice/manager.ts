@@ -10,6 +10,7 @@ import {
   type APIVoiceState,
   type Client,
   getGuildVoiceState,
+  isUnknownDiscordVoiceStateError,
   ReadyListener,
   ResumedListener,
   VoiceStateUpdateListener,
@@ -201,14 +202,6 @@ function isFatalAutoJoinFailure(message: string): boolean {
   return DISCORD_VOICE_FATAL_AUTOJOIN_ERROR_PATTERNS.some((pattern) =>
     normalized.includes(pattern),
   );
-}
-
-function isUnknownDiscordVoiceStateError(err: unknown): boolean {
-  const status =
-    err && typeof err === "object" && "status" in err && typeof err.status === "number"
-      ? err.status
-      : undefined;
-  return status === 404 || /unknown voice state/i.test(formatErrorMessage(err));
 }
 
 function startAutoJoin(manager: Pick<DiscordVoiceManager, "autoJoin">) {

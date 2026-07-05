@@ -7,7 +7,6 @@ import type {
   APIVoiceState,
   RESTPostAPIGuildScheduledEventJSONBody,
 } from "discord-api-types/v10";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
@@ -22,6 +21,7 @@ import {
   getGuild,
   getGuildMember,
   getGuildVoiceState,
+  isUnknownDiscordVoiceStateError,
   listGuildChannels,
   listGuildRoles,
   listGuildScheduledEvents,
@@ -121,14 +121,6 @@ export async function fetchVoiceStatusDiscord(
       reason: "unknown_voice_state",
     };
   }
-}
-
-function isUnknownDiscordVoiceStateError(err: unknown): boolean {
-  const status =
-    err && typeof err === "object" && "status" in err && typeof err.status === "number"
-      ? err.status
-      : undefined;
-  return status === 404 || /unknown voice state/i.test(formatErrorMessage(err));
 }
 
 export async function listScheduledEventsDiscord(

@@ -41,7 +41,9 @@ describe("fetchVoiceStatusDiscord", () => {
   });
 
   it("returns an absent status when Discord reports an unknown voice state", async () => {
-    restMock.get.mockRejectedValueOnce(new Error("DiscordError: Unknown Voice State"));
+    restMock.get.mockRejectedValueOnce(
+      Object.assign(new Error("Not Found"), { status: 404, discordCode: 10065 }),
+    );
 
     const result = await fetchVoiceStatusDiscord("g1", "u1", { cfg: {} as never });
 
@@ -55,8 +57,8 @@ describe("fetchVoiceStatusDiscord", () => {
     });
   });
 
-  it("returns an absent status for Discord 404 voice-state lookups", async () => {
-    restMock.get.mockRejectedValueOnce(Object.assign(new Error("Not Found"), { status: 404 }));
+  it("recognizes legacy unknown voice state error messages", async () => {
+    restMock.get.mockRejectedValueOnce(new Error("DiscordError: Unknown Voice State"));
 
     const result = await fetchVoiceStatusDiscord("g1", "u1", { cfg: {} as never });
 
@@ -70,11 +72,13 @@ describe("fetchVoiceStatusDiscord", () => {
     });
   });
 
-  it("propagates non-voice-state REST failures", async () => {
-    restMock.get.mockRejectedValueOnce(new Error("Discord API error"));
+  it.each([
+    Object.assign(new Error("Unknown Guild"), { status: 404, discordCode: 10004 }),
+    Object.assign(new Error("Not Found"), { status: 404 }),
+    new Error("Discord API error"),
+  ])("propagates non-voice-state REST failures", async (error) => {
+    restMock.get.mockRejectedValueOnce(error);
 
-    await expect(fetchVoiceStatusDiscord("g1", "u1", { cfg: {} as never })).rejects.toThrow(
-      "Discord API error",
-    );
+    await expect(fetchVoiceStatusDiscord("g1", "u1", { cfg: {} as never })).rejects.toBe(error);
   });
 });
