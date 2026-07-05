@@ -594,6 +594,24 @@ describe("runReplyAgent auto-compaction token update", () => {
     expect(payload.replyToId).toBe("msg");
   });
 
+  it.each([
+    ["reasoning", { text: "internal reasoning", isReasoning: true }],
+    ["commentary", { text: "internal commentary", isCommentary: true }],
+  ])("surfaces a fallback for disabled %s-only direct output", async (_label, payload) => {
+    const onBlockReply = vi.fn();
+    const result = await runEmptyDirectReply(
+      {
+        payloads: [payload],
+        meta: { agentMeta: {} },
+      },
+      { onBlockReply },
+    );
+
+    const fallback = expectRecordFields(result, { isError: true }, "empty interactive fallback");
+    expect(fallback.text).toContain("did not produce a visible reply");
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
   it("keeps spawn-only empty direct replies silent", async () => {
     expect(
       await runEmptyDirectReply({
