@@ -1,10 +1,10 @@
-import type { FitAddon, Terminal } from "ghostty-web";
+import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 // Dockable operator terminal panel for the Control UI shell.
 //
 // Renders a VS Code-style shell dock (bottom by default, or right) with session
-// tabs. Each tab hosts one ghostty-web terminal wired to a gateway PTY session.
-// ghostty-web (WASM, ~0.5MB) is dynamically imported on first open so it never
-// weighs down the initial Control UI bundle.
+// tabs. Each tab hosts one libterminal Ghostty controller wired to a gateway PTY
+// session. The browser runtime is dynamically imported on first open so it
+// never weighs down the initial Control UI bundle.
 import { LitElement, css, html, nothing, svg } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../../i18n/index.ts";
@@ -34,8 +34,7 @@ type TerminalTabState = {
   shellName: string;
   /** Agent + cwd shown on hover. */
   hint: string;
-  term: Terminal;
-  fit: FitAddon;
+  controller: GhosttyTerminalController;
   host: HTMLDivElement;
   status: "live" | "exited";
   statusLabel?: string;
@@ -65,6 +64,10 @@ const DEFAULT_LAYOUT: PanelLayout = { open: false, dock: "bottom", height: 320, 
 const MIN_HEIGHT = 140;
 const MIN_WIDTH = 320;
 const TOGGLE_EVENT = "openclaw:terminal-toggle";
+const TERMINAL_FONT_FAMILY =
+  'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Symbols Nerd Font Mono", "MesloLGLDZ Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "Liberation Mono", monospace';
+const TERMINAL_INPUT_DECODER = new TextDecoder();
+const TERMINAL_OUTPUT_ENCODER = new TextEncoder();
 
 function loadLayout(): PanelLayout {
   try {
@@ -151,7 +154,7 @@ export class OpenClawTerminalPanel extends LitElement {
     this.height = height;
     this.width = width;
     this.syncLayoutReservation();
-    this.tabs.find((tab) => tab.id === this.activeId)?.fit.fit();
+    this.tabs.find((tab) => tab.id === this.activeId)?.controller.fit();
   };
 
   override connectedCallback(): void {
@@ -207,7 +210,7 @@ export class OpenClawTerminalPanel extends LitElement {
         // handler only warns), so update the renderer directly and force one
         // full render — the frame loop repaints only dirty rows, which would
         // leave a static screen on the old palette.
-        const { term } = tab;
+        const term = tab.controller.terminal;
         if (term.renderer && term.wasmTerm) {
           term.renderer.setTheme(theme);
           term.renderer.render(term.wasmTerm, true, term.viewportY, term);
@@ -225,7 +228,7 @@ export class OpenClawTerminalPanel extends LitElement {
             viewport.append(tab.host);
           }
         }
-        this.tabs.find((tab) => tab.id === this.activeId)?.fit.fit();
+        this.tabs.find((tab) => tab.id === this.activeId)?.controller.fit();
       }
     }
     this.syncLayoutReservation();
@@ -312,7 +315,7 @@ export class OpenClawTerminalPanel extends LitElement {
     }
   }
 
-  /** Boots a tab with a ghostty terminal, ready for an open or attach RPC. */
+  /** Boots a tab with a libterminal controller, ready for an open or attach RPC. */
   private async bootTab(): Promise<{
     tab: TerminalTabState;
     connection: TerminalConnection;
@@ -322,8 +325,7 @@ export class OpenClawTerminalPanel extends LitElement {
     if (!this.client) {
       throw new Error("terminal client unavailable");
     }
-    const { init, Terminal, FitAddon } = await import("ghostty-web");
-    await init();
+    const { createGhosttyTerminal } = await import("@openclaw/libterminal/browser");
     if (!this.connection) {
       this.connection = new TerminalConnection(this.client);
     }
@@ -332,31 +334,7 @@ export class OpenClawTerminalPanel extends LitElement {
     const connection = this.connection;
     const host = document.createElement("div");
     host.className = "tp-host";
-    const term = new Terminal({
-      fontSize: 13,
-      fontFamily:
-        'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
-      cursorBlink: true,
-      theme: terminalTheme(this.themeMode),
-      scrollback: 5000,
-    });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-
     const id = `tab-${++this.tabSeq}`;
-    const tab: TerminalTabState = {
-      id,
-      gatewaySessionId: "",
-      shellName: t("terminal.tabLabel", { n: String(this.tabSeq) }),
-      hint: "",
-      term,
-      fit,
-      host,
-      status: "live",
-    };
-
-    this.tabs = [...this.tabs, tab];
-    this.activeId = id;
     // Wait for the panel (and its .tp-viewport) to render before attaching the
     // ghostty host, so the terminal opens into a laid-out, measurable node.
     await this.updateComplete;
@@ -365,10 +343,52 @@ export class OpenClawTerminalPanel extends LitElement {
       throw new Error("terminal viewport unavailable");
     }
     viewport.append(host);
-
-    term.open(host);
-    fit.fit();
-    return { tab, connection, cols: term.cols || 80, rows: term.rows || 24 };
+    const tabRef = { current: undefined as TerminalTabState | undefined };
+    let controller: GhosttyTerminalController;
+    try {
+      controller = await createGhosttyTerminal({
+        parent: host,
+        readOnly: false,
+        terminalOptions: {
+          fontSize: 13,
+          fontFamily: TERMINAL_FONT_FAMILY,
+          cursorBlink: true,
+          theme: terminalTheme(this.themeMode),
+          scrollback: 5000,
+        },
+        // The browser controller owns these subscriptions and their teardown.
+        // Ignore startup callbacks until the Gateway session is adopted.
+        onData: (bytes) => {
+          const sessionId = tabRef.current?.gatewaySessionId;
+          if (sessionId) {
+            void connection.input(sessionId, TERMINAL_INPUT_DECODER.decode(bytes));
+          }
+        },
+        onResize: ({ columns, rows }) => {
+          const sessionId = tabRef.current?.gatewaySessionId;
+          if (sessionId) {
+            void connection.resize(sessionId, columns, rows);
+          }
+        },
+      });
+    } catch (error) {
+      host.remove();
+      throw error;
+    }
+    const tab: TerminalTabState = {
+      id,
+      gatewaySessionId: "",
+      shellName: t("terminal.tabLabel", { n: String(this.tabSeq) }),
+      hint: "",
+      controller,
+      host,
+      status: "live",
+    };
+    tabRef.current = tab;
+    this.tabs = [...this.tabs, tab];
+    this.activeId = id;
+    const { terminal } = controller;
+    return { tab, connection, cols: terminal.cols || 80, rows: terminal.rows || 24 };
   }
 
   /** Output/exit sink for one tab, shared by open and attach. */
@@ -378,7 +398,7 @@ export class OpenClawTerminalPanel extends LitElement {
       // connection.open/attach from writing to an already-disposed terminal.
       onData: (data: string) => {
         if (!tab.cancelled) {
-          tab.term.write(data);
+          tab.controller.write(TERMINAL_OUTPUT_ENCODER.encode(data));
         }
       },
       onExit: (info: { reason?: string; exitCode: number | null }) => this.handleExit(tab.id, info),
@@ -393,13 +413,10 @@ export class OpenClawTerminalPanel extends LitElement {
     tab.gatewaySessionId = result.sessionId;
     tab.shellName = shellBasename(result.shell);
     tab.hint = t("terminal.tabHint", { agent: result.agentId, cwd: result.cwd });
-
-    // Forward keystrokes and viewport resizes to the PTY.
-    tab.term.onData((data) => void this.connection?.input(result.sessionId, data));
-    tab.term.onResize(
-      ({ cols: c, rows: r }) => void this.connection?.resize(result.sessionId, c, r),
-    );
-    tab.fit.observeResize();
+    // Libterminal observes layout before the Gateway session exists. Resync the
+    // current grid now so a resize during the open/attach RPC is not lost.
+    const { cols, rows } = tab.controller.terminal;
+    void this.connection?.resize(result.sessionId, cols || 80, rows || 24);
 
     this.tabs = [...this.tabs];
     this.persistLiveSessions();
@@ -439,7 +456,7 @@ export class OpenClawTerminalPanel extends LitElement {
         return;
       }
       this.adoptSession(boot.tab, result);
-      boot.tab.term.focus();
+      boot.tab.controller.terminal.focus();
     } catch (err) {
       this.errorText = err instanceof Error ? err.message : String(err);
       // A failed open (e.g. terminal disabled or a sandboxed agent is refused)
@@ -465,9 +482,6 @@ export class OpenClawTerminalPanel extends LitElement {
         return false;
       }
       this.adoptSession(boot.tab, result);
-      // The PTY grid rarely matches the new viewport; resizing also delivers
-      // the SIGWINCH repaint that restores full-screen apps after the replay.
-      void boot.connection.resize(result.sessionId, boot.cols, boot.rows);
       return true;
     } catch {
       // Session expired between list and attach (reaper race) or an older
@@ -529,15 +543,14 @@ export class OpenClawTerminalPanel extends LitElement {
     const tab = this.tabs.find((entry) => entry.id === tabId);
     // Refit after the container becomes visible so cols/rows match the viewport.
     void this.updateComplete.then(() => {
-      tab?.fit.fit();
-      tab?.term.focus();
+      tab?.controller.fit();
+      tab?.controller.terminal.focus();
     });
   }
 
   private disposeTab(tab: TerminalTabState): void {
     try {
-      tab.fit.dispose();
-      tab.term.dispose();
+      tab.controller.dispose();
       tab.host.remove();
     } catch {
       // Best-effort teardown; a partially-initialized tab may throw.
@@ -570,7 +583,7 @@ export class OpenClawTerminalPanel extends LitElement {
     this.persistLayout();
     void this.updateComplete.then(() => {
       for (const tab of this.tabs) {
-        tab.fit.fit();
+        tab.controller.fit();
       }
     });
   }
@@ -622,7 +635,7 @@ export class OpenClawTerminalPanel extends LitElement {
       // Reflow the content reservation live so the shell tracks the drag.
       this.syncLayoutReservation();
       const active = this.tabs.find((tab) => tab.id === this.activeId);
-      active?.fit.fit();
+      active?.controller.fit();
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);

@@ -1936,6 +1936,9 @@ importers:
       '@noble/ed25519':
         specifier: 3.1.0
         version: 3.1.0
+      '@openclaw/libterminal':
+        specifier: 0.3.1
+        version: 0.3.1
       '@openclaw/media-core':
         specifier: workspace:*
         version: link:../packages/media-core
@@ -1948,9 +1951,6 @@ importers:
       dompurify:
         specifier: 3.4.11
         version: 3.4.11
-      ghostty-web:
-        specifier: 0.4.0
-        version: 0.4.0
       highlight.js:
         specifier: 11.11.1
         version: 11.11.1
@@ -3145,6 +3145,10 @@ packages:
   '@openclaw/fs-safe@0.4.1':
     resolution: {integrity: sha512-hQi+BxO10KdRFlYUot1syC+hTaUnGeQNdqX5kwkKJig8CFq1tKsYJLPm+zkiiGsSKOprPAquQl/txejEhpKPgg==}
     engines: {node: '>=22'}
+
+  '@openclaw/libterminal@0.3.1':
+    resolution: {integrity: sha512-nKEreLY6sdRvn+9UEcZhFpLYg3mJA4tmqNLZiYSMfislU11skiPWJfT7fn6ERsgAJsVMOSxeiVjBb5AX7dLKdQ==}
+    engines: {node: ^22.18.0 || >=24.11.0}
 
   '@openclaw/proxyline@0.3.3':
     resolution: {integrity: sha512-sftHnW69NHQqLjCxBTvQ8f/eQl+peZ5pHCBQtuTWBbeuYRHZ0/GXVTmw/O/YKsShMbqPWhJB0UYtPPdvCUSS8w==}
@@ -8912,6 +8916,10 @@ snapshots:
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.19
+
+  '@openclaw/libterminal@0.3.1':
+    dependencies:
+      ghostty-web: 0.4.0
 
   '@openclaw/proxyline@0.3.3(undici@8.5.0)':
     dependencies:
