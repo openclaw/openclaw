@@ -892,6 +892,7 @@ describe("test-projects args", () => {
         includePatterns: [
           "src/scripts/docs-link-audit.test.ts",
           "src/scripts/sync-plugin-versions.test.ts",
+          "test/e2e/qa-lab/runtime/gateway-mcp-real-transports.test.ts",
           "test/helpers/temp-dir.test.ts",
           "test/scripts/android-pin-version.test.ts",
           "test/scripts/bench-cli-startup.test.ts",
