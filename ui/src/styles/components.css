@@ -6415,6 +6415,13 @@ details[open] > .ov-expandable-toggle::after {
   white-space: nowrap;
 }
 
+.device-pair-setup__gateways {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .device-pair-setup__actions {
   display: flex;
   flex-wrap: wrap;

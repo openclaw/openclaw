@@ -1,5 +1,9 @@
 // Covers embedded backend behavior used by the TUI runtime.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "../agents/internal-runtime-context.js";
 import { isEmbeddedMode, setEmbeddedMode } from "../infra/embedded-mode.js";
 import {
   clearEmbeddedPluginApprovalBroker,
@@ -413,7 +417,7 @@ describe("EmbeddedTuiBackend", () => {
     registeredListener?.({
       runId: "run-local-1",
       stream: "assistant",
-      data: { text: "hello", delta: "hello" },
+      data: { delta: "hello" },
     });
     registeredListener?.({
       runId: "run-local-1",
@@ -430,7 +434,7 @@ describe("EmbeddedTuiBackend", () => {
         payload: {
           runId: "run-local-1",
           stream: "assistant",
-          data: { text: "hello", delta: "hello" },
+          data: { delta: "hello" },
         },
       },
       {
@@ -1828,6 +1832,56 @@ describe("EmbeddedTuiBackend", () => {
       { state: "delta", deltaText: "Hello world", replace: undefined },
       { state: "delta", deltaText: "Goodbye world", replace: true },
     ]);
+  });
+
+  it("keeps internal context private when local deltas split its delimiters", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "split internal context",
+      runId: "run-local-split-context",
+    });
+
+    const deltas = [
+      `Visible\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n`,
+      "private runtime detail\n",
+      `${INTERNAL_RUNTIME_CONTEXT_END}\nAfter`,
+    ];
+    deltas.forEach((delta) => {
+      registeredListener?.({
+        runId: "run-local-split-context",
+        stream: "assistant",
+        data: { delta },
+      });
+    });
+    registeredListener?.({
+      runId: "run-local-split-context",
+      stream: "lifecycle",
+      data: { phase: "end", stopReason: "stop" },
+    });
+    pending.resolve({ payloads: [{ text: "Visible\n\nAfter" }], meta: {} });
+    await flushMicrotasks();
+
+    const chatPayloads = events
+      .filter((entry) => entry.event === "chat")
+      .map((entry) => entry.payload);
+    expect(JSON.stringify(chatPayloads)).not.toContain("private runtime detail");
+    expect(chatPayloads.at(-1)).toMatchObject({
+      state: "final",
+      message: { content: [{ text: "Visible\n\nAfter" }] },
+    });
   });
 
   it("keeps a fallback response deliverable after a retryable lifecycle error", async () => {

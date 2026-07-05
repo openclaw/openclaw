@@ -70,6 +70,7 @@ struct OnboardingWizardView: View {
     @State private var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
     @State private var setupCode: String = ""
     @State private var setupCodeStatus: String?
+    @State private var setupAttemptID: UUID?
     private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
     let allowSkip: Bool
@@ -150,6 +151,7 @@ struct OnboardingWizardView: View {
                         .font(OpenClawType.subheadSemiBold)
                     } else if self.allowSkip {
                         Button {
+                            self.invalidateSetupAttempt()
                             self.onClose()
                         } label: {
                             Text("Close")
@@ -269,6 +271,7 @@ struct OnboardingWizardView: View {
                 self.requestLocalNetworkAccessIfPastIntro(reason: "onboarding_appear")
             }
             .onDisappear {
+                self.invalidateSetupAttempt()
                 self.discoveryRestartTask?.cancel()
                 self.discoveryRestartTask = nil
             }
@@ -332,10 +335,10 @@ struct OnboardingWizardView: View {
         OnboardingWelcomeStep(
             statusLine: self.statusLine,
             onScanQRCode: {
-                self.statusLine = "Opening QR scanner…"
-                self.showQRScanner = true
+                self.openQRScannerFromOnboarding()
             },
             onManualSetup: {
+                self.invalidateSetupAttempt()
                 self.step = .mode
             })
     }
@@ -376,6 +379,7 @@ struct OnboardingWizardView: View {
             Text("Connection Mode")
                 .font(OpenClawType.captionSemiBold)
         }
+        .disabled(self.connectingGatewayID != nil)
 
         Section {
             Button {
@@ -385,7 +389,7 @@ struct OnboardingWizardView: View {
                     .font(OpenClawType.subheadSemiBold)
             }
             .font(OpenClawType.subheadSemiBold)
-            .disabled(self.selectedMode == nil)
+            .disabled(self.selectedMode == nil || self.connectingGatewayID != nil)
         }
     }
 
@@ -676,6 +680,7 @@ extension OnboardingWizardView {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .font(OpenClawType.subhead)
+                .disabled(self.connectingGatewayID != nil)
                 .onSubmit {
                     Task { await self.applySetupCodeAndConnect() }
                 }
@@ -803,29 +808,41 @@ extension OnboardingWizardView {
             return
         }
 
-        guard let link = GatewayConnectDeepLink.fromSetupInput(raw) else {
+        guard let parsedLink = GatewayConnectDeepLink.fromSetupInput(raw) else {
             self.setupCodeStatus = "Setup code not recognized or uses an insecure ws:// gateway URL."
             return
         }
 
-        self.connectingGatewayID = "setup-code"
+        guard let attemptID = self.beginSetupAttempt() else { return }
+        defer { self.finishSetupAttempt(attemptID) }
+        let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
+        guard self.setupAttemptID == attemptID else { return }
+
         self.applyGatewayLink(link)
         self.setupCode = ""
         self.setupCodeStatus = "Setup code applied. Connecting..."
         self.connectMessage = "Connecting via setup code..."
         self.statusLine = "Setup code loaded. Connecting to \(link.host):\(link.port)..."
         self.step = .connect
-        await self.connectManual()
+        await self.connectManual(setupAttemptID: attemptID)
     }
 
     private func handleScannedLink(_ link: GatewayConnectDeepLink) {
-        self.applyGatewayLink(link)
-        self.setupCodeStatus = nil
         self.showQRScanner = false
+        guard let attemptID = self.beginSetupAttempt() else { return }
+        self.setupCodeStatus = nil
+        Task { await self.connectScannedLink(link, attemptID: attemptID) }
+    }
+
+    private func connectScannedLink(_ parsedLink: GatewayConnectDeepLink, attemptID: UUID) async {
+        defer { self.finishSetupAttempt(attemptID) }
+        let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
+        guard self.setupAttemptID == attemptID else { return }
+        self.applyGatewayLink(link)
         self.connectMessage = "Connecting via QR code..."
         self.statusLine = "QR loaded. Connecting to \(link.host):\(link.port)..."
         self.step = .connect
-        Task { await self.connectManual() }
+        await self.connectManual(setupAttemptID: attemptID)
     }
 
     private func applyGatewayLink(_ link: GatewayConnectDeepLink) {
@@ -856,7 +873,7 @@ extension OnboardingWizardView {
     private func handleScannedSetupCode(_ code: String) {
         guard AppleReviewDemoMode.isSetupCode(code) else { return }
         self.showQRScanner = false
-        self.connectingGatewayID = nil
+        self.invalidateSetupAttempt()
         self.connectMessage = "Apple Review demo mode enabled."
         self.statusLine = "Apple Review demo mode enabled."
         self.selectedMode = .homeNetwork
@@ -866,7 +883,7 @@ extension OnboardingWizardView {
     private func openQRScannerFromOnboarding() {
         // Stop active reconnect loops before scanning new credentials.
         self.appModel.disconnectGateway()
-        self.connectingGatewayID = nil
+        self.invalidateSetupAttempt()
         self.connectMessage = nil
         self.issue = .none
         self.pairingRequestId = nil
@@ -982,9 +999,27 @@ extension OnboardingWizardView {
 
     private func navigateBack() {
         guard let target = step.previous else { return }
-        self.connectingGatewayID = nil
+        self.invalidateSetupAttempt()
         self.connectMessage = nil
         self.step = target
+    }
+
+    private func beginSetupAttempt() -> UUID? {
+        guard self.connectingGatewayID == nil else { return nil }
+        let attemptID = UUID()
+        self.setupAttemptID = attemptID
+        self.connectingGatewayID = "setup-code"
+        return attemptID
+    }
+
+    private func finishSetupAttempt(_ attemptID: UUID) {
+        guard self.setupAttemptID == attemptID else { return }
+        self.invalidateSetupAttempt()
+    }
+
+    private func invalidateSetupAttempt() {
+        self.setupAttemptID = nil
+        self.connectingGatewayID = nil
     }
 
     private var canConnectManual: Bool {
@@ -1109,7 +1144,12 @@ extension OnboardingWizardView {
         return !tailnetDns.isEmpty
     }
 
-    private func connectManual() async {
+    private func connectManual(setupAttemptID: UUID? = nil) async {
+        if let setupAttemptID {
+            guard self.setupAttemptID == setupAttemptID else { return }
+        } else {
+            self.invalidateSetupAttempt()
+        }
         let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !host.isEmpty, self.manualPort > 0, self.manualPort <= 65535 else { return }
         self.connectingGatewayID = "manual"

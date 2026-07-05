@@ -35,8 +35,9 @@ import {
 } from "../gateway/chat-display-projection.js";
 import { augmentChatHistoryWithCliSessionImports } from "../gateway/cli-session-history.js";
 import {
-  normalizeLiveAssistantEventText,
+  normalizeLiveAssistantBufferedText,
   projectLiveAssistantBufferedText,
+  resolveAssistantLiveChatInput,
   resolveMergedAssistantText,
   shouldSuppressAssistantEventForLiveChat,
 } from "../gateway/live-chat-projector.js";
@@ -945,7 +946,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private emitChatDelta(runId: string, run: LocalRunState) {
-    const projected = projectLiveAssistantBufferedText(run.buffer.trim(), {
+    const normalizedText = normalizeLiveAssistantBufferedText(run.buffer).trim();
+    const projected = projectLiveAssistantBufferedText(normalizedText, {
       suppressLeadFragments: true,
     });
     const text = projected.text.trim();
@@ -983,7 +985,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
     run.registered = true;
     run.lastBroadcastText = undefined;
-    const projected = projectLiveAssistantBufferedText(run.buffer.trim(), {
+    const normalizedText = normalizeLiveAssistantBufferedText(run.buffer).trim();
+    const projected = projectLiveAssistantBufferedText(normalizedText, {
       suppressLeadFragments: false,
     });
     const text = projected.text.trim();
@@ -1085,20 +1088,17 @@ export class EmbeddedTuiBackend implements TuiBackend {
       data: evt.data,
     });
 
+    const assistantLiveChatInput =
+      evt.stream === "assistant" ? resolveAssistantLiveChatInput(evt.data) : undefined;
     if (
-      evt.stream === "assistant" &&
+      assistantLiveChatInput &&
       !run.isBtw &&
-      typeof evt.data?.text === "string" &&
       !shouldSuppressAssistantEventForLiveChat(evt.data)
     ) {
-      const cleaned = normalizeLiveAssistantEventText({
-        text: evt.data.text,
-        delta: evt.data.delta,
-      });
       run.buffer = resolveMergedAssistantText({
         previousText: run.buffer,
-        nextText: cleaned.text,
-        nextDelta: cleaned.delta,
+        nextText: assistantLiveChatInput.text,
+        nextDelta: assistantLiveChatInput.delta,
       });
       this.emitChatDelta(evt.runId, run);
       return;
