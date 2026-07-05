@@ -2339,6 +2339,8 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.userTurnTranscriptRecorder?.message).toEqual({
       role: "user",
       content: "#35676 Keśava: No wtf",
+      bareBody: "#35676 Keśava: No wtf",
+      inboundDecorated: true,
       timestamp: expect.any(Number),
       __openclaw: { senderIsOwner: false, senderName: "Keśava" },
     });
