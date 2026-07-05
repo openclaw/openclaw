@@ -18,6 +18,7 @@ import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js"
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
@@ -45,6 +46,7 @@ import { createEventHandlers } from "./tui-event-handlers.js";
 import {
   formatGoalFooter,
   formatRemoteConnectionHostFooter,
+  sanitizeRenderableText,
   formatTokens,
 } from "./tui-formatters.js";
 import {
@@ -62,6 +64,7 @@ import {
   createEditorSubmitHandler,
   createSubmitBurstCoalescer,
   shouldEnableWindowsGitBashPasteFallback,
+  type TuiSubmitAction,
 } from "./tui-submit.js";
 import type {
   AgentSummary,
@@ -1442,11 +1445,17 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     addBlockedChatSubmitNotice(chatLog);
     tui.requestRender();
   };
+  const notifySubmitError = (action: TuiSubmitAction, error: unknown) => {
+    const message = sanitizeRenderableText(formatErrorMessage(error));
+    chatLog.addSystem(`${action} submit failed: ${message}`);
+    tui.requestRender();
+  };
   const submitHandler = createEditorSubmitHandler({
     editor,
     handleCommand,
     sendMessage,
     handleBangLine: runLocalShellLine,
+    onSubmitError: notifySubmitError,
     canSubmitMessage: canSubmitChatMessage,
     onBlockedMessageSubmit: notifyBlockedChatSubmit,
   });

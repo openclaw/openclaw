@@ -1466,6 +1466,7 @@ export const pl: TranslationMap = {
         summary: "Użycie kontekstu sesji: {used} z {limit} ({pct}%)",
         contextWindow: "Okno kontekstu",
         latestRunTokens: "Tokeny ostatniego uruchomienia",
+        estimatedCost: "Szac. koszt",
       },
       dismissTalkError: "Odrzuć błąd Talk",
       startTalk: "Start Talk",

@@ -1463,6 +1463,7 @@ export const pt_BR: TranslationMap = {
         summary: "Uso de contexto da sessão: {used} de {limit} ({pct}%)",
         contextWindow: "Janela de contexto",
         latestRunTokens: "Tokens da execução mais recente",
+        estimatedCost: "Custo estimado",
       },
       dismissTalkError: "Descartar erro do Talk",
       startTalk: "Start Talk",

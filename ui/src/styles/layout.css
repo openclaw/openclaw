@@ -778,6 +778,7 @@
 .sidebar-recent-session {
   display: flex;
   align-items: center;
+  min-width: 0;
   min-height: 34px;
   padding-right: 4px;
   border: 1px solid transparent;

@@ -1445,6 +1445,7 @@ export const ar: TranslationMap = {
         summary: "استخدام سياق الجلسة: {used} من {limit} ({pct}%)",
         contextWindow: "نافذة السياق",
         latestRunTokens: "رموز التشغيل الأخير",
+        estimatedCost: "التكلفة المقدّرة",
       },
       dismissTalkError: "تجاهل خطأ Talk",
       startTalk: "Start Talk",

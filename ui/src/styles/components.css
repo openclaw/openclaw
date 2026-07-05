@@ -6748,3 +6748,37 @@ details[open] > .ov-expandable-toggle::after {
     border-color: var(--accent);
   }
 }
+
+/* ===========================================
+   Hover Marquee
+   =========================================== */
+
+/* Truncated single-line labels that slide on hover to reveal the clipped
+   tail. lib/hover-marquee.ts measures the overflow and sets the custom
+   properties; without it the label stays a plain ellipsized span. Animates
+   text-indent so the resting ellipsis keeps rendering (text-overflow shows
+   no "…" for atomic inline children, ruling out a transformed wrapper). */
+.hover-marquee {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: text-indent 180ms ease-out;
+}
+
+.hover-marquee--scrolling {
+  text-overflow: clip;
+  text-indent: var(--hover-marquee-shift, 0);
+  transition-duration: var(--hover-marquee-duration, 600ms);
+  transition-timing-function: linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hover-marquee {
+    transition: none;
+  }
+
+  .hover-marquee--scrolling {
+    text-overflow: ellipsis;
+    text-indent: 0;
+  }
+}

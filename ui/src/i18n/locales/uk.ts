@@ -1465,6 +1465,7 @@ export const uk: TranslationMap = {
         summary: "Використання контексту сеансу: {used} з {limit} ({pct}%)",
         contextWindow: "Контекстне вікно",
         latestRunTokens: "Токени останнього запуску",
+        estimatedCost: "Орієнт. вартість",
       },
       dismissTalkError: "Закрити помилку Talk",
       startTalk: "Start Talk",

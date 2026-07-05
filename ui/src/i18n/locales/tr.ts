@@ -1467,6 +1467,7 @@ export const tr: TranslationMap = {
         summary: "Oturum bağlam kullanımı: {limit} üzerinden {used} ({pct}%)",
         contextWindow: "Bağlam penceresi",
         latestRunTokens: "En son çalıştırma token'ları",
+        estimatedCost: "Tahmini maliyet",
       },
       dismissTalkError: "Talk hatasını kapat",
       startTalk: "Start Talk",

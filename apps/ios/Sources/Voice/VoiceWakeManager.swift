@@ -353,6 +353,8 @@ final class VoiceWakeManager: NSObject {
     }
 
     private func tearDownRecognitionPipeline() {
+        let hadRecognitionPipeline = self.recognitionRequest != nil
+
         self.tapDrainTask?.cancel()
         self.tapDrainTask = nil
         self.tapQueue?.clear()
@@ -360,13 +362,16 @@ final class VoiceWakeManager: NSObject {
 
         self.recognitionTask?.cancel()
         self.recognitionTask = nil
-        self.recognitionRequest = nil
 
         if self.audioEngine.isRunning {
             self.audioEngine.stop()
         }
-        // A tap can be installed before AVAudioEngine.start() throws.
-        self.audioEngine.inputNode.removeTap(onBus: 0)
+        if hadRecognitionPipeline {
+            // Accessing inputNode initializes RemoteIO. Only touch it after
+            // startRecognition created a request and may have installed a tap.
+            self.audioEngine.inputNode.removeTap(onBus: 0)
+        }
+        self.recognitionRequest = nil
 
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
