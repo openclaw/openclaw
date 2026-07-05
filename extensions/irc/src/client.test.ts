@@ -47,8 +47,14 @@ async function startLoopbackIrcServer(): Promise<LoopbackIrcServer> {
       for (const socket of sockets) {
         socket.destroy();
       }
-      await new Promise<void>((resolve) => {
-        server.close(resolve);
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
       });
     },
   };
