@@ -44,9 +44,12 @@ class ChatControllerStreamReplayTest {
       assertEquals(1, controller.pendingRunCount.value)
       val optimisticUserId = controller.messages.value.single { it.role == "user" }.id
 
-      controller.handleGatewayEvent("chat", chatDeltaPayload("main", runId, "Str"))
+      controller.handleGatewayEvent("chat", chatDeltaPayload("main", runId, 1, "Str", "Str"))
       assertEquals("Str", controller.streamingAssistantText.value)
-      controller.handleGatewayEvent("chat", chatDeltaPayload("main", runId, "Streamed reply."))
+      controller.handleGatewayEvent(
+        "chat",
+        chatDeltaPayload("main", runId, 2, "eamed reply.", "Streamed reply."),
+      )
       assertEquals("Streamed reply.", controller.streamingAssistantText.value)
 
       gateway.respondWith(
@@ -60,7 +63,7 @@ class ChatControllerStreamReplayTest {
             ),
         ),
       )
-      controller.handleGatewayEvent("chat", chatTerminalPayload("main", runId))
+      controller.handleGatewayEvent("chat", chatTerminalPayload("main", runId, seq = 3))
       advanceUntilIdle()
 
       assertEquals(
@@ -87,7 +90,7 @@ class ChatControllerStreamReplayTest {
       assertTrue(controller.sendMessageAwaitAcceptance("dedupe me", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
 
-      val delta = chatDeltaPayload("main", runId, "Only once.")
+      val delta = chatDeltaPayload("main", runId, 1, "Only once.", "Only once.")
       controller.handleGatewayEvent("chat", delta)
       controller.handleGatewayEvent("chat", delta)
       assertEquals("Only once.", controller.streamingAssistantText.value)
@@ -103,7 +106,7 @@ class ChatControllerStreamReplayTest {
             ),
         ),
       )
-      val terminal = chatTerminalPayload("main", runId)
+      val terminal = chatTerminalPayload("main", runId, seq = 2)
       controller.handleGatewayEvent("chat", terminal)
       advanceUntilIdle()
       val idsAfterFirstTerminal = controller.messages.value.map { it.id }
@@ -161,10 +164,13 @@ class ChatControllerStreamReplayTest {
       val runId = requireNotNull(gateway.lastRunId)
       val optimisticUserId = controller.messages.value.single { it.role == "user" }.id
 
-      controller.handleGatewayEvent("chat", chatDeltaPayload("main", runId, "partial ans"))
+      controller.handleGatewayEvent(
+        "chat",
+        chatDeltaPayload("main", runId, 1, "partial ans", "partial ans"),
+      )
       controller.handleGatewayEvent(
         "agent",
-        """{"sessionKey":"main","ts":10,"stream":"tool","data":{"phase":"start","name":"exec","toolCallId":"tool-1"}}""",
+        """{"sessionKey":"main","runId":"$runId","seq":2,"ts":10,"stream":"tool","data":{"phase":"start","name":"exec","toolCallId":"tool-1"}}""",
       )
       assertEquals("partial ans", controller.streamingAssistantText.value)
       assertEquals(1, controller.pendingToolCalls.value.size)
@@ -244,7 +250,10 @@ class ChatControllerStreamReplayTest {
         }
       }
 
-      controller.handleGatewayEvent("chat", chatTerminalPayload("main", runId = null))
+      controller.handleGatewayEvent(
+        "chat",
+        chatTerminalPayload("main", runId = "external-run", seq = 1),
+      )
       runCurrent() // history refetch for "main" is now suspended on the gate
 
       controller.switchSession("other")
@@ -282,9 +291,12 @@ class ChatControllerStreamReplayTest {
       val chunks = chunkPreservingCodePoints(fixture, chunkSize = 47)
       assertTrue("fixture should stream in many chunks", chunks.size > 10)
       var accumulated = ""
-      for (chunk in chunks) {
+      for ((index, chunk) in chunks.withIndex()) {
         accumulated += chunk
-        controller.handleGatewayEvent("chat", chatDeltaPayload("main", runId, accumulated))
+        controller.handleGatewayEvent(
+          "chat",
+          chatDeltaPayload("main", runId, index + 1, chunk, accumulated),
+        )
         assertEquals(accumulated, controller.streamingAssistantText.value)
       }
 
@@ -302,7 +314,10 @@ class ChatControllerStreamReplayTest {
             ),
         ),
       )
-      controller.handleGatewayEvent("chat", chatTerminalPayload("main", runId))
+      controller.handleGatewayEvent(
+        "chat",
+        chatTerminalPayload("main", runId, seq = chunks.size + 1),
+      )
       advanceUntilIdle()
 
       val confirmed =

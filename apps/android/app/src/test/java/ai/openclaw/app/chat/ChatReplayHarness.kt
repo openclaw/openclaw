@@ -109,16 +109,20 @@ internal fun historyResponse(
     )
   }.toString()
 
-/** Gateway chat event carrying the accumulated assistant text snapshot so far. */
+/** Protocol-valid gateway delta carrying both the incremental chunk and accumulated snapshot. */
 internal fun chatDeltaPayload(
   sessionKey: String,
   runId: String,
+  seq: Int,
+  deltaText: String,
   accumulatedText: String,
 ): String =
   buildJsonObject {
     put("sessionKey", JsonPrimitive(sessionKey))
     put("runId", JsonPrimitive(runId))
+    put("seq", JsonPrimitive(seq))
     put("state", JsonPrimitive("delta"))
+    put("deltaText", JsonPrimitive(deltaText))
     put(
       "message",
       buildJsonObject {
@@ -140,12 +144,14 @@ internal fun chatDeltaPayload(
 
 internal fun chatTerminalPayload(
   sessionKey: String,
-  runId: String?,
+  runId: String,
+  seq: Int,
   state: String = "final",
 ): String =
   buildJsonObject {
     put("sessionKey", JsonPrimitive(sessionKey))
-    if (runId != null) put("runId", JsonPrimitive(runId))
+    put("runId", JsonPrimitive(runId))
+    put("seq", JsonPrimitive(seq))
     put("state", JsonPrimitive(state))
   }.toString()
 
