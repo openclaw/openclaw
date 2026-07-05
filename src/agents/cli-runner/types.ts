@@ -49,6 +49,8 @@ export type RunCliAgentParams = {
   config?: OpenClawConfig;
   prompt: string;
   transcriptPrompt?: string;
+  /** Undecorated current-turn prompt used to merge inline and offloaded images. */
+  imagePrompt?: string;
   /**
    * Execution mode for the generic CLI runner. Side questions are one-shot
    * background answers and must not reuse or mutate normal agent sessions.

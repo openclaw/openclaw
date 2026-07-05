@@ -55,6 +55,57 @@ const workspacePackageAliasEntries = {
       },
     },
   },
+  "@openclaw/markdown-core": {
+    dir: "markdown-core",
+    subpaths: {
+      "": { srcFile: "src/index.ts", distFile: "dist/index.mjs" },
+      "code-spans": { srcFile: "src/code-spans.ts", distFile: "dist/code-spans.mjs" },
+      fences: { srcFile: "src/fences.ts", distFile: "dist/fences.mjs" },
+      frontmatter: { srcFile: "src/frontmatter.ts", distFile: "dist/frontmatter.mjs" },
+      ir: { srcFile: "src/ir.ts", distFile: "dist/ir.mjs" },
+      render: { srcFile: "src/render.ts", distFile: "dist/render.mjs" },
+      "render-aware-chunking": {
+        srcFile: "src/render-aware-chunking.ts",
+        distFile: "dist/render-aware-chunking.mjs",
+      },
+      tables: { srcFile: "src/tables.ts", distFile: "dist/tables.mjs" },
+      types: { srcFile: "src/types.ts", distFile: "dist/types.mjs" },
+    },
+  },
+  "@openclaw/normalization-core": {
+    dir: "normalization-core",
+    subpaths: {
+      "": { srcFile: "src/index.ts", distFile: "dist/index.mjs" },
+      "boolean-coercion": {
+        srcFile: "src/boolean-coercion.ts",
+        distFile: "dist/boolean-coercion.mjs",
+      },
+      "error-coercion": {
+        srcFile: "src/error-coercion.ts",
+        distFile: "dist/error-coercion.mjs",
+      },
+      "number-coercion": {
+        srcFile: "src/number-coercion.ts",
+        distFile: "dist/number-coercion.mjs",
+      },
+      "record-coerce": {
+        srcFile: "src/record-coerce.ts",
+        distFile: "dist/record-coerce.mjs",
+      },
+      "string-coerce": {
+        srcFile: "src/string-coerce.ts",
+        distFile: "dist/string-coerce.mjs",
+      },
+      "string-normalization": {
+        srcFile: "src/string-normalization.ts",
+        distFile: "dist/string-normalization.mjs",
+      },
+      "utf16-slice": {
+        srcFile: "src/utf16-slice.ts",
+        distFile: "dist/utf16-slice.mjs",
+      },
+    },
+  },
 };
 const workspacePackageAliases = Object.entries(workspacePackageAliasEntries).flatMap(
   ([name, pkg]) =>

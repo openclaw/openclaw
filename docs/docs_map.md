@@ -755,7 +755,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Reusable sender groups
   - H3: Where the state lives
   - H2: 2) Node device pairing (iOS/Android/macOS/headless nodes)
-  - H3: Pair via Telegram (recommended for iOS)
+  - H3: Pair from the Control UI (recommended)
+  - H3: Pair via Telegram
   - H3: Approve a node device
   - H3: Optional trusted-CIDR node auto-approve
   - H3: Node pairing state storage
@@ -2756,6 +2757,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Precedence
   - H2: Per-session overrides
   - H2: Scope and guarantees
+  - H2: Queued-turn cancellation
   - H2: Troubleshooting
   - H2: Related
 
@@ -7203,6 +7205,11 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Getting started
   - H2: Thinking defaults (Claude Fable 5, 4.8, and 4.6)
+  - H2: Safety refusal fallback (Claude Fable 5)
+  - H3: Why this exists
+  - H3: How it works
+  - H3: Observability and billing
+  - H3: Scope
   - H2: Prompt caching
   - H2: Advanced configuration
   - H2: Troubleshooting
@@ -8053,7 +8060,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Version naming
   - H2: Release cadence
-  - H2: Release operator checklist
+  - H2: Monthly npm-only extended-stable publication
+  - H2: Regular release operator checklist
   - H2: Stable main closeout
   - H2: Release preflight
   - H2: Release test boxes
@@ -8061,9 +8069,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Docker
   - H3: QA Lab
   - H3: Package
-  - H2: Release publish automation
+  - H2: Regular release publish automation
   - H2: NPM workflow inputs
-  - H2: Stable npm release sequence
+  - H2: Regular beta/latest stable release sequence
   - H2: Public references
   - H2: Related
 
@@ -9810,6 +9818,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Quick open (local)
   - H2: Device pairing (first connection)
+  - H2: Pair a mobile device
   - H2: Personal identity (browser-local)
   - H2: Runtime config endpoint
   - H2: Language support
@@ -9817,6 +9826,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What it can do (today)
   - H2: MCP page
   - H2: Activity tab
+  - H2: Operator terminal
   - H2: Chat behavior
   - H2: PWA install and web push
   - H2: Hosted embeds

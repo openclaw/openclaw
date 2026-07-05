@@ -615,7 +615,7 @@ describe("telegram message cache", () => {
           blocks: [
             {
               type: "paragraph",
-              text: [{ type: "plain", text: "Forwarded cache text" }],
+              text: "Forwarded cache text",
             },
           ],
         },

@@ -2057,6 +2057,7 @@ describe("CLI attempt execution", () => {
     expectMockArgFields(runCliAgentMock, {
       prompt: "[Wed 2024-06-05 15:30 UTC] what time is it?",
       transcriptPrompt: "canonical timestamp question",
+      imagePrompt: "what time is it?",
       userTurnTranscriptRecorder,
       suppressNextUserMessagePersistence: false,
     });
@@ -2072,6 +2073,8 @@ describe("CLI attempt execution", () => {
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("canonical cli"));
     const fallbackRuntimeState: NonNullable<RunAgentAttemptParams["fallbackRuntimeState"]> = {};
+    const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
+    const imageOrder = ["inline" as const];
 
     await runAgentAttempt({
       providerOverride: "anthropic",
@@ -2093,11 +2096,11 @@ describe("CLI attempt execution", () => {
       sessionFile: path.join(tmpDir, "session.jsonl"),
       workspaceDir: tmpDir,
       body: "route this",
-      isFallbackRetry: false,
+      isFallbackRetry: true,
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
       runId: "run-canonical-claude-cli",
-      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      opts: { images, imageOrder } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: "telegram",
@@ -2116,10 +2119,12 @@ describe("CLI attempt execution", () => {
     expectMockArgFields(runCliAgentMock, {
       provider: "claude-cli",
       model: "claude-opus-4-7",
+      imagePrompt: "route this",
+      images,
+      imageOrder,
     });
     expect(fallbackRuntimeState.originRuntime).toBe("cli");
 
-    const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
     const fallbackArg = await runOpenClawEmbeddedAttemptForTest({
       runId: "run-canonical-claude-cli-fallback",
       isFallbackRetry: true,

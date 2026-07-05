@@ -538,13 +538,11 @@ async function repairMatrixDirectRoom(params: {
   });
 }
 
-type MatrixCliProfileSetResult = MatrixProfileUpdateResult;
-
 async function setMatrixProfile(params: {
   account?: string;
   name?: string;
   avatarUrl?: string;
-}): Promise<MatrixCliProfileSetResult> {
+}): Promise<MatrixProfileUpdateResult> {
   return await applyMatrixProfileUpdate({
     account: params.account,
     displayName: params.name,

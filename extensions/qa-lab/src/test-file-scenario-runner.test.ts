@@ -163,7 +163,7 @@ describe("qa test file scenario runner", () => {
       outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-playwright"),
       providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.5",
-      scenarios: [makeTestFileScenario("playwright", "ui/src/ui/e2e/chat-flow.e2e.test.ts")],
+      scenarios: [makeTestFileScenario("playwright", "ui/src/e2e/chat-flow.e2e.test.ts")],
       runCommand: async (command) => {
         commands.push(command);
         return {
@@ -187,7 +187,7 @@ describe("qa test file scenario runner", () => {
         "test/vitest/vitest.ui-e2e.config.ts",
         "--configLoader",
         "runner",
-        "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+        "ui/src/e2e/chat-flow.e2e.test.ts",
         "--reporter=verbose",
       ],
     ]);
@@ -202,7 +202,7 @@ describe("qa test file scenario runner", () => {
         kind: "playwright-test",
         id: "scenario-playwright",
         source: {
-          path: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+          path: "ui/src/e2e/chat-flow.e2e.test.ts",
         },
       },
       coverage: [
@@ -222,7 +222,7 @@ describe("qa test file scenario runner", () => {
         },
         {
           kind: "code",
-          path: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+          path: "ui/src/e2e/chat-flow.e2e.test.ts",
         },
       ],
       execution: {
@@ -248,7 +248,7 @@ describe("qa test file scenario runner", () => {
       outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-playwright"),
       providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.5",
-      scenarios: [makeTestFileScenario("playwright", "ui/src/ui/e2e/chat-flow.e2e.test.ts")],
+      scenarios: [makeTestFileScenario("playwright", "ui/src/e2e/chat-flow.e2e.test.ts")],
       writeEvidenceFile: false,
       runCommand: async () => ({
         exitCode: 0,

@@ -185,6 +185,8 @@ export const SessionsListParamsSchema = Type.Object(
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
     search: Type.Optional(Type.String()),
+    /** True lists archived sessions; false or omitted lists active sessions. */
+    archived: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -301,6 +303,8 @@ export const SessionsPatchParamsSchema = Type.Object(
     key: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
     label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
+    archived: Type.Optional(Type.Boolean()),
+    pinned: Type.Optional(Type.Boolean()),
     thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Null()])),
     verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -382,6 +386,10 @@ export const SessionsDeleteParamsSchema = Type.Object(
     key: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
     deleteTranscript: Type.Optional(Type.Boolean()),
+    // Internal compare-and-delete guard for lifecycle-owned cleanup.
+    expectedSessionId: Type.Optional(NonEmptyString),
+    expectedLifecycleRevision: Type.Optional(NonEmptyString),
+    expectedSessionUpdatedAt: Type.Optional(Type.Number({ minimum: 0 })),
     // Internal control: when false, still unbind thread bindings but skip hook emission.
     emitLifecycleHooks: Type.Optional(Type.Boolean()),
   },

@@ -1,3 +1,4 @@
+import { isConfiguredContextSizeOverflowError } from "@openclaw/ai/internal/runtime";
 /**
  * Classifies provider/runtime failures and formats assistant-facing error text.
  */
@@ -131,6 +132,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     hasContextWindow && (lower.includes("ran out of room") || lower.includes("ran out of space"));
   return (
     lower.includes("request_too_large") ||
+    isConfiguredContextSizeOverflowError(errorMessage) ||
     (lower.includes("invalid_argument") && lower.includes("maximum number of tokens")) ||
     lower.includes("request exceeds the maximum size") ||
     lower.includes("context length exceeded") ||

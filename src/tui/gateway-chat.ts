@@ -100,6 +100,14 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+function isLegacyPreserveSideRunsError(err: unknown): boolean {
+  if (!(err instanceof GatewayClientRequestError) || err.gatewayCode !== "INVALID_REQUEST") {
+    return false;
+  }
+  const message = err.message.toLowerCase();
+  return message.includes("invalid chat.abort params") && message.includes("preservesideruns");
+}
+
 export type GatewaySessionList = TuiSessionList;
 export type GatewayAgentsList = TuiAgentsList;
 export type GatewayModelChoice = TuiModelChoice;
@@ -211,12 +219,34 @@ export class GatewayChatClient implements TuiBackend {
     return status ? { runId: acceptedRunId, status } : { runId: acceptedRunId };
   }
 
-  async abortChat(opts: { sessionKey: string; agentId?: string; runId: string }) {
-    return await this.client.request<{ ok: boolean; aborted: boolean }>("chat.abort", {
+  async abortChat(opts: { sessionKey: string; agentId?: string; runId?: string }) {
+    const params = {
       sessionKey: opts.sessionKey,
       ...(opts.agentId ? { agentId: opts.agentId } : {}),
-      runId: opts.runId,
-    });
+      ...(opts.runId ? { runId: opts.runId } : {}),
+    };
+    if (opts.runId) {
+      return await this.client.request<{ ok: boolean; aborted: boolean; runIds?: string[] }>(
+        "chat.abort",
+        params,
+      );
+    }
+    try {
+      return await this.client.request<{ ok: boolean; aborted: boolean; runIds?: string[] }>(
+        "chat.abort",
+        { ...params, preserveSideRuns: true },
+      );
+    } catch (err) {
+      // Protocol v4 peers reject unknown fields. Retry the shipped abort shape
+      // so mixed-version TUI stops still work, even without BTW isolation.
+      if (!isLegacyPreserveSideRunsError(err)) {
+        throw err;
+      }
+      return await this.client.request<{ ok: boolean; aborted: boolean; runIds?: string[] }>(
+        "chat.abort",
+        params,
+      );
+    }
   }
 
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {

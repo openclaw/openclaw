@@ -333,6 +333,7 @@ import {
 } from "../tool-result-context-guard.js";
 import {
   resolveLiveToolResultMaxChars,
+  resolveLiveToolResultAggregateMaxChars,
   createToolResultPromptProjectionState,
   truncateOversizedToolResultsInMessages,
   type ToolResultPromptProjectionState,
@@ -532,7 +533,7 @@ export {
 };
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
-const PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER = 4;
+const aggregateToolResultPressureWarnings = new Set<string>();
 
 function pluginMetadataSnapshotCoversProvider(
   snapshot: PluginMetadataSnapshot | undefined,
@@ -4212,25 +4213,49 @@ export async function runEmbeddedAttempt(
             cfg: params.config,
             agentId: sessionAgentId,
           });
+          const promptToolResultAggregateMaxChars = resolveLiveToolResultAggregateMaxChars({
+            contextWindowTokens: contextTokenBudget,
+            perResultMaxChars: promptToolResultMaxChars,
+          });
           let promptHistoryMessages = activeSession.messages;
           const promptToolResultTruncation = truncateOversizedToolResultsInMessages(
             activeSession.messages,
             contextTokenBudget,
             promptToolResultMaxChars,
-            promptToolResultMaxChars * PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER,
+            promptToolResultAggregateMaxChars,
             toolResultPromptProjectionState,
           );
-          if (promptToolResultTruncation.messages !== activeSession.messages) {
+          const promptHistoryChanged =
+            promptToolResultTruncation.messages !== activeSession.messages;
+          const { aggregatePressureEngaged } = promptToolResultTruncation;
+          if (promptHistoryChanged) {
             promptHistoryMessages = promptToolResultTruncation.messages;
-            log.info(
+          }
+          if (promptHistoryChanged || aggregatePressureEngaged) {
+            const sessionLogKey = params.sessionKey ?? params.sessionId ?? "unknown";
+            const truncationLog =
               `[tool-result-truncation] Truncated ${promptToolResultTruncation.truncatedCount} ` +
-                `tool result(s) for prompt history ` +
-                `(maxChars=${promptToolResultMaxChars} ` +
-                `aggregateBudgetChars=${
-                  promptToolResultMaxChars * PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER
-                }) ` +
-                `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
-            );
+              `tool result(s) for prompt history ` +
+              `(maxChars=${promptToolResultMaxChars} ` +
+              `aggregateBudgetChars=${promptToolResultAggregateMaxChars} ` +
+              `aggregate=${promptToolResultTruncation.aggregateTruncatedCount}) ` +
+              `sessionKey=${sessionLogKey}`;
+            if (aggregatePressureEngaged) {
+              if (!aggregateToolResultPressureWarnings.has(sessionLogKey)) {
+                aggregateToolResultPressureWarnings.add(sessionLogKey);
+                log.warn(
+                  `${truncationLog}; aggregate tool-result pressure detected, compaction has been requested; consider /compact or /new if pressure persists`,
+                );
+              }
+              // Compaction and aggregate truncation both target about half the window;
+              // compact-then-truncate prevents re-hitting the same cap on the next turn.
+              preflightRecovery = { route: "compact_then_truncate" };
+              promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
+              promptErrorSource = "precheck";
+              skipPromptSubmission = true;
+            } else {
+              log.info(truncationLog);
+            }
           }
 
           const promptSubmission = resolveRuntimeContextPromptParts({
@@ -4778,7 +4803,7 @@ export async function runEmbeddedAttempt(
                     messages,
                     contextTokenBudget,
                     promptToolResultMaxChars,
-                    promptToolResultMaxChars * PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER,
+                    promptToolResultAggregateMaxChars,
                     toolResultPromptProjectionState,
                   );
                   return providerPromptHistoryTruncation.messages !== messages

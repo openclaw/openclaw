@@ -225,9 +225,17 @@ history, search, `/new`, `/reset`, and future model or harness switching.
 
 Explicit compaction requests, such as `/compact` or a plugin-requested manual
 compact operation, start native Codex compaction with `thread/compact/start`.
-OpenClaw returns after starting that native operation. It does not wait for
-completion, impose a separate OpenClaw timeout, restart the shared Codex
-app-server, or record the operation as an OpenClaw-completed compaction.
+OpenClaw keeps the request and shared-client lease open until Codex emits the
+matching `contextCompaction` completion item and then reports the compaction turn
+as completed. If that terminal turn exceeds the configured compaction timeout,
+OpenClaw requests a native turn interrupt. The lease and per-thread compaction
+fence remain held until Codex reports terminal state or confirms the interrupt RPC.
+If Codex does not confirm within the interrupt grace period, OpenClaw retires
+the connection before releasing the fence. Remote connections also detach the
+matching thread binding so later work cannot overlap an unconfirmed remote
+turn. Other turns on a retired connection fail and can retry on a fresh client.
+Client closure, request cancellation, or a failed compaction turn returns a
+failed operation.
 
 When a context engine requests Codex thread-bootstrap projection, OpenClaw
 projects tool-call names and ids, input shapes, and redacted tool-result content
@@ -235,10 +243,10 @@ into the fresh Codex thread. It does not copy raw tool-call argument values into
 that projection.
 
 The mirror includes the user prompt, final assistant text, and lightweight Codex
-reasoning or plan records when the app-server emits them. Today, OpenClaw only
-records explicit native compaction start signals when it requests compaction. It
-does not expose a human-readable compaction summary or an auditable list of
-which entries Codex kept after compaction.
+reasoning or plan records when the app-server emits them. OpenClaw records the
+native compaction start and terminal status, but it does not expose a
+human-readable compaction summary or an auditable list of which entries Codex
+kept after compaction.
 
 Because Codex owns the canonical native thread, `tool_result_persist` does not
 currently rewrite Codex-native tool result records. It only applies when

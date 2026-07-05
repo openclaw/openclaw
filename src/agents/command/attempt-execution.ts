@@ -705,10 +705,12 @@ export function runAgentAttempt(params: {
         authProfileId,
         bootstrapPromptWarningSignaturesSeen,
         bootstrapPromptWarningSignature,
-        // CLI retries may reuse native session history. Their image replay
-        // decision must be made per process invocation inside the CLI runner.
-        images: params.isFallbackRetry ? undefined : params.opts.images,
-        imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
+        // Image discovery must use the original turn, before retry/history decoration.
+        imagePrompt: params.body,
+        // Fallback prompts repeat the current task, so prompt-local images must
+        // accompany every CLI process. Native dedupe requires a runtime receipt.
+        images: params.opts.images,
+        imageOrder: params.opts.imageOrder,
         skillsSnapshot: params.skillsSnapshot,
         messageChannel: params.messageChannel,
         streamParams: params.opts.streamParams,

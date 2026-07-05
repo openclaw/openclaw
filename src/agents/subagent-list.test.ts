@@ -74,10 +74,8 @@ describe("buildSubagentList", () => {
       recentMinutes: 30,
       taskMaxChars: 110,
     });
-    expect(list.active[0]?.line).toContain(
-      "This is a deliberately long task description used to verify that subagent list output keeps the full task text",
-    );
-    expect(list.active[0]?.line).toContain("...");
+    expect(list.active[0]?.task).toHaveLength(110);
+    expect(list.active[0]?.task).toMatch(/\.\.\.$/);
     expect(list.active[0]?.line).not.toContain("after a short hard cutoff.");
   });
 

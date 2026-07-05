@@ -296,6 +296,15 @@ export async function deleteSlackMessage(
   });
 }
 
+export async function resolveSlackConversationName(
+  channelId: string,
+  opts: SlackActionClientOpts = {},
+): Promise<string | undefined> {
+  const client = await getClient(opts, "read");
+  const info = await client.conversations.info({ channel: channelId });
+  return info.channel?.name?.trim() || undefined;
+}
+
 export async function readSlackMessages(
   channelId: string,
   opts: SlackActionClientOpts & {

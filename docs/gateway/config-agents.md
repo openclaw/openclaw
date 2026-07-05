@@ -384,6 +384,7 @@ Time format in system prompt. Default: `auto` (OS preference).
         primary: "anthropic/claude-opus-4-6",
         fallbacks: ["minimax/MiniMax-M2.7"],
       },
+      utilityModel: "openai/gpt-5.4-mini",
       imageModel: {
         primary: "openrouter/qwen/qwen-2.5-vl-72b-instruct:free",
         fallbacks: ["openrouter/google/gemini-2.0-flash-vision:free"],
@@ -420,6 +421,8 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `model`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - String form sets only the primary model.
   - Object form sets primary plus ordered failover models.
+- `utilityModel`: optional `provider/model` ref or alias for short internal tasks. It currently powers generated Control UI session titles, Telegram DM topic titles, and Discord auto-thread titles. These tasks fall back to the agent's primary model when unset; `agents.list[].utilityModel` overrides the default, and an operation-specific model override wins over both.
+  Utility tasks make separate model calls and send task-specific content to the selected model provider. Dashboard title generation sends at most the first 1,000 characters of the first non-command message. Choose a provider that matches your cost and data-handling requirements.
 - `imageModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the `image` tool path as its vision-model config.
   - Also used as fallback routing when the selected/default model cannot accept image input.
@@ -1051,6 +1054,7 @@ for provider examples and precedence.
         workspace: "~/.openclaw/workspace",
         agentDir: "~/.openclaw/agents/main/agent",
         model: "anthropic/claude-opus-4-6", // or { primary, fallbacks }
+        utilityModel: "openai/gpt-5.4-mini",
         thinkingDefault: "high", // per-agent thinking level override
         reasoningDefault: "on", // per-agent reasoning visibility override
         fastModeDefault: false, // per-agent fast mode override
@@ -1094,6 +1098,7 @@ for provider examples and precedence.
 - `id`: stable agent id (required).
 - `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
 - `model`: string form sets a strict per-agent primary with no model fallback; object form `{ primary }` is also strict unless you add `fallbacks`. Use `{ primary, fallbacks: [...] }` to opt that agent into fallback, or `{ primary, fallbacks: [] }` to make strict behavior explicit. Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
+- `utilityModel`: optional per-agent override for short internal tasks such as generated session and thread titles. Falls back to `agents.defaults.utilityModel`, then this agent's primary model.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
 - `tts`: optional per-agent text-to-speech overrides. The block deep-merges over `messages.tts`, so keep shared provider credentials and fallback policy in `messages.tts` and set only persona-specific values such as provider, voice, model, style, or auto mode here.
 - `skills`: optional per-agent skill allowlist. If omitted, the agent inherits `agents.defaults.skills` when set; an explicit list replaces defaults instead of merging, and `[]` means no skills.
