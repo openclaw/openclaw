@@ -29,8 +29,8 @@ import type {
   StopReason,
   ToolCallLocation,
   ToolKind,
-  RequestError,
 } from "@agentclientprotocol/sdk";
+import { RequestError } from "@agentclientprotocol/sdk";
 import { readBool, readNonNegativeInteger, readString } from "@openclaw/acp-core/meta";
 import { defaultAcpSessionStore, type AcpSessionStore } from "@openclaw/acp-core/session";
 import { toAcpSessionLineageMeta } from "@openclaw/acp-core/session-lineage-meta";
