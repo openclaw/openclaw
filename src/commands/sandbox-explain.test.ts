@@ -154,7 +154,7 @@ describe("sandbox explain command", () => {
             workspaceRoot: "/tmp/openclaw-sandboxes",
           },
         },
-        list: [{ id: "builder" }],
+        list: [{ id: "main", default: true }, { id: "builder" }],
       },
       session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
     };
