@@ -370,6 +370,87 @@ describe("mantis Slack desktop smoke runtime", () => {
     ).rejects.toThrow("--approval-checkpoints only supports approval checkpoint scenarios");
   });
 
+  it.each([
+    {
+      expectedScenarioIds: ["slack-codex-approval-exec-native"],
+      label: "command",
+      remoteTimeoutSeconds: 1_250,
+      requestedScenarioIds: ["slack-codex-approval-exec-native"],
+    },
+    {
+      expectedScenarioIds: ["slack-codex-approval-plugin-native"],
+      label: "file",
+      remoteTimeoutSeconds: 1_250,
+      requestedScenarioIds: ["slack-codex-approval-plugin-native"],
+    },
+    {
+      expectedScenarioIds: [
+        "slack-codex-approval-exec-native",
+        "slack-codex-approval-plugin-native",
+      ],
+      label: "command and file",
+      remoteTimeoutSeconds: 1_900,
+      requestedScenarioIds: [
+        "slack-codex-approval-plugin-native",
+        "slack-codex-approval-exec-native",
+        "slack-codex-approval-plugin-native",
+      ],
+    },
+  ])(
+    "accepts the opt-in Codex $label checkpoint scenarios",
+    async ({ expectedScenarioIds, remoteTimeoutSeconds, requestedScenarioIds }) => {
+      const commands: { args: readonly string[]; command: string }[] = [];
+      const runner = vi.fn(async (command: string, args: readonly string[]) => {
+        commands.push({ command, args });
+        if (command === "/tmp/crabbox" && args[0] === "warmup") {
+          return { stdout: "ready lease cbx_123abc\n", stderr: "" };
+        }
+        if (command === "/tmp/crabbox" && args[0] === "inspect") {
+          return {
+            stdout: `${JSON.stringify({
+              host: "203.0.113.10",
+              id: "cbx_123abc",
+              provider: "hetzner",
+              sshKey: "/tmp/key",
+              sshPort: "2222",
+              sshUser: "crabbox",
+              state: "active",
+            })}\n`,
+            stderr: "",
+          };
+        }
+        if (command === "/tmp/crabbox" && args[0] === "run") {
+          throw new Error("stop after remote script capture");
+        }
+        return { stdout: "", stderr: "" };
+      });
+
+      const result = await runMantisSlackDesktopSmoke({
+        approvalCheckpoints: true,
+        commandRunner: runner,
+        crabboxBin: "/tmp/crabbox",
+        outputDir: `.artifacts/qa-e2e/mantis/${requestedScenarioIds.join("-")}`,
+        repoRoot,
+        scenarioIds: requestedScenarioIds,
+      });
+
+      expect(result.status).toBe("fail");
+      const remoteScript = commands
+        .find((entry) => entry.command === "/tmp/crabbox" && entry.args[0] === "run")
+        ?.args.at(-1);
+      for (const scenarioId of expectedScenarioIds) {
+        expect(remoteScript?.split(`--scenario '${scenarioId}'`)).toHaveLength(3);
+      }
+      expect(remoteScript).toContain(
+        expectedScenarioIds.map((scenarioId) => `--scenario '${scenarioId}'`).join(" "),
+      );
+      expect(remoteScript).toContain("OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS:-470000");
+      expect(remoteScript).toContain(
+        `OPENCLAW_MANTIS_REMOTE_COMMAND_TIMEOUT_SECONDS:-${remoteTimeoutSeconds}`,
+      );
+    },
+  );
+
   it("fails approval checkpoint mode when ack metadata does not match the expected state", async () => {
     const expectedScenarios = ["slack-approval-exec-native", "slack-approval-plugin-native"];
     const runner = vi.fn(async (command: string, args: readonly string[]) => {

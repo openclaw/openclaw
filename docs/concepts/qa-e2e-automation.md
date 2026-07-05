@@ -288,6 +288,14 @@ empty. Cold CI leases may still show Slack sign-in in
 `slack-desktop-smoke.png`; the approval checkpoint images are the visual
 proof for this lane.
 
+The default checkpoint run keeps the two standard Slack approval scenarios.
+To capture either opt-in Codex approval route, select it explicitly with
+`--scenario slack-codex-approval-exec-native` or
+`--scenario slack-codex-approval-plugin-native`; Mantis accepts both and emits
+the same pending/resolved screenshot pair. The runner expands its checkpoint
+and remote-command deadlines for each selected Codex route so the full
+approval, agent completion, and resolved-update sequence can finish.
+
 The operator checklist, GitHub workflow dispatch command, evidence-comment
 contract, hydrate-mode decision table, timing interpretation, and failure
 handling steps live in

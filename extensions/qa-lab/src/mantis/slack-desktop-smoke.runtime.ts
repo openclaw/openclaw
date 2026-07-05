@@ -8,6 +8,7 @@ import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../live-transports/shared/credential-lease.runtime.js";
+import { listSlackQaScenarioCatalog } from "../live-transports/slack/slack-live.runtime.js";
 import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
 import { createPhaseTimer, type MantisPhaseTimings } from "../mantis-phase-timer.runtime.js";
 import {
@@ -142,6 +143,27 @@ const DEFAULT_APPROVAL_CHECKPOINT_SCENARIOS = [
   "slack-approval-exec-native",
   "slack-approval-plugin-native",
 ] as const;
+const SUPPORTED_APPROVAL_CHECKPOINT_SCENARIOS = [
+  ...DEFAULT_APPROVAL_CHECKPOINT_SCENARIOS,
+  "slack-codex-approval-exec-native",
+  "slack-codex-approval-plugin-native",
+] as const;
+const DEFAULT_APPROVAL_CHECKPOINT_TIMEOUT_MS = 120_000;
+const CODEX_APPROVAL_PENDING_TIMEOUT_MS = 180_000;
+const CODEX_APPROVAL_RESOLVE_TIMEOUT_MS = 35_000;
+const CODEX_APPROVAL_AGENT_WAIT_TIMEOUT_MS = 185_000;
+const CODEX_APPROVAL_HISTORY_TIMEOUT_MS = 10_000;
+const CODEX_APPROVAL_RESOLVED_UPDATE_TIMEOUT_MS = 180_000;
+const CODEX_APPROVAL_CAPTURE_HEADROOM_MS = 60_000;
+const CODEX_APPROVAL_POST_PENDING_BUDGET_MS =
+  CODEX_APPROVAL_RESOLVE_TIMEOUT_MS +
+  CODEX_APPROVAL_AGENT_WAIT_TIMEOUT_MS +
+  CODEX_APPROVAL_HISTORY_TIMEOUT_MS +
+  CODEX_APPROVAL_RESOLVED_UPDATE_TIMEOUT_MS +
+  CODEX_APPROVAL_CAPTURE_HEADROOM_MS;
+const CODEX_APPROVAL_SCENARIO_BUDGET_MS =
+  CODEX_APPROVAL_PENDING_TIMEOUT_MS + CODEX_APPROVAL_POST_PENDING_BUDGET_MS;
+const DEFAULT_REMOTE_COMMAND_TIMEOUT_SECONDS = 600;
 const CRABBOX_BIN_ENV = "OPENCLAW_MANTIS_CRABBOX_BIN";
 const CRABBOX_PROVIDER_ENV = "OPENCLAW_MANTIS_CRABBOX_PROVIDER";
 const CRABBOX_CLASS_ENV = "OPENCLAW_MANTIS_CRABBOX_CLASS";
@@ -183,15 +205,21 @@ function resolveScenarioIds(params: {
         ? [...DEFAULT_APPROVAL_CHECKPOINT_SCENARIOS]
         : [];
   if (params.approvalCheckpoints) {
-    const allowed = new Set<string>(DEFAULT_APPROVAL_CHECKPOINT_SCENARIOS);
+    const allowed = new Set<string>(SUPPORTED_APPROVAL_CHECKPOINT_SCENARIOS);
     const unsupported = scenarioIds.filter((scenarioId) => !allowed.has(scenarioId));
     if (unsupported.length > 0) {
       throw new Error(
         `--approval-checkpoints only supports approval checkpoint scenarios: ${[
-          ...DEFAULT_APPROVAL_CHECKPOINT_SCENARIOS,
+          ...SUPPORTED_APPROVAL_CHECKPOINT_SCENARIOS,
         ].join(", ")}. Unsupported: ${unsupported.join(", ")}.`,
       );
     }
+    const requested = new Set(scenarioIds);
+    // Slack selects scenarios from catalog order, not CLI order. The watcher
+    // must mirror that order or both sides can block on different checkpoints.
+    return listSlackQaScenarioCatalog()
+      .map((scenario) => scenario.id)
+      .filter((scenarioId) => requested.has(scenarioId));
   }
   return scenarioIds;
 }
@@ -518,6 +546,20 @@ function renderRemoteScript(params: {
   const slackChannelId = shellQuote(params.slackChannelId);
   const scenarioArgs = params.scenarioIds.flatMap((id) => ["--scenario", shellQuote(id)]).join(" ");
   const checkpointScenarioJson = shellQuote(JSON.stringify(params.scenarioIds));
+  const codexScenarioCount = params.scenarioIds.filter((id) =>
+    id.startsWith("slack-codex-approval-"),
+  ).length;
+  // The watcher starts before gateway setup, then waits for pending and resolved
+  // sequentially. The resolved phase includes approval, agent, history, and Slack waits.
+  const approvalCheckpointTimeoutMs =
+    codexScenarioCount > 0
+      ? CODEX_APPROVAL_POST_PENDING_BUDGET_MS
+      : DEFAULT_APPROVAL_CHECKPOINT_TIMEOUT_MS;
+  // Preserve the existing hydration/startup budget, then add every selected
+  // Codex scenario's complete sequential approval budget.
+  const remoteCommandTimeoutSeconds =
+    DEFAULT_REMOTE_COMMAND_TIMEOUT_SECONDS +
+    Math.ceil((codexScenarioCount * CODEX_APPROVAL_SCENARIO_BUDGET_MS) / 1_000);
   return `set -euo pipefail
 out=${shellOutputDir}
 slack_url_override=${slackUrl}
@@ -532,7 +574,7 @@ setup_gateway=${setupGateway}
 approval_checkpoints=${approvalCheckpoints}
 slack_channel_id=${slackChannelId}
 approval_checkpoint_scenarios_json=${checkpointScenarioJson}
-remote_command_timeout_seconds="\${OPENCLAW_MANTIS_REMOTE_COMMAND_TIMEOUT_SECONDS:-600}"
+remote_command_timeout_seconds="\${OPENCLAW_MANTIS_REMOTE_COMMAND_TIMEOUT_SECONDS:-${remoteCommandTimeoutSeconds}}"
 if [ -z "\${OPENCLAW_QA_SLACK_CHANNEL_ID:-}" ] && [ -n "$slack_channel_id" ]; then
   export OPENCLAW_QA_SLACK_CHANNEL_ID="$slack_channel_id"
 fi
@@ -739,7 +781,7 @@ MANTIS_SLACK_PATCH
       checkpoint_dir="$out/approval-checkpoints"
       mkdir -p "$checkpoint_dir"
       export OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR="$checkpoint_dir"
-      export OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS="\${OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS:-120000}"
+      export OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS="\${OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS:-${approvalCheckpointTimeoutMs}}"
       export OPENCLAW_MANTIS_APPROVAL_CHECKPOINT_SCENARIOS_JSON="$approval_checkpoint_scenarios_json"
       export OPENCLAW_MANTIS_APPROVAL_BROWSER_BIN="$browser_bin"
       cat >"$out/approval-checkpoint-watcher.mjs" <<'MANTIS_APPROVAL_WATCHER'
@@ -749,7 +791,7 @@ MANTIS_SLACK_PATCH
 
 const checkpointDir = process.env.OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR;
 const timeoutMs = Number.parseInt(
-  process.env.OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS || "120000",
+  process.env.OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS || "${approvalCheckpointTimeoutMs}",
   10,
 );
 	const scenarioIds = JSON.parse(
