@@ -10,19 +10,20 @@ import type {
   ToolResultMessage,
 } from "../types.js";
 import { resolveModelBoundThinkingReplayMode } from "./anthropic-model-contract.js";
+import { isImageBlock } from "./tool-result-text.js";
 
 const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
 const NON_VISION_TOOL_IMAGE_PLACEHOLDER = "(tool image omitted: model does not support images)";
 
 function replaceImagesWithPlaceholder(
-  content: (TextContent | ImageContent)[],
+  content: readonly unknown[],
   placeholder: string,
 ): TextContent[] {
   const result: TextContent[] = [];
   let previousWasPlaceholder = false;
 
   for (const block of content) {
-    if (block.type === "image") {
+    if (isImageBlock(block)) {
       if (!previousWasPlaceholder) {
         result.push({ type: "text", text: placeholder });
       }
@@ -30,8 +31,15 @@ function replaceImagesWithPlaceholder(
       continue;
     }
 
-    result.push(block);
-    previousWasPlaceholder = block.text === placeholder;
+    if (block && typeof block === "object" && (block as Record<string, unknown>).type === "text") {
+      result.push(block as TextContent);
+    } else {
+      result.push(block as unknown as TextContent);
+    }
+    previousWasPlaceholder =
+      typeof block === "object" &&
+      block !== null &&
+      (block as Record<string, unknown>).text === placeholder;
   }
 
   return result;
@@ -53,7 +61,7 @@ function downgradeUnsupportedImages<TApi extends Api>(
       };
     }
 
-    if (msg.role === "toolResult") {
+    if (msg.role === "toolResult" && Array.isArray(msg.content)) {
       return {
         ...msg,
         content: replaceImagesWithPlaceholder(msg.content, NON_VISION_TOOL_IMAGE_PLACEHOLDER),

@@ -42,6 +42,7 @@ import {
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
+  isImageBlock,
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -1286,7 +1287,7 @@ function convertResponsesMessages(
       const sanitizedTextResult = sanitizeTransportPayloadText(textResult);
       const hasText = sanitizedTextResult.trim().length > 0;
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
-      const hasImages = msg.content.some((item) => item.type === "image");
+      const hasImages = msg.content.some((item) => isImageBlock(item));
       const [callId] = msg.toolCallId.split("|");
       messages.push({
         type: "function_call_output",

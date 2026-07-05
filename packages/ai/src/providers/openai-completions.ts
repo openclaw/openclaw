@@ -58,7 +58,11 @@ import {
   type OpenAIToolProjection,
 } from "./openai-tool-projection.js";
 import { buildBaseOptions } from "./simple-options.js";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+  isImageBlock,
+} from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 /**
@@ -1161,7 +1165,7 @@ export function convertMessages(
         // Extract text and image content
         const textResult = extractToolResultText(toolMsg.content);
         const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
-        const hasImages = toolMsg.content.some((c) => c.type === "image");
+        const hasImages = toolMsg.content.some((c) => isImageBlock(c));
 
         // Always send tool result with text (or placeholder if only images)
         const content = sanitizeToolResultText(

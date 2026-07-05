@@ -121,6 +121,44 @@ function truncateProviderToolText(text: string): string {
   return `${truncateUtf16Safe(text, PROVIDER_TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
 }
 
+export function isMediaContentBlock(block: unknown): boolean {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const record = block as Record<string, unknown>;
+  const type = typeof record.type === "string" ? record.type : undefined;
+  if (type && (IMAGE_TOOL_RESULT_TYPES.has(type) || AUDIO_TOOL_RESULT_TYPES.has(type))) {
+    return true;
+  }
+  const mimeType = readMimeType(record);
+  if (mimeType) {
+    const lower = mimeType.toLowerCase();
+    if (lower.startsWith("image/") || lower.startsWith("audio/") || lower.startsWith("video/")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function isImageBlock(block: unknown): boolean {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const record = block as Record<string, unknown>;
+  const type = typeof record.type === "string" ? record.type : undefined;
+  if (type && IMAGE_TOOL_RESULT_TYPES.has(type)) {
+    return true;
+  }
+  const mimeType = readMimeType(record);
+  if (mimeType) {
+    const lower = mimeType.toLowerCase();
+    if (lower.startsWith("image/")) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): string | undefined {
   let hasImage = false;
   let hasAudio = false;
