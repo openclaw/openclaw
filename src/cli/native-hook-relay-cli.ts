@@ -80,6 +80,7 @@ export async function runNativeHookRelayCli(
           opts,
           provider,
           event,
+          rawPayload,
           error,
         });
       }
@@ -112,12 +113,20 @@ export async function runNativeHookRelayCli(
           opts,
           provider,
           event,
+          rawPayload,
           error,
         });
       }
       if (isNativeHookRelayBridgeStaleRegistrationError(error)) {
         writeText(stderr, formatRelayCliError("native hook relay unavailable", error));
-        return writeNativeHookRelayUnavailableResponse({ stdout, stderr, opts, provider, event });
+        return writeNativeHookRelayUnavailableResponse({
+          stdout,
+          stderr,
+          opts,
+          provider,
+          event,
+          rawPayload,
+        });
       }
       // Fall through to the gateway path for embedded/local gateway cases and
       // older registrations that predate the direct relay bridge.
@@ -149,7 +158,14 @@ export async function runNativeHookRelayCli(
         });
       }
       writeText(stderr, formatRelayCliError("native hook relay unavailable", error));
-      return writeNativeHookRelayUnavailableResponse({ stdout, stderr, opts, provider, event });
+      return writeNativeHookRelayUnavailableResponse({
+        stdout,
+        stderr,
+        opts,
+        provider,
+        event,
+        rawPayload,
+      });
     }
   } finally {
     deadline.dispose();
@@ -282,12 +298,14 @@ function writeNativeHookRelayUnavailableResponse(params: {
   opts: NativeHookRelayCliOptions;
   provider: string;
   event: string;
+  rawPayload?: unknown;
   message?: string;
 }): number {
   const response = renderNativeHookRelayUnavailableResponse({
     provider: params.provider,
     event: params.event,
     preToolUseUnavailable: params.opts.preToolUseUnavailable,
+    rawPayload: params.rawPayload,
     message: params.message ?? "Native hook relay unavailable",
   });
   writeText(params.stdout, response.stdout);
@@ -301,6 +319,7 @@ function writeNativeHookRelayDeadlineResponse(params: {
   opts: NativeHookRelayCliOptions;
   provider: string;
   event: string;
+  rawPayload?: unknown;
   error: NativeHookRelayDeadlineError;
 }): number {
   writeText(params.stderr, formatRelayCliError("native hook relay timed out", params.error));
@@ -310,6 +329,7 @@ function writeNativeHookRelayDeadlineResponse(params: {
     opts: params.opts,
     provider: params.provider,
     event: params.event,
+    rawPayload: params.rawPayload,
     message: "Native hook relay timed out",
   });
 }

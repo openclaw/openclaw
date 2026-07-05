@@ -490,6 +490,46 @@ describe("native hook relay CLI", () => {
     expect(stderr.text()).toContain("native hook relay unavailable");
   });
 
+  it("keeps skill workshop lifecycle approvals fail-closed when loop-detection-only relay is unavailable", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error("gateway closed");
+    });
+    const stdout = createWritableTextBuffer();
+    const stderr = createWritableTextBuffer();
+
+    const exitCode = await runNativeHookRelayCli(
+      {
+        provider: "codex",
+        relayId: "relay-1",
+        generation: "generation-1",
+        event: "pre_tool_use",
+        preToolUseUnavailable: "loop-detection-only",
+      },
+      {
+        stdin: createReadableTextStream(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "skill_workshop",
+            tool_input: { action: "apply", proposal_id: "proposal-1" },
+          }),
+        ),
+        stdout,
+        stderr,
+        callGateway: callGateway as never,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout.text())).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "Native hook relay unavailable",
+      },
+    });
+    expect(stderr.text()).toContain("native hook relay unavailable");
+  });
+
   it("fails closed for PermissionRequest when the gateway relay is unavailable", async () => {
     const callGateway = vi.fn(async () => {
       throw new Error("gateway closed");
