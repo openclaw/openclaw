@@ -27,6 +27,7 @@ import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { scheduleGatewaySigusr1Restart } from "./restart.js";
 import { detectRespawnSupervisor, type RespawnSupervisor } from "./supervisor-markers.js";
 import {
+  channelToNpmTag,
   normalizeUpdateChannel,
   DEFAULT_PACKAGE_CHANNEL,
   type UpdateChannel,
@@ -260,7 +261,7 @@ function resolvePersistedUpdateAvailable(
   if (cmp == null || cmp >= 0) {
     return null;
   }
-  const persistedTag = state.lastAvailableTag?.trim() || DEFAULT_PACKAGE_CHANNEL;
+  const persistedTag = state.lastAvailableTag?.trim() || channelToNpmTag(channel);
   return {
     currentVersion: VERSION,
     latestVersion,

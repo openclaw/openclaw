@@ -338,7 +338,7 @@ describe("update-startup", () => {
 
   async function runExtendedStableUpdateCheck(params?: {
     cfg?: ReturnType<typeof createExtendedStableConfig>;
-    log?: { info: ReturnType<typeof vi.fn> };
+    log?: Parameters<typeof runGatewayUpdateCheck>[0]["log"];
     onUpdateAvailableChange?: Parameters<
       typeof runGatewayUpdateCheck
     >[0]["onUpdateAvailableChange"];
@@ -372,7 +372,7 @@ describe("update-startup", () => {
 
   function seedStableAutoRolloutState() {
     writePersistedUpdateCheckState({
-      ...(readPersistedUpdateCheckState() ?? {}),
+      ...readPersistedUpdateCheckState(),
       autoInstallId: "stable-install-id",
       autoFirstSeenVersion: "3.0.0",
       autoFirstSeenTag: "latest",
@@ -475,19 +475,45 @@ describe("update-startup", () => {
   });
 
   it.each([
-    { channel: "stable" as const, persistedTag: undefined, expectedTag: "latest" },
-    { channel: "stable" as const, persistedTag: "latest", expectedTag: "latest" },
-    { channel: "beta" as const, persistedTag: "beta", expectedTag: "beta" },
-    { channel: "beta" as const, persistedTag: "latest", expectedTag: "latest" },
+    {
+      channel: "stable" as const,
+      persistedTag: undefined,
+      expectedTag: "latest",
+      preflightsInstallKind: false,
+    },
+    {
+      channel: "stable" as const,
+      persistedTag: "latest",
+      expectedTag: "latest",
+      preflightsInstallKind: false,
+    },
+    {
+      channel: "beta" as const,
+      persistedTag: "beta",
+      expectedTag: "beta",
+      preflightsInstallKind: false,
+    },
+    {
+      channel: "beta" as const,
+      persistedTag: "latest",
+      expectedTag: "latest",
+      preflightsInstallKind: false,
+    },
     {
       channel: "extended-stable" as const,
       persistedTag: "extended-stable",
       expectedTag: "extended-stable",
+      preflightsInstallKind: true,
     },
-    { channel: "dev" as const, persistedTag: "dev", expectedTag: "dev" },
+    {
+      channel: "dev" as const,
+      persistedTag: "dev",
+      expectedTag: "dev",
+      preflightsInstallKind: false,
+    },
   ])(
     "hydrates $channel cached availability from its compatible $expectedTag tag",
-    async ({ channel, persistedTag, expectedTag }) => {
+    async ({ channel, persistedTag, expectedTag, preflightsInstallKind }) => {
       writePersistedUpdateCheckState({
         lastCheckedAt: new Date(Date.now()).toISOString(),
         lastAvailableVersion: "2.0.0",
@@ -503,7 +529,7 @@ describe("update-startup", () => {
         onUpdateAvailableChange,
       });
 
-      expect(checkUpdateStatus).not.toHaveBeenCalled();
+      expect(checkUpdateStatus).toHaveBeenCalledTimes(preflightsInstallKind ? 1 : 0);
       expect(resolveNpmChannelTag).not.toHaveBeenCalled();
       expect(onUpdateAvailableChange).toHaveBeenCalledWith({
         currentVersion: "1.0.0",
