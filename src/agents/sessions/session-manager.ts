@@ -2342,7 +2342,8 @@ export class SessionManager {
       }
       const leaf = parseOpaqueLeafEntry(entry.record);
       if (leaf && entry.preserveActiveLeaf) {
-        const appendParentId = leaf.appendParentId ?? leaf.targetId;
+        const appendParentId =
+          leaf.appendParentId === undefined ? leaf.targetId : leaf.appendParentId;
         if (
           leaf.appendMode !== "side" ||
           leaf.targetId !== this.leafId ||
