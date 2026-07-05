@@ -937,10 +937,24 @@ Example findings:
 `workspaceRepairs` is explicitly enabled; otherwise checks report what they
 would repair and leave settings unchanged.
 
-Currently, repair can disable channels that are enabled in OpenClaw config but
-denied by `channels.denyRules`. Enable `workspaceRepairs` only after the
-policy file has been reviewed, since a valid deny rule can turn off a
-configured channel:
+In this version, repair can disable channels denied by `channels.denyRules` and
+apply the automatic narrowing repairs listed below. Enable `workspaceRepairs`
+only after the policy file has been reviewed, because a valid rule can change
+workspace config:
+
+- set `tools.elevated.enabled=false` when a global policy forbids elevated tools
+- set insecure `gateway.controlUi.*` toggles to `false`
+- set `gateway.mode=local` when policy denies remote gateway mode
+- set `logging.redactSensitive=tools` when policy requires sensitive logging
+  redaction
+- set `diagnostics.otel.captureContent=false`, or
+  `diagnostics.otel.captureContent.enabled=false` for object-form telemetry
+  capture settings, when policy denies telemetry content capture
+
+Scoped elevated-tools repairs are detect-only. Scoped data-handling repairs are
+also skipped when the finding reports shared logging or telemetry config,
+because changing the shared setting would affect more than the scoped policy
+target.
 
 ```jsonc
 {

@@ -252,6 +252,23 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     });
     const page = await context.newPage();
     await installMockGateway(page, {
+      historyMessages: [
+        { role: "user", content: "Show current usage", timestamp: Date.now() - 1_000 },
+        {
+          role: "assistant",
+          content: "Usage ready.",
+          cost: {
+            input: 0.003456,
+            output: 0.018,
+            cacheRead: 0.0015,
+            cacheWrite: 0.0005,
+            total: 0.023456,
+          },
+          model: "gpt-5.5",
+          provider: "openai",
+          timestamp: Date.now(),
+        },
+      ],
       methodResponses: {
         "sessions.list": {
           count: 1,
@@ -264,10 +281,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           sessions: [
             {
               contextTokens: 200_000,
+              estimatedCostUsd: 0.023456,
               inputTokens: 757_300,
               key: "main",
               kind: "direct",
               model: "gpt-5.5",
+              modelProvider: "openai",
               outputTokens: 42_300,
               totalTokens: 46_000,
               updatedAt: Date.now(),
@@ -289,6 +308,14 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await expect.poll(() => popover.textContent()).toContain("46k / 200k · 23%");
       await expect.poll(() => popover.textContent()).toContain("757.3k");
       await expect.poll(() => popover.textContent()).toContain("42.3k");
+      await expect.poll(() => popover.textContent()).toContain("Est. cost");
+      await expect.poll(() => popover.textContent()).toContain("$0.023");
+      await expect.poll(() => popover.textContent()).toContain("Cost by Type");
+      await expect.poll(() => popover.textContent()).toContain("$0.0035");
+      await expect.poll(() => popover.textContent()).toContain("$0.018");
+      await expect.poll(() => popover.textContent()).toContain("$0.0015");
+      await expect.poll(() => popover.textContent()).toContain("$0.0005");
+      await expect.poll(() => popover.textContent()).toContain("openai");
       await expect.poll(() => popover.textContent()).toContain("gpt-5.5");
 
       await page.keyboard.press("Escape");
@@ -1251,6 +1278,82 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(
         "bedrock/claude-opus-4.5",
       );
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("clears hover marquee state when a session switch reshuffles recent rows", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessions = chatSessionListResponse();
+    sessions.sessions[0].label = "Short";
+    sessions.sessions[1].label =
+      "Review and repair the intentionally overlong sidebar session title before navigation ".repeat(
+        4,
+      );
+    await installMockGateway(page, {
+      methodResponses: { "sessions.list": sessions },
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const recentRow = page.locator(
+        '.sidebar-recent-session[data-session-key="agent:main:session-b"]',
+      );
+      const recentLabel = recentRow.locator(".sidebar-recent-session__name");
+      await recentLabel.waitFor({ state: "visible", timeout: 10_000 });
+      const layout = await recentLabel.evaluate((label) => ({
+        clientWidth: label.clientWidth,
+        linkWidth: label.parentElement?.clientWidth ?? 0,
+        rowWidth: label.closest<HTMLElement>(".sidebar-recent-session")?.clientWidth ?? 0,
+        scrollWidth: label.scrollWidth,
+        text: label.textContent,
+      }));
+      expect(layout.scrollWidth, JSON.stringify(layout)).toBeGreaterThan(layout.clientWidth);
+
+      await recentRow.dispatchEvent("mouseenter");
+      await expect
+        .poll(() => recentLabel.evaluate((label) => getComputedStyle(label).textIndent))
+        .not.toBe("0px");
+
+      await recentRow.locator("a.sidebar-recent-session__link").dispatchEvent("click", {
+        button: 0,
+      });
+      await page
+        .locator(".sidebar-recent-session--active")
+        .getByText(sessions.sessions[1].label)
+        .waitFor({
+          timeout: 10_000,
+        });
+
+      const reshuffledLabel = page
+        .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
+        .getByText("Short");
+      await reshuffledLabel.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await reshuffledLabel.evaluate((label) => getComputedStyle(label).textIndent)).toBe(
+        "0px",
+      );
+      expect(await reshuffledLabel.evaluate((label) => getComputedStyle(label).textOverflow)).toBe(
+        "ellipsis",
+      );
+
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      const activeRow = page.locator(
+        '.sidebar-recent-session[data-session-key="agent:main:session-b"]',
+      );
+      await activeRow.dispatchEvent("mouseenter");
+      expect(
+        await activeRow.locator(".sidebar-recent-session__name").evaluate((label) => ({
+          textIndent: getComputedStyle(label).textIndent,
+          textOverflow: getComputedStyle(label).textOverflow,
+        })),
+      ).toEqual({ textIndent: "0px", textOverflow: "ellipsis" });
     } finally {
       await closeBrowserContext(context);
     }

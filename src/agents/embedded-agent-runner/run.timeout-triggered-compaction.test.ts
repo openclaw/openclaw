@@ -13,6 +13,7 @@ import {
   mockedRunPostCompactionSideEffects,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
@@ -114,6 +115,7 @@ function hookCallAt(index: number, kind: "before" | "after"): [HookEvent, HookCo
 describe("timeout-triggered compaction", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
   });
 
   beforeEach(() => {
