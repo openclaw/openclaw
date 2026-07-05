@@ -392,6 +392,24 @@ describe("resolveNpmChannelTag", () => {
       error: "npm view failed: npm ERR! 404 Not Found",
     });
   });
+
+  it("surfaces malformed npm view JSON as an error instead of crashing", async () => {
+    const badRunCommand = vi.fn(async () => ({
+      stdout: "not valid json {",
+      stderr: "",
+      code: 0,
+    }));
+
+    const result = await fetchNpmPackageTargetStatus({
+      target: "openclaw",
+      timeoutMs: 1000,
+      runCommand: badRunCommand as unknown as typeof runCommandWithTimeout,
+    });
+
+    expect(result.version).toBeNull();
+    expect(result.nodeEngine).toBeNull();
+    expect(result.error).toMatch(/invalid JSON/i);
+  });
 });
 
 describe("resolveExtendedStablePackage", () => {
