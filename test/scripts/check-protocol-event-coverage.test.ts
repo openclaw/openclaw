@@ -5,6 +5,7 @@ import {
   extractGatewayEventNames,
   extractKotlinHandledEvents,
   extractSwiftHandledEvents,
+  extractSwiftStaticStringConstants,
 } from "../../scripts/check-protocol-event-coverage.mjs";
 
 const GATEWAY_LIST_FIXTURE = `
@@ -51,6 +52,11 @@ describe("extractGatewayEventNames", () => {
 
 describe("extractSwiftHandledEvents", () => {
   it("collects switch case literals and comparisons, skipping nested and non-event code", () => {
+    const constants = extractSwiftStaticStringConstants(`
+      enum SomeBridge {
+        static let requestedKind = "exec.approval.requested"
+      }
+    `);
     const source = `
       static func mapEventFrame(_ evt: EventFrame) -> Event? {
         switch evt.event {
@@ -80,13 +86,28 @@ describe("extractSwiftHandledEvents", () => {
       }
       if evt.event == "connect.challenge" { return }
     `;
-    const handled = extractSwiftHandledEvents(source);
+    const handled = extractSwiftHandledEvents(source, constants);
     expect([...handled].toSorted()).toEqual([
       "chat",
       "connect.challenge",
+      "exec.approval.requested",
       "session.message",
       "tick",
     ]);
+  });
+
+  it("extracts only type-scoped static string constants", () => {
+    const constants = extractSwiftStaticStringConstants(`
+      enum ApprovalBridge {
+        static let requestedKind = "exec.approval.requested"
+        private static let nested = makeValue {
+          "not.an.event"
+        }
+      }
+      let requestedKind = "wrong.global.value"
+    `);
+
+    expect([...constants]).toEqual([["ApprovalBridge.requestedKind", "exec.approval.requested"]]);
   });
 });
 
