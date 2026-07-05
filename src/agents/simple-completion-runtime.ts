@@ -1,3 +1,4 @@
+import { supportsOpenAIReasoningEffort } from "@openclaw/ai/internal/openai";
 /**
  * Simple completion runtime preparation.
  *
@@ -33,7 +34,6 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "./model-selection.js";
-import { supportsOpenAIReasoningEffort } from "./openai-reasoning-effort.js";
 import { OPENAI_PROVIDER_ID, isOpenAIProvider } from "./openai-routing.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";

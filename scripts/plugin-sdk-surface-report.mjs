@@ -203,7 +203,7 @@ try {
   budgets = {
     publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 324),
     publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10436),
-    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5243),
+    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5209),
     publicDeprecatedExports: readBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
       3261,
@@ -275,10 +275,17 @@ function shouldSkipGeneratedLlmCoreValidatorExport(checker, symbol) {
     : false;
 }
 
+function isGeneratedPackageDeclaration(declaration) {
+  const relativePath = toRepoRelativePath(declaration.getSourceFile().fileName);
+  // Package builds can make workspace package reexports look newly callable.
+  // Source-surface counts must stay independent of generated dist state.
+  return /^packages\/[^/]+\/dist\//u.test(relativePath);
+}
+
 function isCallableExport(checker, symbol, sourceFile) {
   const target = unwrapAlias(checker, symbol);
   const declaration = target.valueDeclaration ?? target.declarations?.[0] ?? sourceFile;
-  if (isGeneratedLlmCoreValidatorDeclaration(symbol.getName(), declaration)) {
+  if (isGeneratedPackageDeclaration(declaration)) {
     return false;
   }
   const type = checker.getTypeOfSymbolAtLocation(target, declaration);

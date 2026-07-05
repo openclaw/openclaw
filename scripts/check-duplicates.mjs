@@ -10,6 +10,7 @@ const jscpdBin = path.join(repoRoot, "node_modules", "jscpd", "bin", "jscpd");
 const targets = [
   "src",
   "extensions",
+  "examples",
   "scripts",
   "packages",
   "ui",
@@ -21,6 +22,7 @@ const targets = [
   "skills",
   "openclaw.mjs",
   "config/knip.config.ts",
+  "tsdown.ai.config.ts",
   "tsdown.config.ts",
   "vitest.config.ts",
 ];
