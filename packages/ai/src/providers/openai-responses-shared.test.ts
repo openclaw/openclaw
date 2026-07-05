@@ -899,8 +899,9 @@ describe("convertResponsesMessages", () => {
       expect(fnOutput).toMatchObject({ type: "function_call_output", call_id: "call_img" });
       const output = fnOutput?.output;
       expect(Array.isArray(output)).toBe(true);
-      if (Array.isArray(output))
+      if (Array.isArray(output)) {
         expect((output as Array<Record<string, unknown>>)[0]?.type).toBe("input_text");
+      }
     });
 
     it("non-vision model downgrades image_url tool results to text placeholder", () => {
