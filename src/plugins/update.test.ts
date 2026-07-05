@@ -2436,6 +2436,96 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it.each([
+    {
+      name: "third-party npm",
+      config: createNpmInstallConfig({
+        pluginId: "demo",
+        spec: "@acme/demo@latest",
+        installPath: "/tmp/demo",
+        resolvedName: "@acme/demo",
+      }),
+    },
+    {
+      name: "ClawHub",
+      config: createClawHubInstallConfig({
+        pluginId: "demo",
+        installPath: "/tmp/demo",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "demo",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+      }),
+    },
+    {
+      name: "marketplace",
+      config: createMarketplaceInstallConfig({
+        pluginId: "demo",
+        installPath: "/tmp/demo",
+        marketplaceSource: "acme/plugins",
+        marketplacePlugin: "demo",
+      }),
+    },
+    {
+      name: "Git",
+      config: createGitInstallConfig({
+        pluginId: "demo",
+        spec: "git:github.com/acme/demo@main",
+        installPath: "/tmp/demo",
+      }),
+    },
+    {
+      name: "local path",
+      config: {
+        plugins: {
+          installs: {
+            demo: {
+              source: "path" as const,
+              sourcePath: "/src/demo",
+              installPath: "/tmp/demo",
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "local archive",
+      config: {
+        plugins: {
+          installs: {
+            demo: {
+              source: "archive" as const,
+              sourcePath: "/src/demo.tgz",
+              installPath: "/tmp/demo",
+            },
+          },
+        },
+      },
+    },
+  ])("preserves $name installs under extended-stable", async ({ config }) => {
+    const result = await updateNpmInstalledPlugins({
+      config,
+      pluginIds: ["demo"],
+      syncOfficialPluginInstalls: true,
+      updateChannel: "extended-stable",
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+    expect(installPluginFromMarketplaceMock).not.toHaveBeenCalled();
+    expect(installPluginFromGitSpecMock).not.toHaveBeenCalled();
+    expect(result.config).toBe(config);
+    expect(result.changed).toBe(false);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "demo",
+        status: "skipped",
+        code: "unsupported_install_source",
+        message: 'Skipping "demo" (extended-stable only converges official npm installs).',
+      },
+    ]);
+  });
+
   it("preserves exact official npm pins when official install sync is not requested", async () => {
     const installPath = createInstalledPackageDir({
       name: "@openclaw/codex",

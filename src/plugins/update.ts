@@ -1501,6 +1501,16 @@ export async function updateNpmInstalledPlugins(params: {
       }
     }
 
+    if (officialSyncUpdateChannel === "extended-stable" && !officialNpmSpec) {
+      outcomes.push({
+        pluginId,
+        status: "skipped",
+        code: "unsupported_install_source",
+        message: `Skipping "${pluginId}" (extended-stable only converges official npm installs).`,
+      });
+      continue;
+    }
+
     if (!isPluginInstallRecordUpdateSource(record)) {
       outcomes.push({
         pluginId,
