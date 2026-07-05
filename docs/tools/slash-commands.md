@@ -234,7 +234,7 @@ plugins.
     | `/commands` | Show the generated command catalog |
     | `/tools [compact\|verbose]` | Show what the current agent can use right now |
     | `/status` | Show execution/runtime status, Gateway and system uptime, plugin health, plus provider usage/quota |
-    | `/status plugins` | Show detailed plugin health: load errors, quarantines, channel failures, dependency issues, compatibility notices |
+    | `/status plugins` | Show detailed plugin health: load errors, quarantines, channel plugin failures, dependency issues, compatibility notices. Requires `commands.plugins: true` |
     | `/goal [status\|start\|pause\|resume\|complete\|block\|clear] ...` | Manage the current session's durable [goal](/tools/goal) |
     | `/diagnostics [note]` | Owner-only support-report flow. Asks for exec approval every time |
     | `/crestodian <request>` | Run the Crestodian setup and repair helper from an owner DM |
@@ -302,14 +302,14 @@ must be in the same identity group.
 
 ### Bundled plugin commands
 
-| Command                                                                                      | Description                                                                         |
-| -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `/dreaming [on\|off\|status\|help]`                                                          | Toggle memory dreaming (owner or Gateway admin). See [Dreaming](/concepts/dreaming) |
-| `/pair [qr\|status\|pending\|approve\|cleanup\|notify]`                                      | Manage device pairing. See [Pairing](/channels/pairing)                             |
-| `/phone status\|arm ...\|disarm`                                                             | Temporarily arm high-risk phone node commands                                       |
-| `/voice status\|list\|set <voiceId>`                                                         | Manage Talk voice config. Discord native name: `/talkvoice`                         |
-| `/card ...`                                                                                  | Send LINE rich card presets. See [LINE](/channels/line)                             |
-| `/codex status\|models\|threads\|resume\|compact\|review\|diagnostics\|account\|mcp\|skills` | Control the Codex app-server harness. See [Codex harness](/plugins/codex-harness)   |
+| Command                                                 | Description                                                                                                                                                                                    |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/dreaming [on\|off\|status\|help]`                     | Toggle memory dreaming (owner or Gateway admin). See [Dreaming](/concepts/dreaming)                                                                                                            |
+| `/pair [qr\|status\|pending\|approve\|cleanup\|notify]` | Manage device pairing. See [Pairing](/channels/pairing)                                                                                                                                        |
+| `/phone status\|arm ...\|disarm`                        | Temporarily arm high-risk phone node commands                                                                                                                                                  |
+| `/voice status\|list\|set <voiceId>`                    | Manage Talk voice config. Discord native name: `/talkvoice`                                                                                                                                    |
+| `/card ...`                                             | Send LINE rich card presets. See [LINE](/channels/line)                                                                                                                                        |
+| `/codex <action> ...`                                   | Bind, steer, and inspect the Codex app-server harness (status, threads, resume, model, fast, permissions, compact, review, mcp, skills, and more). See [Codex harness](/plugins/codex-harness) |
 
 QQBot-only: `/bot-ping`, `/bot-version`, `/bot-help`, `/bot-upgrade`, `/bot-logs`
 
@@ -340,7 +340,7 @@ User-invocable skills are exposed as slash commands:
   </Accordion>
 </AccordionGroup>
 
-## `/tools` — what the agent can use now
+## `/tools`: what the agent can use now
 
 `/tools` answers a runtime question: **what this agent can use right now in this
 conversation** — not a static config catalog.
@@ -354,7 +354,7 @@ Results are session-scoped. Changing agent, channel, thread, sender
 authorization, or model can change the output. For profile and override editing,
 use the Control UI Tools panel or config surfaces.
 
-## `/model` — model selection
+## `/model`: model selection
 
 ```text
 /model             # show model picker
@@ -370,7 +370,7 @@ On Discord, `/model` and `/models` open an interactive picker with provider and
 model dropdowns. The picker respects `agents.defaults.models`, including
 `provider/*` entries.
 
-## `/config` — on-disk config writes
+## `/config`: on-disk config writes
 
 <Note>
   Owner-only. Disabled by default — enable with `commands.config: true`.
@@ -387,7 +387,7 @@ model dropdowns. The picker respects `agents.defaults.models`, including
 Config is validated before write. Invalid changes are rejected. `/config`
 updates persist across restarts.
 
-## `/mcp` — MCP server config
+## `/mcp`: MCP server config
 
 <Note>
   Owner-only. Disabled by default — enable with `commands.mcp: true`.
@@ -402,7 +402,7 @@ updates persist across restarts.
 
 `/mcp` stores config in OpenClaw config, not embedded-agent project settings.
 
-## `/debug` — runtime-only overrides
+## `/debug`: runtime-only overrides
 
 <Note>
   Owner-only. Disabled by default — enable with `commands.debug: true`.
@@ -417,7 +417,7 @@ updates persist across restarts.
 /debug reset
 ```
 
-## `/plugins` — plugin management
+## `/plugins`: plugin management
 
 <Note>
   Owner-only for writes. Disabled by default — enable with `commands.plugins: true`.
@@ -436,7 +436,7 @@ updates persist across restarts.
 plugin runtime for new agent turns. `/plugins install` restarts managed
 Gateways automatically because plugin source modules changed.
 
-## `/trace` — plugin trace output
+## `/trace`: plugin trace output
 
 ```text
 /trace          # show current trace state
@@ -448,7 +448,7 @@ Gateways automatically because plugin source modules changed.
 mode. It does not replace `/debug` (runtime overrides) or `/verbose` (normal
 tool output).
 
-## `/btw` — side questions
+## `/btw`: side questions
 
 `/btw` is a quick side question about the current session context. Alias: `/side`.
 
