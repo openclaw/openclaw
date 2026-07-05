@@ -2754,12 +2754,32 @@ describe("doctor health contributions", () => {
       });
     });
 
-    it("reports an unwritable existing config when selected", async () => {
-      vi.spyOn(fs, "existsSync").mockReturnValue(true);
-      vi.spyOn(fs, "accessSync").mockImplementation((_path, mode) => {
-        if (mode === fs.constants.W_OK) {
-          throw new Error("EACCES");
-        }
+    it("skips a read-only existing config when its directory is writable", async () => {
+      const configPath = "/tmp/openclaw-home/openclaw.json";
+      vi.spyOn(fs, "existsSync").mockImplementation((path) => path === configPath);
+      const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+
+      await expect(
+        runDoctorLintChecks(
+          {
+            cfg: {},
+            mode: "lint" as const,
+            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            configPath,
+          },
+          { checks: [check], onlyIds: ["core/doctor/write-config"] },
+        ),
+      ).resolves.toMatchObject({
+        findings: [],
+      });
+      expect(accessSpy).toHaveBeenCalledWith("/tmp/openclaw-home", fs.constants.W_OK);
+    });
+
+    it("reports an unwritable config directory for an existing config", async () => {
+      const configPath = "/tmp/openclaw-home/openclaw.json";
+      vi.spyOn(fs, "existsSync").mockImplementation((path) => path === configPath);
+      vi.spyOn(fs, "accessSync").mockImplementation(() => {
+        throw new Error("EACCES");
       });
 
       await expect(
@@ -2768,7 +2788,7 @@ describe("doctor health contributions", () => {
             cfg: {},
             mode: "lint" as const,
             runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-            configPath: "/tmp/fake-openclaw.json",
+            configPath,
           },
           { checks: [check], onlyIds: ["core/doctor/write-config"] },
         ),
@@ -2776,8 +2796,9 @@ describe("doctor health contributions", () => {
         findings: [
           expect.objectContaining({
             checkId: "core/doctor/write-config",
-            path: "/tmp/fake-openclaw.json",
-            requirement: "writable-config-file",
+            path: "/tmp/openclaw-home",
+            target: configPath,
+            requirement: "writable-config-directory",
           }),
         ],
       });

@@ -1329,35 +1329,25 @@ async function collectWriteConfigHealthFindings(
   if (!configPath) {
     return findings;
   }
-  if (fs.existsSync(configPath)) {
-    try {
-      fs.accessSync(configPath, fs.constants.W_OK);
-    } catch {
-      findings.push({
-        checkId: "core/doctor/write-config",
-        severity: "warning",
-        message: "Doctor cannot write the current config file.",
-        path: configPath,
-        requirement: "writable-config-file",
-        fixHint: "Restore write access to the config file before running doctor --fix.",
-      });
-    }
-    return findings;
-  }
   const configDirectory = nodePath.dirname(configPath);
-  const existingParent = findNearestExistingParent(configDirectory);
+  const configPathExists = fs.existsSync(configPath);
+  const existingParent = configPathExists
+    ? configDirectory
+    : findNearestExistingParent(configDirectory);
   try {
     fs.accessSync(existingParent, fs.constants.W_OK);
   } catch {
     findings.push({
       checkId: "core/doctor/write-config",
       severity: "warning",
-      message:
-        "Doctor cannot create the config directory because the nearest existing parent is not writable.",
+      message: configPathExists
+        ? "Doctor cannot write config because the config directory is not writable."
+        : "Doctor cannot create the config directory because the nearest existing parent is not writable.",
       path: existingParent,
-      target: configDirectory,
+      target: configPathExists ? configPath : configDirectory,
       requirement: "writable-config-directory",
-      fixHint: "Make the existing parent directory writable before running doctor --fix.",
+      fixHint:
+        "Make the existing config directory or parent directory writable before running doctor --fix.",
     });
   }
   return findings;
