@@ -46,6 +46,7 @@ let replyRunRegistryForTest: typeof import("./reply-run-registry.js").replyRunRe
 let replyRunTestingForTest: typeof import("./reply-run-registry.js").testing;
 let cliBackendsTestingForTest: typeof import("../../agents/cli-backends.js").testing;
 let setReplyPayloadMetadataForTest: typeof import("../reply-payload.js").setReplyPayloadMetadata;
+let getReplyPayloadMetadataForTest: typeof import("../reply-payload.js").getReplyPayloadMetadata;
 const FOLLOWUP_DEBUG = process.env.OPENCLAW_DEBUG_FOLLOWUP_RUNNER_TEST === "1";
 const FOLLOWUP_TEST_QUEUES = new Map<
   string,
@@ -479,8 +480,10 @@ async function loadFreshFollowupRunnerModuleForTest() {
     replyRunRegistry: replyRunRegistryForTest,
     testing: replyRunTestingForTest,
   } = await import("./reply-run-registry.js"));
-  ({ setReplyPayloadMetadata: setReplyPayloadMetadataForTest } =
-    await import("../reply-payload.js"));
+  ({
+    getReplyPayloadMetadata: getReplyPayloadMetadataForTest,
+    setReplyPayloadMetadata: setReplyPayloadMetadataForTest,
+  } = await import("../reply-payload.js"));
 }
 
 function setFastFollowupCliBackendDeps(): void {
@@ -4891,6 +4894,8 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
         ...baseQueuedRun("discord"),
         originatingChannel: "discord",
         originatingTo: "channel:C1",
+        originatingChatType: "direct",
+        originatingReplyToMode: "off",
       } as FollowupRun,
     });
 
@@ -4908,6 +4913,10 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(String(requireRecord(routed.payload, "fallback payload").text)).toContain(
       "did not produce a visible reply",
     );
+    expect(getReplyPayloadMetadataForTest(routed.payload as never)).toMatchObject({
+      replyDelivery: { chatType: "direct", replyToMode: "off" },
+      replyDeliverySource: { channel: "discord" },
+    });
   });
 
   it("routes the fallback for whitespace-only messaging evidence", async () => {
