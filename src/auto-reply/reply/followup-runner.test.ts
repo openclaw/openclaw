@@ -5085,23 +5085,33 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
         run?: Partial<FollowupRun["run"]>;
       },
     ]
-  >)("keeps %s silent", async (_label, agentResult, queuedOverrides) => {
-    const queued = baseQueuedRun("discord");
-    const runOverride = queuedOverrides.run;
-    const { onBlockReply } = await runMessagingCase({
-      agentResult,
-      queued: {
-        ...queued,
-        ...queuedOverrides,
-        originatingChannel: "discord",
-        originatingTo: "channel:C1",
-        run: { ...queued.run, ...runOverride },
-      } as FollowupRun,
-    });
+  >)(
+    "keeps %s silent",
+    async (
+      _label: string,
+      agentResult: Record<string, unknown>,
+      queuedOverrides: {
+        currentInboundEventKind?: FollowupRun["currentInboundEventKind"];
+        run?: Partial<FollowupRun["run"]>;
+      },
+    ) => {
+      const queued = baseQueuedRun("discord");
+      const runOverride = queuedOverrides.run;
+      const { onBlockReply } = await runMessagingCase({
+        agentResult,
+        queued: {
+          ...queued,
+          ...queuedOverrides,
+          originatingChannel: "discord",
+          originatingTo: "channel:C1",
+          run: { ...queued.run, ...runOverride },
+        } as FollowupRun,
+      });
 
-    expect(routeReplyMock).not.toHaveBeenCalled();
-    expect(onBlockReply).not.toHaveBeenCalled();
-  });
+      expect(routeReplyMock).not.toHaveBeenCalled();
+      expect(onBlockReply).not.toHaveBeenCalled();
+    },
+  );
 
   it("retains reply-lane ownership until empty fallback delivery settles", async () => {
     let releaseDelivery = () => {};
