@@ -8,7 +8,7 @@ title: "Environment variables"
 ---
 
 OpenClaw pulls environment variables from multiple sources. The rule is **never override existing values**.
-Workspace `.env` files are a lower-trust source: OpenClaw ignores provider credentials and protected runtime controls from workspace `.env` before applying precedence. OpenClaw ignores provider credential environment variables from workspace `.env` files.
+Workspace `.env` files are a lower-trust source: OpenClaw ignores provider credentials and protected runtime controls from workspace `.env` files before applying precedence.
 
 ## Precedence (highest to lowest)
 
