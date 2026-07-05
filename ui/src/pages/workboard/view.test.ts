@@ -1479,6 +1479,111 @@ describe("renderWorkboard", () => {
     }
   });
 
+  it("renders compact-card actions in the detail drawer", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const request = vi.fn(async () => ({ card: state.cards[0] }));
+    state.loaded = true;
+    state.detailCardId = "card-1";
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Drawer action parity",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        sessionKey: "agent:main:drawer-action",
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: { request } as unknown as GatewayBrowserClient,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [
+          {
+            key: "agent:main:drawer-action",
+            kind: "direct",
+            updatedAt: 2,
+            status: "running",
+            hasActiveRun: true,
+          },
+        ],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    const drawer = container.querySelector<HTMLElement>(".workboard-detail");
+    expect(drawer).toBeTruthy();
+    expect(drawer?.querySelector<HTMLSelectElement>(".workboard-card__move-select")).toBeTruthy();
+    expect(
+      drawer?.querySelector<HTMLButtonElement>('button[aria-label="Stop session"]'),
+    ).toBeTruthy();
+    expect(drawer?.querySelector<HTMLButtonElement>('button[aria-label="Edit card"]')).toBeTruthy();
+    expect(
+      drawer?.querySelector<HTMLButtonElement>('button[aria-label="Archive card"]'),
+    ).toBeTruthy();
+    expect(
+      drawer?.querySelector<HTMLButtonElement>('button[aria-label="Delete card"]'),
+    ).toBeTruthy();
+  });
+
+  it("hides unavailable detail drawer actions for archived read-only cards", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.detailCardId = "card-1";
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Read only archived drawer",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        metadata: { archivedAt: 2 },
+      },
+    ];
+    state.showArchived = true;
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        canWrite: false,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    const drawer = container.querySelector<HTMLElement>(".workboard-detail");
+    expect(drawer).toBeTruthy();
+    expect(drawer?.querySelector<HTMLSelectElement>(".workboard-card__move-select")).toBeNull();
+    expect(
+      drawer?.querySelector<HTMLButtonElement>('button[aria-label="Stop session"]'),
+    ).toBeNull();
+    expect(drawer?.querySelector<HTMLButtonElement>('button[aria-label="Edit card"]')).toBeNull();
+    expect(
+      drawer?.querySelector<HTMLButtonElement>('button[aria-label="Unarchive card"]'),
+    ).toBeNull();
+    expect(drawer?.querySelector<HTMLButtonElement>('button[aria-label="Delete card"]')).toBeNull();
+  });
+
   it("keeps cards compact and puts model-specific execution actions in details", () => {
     const host = {};
     const state = getWorkboardState(host);
