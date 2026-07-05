@@ -487,11 +487,13 @@ Use Azure Managed Identity for passwordless authentication on Azure infrastructu
 **Config (user-assigned managed identity):** add `managedIdentityClientId: "<MI_CLIENT_ID>"` to the account block above. For example:
 
 ```json5
-accounts: {
-  default: {
-    appId: "<APP_ID>",
-    managedIdentityClientId: "<MI_CLIENT_ID>",
-    webhook: { port: 3978 },
+{
+  accounts: {
+    default: {
+      appId: "<APP_ID>",
+      managedIdentityClientId: "<MI_CLIENT_ID>",
+      webhook: { port: 3978 },
+    },
   },
 }
 ```
