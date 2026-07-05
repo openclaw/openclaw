@@ -8,7 +8,7 @@ import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { WizardNavigationError, type WizardPrompter, type WizardSelectParams } from "./prompts.js";
+import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 import { runSetupWizard } from "./setup.js";
 
 type ResolveProviderPluginChoice =
@@ -2648,34 +2648,41 @@ describe("runSetupWizard", () => {
       return args[0];
     });
 
-    const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) => {
+    let sideEffectNavigation: WizardSelectParams<unknown>["navigation"];
+    const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
+      const { message } = params;
       if (message === "Config handling") {
         return "modify";
       }
       if (message === "Channel setup side effect") {
-        throw new WizardNavigationError("back");
+        sideEffectNavigation = params.navigation;
+        return "continue";
       }
       return "quickstart";
     }) as unknown as WizardPrompter["select"];
 
-    await expect(
-      runSetupWizard(
-        {
-          acceptRisk: true,
-          flow: "quickstart",
-          authChoice: "skip",
-          installDaemon: false,
-          skipProviders: true,
-          skipChannels: false,
-          skipSkills: true,
-          skipSearch: true,
-          skipHealth: true,
-          skipUi: true,
-        },
-        createRuntime(),
-        buildWizardPrompter({ select }),
-      ),
-    ).rejects.toBeInstanceOf(WizardNavigationError);
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipChannels: false,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      createRuntime(),
+      buildWizardPrompter({ select }),
+    );
+
+    expect(sideEffectNavigation).toEqual(
+      expect.objectContaining({
+        canGoBack: false,
+      }),
+    );
     expect(setupChannels).toHaveBeenCalledOnce();
   });
 
