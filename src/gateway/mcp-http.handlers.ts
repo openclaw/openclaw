@@ -17,20 +17,23 @@ import {
   type McpToolSchemaEntry,
 } from "./mcp-http.schema.js";
 
-type McpTextContent = {
-  type: "text";
-  text: string;
-};
+type McpContent = { type: "text"; text: string } | { type: string; [key: string]: unknown };
 
 // Tool implementations may return MCP content blocks, plain strings, or
-// arbitrary JSON. Normalize them into text blocks for consistent loopback output.
-function normalizeToolCallContent(result: unknown): McpTextContent[] {
+// arbitrary JSON. Normalize them into text blocks for consistent loopback output,
+// except for native non-text blocks which are preserved.
+function normalizeToolCallContent(result: unknown): McpContent[] {
   const content = (result as { content?: unknown })?.content;
   if (Array.isArray(content)) {
-    return content.map((block: { type?: string; text?: string }) => ({
-      type: (block.type ?? "text") as "text",
-      text: block.text ?? (typeof block === "string" ? block : JSON.stringify(block)),
-    }));
+    return content.map((block: any) => {
+      if (block && typeof block === "object" && typeof block.type === "string" && block.type !== "text") {
+        return block;
+      }
+      return {
+        type: "text",
+        text: block?.text ?? (typeof block === "string" ? block : JSON.stringify(block)),
+      };
+    });
   }
   return [
     {
