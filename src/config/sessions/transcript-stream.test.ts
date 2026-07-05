@@ -2,11 +2,26 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { Readable } from "node:stream";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   streamSessionTranscriptLines,
   streamSessionTranscriptLinesReverse,
 } from "./transcript-stream.js";
+
+const actualReadFileRangeAsync = vi.hoisted(
+  () => vi.fn() as typeof import("./file-range.js").readFileRangeAsync,
+);
+const readFileRangeAsyncMock = vi.fn();
+
+vi.mock("./file-range.js", async () => {
+  const actual = await vi.importActual<typeof import("./file-range.js")>("./file-range.js");
+  actualReadFileRangeAsync.mockImplementation(actual.readFileRangeAsync);
+  return {
+    ...actual,
+    readFileRangeAsync: (...args: unknown[]) => readFileRangeAsyncMock(...args),
+  };
+});
 
 // Regression coverage for #54296: the transcript readers must stay correct and
 // memory-bounded as session files grow into the multi-MB / 100s of MB range.
@@ -20,6 +35,7 @@ let transcriptPath = "";
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-stream-"));
   transcriptPath = path.join(tempDir, "session.jsonl");
+  readFileRangeAsyncMock.mockReset().mockImplementation(actualReadFileRangeAsync);
 });
 
 afterEach(() => {
@@ -94,6 +110,21 @@ describe("streamSessionTranscriptLines", () => {
     const lines = await collect(streamSessionTranscriptLines(transcriptPath));
 
     expect(lines).toEqual([longLine, "short"]);
+  });
+
+  it("returns an empty iterator when the read stream errors mid-stream", async () => {
+    fs.writeFileSync(transcriptPath, "one\ntwo\nthree\n", "utf-8");
+    const expectedError = new Error("simulated read failure");
+    vi.spyOn(fs, "createReadStream").mockImplementation(() => {
+      const stream = new Readable({
+        read() {
+          this.destroy(expectedError);
+        },
+      });
+      return stream as ReturnType<typeof fs.createReadStream>;
+    });
+
+    await expect(collect(streamSessionTranscriptLines(transcriptPath))).resolves.toEqual([]);
   });
 });
 
@@ -198,5 +229,12 @@ describe("streamSessionTranscriptLinesReverse", () => {
     const parsed = lines.map((line) => JSON.parse(line) as { id: string });
 
     expect(parsed.map((entry) => entry.id)).toEqual(["third", "second", "first"]);
+  });
+
+  it("returns an empty iterator when a reverse chunk read fails mid-stream", async () => {
+    fs.writeFileSync(transcriptPath, "one\ntwo\nthree\n", "utf-8");
+    readFileRangeAsyncMock.mockRejectedValue(new Error("simulated read failure"));
+
+    await expect(collect(streamSessionTranscriptLinesReverse(transcriptPath))).resolves.toEqual([]);
   });
 });

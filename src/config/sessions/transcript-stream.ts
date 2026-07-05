@@ -62,6 +62,10 @@ export async function* streamSessionTranscriptLines(
       }
       yield trimmed;
     }
+  } catch {
+    // Transient read errors (e.g. file truncated or permissions changed after
+    // stat) are treated like a missing file: stop yielding so callers do not
+    // crash mid-stream.
   } finally {
     rl.close();
     stream.destroy();
@@ -105,7 +109,13 @@ export async function* streamSessionTranscriptLinesReverse(
       }
       const readLength = Math.min(position, chunkBytes);
       position -= readLength;
-      const chunk = await readFileRangeAsync(fileHandle, position, readLength);
+      let chunk: Buffer;
+      try {
+        chunk = await readFileRangeAsync(fileHandle, position, readLength);
+      } catch {
+        // Treat mid-stream read failures like a missing file so callers do not crash.
+        return;
+      }
       const combined = carry.length > 0 ? Buffer.concat([chunk, carry]) : chunk;
       let lineEnd = combined.length;
       // Split on newline bytes before decoding so UTF-8 characters crossing chunk boundaries stay
