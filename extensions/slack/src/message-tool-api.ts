@@ -35,7 +35,7 @@ function createSlackReactionEmojiSchema(): Record<string, TSchema> {
 
 function createSlackMessageIdActionSchema(): Record<string, TSchema> {
   const description =
-    'Slack message timestamp/message id (for example "1777423717.666499"). Used by react, reactions, edit, delete, pin, and unpin actions. Not used by download-file, which requires fileId from event.files[].id.';
+    'Slack message timestamp/message id (for example "1777423717.666499"). Used by react, reactions, edit, delete, pin, and unpin actions. React defaults to the current inbound message when available. Not used by download-file, which requires fileId from event.files[].id.';
   return {
     messageId: Type.Optional(Type.String({ description })),
     message_id: Type.Optional(Type.String({ description: `${description} Alias for messageId.` })),

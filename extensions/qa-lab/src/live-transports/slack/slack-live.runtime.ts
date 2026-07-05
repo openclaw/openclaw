@@ -3,7 +3,11 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createSlackWebClient, createSlackWriteClient } from "@openclaw/slack/api.js";
+import {
+  createSlackWebClient,
+  createSlackWriteClient,
+  listSlackReactions,
+} from "@openclaw/slack/api.js";
 import type { WebClient } from "@slack/web-api";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -68,6 +72,7 @@ const SLACK_QA_GATEWAY_STOP_SETTLE_MS = 3_000;
 const SLACK_QA_RETRYABLE_SCENARIO_ATTEMPTS = 2;
 const SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS = 30_000;
 const SLACK_QA_APPROVAL_CHECKPOINT_DEFAULT_TIMEOUT_MS = 120_000;
+const SLACK_QA_REACTION_VERIFY_TIMEOUT_MS = 15_000;
 // These scenarios force the Codex harness, whose default provider set is intentionally narrow.
 const SLACK_QA_CODEX_PROVIDER_IDS = new Set(["codex", "openai"]);
 
@@ -79,6 +84,7 @@ type SlackQaScenarioId =
   | "slack-codex-approval-exec-native"
   | "slack-codex-approval-plugin-native"
   | "slack-mention-gating"
+  | "slack-reaction-glyph-native"
   | "slack-restart-resume"
   | "slack-thread-follow-up"
   | "slack-thread-isolation"
@@ -150,6 +156,7 @@ type SlackQaConfigOverrides = {
     target?: "both" | "channel" | "dm";
   };
   codexApproval?: boolean;
+  messageTool?: boolean;
   replyToMode?: "all" | "off";
   users?: string[];
 };
@@ -398,6 +405,36 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
               `expected top-level Slack reply without thread_ts; got ${message.thread_ts}`,
             );
           }
+        },
+      };
+    },
+  },
+  {
+    id: "slack-reaction-glyph-native",
+    title: "Slack message tool normalizes an emoji glyph reaction",
+    timeoutMs: 90_000,
+    configOverrides: { messageTool: true },
+    buildRun: (sutUserId) => {
+      const token = `SLACK_QA_REACTION_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        expectReply: true,
+        input: [
+          `<@${sutUserId}> use the message tool exactly once to react to this message.`,
+          'Set action to "react", channel to "slack", and emoji to exactly "✅".',
+          "Do not substitute a shortcode.",
+          `After the reaction succeeds, reply with only this exact marker: ${token}`,
+        ].join(" "),
+        matchText: token,
+        afterReply: async (_message, context) => {
+          await waitForSlackReaction({
+            channelId: context.channelId,
+            client: context.sutReadClient,
+            expectedReactionName: "white_check_mark",
+            messageId: context.sentTs,
+            sutUserId: context.sutIdentity.userId,
+            timeoutMs: SLACK_QA_REACTION_VERIFY_TIMEOUT_MS,
+          });
+          return "verified SUT white_check_mark reaction from exact glyph instruction";
         },
       };
     },
@@ -714,9 +751,33 @@ function buildSlackQaConfig(
         target: approvalOverrides.target ?? ("channel" as const),
       }
     : undefined;
+  const explicitToolAllow = baseCfg.tools?.allow;
+  const messageToolPolicy = params.overrides?.messageTool
+    ? explicitToolAllow && explicitToolAllow.length > 0
+      ? { allow: uniqueStrings([...explicitToolAllow, "message"]) }
+      : { alsoAllow: uniqueStrings([...(baseCfg.tools?.alsoAllow ?? []), "message"]) }
+    : {};
+  const toolsConfig =
+    codexApprovalConfig || params.overrides?.messageTool
+      ? {
+          tools: {
+            ...baseCfg.tools,
+            ...messageToolPolicy,
+            ...(codexApprovalConfig
+              ? {
+                  exec: {
+                    ...baseCfg.tools?.exec,
+                    mode: "ask" as const,
+                  },
+                }
+              : {}),
+          },
+        }
+      : {};
   return {
     ...baseCfg,
     ...approvalForwardingConfig,
+    ...toolsConfig,
     plugins: {
       ...baseCfg.plugins,
       allow: pluginAllow,
@@ -745,13 +806,6 @@ function buildSlackQaConfig(
           agents: {
             ...baseCfg.agents,
             ...(codexAgentDefaults ? { defaults: codexAgentDefaults } : {}),
-          },
-          tools: {
-            ...baseCfg.tools,
-            exec: {
-              ...baseCfg.tools?.exec,
-              mode: "ask" as const,
-            },
           },
         }
       : {}),
@@ -1706,6 +1760,38 @@ function readAgentWaitStatus(result: unknown) {
   }
   const status = (result as { status?: unknown }).status;
   return typeof status === "string" && status.trim() ? status : "unknown";
+}
+
+async function waitForSlackReaction(params: {
+  channelId: string;
+  client: WebClient;
+  expectedReactionName: string;
+  messageId: string;
+  sutUserId: string;
+  timeoutMs: number;
+}) {
+  const deadline = Date.now() + params.timeoutMs;
+  while (true) {
+    const reactions = await listSlackReactions(params.channelId, params.messageId, {
+      client: params.client,
+    });
+    const reaction = reactions?.find(
+      (entry) =>
+        entry.name === params.expectedReactionName && entry.users?.includes(params.sutUserId),
+    );
+    if (reaction) {
+      return reaction;
+    }
+    if (Date.now() >= deadline) {
+      break;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1_000);
+    });
+  }
+  throw new Error(
+    `Slack message ${params.messageId} did not receive ${params.expectedReactionName} from ${params.sutUserId}`,
+  );
 }
 
 function assertCodexApprovalTranscriptSucceeded(
@@ -2892,5 +2978,6 @@ export const testing = {
   SLACK_QA_STANDARD_SCENARIO_IDS,
   toSlackQaScenarioArtifactResults,
   waitForSlackNoReply,
+  waitForSlackReaction,
 };
 export { testing as __testing };

@@ -206,6 +206,7 @@ describe("Slack message tools", () => {
     expect(schema.actions).toEqual(["react", "reactions", "edit", "delete", "pin", "unpin"]);
     expect(schema.actions).not.toContain("unsend");
     expect(property.description).toContain("1777423717.666499");
+    expect(property.description).toMatch(/React defaults to the current inbound message/i);
     expect(property.description).toMatch(/Not used by download-file/i);
     expect(alias.description).toMatch(/Alias for messageId/i);
   });
