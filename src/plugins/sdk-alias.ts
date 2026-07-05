@@ -80,6 +80,18 @@ function shouldUseJitiFsCache(): boolean {
   return readJitiBooleanEnv("JITI_FS_CACHE", readJitiBooleanEnv("JITI_CACHE", true));
 }
 
+function resolvePluginLoaderJitiNativeModules(): string[] {
+  try {
+    const configured: unknown = JSON.parse(process.env.JITI_NATIVE_MODULES ?? "[]");
+    const nativeModules = Array.isArray(configured)
+      ? configured.filter((entry): entry is string => typeof entry === "string")
+      : [];
+    return [...new Set([...nativeModules, "openclaw"])];
+  } catch {
+    return ["openclaw"];
+  }
+}
+
 export function normalizeJitiAliasTargetPath(targetPath: string): string {
   return process.platform === "win32" ? targetPath.replace(/\\/g, "/") : targetPath;
 }
@@ -2033,7 +2045,7 @@ export function buildPluginLoaderJitiOptions(
     tryNative: true,
     // When jiti must transform a plugin entry, keep OpenClaw's own package
     // chunks on the native module graph instead of re-evaluating them in jiti.
-    nativeModules: ["openclaw"],
+    nativeModules: resolvePluginLoaderJitiNativeModules(),
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
     ...(hasAliases
       ? {

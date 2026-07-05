@@ -100,7 +100,7 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         queuedForDelivery: false,
         transport: "sendMessage")
     var sendError: Error?
-    var lastSent: (id: String, params: OpenClawWatchNotifyParams)?
+    var lastSent: (id: String, params: OpenClawWatchNotifyParams, gatewayStableID: String?)?
     var lastSentExecApprovalPrompt: OpenClawWatchExecApprovalPromptMessage?
     var lastSentExecApprovalResolved: OpenClawWatchExecApprovalResolvedMessage?
     var lastSentExecApprovalExpired: OpenClawWatchExecApprovalExpiredMessage?
@@ -144,8 +144,12 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         self.appCommandHandler = handler
     }
 
-    func sendNotification(id: String, params: OpenClawWatchNotifyParams) async throws -> WatchNotificationSendResult {
-        self.lastSent = (id: id, params: params)
+    func sendNotification(
+        id: String,
+        params: OpenClawWatchNotifyParams,
+        gatewayStableID: String?) async throws -> WatchNotificationSendResult
+    {
+        self.lastSent = (id: id, params: params, gatewayStableID: gatewayStableID)
         if let sendError {
             throw sendError
         }
@@ -1072,7 +1076,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
             defaults.removePersistentDomain(forName: suiteName)
         }
 
-        let coordinator = WatchChatCoordinator(defaults: defaults)
+        let coordinator = WatchMessageOutbox(defaults: defaults)
         let first = WatchAppCommandEvent(
             commandId: "watch-send-chat-gateway-a-1",
             command: .sendChat,
@@ -1090,32 +1094,32 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
             sentAtMs: 132,
             transport: "sendMessage")
 
-        if case .queue = coordinator.ingest(first, isChatAvailable: false, gatewayStableID: "gateway-a") {
+        if case .queue = coordinator.ingest(first, isAvailable: false, gatewayStableID: "gateway-a") {
         } else {
             Issue.record("expected first gateway A command to queue")
         }
-        if case .queue = coordinator.ingest(second, isChatAvailable: false, gatewayStableID: "gateway-a") {
+        if case .queue = coordinator.ingest(second, isAvailable: false, gatewayStableID: "gateway-a") {
         } else {
             Issue.record("expected second gateway A command to queue")
         }
 
-        #expect(coordinator.nextQueuedCommand(isChatAvailable: true, gatewayStableID: "gateway-b") == nil)
-        coordinator.removeQueuedCommand(
-            commandId: "watch-send-chat-gateway-a-1",
+        #expect(coordinator.nextQueuedMessage(isAvailable: true, gatewayStableID: "gateway-b") == nil)
+        coordinator.removeQueuedMessage(
+            messageID: "watch-send-chat-gateway-a-1",
             gatewayStableID: "gateway-b")
 
         #expect(
-            coordinator.nextQueuedCommand(isChatAvailable: true, gatewayStableID: "gateway-a")?.commandId ==
+            coordinator.nextQueuedMessage(isAvailable: true, gatewayStableID: "gateway-a")?.commandId ==
                 "watch-send-chat-gateway-a-1")
         #expect(
-            coordinator.nextQueuedCommand(isChatAvailable: true, gatewayStableID: "gateway-a")?.commandId ==
+            coordinator.nextQueuedMessage(isAvailable: true, gatewayStableID: "gateway-a")?.commandId ==
                 "watch-send-chat-gateway-a-1")
 
-        coordinator.removeQueuedCommand(
-            commandId: "watch-send-chat-gateway-a-1",
+        coordinator.removeQueuedMessage(
+            messageID: "watch-send-chat-gateway-a-1",
             gatewayStableID: "gateway-a")
         #expect(
-            coordinator.nextQueuedCommand(isChatAvailable: true, gatewayStableID: "gateway-a")?.commandId ==
+            coordinator.nextQueuedMessage(isAvailable: true, gatewayStableID: "gateway-a")?.commandId ==
                 "watch-send-chat-gateway-a-2")
     }
 
@@ -1127,7 +1131,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
             defaults.removePersistentDomain(forName: suiteName)
         }
 
-        let coordinator = WatchChatCoordinator(defaults: defaults)
+        let coordinator = WatchMessageOutbox(defaults: defaults)
         let event = WatchAppCommandEvent(
             commandId: "watch-send-chat-retry-gateway-a",
             command: .sendChat,
@@ -1139,10 +1143,48 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
 
         coordinator.requeueFront(event, gatewayStableID: event.gatewayStableID)
 
-        #expect(coordinator.nextQueuedCommand(isChatAvailable: true, gatewayStableID: "gateway-b") == nil)
+        #expect(coordinator.nextQueuedMessage(isAvailable: true, gatewayStableID: "gateway-b") == nil)
         #expect(
-            coordinator.nextQueuedCommand(isChatAvailable: true, gatewayStableID: "gateway-a")?.commandId ==
+            coordinator.nextQueuedMessage(isAvailable: true, gatewayStableID: "gateway-a")?.commandId ==
                 "watch-send-chat-retry-gateway-a")
+    }
+
+    @Test @MainActor func watchMessageOutboxPrioritizesRepliesOverQueuedChat() throws {
+        let suiteName = "watch-message-priority-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let outbox = WatchMessageOutbox(defaults: defaults)
+        let chat = WatchAppCommandEvent(
+            commandId: "queued-chat",
+            command: .sendChat,
+            sessionKey: "main",
+            gatewayStableID: "gateway-a",
+            text: "Chat first",
+            sentAtMs: 1,
+            transport: "transferUserInfo")
+        let reply = WatchAppCommandEvent(
+            commandId: "queued-reply",
+            command: .sendChat,
+            sessionKey: nil,
+            gatewayStableID: "gateway-a",
+            text: "Reply second",
+            sentAtMs: 2,
+            transport: "transferUserInfo",
+            messageKind: .quickReply)
+
+        _ = outbox.ingest(chat, isAvailable: false, gatewayStableID: "gateway-a")
+        _ = outbox.ingest(reply, isAvailable: false, gatewayStableID: "gateway-a")
+
+        #expect(outbox.nextQueuedMessage(isAvailable: true, gatewayStableID: "gateway-a") == reply)
+    }
+
+    @Test func watchMessageOutboxDiscardsPermanentGatewayFailures() {
+        #expect(NodeAppModel._test_shouldDiscardFailedWatchMessage(code: "INVALID_REQUEST"))
+        #expect(!NodeAppModel._test_shouldDiscardFailedWatchMessage(
+            code: "INVALID_REQUEST",
+            message: "Session changed while starting work. Retry."))
+        #expect(!NodeAppModel._test_shouldDiscardFailedWatchMessage(code: "UNAVAILABLE"))
     }
 
     @Test @MainActor func watchChatRestoreBackfillsGatewayOwnerIntoLegacyQueuedEvent() throws {
@@ -1153,26 +1195,26 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
             defaults.removePersistentDomain(forName: suiteName)
         }
         let legacyQueueJSON = """
-            [
-              {
-                "gatewayStableID": "gateway-a",
-                "event": {
-                  "commandId": "watch-send-chat-legacy",
-                  "command": "send-chat",
-                  "sessionKey": "main",
-                  "text": "Legacy queued text",
-                  "sentAtMs": 134,
-                  "transport": "transferUserInfo"
-                }
-              }
-            ]
-            """
+        [
+          {
+            "gatewayStableID": "gateway-a",
+            "event": {
+              "commandId": "watch-send-chat-legacy",
+              "command": "send-chat",
+              "sessionKey": "main",
+              "text": "Legacy queued text",
+              "sentAtMs": 134,
+              "transport": "transferUserInfo"
+            }
+          }
+        ]
+        """
         defaults.set(
             Data(legacyQueueJSON.utf8),
             forKey: "watch.chat.command.queue.v1")
 
-        let coordinator = WatchChatCoordinator(defaults: defaults)
-        let restored = coordinator.nextQueuedCommand(isChatAvailable: true, gatewayStableID: "gateway-a")
+        let coordinator = WatchMessageOutbox(defaults: defaults)
+        let restored = coordinator.nextQueuedMessage(isAvailable: true, gatewayStableID: "gateway-a")
 
         #expect(restored?.commandId == "watch-send-chat-legacy")
         #expect(restored?.gatewayStableID == "gateway-a")
@@ -1186,7 +1228,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
             defaults.removePersistentDomain(forName: suiteName)
         }
 
-        let coordinator = WatchChatCoordinator(defaults: defaults)
+        let coordinator = WatchMessageOutbox(defaults: defaults)
         for index in 0..<140 {
             let event = WatchAppCommandEvent(
                 commandId: "watch-forward-\(index)",
@@ -1198,9 +1240,12 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
                 transport: "sendMessage")
             if case .forward = coordinator.ingest(
                 event,
-                isChatAvailable: true,
+                isAvailable: true,
                 gatewayStableID: "gateway-a")
             {
+                coordinator.removeQueuedMessage(
+                    messageID: event.commandId,
+                    gatewayStableID: "gateway-a")
             } else {
                 Issue.record("expected forwarded command \(index)")
             }
@@ -1216,7 +1261,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
             transport: "sendMessage")
         if case .forward = coordinator.ingest(
             oldestEvent,
-            isChatAvailable: true,
+            isAvailable: true,
             gatewayStableID: "gateway-a")
         {
         } else {
@@ -1233,7 +1278,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
             transport: "sendMessage")
         if case .deduped = coordinator.ingest(
             recentEvent,
-            isChatAvailable: true,
+            isAvailable: true,
             gatewayStableID: "gateway-a")
         {
         } else {
@@ -1249,7 +1294,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
             defaults.removePersistentDomain(forName: suiteName)
         }
 
-        let coordinator = WatchChatCoordinator(defaults: defaults)
+        let coordinator = WatchMessageOutbox(defaults: defaults)
         for index in 0..<140 {
             let event = WatchAppCommandEvent(
                 commandId: "watch-queued-\(index)",
@@ -1261,7 +1306,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
                 transport: "transferUserInfo")
             if case .queue = coordinator.ingest(
                 event,
-                isChatAvailable: false,
+                isAvailable: false,
                 gatewayStableID: "gateway-a")
             {
             } else {
@@ -1269,8 +1314,8 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
             }
         }
 
-        coordinator.removeQueuedCommand(
-            commandId: "watch-queued-0",
+        coordinator.removeQueuedMessage(
+            messageID: "watch-queued-0",
             gatewayStableID: "gateway-a")
 
         let duplicateDeliveredEvent = WatchAppCommandEvent(
@@ -1283,7 +1328,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
             transport: "transferUserInfo")
         if case .deduped = coordinator.ingest(
             duplicateDeliveredEvent,
-            isChatAvailable: true,
+            isAvailable: true,
             gatewayStableID: "gateway-a")
         {
         } else {
@@ -1792,6 +1837,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
             queuedForDelivery: true,
             transport: "transferUserInfo")
         let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel._test_setConnectedGatewayID("gateway-watch-notify")
         let params = OpenClawWatchNotifyParams(
             title: "OpenClaw",
             body: "Meeting with Peter is at 4pm",
@@ -1808,6 +1854,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         #expect(watchService.lastSent?.params.title == "OpenClaw")
         #expect(watchService.lastSent?.params.body == "Meeting with Peter is at 4pm")
         #expect(watchService.lastSent?.params.priority == .timeSensitive)
+        #expect(watchService.lastSent?.gatewayStableID == "gateway-watch-notify")
 
         let payloadData = try #require(res.payloadJSON?.data(using: .utf8))
         let payload = try JSONDecoder().decode(OpenClawWatchNotifyPayload.self, from: payloadData)
@@ -1928,8 +1975,11 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
     }
 
     @Test @MainActor func watchReplyQueuesWhenGatewayOffline() async {
+        NodeAppModel._test_resetPersistedWatchReplyQueueState()
+        defer { NodeAppModel._test_resetPersistedWatchReplyQueueState() }
         let watchService = MockWatchMessagingService()
         let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel._test_setConnectedGatewayID("gateway-watch-reply")
         watchService.emitReply(
             WatchQuickReplyEvent(
                 replyId: "reply-offline-1",
@@ -1937,11 +1987,168 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
                 actionId: "approve",
                 actionLabel: "Approve",
                 sessionKey: "ios",
+                gatewayStableID: "gateway-watch-reply",
                 note: nil,
                 sentAtMs: 1234,
                 transport: "transferUserInfo"))
         await Task.yield()
         #expect(appModel._test_queuedWatchReplyCount() == 1)
+    }
+
+    @Test @MainActor func watchMessageOutboxRestoresQueuedReplyAfterRestart() throws {
+        let suiteName = "watch-reply-queue-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let event = WatchAppCommandEvent(
+            commandId: "reply-restore-1",
+            command: .sendChat,
+            sessionKey: "ios",
+            gatewayStableID: "gateway-a",
+            text: "Watch reply: Approve",
+            sentAtMs: 1235,
+            transport: "transferUserInfo",
+            messageKind: .quickReply)
+        let firstOutbox = WatchMessageOutbox(defaults: defaults)
+        if case .queue = firstOutbox.ingest(event, isAvailable: false, gatewayStableID: "gateway-a") {
+        } else {
+            Issue.record("expected watch reply to queue")
+        }
+
+        let secondOutbox = WatchMessageOutbox(defaults: defaults)
+        #expect(secondOutbox.nextQueuedMessage(isAvailable: true, gatewayStableID: "gateway-b") == nil)
+        let restored = secondOutbox.nextQueuedMessage(isAvailable: true, gatewayStableID: "gateway-a")
+
+        #expect(restored == event)
+        #expect(secondOutbox.queuedCount(kind: .quickReply) == 1)
+        secondOutbox.removeQueuedMessage(messageID: event.commandId, gatewayStableID: "gateway-a")
+        #expect(secondOutbox.queuedCount() == 0)
+    }
+
+    @Test @MainActor func watchMessageOutboxRestoresDeliveryTombstonesAndPromptRoutes() throws {
+        let suiteName = "watch-message-metadata-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let event = WatchAppCommandEvent(
+            commandId: "delivered-reply",
+            command: .sendChat,
+            sessionKey: "main",
+            gatewayStableID: "gateway-a",
+            text: "Delivered reply",
+            sentAtMs: 1,
+            transport: "sendMessage",
+            messageKind: .quickReply)
+        let firstOutbox = WatchMessageOutbox(defaults: defaults)
+        firstOutbox.recordPromptRoute(promptID: "prompt-a", gatewayStableID: "gateway-a")
+        _ = firstOutbox.ingest(event, isAvailable: true, gatewayStableID: "gateway-a")
+        firstOutbox.removeQueuedMessage(messageID: event.commandId, gatewayStableID: "gateway-a")
+        for index in 0..<140 {
+            let pending = WatchAppCommandEvent(
+                commandId: "pending-\(index)",
+                command: .sendChat,
+                sessionKey: "main",
+                gatewayStableID: "gateway-a",
+                text: "Pending \(index)",
+                sentAtMs: index + 2,
+                transport: "transferUserInfo")
+            _ = firstOutbox.ingest(pending, isAvailable: false, gatewayStableID: "gateway-a")
+        }
+
+        let restoredOutbox = WatchMessageOutbox(defaults: defaults)
+        #expect(restoredOutbox.gatewayStableID(forPromptID: "prompt-a") == "gateway-a")
+        if case .deduped = restoredOutbox.ingest(
+            event,
+            isAvailable: true,
+            gatewayStableID: "gateway-a")
+        {
+        } else {
+            Issue.record("expected delivered reply to remain deduped after restart")
+        }
+    }
+
+    @Test @MainActor func watchReplyDropsStaleGatewayTarget() async {
+        NodeAppModel._test_resetPersistedWatchReplyQueueState()
+        defer { NodeAppModel._test_resetPersistedWatchReplyQueueState() }
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel._test_setConnectedGatewayID("gateway-current")
+
+        watchService.emitReply(
+            WatchQuickReplyEvent(
+                replyId: "reply-stale-gateway",
+                promptId: "prompt-stale",
+                actionId: "approve",
+                actionLabel: "Approve",
+                sessionKey: "ios",
+                gatewayStableID: "gateway-old",
+                note: nil,
+                sentAtMs: 1236,
+                transport: "transferUserInfo"))
+        await Task.yield()
+
+        #expect(appModel._test_queuedWatchReplyCount() == 0)
+        #expect(appModel.openChatRequestID == 0)
+    }
+
+    @Test @MainActor func watchReplyUsesIdempotentChatOutbox() async {
+        NodeAppModel._test_resetPersistedWatchReplyQueueState()
+        defer { NodeAppModel._test_resetPersistedWatchReplyQueueState() }
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel.enterAppleReviewDemoMode()
+        appModel._test_recordWatchPromptRoute(
+            promptID: "prompt-idempotent",
+            gatewayStableID: AppleReviewDemoMode.gatewayID)
+        let initialOpenChatRequestID = appModel.openChatRequestID
+        let event = WatchQuickReplyEvent(
+            replyId: "reply-idempotent",
+            promptId: "prompt-idempotent",
+            actionId: "approve",
+            actionLabel: "Approve",
+            sessionKey: "main",
+            gatewayStableID: nil,
+            note: nil,
+            sentAtMs: 1237,
+            transport: "sendMessage")
+
+        watchService.emitReply(event)
+        await Task.yield()
+        watchService.emitReply(event)
+        await Task.yield()
+
+        #expect(appModel.openChatRequestID == initialOpenChatRequestID + 1)
+        #expect(appModel._test_queuedWatchReplyCount() == 0)
+    }
+
+    @Test @MainActor func watchReplyBindsLegacyPromptToCurrentGateway() async {
+        NodeAppModel._test_resetPersistedWatchReplyQueueState()
+        defer { NodeAppModel._test_resetPersistedWatchReplyQueueState() }
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel.enterAppleReviewDemoMode()
+        let initialOpenChatRequestID = appModel.openChatRequestID
+        let event = WatchQuickReplyEvent(
+            replyId: "reply-legacy-prompt",
+            promptId: "prompt-from-previous-release",
+            actionId: "approve",
+            actionLabel: "Approve",
+            sessionKey: "main",
+            gatewayStableID: nil,
+            note: nil,
+            sentAtMs: 1238,
+            transport: "sendMessage")
+
+        watchService.emitReply(event)
+        await Task.yield()
+        watchService.emitReply(event)
+        await Task.yield()
+
+        #expect(appModel.openChatRequestID == initialOpenChatRequestID + 1)
+        #expect(appModel._test_queuedWatchReplyCount() == 0)
     }
 
     @Test @MainActor func handleDeepLinkSetsErrorWhenNotConnected() async throws {
@@ -1962,6 +2169,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
     @Test @MainActor func handleDeepLinkRequiresConfirmationWhenConnectedAndUnkeyed() async {
         let appModel = NodeAppModel()
         appModel._test_setGatewayConnected(true)
+        appModel._test_setAgentRequestHandler { _ in }
         let url = makeAgentDeepLinkURL(message: "hello from deep link")
 
         await appModel.handleDeepLink(url: url)
@@ -2017,6 +2225,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
     @Test @MainActor func handleDeepLinkBypassesPromptWithValidKey() async {
         let appModel = NodeAppModel()
         appModel._test_setGatewayConnected(true)
+        appModel._test_setAgentRequestHandler { _ in }
         let key = NodeAppModel._test_currentDeepLinkKey()
         let url = makeAgentDeepLinkURL(message: "trusted request", key: key)
 

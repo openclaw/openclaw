@@ -172,6 +172,7 @@ export const ChatAbortedEventSchema = Type.Object(
     ...ChatEventBaseSchema,
     state: Type.Literal("aborted"),
     message: Type.Optional(Type.Unknown()),
+    errorMessage: Type.Optional(Type.String()),
     stopReason: Type.Optional(Type.String()),
   },
   { additionalProperties: false },

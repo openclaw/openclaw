@@ -424,6 +424,10 @@ jobs:
           }
           EOF
 
+      - name: Check mobile protocol event coverage
+        if: ${{ steps.manifest.outputs.run_node == 'true' || steps.manifest.outputs.run_ios_build == 'true' || steps.manifest.outputs.run_android_job == 'true' }}
+        run: node scripts/check-protocol-event-coverage.mjs
+
   # Run dependency-free security checks in parallel with scope detection so the
   # main Node jobs do not have to wait for Python/pre-commit setup.
   security-fast:
@@ -1206,7 +1210,6 @@ jobs:
           case "$TASK" in
             guards)
               pnpm check:no-conflict-markers
-              pnpm check:protocol-coverage
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
