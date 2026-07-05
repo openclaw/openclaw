@@ -203,6 +203,7 @@ export function startGatewayEventSubscriptions(params: {
         createLifecycleEventBroadcastHandler({
           broadcastToConnIds: params.broadcastToConnIds,
           sessionEventSubscribers: params.sessionEventSubscribers,
+          chatAbortControllers: params.chatAbortControllers,
         }),
     );
     return lifecycleEventHandlerPromise;
