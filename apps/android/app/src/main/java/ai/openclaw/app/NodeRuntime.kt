@@ -1378,7 +1378,7 @@ class NodeRuntime(
         refreshExecApprovalsFromGateway()
       }
     } else {
-      stopManualVoiceSession()
+      stopActiveVoiceSession()
       publishNodePresenceAliveBeacon(NodePresenceAliveBeacon.Trigger.Background, throttleRecentSuccess = true)
     }
   }
@@ -1877,7 +1877,7 @@ class NodeRuntime(
 
   private fun stopActiveVoiceSession() {
     talkMode.ttsOnAllResponses = false
-    talkMode.setEnabled(false)
+    talkMode.stopAllCapture()
     stopVoicePlayback()
     micCapture.setMicEnabled(false)
     prefs.setVoiceMicEnabled(false)

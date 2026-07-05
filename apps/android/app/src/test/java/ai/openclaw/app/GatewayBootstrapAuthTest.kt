@@ -666,6 +666,44 @@ class GatewayBootstrapAuthTest {
       assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
     }
 
+  @Test
+  fun backgroundingStopsTalkModeCapture() {
+    val app = RuntimeEnvironment.getApplication()
+    shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+    val runtime = NodeRuntime(app)
+    runtime.setTalkModeEnabled(true)
+    val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+
+    assertEquals(VoiceCaptureMode.TalkMode, runtime.voiceCaptureMode.value)
+    assertTrue(talkMode.isEnabled.value)
+    assertTrue(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+
+    runtime.setForeground(false)
+
+    assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+    assertFalse(talkMode.isEnabled.value)
+    assertFalse(talkMode.ttsOnAllResponses)
+    assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+  }
+
+  @Test
+  fun backgroundingStopsGatewayPttWhenVoiceModeIsOff() {
+    val app = RuntimeEnvironment.getApplication()
+    shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+    val runtime = NodeRuntime(app)
+    val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+    writeField(talkMode, "activePttCaptureId", "capture-1")
+    readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value = true
+
+    assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+
+    runtime.setForeground(false)
+
+    assertNull(readField<String?>(talkMode, "activePttCaptureId"))
+    assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+    assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+  }
+
   private fun waitForGatewayTrustPrompt(runtime: NodeRuntime): NodeRuntime.GatewayTrustPrompt {
     repeat(50) {
       runtime.pendingGatewayTrust.value?.let { return it }
