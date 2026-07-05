@@ -3,7 +3,7 @@
  *
  * Keeps provider-specific id formats replay-safe while preserving allowed native ids.
  */
-import { createHash } from "node:crypto";
+import { sha256HexPrefix } from "../infra/crypto-digest.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { isThinkingLikeBlock } from "./thinking-block.js";
 import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-shared.js";
@@ -218,7 +218,7 @@ export function isValidCloudCodeAssistToolId(id: string, mode: ToolCallIdMode = 
 }
 
 function shortHash(text: string, length = 8): string {
-  return createHash("sha256").update(text).digest("hex").slice(0, length);
+  return sha256HexPrefix(text, length);
 }
 
 function isNativeAnthropicToolUseId(id: string): boolean {

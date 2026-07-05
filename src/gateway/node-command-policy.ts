@@ -9,7 +9,7 @@ import {
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
-import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
+import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime.js";
 import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
 import type { NodeSession } from "./node-registry.js";
 
@@ -225,7 +225,7 @@ function normalizePlatformId(platform?: string, deviceFamily?: string): Platform
 }
 
 export function listDangerousPluginNodeCommands(): string[] {
-  const registry = getActiveRuntimePluginRegistry();
+  const registry = getActivePluginGatewayNodePolicyRegistry();
   if (!registry) {
     return [];
   }
@@ -241,7 +241,7 @@ export function listDangerousPluginNodeCommands(): string[] {
 }
 
 function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
-  const registry = getActiveRuntimePluginRegistry();
+  const registry = getActivePluginGatewayNodePolicyRegistry();
   if (!registry) {
     return [];
   }
@@ -256,7 +256,7 @@ function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
 }
 
 export function isForegroundRestrictedPluginNodeCommand(command: string): boolean {
-  const registry = getActiveRuntimePluginRegistry();
+  const registry = getActivePluginGatewayNodePolicyRegistry();
   if (!registry) {
     return false;
   }

@@ -2,6 +2,8 @@ import Foundation
 import OpenClawKit
 
 enum WatchMessagingPayloadCodec {
+    static let completedChatReplyTextLimit = 4000
+
     static func nowMs() -> Int {
         Int(Date().timeIntervalSince1970 * 1000)
     }
@@ -198,6 +200,22 @@ enum WatchMessagingPayloadCodec {
             payload["snapshotId"] = snapshotId
         }
         return payload
+    }
+
+    static func encodeChatCompletionPayload(
+        _ message: OpenClawWatchChatCompletionMessage) -> [String: Any]
+    {
+        [
+            "type": message.type.rawValue,
+            "commandId": message.commandId,
+            "replyText": self.truncatedCompletedChatReplyText(message.replyText),
+            "sentAtMs": message.sentAtMs ?? self.nowMs(),
+        ]
+    }
+
+    private static func truncatedCompletedChatReplyText(_ text: String) -> String {
+        guard text.count > self.completedChatReplyTextLimit else { return text }
+        return "\(text.prefix(self.completedChatReplyTextLimit - 3))..."
     }
 
     static func parseQuickReplyPayload(

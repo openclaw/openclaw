@@ -216,6 +216,40 @@ describe("gateway sessions patch", () => {
     resetPluginRuntimeStateForTest();
   });
 
+  test("archives and restores sessions without retaining a pin", async () => {
+    const archived = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ pinnedAt: 10 }),
+        patch: { key: MAIN_SESSION_KEY, archived: true },
+      }),
+    );
+    expect(archived.archivedAt).toEqual(expect.any(Number));
+    expect(archived.pinnedAt).toBeUndefined();
+
+    const restored = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ archivedAt: archived.archivedAt }),
+        patch: { key: MAIN_SESSION_KEY, archived: false },
+      }),
+    );
+    expect(restored.archivedAt).toBeUndefined();
+  });
+
+  test("pins active sessions and rejects pinned archived sessions", async () => {
+    const pinned = expectPatchOk(
+      await runPatch({ patch: { key: MAIN_SESSION_KEY, pinned: true } }),
+    );
+    expect(pinned.pinnedAt).toEqual(expect.any(Number));
+
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({ archivedAt: 10 }),
+        patch: { key: MAIN_SESSION_KEY, pinned: true },
+      }),
+      "restore it first",
+    );
+  });
+
   test("persists thinkingLevel=off (does not clear)", async () => {
     const entry = expectPatchOk(
       await runPatch({
@@ -562,6 +596,32 @@ describe("gateway sessions patch", () => {
       }),
     );
     expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
+  });
+
+  test("persists provider-qualified aliases without cross-provider collisions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: OPENAI_GPT_MODEL },
+              models: {
+                "lmstudio-moe/qwen3.6-35b-a3b": { alias: "Local" },
+                "lmstudio-dense/qwen3.6-27b": { alias: "Local" },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        patch: { key: MAIN_SESSION_KEY, model: "lmstudio-moe/Local" },
+        loadGatewayModelCatalog: loadCatalog(
+          "lmstudio-moe/qwen3.6-35b-a3b",
+          "lmstudio-dense/qwen3.6-27b",
+        ),
+      }),
+    );
+
+    expectModelSelection(entry, "lmstudio-moe", "qwen3.6-35b-a3b");
+    expect(entry.modelOverrideSource).toBe("user");
   });
 
   test("sets spawnDepth for subagent sessions", async () => {

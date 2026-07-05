@@ -1,5 +1,4 @@
 // WebSocket message handler validates frames, dispatches gateway RPCs, manages pairing, and reports responses.
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
@@ -42,6 +41,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../../config/io.js";
 import { resolveStateDir } from "../../../config/paths.js";
+import { sha256HexPrefix } from "../../../infra/crypto-digest.js";
 import {
   getBoundDeviceBootstrapProfile,
   getDeviceBootstrapTokenProfile,
@@ -169,6 +169,7 @@ import {
   resolvePairingLocality,
   resolveUnauthorizedHandshakeContext,
   shouldAllowSilentLocalPairing,
+  shouldPreserveLocalCliSharedAuthScopes,
   shouldSkipLocalBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
 import {
@@ -200,7 +201,7 @@ function hashGatewaySecurityId(value: string | undefined): string | undefined {
   if (!normalized) {
     return undefined;
   }
-  return `sha256:${createHash("sha256").update(normalized).digest("hex").slice(0, 12)}`;
+  return `sha256:${sha256HexPrefix(normalized, 12)}`;
 }
 
 function emitGatewayAuthSecurityEvent(params: {
@@ -1026,6 +1027,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           sharedAuthOk,
           authMethod,
         });
+        let preserveLocalCliSharedAuthScopes = shouldPreserveLocalCliSharedAuthScopes({
+          connectParams,
+          locality: pairingLocality,
+          hasBrowserOriginHeader,
+          sharedAuthOk,
+          authMethod,
+        });
         const handleMissingDeviceIdentity = (): boolean => {
           const trustedProxyAuthOk = isTrustedProxyControlUiOperatorAuth({
             isControlUi,
@@ -1051,13 +1059,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             hasSharedAuth,
             isLocalClient,
           });
-          // Shared token/password auth can bypass pairing for trusted operators.
-          // Device-less clients still clear self-declared scopes by default, with
-          // one narrow exception: the direct-local backend gateway-client shared-
-          // auth handoff used for in-process control-plane coordination.
+          // Device-less shared auth clears self-declared scopes by default.
+          // Only first-party local control paths preserve scopes: backend self-
+          // calls and CLI shared-secret calls that already proved loopback auth.
           if (
             !device &&
             !skipLocalBackendSelfPairing &&
+            !preserveLocalCliSharedAuthScopes &&
             shouldClearUnboundScopesForMissingDeviceIdentity({
               decision,
               controlUiAuthPolicy,
@@ -1237,6 +1245,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           sharedAuthOk,
           authMethod,
         });
+        preserveLocalCliSharedAuthScopes = shouldPreserveLocalCliSharedAuthScopes({
+          connectParams,
+          locality: pairingLocality,
+          hasBrowserOriginHeader,
+          sharedAuthOk,
+          authMethod,
+        });
         if (!authOk) {
           rejectUnauthorized(authResult);
           return;
@@ -1398,8 +1413,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             // This is the native QR/setup-code onboarding seam. Mobile clients
             // must prove their canonical client id and platform/family metadata
             // agree before the Gateway can skip owner approval and hand off the
-            // bounded operator token below. Admin/pairing scopes still require
-            // an explicit owner flow.
+            // bounded operator token below. Admin/pairing still require an explicit owner flow.
             const bootstrapPairingRoles = allowSetupCodeMobileBootstrapPairing
               ? uniqueStrings([role, ...boundBootstrapProfile.roles])
               : undefined;

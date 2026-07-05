@@ -14,9 +14,13 @@ Every model has a context window: the maximum number of tokens it can process. W
 2. The summary is saved in the session transcript.
 3. Recent messages are kept intact.
 
-When OpenClaw splits history into compaction chunks, it keeps assistant tool calls paired with their matching `toolResult` entries. If a split point lands inside a tool block, OpenClaw moves the boundary so the pair stays together and the current unsummarized tail is preserved.
+OpenClaw keeps assistant tool calls paired with their matching `toolResult` entries when it picks a compaction split point. If the point lands inside a tool block, OpenClaw moves the boundary so the pair stays together and the current unsummarized tail is preserved.
 
 The full conversation history stays on disk. Compaction only changes what the model sees on the next turn.
+
+<Note>
+New configs default `agents.defaults.compaction.mode` to `"safeguard"` (stricter guardrails, summary quality audits). Set `mode: "default"` explicitly to opt out.
+</Note>
 
 ## Auto-compaction
 
@@ -33,13 +37,13 @@ Before compacting, OpenClaw automatically reminds the agent to save important no
 </Info>
 
 <AccordionGroup>
-  <Accordion title="Recognized overflow signatures">
-    OpenClaw detects context overflow from these provider error patterns:
+  <Accordion title="Overflow error patterns OpenClaw recognizes">
+    OpenClaw matches dozens of provider-specific overflow error strings (Anthropic, OpenAI, Bedrock, Gemini, Ollama, OpenRouter, and more). Common examples:
 
     - `request_too_large`
     - `context length exceeded`
     - `input exceeds the maximum number of tokens`
-    - `input token count exceeds the maximum number of input tokens`
+    - `input token count exceeds the maximum number of input tokens` (Bedrock)
     - `input is too long for the model`
     - `ollama error: context length exceeded`
 
@@ -50,11 +54,11 @@ Before compacting, OpenClaw automatically reminds the agent to save important no
 
 Type `/compact` in any chat to force a compaction. Add instructions to guide the summary:
 
-```
+```text
 /compact Focus on the API design decisions
 ```
 
-When `agents.defaults.compaction.keepRecentTokens` is set, manual compaction honors that OpenClaw cut-point and keeps the recent tail in rebuilt context. Without an explicit keep budget, manual compaction behaves as a hard checkpoint and continues from the new summary alone.
+When `agents.defaults.compaction.keepRecentTokens` is set (default: 20,000), manual compaction honors that cut-point and keeps the recent tail in rebuilt context. Without an explicit keep budget, manual compaction behaves as a hard checkpoint and continues from the new summary alone.
 
 ## Configuration
 

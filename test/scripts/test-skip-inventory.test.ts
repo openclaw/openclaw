@@ -70,7 +70,7 @@ describeLive("provider live", () => {});
   );
   writeRepoFile(
     repoRoot,
-    "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+    "ui/src/e2e/chat-flow.e2e.test.ts",
     `
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 describeControlUiE2e("control UI", () => {});
@@ -184,7 +184,7 @@ describe("collectTestSkipInventoryReport", () => {
         target: "it",
       },
       {
-        file: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+        file: "ui/src/e2e/chat-flow.e2e.test.ts",
         kind: "alias",
         method: "skip",
         reason: "optional-dependency",

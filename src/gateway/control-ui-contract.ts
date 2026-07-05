@@ -3,6 +3,9 @@
 /** HTTP path for the Control UI bootstrap config payload. */
 export const CONTROL_UI_BOOTSTRAP_CONFIG_PATH = "/control-ui-config.json";
 
+/** Marks whether the served document CSP permits the terminal WASM runtime. */
+export const CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE = "data-openclaw-terminal-enabled";
+
 /** Sandbox policy for assistant-provided embed surfaces inside Control UI. */
 export type ControlUiEmbedSandboxMode = "strict" | "scripts" | "trusted";
 
@@ -23,4 +26,10 @@ export type ControlUiBootstrapConfig = {
   seamColor?: string;
   /** Resolved `agents.defaults.timeFormat`; "auto" keeps the browser locale default. */
   timeFormat?: "auto" | "12" | "24";
+  /**
+   * Whether the operator terminal surface is enabled (`gateway.terminal.enabled`).
+   * The Control UI hides the terminal entirely when false so a disabled kill
+   * switch removes the surface rather than showing a button that errors on open.
+   */
+  terminalEnabled?: boolean;
 };

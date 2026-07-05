@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveRegistryUpdateChannel } from "../../../infra/update-channels.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../../../plugins/clawhub-error-codes.js";
 import {
@@ -191,6 +191,12 @@ vi.mock("../../../plugins/update.js", async (importOriginal) => {
 });
 
 describe("repairMissingConfiguredPluginInstalls", () => {
+  beforeAll(async () => {
+    // The doctor module owns a broad install/catalog graph. Its cold import is
+    // suite setup; individual cases measure detection and repair behavior.
+    await import("./missing-configured-plugin-install.js");
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.loadPluginMetadataSnapshot.mockReturnValue({

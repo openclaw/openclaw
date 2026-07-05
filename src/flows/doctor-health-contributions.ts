@@ -12,7 +12,7 @@ import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-resul
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
 import type { HealthCheckInput, RunnableHealthCheck } from "./health-check-runner-types.js";
-import type { HealthCheck, HealthFinding } from "./health-checks.js";
+import type { HealthCheck, HealthCheckContext, HealthFinding } from "./health-checks.js";
 import type { FlowContribution } from "./types.js";
 
 type DoctorFlowMode = "local" | "remote";
@@ -979,8 +979,47 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
   });
 }
 
+async function detectSystemdLingerFindings(
+  ctx: HealthCheckContext,
+): Promise<readonly HealthFinding[]> {
+  if (process.platform !== "linux" || resolveDoctorMode(ctx.cfg) !== "local") {
+    return [];
+  }
+  const { resolveGatewayService } = await import("../daemon/service.js");
+  const service = resolveGatewayService();
+  let loaded;
+  try {
+    loaded = await service.isLoaded({ env: process.env });
+  } catch {
+    loaded = false;
+  }
+  if (!loaded) {
+    return [];
+  }
+  const { isSystemdUserServiceAvailable, readSystemdUserLingerStatus } =
+    await import("../daemon/systemd.js");
+  if (!(await isSystemdUserServiceAvailable(process.env))) {
+    return [];
+  }
+  const status = await readSystemdUserLingerStatus(process.env);
+  if (!status || status.linger === "yes") {
+    return [];
+  }
+  return [
+    {
+      checkId: "core/doctor/systemd-linger",
+      severity: "warning",
+      source: "doctor",
+      message: `Systemd lingering is disabled for ${status.user}.`,
+      target: `systemd.user.${status.user}`,
+      requirement: "systemd user lingering enabled",
+      fixHint: `Run: sudo loginctl enable-linger ${status.user}`,
+    },
+  ];
+}
+
 async function hasActiveGatewayExecCredential(
-  ctx: DoctorHealthFlowContext,
+  ctx: Pick<DoctorHealthFlowContext, "cfg">,
   mode: DoctorFlowMode = resolveDoctorMode(ctx.cfg),
 ): Promise<boolean> {
   const { resolveSecretInputRef } = await loadSecretTypesModule();
@@ -1426,7 +1465,56 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:legacy-plugin-manifests",
       label: "Legacy plugin manifests",
+      healthChecks: {
+        id: "core/doctor/legacy-plugin-manifests",
+        description: "Legacy plugin manifest capability keys are reported as findings.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const {
+            collectLegacyPluginManifestContractMigrations,
+            legacyPluginManifestContractMigrationToHealthFinding,
+          } = await import("../commands/doctor-plugin-manifests.js");
+          return collectLegacyPluginManifestContractMigrations({
+            config: ctx.cfg,
+            env: process.env,
+          }).map(legacyPluginManifestContractMigrationToHealthFinding);
+        },
+      },
       run: runLegacyPluginManifestHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:legacy-plugin-dependencies",
+      label: "Legacy plugin dependencies",
+      healthChecks: {
+        id: "core/doctor/legacy-plugin-dependencies",
+        description: "Legacy plugin dependency state roots are represented as findings.",
+        defaultEnabled: false,
+        async detect() {
+          const {
+            detectLegacyPluginDependencyStateIssues,
+            legacyPluginDependencyStateIssueToHealthFinding,
+          } = await import("../commands/doctor/shared/plugin-dependency-cleanup.js");
+          return (await detectLegacyPluginDependencyStateIssues({ env: process.env })).map(
+            legacyPluginDependencyStateIssueToHealthFinding,
+          );
+        },
+      },
+      run: async () => {},
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:stale-plugin-runtime-symlinks",
+      label: "Stale plugin runtime symlinks",
+      healthChecks: {
+        id: "core/doctor/stale-plugin-runtime-symlinks",
+        description: "Stale plugin-runtime symlinks are represented as findings.",
+        defaultEnabled: false,
+        async detect() {
+          const { collectStalePluginRuntimeSymlinkHealthFindings } =
+            await import("../commands/doctor/shared/plugin-runtime-symlinks.js");
+          return await collectStalePluginRuntimeSymlinkHealthFindings();
+        },
+      },
+      run: async () => {},
     }),
     createDoctorHealthContribution({
       id: "doctor:release-configured-plugin-installs",
@@ -1521,6 +1609,16 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:disk-space",
       label: "Disk space",
+      healthChecks: {
+        id: "core/doctor/disk-space",
+        description: "Low disk space around the OpenClaw state directory is a finding.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectDiskSpaceHealthFindings } =
+            await import("../commands/doctor-disk-space.js");
+          return collectDiskSpaceHealthFindings(ctx.cfg);
+        },
+      },
       run: runDiskSpaceHealth,
     }),
     createDoctorHealthContribution({
@@ -1674,7 +1772,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:legacy-cron",
       label: "Legacy cron",
-      healthCheckIds: ["core/doctor/legacy-whatsapp-crontab"],
+      healthCheckIds: ["core/doctor/legacy-whatsapp-crontab", "core/doctor/legacy-cron-store"],
       run: runLegacyCronHealth,
     }),
     createDoctorHealthContribution({
@@ -1725,18 +1823,37 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:startup-channel-maintenance",
       label: "Startup channel maintenance",
-      healthChecks: {
-        id: "core/doctor/channel-plugin-blockers",
-        description: "Configured channels must have loadable backing channel plugins.",
-        defaultEnabled: false,
-        async detect(ctx) {
-          const { channelPluginBlockerHitToHealthFinding, scanConfiguredChannelPluginBlockers } =
-            await import("../commands/doctor/shared/channel-plugin-blockers.js");
-          return scanConfiguredChannelPluginBlockers(ctx.cfg, process.env).map(
-            channelPluginBlockerHitToHealthFinding,
-          );
+      healthCheckIds: [
+        "core/doctor/channel-plugin-blockers",
+        "core/doctor/channel-preview-warnings",
+      ],
+      healthChecks: [
+        {
+          id: "core/doctor/channel-plugin-blockers",
+          description: "Configured channels must have loadable backing channel plugins.",
+          defaultEnabled: false,
+          async detect(ctx) {
+            const { channelPluginBlockerHitToHealthFinding, scanConfiguredChannelPluginBlockers } =
+              await import("../commands/doctor/shared/channel-plugin-blockers.js");
+            return scanConfiguredChannelPluginBlockers(ctx.cfg, process.env).map(
+              channelPluginBlockerHitToHealthFinding,
+            );
+          },
         },
-      },
+        {
+          id: "core/doctor/channel-preview-warnings",
+          description: "Channel doctor preview warnings are captured as structured findings.",
+          defaultEnabled: false,
+          async detect(ctx) {
+            const { collectChannelPreviewWarningHealthFindings } =
+              await import("./doctor-startup-channel-maintenance.js");
+            return collectChannelPreviewWarningHealthFindings({
+              cfg: ctx.cfg,
+              allowExec: ctx.allowExecSecretRefs === true,
+            });
+          },
+        },
+      ],
       run: runStartupChannelMaintenanceHealth,
     }),
     createDoctorHealthContribution({
@@ -1790,6 +1907,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:systemd-linger",
       label: "systemd linger",
+      healthChecks: {
+        id: "core/doctor/systemd-linger",
+        description: "Disabled systemd user lingering is reported as a finding.",
+        defaultEnabled: false,
+        detect: detectSystemdLingerFindings,
+      },
       run: runSystemdLingerHealth,
     }),
     createDoctorHealthContribution({
@@ -1829,6 +1952,16 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:heartbeat-template-repair",
       label: "Heartbeat template repair",
+      healthChecks: {
+        id: "core/doctor/heartbeat-template",
+        description: "Legacy HEARTBEAT.md documentation templates are findings.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectHeartbeatTemplateHealthFindings } =
+            await import("../commands/doctor-heartbeat-template-repair.js");
+          return await collectHeartbeatTemplateHealthFindings(ctx.cfg);
+        },
+      },
       run: runHeartbeatTemplateRepairHealth,
     }),
     createDoctorHealthContribution({
@@ -1846,6 +1979,33 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:whatsapp-responsiveness",
       label: "WhatsApp responsiveness",
+      healthChecks: {
+        id: "core/doctor/whatsapp-responsiveness",
+        description:
+          "WhatsApp responsiveness pressure from degraded Gateway and local TUI clients.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectWhatsappResponsivenessHealthFindings } =
+            await import("../commands/doctor-whatsapp-responsiveness.js");
+          let status: import("../commands/status.types.js").StatusSummary | undefined;
+          if (
+            !(
+              (await hasActiveGatewayExecCredential({ cfg: ctx.cfg })) &&
+              ctx.allowExecSecretRefs !== true
+            )
+          ) {
+            const { callGateway } = await import("../gateway/call.js");
+            status = await callGateway<import("../commands/status.types.js").StatusSummary>({
+              method: "status",
+              params: { includeChannelSummary: false },
+              timeoutMs: 3000,
+              config: ctx.cfg,
+              deviceIdentity: null,
+            }).catch(() => undefined);
+          }
+          return collectWhatsappResponsivenessHealthFindings({ cfg: ctx.cfg, status });
+        },
+      },
       run: runWhatsappResponsivenessHealth,
     }),
     createDoctorHealthContribution({

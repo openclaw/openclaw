@@ -9,12 +9,14 @@ import { getRuntimeConfig } from "../config/io.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { logError } from "../logger.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import {
-  normalizeLiveAssistantEventText,
+  normalizeLiveAssistantBufferedText,
   projectLiveAssistantBufferedText,
+  resolveAssistantLiveChatInput,
   resolveMergedAssistantText,
   shouldSuppressAssistantEventForLiveChat,
 } from "./live-chat-projector.js";
@@ -716,7 +718,10 @@ export function createAgentEventHandler({
             markPersisted();
             broadcastSessionChange();
           })
-          .catch(() => {
+          .catch((err: unknown) => {
+            logError(
+              `gateway: terminal session persistence failed session=${formatForLog(sessionKey)} run=${formatForLog(evt.runId)} error=${formatForLog(err)}`,
+            );
             // Persistence recovery remains tracked by the controller entry, but
             // subscribers still need a terminal projection instead of hanging.
             broadcastSessionChange(evt);
@@ -752,12 +757,11 @@ export function createAgentEventHandler({
     delta?: unknown,
     opts?: { controlUiVisible?: boolean },
   ) => {
-    const cleaned = normalizeLiveAssistantEventText({ text, delta });
     const previousRawText = chatRunState.rawBuffers.get(clientRunId) ?? "";
     const mergedRawText = resolveMergedAssistantText({
       previousText: previousRawText,
-      nextText: cleaned.text,
-      nextDelta: cleaned.delta,
+      nextText: text,
+      nextDelta: typeof delta === "string" ? delta : "",
     });
     if (!mergedRawText) {
       return;
@@ -765,7 +769,10 @@ export function createAgentEventHandler({
     const now = Date.now();
     chatRunState.rawBuffers.set(clientRunId, mergedRawText);
     chatRunState.bufferUpdatedAt.set(clientRunId, now);
-    const projected = projectLiveAssistantBufferedText(mergedRawText);
+    // Sanitize only after merging. Protected blocks and directive tags can span
+    // delta frames; cleaning each frame independently can expose their contents.
+    const normalizedText = normalizeLiveAssistantBufferedText(mergedRawText);
+    const projected = projectLiveAssistantBufferedText(normalizedText);
     const mergedText = projected.text;
     chatRunState.buffers.set(clientRunId, mergedText);
     if (projected.suppress) {
@@ -817,9 +824,7 @@ export function createAgentEventHandler({
     sourceRunId: string,
     options?: { suppressLeadFragments?: boolean },
   ) => {
-    const bufferedText = normalizeLiveAssistantEventText({
-      text: chatRunState.buffers.get(clientRunId) ?? "",
-    }).text.trim();
+    const bufferedText = (chatRunState.buffers.get(clientRunId) ?? "").trim();
     const normalizedHeartbeatText = normalizeHeartbeatChatFinalText({
       runId: clientRunId,
       sourceRunId,
@@ -1389,10 +1394,11 @@ export function createAgentEventHandler({
           sessionAgentId,
         );
       }
+      const assistantLiveChatInput =
+        evt.stream === "assistant" ? resolveAssistantLiveChatInput(evt.data) : undefined;
       if (
         !isAborted &&
-        evt.stream === "assistant" &&
-        typeof evt.data?.text === "string" &&
+        assistantLiveChatInput &&
         !shouldSuppressAssistantEventForLiveChat(evt.data)
       ) {
         emitChatDelta(
@@ -1401,8 +1407,8 @@ export function createAgentEventHandler({
           clientRunId,
           evt.runId,
           evt.seq,
-          evt.data.text,
-          evt.data.delta,
+          assistantLiveChatInput.text,
+          assistantLiveChatInput.delta,
           {
             controlUiVisible: isControlUiVisible,
           },

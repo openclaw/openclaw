@@ -39,6 +39,7 @@ import { CustomEditor } from "./components/custom-editor.js";
 import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 import { editorTheme, theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
+import { addBlockedChatSubmitNotice } from "./tui-busy-notice.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import {
@@ -54,6 +55,7 @@ import {
 } from "./tui-last-session.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
+import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import {
@@ -402,7 +404,6 @@ export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
 }
 
 export function canSubmitTuiChatMessage(params: {
-  local?: boolean;
   activeChatRunId?: string | null;
   pendingChatRunId?: string | null;
   pendingOptimisticUserMessage?: boolean;
@@ -412,11 +413,7 @@ export function canSubmitTuiChatMessage(params: {
   if (stopText && (params.activeChatRunId || params.pendingChatRunId)) {
     return true;
   }
-  const pending = Boolean(params.pendingChatRunId) || params.pendingOptimisticUserMessage === true;
-  if (!params.local && params.activeChatRunId) {
-    return false;
-  }
-  return !pending;
+  return !params.pendingChatRunId && params.pendingOptimisticUserMessage !== true;
 }
 
 const TUI_BUSY_ACTIVITY_STATUSES = new Set([
@@ -610,12 +607,14 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     },
     set currentAgentId(value) {
       currentAgentId = value;
+      pluginApprovals?.sessionChanged();
     },
     get currentSessionKey() {
       return currentSessionKey;
     },
     set currentSessionKey(value) {
       currentSessionKey = value;
+      pluginApprovals?.sessionChanged();
     },
     get currentSessionId() {
       return currentSessionId;
@@ -1263,6 +1262,15 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   const { openOverlay, closeOverlay } = createOverlayHandlers(tui, editor);
+  const pluginApprovals = createTuiPluginApprovalController({
+    client,
+    chatLog,
+    getAgentId: () => currentAgentId,
+    getSessionKey: () => currentSessionKey,
+    openOverlay,
+    closeOverlay,
+    requestRender: () => tui.requestRender(),
+  });
   const btw = {
     showResult: (params: { question: string; text: string; isError?: boolean }) => {
       chatLog.showBtw(params);
@@ -1297,7 +1305,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     setActivityStatus,
     clearLocalRunIds,
     rememberSessionKey: rememberCurrentSessionKey,
-    emptySessionInfoDefaults,
   });
   const {
     refreshAgents,
@@ -1306,7 +1313,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     applySessionMutationResult,
     loadHistory,
     setSession,
-    setEmptySession,
     abortActive,
   } = sessionActions;
 
@@ -1357,6 +1363,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       exitReason: result?.exitReason ?? "exit",
       ...(result?.crestodianMessage ? { crestodianMessage: result.crestodianMessage } : {}),
     };
+    pluginApprovals?.dispose();
     const hardExitTimer = setTimeout(
       forceExit,
       resolveTuiShutdownHardExitMs({ localMode: isLocalMode }),
@@ -1402,7 +1409,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       applySessionMutationResult,
       loadHistory,
       setSession,
-      setEmptySession,
       refreshAgents,
       abortActive,
       setActivityStatus,
@@ -1427,14 +1433,13 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   updateAutocompleteProvider();
   const canSubmitChatMessage = (message: string) =>
     canSubmitTuiChatMessage({
-      local: isLocalMode,
       activeChatRunId: state.activeChatRunId,
       pendingChatRunId: state.pendingChatRunId,
       pendingOptimisticUserMessage: state.pendingOptimisticUserMessage,
       message,
     });
   const notifyBlockedChatSubmit = () => {
-    chatLog.addSystem("agent is busy — press Esc to abort before sending a new message");
+    addBlockedChatSubmitNotice(chatLog);
     tui.requestRender();
   };
   const submitHandler = createEditorSubmitHandler({
@@ -1534,6 +1539,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   });
 
   client.onEvent = (evt) => {
+    pluginApprovals?.handleEvent(evt.event, evt.payload);
     if (evt.event === "chat") {
       handleChatEvent(evt.payload);
     }
@@ -1567,6 +1573,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       await restoreRememberedSession();
       updateHeader();
       updateAutocompleteProvider();
+      try {
+        await pluginApprovals?.refresh();
+      } catch (err) {
+        chatLog.addSystem(`plugin approval refresh failed: ${String(err)}`);
+      }
       await loadHistory();
       setConnectionStatus(
         isLocalMode ? "local ready" : reconnected ? "gateway reconnected" : "gateway connected",
@@ -1619,6 +1630,13 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
 
   client.onGap = (info) => {
     setConnectionStatus(`event gap: expected ${info.expected}, got ${info.received}`, 5000);
+    void (async () => {
+      try {
+        await pluginApprovals?.refresh();
+      } catch (err) {
+        chatLog.addSystem(`plugin approval refresh failed: ${String(err)}`);
+      }
+    })();
     tui.requestRender();
   };
 
@@ -1644,6 +1662,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   client.start();
   await new Promise<void>((resolve) => {
     const finish = () => {
+      pluginApprovals?.dispose();
       if (isLocalMode) {
         setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
       }

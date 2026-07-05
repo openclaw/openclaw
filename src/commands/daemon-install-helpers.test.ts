@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeStateDirDotEnv } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { collectPreservedExistingServiceEnvVars } from "./daemon-install-helpers.js";
@@ -171,6 +171,11 @@ function mockNodeGatewayPlanFixture(
 }
 
 describe("buildGatewayInstallPlan", () => {
+  beforeAll(async () => {
+    const { resolveConfigSecretTargetByPath } = await import("../secrets/target-registry.js");
+    resolveConfigSecretTargetByPath(["channels", "discord", "token"]);
+  });
+
   // Prevent tests from reading the developer's real ~/.openclaw/.env when
   // passing `env: {}` (which falls back to os.homedir for state-dir resolution).
   let isolatedHome: string;
@@ -410,6 +415,7 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
       "CUSTOM_VAR,GOOGLE_API_KEY,SAFE_KEY",
     );
+    expect(mocks.loadPluginManifestRegistryForPluginRegistry).not.toHaveBeenCalled();
   });
 
   it("renders config env SecretRefs as file-backed managed values on Linux", async () => {
@@ -1435,7 +1441,8 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       },
     });
 
-    const home = "/home/testuser";
+    // Avoid macOS /home autofs lookups while exercising the same user-tool paths.
+    const home = "/Users/testuser";
     const plan = await buildGatewayInstallPlan({
       env: { HOME: tmpDir },
       port: 3000,

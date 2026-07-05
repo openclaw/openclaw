@@ -355,6 +355,33 @@ describe("qa mock openai server", () => {
     expect(quietBody).toContain('"phase":"final_answer"');
     expect(quietBody).toContain("QA_STREAMING_OK");
 
+    const finalOnlyMarkerResponse = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          makeUserInput(
+            "Final-only marker streaming QA check. Reply exactly: QA-FINAL-ONLY-STREAMING-OK",
+          ),
+        ],
+      }),
+    });
+    expect(finalOnlyMarkerResponse.status).toBe(200);
+    const finalOnlyMarkerBody = await finalOnlyMarkerResponse.text();
+    const finalOnlyMarkerDeltaText = finalOnlyMarkerBody
+      .split("\n")
+      .filter((line) => line.startsWith("data: {"))
+      .map((line) => JSON.parse(line.slice("data: ".length)) as { type?: string; delta?: string })
+      .filter((event) => event.type === "response.output_text.delta")
+      .map((event) => event.delta ?? "")
+      .join("");
+    expect(finalOnlyMarkerDeltaText).toBe("QA streaming preview in progress");
+    expect(finalOnlyMarkerDeltaText).not.toContain("QA-FINAL-ONLY-STREAMING-OK");
+    expect(finalOnlyMarkerBody).toContain('"text":"QA-FINAL-ONLY-STREAMING-OK"');
+
     const partialResponse = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
       headers: {

@@ -15,8 +15,8 @@ title: OpenClaw QA Scenario Pack
 #
 # Coverage tracking:
 #
-# - add `coverage.primary` IDs to each scenario's `scenario` block
-# - add `coverage.secondary` only when a scenario intentionally protects another behavior
+# - use `coverage.primary` only for evidence that executes the required product boundary
+# - use `coverage.secondary` for helper or supporting evidence; it may stand alone
 # - keep IDs behavior-shaped, broad enough to reuse, lowercase, and dotted
 #   as `namespace.behavior`, with dashes allowed inside each segment
 # - use the exact values listed under feature `coverageIds` in `taxonomy.yaml`

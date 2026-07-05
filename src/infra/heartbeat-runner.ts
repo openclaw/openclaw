@@ -106,6 +106,7 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { escapeRegExp } from "../utils.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
@@ -147,6 +148,7 @@ import {
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
 import type { OutboundSendDeps } from "./outbound/deliver.js";
+import { resolveAgentOutboundIdentity } from "./outbound/identity.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import {
   resolveHeartbeatDeliveryTargetWithSessionRoute,
@@ -172,13 +174,10 @@ export type HeartbeatDeps = OutboundSendDeps &
   };
 
 const log = createSubsystemLogger("gateway/heartbeat");
-let heartbeatRunnerRuntimePromise: Promise<typeof import("./heartbeat-runner.runtime.js")> | null =
-  null;
 
-function loadHeartbeatRunnerRuntime() {
-  heartbeatRunnerRuntimePromise ??= import("./heartbeat-runner.runtime.js");
-  return heartbeatRunnerRuntimePromise;
-}
+const loadHeartbeatRunnerRuntime = createLazyRuntimeModule(
+  () => import("./heartbeat-runner.runtime.js"),
+);
 
 const HEARTBEAT_ALWAYS_BUSY_LANES = [CommandLane.Cron, CommandLane.CronNested] as const;
 const DEFAULT_HEARTBEAT_TIMEOUT_SECONDS = 10 * 60;
@@ -1859,6 +1858,7 @@ export async function runHeartbeatOnce(opts: {
     sessionKey: runSessionKey,
     policySessionKey: outboundPolicySessionKey,
   });
+  const outboundIdentity = resolveAgentOutboundIdentity(cfg, agentId);
   const canAttemptHeartbeatOk = Boolean(
     !hasDueCommitments && visibility.showOk && delivery.channel !== "none" && delivery.to,
   );
@@ -1913,6 +1913,7 @@ export async function runHeartbeatOnce(opts: {
       threadId: delivery.threadId,
       payloads: [{ text: resolveHeartbeatOkText() }],
       session: outboundSession,
+      identity: outboundIdentity,
       deps: opts.deps,
     });
     if (send.status === "failed" || send.status === "partial_failed") {
@@ -2223,6 +2224,7 @@ export async function runHeartbeatOnce(opts: {
       to: delivery.to,
       accountId: deliveryAccountId,
       session: outboundSession,
+      identity: outboundIdentity,
       threadId: delivery.threadId,
       payloads: [
         ...reasoningPayloads,

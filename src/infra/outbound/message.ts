@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
@@ -29,23 +30,17 @@ import {
 import { buildOutboundSessionContext } from "./session-context.js";
 import { resolveOutboundTarget } from "./targets.js";
 
-let messageConfigRuntimePromise: Promise<typeof import("./message.config.runtime.js")> | null =
-  null;
-let messageGatewayRuntimePromise: Promise<typeof import("./message.gateway.runtime.js")> | null =
-  null;
 const SEND_BUFFER_MEDIA_URL = "buffer://message-send/attachment";
 
-function loadMessageConfigRuntime() {
-  // Keep config/runtime loading lazy so importing message helpers does not
-  // bootstrap plugin registries or gateway clients.
-  messageConfigRuntimePromise ??= import("./message.config.runtime.js");
-  return messageConfigRuntimePromise;
-}
+const loadMessageConfigRuntime = createLazyRuntimeModule(
+  () => import("./message.config.runtime.js"),
+);
 
-function loadMessageGatewayRuntime() {
-  messageGatewayRuntimePromise ??= import("./message.gateway.runtime.js");
-  return messageGatewayRuntimePromise;
-}
+// Keep config/runtime loading lazy so importing message helpers does not
+// bootstrap plugin registries or gateway clients.
+const loadMessageGatewayRuntime = createLazyRuntimeModule(
+  () => import("./message.gateway.runtime.js"),
+);
 
 export type MessageGatewayOptions = OutboundMessageGatewayOptionsInput;
 
@@ -364,7 +359,10 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       requesterSenderUsername: params.requesterSenderUsername,
       requesterSenderE164: params.requesterSenderE164,
     });
-    if (params.queuePolicy === "required") {
+    // Public queuePolicy:"required" is the exact-delivery contract preflighted below.
+    // Lower-level queue-required callers must leave this internal opt-in unset.
+    const requireUnknownSendReconciliation = params.queuePolicy === "required";
+    if (requireUnknownSendReconciliation) {
       await assertRequiredMessageSendDurability({
         cfg,
         channel: outboundChannel,
@@ -387,6 +385,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       forceDocument: params.forceDocument,
       deps: params.deps,
       bestEffort: params.bestEffort,
+      ...(requireUnknownSendReconciliation ? { requireUnknownSendReconciliation: true } : {}),
       durability:
         params.bestEffort || params.queuePolicy === "best_effort" ? "best_effort" : "required",
       signal: params.abortSignal,

@@ -371,6 +371,16 @@ let createSessionStatusTool: typeof import("./tools/session-status-tool.js").cre
 
 beforeAll(async () => {
   ({ createSessionStatusTool } = await import("./tools/session-status-tool.js"));
+  resetSessionStore({
+    "agent:main:spawned": {
+      sessionId: "spawned-status-warmup",
+      updatedAt: 1,
+      spawnedWorkspaceDir: "/tmp/openclaw-spawned-workspace",
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+    },
+  });
+  await getSessionStatusTool("agent:main:spawned").execute("warm-spawned-workspace-status", {});
 });
 
 function resetSessionStore(store: Record<string, SessionEntry>) {

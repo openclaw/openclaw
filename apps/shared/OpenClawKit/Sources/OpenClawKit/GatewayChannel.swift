@@ -241,6 +241,10 @@ private enum GatewayConnectErrorCodes {
 }
 
 public actor GatewayChannelActor {
+    nonisolated static func resolveRequestTimeoutMs(_ timeoutMs: Double?, defaultMs: Double) -> Double? {
+        timeoutMs == 0 ? nil : (timeoutMs ?? defaultMs)
+    }
+
     private let logger = Logger(subsystem: "ai.openclaw", category: "gateway")
     private var task: WebSocketTaskBox?
     private var pending: [String: CheckedContinuation<GatewayFrame, Error>] = [:]
@@ -743,10 +747,11 @@ public actor GatewayChannelActor {
         if scheme == "wss" {
             return true
         }
-        if let host = self.url.host, LoopbackHost.isLoopback(host) {
-            return true
-        }
-        return false
+        guard scheme == "ws", let host = self.url.host else { return false }
+        // Setup codes intentionally allow plaintext WebSocket bootstrap on local networks
+        // for QR pairing. Persist the resulting bounded device token so reconnects do not
+        // fall back to auth=none after the single-use bootstrap token is cleared.
+        return LoopbackHost.isLocalNetworkHost(host)
     }
 
     private func filteredBootstrapHandoffScopes(role: String, scopes: [String]) -> [String]? {
@@ -1173,14 +1178,17 @@ public actor GatewayChannelActor {
         timeoutMs: Double? = nil) async throws -> Data
     {
         try await self.connectOrThrow(context: "gateway connect")
-        let effectiveTimeout = timeoutMs ?? self.defaultRequestTimeoutMs
+        // Zero leaves terminal-operation deadlines to the Gateway owner.
+        let effectiveTimeout = Self.resolveRequestTimeoutMs(timeoutMs, defaultMs: self.defaultRequestTimeoutMs)
         let payload = try self.encodeRequest(method: method, params: params, kind: "request")
         let response = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<GatewayFrame, Error>) in
             self.pending[payload.id] = cont
-            Task { [weak self] in
-                guard let self else { return }
-                try? await Task.sleep(nanoseconds: UInt64(effectiveTimeout * 1_000_000))
-                await self.timeoutRequest(id: payload.id, timeoutMs: effectiveTimeout)
+            if let effectiveTimeout {
+                Task { [weak self] in
+                    guard let self else { return }
+                    try? await Task.sleep(nanoseconds: UInt64(effectiveTimeout * 1_000_000))
+                    await self.timeoutRequest(id: payload.id, timeoutMs: effectiveTimeout)
+                }
             }
             Task {
                 do {

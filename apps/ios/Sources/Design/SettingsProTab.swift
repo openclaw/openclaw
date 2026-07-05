@@ -1,13 +1,16 @@
 import OpenClawKit
 import SwiftUI
 
+struct GatewaySetupRequest {
+    let id: Int
+    let link: GatewayConnectDeepLink
+}
+
 struct SettingsProTab: View {
     @Environment(NodeAppModel.self) var appModel
     @Environment(VoiceWakeManager.self) var voiceWake
     @Environment(GatewayConnectionController.self) var gatewayController
     @Environment(\.scenePhase) var scenePhase
-    @AppStorage(AppAppearancePreference.storageKey) var appearancePreferenceRaw: String =
-        AppAppearancePreference.system.rawValue
     @AppStorage("node.displayName") var displayName: String = "iOS Node"
     @AppStorage("node.instanceId") var instanceId: String = UUID().uuidString
     @AppStorage("camera.enabled") var cameraEnabled: Bool = true
@@ -46,12 +49,17 @@ struct SettingsProTab: View {
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
     @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
     @State var defaultShareInstruction = ""
-    @State var showGatewayProblemDetails = false
     @State var showQRScanner = false
     @State var scannerError: String?
     @State var showResetOnboardingAlert = false
     @State var suppressCredentialPersist = false
     @State var locationStatusText: String?
+    @State var locationPermissionSummary = LocationPermissionSummary(
+        desiredMode: .off,
+        locationServicesEnabled: true,
+        authorizationStatus: .notDetermined,
+        accuracyAuthorization: .fullAccuracy)
+    @State var locationPermissionRefreshID = 0
     @State var previousLocationModeRaw: String = OpenClawLocationMode.off.rawValue
     @State var notificationStatus: SettingsNotificationStatus = .checking
     @State var isRequestingNotificationAuthorization = false
@@ -66,6 +74,8 @@ struct SettingsProTab: View {
     let ownsNavigationStack: Bool
     let navigateToRoute: ((SettingsRoute) -> Void)?
     let onRouteChange: ((SettingsRoute?) -> Void)?
+    let gatewaySetupRequest: GatewaySetupRequest?
+    let onGatewaySetupRequestHandled: ((Int) -> Void)?
 
     init(
         initialRoute: SettingsRoute? = nil,
@@ -73,7 +83,9 @@ struct SettingsProTab: View {
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
         ownsNavigationStack: Bool = true,
         navigateToRoute: ((SettingsRoute) -> Void)? = nil,
-        onRouteChange: ((SettingsRoute?) -> Void)? = nil)
+        onRouteChange: ((SettingsRoute?) -> Void)? = nil,
+        gatewaySetupRequest: GatewaySetupRequest? = nil,
+        onGatewaySetupRequestHandled: ((Int) -> Void)? = nil)
     {
         self.initialRoute = initialRoute
         self.directRoute = directRoute
@@ -81,6 +93,8 @@ struct SettingsProTab: View {
         self.ownsNavigationStack = ownsNavigationStack
         self.navigateToRoute = navigateToRoute
         self.onRouteChange = onRouteChange
+        self.gatewaySetupRequest = gatewaySetupRequest
+        self.onGatewaySetupRequestHandled = onGatewaySetupRequestHandled
     }
 
     var body: some View {
@@ -113,21 +127,17 @@ struct SettingsProTab: View {
             self.gatewaySection
             self.settingsListSection
         }
-        .listStyle(.insetGrouped)
+        .font(OpenClawType.body)
         .navigationTitle("Settings")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationDestination(for: SettingsRoute.self) { route in
+            self.destination(for: route)
+        }
         .toolbar {
             if let headerLeadingAction {
                 ToolbarItem(placement: .topBarLeading) {
-                    OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                    OpenClawSidebarRevealButton(action: headerLeadingAction)
                 }
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                self.appearanceMenu
-            }
-        }
-        .navigationDestination(for: SettingsRoute.self) { route in
-            self.destination(for: route)
         }
     }
 
@@ -137,9 +147,12 @@ struct SettingsProTab: View {
                 self.previousLocationModeRaw = self.locationModeRaw
                 self.syncSettingsState()
                 self.refreshNotificationSettings()
-                self.applyPendingGatewaySetupLinkIfNeeded()
+                self.applyGatewaySetupRequestIfNeeded()
                 self.applyInitialRouteIfNeeded()
                 self.notifyRouteChange()
+            }
+            .onChange(of: self.gatewaySetupRequest?.id) { _, _ in
+                self.applyGatewaySetupRequestIfNeeded()
             }
             .onChange(of: self.scenePhase) { _, phase in
                 if phase == .active {
@@ -173,8 +186,10 @@ struct SettingsProTab: View {
             .onChange(of: self.defaultShareInstruction) { _, newValue in
                 ShareToAgentSettings.saveDefaultInstruction(newValue)
             }
-            .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
-                self.applyPendingGatewaySetupLinkIfNeeded()
+            .onChange(of: self.onboardingRequestID) { _, _ in
+                // Root-owned resets leave Settings mounted behind onboarding.
+                // Reload cleared credentials before the view can persist stale state.
+                self.syncAfterOnboardingReset()
             }
             .onChange(of: self.navigationPath) { _, _ in
                 self.notifyRouteChange()
@@ -183,16 +198,6 @@ struct SettingsProTab: View {
 
     private func settingsModalPresentation(_ content: some View) -> some View {
         content
-            .sheet(isPresented: self.$showGatewayProblemDetails) {
-                if let gatewayProblem = self.appModel.lastGatewayProblem {
-                    GatewayProblemDetailsSheet(
-                        problem: gatewayProblem,
-                        primaryActionTitle: self.gatewayProblemPrimaryActionTitle(gatewayProblem),
-                        onPrimaryAction: {
-                            Task { await self.handleGatewayProblemPrimaryAction(gatewayProblem) }
-                        })
-                }
-            }
             .sheet(isPresented: self.$showTalkIssueDetails) {
                 if let issue = self.appModel.talkMode.gatewayTalkCurrentFallbackIssue {
                     TalkRuntimeIssueDetailsSheet(issue: issue)
@@ -218,9 +223,16 @@ struct SettingsProTab: View {
                         .ignoresSafeArea()
                         .navigationTitle("Scan QR Code")
                         .navigationBarTitleDisplayMode(.inline)
+                        .font(OpenClawType.body)
                         .toolbar {
                             ToolbarItem(placement: .topBarLeading) {
-                                Button("Cancel") { self.showQRScanner = false }
+                                Button {
+                                    self.showQRScanner = false
+                                } label: {
+                                    Text("Cancel")
+                                        .font(OpenClawType.subheadSemiBold)
+                                }
+                                .font(OpenClawType.subheadSemiBold)
                             }
                         }
                 }
@@ -231,12 +243,19 @@ struct SettingsProTab: View {
                     onContinue: self.requestNotificationAuthorizationFromSettings)
             }
             .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
-                Button("Reset", role: .destructive) {
+                Button(role: .destructive) {
                     self.resetOnboarding()
+                } label: {
+                    Text("Reset")
+                        .font(OpenClawType.subheadSemiBold)
                 }
-                Button("Cancel", role: .cancel) {}
+                Button(role: .cancel) {} label: {
+                    Text("Cancel")
+                        .font(OpenClawType.subheadSemiBold)
+                }
             } message: {
                 Text("This disconnects, clears saved gateway credentials, and reopens onboarding.")
+                    .font(OpenClawType.subhead)
             }
             .alert(
                 "QR Scanner Unavailable",
@@ -244,10 +263,20 @@ struct SettingsProTab: View {
                     get: { self.scannerError != nil },
                     set: { if !$0 { self.scannerError = nil } }))
             {
-                Button("OK", role: .cancel) {}
+                Button(role: .cancel) {} label: {
+                    Text("OK")
+                        .font(OpenClawType.subheadSemiBold)
+                }
             } message: {
                 Text(self.scannerError ?? "")
+                    .font(OpenClawType.subhead)
             }
+    }
+
+    private func applyGatewaySetupRequestIfNeeded() {
+        guard let gatewaySetupRequest else { return }
+        self.applyGatewaySetupLink(gatewaySetupRequest.link)
+        self.onGatewaySetupRequestHandled?(gatewaySetupRequest.id)
     }
 
     func openNotificationsRouteFromApprovals() {
@@ -256,7 +285,9 @@ struct SettingsProTab: View {
             navigateToRoute(.notifications)
             return
         }
-        self.navigationPath = [.notifications]
+        // Push, don't replace: Back from Notifications must return to the
+        // Approvals screen the user came from, not reset to the Settings root.
+        self.navigationPath.append(.notifications)
     }
 
     private func applyInitialRouteIfNeeded() {
@@ -285,26 +316,32 @@ struct HostedPushRelayDisclosureSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     Image(systemName: "network")
-                        .font(.title2.weight(.semibold))
+                        .font(OpenClawType.title2SemiBold)
                         .foregroundStyle(OpenClawBrand.accentForeground)
                     Text("Enable OpenClaw Hosted Push Relay?")
-                        .font(.title3.weight(.semibold))
+                        .font(OpenClawType.title3SemiBold)
                     Text(self.message)
-                        .font(.body)
+                        .font(OpenClawType.body)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .font(OpenClawType.body)
             }
             VStack(spacing: 10) {
                 Button {
                     self.dismiss()
                     self.onContinue()
                 } label: {
-                    Text("Continue").frame(maxWidth: .infinity)
+                    Text("Continue")
+                        .font(OpenClawType.subheadSemiBold)
+                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                Button("Not Now", role: .cancel) {
+                Button(role: .cancel) {
                     self.dismiss()
+                } label: {
+                    Text("Not Now")
+                        .font(OpenClawType.subheadSemiBold)
                 }
                 .buttonStyle(.bordered)
                 .frame(maxWidth: .infinity)
