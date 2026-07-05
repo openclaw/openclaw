@@ -171,8 +171,12 @@ function createOneShotAllowAlwaysDecision(): AllowAlwaysPersistenceDecision {
 function resolveGatewayEffectiveAllowAlwaysPersistence(params: {
   command: string;
   allowAlwaysPersistence: AllowAlwaysPersistenceDecision;
+  requiresExplicitApproval: boolean;
   requiresAllowlistPlanApproval: boolean;
 }): AllowAlwaysPersistenceDecision {
+  if (params.requiresExplicitApproval) {
+    return createOneShotAllowAlwaysDecision();
+  }
   if (!params.requiresAllowlistPlanApproval) {
     return params.allowAlwaysPersistence;
   }
@@ -562,6 +566,9 @@ export async function processGatewayAllowlist(
       env: params.env,
       segments: allowlistEval.segments,
     }) && !(hostSecurity === "full" && hostAsk === "off");
+  const requiresExplicitApproval = allowlistEval.segments.some(
+    (segment) => segment.requiresExplicitApproval !== undefined,
+  );
   const requiresAsk =
     requiresExecApproval({
       ask: hostAsk,
@@ -587,6 +594,7 @@ export async function processGatewayAllowlist(
   const effectiveAllowAlwaysPersistence = resolveGatewayEffectiveAllowAlwaysPersistence({
     command: params.command,
     allowAlwaysPersistence,
+    requiresExplicitApproval,
     requiresAllowlistPlanApproval,
   });
   const approvalAllowedDecisions = resolveExecApprovalAllowedDecisions({
@@ -607,9 +615,6 @@ export async function processGatewayAllowlist(
     );
   }
   if (requiresAsk) {
-    const requiresExplicitApproval = allowlistEval.segments.some(
-      (segment) => segment.requiresExplicitApproval !== undefined,
-    );
     const [autoReviewSegment] = allowlistEval.segments;
     const autoReviewArgv =
       allowlistEval.segments.length === 1 &&

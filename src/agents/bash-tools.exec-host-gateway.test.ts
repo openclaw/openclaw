@@ -52,6 +52,9 @@ const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
 const buildExecApprovalFollowupTargetMock = vi.hoisted(() =>
   vi.fn<BuildExecApprovalFollowupTargetMock>(() => null),
 );
+const registerExecApprovalRequestForHostOrThrowMock = vi.hoisted(() =>
+  vi.fn(async () => undefined),
+);
 const createExecApprovalDecisionStateMock = vi.hoisted(() =>
   vi.fn(
     (): {
@@ -173,7 +176,7 @@ vi.mock("../infra/exec-auto-review.js", () => ({
 vi.mock("./bash-tools.exec-approval-request.js", () => ({
   buildExecApprovalRequesterContext: vi.fn(() => ({})),
   buildExecApprovalTurnSourceContext: vi.fn(() => ({})),
-  registerExecApprovalRequestForHostOrThrow: vi.fn(async () => undefined),
+  registerExecApprovalRequestForHostOrThrow: registerExecApprovalRequestForHostOrThrowMock,
 }));
 
 vi.mock("./bash-tools.exec-host-shared.js", () => ({
@@ -330,16 +333,24 @@ describe("processGatewayAllowlist", () => {
       details: { status: "approval-pending" },
       content: [],
     });
+    registerExecApprovalRequestForHostOrThrowMock.mockClear();
     createAndRegisterDefaultExecApprovalRequestMock.mockReset();
-    createAndRegisterDefaultExecApprovalRequestMock.mockResolvedValue({
-      approvalId: "req-1",
-      approvalSlug: "slug-1",
-      warningText: "",
-      expiresAtMs: Date.now() + 60_000,
-      preResolvedDecision: null,
-      initiatingSurface: "origin",
-      sentApproverDms: false,
-      unavailableReason: null,
+    createAndRegisterDefaultExecApprovalRequestMock.mockImplementation(async (args?: unknown) => {
+      const register =
+        args && typeof args === "object" && "register" in args
+          ? (args as { register?: (approvalId: string) => Promise<void> }).register
+          : undefined;
+      await register?.("req-1");
+      return {
+        approvalId: "req-1",
+        approvalSlug: "slug-1",
+        warningText: "",
+        expiresAtMs: Date.now() + 60_000,
+        preResolvedDecision: null,
+        initiatingSurface: "origin",
+        sentApproverDms: false,
+        unavailableReason: null,
+      };
     });
   });
 
@@ -618,6 +629,23 @@ describe("processGatewayAllowlist", () => {
 
     expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
+      ask: "on-miss",
+      allowAlwaysPersistence: {
+        kind: "one-shot",
+        reasons: ["no-reusable-pattern"],
+      },
+    });
+    expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        unavailableDecisions: ["allow-always"],
+      }),
+    );
+    expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+    );
     expect(result.pendingResult?.details.status).toBe("approval-pending");
   });
 
@@ -653,6 +681,23 @@ describe("processGatewayAllowlist", () => {
 
     expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
+      ask: "on-miss",
+      allowAlwaysPersistence: {
+        kind: "one-shot",
+        reasons: ["no-reusable-pattern"],
+      },
+    });
+    expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        unavailableDecisions: ["allow-always"],
+      }),
+    );
+    expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+    );
     expect(result.pendingResult?.details.status).toBe("approval-pending");
   });
 

@@ -104,6 +104,10 @@ function resolveNodeRunTimeoutMs(runTimeoutSec: number): number {
     : 0;
 }
 
+function createOneShotAllowAlwaysDecision(): AllowAlwaysPersistenceDecision {
+  return { kind: "one-shot", reasons: ["no-reusable-pattern"] };
+}
+
 type NodePolicyCommandEval = {
   command: string;
   cwd: string | undefined;
@@ -672,6 +676,17 @@ export async function analyzeNodeApprovalRequirement(params: {
       // Fall back to requiring approval if node approvals cannot be fetched.
     }
   }
+  const allowAlwaysPersistence = resolveAllowAlwaysPersistenceDecision({
+    segments: baseAllowlistEval.segments,
+    commandText: approvalCommand,
+    cwd: approvalCwd,
+    env: analysisEnv,
+    platform: params.target.platform,
+    strictInlineEval: params.request.strictInlineEval,
+    authorizationPlan: baseAllowlistEval.authorizationPlan,
+    runtimePayload: inlineEvalHit !== null,
+    preparedCoverage: params.prepared.allowAlwaysCoverage,
+  });
   return {
     analysisOk,
     allowlistSatisfied,
@@ -682,17 +697,9 @@ export async function analyzeNodeApprovalRequirement(params: {
     inlineEvalHit,
     requiresExplicitApproval,
     requiresSecurityAuditSuppressionApproval,
-    allowAlwaysPersistence: resolveAllowAlwaysPersistenceDecision({
-      segments: baseAllowlistEval.segments,
-      commandText: approvalCommand,
-      cwd: approvalCwd,
-      env: analysisEnv,
-      platform: params.target.platform,
-      strictInlineEval: params.request.strictInlineEval,
-      authorizationPlan: baseAllowlistEval.authorizationPlan,
-      runtimePayload: inlineEvalHit !== null,
-      preparedCoverage: params.prepared.allowAlwaysCoverage,
-    }),
+    allowAlwaysPersistence: requiresExplicitApproval
+      ? createOneShotAllowAlwaysDecision()
+      : allowAlwaysPersistence,
     autoReviewArgv:
       autoReviewBindingEval.segments.length === 1 &&
       (autoReviewBindingEval.segments[0]?.raw === undefined ||
