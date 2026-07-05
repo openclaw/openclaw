@@ -110,14 +110,27 @@ function registerActiveLspSession(session: LspSession): void {
   activeBundleLspSessions.add(session);
 }
 
+function failLspSession(session: LspSession, error: Error): void {
+  if (session.failure) {
+    return;
+  }
+  session.failure = error;
+  for (const pending of session.pendingRequests.values()) {
+    clearTimeout(pending.timeout);
+    pending.reject(error);
+  }
+  session.pendingRequests.clear();
+}
+
 function attachLspProcessHandlers(session: LspSession): void {
   session.process.on("error", (error) => {
-    session.failure = error;
-    for (const pending of session.pendingRequests.values()) {
-      clearTimeout(pending.timeout);
-      pending.reject(error);
-    }
-    session.pendingRequests.clear();
+    failLspSession(session, error);
+  });
+  session.process.on("exit", (code, signal) => {
+    failLspSession(
+      session,
+      new Error(`LSP server "${session.serverName}" exited (${signal ?? code ?? "unknown"})`),
+    );
   });
   session.process.stdout?.on("data", (chunk: Buffer | string) =>
     handleIncomingData(session, chunk),

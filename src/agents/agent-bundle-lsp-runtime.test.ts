@@ -47,7 +47,10 @@ class MockChildProcess extends EventEmitter {
   readonly stderr = new PassThrough();
   readonly stdin: Writable;
 
-  constructor(private readonly initializeResponsePrefix = "") {
+  constructor(
+    private readonly initializeResponsePrefix = "",
+    private readonly respondMethods?: ReadonlySet<string>,
+  ) {
     super();
     this.stdin = new Writable({
       write: (chunk, _encoding, callback) => {
@@ -68,6 +71,9 @@ class MockChildProcess extends EventEmitter {
   private respondToRequest(text: string): void {
     const body = parseWrittenLspBody(text);
     if (!body || typeof body.id !== "number" || typeof body.method !== "string") {
+      return;
+    }
+    if (this.respondMethods && !this.respondMethods.has(body.method)) {
       return;
     }
     const result = body.method === "initialize" ? { capabilities: { hoverProvider: true } } : null;
@@ -136,6 +142,38 @@ describe("bundle LSP runtime", () => {
     expect(runtime.sessions).toEqual([]);
     expect(runtime.tools).toEqual([]);
     expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { graceMs: 1000 });
+  });
+
+  it("rejects pending LSP requests immediately when the child process exits", async () => {
+    configureSingleLspServer();
+    const child = new MockChildProcess("", new Set(["initialize"]));
+    spawnMock.mockReturnValue(child);
+    const { createBundleLspToolRuntime } = await import("./agent-bundle-lsp-runtime.js");
+
+    const runtime = await createBundleLspToolRuntime({ workspaceDir: "/tmp/workspace" });
+    const hoverTool = runtime.tools.find((tool) => tool.name === "lsp_hover_typescript");
+    if (!hoverTool) {
+      throw new Error("expected hover tool");
+    }
+
+    const request = hoverTool.execute("call-1", {
+      uri: "file:///tmp/workspace/index.ts",
+      line: 0,
+      character: 0,
+    });
+    child.exitCode = 1;
+    child.emit("exit", 1, null);
+
+    await expect(request).rejects.toThrow('LSP server "typescript" exited (1)');
+    await expect(
+      hoverTool.execute("call-2", {
+        uri: "file:///tmp/workspace/index.ts",
+        line: 0,
+        character: 0,
+      }),
+    ).rejects.toThrow('LSP server "typescript" exited (1)');
+
+    await runtime.dispose();
   });
 
   it("keeps LSP framing aligned after multibyte messages in the same chunk", async () => {
