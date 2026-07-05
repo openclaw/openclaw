@@ -227,6 +227,8 @@ imsg history --chat-id 42 --limit 20 --json | jq -s '.[] | select(.poll != null)
 
 Poll vote rows are `poll` events, not tapbacks; `watch --reactions` is not required to see them.
 
+Inbound native polls carry no title of their own, so imsg backfills the poll's `question` from its caption (the reply-to-the-poll message) — a native poll read back from history/watch shows the real question, not an empty one.
+
 ## Watch and Long-Running Agents
 
 For a short one-off wait, use `watch`:
