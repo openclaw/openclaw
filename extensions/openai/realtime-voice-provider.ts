@@ -93,6 +93,7 @@ const OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX =
 const OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR =
   "Cancellation failed: no active response found";
 const OPENAI_REALTIME_MAX_SESSION_DURATION_FRAGMENT = "maximum duration";
+const OPENAI_VOICE_WS_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 const OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
 // Realtime validates this character set but accepts names beyond the 64-character
 // cap used by other OpenAI tool surfaces.
@@ -616,6 +617,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         const proxyAgent = createDebugProxyWebSocketAgent(debugProxy);
         const ws = new WebSocket(connection.url, {
           headers: connection.headers,
+          maxPayload: OPENAI_VOICE_WS_MAX_PAYLOAD_BYTES,
           ...(proxyAgent ? { agent: proxyAgent } : {}),
         });
         this.ws = ws;

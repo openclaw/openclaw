@@ -1955,8 +1955,8 @@ export async function updatePluginsAfterCoreUpdate(params: {
   );
   const pluginInstallRecords =
     params.pluginInstallRecords ?? (await loadInstalledPluginIndexInstallRecords());
-  const pluginUpdateChannel: UpdateChannel =
-    params.channel === "extended-stable" ? "stable" : params.channel;
+  const pluginUpdateChannel = params.channel;
+  const coreVersion = await readPackageVersion(params.root);
   const syncConfig = withPluginInstallRecords(
     params.configSnapshot.sourceConfig,
     pluginInstallRecords,
@@ -1964,6 +1964,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   const syncResult = await syncPluginsForUpdateChannel({
     config: syncConfig,
     channel: pluginUpdateChannel,
+    coreVersion: coreVersion ?? undefined,
     workspaceDir: params.root,
     externalizedBundledPluginBridges: await listPersistedBundledPluginLocationBridges({
       workspaceDir: params.root,
@@ -2037,6 +2038,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
       pluginIds: missingIds,
       timeoutMs: params.timeoutMs,
       updateChannel: pluginUpdateChannel,
+      coreVersion: coreVersion ?? undefined,
       skipDisabledPlugins: true,
       syncOfficialPluginInstalls: true,
       disableOnFailure: true,
@@ -2057,6 +2059,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     config: pluginConfig,
     timeoutMs: params.timeoutMs,
     updateChannel: pluginUpdateChannel,
+    coreVersion: coreVersion ?? undefined,
     skipIds: new Set([...syncResult.summary.switchedToNpm, ...missingPayloadIdSet]),
     skipDisabledPlugins: true,
     syncOfficialPluginInstalls: true,

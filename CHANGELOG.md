@@ -13,10 +13,12 @@ Docs: https://docs.openclaw.ai
 - **Control UI session titles:** reveal truncated recent-session names with a reduced-motion-safe hover animation.
 - **Control UI sidebar navigation:** show a small customizable pinned destination set, keep the remaining pages under More, move Settings to the footer, and persist sidebar customization in the browser. (#100296)
 - **Control UI sidebar usage:** remove the provider usage quota row from the expanded sidebar while keeping usage details available in the chat composer and Usage page. Thanks @shakkernerd.
+- **Android chat code highlighting:** render fenced Kotlin, Swift, TypeScript, JavaScript, Python, Bash, and JSON blocks with bounded, theme-aware syntax colors while preserving plain rendering for unknown, partial, or oversized blocks. (#100217)
 
 ### Fixes
 
 - **Diffs rendering:** render viewer and image output from one SSR preload, preserve language-pack highlighting through hydration, normalize language hints case-insensitively, skip identical before/after inputs with an explicit `changed` result, report truthful file-render and input errors, cache hash-pinned viewer runtimes, and prefer canonical file settings over stale aliases. (#100487)
+- **Remote browser reliability:** bound persistent Playwright tab enumeration by the existing remote CDP timeout budget and retire timed-out connection attempts so late completions cannot restore a stuck connection. (#80147, #58968) Thanks @HemantSudarshan and @KeaneYan.
 - **Control UI approval prompts:** keep stale resolve failures and busy-state cleanup from leaking across newer approvals or Gateway reconnects. (#98394) Thanks @haruaiclone-droid.
 - **Agent empty replies:** surface a visible failure when a completed interactive turn has no deliverable reply, including queued follow-ups, while preserving explicit silence, pending continuations, and committed side effects. (#100456) Thanks @mushuiyu886.
 - **Child process output safety:** prevent stdout/stderr pipe failures from crashing agent exec sessions, local TUI shell commands, and bounded process execution. (#100407, #100406, #100410) Thanks @cxbAsDev.
@@ -25,6 +27,8 @@ Docs: https://docs.openclaw.ai
 - **Exec output sanitization:** remove complete ANSI sequences and render residual C0/C1 controls as visible escapes instead of silently discarding output bytes. (#100327) Thanks @LavyaTandel.
 - **Assistant visible text:** unwrap leaked standalone `<parameter>` tags while preserving their content and literal code/XML examples. (#100302) Thanks @nankingjing.
 - **Android microphone capture:** treat negative `AudioRecord.read` results as fatal shared-session errors so both transcription and Talk capture stop cleanly after device loss. (#100028) Thanks @NianJiuZst.
+- **Lean local-model tools:** trim media generation, TTS, and PDF tools from lean agent surfaces while preserving explicit config and runtime opt-ins. (#88881) Thanks @vincentkoc.
+- **iOS development app identity:** keep the development app labeled OpenClaw while using its distinct debug icon to differentiate it from release builds.
 - **iOS QR gateway handoff:** stop VisionKit before delivering scanned setup codes, and keep deferred auth, approval, Watch, and foreground-node work bound to its originating gateway across reconnects. (#99572) Thanks @PollyBot13.
 - **Agent terminal failures:** surface a safe interactive reply when an agent run ends without visible output, while preserving completed message-tool delivery and heartbeat-specific guidance. (#99304) Thanks @moeedahmed.
 - **MCP loopback tool results:** preserve schema-valid text, image, and embedded-resource content through HTTP tool calls while rendering malformed or protocol-incompatible blocks as safe text. (#100336) Thanks @tzy-17.

@@ -114,6 +114,18 @@ describe("OpenClawSchema talk validation", () => {
     ).toThrow(/talk\.provider|talk\.providers|missing "acme"/i);
   });
 
+  it.each(["constructor", "__proto__"])(
+    "rejects inherited Object.prototype key %s as a Talk provider",
+    (provider) => {
+      const providers = { elevenlabs: { voiceId: "voice-123" } };
+
+      expect(OpenClawSchema.safeParse({ talk: { provider, providers } }).success).toBe(false);
+      expect(
+        OpenClawSchema.safeParse({ talk: { realtime: { provider, providers } } }).success,
+      ).toBe(false);
+    },
+  );
+
   it("rejects multi-provider talk config without talk.provider", () => {
     expect(() =>
       OpenClawSchema.parse({

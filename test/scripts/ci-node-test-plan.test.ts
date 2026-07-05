@@ -132,6 +132,9 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(bundled.find((shard) => shard.shardName === "core-unit-fast")?.runner).toBe(
       DEFAULT_NODE_TEST_RUNNER,
     );
+    expect(
+      bundled.find((shard) => shard.shardName === "agentic-control-plane-startup-core")?.runner,
+    ).toBe(DEFAULT_NODE_TEST_RUNNER);
     expect(bundled.find((shard) => shard.shardName === "bundle-infra-small-1")?.runner).toBe(
       "blacksmith-4vcpu-ubuntu-2404",
     );
@@ -182,6 +185,15 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     ).toEqual({
       OPENCLAW_TUI_PTY_INCLUDE_LOCAL: "1",
     });
+    const startupCoreJob = compact.find((shard) =>
+      shard.groups.some((group) => group.shard_name === "agentic-control-plane-startup-core"),
+    );
+    expect(startupCoreJob?.runner).toBe(DEFAULT_NODE_TEST_RUNNER);
+    expect(
+      startupCoreJob?.groups.find(
+        (group) => group.shard_name === "agentic-control-plane-startup-core",
+      )?.runner,
+    ).toBe(DEFAULT_NODE_TEST_RUNNER);
     expect(
       compact
         .filter((shard) => shard.groups.some((group) => !group.includePatterns))
@@ -656,7 +668,10 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         configs: ["test/vitest/vitest.gateway-server.config.ts"],
         includePatterns: shard.includePatterns,
         requiresDist: false,
-        runner: "blacksmith-4vcpu-ubuntu-2404",
+        runner:
+          shard.shardName === "agentic-control-plane-startup-core"
+            ? DEFAULT_NODE_TEST_RUNNER
+            : "blacksmith-4vcpu-ubuntu-2404",
         shardName: shard.shardName,
       })),
     );

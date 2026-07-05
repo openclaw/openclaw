@@ -550,6 +550,10 @@ extension VoiceWakeManager {
         self.isStarting = isStarting
     }
 
+    func _test_isSuspendedForExternalAudio() -> Bool {
+        self.isSuspendedForExternalAudio
+    }
+
     func _test_waitForScheduledStart() async {
         let task = self.scheduledStartTask
         await task?.value

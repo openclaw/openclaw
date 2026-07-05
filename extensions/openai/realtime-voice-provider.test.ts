@@ -333,13 +333,16 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     bridge.close();
 
     const socket = FakeWebSocket.instances[0];
-    const options = socket?.args[1] as { headers?: Record<string, string> } | undefined;
+    const options = socket?.args[1] as
+      | { headers?: Record<string, string>; maxPayload?: number }
+      | undefined;
     expectRecordFields(options?.headers, "websocket headers", {
       originator: "openclaw",
       version: "2026.3.22",
       "User-Agent": "openclaw/2026.3.22",
     });
     expect(options?.headers).not.toHaveProperty("OpenAI-Beta");
+    expect(options?.maxPayload).toBe(16 * 1024 * 1024);
   });
 
   it("requires a Platform API key for native realtime websocket bridges", async () => {

@@ -240,6 +240,12 @@ class TalkModeManager internal constructor(
     }
   }
 
+  /** Stops continuous, one-shot, or push-to-talk capture regardless of the enabled flag. */
+  fun stopAllCapture() {
+    _isEnabled.value = false
+    stop()
+  }
+
   /** Starts a push-to-talk capture session for gateway node.invoke callers. */
   suspend fun beginPushToTalk(allowNewCapture: Boolean): TalkPttStartPayload {
     if (!allowNewCapture) {

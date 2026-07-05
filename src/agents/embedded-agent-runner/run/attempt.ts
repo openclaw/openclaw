@@ -1189,11 +1189,6 @@ export async function runEmbeddedAttempt(
             ]),
           ]
         : toolsAllowWithForcedRuntimeTools;
-    const localModelLeanPreserveToolNames = resolveLocalModelLeanPreserveToolNames({
-      toolNames: effectiveToolsAllow,
-      forceMessageTool: params.forceMessageTool,
-      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    });
     const shouldConstructTools =
       toolConstructionPlan.constructTools ||
       toolSearchControlsEnabledForRun ||
@@ -1256,6 +1251,11 @@ export async function runEmbeddedAttempt(
       skillsSnapshot: skillsSnapshotForRun,
       sandboxToolPolicy: sandbox?.tools,
       runtimeToolAllowlist: effectiveToolsAllow,
+    });
+    const localModelLeanPreserveToolNames = resolveLocalModelLeanPreserveToolNames({
+      toolNames: runtimeCapabilityProfile.policy.explicitToolOverrideAllowlist,
+      forceMessageTool: params.forceMessageTool,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     });
     const toolsRaw = !shouldConstructTools
       ? []
