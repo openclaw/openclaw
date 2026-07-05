@@ -112,15 +112,8 @@ function readParamRaw(params: Record<string, unknown>, key: string): unknown {
   return readSnakeCaseParamRaw(params, key);
 }
 
-/**
- * True when a raw tool-param value should be treated as "not provided".
- *
- * Tool-calling models frequently populate every optional field with an empty
- * or whitespace-only string default even when the caller did not set it. Such
- * a value carries no information and must not be treated as an invalid present
- * value. This mirrors how {@link readStringParam} / {@link readNumberParam}
- * already ignore empty/whitespace strings.
- */
+// Models may emit blank defaults for optional numeric fields. Treat them as
+// absent while still rejecting nonblank invalid input.
 function isBlankParamValue(raw: unknown): boolean {
   return typeof raw === "string" && raw.trim() === "";
 }
