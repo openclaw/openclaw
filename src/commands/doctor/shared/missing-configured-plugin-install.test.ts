@@ -530,6 +530,58 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.warnings).toStrictEqual([]);
   });
 
+  it("repairs a missing cohort plugin at the monthly baseline without pinning intent", async () => {
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "matrix",
+        pluginId: "matrix",
+        meta: { label: "Matrix" },
+        install: { npmSpec: "@openclaw/plugin-matrix" },
+        trustedSourceLinkedOfficialInstall: true,
+      },
+    ]);
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "matrix",
+      targetDir: "/tmp/openclaw-plugins/matrix",
+      version: "2026.6.21",
+      npmResolution: {
+        name: "@openclaw/plugin-matrix",
+        version: "2026.6.21",
+        resolvedSpec: "@openclaw/plugin-matrix@2026.6.21",
+      },
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        update: { channel: "extended-stable" },
+        channels: { matrix: { enabled: true, homeserver: "https://matrix.example.org" } },
+      },
+      env: {},
+      extendedStableTargetContext: {
+        installedCoreVersion: "2026.6.34",
+        support: { schemaVersion: 1, plugins: [] },
+        cohort: {
+          schemaVersion: 1,
+          releaseLine: "2026.6",
+          baselineVersion: "2026.6.21",
+        },
+        cohortPackageNames: new Set(["@openclaw/plugin-matrix"]),
+      },
+    });
+
+    expect(mockCallArg(mocks.installPluginFromNpmSpec)).toMatchObject({
+      spec: "@openclaw/plugin-matrix@2026.6.21",
+      expectedPluginId: "matrix",
+    });
+    expect(result.records.matrix).toMatchObject({
+      spec: "@openclaw/plugin-matrix",
+      version: "2026.6.21",
+    });
+  });
+
   it("uses an explicit ClawHub install spec before npm", async () => {
     const reviewNotice =
       "╭─ REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check ─╮\n" +

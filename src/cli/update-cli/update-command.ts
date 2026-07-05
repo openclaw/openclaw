@@ -54,6 +54,8 @@ import {
 import type { ClawHubRiskAcknowledgementRequest } from "../../infra/clawhub-install-trust.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { pathExists } from "../../infra/fs-safe.js";
+import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
+import { packNpmSpecToArchive, withTempDir } from "../../infra/install-source-utils.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
 import {
   markPackagePostInstallDoctorAdvisory,
@@ -109,6 +111,10 @@ import {
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
 import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
+import {
+  loadExtendedStablePluginTargetContext,
+  type ExtendedStablePluginTargetContext,
+} from "../../plugins/extended-stable-plugin-target.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
@@ -733,6 +739,79 @@ export function buildInvalidConfigPostCoreUpdateResult(): {
       warnings: [{ reason: "invalid-config", message, guidance }],
     },
   };
+}
+
+function buildExtendedStablePluginMetadataError(error: unknown): PostCorePluginUpdateResult {
+  const message = `Extended-stable plugin metadata is unavailable: ${error instanceof Error ? error.message : String(error)}`;
+  return {
+    status: "error",
+    reason: "post-update-plugins",
+    changed: false,
+    sync: {
+      changed: false,
+      switchedToBundled: [],
+      switchedToNpm: [],
+      warnings: [],
+      errors: [message],
+    },
+    npm: {
+      changed: false,
+      outcomes: [],
+    },
+    integrityDrifts: [],
+    warnings: [
+      {
+        reason: "extended-stable-metadata",
+        message,
+        guidance: [
+          "Rerun the update after installing a core package with valid extended-stable metadata.",
+        ],
+      },
+    ],
+  };
+}
+
+export async function previewExtendedStablePluginMetadata(params: {
+  packageSpec: string;
+  targetVersion: string;
+  timeoutMs: number;
+}): Promise<{ baselineVersion: string; coveredPlugins: number; cohortPlugins: number }> {
+  return await withTempDir("openclaw-extended-stable-preview-", async (tmpDir) => {
+    const packed = await packNpmSpecToArchive({
+      spec: params.packageSpec,
+      timeoutMs: params.timeoutMs,
+      cwd: tmpDir,
+    });
+    if (!packed.ok) {
+      throw new Error(packed.error);
+    }
+    const inspected = await withExtractedArchiveRoot({
+      archivePath: packed.archivePath,
+      tempDirPrefix: "openclaw-extended-stable-preview-extract-",
+      timeoutMs: params.timeoutMs,
+      rootMarkers: ["package.json"],
+      onExtracted: async (rootDir) => {
+        const context = loadExtendedStablePluginTargetContext({
+          rootDir,
+          installedCoreVersion: params.targetVersion,
+        });
+        return {
+          ok: true as const,
+          baselineVersion: context.cohort.baselineVersion,
+          coveredPlugins: context.support.plugins.length,
+          cohortPlugins: context.cohortPackageNames.size,
+        };
+      },
+    });
+    if (!inspected.ok) {
+      throw new Error(inspected.error);
+    }
+    return {
+      baselineVersion: inspected.baselineVersion,
+      coveredPlugins: inspected.coveredPlugins,
+      cohortPlugins: inspected.cohortPlugins,
+    };
+  });
 }
 
 export function shouldPrepareUpdatedInstallRestart(params: {
@@ -1954,8 +2033,22 @@ export async function updatePluginsAfterCoreUpdate(params: {
   );
   const pluginInstallRecords =
     params.pluginInstallRecords ?? (await loadInstalledPluginIndexInstallRecords());
-  const pluginUpdateChannel: UpdateChannel =
-    params.channel === "extended-stable" ? "stable" : params.channel;
+  const pluginUpdateChannel: UpdateChannel = params.channel;
+  let extendedStableTargetContext: ExtendedStablePluginTargetContext | undefined;
+  if (pluginUpdateChannel === "extended-stable") {
+    try {
+      const installedCoreVersion = await readPackageVersion(params.root);
+      if (!installedCoreVersion) {
+        throw new Error("installed core version is missing");
+      }
+      extendedStableTargetContext = loadExtendedStablePluginTargetContext({
+        rootDir: params.root,
+        installedCoreVersion,
+      });
+    } catch (error) {
+      return buildExtendedStablePluginMetadataError(error);
+    }
+  }
   const syncConfig = withPluginInstallRecords(
     params.configSnapshot.sourceConfig,
     pluginInstallRecords,
@@ -1967,6 +2060,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     externalizedBundledPluginBridges: await listPersistedBundledPluginLocationBridges({
       workspaceDir: params.root,
     }),
+    extendedStableTargetContext,
     ...clawHubRiskAcknowledgementOptions,
     logger: pluginLogger,
   });
@@ -2039,6 +2133,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
       skipDisabledPlugins: true,
       syncOfficialPluginInstalls: true,
       disableOnFailure: true,
+      extendedStableTargetContext,
       logger: pluginLogger,
       onIntegrityDrift: onPluginIntegrityDrift,
       ...clawHubRiskAcknowledgementOptions,
@@ -2060,6 +2155,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     skipDisabledPlugins: true,
     syncOfficialPluginInstalls: true,
     disableOnFailure: true,
+    extendedStableTargetContext,
     logger: pluginLogger,
     onIntegrityDrift: onPluginIntegrityDrift,
     ...clawHubRiskAcknowledgementOptions,
@@ -2116,6 +2212,8 @@ export async function updatePluginsAfterCoreUpdate(params: {
     cfg: pluginConfig,
     env: process.env,
     baselineInstallRecords: convergenceBaselineRecords,
+    installedCoreVersion: extendedStableTargetContext?.installedCoreVersion,
+    extendedStableTargetContext,
     ...clawHubRiskAcknowledgementOptions,
   });
   for (const change of convergence.changes) {
@@ -3727,6 +3825,29 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
   }
 
   if (opts.dryRun) {
+    let extendedStablePluginPreview:
+      | { baselineVersion: string; coveredPlugins: number; cohortPlugins: number }
+      | undefined;
+    if (channel === "extended-stable") {
+      if (!packageInstallSpec || !targetVersion) {
+        defaultRuntime.error("Extended-stable preview requires an exact core package target.");
+        defaultRuntime.exit(1);
+        return;
+      }
+      try {
+        extendedStablePluginPreview = await previewExtendedStablePluginMetadata({
+          packageSpec: packageInstallSpec,
+          targetVersion,
+          timeoutMs: updateStepTimeoutMs,
+        });
+      } catch (error) {
+        defaultRuntime.error(
+          `Extended-stable preview could not verify future plugin metadata: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        defaultRuntime.exit(1);
+        return;
+      }
+    }
     let mode: UpdateRunResult["mode"] = "unknown";
     if (updateInstallKind === "git") {
       mode = "git";
@@ -3777,6 +3898,11 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     }
     if (explicitTag && !canResolveRegistryVersionForPackageTarget(tag)) {
       notes.push("Non-registry package specs skip npm version lookup and downgrade previews.");
+    }
+    if (extendedStablePluginPreview) {
+      notes.push(
+        `Extended-stable plugin plan: ${extendedStablePluginPreview.coveredPlugins} covered plugins target ${targetVersion}; ${extendedStablePluginPreview.cohortPlugins} cohort plugins target ${extendedStablePluginPreview.baselineVersion}.`,
+      );
     }
 
     printDryRunPreview(

@@ -676,6 +676,102 @@ describe("updateNpmInstalledPlugins", () => {
     expect(result.config.plugins?.installs?.acpx?.spec).toBe("@openclaw/acpx@2026.5.2-beta.2");
   });
 
+  it("uses the extended-stable monthly cohort target without rewriting default intent", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/acpx",
+      version: "2026.6.20",
+    });
+    mockNpmViewMetadata({
+      name: "@openclaw/acpx",
+      version: "2026.6.21",
+      integrity: "sha512-cohort",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "acpx",
+        targetDir: installPath,
+        version: "2026.6.21",
+        npmResolution: {
+          name: "@openclaw/acpx",
+          version: "2026.6.21",
+          resolvedSpec: "@openclaw/acpx@2026.6.21",
+        },
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "acpx",
+        spec: "@openclaw/acpx@latest",
+        installPath,
+        resolvedName: "@openclaw/acpx",
+        resolvedSpec: "@openclaw/acpx@2026.6.20",
+        resolvedVersion: "2026.6.20",
+      }),
+      pluginIds: ["acpx"],
+      updateChannel: "extended-stable",
+      syncOfficialPluginInstalls: true,
+      extendedStableTargetContext: {
+        installedCoreVersion: "2026.6.34",
+        support: { schemaVersion: 1, plugins: [] },
+        cohort: {
+          schemaVersion: 1,
+          releaseLine: "2026.6",
+          baselineVersion: "2026.6.21",
+        },
+        cohortPackageNames: new Set(["@openclaw/acpx"]),
+      },
+    });
+
+    expect(npmInstallCall()?.spec).toBe("@openclaw/acpx@2026.6.21");
+    expect(result.config.plugins?.installs?.acpx?.spec).toBe("@openclaw/acpx@latest");
+    expect(result.outcomes[0]).toMatchObject({
+      pluginId: "acpx",
+      status: "updated",
+      code: "monthly_cohort_target",
+      nextVersion: "2026.6.21",
+    });
+  });
+
+  it("preserves an exact official pin under extended-stable", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/acpx",
+      version: "2026.6.20",
+    });
+    mockNpmViewMetadata({ name: "@openclaw/acpx", version: "2026.6.20" });
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "acpx",
+        spec: "@openclaw/acpx@2026.6.20",
+        installPath,
+        resolvedName: "@openclaw/acpx",
+        resolvedSpec: "@openclaw/acpx@2026.6.20",
+        resolvedVersion: "2026.6.20",
+      }),
+      pluginIds: ["acpx"],
+      updateChannel: "extended-stable",
+      syncOfficialPluginInstalls: true,
+      extendedStableTargetContext: {
+        installedCoreVersion: "2026.6.34",
+        support: { schemaVersion: 1, plugins: [] },
+        cohort: {
+          schemaVersion: 1,
+          releaseLine: "2026.6",
+          baselineVersion: "2026.6.21",
+        },
+        cohortPackageNames: new Set(["@openclaw/acpx"]),
+      },
+    });
+
+    expect(npmInstallCall()).toBeUndefined();
+    expect(result.config.plugins?.installs?.acpx?.spec).toBe("@openclaw/acpx@2026.6.20");
+    expect(result.outcomes[0]).toMatchObject({
+      status: "unchanged",
+      code: "user_pin_preserved",
+    });
+  });
+
   it("pins unchanged official npm records during official sync", async () => {
     const installPath = createInstalledPackageDir({
       name: "@openclaw/acpx",

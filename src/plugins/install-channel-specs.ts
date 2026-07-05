@@ -2,12 +2,17 @@
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
+import {
+  resolveExtendedStablePluginTarget,
+  type ExtendedStablePluginTargetContext,
+} from "./extended-stable-plugin-target.js";
 
 export type ChannelInstallSpecs = {
   installSpec: string;
   recordSpec: string;
   fallbackSpec?: string;
   fallbackLabel?: string;
+  targetCode?: "extended_stable_target" | "monthly_cohort_target" | "user_pin_preserved";
 };
 
 function isDefaultNpmSpecForBetaChannel(spec: string): { name: string } | null {
@@ -38,7 +43,28 @@ function isDefaultClawHubSpecForBetaChannel(spec: string): { name: string } | nu
 export function resolveNpmInstallSpecsForUpdateChannel(params: {
   spec: string;
   updateChannel?: UpdateChannel;
+  officialPackageName?: string;
+  extendedStableTargetContext?: ExtendedStablePluginTargetContext;
 }): ChannelInstallSpecs {
+  if (
+    params.updateChannel === "extended-stable" &&
+    params.officialPackageName &&
+    params.extendedStableTargetContext
+  ) {
+    const decision = resolveExtendedStablePluginTarget({
+      requestedSpec: params.spec,
+      officialPackageName: params.officialPackageName,
+      updateChannel: params.updateChannel,
+      ...params.extendedStableTargetContext,
+    });
+    if (decision.kind !== "unchanged") {
+      return {
+        installSpec: decision.installSpec,
+        recordSpec: decision.recordSpec,
+        targetCode: decision.code,
+      };
+    }
+  }
   if (params.updateChannel !== "beta") {
     return {
       installSpec: params.spec,

@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import type { ClawHubRiskAcknowledgementRequest } from "../../infra/clawhub-install-trust.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
+import type { ExtendedStablePluginTargetContext } from "../../plugins/extended-stable-plugin-target.js";
 import { resolveDefaultPluginNpmDir } from "../../plugins/install-paths.js";
 import { listManagedPluginNpmRoots } from "../../plugins/npm-project-roots.js";
 import {
@@ -105,12 +106,14 @@ export async function runPostCorePluginConvergence(params: {
    * map is what gets persisted and returned via `installRecords`.
    */
   baselineInstallRecords?: Record<string, PluginInstallRecord>;
+  installedCoreVersion?: string;
+  extendedStableTargetContext?: ExtendedStablePluginTargetContext;
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
 }): Promise<PostCoreConvergenceResult> {
   const env: NodeJS.ProcessEnv = {
     ...params.env,
-    OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
+    OPENCLAW_COMPATIBILITY_HOST_VERSION: params.installedCoreVersion ?? VERSION,
     [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1",
   };
   const prunedBaseline = params.baselineInstallRecords
@@ -124,6 +127,9 @@ export async function runPostCorePluginConvergence(params: {
     cfg: params.cfg,
     env,
     ...(prunedBaseline ? { baselineRecords: prunedBaseline.records } : {}),
+    ...(params.extendedStableTargetContext
+      ? { extendedStableTargetContext: params.extendedStableTargetContext }
+      : {}),
     ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
     ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
   });

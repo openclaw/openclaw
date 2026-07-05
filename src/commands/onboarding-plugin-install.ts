@@ -14,6 +14,7 @@ import { assertConfigWriteAllowedInCurrentMode } from "../config/nix-mode-write-
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { isOpenClawOrgNpmSpec, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import {
   findBundledPluginSourceInMap,
@@ -25,6 +26,7 @@ import {
   enableExplicitlySelectedPluginInConfig,
   type PluginEnableResult,
 } from "../plugins/enable.js";
+import { loadExtendedStablePluginTargetContext } from "../plugins/extended-stable-plugin-target.js";
 import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
@@ -1127,6 +1129,20 @@ export async function ensureOnboardingPluginInstalled(params: {
     configChannel: normalizeUpdateChannel(next.update?.channel),
     currentVersion: VERSION,
   });
+  const extendedStableTargetContext =
+    updateChannel === "extended-stable"
+      ? loadExtendedStablePluginTargetContext({
+          rootDir:
+            resolveOpenClawPackageRootSync({
+              cwd: workspaceDir,
+              argv1: process.argv[1],
+              moduleUrl: import.meta.url,
+            }) ??
+            workspaceDir ??
+            process.cwd(),
+          installedCoreVersion: VERSION,
+        })
+      : undefined;
   const clawhubSpecs = clawhubSpec
     ? resolveClawHubInstallSpecsForUpdateChannel({
         spec: clawhubSpec,
@@ -1137,6 +1153,10 @@ export async function ensureOnboardingPluginInstalled(params: {
     ? resolveNpmInstallSpecsForUpdateChannel({
         spec: npmSpec,
         updateChannel,
+        officialPackageName: entry.trustedSourceLinkedOfficialInstall
+          ? parseRegistryNpmSpec(npmSpec)?.name
+          : undefined,
+        extendedStableTargetContext,
       })
     : null;
   const clawhubInstallSpec = clawhubSpecs?.installSpec ?? clawhubSpec;
@@ -1383,7 +1403,8 @@ export async function ensureOnboardingPluginInstalled(params: {
       spec: resolveNpmInstallRecordSpec({
         requestedSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
         resolution: result.npmResolution,
-        pinResolvedRegistrySpec: entry.trustedSourceLinkedOfficialInstall === true,
+        pinResolvedRegistrySpec:
+          entry.trustedSourceLinkedOfficialInstall === true && !npmSpecs?.targetCode,
       }),
       installPath: result.targetDir,
       version: result.version,
