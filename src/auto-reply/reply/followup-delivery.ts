@@ -36,6 +36,7 @@ export function resolveFollowupDeliveryPayloads(params: {
   originatingTo?: string;
   originatingThreadId?: string | number;
   reasoningPayloadsEnabled?: boolean;
+  commentaryPayloadsEnabled?: boolean;
   sentMediaUrls?: string[];
   sentTargets?: MessagingToolSend[];
   sentTexts?: string[];
@@ -64,7 +65,9 @@ export function resolveFollowupDeliveryPayloads(params: {
       }
     : undefined;
   const deliverablePayloads = params.payloads.filter(
-    (payload) => !(payload.isReasoning === true && params.reasoningPayloadsEnabled !== true),
+    (payload) =>
+      !(payload.isReasoning === true && params.reasoningPayloadsEnabled !== true) &&
+      !(payload.isCommentary === true && params.commentaryPayloadsEnabled !== true),
   );
   const sanitizedPayloads: ReplyPayload[] = [];
   for (const payload of deliverablePayloads) {

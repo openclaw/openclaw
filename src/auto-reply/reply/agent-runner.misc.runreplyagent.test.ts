@@ -621,7 +621,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     ).toBeUndefined();
   });
 
-  it("keeps terminal direct failures silent after delivering runtime compaction notices", async () => {
+  it("surfaces terminal direct failures after runtime compaction progress", async () => {
     const onBlockReply = vi.fn();
     const result = await runEmptyDirectReply(
       {
@@ -643,7 +643,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     );
 
     expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expect(result).toBeUndefined();
+    expectRecordFields(result, { isError: true }, "terminal failure");
   });
 
   it("surfaces empty direct replies when runtime compaction notice delivery fails", async () => {

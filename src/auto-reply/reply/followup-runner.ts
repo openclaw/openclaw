@@ -696,7 +696,6 @@ export function createFollowupRunner(params: {
           ? queued.originatingReplyToId
           : queued.messageId;
       const compactionNoticeReplyToId = resolveFollowupCurrentMessageId();
-      let didSendCompactionNoticePayload = false;
       const sendCompactionNoticePayload = async (
         payload: ReplyPayload,
         resolvedRun: { provider: string; modelId: string } = {
@@ -718,16 +717,16 @@ export function createFollowupRunner(params: {
           originatingReplyToMode: queued.originatingReplyToMode,
           originatingTo: queued.originatingTo,
           reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,
+          commentaryPayloadsEnabled: opts?.commentaryPayloadsEnabled === true,
         });
         if (noticePayloads.length === 0) {
           return;
         }
-        didSendCompactionNoticePayload =
-          (await sendRunPayloads(noticePayloads, effectiveQueued, resolvedRun, {
-            kind: "block",
-            mirror: false,
-            runId,
-          })) || didSendCompactionNoticePayload;
+        await sendRunPayloads(noticePayloads, effectiveQueued, resolvedRun, {
+          kind: "block",
+          mirror: false,
+          runId,
+        });
       };
       const notifyPreflightCompaction = shouldNotifyUserAboutCompaction(runtimeConfig)
         ? async (phase: CompactionNoticePhase) => {
@@ -1455,9 +1454,6 @@ export function createFollowupRunner(params: {
           allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
           sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
           hasSuccessfulSideEffectDelivery:
-            // A delivered compaction notice is already a visible response; adding an empty-reply
-            // error afterward would contradict that lifecycle state.
-            didSendCompactionNoticePayload ||
             hasVisibleOutboundDeliveryEvidence(runResult) ||
             hasCommittedSourceReplyDeliveryEvidence(runResult) ||
             runResult.didSendDeterministicApprovalPrompt === true,
@@ -1541,6 +1537,7 @@ export function createFollowupRunner(params: {
         originatingTo: queued.originatingTo,
         originatingThreadId: queued.originatingThreadId,
         reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,
+        commentaryPayloadsEnabled: opts?.commentaryPayloadsEnabled === true,
         sentMediaUrls: runResult.messagingToolSentMediaUrls,
         sentTargets: runResult.messagingToolSentTargets,
         sentTexts: runResult.messagingToolSentTexts,
