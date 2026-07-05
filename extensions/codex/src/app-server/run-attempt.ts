@@ -878,6 +878,7 @@ export async function runCodexAppServerAttempt(
     hookContext: {
       agentId: sessionAgentId,
       config: params.config,
+      workspaceDir: effectiveWorkspace,
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
       runId: params.runId,

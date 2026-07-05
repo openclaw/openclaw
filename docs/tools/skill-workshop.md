@@ -74,6 +74,14 @@ Agent-initiated `apply`, `reject`, and `quarantine` show an approval prompt by
 default. Set `skills.workshop.approvalPolicy` to `"auto"` to skip it in
 trusted environments.
 
+The prompt identifies the proposal id and target skill, and shows the proposal
+description, support-file count, and body size. Approval requests are bounded
+to finish before the agent tool watchdog. If no decision arrives before the
+prompt expires, the lifecycle action does not run: the proposal stays pending
+and unchanged. Decide later in the Skill Workshop UI or run
+`openclaw skills workshop apply|reject|quarantine <proposal-id>`. Agents should
+not retry an expired lifecycle action in a loop.
+
 ## CLI
 
 ```bash
