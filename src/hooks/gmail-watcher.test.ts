@@ -277,6 +277,32 @@ describe("startGmailWatcher", () => {
     }
   });
 
+  it("catches renewal interval errors instead of letting them become unhandled rejections", async () => {
+    vi.useFakeTimers();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      let callCount = 0;
+      mocks.runCommandWithTimeout.mockImplementation(async () => {
+        callCount += 1;
+        if (callCount === 1) {
+          return { code: 0, stdout: "", stderr: "" };
+        }
+        throw new Error("renewal failed");
+      });
+
+      await startGmailWatcher(createGmailConfig());
+      // Advance one full renewal cycle to trigger the interval callback.
+      await vi.advanceTimersByTimeAsync(720 * 60_000);
+
+      expect(unhandled).toHaveLength(0);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      vi.useRealTimers();
+    }
+  });
+
   it("escalates to SIGKILL and resolves on final timeout when process ignores signals", async () => {
     vi.useFakeTimers();
     try {
