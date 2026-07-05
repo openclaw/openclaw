@@ -947,6 +947,7 @@ function resolveTrustedSourceLinkedOfficialNpmFallbackForClawHubUpdate(params: {
   effectiveClawHubSpec?: string;
   recordClawHubSpec?: string;
   updateChannel?: UpdateChannel;
+  coreVersion?: string;
 }): {
   installSpec: string;
   recordSpec: string;
@@ -995,6 +996,8 @@ function resolveTrustedSourceLinkedOfficialNpmFallbackForClawHubUpdate(params: {
   return resolveNpmInstallSpecsForUpdateChannel({
     spec: officialSpec,
     updateChannel: params.updateChannel,
+    officialPackageName,
+    coreVersion: params.coreVersion,
   });
 }
 
@@ -1076,10 +1079,12 @@ function resolveNpmUpdateSpecs(params: {
     return {};
   }
   if (params.specOverride) {
-    return {
-      installSpec: recordSpec,
-      recordSpec,
-    };
+    return resolveNpmInstallSpecsForUpdateChannel({
+      spec: recordSpec,
+      updateChannel: params.updateChannel,
+      officialPackageName: params.officialPackageName,
+      coreVersion: params.coreVersion,
+    });
   }
   return resolveNpmInstallSpecsForUpdateChannel({
     spec: recordSpec,
@@ -1531,6 +1536,7 @@ export async function updateNpmInstalledPlugins(params: {
             updateChannel: params.syncOfficialPluginInstalls
               ? officialSyncUpdateChannel
               : params.updateChannel,
+            coreVersion: params.coreVersion,
           })
         : null;
     let officialNpmFallbackInstallSpec = officialNpmFallbackSpecs?.installSpec;
@@ -2310,7 +2316,7 @@ export async function updateNpmInstalledPlugins(params: {
               (params.syncOfficialPluginInstalls &&
                 trustedSourceLinkedOfficialInstall &&
                 !preserveNpmRecordIntent) ||
-              usedOfficialNpmFallback,
+              (usedOfficialNpmFallback && params.updateChannel !== "extended-stable"),
           }),
           installPath: result.targetDir,
           version: nextVersion,

@@ -161,8 +161,8 @@ on [npmjs.com/org/openclaw](https://www.npmjs.com/org/openclaw) or the
 Beta-channel installs and updates prefer the npm `beta` dist-tag when available,
 falling back to `latest`. On the extended-stable channel, official npm plugins
 with bare/default or `latest` intent resolve to the exact installed core
-version. Explicit pins and tags, third-party packages, and non-npm sources are
-not rewritten.
+version. Exact pins and explicit non-`latest` tags, third-party packages, and
+non-npm sources are not rewritten.
 </Note>
 
 <AccordionGroup>

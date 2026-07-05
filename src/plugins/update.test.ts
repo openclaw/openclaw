@@ -3223,7 +3223,7 @@ describe("updateNpmInstalledPlugins", () => {
   it("targets the exact core version for official extended-stable updates and preserves intent", async () => {
     const installPath = createInstalledPackageDir({
       name: "@openclaw/acpx",
-      version: "2026.6.33",
+      version: "2026.7.21",
     });
     mockNpmViewMetadata({
       name: "@openclaw/acpx",
@@ -3248,8 +3248,8 @@ describe("updateNpmInstalledPlugins", () => {
         spec: "@openclaw/acpx",
         installPath,
         resolvedName: "@openclaw/acpx",
-        resolvedSpec: "@openclaw/acpx@2026.6.33",
-        resolvedVersion: "2026.6.33",
+        resolvedSpec: "@openclaw/acpx@2026.7.21",
+        resolvedVersion: "2026.7.21",
       }),
       pluginIds: ["acpx"],
       syncOfficialPluginInstalls: true,
@@ -3300,6 +3300,55 @@ describe("updateNpmInstalledPlugins", () => {
     expectNpmUpdateCall({
       spec: "@openclaw/acpx@2026.6.33",
       expectedPluginId: "acpx",
+    });
+  });
+
+  it("lets an explicit bare official spec opt a legacy pin into exact-core tracking", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/acpx",
+      version: "2026.6.21",
+    });
+    mockNpmViewMetadata({
+      name: "@openclaw/acpx",
+      version: "2026.7.33",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "acpx",
+        targetDir: installPath,
+        version: "2026.7.33",
+        npmResolution: {
+          name: "@openclaw/acpx",
+          version: "2026.7.33",
+          resolvedSpec: "@openclaw/acpx@2026.7.33",
+        },
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "acpx",
+        spec: "@openclaw/acpx@2026.6.21",
+        installPath,
+        resolvedName: "@openclaw/acpx",
+        resolvedSpec: "@openclaw/acpx@2026.6.21",
+        resolvedVersion: "2026.6.21",
+      }),
+      pluginIds: ["acpx"],
+      specOverrides: { acpx: "@openclaw/acpx" },
+      syncOfficialPluginInstalls: true,
+      officialPluginUpdateChannel: "extended-stable",
+      coreVersion: "2026.7.33",
+    });
+
+    expectNpmUpdateCall({
+      spec: "@openclaw/acpx@2026.7.33",
+      expectedPluginId: "acpx",
+    });
+    expectRecordFields(result.config.plugins?.installs?.acpx, {
+      spec: "@openclaw/acpx",
+      version: "2026.7.33",
+      resolvedSpec: "@openclaw/acpx@2026.7.33",
     });
   });
 
@@ -3811,6 +3860,53 @@ describe("updateNpmInstalledPlugins", () => {
       'Plugin "discord" has no beta ClawHub release for clawhub:@openclaw/discord@beta; using clawhub:@openclaw/discord instead. Core update can still complete.',
       'Plugin "discord" could not download official ClawHub artifact for clawhub:@openclaw/discord; using npm @openclaw/discord instead. Core update can still complete.',
     ]);
+  });
+
+  it("uses exact-core npm when an official ClawHub install falls back on extended-stable", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/discord",
+      version: "2026.6.33",
+    });
+    installPluginFromClawHubMock.mockResolvedValueOnce({
+      ok: false,
+      code: "artifact_unavailable",
+      error: "artifact unavailable",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValueOnce(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "discord",
+        targetDir: "/tmp/openclaw-plugins/discord",
+        version: "2026.7.33",
+        npmResolution: {
+          name: "@openclaw/discord",
+          version: "2026.7.33",
+          resolvedSpec: "@openclaw/discord@2026.7.33",
+        },
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: createClawHubInstallConfig({
+        pluginId: "discord",
+        installPath,
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "@openclaw/discord",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+        spec: "clawhub:@openclaw/discord",
+      }),
+      pluginIds: ["discord"],
+      updateChannel: "extended-stable",
+      coreVersion: "2026.7.33",
+    });
+
+    expect(npmInstallCall()?.spec).toBe("@openclaw/discord@2026.7.33");
+    expectRecordFields(result.config.plugins?.installs?.discord, {
+      source: "npm",
+      spec: "@openclaw/discord",
+      version: "2026.7.33",
+      resolvedSpec: "@openclaw/discord@2026.7.33",
+    });
   });
 
   it("reports npm dry-run versions for trusted official ClawHub artifact fallback", async () => {

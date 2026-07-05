@@ -1104,9 +1104,7 @@ async function installCandidate(params: {
       records: params.records,
       npmInstallSpec,
       npmRecordSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
-      pinResolvedRegistrySpec:
-        candidate.trustedSourceLinkedOfficialInstall === true &&
-        params.updateChannel !== "extended-stable",
+      pinResolvedRegistrySpec: false,
       packagePath: existingNpmPackagePath,
       version: existingNpmPackageVersion,
     });
@@ -1236,9 +1234,7 @@ async function installCandidate(params: {
         spec: resolveNpmInstallRecordSpec({
           requestedSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
           resolution: result.npmResolution,
-          pinResolvedRegistrySpec:
-            candidate.trustedSourceLinkedOfficialInstall === true &&
-            params.updateChannel !== "extended-stable",
+          pinResolvedRegistrySpec: false,
         }),
         installPath: result.targetDir,
         version: result.version,

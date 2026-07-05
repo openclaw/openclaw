@@ -5,7 +5,13 @@ import { parse } from "yaml";
 const workflowPath = ".github/workflows/plugin-npm-release.yml";
 
 type Step = { env?: Record<string, string>; name?: string; run?: string };
-type Job = { if?: string; needs?: string[] | string; steps?: Step[] };
+type Job = {
+  environment?: string;
+  if?: string;
+  needs?: string[] | string;
+  steps?: Step[];
+  strategy?: { matrix?: { plugin?: string } };
+};
 type Workflow = {
   on?: {
     workflow_dispatch?: {
@@ -75,10 +81,21 @@ describe("plugin npm extended-stable workflow", () => {
     );
   });
 
-  it("verifies every publishable exact package and extended-stable tag after the publish matrix", () => {
+  it("repairs every publishable extended-stable tag before final readback", () => {
     const parsed = workflow();
+    const reconcile = parsed.jobs?.reconcile_plugins_npm;
+    expect(reconcile?.needs).toEqual(["preview_plugins_npm", "publish_plugins_npm"]);
+    expect(reconcile?.environment).toBe("npm-release");
+    expect(reconcile?.if).toContain("has_candidates == 'false'");
+    expect(reconcile?.strategy?.matrix?.plugin).toContain("all_matrix");
+    const repair = step(reconcile, "Reconcile extended-stable tag");
+    expect(repair.run).toContain(
+      'npm dist-tag add "${PACKAGE_NAME}@${PACKAGE_VERSION}" extended-stable',
+    );
+    expect(repair.run).toContain('NPM_CONFIG_USERCONFIG="${userconfig}"');
+
     const verify = parsed.jobs?.verify_plugins_npm;
-    expect(verify?.needs).toEqual(["preview_plugins_npm", "publish_plugins_npm"]);
+    expect(verify?.needs).toEqual(["preview_plugins_npm", "reconcile_plugins_npm"]);
     expect(verify?.if).toContain("always()");
     const readback = step(verify, "Verify complete plugin registry readback");
     expect(readback.run).toContain('npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version');

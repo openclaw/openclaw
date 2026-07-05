@@ -43,13 +43,13 @@ export function resolveNpmInstallSpecsForUpdateChannel(params: {
 }): ChannelInstallSpecs {
   if (params.updateChannel === "extended-stable") {
     const target = resolveDefaultNpmSpec(params.spec);
-    const coreVersion = params.coreVersion?.trim();
-    if (
-      target &&
-      params.officialPackageName === target.name &&
-      coreVersion &&
-      isExactSemverVersion(coreVersion)
-    ) {
+    if (target && params.officialPackageName === target.name) {
+      const coreVersion = params.coreVersion?.trim();
+      if (!coreVersion || !isExactSemverVersion(coreVersion)) {
+        throw new Error(
+          `Extended-stable plugin resolution for ${target.name} requires an exact core version.`,
+        );
+      }
       return {
         installSpec: `${target.name}@${coreVersion}`,
         recordSpec: params.spec,

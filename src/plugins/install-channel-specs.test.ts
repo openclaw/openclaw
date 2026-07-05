@@ -50,14 +50,14 @@ describe("resolveNpmInstallSpecsForUpdateChannel", () => {
     ).toEqual({ installSpec: "@acme/discord", recordSpec: "@acme/discord" });
   });
 
-  it("does not guess an extended-stable target without an authoritative core version", () => {
-    expect(
+  it("fails closed without an authoritative extended-stable core version", () => {
+    expect(() =>
       resolveNpmInstallSpecsForUpdateChannel({
         spec: "@openclaw/discord",
         updateChannel: "extended-stable",
         officialPackageName: "@openclaw/discord",
       }),
-    ).toEqual({ installSpec: "@openclaw/discord", recordSpec: "@openclaw/discord" });
+    ).toThrow("requires an exact core version");
   });
 
   it("preserves beta behavior", () => {

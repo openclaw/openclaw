@@ -351,9 +351,45 @@ jobs:
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
         run: node scripts/verify-plugin-npm-published-runtime.mjs "${PACKAGE_NAME}@${PACKAGE_VERSION}"
 
-  verify_plugins_npm:
+  reconcile_plugins_npm:
     needs: [preview_plugins_npm, publish_plugins_npm]
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.npm_dist_tag == 'extended-stable' && needs.preview_plugins_npm.result == 'success' && (needs.publish_plugins_npm.result == 'success' || needs.publish_plugins_npm.result == 'skipped') }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.npm_dist_tag == 'extended-stable' && needs.preview_plugins_npm.result == 'success' && (needs.publish_plugins_npm.result == 'success' || (needs.preview_plugins_npm.outputs.has_candidates == 'false' && needs.publish_plugins_npm.result == 'skipped')) }}
+    runs-on: ubuntu-latest
+    environment: npm-release
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.all_matrix) }}
+    steps:
+      - name: Reconcile extended-stable tag
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+        run: |
+          set -euo pipefail
+          exact_version="$(npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version 2>/dev/null || true)"
+          if [[ "${exact_version}" != "${PACKAGE_VERSION}" ]]; then
+            echo "Cannot reconcile ${PACKAGE_NAME}@extended-stable: ${PACKAGE_NAME}@${PACKAGE_VERSION} is not published." >&2
+            exit 1
+          fi
+          tagged_version="$(npm view "${PACKAGE_NAME}@extended-stable" version 2>/dev/null || true)"
+          if [[ "${tagged_version}" == "${PACKAGE_VERSION}" ]]; then
+            echo "${PACKAGE_NAME}@extended-stable already points to ${PACKAGE_VERSION}."
+            exit 0
+          fi
+          userconfig="$(mktemp)"
+          trap 'rm -f "${userconfig}"' EXIT
+          chmod 0600 "${userconfig}"
+          printf '//registry.npmjs.org/:_authToken=%s\n' "${NPM_TOKEN}" > "${userconfig}"
+          NPM_CONFIG_USERCONFIG="${userconfig}" npm dist-tag add "${PACKAGE_NAME}@${PACKAGE_VERSION}" extended-stable
+          echo "Reconciled ${PACKAGE_NAME}@extended-stable from ${tagged_version:-<missing>} to ${PACKAGE_VERSION}."
+
+  verify_plugins_npm:
+    needs: [preview_plugins_npm, reconcile_plugins_npm]
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.npm_dist_tag == 'extended-stable' && needs.preview_plugins_npm.result == 'success' && needs.reconcile_plugins_npm.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -1391,8 +1391,7 @@ export async function ensureOnboardingPluginInstalled(params: {
       spec: resolveNpmInstallRecordSpec({
         requestedSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
         resolution: result.npmResolution,
-        pinResolvedRegistrySpec:
-          entry.trustedSourceLinkedOfficialInstall === true && updateChannel !== "extended-stable",
+        pinResolvedRegistrySpec: false,
       }),
       installPath: result.targetDir,
       version: result.version,

@@ -55,8 +55,15 @@ already contain a strictly later calendar month's final version below patch
 `33`; maintenance patches stay eligible after `main` advances by more than one
 month.
 
-Run the npm preflight and Full Release Validation from the exact
-extended-stable branch, then save both run IDs:
+On the exact extended-stable branch, bump the root package to `YYYY.M.P`, run
+`pnpm release:prep`, and verify every publishable extension package has the
+same version. Commit and push all generated changes, create and push the
+immutable `vYYYY.M.P` tag at that commit, and record the resulting full SHA.
+The workflows consume this prepared tree; they do not bump or synchronize
+versions for you.
+
+Run the npm preflight and Full Release Validation from that exact prepared
+branch tip, then save both run IDs:
 
 ```bash
 gh workflow run openclaw-npm-release.yml \
@@ -89,11 +96,12 @@ gh workflow run plugin-npm-release.yml \
   -f npm_dist_tag=extended-stable
 ```
 
-The workflow uses the regular `all-publishable` package inventory and version
-sync, including packages whose source did not change. It verifies every exact
-package and every plugin `extended-stable` tag before succeeding. If a partial
-run fails, rerun the same command: already-published packages are reused and
-the final readback still covers the complete package set.
+The workflow uses the regular prepared `all-publishable` package inventory,
+including packages whose source did not change. It verifies every exact package
+and every plugin `extended-stable` tag before succeeding. If a partial run
+fails, rerun the same command: already-published packages are reused, missing
+or stale plugin tags are reconciled under the npm release environment, and the
+final readback still covers the complete package set.
 
 After the plugin workflow succeeds and the npm release environment is ready,
 publish the exact core preflight tarball. Core publication verifies that the

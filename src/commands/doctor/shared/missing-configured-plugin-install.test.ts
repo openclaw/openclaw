@@ -2278,7 +2278,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     const records = mockCallArg(mocks.writePersistedInstalledPluginIndexInstallRecords);
     expectRecordFields((records as Record<string, unknown>).codex, {
       source: "npm",
-      spec: "@openclaw/codex@2026.5.2",
+      spec: "@openclaw/codex",
       installPath: "/tmp/openclaw-plugins/codex",
       version: "2026.5.2",
     });
@@ -2379,7 +2379,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     ]);
     expectRecordFields(result.records.codex, {
       source: "npm",
-      spec: `@openclaw/codex@${VERSION}`,
+      spec: "@openclaw/codex",
       installPath: "/tmp/openclaw-plugins/codex",
       version: VERSION,
       resolvedName: "@openclaw/codex",
@@ -2478,7 +2478,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     ]);
     expectRecordFields(firstPass.records.codex, {
       source: "npm",
-      spec: `@openclaw/codex@${codexBetaVersion}`,
+      spec: "@openclaw/codex",
       installPath: installDir,
       version: codexBetaVersion,
       resolvedName: "@openclaw/codex",
@@ -2689,7 +2689,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     const records = mockCallArg(mocks.writePersistedInstalledPluginIndexInstallRecords);
     expectRecordFields((records as Record<string, unknown>).codex, {
       source: "npm",
-      spec: "@openclaw/codex@2026.5.2",
+      spec: "@openclaw/codex",
       installPath: "/tmp/openclaw-plugins/codex",
       version: "2026.5.2",
     });
@@ -2703,7 +2703,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(Object.keys(result.records)).toEqual(["codex"]);
     expectRecordFields(result.records.codex, {
       source: "npm",
-      spec: "@openclaw/codex@2026.5.2",
+      spec: "@openclaw/codex",
       installPath: "/tmp/openclaw-plugins/codex",
       version: "2026.5.2",
       resolvedName: "@openclaw/codex",
@@ -3469,7 +3469,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
     const persistedRecords = mockCallArg(mocks.writePersistedInstalledPluginIndexInstallRecords);
     expectRecordFields((persistedRecords as Record<string, unknown>).discord, {
-      spec: "@openclaw/discord@1.2.3",
+      spec: "@openclaw/discord",
       installPath: "/tmp/openclaw-plugins/discord",
     });
     expect(mockCallArg(mocks.writePersistedInstalledPluginIndexInstallRecords, 0, 1)).toEqual({
@@ -3834,7 +3834,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     ) as Record<string, unknown>;
     expectRecordFields(persistedRecords.brave, {
       source: "npm",
-      spec: "@openclaw/brave-plugin@2026.5.12",
+      spec: "@openclaw/brave-plugin",
       installPath: "/tmp/openclaw-plugins/brave",
       version: "2026.5.12",
     });
@@ -4663,7 +4663,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       mocks.writePersistedInstalledPluginIndexInstallRecords,
     ) as Record<string, unknown>;
     expectRecordFields(persistedRecords.brave, {
-      spec: "@openclaw/brave-plugin@2026.5.4-beta.1",
+      spec: "@openclaw/brave-plugin",
     });
     expect(mockCallArg(mocks.writePersistedInstalledPluginIndexInstallRecords, 0, 1)).toEqual({
       env: {},

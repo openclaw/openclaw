@@ -84,13 +84,11 @@ export type ParsedPluginReleaseArgs = {
   headRef?: string;
 };
 
-export type ParsedPluginNpmReleaseArgs = ParsedPluginReleaseArgs & {
+type ParsedPluginNpmReleaseArgs = ParsedPluginReleaseArgs & {
   npmDistTag?: "extended-stable";
 };
 
-export function parsePluginNpmDistTagOverride(
-  value: string | undefined,
-): "extended-stable" | undefined {
+function parsePluginNpmDistTagOverride(value: string | undefined): "extended-stable" | undefined {
   if (value === undefined || value.trim() === "") {
     return undefined;
   }

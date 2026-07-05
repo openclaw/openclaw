@@ -281,10 +281,10 @@ When the updated Gateway starts, plugin loading is verify-only: startup does not
 
 After an extended-stable core update succeeds, post-core plugin integrity and
 convergence target eligible official npm plugins at the exact installed core
-version. OpenClaw does not query plugin `@extended-stable` or fall back to npm
-`latest`; it derives the package version from the installed core. Explicit
-version pins, explicit non-`latest` tags, third-party packages, and non-npm
-sources keep their existing intent.
+version. For default/`latest` intent, OpenClaw does not query plugin
+`@extended-stable` or fall back to npm `latest`; it derives the package version
+from the installed core. Explicit version pins, explicit non-`latest` tags,
+third-party packages, and non-npm sources keep their existing intent.
 
 For package-manager installs, `openclaw update` resolves the target package
 version before invoking the package manager. npm global installs use a staged
