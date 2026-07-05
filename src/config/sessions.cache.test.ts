@@ -135,6 +135,34 @@ describe("Session Store Cache", () => {
     expect(loaded).toEqual(testStore);
   });
 
+  it("retries transient session store read failures", async () => {
+    const testStore = createSingleSessionStore();
+    await saveSessionStore(storePath, testStore);
+    clearSessionStoreCacheForTest();
+
+    const originalReadFileSync = fs.readFileSync.bind(fs);
+    let storeReads = 0;
+    const readSpy = vi.spyOn(fs, "readFileSync").mockImplementation((file, ...args) => {
+      if (file === storePath) {
+        storeReads += 1;
+        if (storeReads === 1) {
+          throw Object.assign(
+            new Error("Unknown system error -11: Unknown system error -11, read"),
+            { code: "EAGAIN", errno: -11 },
+          );
+        }
+      }
+      return originalReadFileSync(file, ...(args as [Parameters<typeof fs.readFileSync>[1]]));
+    });
+
+    try {
+      expect(loadSessionStore(storePath, { skipCache: true })).toEqual(testStore);
+      expect(storeReads).toBe(2);
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
   it("should serve freshly saved session stores from cache without disk reads", async () => {
     const testStore = createSingleSessionStore();
 
