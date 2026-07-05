@@ -214,6 +214,30 @@ describe("msteams attachment helpers", () => {
       ).toEqual({ placeholder: "", expectedMediaCount: 0 });
     });
 
+    it("does not count HTML references separately from files or cards", () => {
+      expect(
+        resolveMSTeamsInboundAttachmentPresentation([
+          createHtmlAttachment('<attachment id="file-1"></attachment>'),
+          {
+            id: "file-1",
+            contentType: CONTENT_TYPE_APPLICATION_PDF,
+            contentUrl: TEST_URL_PDF,
+          },
+        ]),
+      ).toEqual({ placeholder: "<media:document>", expectedMediaCount: 1 });
+
+      expect(
+        resolveMSTeamsInboundAttachmentPresentation([
+          createHtmlAttachment('<attachment id="card-1"></attachment>'),
+          {
+            id: "card-1",
+            contentType: "application/vnd.microsoft.card.adaptive",
+            content: { type: "AdaptiveCard" },
+          },
+        ]),
+      ).toEqual({ placeholder: "", expectedMediaCount: 0 });
+    });
+
     it("counts repeated inline URLs once while keeping data images per occurrence", () => {
       const repeatedUrl = "https://example.com/repeated.png";
       expect(

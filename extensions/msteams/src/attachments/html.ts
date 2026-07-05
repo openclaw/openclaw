@@ -170,6 +170,22 @@ function countDistinctInlineCandidates(
   return dataCount + seenUrls.size;
 }
 
+function countUnrepresentedHtmlAttachmentIds(attachments: MSTeamsAttachmentLike[]): number {
+  const representedIds = new Set<string>();
+  for (const attachment of attachments) {
+    const contentType = normalizeContentType(attachment.contentType) ?? "";
+    if (contentType.startsWith("text/html")) {
+      continue;
+    }
+    const id = attachment.id?.trim();
+    if (id) {
+      representedIds.add(id);
+    }
+  }
+  return extractMSTeamsHtmlAttachmentIds(attachments).filter((id) => !representedIds.has(id))
+    .length;
+}
+
 export function resolveMSTeamsInboundAttachmentPresentation(
   attachments: MSTeamsAttachmentLike[] | undefined,
   limits?: { maxInlineBytes?: number; maxInlineTotalBytes?: number },
@@ -181,7 +197,10 @@ export function resolveMSTeamsInboundAttachmentPresentation(
   const fileAttachments = list.filter(isAdvertisedFileAttachment);
   const inlinePlaceholderCount = countDistinctInlineCandidates(list, limits);
   const inlineExpectedCount = countDistinctInlineImages(list);
-  const htmlAttachmentCount = extractMSTeamsHtmlAttachmentIds(list).length;
+  // Teams HTML uses <attachment> tags as references. A matching attachment
+  // entry is the same resource (and may be a card), so count only unmatched
+  // IDs that need the Graph/Bot Framework hosted-content fallback.
+  const htmlAttachmentCount = countUnrepresentedHtmlAttachmentIds(list);
   const expectedMediaCount = fileAttachments.length + inlineExpectedCount + htmlAttachmentCount;
   if (expectedMediaCount === 0) {
     return { placeholder: "", expectedMediaCount: 0 };
