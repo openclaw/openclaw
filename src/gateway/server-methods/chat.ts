@@ -1742,6 +1742,42 @@ export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; max
   return { messages: [buildChatHistoryUnavailableSentinel()] };
 }
 
+// Byte budget for afterSeq catch-up pages. Unlike the tail-preserving offset
+// and recent paths, the cursor page must keep its OLDEST rows: dropping from
+// the head while nextAfterSeq advances would silently skip unread messages
+// forever. Trims from the newest end at a transcript-seq boundary so mirror
+// rows that share one raw entry are never stranded across pages.
+export function capCursorChatHistoryMessagesKeepOldest(params: {
+  messages: unknown[];
+  maxBytes: number;
+}): { messages: unknown[] } {
+  const { messages, maxBytes } = params;
+  if (messages.length === 0 || jsonUtf8Bytes(messages) <= maxBytes) {
+    return { messages };
+  }
+  // Array brackets + per-row comma separators, mirroring capArrayByJsonBytes.
+  let bytes = 2;
+  let end = 0;
+  for (const [index, message] of messages.entries()) {
+    const rowBytes = jsonUtf8Bytes(message) + (index > 0 ? 1 : 0);
+    // Always deliver the first row even when it alone exceeds the budget
+    // (already per-row capped upstream); an empty page could not advance the
+    // cursor and would stall the client's catch-up loop.
+    if (index > 0 && bytes + rowBytes > maxBytes) {
+      break;
+    }
+    bytes += rowBytes;
+    end = index + 1;
+  }
+  const boundarySeq = readChatHistoryMessageSeq(messages[end]);
+  if (boundarySeq !== undefined) {
+    while (end > 1 && readChatHistoryMessageSeq(messages[end - 1]) === boundarySeq) {
+      end--;
+    }
+  }
+  return { messages: messages.slice(0, end) };
+}
+
 // Counts how many of the original chat.history messages lost their verbatim
 // representation by the time the budget pipeline finished — whether they were
 // replaced with a placeholder, dropped by the front byte cap, or collapsed by
@@ -2837,6 +2873,16 @@ function readChatHistoryMessageSeq(message: unknown): number | undefined {
   return typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0 ? seq : undefined;
 }
 
+function lastChatHistoryMessageSeq(messages: unknown[]): number | undefined {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const seq = readChatHistoryMessageSeq(messages[index]);
+    if (seq !== undefined) {
+      return seq;
+    }
+  }
+  return undefined;
+}
+
 function resolveChatHistoryNextOffset(params: {
   messages: unknown[];
   totalMessages: number;
@@ -3208,8 +3254,24 @@ async function handleChatHistoryRequest({
     ...(selectedAgent.agentId ? { agentId: selectedAgent.agentId } : {}),
     context,
   });
-  const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
-  const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
+  const isCursorPage = historyPage.nextAfterSeq !== undefined;
+  const bounded = isCursorPage
+    ? capCursorChatHistoryMessagesKeepOldest({
+        messages: replaced.messages,
+        maxBytes: maxHistoryBytes,
+      })
+    : enforceChatHistoryFinalBudget({
+        messages: capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items,
+        maxBytes: maxHistoryBytes,
+      });
+  // When the budget trimmed cursor rows, only advance the cursor to the last
+  // DELIVERED raw entry so trimmed unread rows are re-fetched next page. An
+  // untrimmed page advances over the full raw range consumed, which also skips
+  // trailing projection-filtered entries and keeps the catch-up loop moving.
+  const cursorTrimmed = isCursorPage && bounded.messages.length < normalized.length;
+  const nextAfterSeq = cursorTrimmed
+    ? (lastChatHistoryMessageSeq(bounded.messages) ?? historyPage.nextAfterSeq)
+    : historyPage.nextAfterSeq;
   const nextOffset =
     historyPage.offset !== undefined && historyPage.totalMessages !== undefined
       ? resolveChatHistoryNextOffset({
@@ -3224,8 +3286,8 @@ async function handleChatHistoryRequest({
       ? nextOffset < historyPage.totalMessages
       : undefined;
   const cursorHasMore =
-    historyPage.nextAfterSeq !== undefined && historyPage.totalMessages !== undefined
-      ? historyPage.nextAfterSeq < historyPage.totalMessages
+    nextAfterSeq !== undefined && historyPage.totalMessages !== undefined
+      ? nextAfterSeq < historyPage.totalMessages
       : undefined;
   const hasMore = offsetHasMore ?? cursorHasMore;
   reportOmittedChatHistory({
@@ -3291,7 +3353,7 @@ async function handleChatHistoryRequest({
     ...(historyPage.offset !== undefined ? { offset: historyPage.offset } : {}),
     ...(offsetHasMore ? { nextOffset } : {}),
     ...(historyPage.afterSeq !== undefined ? { afterSeq: historyPage.afterSeq } : {}),
-    ...(historyPage.nextAfterSeq !== undefined ? { nextAfterSeq: historyPage.nextAfterSeq } : {}),
+    ...(nextAfterSeq !== undefined ? { nextAfterSeq } : {}),
     ...(hasMore !== undefined ? { hasMore } : {}),
     ...(historyPage.totalMessages !== undefined
       ? { totalMessages: historyPage.totalMessages }

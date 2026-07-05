@@ -4329,6 +4329,142 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history afterSeq keeps oldest rows under byte budget and iterates losslessly", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        historyMaxBytes: 250,
+      });
+      const texts = ["catchup one", "catchup two", "catchup three", "catchup four"];
+      await writeMainSessionTranscript(
+        sessionDir,
+        texts.map((text, index) =>
+          JSON.stringify({
+            message: {
+              role: index % 2 === 0 ? "user" : "assistant",
+              content: [{ type: "text", text }],
+              timestamp: Date.now() + index,
+            },
+          }),
+        ),
+      );
+
+      type CursorPage = {
+        messages?: Array<{ __openclaw?: { seq?: number } }>;
+        nextAfterSeq?: number;
+        hasMore?: boolean;
+        totalMessages?: number;
+      };
+      const firstPage = await rpcReq<CursorPage>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 4,
+        afterSeq: 0,
+        maxChars: 1_000,
+      });
+      expect(firstPage.ok).toBe(true);
+      const firstSeqs = firstPage.payload?.messages?.map(readOpenClawSeq) ?? [];
+      // The budget trims from the newest end: the oldest unread rows survive
+      // and the cursor only advances to the last row actually delivered.
+      expect(firstSeqs.length).toBeGreaterThan(0);
+      expect(firstSeqs.length).toBeLessThan(4);
+      expect(firstSeqs[0]).toBe(1);
+      expect(firstPage.payload?.nextAfterSeq).toBe(firstSeqs.at(-1));
+      expect(firstPage.payload?.hasMore).toBe(true);
+
+      const collected: string[] = [];
+      let cursor = 0;
+      for (let iteration = 0; iteration < 6; iteration++) {
+        const page = await rpcReq<CursorPage>(ws, "chat.history", {
+          sessionKey: "main",
+          limit: 4,
+          afterSeq: cursor,
+          maxChars: 1_000,
+        });
+        expect(page.ok).toBe(true);
+        for (const message of page.payload?.messages ?? []) {
+          const content = (message as { content?: Array<{ text?: string }> }).content;
+          collected.push(content?.[0]?.text ?? "");
+        }
+        expect(page.payload?.nextAfterSeq).toBeGreaterThan(cursor);
+        cursor = page.payload?.nextAfterSeq ?? cursor;
+        if (!page.payload?.hasMore) {
+          break;
+        }
+      }
+      expect(collected).toEqual(texts);
+    });
+  });
+
+  test("chat.history afterSeq page of only filtered rows still advances under byte budget", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        historyMaxBytes: 250,
+      });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "start" }],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "NO_REPLY" }],
+            timestamp: Date.now() + 1,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "NO_REPLY" }],
+            timestamp: Date.now() + 2,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "the end" }],
+            timestamp: Date.now() + 3,
+          },
+        }),
+      ]);
+
+      type CursorPage = {
+        messages?: Array<{ __openclaw?: { seq?: number } }>;
+        nextAfterSeq?: number;
+        hasMore?: boolean;
+      };
+      const filteredPage = await rpcReq<CursorPage>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 2,
+        afterSeq: 1,
+        maxChars: 1_000,
+      });
+      expect(filteredPage.ok).toBe(true);
+      // Both raw rows on this page are NO_REPLY and projected away; the raw
+      // consumption still advances the cursor so the loop cannot stall.
+      expect(filteredPage.payload?.messages).toEqual([]);
+      expect(filteredPage.payload?.nextAfterSeq).toBe(3);
+      expect(filteredPage.payload?.hasMore).toBe(true);
+
+      const nextPage = await rpcReq<CursorPage>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 2,
+        afterSeq: filteredPage.payload?.nextAfterSeq,
+        maxChars: 1_000,
+      });
+      expect(nextPage.ok).toBe(true);
+      expect(nextPage.payload?.messages?.map(readOpenClawSeq)).toEqual([4]);
+      expect(JSON.stringify(nextPage.payload?.messages)).toContain("the end");
+      expect(nextPage.payload?.hasMore).toBe(false);
+    });
+  });
+
   test("chat.history offset pagination advances from the final budgeted page", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const sessionDir = await prepareMainHistoryHarness({
