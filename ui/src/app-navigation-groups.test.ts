@@ -4,17 +4,16 @@ import {
   SETTINGS_NAVIGATION_ROUTES,
   SIDEBAR_SECTIONS,
   isSettingsNavigationRoute,
-  isRouteInSidebarSection,
 } from "./app-navigation.ts";
 import { routeIdFromPath } from "./app-routes.ts";
 
 describe("SIDEBAR_SECTIONS", () => {
-  it("collapses detailed settings slices into one sidebar entry", () => {
-    const settings = SIDEBAR_SECTIONS.find((group) => group.label === "settings");
-    expect(settings?.routes).toEqual(["config"]);
+  it("keeps settings out of the scrollable sections; the footer pins it", () => {
+    expect(SIDEBAR_SECTIONS.flatMap((group) => group.routes)).not.toContain("config");
     expect(SETTINGS_NAVIGATION_ROUTES.every((routeId) => isSettingsNavigationRoute(routeId))).toBe(
       true,
     );
+    expect(isSettingsNavigationRoute("chat")).toBe(false);
   });
 
   it("keeps channel management out of the primary control sidebar", () => {
@@ -29,18 +28,6 @@ describe("SIDEBAR_SECTIONS", () => {
       "cron",
     ]);
     expect(SETTINGS_NAVIGATION_ROUTES).toContain("channels");
-  });
-
-  it("keeps the settings group active for nested settings routes", () => {
-    const settings = SIDEBAR_SECTIONS.find((group) => group.label === "settings");
-    if (!settings) {
-      throw new Error("Expected settings group");
-    }
-
-    expect(isRouteInSidebarSection(settings, "appearance")).toBe(true);
-    expect(isRouteInSidebarSection(settings, "channels")).toBe(true);
-    expect(isRouteInSidebarSection(settings, "debug")).toBe(true);
-    expect(isRouteInSidebarSection(settings, "chat")).toBe(false);
   });
 
   it("routes every published settings slice", () => {

@@ -759,6 +759,7 @@ export class AppSidebar extends LitElement {
           </div>
           <div class="sidebar-shell__footer">
             <div class="sidebar-utility-group">
+              ${this.renderRoute("config")}
               ${this.collapsed
                 ? html`
                     <openclaw-tooltip

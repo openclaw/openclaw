@@ -268,7 +268,7 @@ describe("plugin tabs route", () => {
 
 describe("SIDEBAR_SECTIONS", () => {
   it("contains all expected groups", () => {
-    expect(SIDEBAR_SECTIONS.map((g) => g.label)).toEqual(["chat", "control", "agent", "settings"]);
+    expect(SIDEBAR_SECTIONS.map((g) => g.label)).toEqual(["chat", "control", "agent"]);
   });
 
   it("all routes are unique", () => {
@@ -278,8 +278,7 @@ describe("SIDEBAR_SECTIONS", () => {
   });
 
   it("keeps detailed settings slices routed but out of the root sidebar", () => {
-    const settings = SIDEBAR_SECTIONS.find((group) => group.label === "settings");
-    expect(settings?.routes).toEqual(["config"]);
+    expect(SIDEBAR_SECTIONS.flatMap((g) => g.routes)).not.toContain("config");
     expect(SETTINGS_NAVIGATION_ROUTES).toEqual([
       "config",
       "channels",

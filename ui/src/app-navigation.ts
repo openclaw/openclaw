@@ -14,6 +14,7 @@ type NavigationItem = {
   [TRouteId in NavigationRouteId]: IconName;
 };
 
+// Settings ("config") is not a scrollable section; the sidebar footer pins it.
 export const SIDEBAR_SECTIONS = [
   { label: "chat", routes: ["chat"] },
   {
@@ -21,7 +22,6 @@ export const SIDEBAR_SECTIONS = [
     routes: ["overview", "activity", "workboard", "instances", "sessions", "usage", "cron"],
   },
   { label: "agent", routes: ["agents", "skills", "skill-workshop", "nodes", "dreams"] },
-  { label: "settings", routes: ["config"] },
 ] as const satisfies readonly SidebarSection[];
 
 export const SETTINGS_NAVIGATION_ROUTES = [
@@ -66,16 +66,6 @@ const NAVIGATION_ICONS: NavigationItem = {
 
 export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
   return (SETTINGS_NAVIGATION_ROUTES as readonly NavigationRouteId[]).includes(routeId);
-}
-
-export function isRouteInSidebarSection(
-  section: SidebarSection,
-  routeId: NavigationRouteId,
-): boolean {
-  if (section.label === "settings") {
-    return isSettingsNavigationRoute(routeId);
-  }
-  return section.routes.includes(routeId);
 }
 
 export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
