@@ -2034,6 +2034,7 @@ describe("plugin sdk alias helpers", () => {
     const options = buildPluginLoaderJitiOptions({});
 
     expect(options.tryNative).toBe(true);
+    expect(options.nativeModules).toEqual(["openclaw"]);
     expect(options.interopDefault).toBe(true);
     expect(options.extensions).toContain(".js");
     expect(options.extensions).toContain(".ts");
