@@ -1369,8 +1369,44 @@ describe("buildGuardedModelFetch", () => {
     expect(refreshTimeout).toHaveBeenCalledTimes(2);
   });
 
+  it("handles a valid large SSE event split before its boundary", async () => {
+    const payload = { text: "x".repeat(70 * 1024) };
+    const encoder = new TextEncoder();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}`));
+            controller.enqueue(encoder.encode("\n\n"));
+            controller.close();
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+      finalUrl: "https://openrouter.ai/api/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "gpt-5.4",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      { method: "POST" },
+    );
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+
+    expect(items).toEqual([payload]);
+  });
+
   it("errors on oversized SSE body without event boundary in sanitizer", async () => {
-    const oversized = "x".repeat(65 * 1024);
+    const oversized = "x".repeat(16 * 1024 * 1024 + 1024);
     const encoder = new TextEncoder();
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(

@@ -62,7 +62,7 @@ for (const signal of Object.keys(SIGNAL_EXIT_CODES)) {
   });
 }
 export const OPENCLAW_PACKAGE_SPEC_RE =
-  /^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$/u;
+  /^openclaw@(alpha|beta|extended-stable|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$/u;
 
 function usage() {
   return `Usage: node scripts/resolve-openclaw-package-candidate.mjs --source <ref|npm|url|trusted-url|artifact> --output-dir <dir> [options]
@@ -175,7 +175,7 @@ function resolvePackedOpenClawTarballFilename(value) {
 export function validateOpenClawPackageSpec(spec) {
   if (!OPENCLAW_PACKAGE_SPEC_RE.test(spec)) {
     throw new Error(
-      `package_spec must be openclaw@alpha, openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${spec}`,
+      `package_spec must be openclaw@alpha, openclaw@beta, openclaw@extended-stable, openclaw@latest, or an exact OpenClaw release version; got: ${spec}`,
     );
   }
 }
@@ -1281,10 +1281,7 @@ async function openHttpsPackageDownloadResponse(parsed, options) {
 
 async function openPackageDownloadResponse(url, options) {
   const lookupHost = options.lookupHost ?? defaultLookupHost;
-  const timeoutMs = resolveTimerTimeoutMs(
-    options.timeoutMs,
-    PACKAGE_URL_DOWNLOAD_TIMEOUT_MS,
-  );
+  const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, PACKAGE_URL_DOWNLOAD_TIMEOUT_MS);
   const maxRedirects = options.maxRedirects ?? PACKAGE_URL_MAX_REDIRECTS;
   const trustedSource = options.trustedSource;
   let parsed = new URL(url);

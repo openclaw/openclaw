@@ -11,6 +11,7 @@ import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
+import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
 /** Image content block for Claude API multimodal messages. */
@@ -122,7 +123,7 @@ export type AgentCommandOpts = {
   /** Bootstrap workspace context injection mode for this run. */
   bootstrapContextMode?: "full" | "lightweight";
   /** Run kind hint for bootstrap context behavior. */
-  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  bootstrapContextRunKind?: BootstrapContextRunKind;
   internalEvents?: AgentInternalEvent[];
   inputProvenance?: InputProvenance;
   /** Internal runs can execute against a session without updating visible status/model/usage. */
@@ -151,6 +152,8 @@ export type AgentCommandOpts = {
   cleanupCliLiveSessionOnRunEnd?: boolean;
   /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
   oneShotCliRun?: boolean;
+  /** Gateway-owned runs can late-bind plugin subagent and node runtime helpers. */
+  allowGatewaySubagentBinding?: boolean;
   /** Internal local CLI callers can annotate result metadata before JSON/text output. */
   resultMetaOverrides?: AgentCommandResultMetaOverrides;
   /** Called when the actual run model is selected, including fallback retries. */

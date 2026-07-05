@@ -348,22 +348,7 @@ export function migrateSessionEntries(entries: FileEntry[]): void {
 
 /** Exported for compaction.test.ts */
 export function parseSessionEntries(content: string): FileEntry[] {
-  const entries: FileEntry[] = [];
-  const lines = content.trim().split("\n");
-
-  for (const line of lines) {
-    if (!line.trim()) {
-      continue;
-    }
-    try {
-      const entry = JSON.parse(line) as FileEntry;
-      entries.push(entry);
-    } catch {
-      // Skip malformed lines
-    }
-  }
-
-  return entries;
+  return parseJsonlEntries(content);
 }
 
 export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEntry | null {
@@ -740,7 +725,7 @@ function rememberAppendedSessionEntry(
   const persistedEntry = JSON.parse(
     serializedAppend.startsWith("\n") ? serializedAppend.slice(1) : serializedAppend,
   ) as FileEntry;
-  cached.entries.push(freezeFileEntry(persistedEntry));
+  cached.entries.push(freezeFileEntry(normalizeLoadedFileEntry(persistedEntry)));
   cached.snapshot = snapshot;
   cached.endsWithNewline = true;
   sessionEntriesCache.delete(resolvedPath);
@@ -959,13 +944,34 @@ function parseJsonlEntries(content: string): FileEntry[] {
     }
     try {
       const entry = JSON.parse(line) as FileEntry;
-      entries.push(entry);
+      entries.push(normalizeLoadedFileEntry(entry));
     } catch {
       // Skip malformed lines
     }
   }
 
   return entries;
+}
+
+function normalizeLoadedFileEntry(entry: FileEntry): FileEntry {
+  if (!isJsonRecord(entry) || entry.type !== "message" || !isJsonRecord(entry.message)) {
+    return entry;
+  }
+  // Persisted JSONL is untrusted: shapes may predate the current Message type,
+  // so normalize through a record view instead of the declared union.
+  const message: Record<string, unknown> = entry.message;
+  // Replayed JSONL can carry legacy string assistant/toolResult content while
+  // downstream providers require block arrays. Single-record tool results need
+  // the same ingress repair before replay reaches provider conversion.
+  if (
+    (message.role === "assistant" || message.role === "toolResult") &&
+    typeof message.content === "string"
+  ) {
+    message.content = [{ type: "text", text: message.content }];
+  } else if (message.role === "toolResult" && isJsonRecord(message.content)) {
+    message.content = [message.content];
+  }
+  return entry;
 }
 
 function hasReadableSessionHeader(entries: FileEntry[]): boolean {
@@ -1171,27 +1177,34 @@ function readFirstSessionFileLine(filePath: string): string | undefined {
   }
 }
 
-function isValidSessionFile(filePath: string): boolean {
+function readSessionHeaderFromFile(filePath: string): SessionHeader | undefined {
   try {
     const firstLine = readFirstSessionFileLine(filePath);
     if (!firstLine) {
-      return false;
+      return undefined;
     }
     const header = JSON.parse(firstLine);
-    return header.type === "session" && typeof header.id === "string";
+    if (header.type !== "session" || typeof header.id !== "string") {
+      return undefined;
+    }
+    return header as SessionHeader;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
 /** Exported for testing */
-export function findMostRecentSession(sessionDir: string): string | null {
+export function findMostRecentSession(sessionDir: string, cwd?: string): string | null {
   try {
     const files = readdirSync(sessionDir)
       .filter((f) => f.endsWith(".jsonl"))
       .map((f) => join(sessionDir, f))
-      .filter(isValidSessionFile)
-      .map((path) => ({ path, mtime: statSync(path).mtime }))
+      .map((path) => ({ path, header: readSessionHeaderFromFile(path) }))
+      .filter(
+        (candidate): candidate is { path: string; header: SessionHeader } =>
+          candidate.header !== undefined && (cwd === undefined || candidate.header.cwd === cwd),
+      )
+      .map((candidate) => ({ path: candidate.path, mtime: statSync(candidate.path).mtime }))
       .toSorted((a, b) => b.mtime.getTime() - a.mtime.getTime());
 
     return files[0]?.path || null;
@@ -1348,6 +1361,10 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
   }
 }
 
+function sessionInfoMatchesCwd(info: SessionInfo, cwd: string | undefined): boolean {
+  return cwd === undefined || info.cwd === cwd;
+}
+
 export type SessionListProgress = (loaded: number, total: number) => void;
 
 const MAX_CONCURRENT_SESSION_INFO_LOADS = 10;
@@ -1397,6 +1414,7 @@ async function listSessionsFromDir(
   onProgress?: SessionListProgress,
   progressOffset = 0,
   progressTotal?: number,
+  cwd?: string,
 ): Promise<SessionInfo[]> {
   const sessions: SessionInfo[] = [];
   if (!existsSync(dir)) {
@@ -1414,7 +1432,7 @@ async function listSessionsFromDir(
       onProgress?.(progressOffset + loaded, total);
     });
     for (const info of results) {
-      if (info) {
+      if (info && sessionInfoMatchesCwd(info, cwd)) {
         sessions.push(info);
       }
     }
@@ -2921,7 +2939,7 @@ export class SessionManager {
    */
   static continueRecent(cwd: string, sessionDir?: string): SessionManager {
     const dir = sessionDir ?? getDefaultSessionDir(cwd);
-    const mostRecent = findMostRecentSession(dir);
+    const mostRecent = findMostRecentSession(dir, cwd);
     if (mostRecent) {
       return new SessionManager(cwd, dir, mostRecent, true);
     }
@@ -2995,7 +3013,7 @@ export class SessionManager {
     onProgress?: SessionListProgress,
   ): Promise<SessionInfo[]> {
     const dir = sessionDir ?? getDefaultSessionDir(cwd);
-    const sessions = await listSessionsFromDir(dir, onProgress);
+    const sessions = await listSessionsFromDir(dir, onProgress, 0, undefined, cwd);
     sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
     return sessions;
   }

@@ -20,6 +20,7 @@ import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/open
 import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   resolveSessionFilePath,
@@ -31,6 +32,7 @@ import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import { resolveHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import {
@@ -169,6 +171,29 @@ function normalizeMessageTimestampMs(value: unknown): number | undefined {
   const timestampMs =
     timestamp < EPOCH_MILLISECONDS_THRESHOLD ? Math.trunc(timestamp * 1000) : timestamp;
   return asDateTimestampMs(timestampMs);
+}
+
+async function updateRoomEventAmbientTranscriptWatermark(params: {
+  expectedSessionId: string;
+  sessionCtx: TemplateContext;
+  storePath?: string;
+  sessionKey?: string;
+}): Promise<void> {
+  const key = normalizeOptionalString(params.sessionCtx.AmbientTranscriptWatermarkKey);
+  const messageId = normalizeOptionalString(params.sessionCtx.AmbientTranscriptMessageId);
+  if (!params.storePath || !params.sessionKey || !key || !messageId) {
+    return;
+  }
+  // Advance only after the transcript row exists; Telegram windows exclude
+  // everything at or before this durable boundary on later turns.
+  await updateAmbientTranscriptWatermark({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    key,
+    messageId,
+    timestampMs: params.sessionCtx.AmbientTranscriptTimestampMs,
+    expectedSessionId: params.expectedSessionId,
+  });
 }
 
 function isSlackDirectRoutedThreadTurn(ctx: MsgContext): boolean {
@@ -515,6 +540,8 @@ export async function runPreparedReply(
   } = params;
   let { sessionEntry, resolvedThinkLevel } = params;
   const isHeartbeat = opts?.isHeartbeat === true;
+  const heartbeatRunScope = resolveHeartbeatRunScope(opts);
+  const explicitThinkingLevelOverride = normalizeThinkLevel(opts?.thinkingLevelOverride);
   const traceAttributes = {
     provider,
     hasSessionKey: Boolean(sessionKey),
@@ -541,6 +568,8 @@ export async function runPreparedReply(
       : isInternalPromptChannel && opts?.sourceReplyDeliveryMode === undefined
         ? "automatic"
         : opts?.sourceReplyDeliveryMode;
+  const sessionPromptSourceReplyDeliveryMode =
+    opts?.sessionPromptSourceReplyDeliveryMode ?? sourceReplyDeliveryMode;
   const silentReplyConversationType = resolvePromptSilentReplyConversationType({
     ctx: promptSessionCtx,
     inboundSessionKey: ctx.SessionKey,
@@ -590,27 +619,23 @@ export async function runPreparedReply(
   const directChatContext = isDirectChat
     ? buildDirectChatContext({
         sessionCtx: promptSessionCtx,
-        sourceReplyDeliveryMode,
+        sourceReplyDeliveryMode: sessionPromptSourceReplyDeliveryMode,
       })
     : "";
   // Always include persistent group chat context (provider + reply guidance).
   const groupChatContext = isGroupChat
     ? buildGroupChatContext({
         sessionCtx: promptSessionCtx,
-        sourceReplyDeliveryMode,
+        sourceReplyDeliveryMode: sessionPromptSourceReplyDeliveryMode,
         silentReplyPolicy: silentReplySettings.policy,
         silentToken: SILENT_REPLY_TOKEN,
       })
     : "";
-  // Behavioral intro (activation mode, lurking, etc.) only on first turn / activation needed
-  const groupIntro = shouldInjectGroupIntro
+  // Claude CLI fixes the system prompt at session creation; group intro must stay session-stable.
+  const groupIntro = isGroupChat
     ? buildGroupIntro({
-        cfg,
-        sessionCtx: promptSessionCtx,
         sessionEntry,
         defaultActivation,
-        silentToken: SILENT_REPLY_TOKEN,
-        silentReplyPolicy: silentReplySettings.policy,
       })
     : "";
   const allowEmptyAssistantReplyAsSilent =
@@ -628,32 +653,35 @@ export async function runPreparedReply(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
     { includeFormattingHints: !useFastReplyRuntime },
   );
+  const execOverridePromptHint = buildExecOverridePromptHint({
+    execOverrides,
+    elevatedLevel: resolvedElevatedLevel,
+    fullAccessAvailable: fullAccessState.available,
+    fullAccessBlockedReason: fullAccessState.blockedReason,
+  });
   const extraSystemPromptParts = [
     inboundMetaPrompt,
     directChatContext,
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
-    buildExecOverridePromptHint({
-      execOverrides,
-      elevatedLevel: resolvedElevatedLevel,
-      fullAccessAvailable: fullAccessState.available,
-      fullAccessBlockedReason: fullAccessState.blockedReason,
-    }),
+    execOverridePromptHint,
   ].filter(Boolean);
-  // Static parts only (no per-message inbound metadata) for CLI session reuse hashing.
-  const extraSystemPromptStaticParts = [
+  const extraSystemPromptStatic = [
     directChatContext,
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
-    buildExecOverridePromptHint({
-      execOverrides,
-      elevatedLevel: resolvedElevatedLevel,
-      fullAccessAvailable: fullAccessState.available,
-      fullAccessBlockedReason: fullAccessState.blockedReason,
-    }),
-  ].filter(Boolean);
+    execOverridePromptHint,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  const cliSessionBindingFacts = {
+    extraSystemPromptStatic,
+    ...(sessionPromptSourceReplyDeliveryMode
+      ? { sourceReplyDeliveryMode: sessionPromptSourceReplyDeliveryMode }
+      : {}),
+  };
   const silentReplyPromptMode: SilentReplyPromptMode =
     directChatContext || groupChatContext || sourceReplyDeliveryMode === "message_tool_only"
       ? "none"
@@ -736,7 +764,6 @@ export async function runPreparedReply(
         }
       : { ...sessionCtx, ThreadStarterBody: undefined },
     envelopeOptions,
-    { sourceReplyDeliveryMode },
   );
   const inboundUserContextPromptJoiner = resolveInboundUserContextPromptJoiner(sessionCtx);
   const hasUserBody =
@@ -774,16 +801,21 @@ export async function runPreparedReply(
     sourceReplyDeliveryMode,
   });
   const effectiveBaseBody = promptEnvelopeBase.effectiveBaseBody;
-  let prefixedBodyBase = await applySessionHints({
-    baseBody: effectiveBaseBody,
-    abortedLastRun,
-    sessionEntry,
-    sessionEntryHandle,
-    sessionStore,
-    sessionKey,
-    storePath,
-    abortKey: command.abortKey,
-  });
+  // A commitment-only wake must not consume the one-shot aborted-run hint;
+  // that recovery context belongs to the next normal conversation turn.
+  let prefixedBodyBase =
+    heartbeatRunScope === "commitment-only"
+      ? effectiveBaseBody
+      : await applySessionHints({
+          baseBody: effectiveBaseBody,
+          abortedLastRun,
+          sessionEntry,
+          sessionEntryHandle,
+          sessionStore,
+          sessionKey,
+          storePath,
+          abortKey: command.abortKey,
+        });
   sessionEntry = sessionEntryHandle?.getCurrent() ?? sessionEntry;
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
@@ -822,7 +854,7 @@ export async function runPreparedReply(
     transcriptCommandBody: string;
     currentInboundContext?: typeof promptEnvelopeBase.currentInboundContext;
   }> => {
-    if (!useFastReplyRuntime) {
+    if (!useFastReplyRuntime && heartbeatRunScope !== "commitment-only") {
       const eventsBlock = await drainFormattedSystemEvents({
         cfg,
         sessionKey,
@@ -921,7 +953,9 @@ export async function runPreparedReply(
     });
   }
   if (!thinkingLevelSupported) {
-    const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
+    const explicitThink =
+      (directives.hasThinkDirective && directives.thinkLevel !== undefined) ||
+      explicitThinkingLevelOverride !== undefined;
     if (explicitThink) {
       typing.cleanup();
       return {
@@ -1233,8 +1267,15 @@ export async function runPreparedReply(
       extractedFileImages: opts?.extractedFileImages,
     }),
   );
+  // Abort-signal attachment for queued followups:
+  // - room_event: always inherit (source admission fence / ambient cancel).
+  // - Gateway-owned lifecycle (chat.send): always inherit so Esc can cancel a
+  //   turn after chat.send terminalizes while still queued.
+  // - plain user_request without lifecycle: deliberately detach from the
+  //   source/active-lane signal so a superseded parent abort does not cancel a
+  //   still-valid queued user turn.
   const queuedFollowupAbortSignal =
-    inboundEventKind === "room_event"
+    opts?.queuedFollowupLifecycle || inboundEventKind === "room_event"
       ? (opts?.queuedFollowupAbortSignal ?? opts?.abortSignal)
       : undefined;
   const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
@@ -1247,6 +1288,7 @@ export async function runPreparedReply(
     userTurnTranscriptText !== undefined || userTurnMediaForPersistence.length > 0
       ? {
           text: userTurnTranscriptText,
+          senderIsOwner: command.senderIsOwner,
           ...(inputProvenance ? { provenance: inputProvenance } : {}),
           ...(userTurnMediaForPersistence.length > 0
             ? {
@@ -1279,6 +1321,15 @@ export async function runPreparedReply(
           }),
           errorContext: "reply user turn transcript",
           beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+          onMessagePersisted: isRoomEvent
+            ? async () =>
+                await updateRoomEventAmbientTranscriptWatermark({
+                  expectedSessionId: preparedSessionState.sessionId,
+                  sessionCtx,
+                  storePath,
+                  sessionKey: sessionKey ?? preparedSessionState.sessionId,
+                })
+            : undefined,
         })
       : undefined);
   const replyRoute = resolveEffectiveReplyRoute({
@@ -1312,6 +1363,7 @@ export async function runPreparedReply(
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     queuedLifecycle: opts?.queuedFollowupLifecycle,
+    onFollowupAdmissionWaitChange: opts?.onFollowupAdmissionWaitChange,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
@@ -1323,12 +1375,9 @@ export async function runPreparedReply(
     originatingAccountId: replyRoute.accountId,
     originatingThreadId: replyRoute.threadId ?? originatingThreadId,
     originatingReplyToId: promptSessionCtx.ReplyToId,
-    originatingReplyToMode: resolveReplyToMode(
-      cfg,
-      replyPolicyChannel,
-      replyRoute.accountId,
-      replyRoute.chatType,
-    ),
+    originatingReplyToMode:
+      promptSessionCtx.ReplyToMode ??
+      resolveReplyToMode(cfg, replyPolicyChannel, replyRoute.accountId, replyRoute.chatType),
     originatingChatId:
       normalizeOptionalString(sessionCtx.NativeChannelId) ??
       normalizeOptionalString(sessionCtx.ChatId),
@@ -1418,10 +1467,10 @@ export async function runPreparedReply(
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
       sourceReplyDeliveryMode,
       silentReplyPromptMode,
-      extraSystemPromptStatic: extraSystemPromptStaticParts.join("\n\n"),
+      extraSystemPromptStatic,
+      cliSessionBindingFacts,
       skipProviderRuntimeHints: useFastReplyRuntime,
       allowEmptyAssistantReplyAsSilent,
-      suppressNextUserMessagePersistence: isRoomEvent,
       suppressTranscriptOnlyAssistantPersistence: isRoomEvent,
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, {

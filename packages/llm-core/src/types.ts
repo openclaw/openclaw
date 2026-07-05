@@ -263,6 +263,10 @@ export interface Usage {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Exact context snapshot for the final provider iteration. */
+  contextUsage?:
+    | { state: "available"; promptTokens: number; totalTokens: number }
+    | { state: "unavailable" };
   totalTokens: number;
   cost: {
     input: number;

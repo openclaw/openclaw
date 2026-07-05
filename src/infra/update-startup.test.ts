@@ -478,6 +478,33 @@ describe("update-startup", () => {
     await expectPathMissing(path.join(tempDir, "update-check.json"));
   });
 
+  it("skips all startup and background work for extended-stable", async () => {
+    const onUpdateAvailableChange = vi.fn();
+    const runAutoUpdate = createAutoUpdateSuccessMock();
+
+    await runGatewayUpdateCheck({
+      cfg: {
+        update: {
+          channel: "extended-stable",
+          checkOnStart: true,
+          auto: { enabled: true },
+        },
+      },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      onUpdateAvailableChange,
+      runAutoUpdate,
+    });
+
+    expect(resolveOpenClawPackageRoot).not.toHaveBeenCalled();
+    expect(checkUpdateStatus).not.toHaveBeenCalled();
+    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
+    expect(runAutoUpdate).not.toHaveBeenCalled();
+    expect(readPersistedUpdateCheckState()).toBeNull();
+    expect(onUpdateAvailableChange).not.toHaveBeenCalled();
+  });
+
   it("defers stable auto-update until rollout window is due", async () => {
     mockPackageUpdateStatus("latest", "2.0.0");
 
@@ -715,6 +742,20 @@ describe("update-startup", () => {
       log: { info: vi.fn() },
       isNixMode: false,
     });
+    stop();
+  });
+
+  it("does not schedule recurring checks for extended-stable", async () => {
+    const stop = scheduleGatewayUpdateCheck({
+      cfg: { update: { channel: "extended-stable" } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+    });
+
+    await vi.runAllTimersAsync();
+
+    expect(resolveOpenClawPackageRoot).not.toHaveBeenCalled();
+    expect(checkUpdateStatus).not.toHaveBeenCalled();
     stop();
   });
 });

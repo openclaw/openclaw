@@ -21,6 +21,7 @@ import {
   resolveStateDir as resolveStateDirFromPaths,
 } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
@@ -75,7 +76,7 @@ type CallGatewayBaseOptions = {
   method: string;
   params?: unknown;
   expectFinal?: boolean;
-  timeoutMs?: number;
+  timeoutMs?: number | null;
   signal?: AbortSignal;
   onAccepted?: GatewayClientRequestOptions["onAccepted"];
   onSignalAbort?: (request: GatewayRequestFunction) => Promise<void> | void;
@@ -652,7 +653,8 @@ function resolveGatewayCallTimeout(
   timeoutValue: unknown,
   configuredHandshakeTimeoutMs?: number | null,
 ): {
-  timeoutMs: number;
+  timeoutMs: number | null;
+  startupTimeoutMs: number;
   safeTimerTimeoutMs: number;
 } {
   const hasConfiguredHandshakeTimeout =
@@ -666,14 +668,16 @@ function resolveGatewayCallTimeout(
     hasConfiguredHandshakeTimeout || hasEnvHandshakeTimeout
       ? resolvePreauthHandshakeTimeoutMs({ configuredTimeoutMs: configuredHandshakeTimeoutMs })
       : undefined;
-  const timeoutMs =
-    typeof timeoutValue === "number" && Number.isFinite(timeoutValue)
-      ? timeoutValue
-      : typeof resolvedHandshakeTimeoutMs === "number" && resolvedHandshakeTimeoutMs > 10_000
-        ? resolvedHandshakeTimeoutMs
-        : 10_000;
-  const safeTimerTimeoutMs = resolveSafeTimeoutDelayMs(timeoutMs);
-  return { timeoutMs, safeTimerTimeoutMs };
+  const defaultTimeoutMs =
+    typeof resolvedHandshakeTimeoutMs === "number" && resolvedHandshakeTimeoutMs > 10_000
+      ? resolvedHandshakeTimeoutMs
+      : 10_000;
+  const explicitTimeoutMs =
+    typeof timeoutValue === "number" && Number.isFinite(timeoutValue) ? timeoutValue : undefined;
+  const startupTimeoutMs = explicitTimeoutMs ?? defaultTimeoutMs;
+  const timeoutMs = timeoutValue === null ? null : (explicitTimeoutMs ?? defaultTimeoutMs);
+  const safeTimerTimeoutMs = resolveSafeTimeoutDelayMs(timeoutMs ?? startupTimeoutMs);
+  return { timeoutMs, startupTimeoutMs, safeTimerTimeoutMs };
 }
 
 async function resolveGatewayCallContext(
@@ -849,9 +853,7 @@ function createGatewayTimeoutTransportError(params: {
 }
 
 function createGatewayRequestAbortError(method: string): Error {
-  const err = new Error(`gateway request aborted for ${method}`);
-  err.name = "AbortError";
-  return err;
+  return createAbortError(`gateway request aborted for ${method}`);
 }
 
 function ensureGatewaySupportsRequiredMethods(params: {
@@ -897,7 +899,8 @@ async function executeGatewayRequestWithScopes<T>(params: {
   password?: string;
   tlsFingerprint?: string;
   preauthHandshakeTimeoutMs?: number;
-  timeoutMs: number;
+  timeoutMs: number | null;
+  startupTimeoutMs: number;
   safeTimerTimeoutMs: number;
   connectionDetails: GatewayConnectionDetails;
   deviceIdentity: DeviceIdentity | null;
@@ -912,6 +915,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     tlsFingerprint,
     preauthHandshakeTimeoutMs,
     timeoutMs,
+    startupTimeoutMs,
     safeTimerTimeoutMs,
     deviceIdentity,
     surfaceGatewayClientRequestErrors,
@@ -923,6 +927,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     }
     let settled = false;
     let ignoreClose = false;
+    let timer: NodeJS.Timeout | undefined;
     const startAbort = new AbortController();
     let primaryRequestStarted = false;
     let suppressedPreHelloCleanCloses = 0;
@@ -1005,6 +1010,10 @@ async function executeGatewayRequestWithScopes<T>(params: {
       minProtocol: opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: (hello) => {
+        if (timeoutMs === null && timer) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
         void (async () => {
           try {
             ensureGatewaySupportsRequiredMethods({
@@ -1069,11 +1078,12 @@ async function executeGatewayRequestWithScopes<T>(params: {
       },
     });
 
-    const timer: NodeJS.Timeout | undefined = setTimeout(() => {
+    const wrapperTimeoutMs = timeoutMs ?? startupTimeoutMs;
+    timer = setTimeout(() => {
       ignoreClose = true;
       stop(
         createGatewayTimeoutTransportError({
-          timeoutMs,
+          timeoutMs: wrapperTimeoutMs,
           connectionDetails: params.connectionDetails,
         }),
       );
@@ -1090,7 +1100,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
         ignoreClose = true;
         stop(
           createGatewayTimeoutTransportError({
-            timeoutMs,
+            timeoutMs: startupTimeoutMs,
             connectionDetails: params.connectionDetails,
           }),
         );
@@ -1110,7 +1120,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   scopes: OperatorScope[] | undefined,
 ): Promise<T> {
   const context = await resolveGatewayCallContext(opts);
-  const { timeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(
+  const { timeoutMs, startupTimeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(
     opts.timeoutMs,
     context.config.gateway?.handshakeTimeoutMs,
   );
@@ -1211,6 +1221,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     tlsFingerprint,
     preauthHandshakeTimeoutMs: context.config.gateway?.handshakeTimeoutMs,
     timeoutMs,
+    startupTimeoutMs,
     safeTimerTimeoutMs,
     connectionDetails,
     deviceIdentity,

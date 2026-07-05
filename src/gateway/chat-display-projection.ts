@@ -1494,6 +1494,38 @@ function isDuplicateAcpGatewayInjectedMessage(
   return Boolean(previousText && currentText && previousText === currentText);
 }
 
+function isDuplicateChannelFinalDeliveryMirror(
+  current: Record<string, unknown>,
+  previousVisible: Record<string, unknown> | undefined,
+): boolean {
+  if (!previousVisible || !isOpenClawDeliveryMirrorAssistantMessage(current)) {
+    return false;
+  }
+  const deliveryMirror = readRecord(current.openclawDeliveryMirror);
+  if (deliveryMirror?.kind !== "channel-final") {
+    return false;
+  }
+  if (asRoleContentMessage(previousVisible)?.role !== "assistant") {
+    return false;
+  }
+  if (isOpenClawDeliveryMirrorAssistantMessage(previousVisible)) {
+    return false;
+  }
+  if (isProjectedSessionsSendForwardedMessage(previousVisible)) {
+    return false;
+  }
+  const previousMeta = readRecord(previousVisible["__openclaw"]);
+  if (typeof previousMeta?.mirrorIdentity !== "string" || !previousMeta.mirrorIdentity.trim()) {
+    return false;
+  }
+  if (hasAssistantNonTextContent(previousVisible) || hasAssistantNonTextContent(current)) {
+    return false;
+  }
+  const previousText = displayTextForDuplicateCheck(previousVisible);
+  const currentText = displayTextForDuplicateCheck(current);
+  return Boolean(previousText && currentText && previousText === currentText);
+}
+
 function toProjectedMessages(messages: unknown[]): Array<Record<string, unknown>> {
   return messages.filter(
     (message): message is Record<string, unknown> =>
@@ -1532,7 +1564,10 @@ function filterVisibleProjectedHistoryMessages(
       changed = true;
       continue;
     }
-    if (isDuplicateAcpGatewayInjectedMessage(current, visible.at(-1))) {
+    if (
+      isDuplicateAcpGatewayInjectedMessage(current, visible.at(-1)) ||
+      isDuplicateChannelFinalDeliveryMirror(current, messages[i - 1])
+    ) {
       changed = true;
       continue;
     }

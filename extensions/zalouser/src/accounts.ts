@@ -6,15 +6,11 @@ import {
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedZalouserAccount, ZalouserAccountConfig, ZalouserConfig } from "./types.js";
 
-let zalouserAccountsRuntimePromise: Promise<typeof import("./accounts.runtime.js")> | undefined;
-
-async function loadZalouserAccountsRuntime() {
-  zalouserAccountsRuntimePromise ??= import("./accounts.runtime.js");
-  return await zalouserAccountsRuntimePromise;
-}
+const loadZalouserAccountsRuntime = createLazyRuntimeModule(() => import("./accounts.runtime.js"));
 
 const {
   listAccountIds: listZalouserAccountIds,

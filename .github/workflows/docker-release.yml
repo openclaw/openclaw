@@ -108,7 +108,8 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
           fetch-depth: 0
 
-      - name: Pre-pull BuildKit image
+      - &buildkit_prepull_step
+        name: Pre-pull BuildKit image
         shell: bash
         env:
           BUILDKIT_IMAGE: moby/buildkit:buildx-stable-1
@@ -329,25 +330,7 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
           fetch-depth: 0
 
-      - name: Pre-pull BuildKit image
-        shell: bash
-        env:
-          BUILDKIT_IMAGE: moby/buildkit:buildx-stable-1
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3 4; do
-            if docker pull "${BUILDKIT_IMAGE}"; then
-              exit 0
-            fi
-            if [[ "${attempt}" == "4" ]]; then
-              echo "::error::Failed to pull ${BUILDKIT_IMAGE} after ${attempt} attempts"
-              exit 1
-            fi
-            sleep_seconds=$((attempt * 10))
-            echo "BuildKit image pull failed; retrying in ${sleep_seconds}s (${attempt}/4)."
-            sleep "${sleep_seconds}"
-          done
-
+      - *buildkit_prepull_step
       - name: Set up Docker Builder
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
 
@@ -683,25 +666,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Pre-pull BuildKit image
-        shell: bash
-        env:
-          BUILDKIT_IMAGE: moby/buildkit:buildx-stable-1
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3 4; do
-            if docker pull "${BUILDKIT_IMAGE}"; then
-              exit 0
-            fi
-            if [[ "${attempt}" == "4" ]]; then
-              echo "::error::Failed to pull ${BUILDKIT_IMAGE} after ${attempt} attempts"
-              exit 1
-            fi
-            sleep_seconds=$((attempt * 10))
-            echo "BuildKit image pull failed; retrying in ${sleep_seconds}s (${attempt}/4)."
-            sleep "${sleep_seconds}"
-          done
-
+      - *buildkit_prepull_step
       - name: Set up Docker Builder
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
 

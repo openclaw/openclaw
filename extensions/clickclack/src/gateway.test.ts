@@ -255,4 +255,41 @@ describe("ClickClack gateway", () => {
       running: false,
     });
   });
+
+  it("wraps non-Error ws message rejections with the original value in the message", async () => {
+    const socket = new FakeSocket();
+    mocks.client.websocket.mockReturnValue(socket);
+    const rejection = { code: "ECONNRESET", retryable: true };
+    mocks.resolveClickClackInboundAccess.mockRejectedValue(rejection);
+    const abort = new AbortController();
+    const ctx = createGatewayContext(abort.signal);
+    const run = startClickClackGatewayAccount(ctx);
+
+    await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          id: "evt-1",
+          cursor: "cursor-1",
+          type: "message.created",
+          workspace_id: "workspace-1",
+          channel_id: "chan-1",
+          seq: 2,
+          created_at: "2026-01-01T00:00:00.000Z",
+          payload: { message_id: "msg-1", author_id: "human-1" },
+        }),
+      ),
+    );
+
+    await expect(run).rejects.toMatchObject({
+      message: 'ClickClack ws message failed: {"code":"ECONNRESET","retryable":true}',
+      cause: rejection,
+    });
+    expect(ctx.setStatus).toHaveBeenLastCalledWith({
+      accountId: "default",
+      running: false,
+    });
+  });
 });

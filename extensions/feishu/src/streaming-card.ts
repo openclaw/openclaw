@@ -452,7 +452,9 @@ export class FeishuStreamingSession {
       if (!pending || this.closed) {
         return;
       }
-      void this.update(pending);
+      void this.update(pending).catch((error: unknown) =>
+        this.log?.(`Scheduled flush update failed: ${String(error)}`),
+      );
     }, delayMs);
   }
 

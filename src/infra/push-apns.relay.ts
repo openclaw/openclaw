@@ -1,6 +1,5 @@
 // Sends APNs notifications through the configured relay endpoint.
 import { URL } from "node:url";
-import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -13,6 +12,7 @@ import {
   type DeviceIdentity,
 } from "./device-identity.js";
 import { formatErrorMessage } from "./errors.js";
+import { readResponseWithLimit } from "./http-body.js";
 import { normalizeHostname } from "./net/hostname.js";
 
 type ApnsRelayPushType = "alert" | "background";

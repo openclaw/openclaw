@@ -6,8 +6,13 @@ import { formatBillingErrorMessage } from "../../agents/embedded-agent-helpers.j
 import { FailoverError } from "../../agents/failover-error.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { MissingProviderAuthError } from "../../agents/model-auth.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import {
+  HEARTBEAT_RUN_SCOPE,
+  type ReplyOptionsWithHeartbeatRunScope,
+} from "../../infra/heartbeat-run-scope.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
@@ -34,7 +39,7 @@ import {
   PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE,
 } from "./provider-request-error-classifier.js";
 import type { FollowupRun } from "./queue.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
+import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 const state = vi.hoisted(() => ({
@@ -355,6 +360,12 @@ type EmbeddedAgentParams = {
   }) => void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
+  onReasoningStream?: (payload: {
+    text?: string;
+    mediaUrls?: string[];
+    isReasoningSnapshot?: boolean;
+    requiresReasoningProgressOptIn?: boolean;
+  }) => Promise<void> | void;
   onItemEvent?: (payload: {
     itemId?: string;
     toolCallId?: string;
@@ -433,14 +444,17 @@ function createTestUserTurnRecorder(message: PersistedUserTurnMessage) {
 function createMockReplyOperation(): {
   replyOperation: ReplyOperation;
   failMock: ReturnType<typeof vi.fn>;
+  freezeAbortMock: ReturnType<typeof vi.fn>;
   retainFailureUntilCompleteMock: ReturnType<typeof vi.fn>;
   updateSessionIdMock: ReturnType<typeof vi.fn>;
 } {
   const failMock = vi.fn();
+  const freezeAbortMock = vi.fn();
   const retainFailureUntilCompleteMock = vi.fn();
   const updateSessionIdMock = vi.fn();
   return {
     failMock,
+    freezeAbortMock,
     retainFailureUntilCompleteMock,
     updateSessionIdMock,
     replyOperation: {
@@ -451,17 +465,19 @@ function createMockReplyOperation(): {
       terminalRecovery: false,
       phase: "running",
       result: null,
+      hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
       setPhase: vi.fn(),
       updateSessionId: updateSessionIdMock,
       attachBackend: vi.fn(),
       detachBackend: vi.fn(),
+      freezeAbort: freezeAbortMock,
       retainFailureUntilComplete: retainFailureUntilCompleteMock,
       complete: vi.fn(),
       completeThen: vi.fn((afterClear: () => void) => afterClear()),
       completeWithAfterClearBarrier: vi.fn(),
       fail: failMock,
-      abortByUser: vi.fn(),
-      abortForRestart: vi.fn(),
+      abortByUser: vi.fn(() => true),
+      abortForRestart: vi.fn(() => true),
       markTerminalRecovery: vi.fn(),
     },
   };
@@ -541,7 +557,7 @@ function expectBlockReplyCall(
 
 function createMinimalRunAgentTurnParams(overrides?: {
   followupRun?: FollowupRun;
-  opts?: GetReplyOptions;
+  opts?: GetReplyOptions & ReplyOptionsWithHeartbeatRunScope;
   replyOperation?: ReplyOperation;
   sessionCtx?: TemplateContext;
   typingSignals?: TypingSignaler;
@@ -1327,6 +1343,220 @@ describe("runAgentTurnWithFallback", () => {
     expect(embeddedCall.abortSignal).toBe(replyOperation.abortSignal);
   });
 
+  it("freezes abort ownership only after model fallback settles", async () => {
+    const { replyOperation, freezeAbortMock } = createMockReplyOperation();
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      expect(freezeAbortMock).not.toHaveBeenCalled();
+      await params.run("anthropic", "claude").catch(() => undefined);
+      expect(freezeAbortMock).not.toHaveBeenCalled();
+      const result = await params.run("openai", "gpt-5.5");
+      expect(freezeAbortMock).not.toHaveBeenCalled();
+      return {
+        result,
+        provider: "openai",
+        model: "gpt-5.5",
+        attempts: [],
+      };
+    });
+    state.runEmbeddedAgentMock
+      .mockRejectedValueOnce(new Error("primary failed"))
+      .mockResolvedValueOnce({
+        payloads: [{ text: "ok" }],
+        meta: {},
+      });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      replyOperation,
+    });
+
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    expect(freezeAbortMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses a settled fallback result after an accepted user abort", async () => {
+    const { replyOperation, freezeAbortMock } = createMockReplyOperation();
+    const abortController = new AbortController();
+    let operationResult: ReplyOperation["result"] = null;
+    let releaseFallback: () => void = () => undefined;
+    let markCandidateSettled: () => void = () => undefined;
+    const candidateSettled = new Promise<void>((resolve) => {
+      markCandidateSettled = resolve;
+    });
+    const fallbackRelease = new Promise<void>((resolve) => {
+      releaseFallback = resolve;
+    });
+    let releaseToolTask: () => void = () => undefined;
+    const pendingToolTask = new Promise<void>((resolve) => {
+      releaseToolTask = resolve;
+    });
+    const pendingToolTasks = new Set([pendingToolTask]);
+    Object.defineProperty(replyOperation, "abortSignal", {
+      configurable: true,
+      get: () => abortController.signal,
+    });
+    Object.defineProperty(replyOperation, "result", {
+      configurable: true,
+      get: () => operationResult,
+    });
+    replyOperation.abortByUser = vi.fn(() => {
+      operationResult = { kind: "aborted", code: "aborted_by_user" };
+      abortController.abort("user_abort");
+      return true;
+    });
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "late reply" }],
+      meta: {},
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      const result = await params.run("anthropic", "claude");
+      markCandidateSettled();
+      await fallbackRelease;
+      return {
+        result,
+        provider: "anthropic",
+        model: "claude",
+        attempts: [],
+      };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const pending = runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      replyOperation,
+      pendingToolTasks,
+    });
+    await candidateSettled;
+    expect(replyOperation.abortByUser()).toBe(true);
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    releaseFallback();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(settled).toBe(false);
+    expect(freezeAbortMock).not.toHaveBeenCalled();
+    releaseToolTask();
+
+    await expect(pending).resolves.toEqual({
+      kind: "final",
+      payload: { text: SILENT_REPLY_TOKEN },
+    });
+    expect(freezeAbortMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses a settled fallback result after an upstream abort", async () => {
+    const upstreamAbort = new AbortController();
+    const replyOperation = createReplyOperation({
+      sessionKey: "agent:main:upstream-settled-fallback",
+      sessionId: "upstream-settled-fallback",
+      resetTriggered: false,
+      upstreamAbortSignal: upstreamAbort.signal,
+    });
+    replyOperation.setPhase("running");
+    let releaseFallback: () => void = () => undefined;
+    let markCandidateSettled: () => void = () => undefined;
+    const candidateSettled = new Promise<void>((resolve) => {
+      markCandidateSettled = resolve;
+    });
+    const fallbackRelease = new Promise<void>((resolve) => {
+      releaseFallback = resolve;
+    });
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "late reply" }],
+      meta: {},
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      const result = await params.run("anthropic", "claude");
+      markCandidateSettled();
+      await fallbackRelease;
+      return {
+        result,
+        provider: "anthropic",
+        model: "claude",
+        attempts: [],
+      };
+    });
+
+    try {
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const pending = runAgentTurnWithFallback({
+        ...createMinimalRunAgentTurnParams(),
+        replyOperation,
+      });
+      await candidateSettled;
+      upstreamAbort.abort(new Error("caller cancelled"));
+      expect(replyOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+      expect(replyOperation.abortSignal.aborted).toBe(true);
+      releaseFallback();
+
+      await expect(pending).resolves.toEqual({
+        kind: "final",
+        payload: { text: SILENT_REPLY_TOKEN },
+      });
+    } finally {
+      replyOperation.complete();
+    }
+  });
+
+  it("preserves restart reply classification after an upstream abort settles fallback", async () => {
+    const upstreamAbort = new AbortController();
+    const replyOperation = createReplyOperation({
+      sessionKey: "agent:main:upstream-settled-restart",
+      sessionId: "upstream-settled-restart",
+      resetTriggered: false,
+      upstreamAbortSignal: upstreamAbort.signal,
+    });
+    replyOperation.setPhase("running");
+    let releaseFallback: () => void = () => undefined;
+    let markCandidateSettled: () => void = () => undefined;
+    const candidateSettled = new Promise<void>((resolve) => {
+      markCandidateSettled = resolve;
+    });
+    const fallbackRelease = new Promise<void>((resolve) => {
+      releaseFallback = resolve;
+    });
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "late reply" }],
+      meta: {},
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      const result = await params.run("anthropic", "claude");
+      markCandidateSettled();
+      await fallbackRelease;
+      return {
+        result,
+        provider: "anthropic",
+        model: "claude",
+        attempts: [],
+      };
+    });
+
+    try {
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const pending = runAgentTurnWithFallback({
+        ...createMinimalRunAgentTurnParams(),
+        replyOperation,
+      });
+      await candidateSettled;
+      upstreamAbort.abort(createAgentRunRestartAbortError());
+      releaseFallback();
+
+      await expect(pending).resolves.toEqual({
+        kind: "final",
+        payload: {
+          isError: true,
+          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+        },
+      });
+    } finally {
+      replyOperation.complete();
+    }
+  });
+
   it("passes the hydrated run account to embedded execution", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
@@ -1421,6 +1651,41 @@ describe("runAgentTurnWithFallback", () => {
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
       provider: "codex-cli",
       model: "gpt-5.4",
+    });
+  });
+
+  it("propagates commitment-only bootstrap scope to CLI runs", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "sonnet-4.6"),
+      provider: "claude-cli",
+      model: "sonnet-4.6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "sonnet-4.6";
+    const params = createMinimalRunAgentTurnParams({
+      followupRun,
+      opts: {
+        isHeartbeat: true,
+        bootstrapContextMode: "lightweight",
+        [HEARTBEAT_RUN_SCOPE]: "commitment-only",
+      },
+    });
+    params.isHeartbeat = true;
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback(params);
+
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      trigger: "heartbeat",
+      bootstrapContextMode: "lightweight",
+      bootstrapContextRunKind: "commitment-only",
     });
   });
 
@@ -3201,7 +3466,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(onPartialReply).not.toHaveBeenCalled();
   });
 
-  it("bridges CLI assistant agent events into onReasoningStream for live reasoning preview (opus-4-7 text_delta path)", async () => {
+  it("bridges CLI thinking agent events into onReasoningStream with the reasoning opt-in gate", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("claude-cli", "claude-opus-4-7"),
@@ -3215,13 +3480,18 @@ describe("runAgentTurnWithFallback", () => {
       );
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
-        stream: "assistant",
-        data: { text: "Thinking", delta: "Thinking" },
+        stream: "thinking",
+        data: { text: "Thinking", delta: "Thinking", isReasoningSnapshot: true },
       });
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
-        stream: "assistant",
-        data: { text: "Thinking about it", delta: " about it" },
+        stream: "thinking",
+        data: { text: "Thinking", delta: "", isReasoningSnapshot: true },
+      });
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { text: "Thinking about it", delta: " about it", isReasoningSnapshot: true },
       });
       return { payloads: [{ text: "Thinking about it" }], meta: {} };
     });
@@ -3257,11 +3527,21 @@ describe("runAgentTurnWithFallback", () => {
       resolvedVerboseLevel: "off",
     });
 
-    const reasoningTexts = onReasoningStream.mock.calls.map((call) => call[0].text);
-    expect(reasoningTexts).toEqual(["Thinking", "Thinking about it"]);
+    expect(onReasoningStream.mock.calls.map((call) => call[0])).toEqual([
+      {
+        text: "Thinking",
+        isReasoningSnapshot: true,
+        requiresReasoningProgressOptIn: true,
+      },
+      {
+        text: "Thinking about it",
+        isReasoningSnapshot: true,
+        requiresReasoningProgressOptIn: true,
+      },
+    ]);
   });
 
-  it("does not bridge CLI assistant events to onReasoningStream when silentExpected is set", async () => {
+  it("does not bridge CLI thinking events to onReasoningStream when silentExpected is set", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("claude-cli", "claude-opus-4-7"),
@@ -3275,12 +3555,12 @@ describe("runAgentTurnWithFallback", () => {
       );
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
-        stream: "assistant",
+        stream: "thinking",
         data: { text: "heartbeat scratch text", delta: "heartbeat scratch text" },
       });
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
-        stream: "assistant",
+        stream: "thinking",
         data: { text: "NO_REPLY do not preview reasoning", delta: " do not preview reasoning" },
       });
       return { payloads: [{ text: "final" }], meta: {} };
@@ -3431,6 +3711,38 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(onReasoningStream).not.toHaveBeenCalled();
+  });
+
+  it("preserves embedded reasoning stream opt-in markers", async () => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onReasoningStream?.({ text: "stream thought" });
+      await params.onReasoningStream?.({
+        text: "ambient thought",
+        requiresReasoningProgressOptIn: true,
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const onReasoningStream = vi.fn<NonNullable<GetReplyOptions["onReasoningStream"]>>(
+      async (_payload) => undefined,
+    );
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+
+    await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        opts: { onReasoningStream },
+      }),
+    );
+
+    expect(
+      onReasoningStream.mock.calls.map(([payload]) => ({
+        text: payload.text,
+        requiresReasoningProgressOptIn: payload.requiresReasoningProgressOptIn,
+      })),
+    ).toEqual([
+      { text: "stream thought", requiresReasoningProgressOptIn: undefined },
+      { text: "ambient thought", requiresReasoningProgressOptIn: true },
+    ]);
   });
 
   it("resolves CLI messageProvider from the live session surface when no origin channel is set", async () => {
@@ -4268,6 +4580,82 @@ describe("runAgentTurnWithFallback", () => {
       phase: "start",
       status: "running",
     });
+  });
+
+  it("hides internal lifecycle events while preserving visible tool progress", async () => {
+    const onItemEvent = vi.fn();
+    const onToolStart = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          name: "exec",
+          phase: "start",
+          args: { command: "pwd" },
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "item",
+        data: {
+          itemId: "tool:exec-1",
+          kind: "tool",
+          title: "exec pwd",
+          name: "exec",
+          phase: "start",
+          status: "running",
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          name: "wait",
+          phase: "start",
+          args: { runId: "ordinary_wait" },
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          name: "wait",
+          phase: "start",
+          args: { runId: "cm_1" },
+          hideFromChannelProgress: true,
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "item",
+        data: {
+          itemId: "tool:wait-1",
+          kind: "tool",
+          title: "wait",
+          name: "wait",
+          phase: "start",
+          status: "running",
+          hideFromChannelProgress: true,
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: { onItemEvent, onToolStart } satisfies GetReplyOptions,
+      }),
+    });
+
+    expect(result.kind).toBe("success");
+    expect(onToolStart).toHaveBeenCalledTimes(2);
+    expect(onToolStart).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "exec", phase: "start" }),
+    );
+    expect(onToolStart).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "wait", phase: "start" }),
+    );
+    expect(onItemEvent).toHaveBeenCalledTimes(1);
+    expect(onItemEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "exec", phase: "start" }),
+    );
   });
 
   it("forwards raw tool progress detail mode to tool-start reply options", async () => {
@@ -7025,7 +7413,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Model login expired on the gateway for openai. Re-auth with `openclaw models auth login --provider openai`, then try again.",
+        "⚠️ Model login expired on the gateway for openai. Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth with `openclaw models auth login --provider openai` in a terminal, then try again.",
       );
     }
   });
@@ -7034,6 +7422,7 @@ describe("runAgentTurnWithFallback", () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new OAuthRefreshFailureError({
         provider: "openai",
+        profileId: "openai:user@example.com",
         message: "invalid_grant",
       }),
     );
@@ -7044,8 +7433,123 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Model login expired on the gateway for openai. Re-auth with `openclaw models auth login --provider openai`, then try again.",
+        "⚠️ Model login expired on the gateway for openai. Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth with `openclaw models auth login --provider openai --profile-id 'openai:user@example.com'` in a terminal, then try again.",
       );
+    }
+  });
+
+  it("preserves OAuth profile guidance through failover wrappers", async () => {
+    const refreshError = new OAuthRefreshFailureError({
+      provider: "openai",
+      profileId: "openai:user@example.com",
+      message: "invalid_grant",
+    });
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError("OpenAI OAuth failed", {
+        reason: "auth",
+        provider: "openai",
+        model: "gpt-5.5",
+        profileId: "openai:user@example.com",
+        authProfileFailure: { allInCooldown: false },
+        status: 401,
+        cause: refreshError,
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("--profile-id 'openai:user@example.com'");
+    }
+  });
+
+  it("preserves OAuth profile guidance through fallback summaries", async () => {
+    const refreshError = new OAuthRefreshFailureError({
+      provider: "openai",
+      profileId: "openai:user@example.com",
+      message: "invalid_grant",
+    });
+    const failoverError = new FailoverError("OpenAI OAuth failed", {
+      reason: "auth",
+      provider: "openai",
+      model: "gpt-5.5",
+      profileId: "openai:user@example.com",
+      authProfileFailure: { allInCooldown: false },
+      status: 401,
+      cause: refreshError,
+    });
+    const summaryError = new Error("All models failed", { cause: failoverError });
+    summaryError.name = "FallbackSummaryError";
+    Object.assign(summaryError, {
+      attempts: [
+        {
+          provider: "openai",
+          model: "gpt-5.5",
+          error: "OpenAI OAuth failed",
+          reason: "auth",
+        },
+      ],
+      soonestCooldownExpiry: null,
+    });
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(summaryError);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("--profile-id 'openai:user@example.com'");
+    }
+  });
+
+  it("omits OAuth profile ids from group reauth guidance", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new OAuthRefreshFailureError({
+        provider: "openai",
+        profileId: "openai:user@example.com",
+        message: "invalid_grant",
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "whatsapp",
+          MessageSid: "msg",
+          ChatType: "group",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain(
+        "openclaw models auth login --provider openai` in a terminal",
+      );
+      expect(result.payload.text).not.toContain("user@example.com");
+    }
+  });
+
+  it("keeps non-OpenAI OAuth refresh failures on provider-specific terminal guidance", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new OAuthRefreshFailureError({
+        provider: "anthropic",
+        message: "invalid_grant",
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Model login expired on the gateway for anthropic. Re-auth with `openclaw models auth login --provider anthropic` in a terminal, then try again.",
+      );
+      expect(result.payload.text).not.toContain("/login codex");
     }
   });
 
@@ -7112,6 +7616,7 @@ describe("runAgentTurnWithFallback", () => {
       new FailoverError("Auth profile failover exhausted for provider openai", {
         reason: "auth",
         provider: "openai",
+        status: 401,
         authProfileFailure: { allInCooldown: true },
         cause: new Error("invalid_grant"),
       }),
@@ -7238,7 +7743,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Model login expired on the gateway. Re-auth with `openclaw models auth login`, then try again.",
+        "⚠️ Model login expired on the gateway. Re-auth with `openclaw models auth login` in a terminal, then try again.",
       );
     }
   });
