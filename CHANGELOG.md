@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Conversational onboarding:** add a real agent-loop Crestodian setup flow across the CLI, Gateway, web install, and macOS app, with typed operations, exact approval binding, masked credential prompts, isolated session transcripts, and safe handoff to the normal agent.
 - **Generated session titles:** name new Control UI sessions from their first message, and add default/per-agent `utilityModel` routing for lower-cost session, topic, and thread title generation. Thanks @Juliangsm and @zhangguiping-xydt.
 - **ClawRouter routing and quotas:** add the bundled ClawRouter provider plugin with credential-scoped dynamic model discovery, OpenAI-compatible and native Anthropic/Gemini transports, and managed budget reporting across OpenClaw usage surfaces. (#99658)
 - **Model and provider coverage:** add GPT-5.6 support, use Nemotron Super's 1M context window, and preserve explicit OpenRouter authentication headers. (#98333, #98726, #98187) Thanks @steipete-oai, @eleqtrizit, @sunlit-deng, and @laurencebrown.

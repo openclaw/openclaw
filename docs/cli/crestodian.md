@@ -91,6 +91,11 @@ Persistent, require conversational approval (or `--yes` for a direct command): w
 
 Applied writes are recorded in `~/.openclaw/audit/crestodian.jsonl`. Discovery is not audited; only applied operations and writes are.
 
+Channel setup can run as a hosted conversation when the host supports masked
+input. The local Crestodian TUI does not accept sensitive wizard answers;
+instead it directs you to `openclaw channels add --channel <channel>`, whose
+interactive prompts mask credentials.
+
 ## Setup bootstrap
 
 `setup` is the chat-first onboarding bootstrap. It writes only through typed config operations and asks for approval first.
