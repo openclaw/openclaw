@@ -3639,8 +3639,13 @@ async function buildMessagesPayload(
   return { events, input, extracted, responseBody, streamEvents, model: normalizedModel };
 }
 
-export async function startQaMockOpenAiServer(params?: { host?: string; port?: number }) {
+export async function startQaMockOpenAiServer(params?: {
+  host?: string;
+  port?: number;
+  finalOnlyMarkerPauseMs?: number;
+}) {
   const host = params?.host ?? "127.0.0.1";
+  const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
   const scenarioState: MockScenarioState = {
     anthropicThinkingErrorPhase: 0,
     subagentFanoutPhase: 0,
@@ -3791,7 +3796,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           return;
         }
         if (QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)) {
-          await writeSseWithPreviewPause(res, events, 1_500);
+          await writeSseWithPreviewPause(res, events, finalOnlyMarkerPauseMs);
         } else {
           writeSse(res, events);
         }

@@ -966,6 +966,7 @@ async function executeToolCallsSequential(
         result: preparation.result,
         isError: preparation.isError,
         executionStarted: false,
+        ...(preparation.errorKind ? { errorKind: preparation.errorKind } : {}),
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       };
     } else {
@@ -1036,6 +1037,7 @@ async function executeToolCallsParallel(
         result: preparation.result,
         isError: preparation.isError,
         executionStarted: false,
+        ...(preparation.errorKind ? { errorKind: preparation.errorKind } : {}),
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       } satisfies FinalizedToolCallOutcome;
       await emitToolExecutionEnd(finalized, emit);
@@ -1091,6 +1093,7 @@ type ImmediateToolCallOutcome = {
   kind: "immediate";
   result: AgentToolResult<unknown>;
   isError: boolean;
+  errorKind?: "argument-validation";
 };
 
 type ExecutedToolCallOutcome = {
@@ -1103,6 +1106,7 @@ type FinalizedToolCallOutcome = {
   result: AgentToolResult<unknown>;
   isError: boolean;
   executionStarted: boolean;
+  errorKind?: "argument-validation";
   hideFromChannelProgress?: boolean;
 };
 
@@ -1211,9 +1215,30 @@ async function prepareToolCall(
     };
   }
 
+  let preparedToolCall: AgentToolCall;
   try {
-    const preparedToolCall = prepareToolCallArguments(tool, toolCall);
-    const validatedArgs = validateToolArguments(tool, preparedToolCall);
+    preparedToolCall = prepareToolCallArguments(tool, toolCall);
+  } catch (error) {
+    return {
+      kind: "immediate",
+      result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
+      isError: true,
+    };
+  }
+
+  let validatedArgs: unknown;
+  try {
+    validatedArgs = validateToolArguments(tool, preparedToolCall);
+  } catch (error) {
+    return {
+      kind: "immediate",
+      result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
+      isError: true,
+      errorKind: "argument-validation",
+    };
+  }
+
+  try {
     if (config.beforeToolCall) {
       const beforeResult = await config.beforeToolCall(
         {
@@ -1374,6 +1399,7 @@ async function emitToolExecutionEnd(
     result: finalized.result,
     isError: finalized.isError,
     executionStarted: finalized.executionStarted,
+    ...(finalized.errorKind ? { errorKind: finalized.errorKind } : {}),
     ...(finalized.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
   });
 }

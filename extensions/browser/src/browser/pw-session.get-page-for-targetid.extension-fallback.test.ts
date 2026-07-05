@@ -147,10 +147,13 @@ describe("pw-session getPageForTargetId", () => {
     }).pages;
 
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      Response.json([
-        { id: "TARGET_A", url: "https://alpha.example" },
-        { id: "TARGET_B", url: "https://beta.example" },
-      ]),
+      new Response(
+        JSON.stringify([
+          { id: "TARGET_A", url: "https://alpha.example" },
+          { id: "TARGET_B", url: "https://beta.example" },
+        ]),
+        { headers: { "content-type": "application/json" } },
+      ),
     );
 
     try {
@@ -180,10 +183,13 @@ describe("pw-session getPageForTargetId", () => {
     const [, pageB] = pages;
 
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      Response.json([
-        { id: "TARGET_A", url: "https://alpha.example" },
-        { id: "TARGET_B", url: "https://beta.example" },
-      ]),
+      new Response(
+        JSON.stringify([
+          { id: "TARGET_A", url: "https://alpha.example" },
+          { id: "TARGET_B", url: "https://beta.example" },
+        ]),
+        { headers: { "content-type": "application/json" } },
+      ),
     );
 
     try {

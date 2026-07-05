@@ -46,6 +46,7 @@ struct SettingsProTab: View {
     @State var gatewayPassword = ""
     @State var manualGatewayPortText = ""
     @State var setupStatusText: String?
+    @State var setupAttemptID: UUID?
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
     @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
     @State var defaultShareInstruction = ""
@@ -143,6 +144,9 @@ struct SettingsProTab: View {
 
     private func settingsLifecycle(_ content: some View) -> some View {
         content
+            .onDisappear {
+                self.invalidateGatewaySetupAttempt()
+            }
             .task {
                 self.previousLocationModeRaw = self.locationModeRaw
                 self.syncSettingsState()
@@ -192,6 +196,7 @@ struct SettingsProTab: View {
                 self.syncAfterOnboardingReset()
             }
             .onChange(of: self.navigationPath) { _, _ in
+                self.invalidateGatewaySetupAttempt()
                 self.notifyRouteChange()
             }
     }

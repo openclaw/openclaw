@@ -18,6 +18,7 @@ import {
   mockedSleepWithAbort,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import {
   buildAttemptReplayMetadata,
@@ -53,15 +54,7 @@ function resolveIncompleteTurnPayloadText(
 describe("runEmbeddedAgent incomplete-turn safety", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
-    resetRunOverflowCompactionHarnessMocks();
-    mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({ assistantTexts: ["warmup"] }),
-    );
-    await runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      runId: "run-incomplete-turn-warmup",
-    });
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
   });
 
   beforeEach(() => {

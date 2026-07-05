@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
+import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
@@ -29,6 +30,8 @@ export type ChatAbortControllerEntry = {
   providerId?: string;
   authProviderId?: string;
   abortStopReason?: string;
+  /** Latest argument-free validation diagnostic for operator-initiated aborts. */
+  toolErrorSummary?: string;
   /**
    * False for backend/internal agent runs that may share a session key but must
    * not be projected into operator chat surfaces.
@@ -424,9 +427,11 @@ function broadcastChatAborted(
     agentId?: string;
     stopReason?: string;
     partialText?: string;
+    errorMessage?: string;
   },
 ) {
   const { runId, sessionKey, stopReason, partialText } = params;
+  const errorMessage = readToolValidationErrorSummary(params.errorMessage);
   const defaultGlobalAgentId =
     sessionKey === "global" ? normalizeActiveAgentId(resolveDefaultGlobalAgentId(ops)) : undefined;
   const payloadAgentId =
@@ -440,6 +445,7 @@ function broadcastChatAborted(
     seq: (ops.agentRunSeq.get(runId) ?? 0) + 1,
     state: "aborted" as const,
     stopReason,
+    ...(errorMessage ? { errorMessage } : {}),
     message: partialText
       ? {
           role: "assistant",
@@ -526,6 +532,7 @@ export function abortChatRunById(
       agentId: active.agentId,
       stopReason,
       partialText,
+      errorMessage: active.toolErrorSummary,
     });
   }
   emitAgentEvent({
@@ -539,6 +546,7 @@ export function abortChatRunById(
       status: "cancelled",
       aborted: true,
       stopReason,
+      ...(active.toolErrorSummary ? { toolErrorSummary: active.toolErrorSummary } : {}),
       startedAt: active.startedAtMs,
       endedAt: Date.now(),
     },

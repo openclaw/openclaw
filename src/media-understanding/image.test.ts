@@ -1,5 +1,6 @@
 // Image runtime tests cover model-backed image routing, auth/profile handling,
 // provider payload transforms, and MiniMax/Copilot special paths.
+import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -138,11 +139,15 @@ const { describeImageWithModel } = await import("./image.js");
 describe("describeImageWithModel", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
   beforeEach(() => {
+    // Provider endpoint policy comes from manifests. Pin source manifests so a
+    // prior local build cannot make this source-checkout test read partial dist output.
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(process.cwd(), "extensions"));
     vi.stubGlobal("fetch", fetchMock);
     vi.clearAllMocks();
     fetchMock.mockResolvedValue({

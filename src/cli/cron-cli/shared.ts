@@ -227,9 +227,9 @@ export function parseDurationMs(input: string): number | null {
             ? 3_600_000
             : 86_400_000;
   const result = Math.floor(n * factor);
-  if (!Number.isFinite(result)) {
+  if (!Number.isFinite(result) || result <= 0) {
     // A finite mantissa can still overflow to Infinity for a large unit (e.g. a long
-    // pure-digit string with "d"); reject it instead of returning Infinity ms.
+    // pure-digit string with "d"); tiny positive values can also floor to 0ms.
     return null;
   }
   return result;

@@ -50,6 +50,8 @@ export type GatewaySessionRow = {
   subagentControlScope?: SessionEntry["subagentControlScope"];
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
+  /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
+  category?: string;
   displayName?: string;
   derivedTitle?: string;
   lastMessagePreview?: string;

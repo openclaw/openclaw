@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import {
   testing as embeddedRunTesting,
@@ -257,7 +257,7 @@ function firstMockCallArg(mock: MockCallSource, label: string): unknown {
   return call[0];
 }
 
-beforeEach(() => {
+function setupAgentRunnerMocks(): void {
   vi.useRealTimers();
   registerCliBackendsForTest();
   clearRuntimeConfigSnapshot();
@@ -293,7 +293,9 @@ beforeEach(() => {
       model,
     }),
   );
-});
+}
+
+beforeEach(setupAgentRunnerMocks);
 
 afterEach(() => {
   cliBackendsTesting.resetDepsForTest();
@@ -434,6 +436,17 @@ describe("runReplyAgent auto-compaction token update", () => {
     const usageEvent = diagnostics.find((event) => event.type === "model.usage");
     return { sessionKey, stored, usageEvent };
   }
+
+  beforeAll(async () => {
+    setupAgentRunnerMocks();
+    await runBaseReplyWithAgentMeta({
+      tmpPrefix: "openclaw-usage-warm-",
+      agentMeta: {
+        usage: { input: 10, output: 5, total: 15 },
+        lastCallUsage: { input: 8, output: 2, total: 10 },
+      },
+    });
+  });
 
   it("updates totalTokens from lastCallUsage even without compaction", async () => {
     const { sessionKey, stored } = await runBaseReplyWithAgentMeta({

@@ -21,6 +21,7 @@ import {
   mockedSessionLikelyHasOversizedToolResults,
   mockedTruncateOversizedToolResultsInSession,
   resetRunOverflowCompactionHarnessMocks,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -66,6 +67,7 @@ function expectRetryContinuesFromTranscript() {
 describe("overflow compaction in run loop", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
   });
 
   beforeEach(() => {

@@ -1,6 +1,5 @@
 // Browser tests cover tabs.attach only plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withBrowserFetchPreconnect } from "../../../test-fetch.js";
 import "../../../test-support.js";
 import "../server-context.chrome-test-harness.js";
 import "../../test-support/browser-security.mock.js";
@@ -40,9 +39,8 @@ describe("browser tab routes attachOnly loopback profiles", () => {
 
     const fetchMock = vi.fn(async (url: unknown) => {
       expect(String(url)).toBe("http://127.0.0.1:9222/json/list");
-      return {
-        ok: true,
-        json: async () => [
+      return new Response(
+        JSON.stringify([
           {
             id: "PAGE-1",
             title: "WordPress",
@@ -50,10 +48,11 @@ describe("browser tab routes attachOnly loopback profiles", () => {
             webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/page/PAGE-1",
             type: "page",
           },
-        ],
-      } as unknown as Response;
+        ]),
+        { headers: { "content-type": "application/json" } },
+      );
     });
-    vi.stubGlobal("fetch", withBrowserFetchPreconnect(fetchMock));
+    vi.stubGlobal("fetch", fetchMock);
 
     const ctx = createBrowserRouteContext({ getState: () => state });
     const { app, getHandlers } = createBrowserRouteApp();

@@ -848,7 +848,12 @@ describe("grouped chat rendering", () => {
     );
     const meta = cached.querySelector<HTMLDetailsElement>("details.msg-meta");
     expect(meta?.open).toBe(false);
-    expect(meta?.querySelector(".msg-meta__summary span:last-child")?.textContent).toBe("Context");
+    const summary = meta?.querySelector<HTMLElement>(".msg-meta__summary");
+    const time = summary?.querySelector<HTMLTimeElement>(".chat-group-timestamp");
+    expect(time).not.toBeNull();
+    expect(time?.title).toBe("");
+    expect(summary?.textContent).not.toContain("Context");
+    expect(summary?.getAttribute("aria-label")).toContain("Message context for");
     expect(cached.querySelector(".msg-meta__ctx")?.textContent).toBe("44% ctx");
     expect(
       Array.from(cached.querySelectorAll(".msg-meta__cache")).map((node) => node.textContent),
@@ -864,6 +869,53 @@ describe("grouped chat rendering", () => {
       10_000,
     );
     expect(outputHeavy.querySelector(".msg-meta__ctx")?.textContent).toBe("10% ctx");
+  });
+
+  it("previews message context from the timestamp and pins it on click", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: "Done",
+        usage: { input: 12_000, output: 300 },
+        model: "openai/gpt-5.5",
+        timestamp: 1000,
+      },
+      { contextWindow: 100_000 },
+    );
+
+    const details = container.querySelector<HTMLDetailsElement>("details.msg-meta")!;
+    const summary = details.querySelector<HTMLElement>("summary")!;
+    const pointerEnter = new Event("pointerenter");
+    Object.defineProperty(pointerEnter, "pointerType", { value: "mouse" });
+    details.dispatchEvent(pointerEnter);
+    expect(details.open).toBe(true);
+
+    details.dispatchEvent(new Event("pointerleave"));
+    expect(details.open).toBe(false);
+
+    details.dispatchEvent(pointerEnter);
+    summary.click();
+    details.dispatchEvent(new Event("pointerleave"));
+    expect(details.open).toBe(true);
+
+    summary.click();
+    expect(details.open).toBe(false);
+  });
+
+  it("keeps timestamps without context metadata non-interactive", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: "Done",
+      timestamp: 1000,
+    });
+
+    const time = container.querySelector<HTMLTimeElement>(".chat-group-timestamp");
+    expect(time).not.toBeNull();
+    expect(time?.closest("details.msg-meta")).toBeNull();
+    expect(time?.title).not.toBe("");
   });
 
   it("uses the largest single assistant call for grouped context usage", () => {
