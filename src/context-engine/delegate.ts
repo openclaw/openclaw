@@ -1,5 +1,5 @@
 // Context-engine delegates bridge custom engines to built-in compaction and memory prompt paths.
-import { normalizeStructuredPromptSection } from "../agents/prompt-cache-stability.js";
+import { normalizeStructuredPromptSection } from "@openclaw/ai/internal/shared";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";

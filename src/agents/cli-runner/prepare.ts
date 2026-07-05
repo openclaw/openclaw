@@ -1,3 +1,4 @@
+import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 /**
  * Prepares CLI backend run context: backend config, prompts, bootstrap context,
  * MCP, auth epoch, and reusable session metadata.
@@ -77,7 +78,6 @@ import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-promp
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
-import { ensureSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";

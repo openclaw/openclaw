@@ -8161,6 +8161,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Example
   - H2: Related
 
+## reference/openclaw-ai.md
+
+- Route: /reference/openclaw-ai
+- Headings:
+  - H2: Quick start
+  - H2: Design contract
+  - H2: Subpath exports
+
 ## reference/prompt-caching.md
 
 - Route: /reference/prompt-caching
