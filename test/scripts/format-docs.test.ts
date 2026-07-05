@@ -146,6 +146,46 @@ describe("format-docs", () => {
     expect(oxfmtFileArgs[1]?.every((filePath) => filePath.startsWith(root))).toBe(false);
   });
 
+  it("normalizes CRLF to LF before comparing in check mode", () => {
+    const root = createTempDir("openclaw-format-docs-crlf-");
+    fs.mkdirSync(path.join(root, "docs"), { recursive: true });
+    
+    fs.writeFileSync(path.join(root, "docs", "crlf.md"), "# Heading\r\n\r\nText\r\n", "utf8");
+
+    const spawnSync = (command: string, args: string[]) => {
+      if (command === "git") {
+        return {
+          status: 0,
+          stderr: "",
+          stdout: "docs/crlf.md\n",
+        };
+      }
+      
+      const filePaths = args.filter((arg) => arg.endsWith(".md"));
+      for (const filePath of filePaths) {
+         if (fs.existsSync(filePath)) {
+           fs.writeFileSync(filePath, "# Heading\n\nText\n", "utf8");
+         }
+      }
+      
+      return { status: 0, stderr: "", stdout: "" };
+    };
+
+    const result = formatDocs(
+      {
+        check: true,
+        repoRoot: root,
+        root,
+      },
+      {
+        existsSync: fs.existsSync,
+        spawnSync,
+      },
+    );
+
+    expect(result).toEqual({ changed: [], fileCount: 1 });
+  });
+
   it("keeps single oversized docs in their own command chunk", () => {
     expect(chunkFilesForCommand(["docs/very-long-name.md"], ["--write"], 1)).toEqual([
       ["docs/very-long-name.md"],
