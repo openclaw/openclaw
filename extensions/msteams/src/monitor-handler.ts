@@ -279,16 +279,14 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         });
 
         // Build the session key for this user's DM conversations.
-        // Session key shape: agent:<agentId>:msteams:direct:<userId>
-        // We use accountId as agentId since each Teams account has its own session store.
-        const accountId = DEFAULT_ACCOUNT_ID; // Use the default account ID for Teams
-        const baseSessionKey = `agent:${accountId}:msteams:direct:${userId}`;
+        // Session key shape follows the routing pattern: msteams:direct:<userId>
+        const baseSessionKey = `msteams:direct:${userId}`;
 
         // Mark all sessions for this user as stale by setting updatedAt to 0.
         // This preserves the transcript records but signals that new sessions
         // should be created on the next message.
         try {
-          const storePath = resolveStorePath(deps.cfg.session?.store, { agentId: accountId });
+          const storePath = resolveStorePath(deps.cfg.session?.store, { agentId: "default" });
           let resetCount = 0;
 
           // Iterate through all session entries and mark those matching this user as stale.
@@ -389,11 +387,11 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
       });
 
       // Build the session key for this user's DM conversations.
-      const accountId = DEFAULT_ACCOUNT_ID;
-      const baseSessionKey = `agent:${accountId}:msteams:direct:${userId}`;
+      // Session key shape follows the routing pattern: msteams:direct:<userId>
+      const baseSessionKey = `msteams:direct:${userId}`;
 
       try {
-        const storePath = resolveStorePath(deps.cfg.session?.store, { agentId: accountId });
+        const storePath = resolveStorePath(deps.cfg.session?.store, { agentId: "default" });
         let resetCount = 0;
 
         const sessionKeyPrefix = `${baseSessionKey}:`;
