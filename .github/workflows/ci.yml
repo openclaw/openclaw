@@ -116,6 +116,7 @@ jobs:
       run_checks_node_core_dist: ${{ steps.manifest.outputs.run_checks_node_core_dist }}
       run_check: ${{ steps.manifest.outputs.run_check }}
       run_check_additional: ${{ steps.manifest.outputs.run_check_additional }}
+      run_coverage: ${{ steps.manifest.outputs.run_coverage }}
       run_check_docs: ${{ steps.manifest.outputs.run_check_docs }}
       run_format_check: ${{ steps.manifest.outputs.run_format_check }}
       compatibility_target: ${{ steps.manifest.outputs.compatibility_target }}
@@ -690,6 +691,7 @@ jobs:
             run_checks_node_core_dist: runNodeCoreDist,
             run_check: runNodeFull,
             run_check_additional: runNodeFull,
+            run_coverage: runNodeFull && eventName !== "pull_request",
             run_check_docs: docsChanged && eventName !== "push",
             run_format_check: runFormatCheck,
             run_control_ui_i18n: runControlUiI18n,
@@ -1921,6 +1923,35 @@ jobs:
             runner="${harness_root}/${runner}"
           fi
           node "$runner"
+
+  # Run the existing coverage-threshold script on trusted default validation.
+  coverage-threshold:
+    permissions:
+      contents: read
+    needs: [preflight]
+    if: needs.preflight.outputs.run_coverage == 'true'
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 20
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Run coverage threshold gate
+        run: pnpm test:coverage
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: coverage-threshold-report
+          path: |
+            coverage/lcov.info
+            coverage/coverage-final.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   # Types, lint, and format check shards.
   check-shard:
@@ -3264,6 +3295,7 @@ jobs:
       - native-i18n
       - checks-ui
       - control-ui-i18n
+      - coverage-threshold
       - checks-fast-core
       - qa-smoke-ci-profile
       - checks-fast-plugin-contracts-shard
@@ -3296,6 +3328,7 @@ jobs:
             native-i18n=${{ needs.native-i18n.result }}
             checks-ui=${{ needs.checks-ui.result }}
             control-ui-i18n=${{ needs.control-ui-i18n.result }}
+            coverage-threshold=${{ needs.coverage-threshold.result }}
             checks-fast-core=${{ needs.checks-fast-core.result }}
             qa-smoke-ci-profile=${{ needs.qa-smoke-ci-profile.result }}
             checks-fast-plugin-contracts-shard=${{ needs.checks-fast-plugin-contracts-shard.result }}

@@ -1693,6 +1693,33 @@ describe("ci workflow guards", () => {
     }
   });
 
+  it("keeps coverage thresholds on trusted default validation", () => {
+    const workflow = readCiWorkflow();
+    const source = readFileSync(".github/workflows/ci.yml", "utf8");
+    const coverageJob = workflow.jobs["coverage-threshold"];
+
+    expect(workflow.jobs.preflight.outputs.run_coverage).toBe(
+      "${{ steps.manifest.outputs.run_coverage }}",
+    );
+    expect(coverageJob.needs).toEqual(["preflight"]);
+    expect(coverageJob.if).toBe("needs.preflight.outputs.run_coverage == 'true'");
+    expect(
+      coverageJob.steps.some((step: { run?: string }) => step.run === "pnpm test:coverage"),
+    ).toBe(true);
+    expect(source).toContain('run_coverage: runNodeFull && eventName !== "pull_request"');
+
+    const uploadStep = coverageJob.steps.find(
+      (step: { name?: string }) => step.name === "Upload coverage report",
+    );
+    expect(uploadStep.uses).toBe(UPLOAD_ARTIFACT_V7);
+    expect(uploadStep.with).toMatchObject({
+      name: "coverage-threshold-report",
+      "if-no-files-found": "ignore",
+      "retention-days": 7,
+    });
+    expect(uploadStep.with.path).toContain("coverage/lcov.info");
+  });
+
   it("runs real behavior proof from the trusted workflow revision", () => {
     const workflow = readRealBehaviorProofWorkflow();
     const source = readFileSync(".github/workflows/real-behavior-proof.yml", "utf8");
@@ -4026,6 +4053,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "native-i18n",
       "checks-ui",
       "control-ui-i18n",
+      "coverage-threshold",
       "checks-fast-core",
       "qa-smoke-ci-profile",
       "checks-fast-plugin-contracts-shard",
