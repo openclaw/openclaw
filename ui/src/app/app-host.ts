@@ -615,6 +615,8 @@ class OpenClawShell extends LitElement {
         ? pluginTabKey(pluginTabRefFromSearch(this.routeState.location?.search ?? ""))
         : "";
     const navDrawerOpen = this.navDrawerOpen && !this.onboarding;
+    // Drawer navigation always opens expanded; the desktop collapse preference
+    // stays persisted for when the viewport returns to the desktop layout.
     const navCollapsed = this.navCollapsed && !navDrawerOpen;
     return html`
       <openclaw-command-palette

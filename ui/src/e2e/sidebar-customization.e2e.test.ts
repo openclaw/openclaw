@@ -127,6 +127,23 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         .poll(() => page.getByRole("button", { name: "Expand sidebar" }).isVisible())
         .toBe(true);
       await captureUiProof(page, "04-persisted-collapsed.png");
+
+      await page.setViewportSize({ height: 900, width: 900 });
+      const drawerButton = page.locator(".topbar-nav-toggle");
+      await expect.poll(() => drawerButton.isVisible()).toBe(true);
+      await drawerButton.click();
+      await expect
+        .poll(() => page.locator(".shell").getAttribute("class"))
+        .toContain("shell--nav-drawer-open");
+      await expect
+        .poll(() =>
+          sidebar.evaluate(
+            (element) => (element as HTMLElement & { collapsed: boolean }).collapsed,
+          ),
+        )
+        .toBe(false);
+      await expect.poll(() => moreButton.isVisible()).toBe(true);
+      await captureUiProof(page, "05-expanded-tablet-drawer.png");
     } finally {
       await context.close();
     }
