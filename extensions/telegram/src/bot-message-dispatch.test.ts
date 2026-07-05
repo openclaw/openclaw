@@ -4140,13 +4140,16 @@ describe("dispatchTelegramMessage draft streaming", () => {
   it("renders CLI thinking token progress in the Telegram progress draft", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
-      await replyOptions?.onReplyStart?.();
-      await replyOptions?.onAssistantMessageStart?.();
-      await replyOptions?.onReasoningProgress?.({ progressTokens: 50 });
-      await replyOptions?.onReasoningProgress?.({ progressTokens: 200 });
-      return { queuedFinal: false };
-    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onReplyStart?.();
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onReasoningProgress?.({ progressTokens: 50 });
+        await replyOptions?.onReasoningProgress?.({ progressTokens: 200 });
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
 
     await dispatchWithContext({
       context: createContext(),
@@ -4161,6 +4164,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
         "<b>Shelling</b>\n<b>🧠 Thinking… (~200 tokens)</b>",
       ),
     );
+    expectWindowCollapsedTo(draftStream, "🧠 1 thought · ⏱️ 1s");
+    expectDeliveredReply(0, { text: "Done" });
   });
 
   it("renders model markdown in streamed reasoning and commentary lanes", async () => {

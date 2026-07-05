@@ -1163,6 +1163,16 @@ export const dispatchTelegramMessage = async ({
       snapshot: payload.isReasoningSnapshot === true,
     });
   };
+  const pushStreamThinkingTokenProgress = async (progressTokens: number) => {
+    const rendered = await pushStreamToolProgress(
+      buildTelegramThinkingProgressLine(progressTokens),
+      { startImmediately: true },
+    );
+    if (rendered) {
+      progressSummary.noteReasoningActivity();
+    }
+    return rendered;
+  };
   const markProgressFinalStarted = () => {
     finalAnswerDeliveryStarted = true;
     progressDraft.markFinalReplyStarted();
@@ -2647,10 +2657,7 @@ export const dispatchTelegramMessage = async ({
                   onReasoningProgress: answerLane.stream
                     ? (payload) =>
                         enqueueDraftLaneEvent(async () => {
-                          await pushStreamToolProgress(
-                            buildTelegramThinkingProgressLine(payload.progressTokens),
-                            { startImmediately: true },
-                          );
+                          await pushStreamThinkingTokenProgress(payload.progressTokens);
                         })
                     : undefined,
                   onAssistantMessageStart: answerLane.stream

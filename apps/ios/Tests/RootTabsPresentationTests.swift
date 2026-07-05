@@ -79,6 +79,7 @@ struct RootTabsPresentationTests {
             .dreaming,
             .usage,
             .cron,
+            .terminal,
         ])
         #expect(groups[2].destinations == [.settings])
         #expect(groups[3].destinations == [.docs])
@@ -95,6 +96,7 @@ struct RootTabsPresentationTests {
             "dreaming",
             "usage",
             "cron",
+            "terminal",
             "docs",
             "settings",
             "gateway",

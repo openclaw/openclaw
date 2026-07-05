@@ -320,6 +320,18 @@
   box-shadow: var(--focus-ring);
 }
 
+/* Without explicit sizing/stroke the Lucide-style icon renders as a filled
+   blob at the browser's default svg size (e.g. the terminal toggle glyph). */
+.topbar-icon-btn svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .topbar-search__label {
   flex: 1;
   text-align: left;
@@ -1598,4 +1610,18 @@
 
 .chat-controls-dropdown {
   display: none;
+}
+
+/* Terminal-only document (`?view=terminal`, mobile WebViews): centered notice
+   when the gateway refuses or lacks the terminal surface. */
+.terminal-view-unavailable {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+  background: var(--bg);
 }
