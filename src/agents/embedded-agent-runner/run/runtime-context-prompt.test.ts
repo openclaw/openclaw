@@ -7,6 +7,24 @@ import {
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
 
+function withModelPromptBuildContext(params: {
+  promptBeforeHooks: string;
+  transcriptPrompt: string;
+  promptBeforeAnnotation?: string;
+  prependContext?: string;
+  appendContext?: string;
+}) {
+  return {
+    modelPromptBuildContext: {
+      promptBeforeHooks: params.promptBeforeHooks,
+      transcriptPromptBeforeTransforms: params.transcriptPrompt,
+      promptBeforeAnnotation: params.promptBeforeAnnotation ?? params.promptBeforeHooks,
+      prependContext: params.prependContext ?? "",
+      appendContext: params.appendContext ?? "",
+    },
+  };
+}
+
 describe("runtime context prompt submission", () => {
   it("keeps unchanged prompts as a normal user prompt", () => {
     expect(
@@ -113,6 +131,11 @@ describe("runtime context prompt submission", () => {
         effectivePrompt: queuedBody,
         transcriptPrompt: userText,
         modelPrompt: [prependContext, "", queuedBody].join("\n"),
+        ...withModelPromptBuildContext({
+          promptBeforeHooks: queuedBody,
+          transcriptPrompt: userText,
+          prependContext,
+        }),
       }),
     ).toEqual({
       prompt: userText,
@@ -132,6 +155,11 @@ describe("runtime context prompt submission", () => {
         effectivePrompt: queuedBody,
         transcriptPrompt: userText,
         modelPrompt: [queuedBody, "", appendContext].join("\n"),
+        ...withModelPromptBuildContext({
+          promptBeforeHooks: queuedBody,
+          transcriptPrompt: userText,
+          appendContext,
+        }),
       }),
     ).toEqual({
       prompt: userText,
@@ -153,6 +181,12 @@ describe("runtime context prompt submission", () => {
         effectivePrompt,
         transcriptPrompt: userText,
         modelPrompt,
+        ...withModelPromptBuildContext({
+          promptBeforeHooks: effectivePrompt,
+          transcriptPrompt: userText,
+          prependContext: hookContext,
+          appendContext: hookContext,
+        }),
       }),
     ).toEqual({
       prompt: userText,
@@ -171,6 +205,11 @@ describe("runtime context prompt submission", () => {
         effectivePrompt: [systemEvent, userText].join("\n\n"),
         transcriptPrompt: userText,
         modelPrompt: [systemEvent, userText, appendContext].join("\n\n"),
+        ...withModelPromptBuildContext({
+          promptBeforeHooks: [systemEvent, userText].join("\n\n"),
+          transcriptPrompt: userText,
+          appendContext,
+        }),
       }),
     ).toEqual({
       prompt: userText,
@@ -190,7 +229,11 @@ describe("runtime context prompt submission", () => {
         effectivePrompt,
         transcriptPrompt: userText,
         modelPrompt: [effectivePrompt, effectivePrompt].join("\n\n"),
-        modelPromptHookContext: { prepend: effectivePrompt, append: "" },
+        ...withModelPromptBuildContext({
+          promptBeforeHooks: effectivePrompt,
+          transcriptPrompt: userText,
+          prependContext: effectivePrompt,
+        }),
       }),
     ).toEqual({
       prompt: userText,
@@ -209,7 +252,11 @@ describe("runtime context prompt submission", () => {
         effectivePrompt,
         transcriptPrompt: userText,
         modelPrompt: [effectivePrompt, effectivePrompt].join("\n\n"),
-        modelPromptHookContext: { prepend: "", append: effectivePrompt },
+        ...withModelPromptBuildContext({
+          promptBeforeHooks: effectivePrompt,
+          transcriptPrompt: userText,
+          appendContext: effectivePrompt,
+        }),
       }),
     ).toEqual({
       prompt: userText,
@@ -233,7 +280,11 @@ describe("runtime context prompt submission", () => {
         effectivePrompt,
         transcriptPrompt: userText,
         modelPrompt: [effectivePrompt, effectivePrompt].join("\n\n"),
-        modelPromptHookContext: { prepend: "", append: effectivePrompt },
+        ...withModelPromptBuildContext({
+          promptBeforeHooks: effectivePrompt,
+          transcriptPrompt: userText,
+          appendContext: effectivePrompt,
+        }),
       }),
     ).toEqual({
       prompt: userText,
@@ -253,12 +304,70 @@ describe("runtime context prompt submission", () => {
         effectivePrompt,
         transcriptPrompt: userText,
         modelPrompt: [effectivePrompt, appendContext].join("\n\n"),
-        modelPromptHookContext: { prepend: "", append: appendContext },
+        ...withModelPromptBuildContext({
+          promptBeforeHooks: effectivePrompt,
+          transcriptPrompt: userText,
+          appendContext,
+        }),
       }),
     ).toEqual({
       prompt: userText,
       modelPrompt: `${userText}\n\n${appendContext}`,
       runtimeContext: systemEvent,
+    });
+  });
+
+  it("strips hidden context after prompt transforms decorate the active hook body", () => {
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello";
+    const prependContext = "Hook injected context";
+    const queuedContext = "[Queued messages while agent was busy]";
+    const promptBeforeHooks = [systemEvent, userText].join("\n\n");
+    const promptBeforeAnnotation = [queuedContext, promptBeforeHooks].join("\n\n");
+    const transcriptPrompt = [queuedContext, userText].join("\n\n");
+    const modelPrompt = [queuedContext, prependContext, promptBeforeHooks].join("\n\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: promptBeforeAnnotation,
+        transcriptPrompt,
+        modelPrompt,
+        ...withModelPromptBuildContext({
+          promptBeforeHooks,
+          transcriptPrompt: userText,
+          promptBeforeAnnotation,
+          prependContext,
+        }),
+      }),
+    ).toEqual({
+      prompt: transcriptPrompt,
+      modelPrompt: [queuedContext, prependContext, userText].join("\n\n"),
+      runtimeContext: systemEvent,
+    });
+  });
+
+  it("keeps outer provenance context ahead of source runtime context", () => {
+    const provenance = "[Inter-session message] sourceTool=sessions_send isUser=false";
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello";
+    const promptBeforeHooks = [systemEvent, userText].join("\n\n");
+    const prependContext = "Hook injected context";
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: [provenance, promptBeforeHooks].join("\n"),
+        transcriptPrompt: userText,
+        modelPrompt: [prependContext, promptBeforeHooks].join("\n\n"),
+        ...withModelPromptBuildContext({
+          promptBeforeHooks,
+          transcriptPrompt: userText,
+          prependContext,
+        }),
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: [prependContext, userText].join("\n\n"),
+      runtimeContext: [provenance, systemEvent].join("\n\n"),
     });
   });
 
@@ -350,6 +459,11 @@ describe("runtime context prompt submission", () => {
         effectivePrompt: "Hello",
         transcriptPrompt: "Hello",
         modelPrompt,
+        ...withModelPromptBuildContext({
+          promptBeforeHooks: "Hello",
+          transcriptPrompt: "Hello",
+          appendContext: "Hook summary: Hello",
+        }),
       }),
     ).toEqual({
       prompt: "Hello",

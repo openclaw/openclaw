@@ -34,9 +34,12 @@ export type RuntimeContextCustomMessage = {
 
 type EmptyTranscriptMode = "model-prompt" | "runtime-event";
 
-type ModelPromptHookContext = {
-  prepend: string;
-  append: string;
+type ModelPromptBuildContext = {
+  promptBeforeHooks: string;
+  transcriptPromptBeforeTransforms: string;
+  promptBeforeAnnotation: string;
+  prependContext: string;
+  appendContext: string;
 };
 
 /** Combines inbound context and the current prompt using the channel-provided joiner. */
@@ -73,51 +76,39 @@ function splitLastPromptOccurrence(
   };
 }
 
-function removePromptContextAroundOccurrence(params: {
+function replacePromptOccurrenceWithinHookBounds(params: {
   text: string;
-  prompt: string;
-  hiddenBefore: string;
-  hiddenAfter: string;
-  hookContext?: ModelPromptHookContext;
+  promptBeforeHooks: string;
+  transcriptPrompt: string;
+  prependContext: string;
+  appendContext: string;
 }): string | null {
-  const hiddenBefore = params.hiddenBefore.trim();
-  const hiddenAfter = params.hiddenAfter.trim();
-  const prependContext = params.hookContext?.prepend;
-  const appendContext = params.hookContext?.append;
-  const prependIndex = prependContext ? params.text.indexOf(prependContext) : -1;
-  const appendIndex = appendContext ? params.text.lastIndexOf(appendContext) : -1;
-  const searchStart = prependIndex === -1 ? 0 : prependIndex + prependContext.length;
-  const searchEnd = appendIndex < searchStart ? params.text.length : appendIndex;
-  let stripped: string | null = null;
-  let searchFrom = searchStart;
-  while (searchFrom <= searchEnd) {
-    const index = params.text.indexOf(params.prompt, searchFrom);
-    if (index === -1 || index + params.prompt.length > searchEnd) {
-      return stripped;
-    }
-    const rawBefore = params.text.slice(0, index);
-    const rawAfter = params.text.slice(index + params.prompt.length);
-    const before = rawBefore.trimEnd();
-    const after = rawAfter.trimStart();
-    if (
-      (!hiddenBefore || before.endsWith(hiddenBefore)) &&
-      (!hiddenAfter || after.startsWith(hiddenAfter))
-    ) {
-      const hiddenBeforeStart = before.length - hiddenBefore.length;
-      const hiddenAfterStart = rawAfter.length - after.length;
-      const keptBefore = hiddenBefore
-        ? rawBefore.slice(0, hiddenBeforeStart).replace(/\r?\n\r?\n$/u, "")
-        : rawBefore;
-      const keptAfter = hiddenAfter
-        ? rawAfter.slice(hiddenAfterStart + hiddenAfter.length).replace(/^\r?\n\r?\n/u, "")
-        : rawAfter;
-      const beforePrompt = hiddenBefore && keptBefore ? `${keptBefore}\n\n` : keptBefore;
-      const afterPrompt = hiddenAfter && keptAfter ? `\n\n${keptAfter}` : keptAfter;
-      stripped = `${beforePrompt}${params.prompt}${afterPrompt}`;
-    }
-    searchFrom = index + Math.max(1, params.prompt.length);
+  if (!params.promptBeforeHooks) {
+    return null;
   }
-  return stripped;
+  const prependIndex = params.prependContext ? params.text.indexOf(params.prependContext) : -1;
+  if (params.prependContext && prependIndex === -1) {
+    return null;
+  }
+  const searchStart = prependIndex === -1 ? 0 : prependIndex + params.prependContext.length;
+  const appendIndex = params.appendContext ? params.text.lastIndexOf(params.appendContext) : -1;
+  if (params.appendContext && appendIndex < searchStart) {
+    return null;
+  }
+  const searchEnd = appendIndex === -1 ? params.text.length : appendIndex;
+  const occurrenceIndex = params.text.lastIndexOf(
+    params.promptBeforeHooks,
+    searchEnd - params.promptBeforeHooks.length,
+  );
+  if (
+    occurrenceIndex < searchStart ||
+    occurrenceIndex + params.promptBeforeHooks.length > searchEnd
+  ) {
+    return null;
+  }
+  return `${params.text.slice(0, occurrenceIndex)}${params.transcriptPrompt}${params.text.slice(
+    occurrenceIndex + params.promptBeforeHooks.length,
+  )}`;
 }
 
 /**
@@ -129,7 +120,7 @@ export function resolveRuntimeContextPromptParts(params: {
   effectivePrompt: string;
   transcriptPrompt?: string;
   modelPrompt?: string;
-  modelPromptHookContext?: ModelPromptHookContext;
+  modelPromptBuildContext?: ModelPromptBuildContext;
   emptyTranscriptMode?: EmptyTranscriptMode;
 }): RuntimeContextPromptParts {
   const transcriptPrompt = params.transcriptPrompt;
@@ -143,14 +134,21 @@ export function resolveRuntimeContextPromptParts(params: {
       : shouldExtractInternalRuntimeContext
         ? extractInternalRuntimeContext(params.modelPrompt)
         : { text: params.modelPrompt };
-  const modelPromptHookContext = params.modelPromptHookContext
+  const modelPromptBuildContext = params.modelPromptBuildContext
     ? {
-        prepend: shouldExtractInternalRuntimeContext
-          ? extractInternalRuntimeContext(params.modelPromptHookContext.prepend).text
-          : params.modelPromptHookContext.prepend,
-        append: shouldExtractInternalRuntimeContext
-          ? extractInternalRuntimeContext(params.modelPromptHookContext.append).text
-          : params.modelPromptHookContext.append,
+        promptBeforeHooks: extractInternalRuntimeContext(
+          params.modelPromptBuildContext.promptBeforeHooks,
+        ).text,
+        transcriptPromptBeforeTransforms: extractInternalRuntimeContext(
+          params.modelPromptBuildContext.transcriptPromptBeforeTransforms,
+        ).text,
+        promptBeforeAnnotation: extractInternalRuntimeContext(
+          params.modelPromptBuildContext.promptBeforeAnnotation,
+        ).text,
+        prependContext: extractInternalRuntimeContext(params.modelPromptBuildContext.prependContext)
+          .text,
+        appendContext: extractInternalRuntimeContext(params.modelPromptBuildContext.appendContext)
+          .text,
       }
     : undefined;
   const modelPromptText = modelPrompt?.text ?? transcriptPrompt ?? extracted.text;
@@ -164,18 +162,36 @@ export function resolveRuntimeContextPromptParts(params: {
       ...(extracted.runtimeContext ? { runtimeContext: extracted.runtimeContext } : {}),
     };
   }
-  const hiddenPromptParts = modelPrompt
-    ? (splitLastPromptOccurrence(extracted.text, modelPrompt.text) ??
-      (transcriptPrompt ? splitLastPromptOccurrence(extracted.text, transcriptPrompt) : undefined))
-    : transcriptPrompt
-      ? splitLastPromptOccurrence(extracted.text, transcriptPrompt)
-      : undefined;
-  const hiddenRuntimeContext = hiddenPromptParts
-    ? [hiddenPromptParts.before, hiddenPromptParts.after]
-        .map((part) => part.trim())
-        .filter((part) => part.length > 0)
-        .join("\n\n")
+  const sourcePromptParts = modelPromptBuildContext
+    ? splitLastPromptOccurrence(
+        modelPromptBuildContext.promptBeforeHooks,
+        modelPromptBuildContext.transcriptPromptBeforeTransforms,
+      )
     : undefined;
+  const outerPromptParts = modelPromptBuildContext
+    ? splitLastPromptOccurrence(extracted.text, modelPromptBuildContext.promptBeforeAnnotation)
+    : undefined;
+  const fallbackPromptParts = !modelPromptBuildContext
+    ? modelPrompt
+      ? (splitLastPromptOccurrence(extracted.text, modelPrompt.text) ??
+        (transcriptPrompt
+          ? splitLastPromptOccurrence(extracted.text, transcriptPrompt)
+          : undefined))
+      : transcriptPrompt
+        ? splitLastPromptOccurrence(extracted.text, transcriptPrompt)
+        : undefined
+    : undefined;
+  // Source context sits inside the active prompt; provenance sits outside all
+  // prompt transforms. Preserve that nesting order when hiding both.
+  const hiddenRuntimeContext = [
+    outerPromptParts?.before,
+    sourcePromptParts?.before ?? fallbackPromptParts?.before,
+    sourcePromptParts?.after ?? fallbackPromptParts?.after,
+    outerPromptParts?.after,
+  ]
+    .map((part) => part?.trim())
+    .filter((part): part is string => Boolean(part))
+    .join("\n\n");
   // The hidden context is whatever remains after removing the last visible
   // prompt occurrence, plus any explicit internal runtime-context block.
   const runtimeContext =
@@ -205,17 +221,17 @@ export function resolveRuntimeContextPromptParts(params: {
   // When hooks added pre-prompt context, modelPromptText still contains the
   // system-event prefix that was separated into runtimeContext. Strip it so
   // events aren't delivered to the model twice (Message A and Message B).
-  const hasHiddenPromptContext = Boolean(
-    hiddenPromptParts?.before.trim() || hiddenPromptParts?.after.trim(),
+  const hasHiddenSourceContext = Boolean(
+    sourcePromptParts?.before.trim() || sourcePromptParts?.after.trim(),
   );
   const returnModelPromptText =
-    hasHiddenPromptContext && hiddenPromptParts && modelPrompt
-      ? (removePromptContextAroundOccurrence({
+    hasHiddenSourceContext && modelPromptBuildContext && modelPrompt
+      ? (replacePromptOccurrenceWithinHookBounds({
           text: modelPromptText,
-          prompt: transcriptPrompt ?? extracted.text,
-          hiddenBefore: hiddenPromptParts.before,
-          hiddenAfter: hiddenPromptParts.after,
-          hookContext: modelPromptHookContext,
+          promptBeforeHooks: modelPromptBuildContext.promptBeforeHooks,
+          transcriptPrompt: modelPromptBuildContext.transcriptPromptBeforeTransforms,
+          prependContext: modelPromptBuildContext.prependContext,
+          appendContext: modelPromptBuildContext.appendContext,
         }) ?? modelPromptText)
       : modelPromptText;
 
