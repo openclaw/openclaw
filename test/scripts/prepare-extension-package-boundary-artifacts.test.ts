@@ -44,11 +44,19 @@ afterEach(() => {
   tempRoots.clear();
 });
 
-async function waitForFile(filePath: string, timeoutMs: number) {
+async function waitForFile(filePath: string, timeoutMs: number): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (fs.existsSync(filePath)) {
-      return;
+    try {
+      // writeFileSync is not atomic for concurrent readers: the path can exist
+      // before the payload is flushed. Wait for non-empty content, or pid
+      // parsing races into NaN under parallel-suite load.
+      const content = fs.readFileSync(filePath, "utf8").trim();
+      if (content) {
+        return content;
+      }
+    } catch {
+      // Not created yet.
     }
     await delay(25);
   }
@@ -219,12 +227,21 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         "setInterval(() => {}, 1000);",
       ].join("\n");
 
+      // Fail the sibling only once the descendant reported its pid so the
+      // group abort cannot race the descendant's boot under suite load.
+      const failWhenDescendantReady = [
+        "const fs = require('node:fs');",
+        "setInterval(() => {",
+        `  try { if (fs.readFileSync(${JSON.stringify(descendantPidPath)}, 'utf8').trim()) { process.exit(2); } } catch {}`,
+        "}, 25);",
+      ].join("\n");
+
       try {
         const command = runNodeStepsInParallel([
           {
             label: "delayed-fail",
-            args: ["--eval", "setTimeout(() => process.exit(2), 150)"],
-            timeoutMs: 5_000,
+            args: ["--eval", failWhenDescendantReady],
+            timeoutMs: 30_000,
           },
           {
             label: "abort-group-prep",
@@ -235,8 +252,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         const expectedFailure = expect(command).rejects.toThrow(
           "delayed-fail failed with exit code 2",
         );
-        await waitForFile(descendantPidPath, 1_000);
-        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        descendantPid = Number.parseInt(await waitForFile(descendantPidPath, 10_000), 10);
 
         await expectedFailure;
         await waitForDead(descendantPid, 2_000);
@@ -272,11 +288,19 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         "setInterval(() => {}, 1000);",
       ].join("\n");
 
+      // Fail the sibling only once the descendant installed its SIGTERM trap
+      // (signalled via readyPath) so the group abort cannot race its boot.
+      const failWhenDescendantReady = [
+        "const fs = require('node:fs');",
+        "setInterval(() => {",
+        `  try { if (fs.readFileSync(${JSON.stringify(readyPath)}, 'utf8').trim()) { process.exit(2); } } catch {}`,
+        "}, 25);",
+      ].join("\n");
       const command = runNodeStepsInParallel([
         {
           label: "delayed-fail",
-          args: ["--eval", "setTimeout(() => process.exit(2), 150)"],
-          timeoutMs: 5_000,
+          args: ["--eval", failWhenDescendantReady],
+          timeoutMs: 30_000,
         },
         {
           label: "abort-group-drain",
@@ -285,9 +309,9 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         },
       ]);
 
-      await waitForFile(readyPath, 1_000);
+      await waitForFile(readyPath, 10_000);
       await expect(command).rejects.toThrow("delayed-fail failed with exit code 2");
-      expect(fs.readFileSync(drainedPath, "utf8")).toBe("drained");
+      expect(await waitForFile(drainedPath, 10_000)).toBe("drained");
     },
   );
 
@@ -346,12 +370,14 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     ].join("\n");
 
     try {
-      const command = runNodeStep("hung-group-prep", ["--eval", parentScript], 750);
+      // The timeout clock starts at spawn, so it must leave room for two Node
+      // boots (parent + descendant) under parallel-suite load; otherwise the
+      // group is killed before the descendant ever writes its pid.
+      const command = runNodeStep("hung-group-prep", ["--eval", parentScript], 5_000);
       const expectedFailure = expect(command).rejects.toThrow(
-        "hung-group-prep timed out after 750ms",
+        "hung-group-prep timed out after 5000ms",
       );
-      await waitForFile(descendantPidPath, 500);
-      descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+      descendantPid = Number.parseInt(await waitForFile(descendantPidPath, 4_000), 10);
 
       await expectedFailure;
       await waitForDead(descendantPid, 2_000);
@@ -395,9 +421,8 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       runnerPid = runner.pid ?? 0;
 
       try {
-        await waitForFile(descendantPidPath, 2_000);
-        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
-        const runnerExit = waitForProcessExit(runner, 2_000);
+        descendantPid = Number.parseInt(await waitForFile(descendantPidPath, 10_000), 10);
+        const runnerExit = waitForProcessExit(runner, 10_000);
         runner.kill("SIGTERM");
 
         expect(await runnerExit).toEqual({ code: 143, signal: null });

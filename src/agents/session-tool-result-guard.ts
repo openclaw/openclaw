@@ -344,7 +344,17 @@ function buildPersistedDetailsFallback(
   }
   if (src) {
     fallback.originalDetailKeys = redactedOriginalDetailKeys(src, redactionConfig);
-    for (const key of ["status", "sessionId", "pid", "exitCode", "exitSignal", "truncated"]) {
+    for (const key of [
+      "status",
+      "sessionId",
+      "pid",
+      "exitCode",
+      "exitSignal",
+      "truncated",
+      "fullOutputPath",
+      "spilledChars",
+      "spillTruncated",
+    ]) {
       const field = src[key];
       if (field !== undefined) {
         fallback[key] = redactPersistedSummaryField(
@@ -470,6 +480,8 @@ function sanitizeToolResultDetailsForPersistence(
     "totalChars",
     "truncated",
     "fullOutputPath",
+    "spilledChars",
+    "spillTruncated",
     "truncation",
   ]) {
     const field = src[key];

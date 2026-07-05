@@ -201,6 +201,297 @@ describe("anthropic transport stream", () => {
     vi.useRealTimers();
   });
 
+  it("keeps aggregate cache billing buckets out of the context total", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: {
+            id: "msg_usage",
+            model: "claude-fable-5",
+            usage: {
+              input_tokens: 12,
+              output_tokens: 0,
+              cache_read_input_tokens: 120_000,
+              cache_creation_input_tokens: null,
+            },
+          },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "Done." },
+        },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: {
+            input_tokens: 12,
+            output_tokens: 15_104,
+            cache_read_input_tokens: 819_661,
+            cache_creation_input_tokens: 93_130,
+            iterations: [
+              {
+                type: "compaction",
+                input_tokens: 12,
+                output_tokens: 1_000,
+                cache_read_input_tokens: 819_661,
+                cache_creation_input_tokens: 93_130,
+              },
+              {
+                type: "message",
+                input_tokens: 12,
+                output_tokens: 15_104,
+                cache_read_input_tokens: 148_862,
+                cache_creation_input_tokens: 0,
+              },
+            ],
+          },
+        },
+        { type: "message_stop" },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.usage).toMatchObject({
+      input: 12,
+      output: 15_104,
+      cacheRead: 819_661,
+      cacheWrite: 93_130,
+      contextUsage: {
+        state: "available",
+        promptTokens: 148_874,
+        totalTokens: 163_978,
+      },
+      totalTokens: 927_907,
+    });
+  });
+
+  it("does not fall back to aggregate usage when the final iteration is malformed", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: {
+            id: "msg_invalid_iteration",
+            model: "claude-fable-5",
+            usage: {
+              input_tokens: 12,
+              output_tokens: 0,
+              cache_read_input_tokens: 120_000,
+              cache_creation_input_tokens: 0,
+            },
+          },
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: {
+            input_tokens: 12,
+            output_tokens: 15_104,
+            cache_read_input_tokens: 819_661,
+            cache_creation_input_tokens: 93_130,
+            iterations: [
+              {
+                type: "message",
+                input_tokens: "malformed",
+                output_tokens: 15_104,
+                cache_read_input_tokens: 148_862,
+                cache_creation_input_tokens: 0,
+              },
+            ],
+          },
+        },
+        { type: "message_stop" },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.usage.totalTokens).toBe(927_907);
+    expect(result.usage.contextUsage).toEqual({ state: "unavailable" });
+  });
+
+  it("uses complete final usage when message-start prompt buckets are zero placeholders", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: {
+            id: "msg_zero_start",
+            model: "claude-fable-5",
+            usage: {
+              input_tokens: 0,
+              output_tokens: 0,
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0,
+            },
+          },
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: {
+            input_tokens: 12,
+            output_tokens: 15_104,
+            cache_read_input_tokens: 148_862,
+            cache_creation_input_tokens: 0,
+          },
+        },
+        { type: "message_stop" },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.usage.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 148_874,
+      totalTokens: 163_978,
+    });
+  });
+
+  it("does not treat zero start placeholders as complete final prompt usage", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: {
+            id: "msg_zero_start_partial_delta",
+            model: "claude-fable-5",
+            usage: {
+              input_tokens: 0,
+              output_tokens: 0,
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0,
+            },
+          },
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { output_tokens: 15_104 },
+        },
+        { type: "message_stop" },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.usage.contextUsage).toEqual({ state: "unavailable" });
+  });
+
+  it("uses accumulated prompt buckets when the final usage update is partial", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: {
+            id: "msg_partial_final_usage",
+            model: "claude-sonnet-4-6",
+            usage: {
+              input_tokens: 12,
+              output_tokens: 0,
+              cache_read_input_tokens: 120_000,
+              cache_creation_input_tokens: 500,
+            },
+          },
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: {
+            input_tokens: 12,
+            output_tokens: 15_104,
+            cache_read_input_tokens: 148_862,
+            cache_creation_input_tokens: null,
+          },
+        },
+        { type: "message_stop" },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.usage.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 149_374,
+      totalTokens: 164_478,
+    });
+  });
+
+  it("preserves valid message-start billing buckets when a sibling is malformed", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: {
+            id: "msg_malformed_usage",
+            model: "claude-sonnet-4-6",
+            usage: {
+              input_tokens: 12,
+              output_tokens: 0,
+              cache_read_input_tokens: "malformed",
+              cache_creation_input_tokens: 500,
+            },
+          },
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: {
+            input_tokens: 12,
+            output_tokens: 15_104,
+            cache_creation_input_tokens: null,
+          },
+        },
+        { type: "message_stop" },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.usage).toMatchObject({
+      input: 12,
+      output: 15_104,
+      cacheRead: 0,
+      cacheWrite: 500,
+      totalTokens: 15_616,
+    });
+    expect(result.usage.contextUsage).toEqual({ state: "unavailable" });
+  });
+
   it("tags pre-tool narration as commentary when a proxy mislabels stop_reason (pioneer/Bedrock)", async () => {
     // Bedrock/Vertex-proxied routes (e.g. pioneer; tool ids "toolu_vrtx_…") report
     // stop_reason "end_turn" on turns that DO carry a tool call. Commentary tagging

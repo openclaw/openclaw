@@ -22,17 +22,19 @@ type InstalledPackageJson = {
 export type OpenClawNpmPrepublishVerifyArgs =
   | {
       expectedVersion?: string;
+      dependencyTarballPaths: string[];
       help: false;
       tarballPath: string;
     }
   | {
       expectedVersion?: undefined;
+      dependencyTarballPaths: [];
       help: true;
       tarballPath: "";
     };
 
 export function openClawNpmPrepublishVerifyUsage(): string {
-  return "Usage: node --import tsx scripts/openclaw-npm-prepublish-verify.ts <tarball.tgz> [expected-version]";
+  return "Usage: node --import tsx scripts/openclaw-npm-prepublish-verify.ts <tarball.tgz> [expected-version] [dependency.tgz ...]";
 }
 
 export function parseOpenClawNpmPrepublishVerifyArgs(
@@ -41,7 +43,7 @@ export function parseOpenClawNpmPrepublishVerifyArgs(
   const args = argv[0] === "--" ? argv.slice(1) : argv;
   const tarballPath = args[0]?.trim() ?? "";
   if (tarballPath === "--help" || tarballPath === "-h") {
-    return { help: true, tarballPath: "" };
+    return { dependencyTarballPaths: [], help: true, tarballPath: "" };
   }
   if (!tarballPath) {
     throw new Error(openClawNpmPrepublishVerifyUsage());
@@ -54,14 +56,17 @@ export function parseOpenClawNpmPrepublishVerifyArgs(
   if (expectedVersion?.startsWith("-")) {
     throw new Error(`Unknown openclaw npm prepublish verifier option: ${expectedVersion}`);
   }
-  const extraArg = args[2]?.trim();
-  if (extraArg) {
-    throw new Error(`Unexpected openclaw npm prepublish verifier argument: ${extraArg}`);
+  const dependencyTarballPaths = args.slice(2).map((value) => value.trim());
+  const invalidDependency = dependencyTarballPaths.find(
+    (value) => value.length === 0 || value.startsWith("-"),
+  );
+  if (invalidDependency !== undefined) {
+    throw new Error(`Invalid dependency tarball path: ${invalidDependency || "<empty>"}`);
   }
 
   return expectedVersion
-    ? { expectedVersion, help: false, tarballPath }
-    : { help: false, tarballPath };
+    ? { dependencyTarballPaths, expectedVersion, help: false, tarballPath }
+    : { dependencyTarballPaths, help: false, tarballPath };
 }
 
 function npmExec(args: string[], cwd: string): string {
@@ -91,6 +96,7 @@ function main(argv = process.argv.slice(2)): void {
         "-g",
         "--prefix",
         prefixDir,
+        ...args.dependencyTarballPaths.map((dependency) => realpathSync(dependency)),
         realpathSync(args.tarballPath),
         "--no-fund",
         "--no-audit",

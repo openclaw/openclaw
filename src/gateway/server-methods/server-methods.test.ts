@@ -1801,6 +1801,167 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
+  it("drops channel-final delivery mirrors that duplicate the preceding assistant reply", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: "yo big boy",
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "Yo Peter. I’m here." }],
+        __openclaw: { mirrorIdentity: "run-1:assistant" },
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Yo Peter. I’m here." }],
+        idempotencyKey: "channel-final:message-1:0",
+        openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "message-1" },
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: "yo big boy",
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "Yo Peter. I’m here." }],
+        __openclaw: { mirrorIdentity: "run-1:assistant" },
+        timestamp: 2,
+      },
+    ]);
+  });
+
+  it("keeps a channel-final delivery mirror after a filtered user turn", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "Repeated reply" }],
+        __openclaw: { mirrorIdentity: "run-1:assistant" },
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: "",
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Repeated reply" }],
+        idempotencyKey: "channel-final:message-2:0",
+        openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "message-2" },
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toHaveLength(2);
+    expect(result[1]).toEqual(
+      expect.objectContaining({
+        provider: "openclaw",
+        model: "delivery-mirror",
+      }),
+    );
+  });
+
+  it("keeps adjacent channel-final delivery mirrors from distinct sends", () => {
+    const deliveryMirror = (sourceMessageId: string, timestamp: number) => ({
+      role: "assistant",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      content: [{ type: "text", text: "Repeated reply" }],
+      idempotencyKey: `channel-final:${sourceMessageId}:0`,
+      openclawDeliveryMirror: { kind: "channel-final", sourceMessageId },
+      timestamp,
+    });
+
+    const result = projectRecentChatDisplayMessages([
+      deliveryMirror("message-1", 1),
+      deliveryMirror("message-2", 2),
+    ]);
+
+    expect(result).toHaveLength(2);
+  });
+
+  it("keeps channel-final mirrors after unmarked assistant replies", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "Repeated reply" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Repeated reply" }],
+        idempotencyKey: "channel-final:message-unmarked:0",
+        openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "message-unmarked" },
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toHaveLength(2);
+  });
+
+  it("keeps channel-final mirrors after forwarded sessions_send messages", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Forwarded status" }],
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:webchat:source",
+          sourceTool: "sessions_send",
+        },
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Forwarded status" }],
+        idempotencyKey: "channel-final:message-forwarded:0",
+        openclawDeliveryMirror: {
+          kind: "channel-final",
+          sourceMessageId: "message-forwarded",
+        },
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual(
+      expect.objectContaining({
+        role: "assistant",
+        senderLabel: "Forwarded from main",
+      }),
+    );
+    expect(result[1]).toEqual(
+      expect.objectContaining({
+        provider: "openclaw",
+        model: "delivery-mirror",
+      }),
+    );
+  });
+
   it("keeps gateway-injected assistant replies when they are not duplicate ACP text", () => {
     const result = projectRecentChatDisplayMessages([
       {

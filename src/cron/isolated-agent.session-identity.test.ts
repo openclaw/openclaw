@@ -214,7 +214,12 @@ describe("runCronIsolatedAgentTurn session identity", () => {
 
       const finalPersist = updateSessionStoreMock.mock.calls.at(-1);
       expect(finalPersist?.[0]).toBe(storePath);
-      const persistedStore: Record<string, { [key: string]: unknown }> = {};
+      // Replay the final persist against the real post-run store: the claim
+      // guard rejects writes into a store that never held the session.
+      const persistedStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        { [key: string]: unknown }
+      >;
       (finalPersist![1] as (store: typeof persistedStore) => void)(persistedStore);
       expect(persistedStore[boundSessionKey]).toEqual(
         expect.objectContaining({

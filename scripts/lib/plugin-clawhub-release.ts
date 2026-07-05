@@ -4,10 +4,12 @@ import { resolve } from "node:path";
 import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
 import { readBoundedResponseText } from "./bounded-response.ts";
 import {
+  assertPluginReleaseDependencyFreshness,
   collectExtensionPackageJsonCandidates,
   collectChangedPathsFromGitRange,
   collectChangedExtensionIdsFromPaths,
   collectPublishablePluginPackageErrors,
+  collectRequiredLatestDependencies,
   assertPluginReleaseVersionFloors,
   parsePluginReleaseArgs,
   resolvePublishablePluginVersion,
@@ -15,10 +17,16 @@ import {
   resolveChangedPublishablePluginPackages,
   resolveSelectedPublishablePluginPackages,
   type GitRangeSelection,
+  type NpmLatestVersionResolver,
   type PluginReleaseSelectionMode,
+  type RequiredLatestDependency,
 } from "./plugin-npm-release.ts";
 
-export { assertPluginReleaseVersionFloors, parsePluginReleaseArgs };
+export {
+  assertPluginReleaseDependencyFreshness,
+  assertPluginReleaseVersionFloors,
+  parsePluginReleaseArgs,
+};
 
 type PluginPackageJson = {
   name?: string;
@@ -51,6 +59,7 @@ export type PublishablePluginPackage = {
   version: string;
   channel: "stable" | "alpha" | "beta";
   publishTag: "latest" | "alpha" | "beta";
+  requiredLatestDependencies?: RequiredLatestDependency[];
 };
 
 type PluginReleasePlanItem = PublishablePluginPackage & {
@@ -237,6 +246,7 @@ export function collectClawHubPublishablePluginPackages(
       continue;
     }
     const { version, parsedVersion } = resolvedVersion;
+    const requiredLatestDependencies = collectRequiredLatestDependencies(packageJson).dependencies;
 
     publishable.push({
       extensionId,
@@ -250,6 +260,7 @@ export function collectClawHubPublishablePluginPackages(
           : parsedVersion.channel === "beta"
             ? "beta"
             : "latest",
+      ...(requiredLatestDependencies.length > 0 ? { requiredLatestDependencies } : {}),
     });
   }
 
@@ -588,6 +599,7 @@ export async function collectPluginClawHubReleasePlan(params?: {
   registryBaseUrl?: string;
   fetchImpl?: typeof fetch;
   requestTimeoutMs?: number;
+  resolveLatestVersion?: NpmLatestVersionResolver;
 }): Promise<PluginReleasePlan> {
   const rootDir = params?.rootDir;
   const selection = params?.selection ?? [];
@@ -618,6 +630,11 @@ export async function collectPluginClawHubReleasePlan(params?: {
   if (explicitPublishSelection) {
     assertPluginReleaseVersionFloors(selectedPublishable, "Plugin ClawHub release plan");
   }
+  assertPluginReleaseDependencyFreshness(
+    selectedPublishable,
+    "Plugin ClawHub release plan",
+    params?.resolveLatestVersion,
+  );
 
   const planned: PluginReleasePlanItemWithPackageState[] = [];
   for (const plugin of selectedPublishable) {

@@ -12,7 +12,7 @@ import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-resul
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
 import type { HealthCheckInput, RunnableHealthCheck } from "./health-check-runner-types.js";
-import type { HealthCheck, HealthFinding } from "./health-checks.js";
+import type { HealthCheck, HealthCheckContext, HealthFinding } from "./health-checks.js";
 import type { FlowContribution } from "./types.js";
 
 type DoctorFlowMode = "local" | "remote";
@@ -979,6 +979,45 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
   });
 }
 
+async function detectSystemdLingerFindings(
+  ctx: HealthCheckContext,
+): Promise<readonly HealthFinding[]> {
+  if (process.platform !== "linux" || resolveDoctorMode(ctx.cfg) !== "local") {
+    return [];
+  }
+  const { resolveGatewayService } = await import("../daemon/service.js");
+  const service = resolveGatewayService();
+  let loaded;
+  try {
+    loaded = await service.isLoaded({ env: process.env });
+  } catch {
+    loaded = false;
+  }
+  if (!loaded) {
+    return [];
+  }
+  const { isSystemdUserServiceAvailable, readSystemdUserLingerStatus } =
+    await import("../daemon/systemd.js");
+  if (!(await isSystemdUserServiceAvailable(process.env))) {
+    return [];
+  }
+  const status = await readSystemdUserLingerStatus(process.env);
+  if (!status || status.linger === "yes") {
+    return [];
+  }
+  return [
+    {
+      checkId: "core/doctor/systemd-linger",
+      severity: "warning",
+      source: "doctor",
+      message: `Systemd lingering is disabled for ${status.user}.`,
+      target: `systemd.user.${status.user}`,
+      requirement: "systemd user lingering enabled",
+      fixHint: `Run: sudo loginctl enable-linger ${status.user}`,
+    },
+  ];
+}
+
 async function hasActiveGatewayExecCredential(
   ctx: Pick<DoctorHealthFlowContext, "cfg">,
   mode: DoctorFlowMode = resolveDoctorMode(ctx.cfg),
@@ -1868,6 +1907,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:systemd-linger",
       label: "systemd linger",
+      healthChecks: {
+        id: "core/doctor/systemd-linger",
+        description: "Disabled systemd user lingering is reported as a finding.",
+        defaultEnabled: false,
+        detect: detectSystemdLingerFindings,
+      },
       run: runSystemdLingerHealth,
     }),
     createDoctorHealthContribution({

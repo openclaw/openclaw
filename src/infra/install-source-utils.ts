@@ -139,8 +139,10 @@ export type NpmIntegrityDrift = {
 export async function withTempDir<T>(
   prefix: string,
   fn: (tmpDir: string) => Promise<T>,
+  options?: { rootDir?: string },
 ): Promise<T> {
-  return await withTempWorkspace({ rootDir: os.tmpdir(), prefix }, async (tmp) => fn(tmp.dir));
+  const rootDir = options?.rootDir ?? os.tmpdir();
+  return await withTempWorkspace({ rootDir, prefix }, async (tmp) => fn(tmp.dir));
 }
 
 /** Resolves and validates a user-supplied archive path before extraction. */

@@ -40,6 +40,7 @@ const state = vi.hoisted(() => ({
   ),
   resolveEffectiveModelFallbacksMock: vi.fn().mockReturnValue(undefined),
   hasLegacyAutoFallbackWithoutOriginMock: vi.fn((_entry: unknown) => false),
+  applyModelOverrideToSessionEntryMock: vi.fn((_params: unknown) => ({ updated: false })),
   resolveAutoFallbackPrimaryProbeMock: vi.fn((_params: unknown) => undefined as unknown),
   resolveChannelModelOverrideMock: vi.fn((_params: unknown) => null as unknown),
   assertLifecycleCurrentMock: vi.fn(),
@@ -151,6 +152,8 @@ vi.mock("./command/run-context.js", () => ({
 }));
 
 vi.mock("./command/session-store.runtime.js", () => ({
+  loadSessionEntry: ({ sessionKey }: { sessionKey: string }) =>
+    (state.sessionStoreMock as Record<string, SessionEntry> | undefined)?.[sessionKey],
   updateSessionStoreAfterAgentRun: (...args: unknown[]) =>
     state.updateSessionStoreAfterAgentRunMock(...args),
 }));
@@ -347,7 +350,8 @@ vi.mock("../sessions/level-overrides.js", () => ({
 }));
 
 vi.mock("../sessions/model-overrides.js", () => ({
-  applyModelOverrideToSessionEntry: () => ({ updated: false }),
+  applyModelOverrideToSessionEntry: (params: unknown) =>
+    state.applyModelOverrideToSessionEntryMock(params),
   repairProviderWrappedModelOverride: () => ({ updated: false }),
 }));
 
@@ -958,6 +962,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
     state.loadManifestModelCatalogMock.mockReturnValue([]);
     state.hasLegacyAutoFallbackWithoutOriginMock.mockReturnValue(false);
+    state.applyModelOverrideToSessionEntryMock.mockReturnValue({ updated: false });
     state.resolveAutoFallbackPrimaryProbeMock.mockReturnValue(undefined);
     state.resolveChannelModelOverrideMock.mockImplementation((params: unknown) => {
       const input = params as {
@@ -1259,17 +1264,19 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   it("preserves restart ownership when an aborted attempt resolves normally", async () => {
     setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue({
-      payloads: [],
-      meta: {
-        durationMs: 100,
-        aborted: true,
-        stopReason: "end_turn",
-        agentMeta: { provider: "anthropic", model: "claude" },
-      },
-    });
     const controller = new AbortController();
-    controller.abort(createAgentRunRestartAbortError());
+    state.runAgentAttemptMock.mockImplementation(async () => {
+      controller.abort(createAgentRunRestartAbortError());
+      return {
+        payloads: [],
+        meta: {
+          durationMs: 100,
+          aborted: true,
+          stopReason: "end_turn",
+          agentMeta: { provider: "anthropic", model: "claude" },
+        },
+      };
+    });
 
     await expect(
       agentCommand({
@@ -1348,9 +1355,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       expect.objectContaining({
         runId: "session-1",
         sessionKey: "agent:main:main",
-        abortSignal: controller.signal,
       }),
     );
+    const lifecycleError = state.emitAcpLifecycleErrorMock.mock.calls[0]?.[0] as
+      | { abortSignal?: AbortSignal }
+      | undefined;
+    expect(lifecycleError?.abortSignal?.aborted).toBe(true);
+    expect(lifecycleError?.abortSignal?.reason).toBe(controller.signal.reason);
     expect(state.persistAcpTurnTranscriptMock).toHaveBeenCalledTimes(1);
     expect(state.buildAcpResultMock).not.toHaveBeenCalled();
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
@@ -1674,6 +1685,64 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
     expect(fallbackParams.provider).toBe("openai");
     expect(fallbackParams.model).toBe("channel-model");
+  });
+
+  it("uses a concurrent user override adopted during legacy fallback repair", async () => {
+    setupSingleAttemptFallback();
+    state.applyModelOverrideToSessionEntryMock.mockImplementation((params: unknown) => {
+      const { entry } = params as { entry: SessionEntry };
+      delete entry.providerOverride;
+      delete entry.modelOverride;
+      delete entry.modelOverrideSource;
+      return { updated: true };
+    });
+    state.hasLegacyAutoFallbackWithoutOriginMock.mockImplementation(
+      (entry: unknown) =>
+        (entry as SessionEntry | undefined)?.modelOverride === "stale-fallback-model",
+    );
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: "anthropic/default-model",
+          models: {
+            "anthropic/default-model": {},
+            "anthropic/stale-fallback-model": {},
+            "google/gemini-3-pro": {},
+          },
+        },
+      },
+    };
+    const sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      providerOverride: "anthropic",
+      modelOverride: "stale-fallback-model",
+      modelOverrideSource: "auto",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    } satisfies SessionEntry;
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-session-store.json";
+    state.persistSessionEntryMock.mockImplementation(async (...args: unknown[]) => {
+      const params = args[0] as { entry?: SessionEntry };
+      if (params.entry?.modelOverride === "stale-fallback-model") {
+        return params.entry;
+      }
+      return {
+        ...sessionEntry,
+        updatedAt: 2,
+        providerOverride: "google",
+        modelOverride: "gemini-3-pro",
+        modelOverrideSource: "user",
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("google", "gemini-3-pro"));
+
+    await runBasicAgentCommand();
+
+    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
+    expect(fallbackParams.provider).toBe("google");
+    expect(fallbackParams.model).toBe("gemini-3-pro");
   });
 
   it("probes the channel primary when a session is pinned to an auto fallback", async () => {
@@ -2970,8 +3039,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   it("marks lifecycle errors aborted when cancellation reaches post-turn handling", async () => {
     const abortController = new AbortController();
-    abortController.abort();
-    state.runWithModelFallbackMock.mockRejectedValueOnce(new Error("request aborted"));
+    state.runWithModelFallbackMock.mockImplementationOnce(async () => {
+      abortController.abort();
+      throw new Error("request aborted");
+    });
 
     await expect(
       agentCommand({

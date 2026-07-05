@@ -519,8 +519,8 @@ postgres Created
       )}`,
       env: process.env,
       label: "oversized-capture-timeout",
-        timeoutKillGraceMs: Number.MAX_SAFE_INTEGER,
-        timeoutMs: Number.MAX_SAFE_INTEGER,
+      timeoutKillGraceMs: Number.MAX_SAFE_INTEGER,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
     });
 
     expect(result).toMatchObject({
@@ -608,7 +608,7 @@ setInterval(() => {}, 1000);
       command: `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(scriptPath)}`,
       env: process.env,
       label: "oversized-timeout-grace",
-        timeoutKillGraceMs: Number.MAX_SAFE_INTEGER,
+      timeoutKillGraceMs: Number.MAX_SAFE_INTEGER,
       timeoutMs: 500,
     });
 
@@ -730,12 +730,17 @@ setInterval(() => {}, 1000);
 `,
       "utf8",
     );
+    // Preserve the production 10s grace while accelerating only this spawned proof's clock.
     writeFileSync(
       runnerPath,
       `
-import { runShellCommand } from ${JSON.stringify(
+const realNow = Date.now.bind(Date);
+const startedAt = realNow();
+Date.now = () => startedAt + (realNow() - startedAt) * 100;
+
+const { runShellCommand } = await import(${JSON.stringify(
         new URL("../../scripts/test-docker-all.mjs", import.meta.url).href,
-      )};
+      )});
 
 await runShellCommand({
   command: ${JSON.stringify(`exec ${JSON.stringify(process.execPath)} ${JSON.stringify(leaderPath)}`)},
