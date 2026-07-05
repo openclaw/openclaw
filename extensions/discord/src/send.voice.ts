@@ -31,6 +31,7 @@ type VoiceMessageOpts = {
   verbose?: boolean;
   rest?: RequestClient;
   replyTo?: string;
+  replyToFirstChunkOnly?: boolean;
   retry?: RetryConfig;
   silent?: boolean;
 };
