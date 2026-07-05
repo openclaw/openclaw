@@ -764,6 +764,21 @@
       "translated": "$remoteGatewaySecurityRule $remoteGatewaySecurityFix"
     },
     {
+      "id": "native.android.d5230e4551045851",
+      "source": "Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
+      "translated": "کد راه‌اندازی از شناسهٔ محدودهٔ IPv6 استفاده می‌کند. از یک نشانی IPv6 بدون محدوده یا نام میزبان LAN استفاده کنید."
+    },
+    {
+      "id": "native.android.ca9fc2ce10f4028a",
+      "source": "QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
+      "translated": "کد QR از شناسهٔ محدودهٔ IPv6 استفاده می‌کند. از یک نشانی IPv6 بدون محدوده یا نام میزبان LAN استفاده کنید."
+    },
+    {
+      "id": "native.android.141236601fece71e",
+      "source": "IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname.",
+      "translated": "شناسه‌های محدودهٔ IPv6 پشتیبانی نمی‌شوند. از یک نشانی IPv6 بدون محدوده یا نام میزبان LAN استفاده کنید."
+    },
+    {
       "id": "native.android.47e3c19d55f0150b",
       "source": "Setup code has invalid gateway URL.",
       "translated": "کد راه‌اندازی URL نامعتبر gateway دارد."
@@ -1044,14 +1059,49 @@
       "translated": "آنلاین"
     },
     {
-      "id": "native.android.d42fe72f8e76b450",
-      "source": "OPENCLAW",
-      "translated": "OPENCLAW"
+      "id": "native.android.9ac2d4498b17d478",
+      "source": "Trust",
+      "translated": "اعتماد"
     },
     {
-      "id": "native.android.a5c2d7f27576f0c4",
-      "source": "Your personal AI assistant.\nExfoliate! Exfoliate!",
-      "translated": "دستیار هوش مصنوعی شخصی شما.\nلایه‌برداری! لایه‌برداری!"
+      "id": "native.android.e26ee07a1d1911be",
+      "source": "Cancel",
+      "translated": "لغو"
+    },
+    {
+      "id": "native.android.64c8db13ef91513c",
+      "source": "Welcome to OpenClaw",
+      "translated": "به OpenClaw خوش آمدید"
+    },
+    {
+      "id": "native.android.f941909a3fa51055",
+      "source": "OpenClaw logo",
+      "translated": "نشان‌واره OpenClaw"
+    },
+    {
+      "id": "native.android.cc878f72a6b70b23",
+      "source": "Connect to your Gateway",
+      "translated": "اتصال به Gateway"
+    },
+    {
+      "id": "native.android.bf3750bf264f0063",
+      "source": "Choose device permissions",
+      "translated": "مجوزهای دستگاه را انتخاب کنید"
+    },
+    {
+      "id": "native.android.3bfe29d4d13d3c3e",
+      "source": "Use OpenClaw from your phone",
+      "translated": "از OpenClaw در تلفن خود استفاده کنید"
+    },
+    {
+      "id": "native.android.c0b539eeb4612f5d",
+      "source": "Security notice",
+      "translated": "اعلان امنیتی"
+    },
+    {
+      "id": "native.android.5aed4b5c8d6b246d",
+      "source": "The connected OpenClaw agent can use device capabilities you enable. Continue only if you trust the Gateway and agent you connect to.",
+      "translated": "عامل OpenClaw متصل می‌تواند از قابلیت‌های دستگاهی که فعال می‌کنید استفاده کند. فقط در صورتی ادامه دهید که به Gateway و عاملی که به آن وصل می‌شوید اعتماد دارید."
     },
     {
       "id": "native.android.63c31ee564d63347",
@@ -1059,19 +1109,134 @@
       "translated": "اتصال به Gateway"
     },
     {
-      "id": "native.android.afdd3e2c10f56b75",
-      "source": "Setup code issue",
-      "translated": "مشکل کد راه‌اندازی"
+      "id": "native.android.58d80589d9d4b7ff",
+      "source": "Could not open setup guide.",
+      "translated": "راهنمای راه‌اندازی باز نشد."
     },
     {
-      "id": "native.android.084eda7046e91737",
-      "source": "Advanced",
-      "translated": "پیشرفته"
+      "id": "native.android.18d6dd32cfcc1c9a",
+      "source": "Scan QR or setup code",
+      "translated": "اسکن QR یا کد راه‌اندازی"
+    },
+    {
+      "id": "native.android.8b8acc5b98b8c99f",
+      "source": "Set up manually",
+      "translated": "راه‌اندازی دستی"
+    },
+    {
+      "id": "native.android.debd7b3e59db6ab2",
+      "source": "Before you start",
+      "translated": "قبل از شروع"
+    },
+    {
+      "id": "native.android.9cfcf68aae2c05c6",
+      "source": "Access to the Gateway device",
+      "translated": "دسترسی به دستگاه Gateway"
+    },
+    {
+      "id": "native.android.71ce00f359981a0b",
+      "source": "Phone can reach the Gateway",
+      "translated": "تلفن می‌تواند به Gateway دسترسی داشته باشد"
+    },
+    {
+      "id": "native.android.68a31cee94a9db86",
+      "source": "Android setup guide",
+      "translated": "راهنمای راه‌اندازی Android"
+    },
+    {
+      "id": "native.android.d514a981f80779e9",
+      "source": "Setup Gateway",
+      "translated": "راه‌اندازی Gateway"
+    },
+    {
+      "id": "native.android.6a45e2dae35ab5a7",
+      "source": "Start your Gateway.",
+      "translated": "Gateway خود را شروع کنید."
+    },
+    {
+      "id": "native.android.c6f9da7008df05a6",
+      "source": "Generate a QR code.",
+      "translated": "یک کد QR ایجاد کنید."
+    },
+    {
+      "id": "native.android.96d40475de2885d6",
+      "source": "Choose from gallery",
+      "translated": "انتخاب از گالری"
+    },
+    {
+      "id": "native.android.fd83bd36419ef526",
+      "source": "QR code not accepted",
+      "translated": "کد QR پذیرفته نشد"
+    },
+    {
+      "id": "native.android.4dde43318559c65d",
+      "source": "Choose another image",
+      "translated": "انتخاب تصویر دیگر"
+    },
+    {
+      "id": "native.android.54bab6e4054484d0",
+      "source": "Scan QR code",
+      "translated": "اسکن کد QR"
+    },
+    {
+      "id": "native.android.05987e822ac102ec",
+      "source": "Open the camera and frame the code from openclaw qr.",
+      "translated": "دوربین را باز کنید و کد openclaw qr را در کادر قرار دهید."
+    },
+    {
+      "id": "native.android.90fa932d2e0adbd9",
+      "source": "Align the QR code inside the square.",
+      "translated": "کد QR را داخل مربع تراز کنید."
+    },
+    {
+      "id": "native.android.7a817ddf54373dbf",
+      "source": "Camera access is needed to scan the setup QR.",
+      "translated": "برای اسکن QR راه‌اندازی، دسترسی به دوربین لازم است."
+    },
+    {
+      "id": "native.android.c8d5f12cb28f3853",
+      "source": "Allow camera",
+      "translated": "اجازه به دوربین"
+    },
+    {
+      "id": "native.android.7efba153567b1232",
+      "source": "Close scanner",
+      "translated": "بستن اسکنر"
+    },
+    {
+      "id": "native.android.b8d5431e1e441f74",
+      "source": "Enter setup code",
+      "translated": "وارد کردن کد راه‌اندازی"
     },
     {
       "id": "native.android.41e3fbccb2ad5a4c",
       "source": "Setup code",
       "translated": "کد راه‌اندازی"
+    },
+    {
+      "id": "native.android.06a2214da1eee841",
+      "source": "Paste setup code",
+      "translated": "چسباندن کد راه‌اندازی"
+    },
+    {
+      "id": "native.android.35aec8a97ac12e1c",
+      "source": "Setup code was not accepted",
+      "translated": "کد راه‌اندازی پذیرفته نشد"
+    },
+    {
+      "id": "native.android.9aaee5a05de93dbe",
+      "source": "Use setup code",
+      "translated": "استفاده از کد راه‌اندازی"
+    },
+    {
+      "id": "native.android.073c93545602b198",
+      "source": "Manual setup",
+      "translated": "راه‌اندازی دستی"
+    },
+    {
+      "id": "native.android.46d58ca58c32ad52",
+      "source": "Gateway URL",
+      "translated": "نشانی URL Gateway"
     },
     {
       "id": "native.android.d54b9e3433ffd809",
@@ -1084,24 +1249,29 @@
       "translated": "درگاه"
     },
     {
-      "id": "native.android.20d94e1cedd3f319",
-      "source": "TLS off",
-      "translated": "TLS خاموش"
+      "id": "native.android.1b0d9893ae4c0682",
+      "source": "Use the Gateway computer's LAN address or secure remote hostname.",
+      "translated": "از نشانی LAN رایانه Gateway یا نام میزبان راه دور امن استفاده کنید."
     },
     {
-      "id": "native.android.a3a158b4a10d34ba",
-      "source": "TLS on",
-      "translated": "TLS روشن"
+      "id": "native.android.bfc48711d6deed92",
+      "source": "Token",
+      "translated": "توکن"
     },
     {
-      "id": "native.android.a02f48c59c8b7b9d",
-      "source": "Local",
-      "translated": "محلی"
+      "id": "native.android.7ac2b9aec9d78cda",
+      "source": "Paste token",
+      "translated": "چسباندن توکن"
     },
     {
-      "id": "native.android.aae4212f2ff4df98",
-      "source": "Token optional",
-      "translated": "Token اختیاری"
+      "id": "native.android.96ba0e3919c3955a",
+      "source": "Paste a shared Gateway token or operator-issued token.",
+      "translated": "یک توکن مشترک Gateway یا توکن صادرشده توسط اپراتور را بچسبانید."
+    },
+    {
+      "id": "native.android.4a5a1702f0130328",
+      "source": "Password",
+      "translated": "رمز عبور"
     },
     {
       "id": "native.android.e7045d344dd32ddc",
@@ -1109,24 +1279,99 @@
       "translated": "Password اختیاری"
     },
     {
-      "id": "native.android.369ee061f6d7881f",
-      "source": "Pair with Gateway",
-      "translated": "جفت‌سازی با Gateway"
+      "id": "native.android.1259d0d0d1671ed7",
+      "source": "Connection type",
+      "translated": "نوع اتصال"
     },
     {
-      "id": "native.android.82b296ed39647687",
-      "source": "Last gateway",
-      "translated": "آخرین Gateway"
+      "id": "native.android.278d9abb3abc12e6",
+      "source": "Local network",
+      "translated": "شبکه محلی"
     },
     {
-      "id": "native.android.e0e5d2bb055863fb",
-      "source": "Edit connection",
-      "translated": "ویرایش اتصال"
+      "id": "native.android.4aa2b8be11a971eb",
+      "source": "Secure remote",
+      "translated": "ارتباط راه‌دور امن"
     },
     {
-      "id": "native.android.ea2f18dad7749613",
-      "source": "Copy diagnostic",
-      "translated": "کپی تشخیص"
+      "id": "native.android.8c31e2762b496d61",
+      "source": "Local works for LAN or emulator hosts. Secure remote is for wss:// or Tailscale Serve/Funnel.",
+      "translated": "محلی برای میزبان‌های LAN یا شبیه‌ساز کار می‌کند. ارتباط راه‌دور امن برای wss:// یا Tailscale Serve/Funnel است."
+    },
+    {
+      "id": "native.android.24a0a4819f223b87",
+      "source": "Could not test connection",
+      "translated": "امکان آزمایش اتصال وجود نداشت"
+    },
+    {
+      "id": "native.android.9a8f8ba539d4dd68",
+      "source": "Test connection",
+      "translated": "آزمایش اتصال"
+    },
+    {
+      "id": "native.android.a1c6ad798cdb4e32",
+      "source": "View details",
+      "translated": "مشاهده جزئیات"
+    },
+    {
+      "id": "native.android.ebdc41fd34eab0a5",
+      "source": "Connection details",
+      "translated": "جزئیات اتصال"
+    },
+    {
+      "id": "native.android.f982d1f6ad7b3e5d",
+      "source": "Copy",
+      "translated": "کپی"
+    },
+    {
+      "id": "native.android.fa2a2369f23aa195",
+      "source": "Close",
+      "translated": "بستن"
+    },
+    {
+      "id": "native.android.50cca1e186823cd6",
+      "source": "Details copied",
+      "translated": "جزئیات کپی شد"
+    },
+    {
+      "id": "native.android.31a4bf3ed4071f7c",
+      "source": "Approve node access",
+      "translated": "تأیید دسترسی node"
+    },
+    {
+      "id": "native.android.f43cb6ed03dc6766",
+      "source": "Gateway pairing is complete. Approve this phone as a node so OpenClaw can use the device capabilities you enable.",
+      "translated": "جفت‌سازی Gateway کامل شد. این تلفن را به‌عنوان یک node تأیید کنید تا OpenClaw بتواند از قابلیت‌های دستگاه که فعال می‌کنید استفاده کند."
+    },
+    {
+      "id": "native.android.8e49feba12c350ac",
+      "source": "On the Gateway computer, run:",
+      "translated": "روی رایانه Gateway، اجرا کنید:"
+    },
+    {
+      "id": "native.android.6189b5e2af7cc793",
+      "source": "Use the requestId from the pending command in the approve command.",
+      "translated": "از requestId مربوط به فرمان در انتظار، در فرمان approve استفاده کنید."
+    },
+    {
+      "id": "native.android.53bcd45eeb574d74",
+      "source": "I have approved",
+      "translated": "تأیید کرده‌ام"
+    },
+    {
+      "id": "native.android.cdc44aaeb8bd6e4a",
+      "source": "Still waiting for approval",
+      "translated": "هنوز در انتظار تأیید"
+    },
+    {
+      "id": "native.android.df5cc00eb95c21ad",
+      "source": "Run the approve command on the Gateway computer, then check again.",
+      "translated": "فرمان approve را روی رایانه Gateway اجرا کنید، سپس دوباره بررسی کنید."
+    },
+    {
+      "id": "native.android.f579f91c216dd6c4",
+      "source": "OK",
+      "translated": "باشه"
     },
     {
       "id": "native.android.b80462122abbe312",
@@ -1134,44 +1379,9 @@
       "translated": "کپی فرمان تأیید"
     },
     {
-      "id": "native.android.a31f2beb68298aa8",
-      "source": "Allow permissions",
-      "translated": "اجازه دادن به مجوزها"
-    },
-    {
-      "id": "native.android.b82104d8df1d4b4a",
-      "source": "These permissions keep OpenClaw secure\nand useful.",
-      "translated": "این مجوزها OpenClaw را امن\nو کاربردی نگه می‌دارند."
-    },
-    {
-      "id": "native.android.03b95088ba72bd8e",
-      "source": "Open $title",
-      "translated": "باز کردن $title"
-    },
-    {
-      "id": "native.android.f38ca3445453a6bb",
-      "source": "Choose what this phone can share with OpenClaw. You can change these later in Settings.",
-      "translated": "انتخاب کنید این تلفن چه چیزهایی را می‌تواند با OpenClaw به اشتراک بگذارد. می‌توانید بعداً این موارد را در تنظیمات تغییر دهید."
-    },
-    {
-      "id": "native.android.44549cfd7e6a1ab8",
-      "source": "Back",
-      "translated": "بازگشت"
-    },
-    {
-      "id": "native.android.4b54af42d17dec84",
-      "source": "Permission Setup",
-      "translated": "راه‌اندازی مجوزها"
-    },
-    {
-      "id": "native.android.437599c024df158e",
-      "source": "Granted",
-      "translated": "اعطا شده"
-    },
-    {
-      "id": "native.android.cf8344d3562e28e3",
-      "source": "Not granted",
-      "translated": "اعطا نشده"
+      "id": "native.android.d4c3bcf880727fb3",
+      "source": "Only enable access you are comfortable letting OpenClaw use while this phone is connected. You can change these later in Android Settings.",
+      "translated": "فقط دسترسی‌هایی را فعال کنید که با اجازه‌دادن به OpenClaw برای استفاده از آن‌ها هنگام اتصال این تلفن راحت هستید. می‌توانید بعداً این موارد را در تنظیمات Android تغییر دهید."
     },
     {
       "id": "native.android.d7ea800cc2475013",
@@ -1179,24 +1389,19 @@
       "translated": "ادامه"
     },
     {
-      "id": "native.android.547f11a819721ffb",
-      "source": "Scan fresh setup code",
-      "translated": "کد راه‌اندازی تازه را اسکن کنید"
+      "id": "native.android.44549cfd7e6a1ab8",
+      "source": "Back",
+      "translated": "بازگشت"
     },
     {
-      "id": "native.android.3b169db8b57795b5",
-      "source": "Retry connection",
-      "translated": "تلاش دوباره برای اتصال"
+      "id": "native.android.f3f0527db434d756",
+      "source": "Permissions",
+      "translated": "مجوزها"
     },
     {
-      "id": "native.android.e44224ed4df1700f",
-      "source": "Setup code expired. Scan a fresh setup QR.",
-      "translated": "کد راه‌اندازی منقضی شده است. یک QR راه‌اندازی تازه را اسکن کنید."
-    },
-    {
-      "id": "native.android.e03bb4ea463ba7a5",
-      "source": "Gateway access needs review. Check gateway authentication scopes, then retry.",
-      "translated": "دسترسی Gateway نیاز به بازبینی دارد. محدوده‌های احراز هویت gateway را بررسی کنید، سپس دوباره تلاش کنید."
+      "id": "native.android.29732759e050c874",
+      "source": "The code may have expired or been generated for another Gateway.",
+      "translated": "ممکن است کد منقضی شده باشد یا برای Gateway دیگری تولید شده باشد."
     },
     {
       "id": "native.android.511925b4321aae31",
@@ -1224,9 +1429,9 @@
       "translated": "احراز هویت ذخیره‌شده نامعتبر است. دوباره احراز هویت کنید یا این اتصال Gateway را بازنشانی کنید."
     },
     {
-      "id": "native.android.3f61f2c34784ed0f",
-      "source": "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
-      "translated": "احراز هویت Gateway پیکربندی نشده است. آن را روی میزبان gateway پیکربندی کنید، سپس دوباره تلاش کنید."
+      "id": "native.android.214b03b4cd2199b1",
+      "source": "Gateway authentication is not configured. Edit this connection and try again.",
+      "translated": "احراز هویت Gateway پیکربندی نشده است. این اتصال را ویرایش کنید و دوباره تلاش کنید."
     },
     {
       "id": "native.android.1ccbb6f3911e7219",
@@ -1244,9 +1449,14 @@
       "translated": "دستور تأیید کپی شد"
     },
     {
-      "id": "native.android.bc9715de99c769c7",
-      "source": "Diagnostic copied",
-      "translated": "عیب‌یابی کپی شد"
+      "id": "native.android.437599c024df158e",
+      "source": "Granted",
+      "translated": "اعطا شده"
+    },
+    {
+      "id": "native.android.cf8344d3562e28e3",
+      "source": "Not granted",
+      "translated": "اعطا نشده"
     },
     {
       "id": "native.android.561d07951dc36959",
@@ -2459,6 +2669,11 @@
       "translated": "نیازمند توجه"
     },
     {
+      "id": "native.android.8452bcda8a619361",
+      "source": "Open ${row.title}",
+      "translated": "باز کردن ${row.title}"
+    },
+    {
       "id": "native.android.a65477861c7203aa",
       "source": "Open session",
       "translated": "باز کردن جلسه"
@@ -2569,11 +2784,6 @@
       "translated": "باز کردن پروفایل"
     },
     {
-      "id": "native.android.8452bcda8a619361",
-      "source": "Open ${row.title}",
-      "translated": "باز کردن ${row.title}"
-    },
-    {
       "id": "native.android.22d755834386db07",
       "source": "Main session",
       "translated": "نشست اصلی"
@@ -2657,6 +2867,26 @@
       "id": "native.android.14d7845e9790eaab",
       "source": "Skill",
       "translated": "Skill"
+    },
+    {
+      "id": "native.android.efc938b5cc23e079",
+      "source": "Back",
+      "translated": "بازگشت"
+    },
+    {
+      "id": "native.android.3e0f25545a6ccfb4",
+      "source": "Terminal",
+      "translated": "ترمینال"
+    },
+    {
+      "id": "native.android.a196c4c819426137",
+      "source": "Terminal needs a connected gateway",
+      "translated": "ترمینال به یک Gateway متصل نیاز دارد"
+    },
+    {
+      "id": "native.android.9f3ceb93047671b5",
+      "source": "Connect to your gateway to open a shell in the agent workspace.",
+      "translated": "برای باز کردن یک shell در فضای کاری عامل، به Gateway خود متصل شوید."
     },
     {
       "id": "native.android.5e0524a5d86e673a",
@@ -2949,9 +3179,19 @@
       "translated": "ارسال"
     },
     {
+      "id": "native.android.ff4e568bce360d5f",
+      "source": "No commands found",
+      "translated": "هیچ دستوری یافت نشد"
+    },
+    {
       "id": "native.android.bef360f847488651",
       "source": "Image unavailable",
       "translated": "تصویر در دسترس نیست"
+    },
+    {
+      "id": "native.android.97a0b44d89402809",
+      "source": "Jump to latest",
+      "translated": "پرش به آخرین مورد"
     },
     {
       "id": "native.android.69239493702da212",
@@ -3019,6 +3259,11 @@
       "translated": "OpenClaw"
     },
     {
+      "id": "native.android.4437f3cbdb3c8cbe",
+      "source": "New chat",
+      "translated": "گفت‌وگوی جدید"
+    },
+    {
       "id": "native.android.0066c3883e9eff15",
       "source": "Refresh chat",
       "translated": "به‌روزرسانی گفتگو"
@@ -3032,6 +3277,11 @@
       "id": "native.android.882cc14a58e7e105",
       "source": "Loading session",
       "translated": "در حال بارگذاری نشست"
+    },
+    {
+      "id": "native.android.2c1106e1687ab258",
+      "source": "Jump to latest",
+      "translated": "پرش به آخرین مورد"
     },
     {
       "id": "native.android.9df2c9d68bad169f",
@@ -3074,6 +3324,11 @@
       "translated": "توقف"
     },
     {
+      "id": "native.android.5953c956ff208e6e",
+      "source": "No commands found",
+      "translated": "هیچ دستوری یافت نشد"
+    },
+    {
       "id": "native.android.8e3e367df24cae4b",
       "source": "Gateway offline",
       "translated": "Gateway آفلاین است"
@@ -3097,11 +3352,6 @@
       "id": "native.android.5054269049758d6a",
       "source": "Remove attachment",
       "translated": "حذف پیوست"
-    },
-    {
-      "id": "native.android.326caa6b92aa9bdf",
-      "source": "New chat",
-      "translated": "گفتگوی جدید"
     },
     {
       "id": "native.android.5fa853a957713a56",
@@ -3404,51 +3654,6 @@
       "translated": "نقطه پایانی حل‌شده"
     },
     {
-      "id": "native.android.3d9d01cc0af8727d",
-      "source": "Gateway Setup",
-      "translated": "راه‌اندازی Gateway"
-    },
-    {
-      "id": "native.android.fff6a6f130e88354",
-      "source": "Connect to your Gateway",
-      "translated": "به Gateway خود متصل شوید"
-    },
-    {
-      "id": "native.android.77a54beda22bfeb7",
-      "source": "Scan setup code",
-      "translated": "اسکن کد راه‌اندازی"
-    },
-    {
-      "id": "native.android.8f525f9218215b42",
-      "source": "Use your Gateway QR or setup code",
-      "translated": "از QR یا کد راه‌اندازی Gateway خود استفاده کنید"
-    },
-    {
-      "id": "native.android.40da32c36971b959",
-      "source": "Nearby gateway",
-      "translated": "Gateway نزدیک"
-    },
-    {
-      "id": "native.android.7423bd0086e6897e",
-      "source": "Enter gateway URL",
-      "translated": "نشانی URL Gateway را وارد کنید"
-    },
-    {
-      "id": "native.android.c9420b6801f5a76f",
-      "source": "Connect using a manual URL",
-      "translated": "اتصال با استفاده از URL دستی"
-    },
-    {
-      "id": "native.android.4b55356d9bf6e444",
-      "source": "Permissions",
-      "translated": "مجوزها"
-    },
-    {
-      "id": "native.android.c49a911b95af5d5d",
-      "source": "Done",
-      "translated": "انجام شد"
-    },
-    {
       "id": "native.android.288b83f93172c633",
       "source": "Verify the certificate fingerprint before trusting this gateway.\n\n%1$s",
       "translated": "پیش از اعتماد به این gateway، اثرانگشت گواهی را بررسی کنید.\n\n%1$s"
@@ -3457,11 +3662,6 @@
       "id": "native.android.6ad2d3f084142bed",
       "source": "The gateway certificate changed. Continue only if you expected this.\n\nOld SHA-256:\n%1$s\n\nNew SHA-256:\n%2$s",
       "translated": "گواهی gateway تغییر کرده است. فقط در صورتی ادامه دهید که انتظار این تغییر را داشتید.\n\nSHA-256 قدیمی:\n%1$s\n\nSHA-256 جدید:\n%2$s"
-    },
-    {
-      "id": "native.android.6ffa3d752514836d",
-      "source": "Gateway Recovery",
-      "translated": "بازیابی Gateway"
     },
     {
       "id": "native.apple.8f741d09cc1d5495",
@@ -4149,6 +4349,16 @@
       "translated": "ویرایش \\(skill.displayName)"
     },
     {
+      "id": "native.apple.de59fbc2807318fc",
+      "source": "Skill unavailable",
+      "translated": "Skill در دسترس نیست"
+    },
+    {
+      "id": "native.apple.2e0b19585f4fec18",
+      "source": "Return to the skills list and choose another skill.",
+      "translated": "به فهرست Skills برگردید و Skill دیگری انتخاب کنید."
+    },
+    {
       "id": "native.apple.29d82bdb73f5a551",
       "source": "Skill",
       "translated": "Skill"
@@ -4319,14 +4529,14 @@
       "translated": "آماده"
     },
     {
-      "id": "native.apple.e4d6867912dc7a57",
-      "source": "Chat is preparing",
-      "translated": "چت در حال آماده‌سازی است"
+      "id": "native.apple.202b97e93b938049",
+      "source": "What would you like to work on?",
+      "translated": "دوست دارید روی چه چیزی کار کنید؟"
     },
     {
-      "id": "native.apple.3a97c70e0e573740",
-      "source": "The operator session will attach when the gateway is ready.",
-      "translated": "نشست اپراتور زمانی متصل می‌شود که Gateway آماده باشد."
+      "id": "native.apple.32179ce0b6d4543f",
+      "source": "The session attaches once the gateway is ready.",
+      "translated": "پس از آماده شدن Gateway، نشست متصل می‌شود."
     },
     {
       "id": "native.apple.d19c9577e0fdfea7",
@@ -4352,6 +4562,36 @@
       "id": "native.apple.e8173c7d24457256",
       "source": "Message \\(self.agentDisplayName)...",
       "translated": "پیام به \\(self.agentDisplayName)..."
+    },
+    {
+      "id": "native.apple.14492e334b87e4f2",
+      "source": "Check OpenClaw status",
+      "translated": "بررسی وضعیت OpenClaw"
+    },
+    {
+      "id": "native.apple.bbf7bd23da1e7865",
+      "source": "Summarize the current OpenClaw status and tell me what needs attention.",
+      "translated": "وضعیت فعلی OpenClaw را خلاصه کن و بگو چه چیزهایی نیاز به توجه دارد."
+    },
+    {
+      "id": "native.apple.ea8cbb1b4230c652",
+      "source": "What can I control here?",
+      "translated": "اینجا چه چیزهایی را می‌توانم کنترل کنم؟"
+    },
+    {
+      "id": "native.apple.451d25bdb3130ed0",
+      "source": "Show me which phone controls and device capabilities are available right now.",
+      "translated": "به من نشان بده در حال حاضر کدام کنترل‌های تلفن و قابلیت‌های دستگاه در دسترس هستند."
+    },
+    {
+      "id": "native.apple.503ec402d08bd43a",
+      "source": "Help me start voice chat",
+      "translated": "برای شروع گفت‌وگوی صوتی به من کمک کن"
+    },
+    {
+      "id": "native.apple.65e462758be96174",
+      "source": "Help me start a realtime voice session from this phone.",
+      "translated": "به من کمک کن از این تلفن یک جلسه صوتی بلادرنگ شروع کنم."
     },
     {
       "id": "native.apple.e8018adcccaa2a4d",
@@ -4874,11 +5114,6 @@
       "translated": "عامل پیش‌فرض"
     },
     {
-      "id": "native.apple.0c99715b98ca22a2",
-      "source": "Card",
-      "translated": "کارت"
-    },
-    {
       "id": "native.apple.77a417fa0f2aba1d",
       "source": "Title",
       "translated": "عنوان"
@@ -4889,9 +5124,9 @@
       "translated": "وضعیت"
     },
     {
-      "id": "native.apple.68a43a9e8939f395",
-      "source": "Actions",
-      "translated": "اقدامات"
+      "id": "native.apple.0c99715b98ca22a2",
+      "source": "Card",
+      "translated": "کارت"
     },
     {
       "id": "native.apple.93eeaedb2ff61043",
@@ -4912,6 +5147,11 @@
       "id": "native.apple.dab3609e8a71ed48",
       "source": "Unarchive",
       "translated": "خارج کردن از بایگانی"
+    },
+    {
+      "id": "native.apple.68a43a9e8939f395",
+      "source": "Actions",
+      "translated": "اقدامات"
     },
     {
       "id": "native.apple.07a313e2adf7227b",
@@ -5249,6 +5489,11 @@
       "translated": "فعلاً نه"
     },
     {
+      "id": "native.apple.d77230c105bfb69f",
+      "source": "Checks",
+      "translated": "بررسی‌ها"
+    },
+    {
       "id": "native.apple.00a5d93faa0d6491",
       "source": "Last Run",
       "translated": "آخرین اجرا"
@@ -5349,29 +5594,39 @@
       "translated": "\\(diagnosticsIssueCount)"
     },
     {
-      "id": "native.apple.f93745d2550799de",
-      "source": "Location \\(self.locationLabel)",
-      "translated": "مکان \\(self.locationLabel)"
-    },
-    {
       "id": "native.apple.acbedcae9f022c29",
       "source": "Location off",
       "translated": "مکان خاموش است"
     },
     {
-      "id": "native.apple.539d9f2b9cde9cb3",
-      "source": "Off",
-      "translated": "خاموش"
+      "id": "native.apple.7d31e35d20b78c2d",
+      "source": "Location While Using",
+      "translated": "مکان هنگام استفاده"
     },
     {
-      "id": "native.apple.86a934ca21b05d9c",
-      "source": "While Using",
-      "translated": "هنگام استفاده"
+      "id": "native.apple.b94b8d4e935c81fb",
+      "source": "Location While Using, effective Off",
+      "translated": "مکان هنگام استفاده، عملاً خاموش"
     },
     {
-      "id": "native.apple.7774b67d295ea77d",
-      "source": "Always",
-      "translated": "همیشه"
+      "id": "native.apple.6533895b2a1f2b2d",
+      "source": "Location While Using, effective Always",
+      "translated": "مکان هنگام استفاده، عملاً همیشه"
+    },
+    {
+      "id": "native.apple.c3c9d2baa0607380",
+      "source": "Location Always",
+      "translated": "مکان همیشه"
+    },
+    {
+      "id": "native.apple.10fe695bb1cd3c62",
+      "source": "Location Always, effective While Using",
+      "translated": "مکان همیشه، عملاً هنگام استفاده"
+    },
+    {
+      "id": "native.apple.306454b6d067e1ee",
+      "source": "Location Always, effective Off",
+      "translated": "مکان همیشه، عملاً خاموش"
     },
     {
       "id": "native.apple.2829150c12160b55",
@@ -5399,7 +5654,7 @@
       "translated": "OpenClaw نمی‌تواند وضعیت فعلی مجوز اعلان‌ها را تعیین کند."
     },
     {
-      "id": "native.apple.cfec8b4d042a8066",
+      "id": "native.apple.80fade864c8ad242",
       "source": "Choose system, light, or dark appearance",
       "translated": "ظاهر سیستم، روشن یا تیره را انتخاب کنید"
     },
@@ -5409,24 +5664,19 @@
       "translated": "ظاهر"
     },
     {
-      "id": "native.apple.0b50dca4526336be",
-      "source": "1 agent",
-      "translated": "۱ عامل"
+      "id": "native.apple.f459c262b181a64b",
+      "source": "Selected",
+      "translated": "انتخاب‌شده"
     },
     {
-      "id": "native.apple.4e579fbdce03c39a",
-      "source": "\\(agentCount) agents",
-      "translated": "\\(agentCount) عامل"
+      "id": "native.apple.998482352d20ebaa",
+      "source": "System follows this device’s appearance setting.",
+      "translated": "سیستم از تنظیمات ظاهر این دستگاه پیروی می‌کند."
     },
     {
-      "id": "native.apple.31f9c5fa6c3ca5dd",
-      "source": "Reconnect",
-      "translated": "اتصال مجدد"
-    },
-    {
-      "id": "native.apple.1dc0c6ff4da2deca",
-      "source": "Diagnose",
-      "translated": "عیب‌یابی"
+      "id": "native.apple.70eca66c79335a6e",
+      "source": "Connection",
+      "translated": "اتصال"
     },
     {
       "id": "native.apple.2c2cdafd79f8ba5b",
@@ -5504,9 +5754,9 @@
       "translated": "اعلان‌ها خاموش هستند"
     },
     {
-      "id": "native.apple.91124246863fcbb2",
-      "source": "Enable Notifications to receive approval notifications while OpenClaw is not open.",
-      "translated": "اعلان‌ها را فعال کنید تا وقتی OpenClaw باز نیست، اعلان‌های تأیید را دریافت کنید."
+      "id": "native.apple.2e042499c42824f5",
+      "source": "Enable Notifications to receive approval alerts while OpenClaw is not open.",
+      "translated": "برای دریافت هشدارهای تأیید هنگامی که OpenClaw باز نیست، اعلان‌ها را فعال کنید."
     },
     {
       "id": "native.apple.fc1f2fdbe437cb9d",
@@ -5517,6 +5767,11 @@
       "id": "native.apple.34b198d5caa2f6de",
       "source": "Allow",
       "translated": "مجاز کردن"
+    },
+    {
+      "id": "native.apple.53c2c08c522ceb97",
+      "source": "Always Allow",
+      "translated": "همیشه مجاز باشد"
     },
     {
       "id": "native.apple.47aa34a39a9e05e5",
@@ -5534,19 +5789,9 @@
       "translated": "دوربین"
     },
     {
-      "id": "native.apple.68d3c5dbdb054a8b",
-      "source": "Allow the gateway to request photos or video while OpenClaw is foregrounded.",
-      "translated": "به Gateway اجازه دهید وقتی OpenClaw در پیش‌زمینه است، عکس یا ویدیو درخواست کند."
-    },
-    {
       "id": "native.apple.1826e2be7765ee28",
       "source": "Keep Awake",
       "translated": "بیدار نگه داشتن"
-    },
-    {
-      "id": "native.apple.1b32ce3678bba852",
-      "source": "Keep the screen awake while OpenClaw is open.",
-      "translated": "وقتی OpenClaw باز است، صفحه را روشن نگه دارید."
     },
     {
       "id": "native.apple.1dc29a33b5cd648a",
@@ -5564,7 +5809,7 @@
       "translated": "بررسی‌های برنامه، مجوز و موارد مرتبط با Gateway را بدون ویرایش راه‌اندازی اجرا کنید."
     },
     {
-      "id": "native.apple.5b8f207013e270d1",
+      "id": "native.apple.e06f8e5c2bb61fe0",
       "source": "Run Diagnostics",
       "translated": "اجرای عیب‌یابی"
     },
@@ -5599,19 +5844,9 @@
       "translated": "دسترسی به دوربین"
     },
     {
-      "id": "native.apple.3a6fd1b30501990f",
-      "source": "Disable to block camera capture requests from the gateway.",
-      "translated": "برای مسدود کردن درخواست‌های ضبط دوربین از gateway غیرفعال کنید."
-    },
-    {
       "id": "native.apple.a0ed2e431173327d",
       "source": "Background Listening",
       "translated": "گوش دادن در پس‌زمینه"
-    },
-    {
-      "id": "native.apple.3b12afefbeaca766",
-      "source": "Allow active Talk sessions to continue while the app is backgrounded.",
-      "translated": "اجازه دهید نشست‌های فعال Talk هنگام قرار گرفتن برنامه در پس‌زمینه ادامه پیدا کنند."
     },
     {
       "id": "native.apple.e16cdd169d3376c2",
@@ -5619,24 +5854,14 @@
       "translated": "اعلان‌ها"
     },
     {
-      "id": "native.apple.35714980723b430d",
-      "source": "OpenClaw app version",
-      "translated": "نسخه برنامه OpenClaw"
+      "id": "native.apple.31f9c5fa6c3ca5dd",
+      "source": "Reconnect",
+      "translated": "اتصال مجدد"
     },
     {
-      "id": "native.apple.f0a16e985312895b",
-      "source": "Device",
-      "translated": "دستگاه"
-    },
-    {
-      "id": "native.apple.bbb2c589c2049217",
-      "source": "iOS",
-      "translated": "iOS"
-    },
-    {
-      "id": "native.apple.5abfcc15e933c483",
-      "source": "No licenses bundled",
-      "translated": "هیچ مجوزی همراه نشده است"
+      "id": "native.apple.1dc0c6ff4da2deca",
+      "source": "Diagnose",
+      "translated": "عیب‌یابی"
     },
     {
       "id": "native.apple.af22fba4150f2c1d",
@@ -5647,6 +5872,16 @@
       "id": "native.apple.a82dc4a746268028",
       "source": "OpenClaw appreciates its partners in the open-source community.",
       "translated": "OpenClaw از شرکای خود در جامعهٔ متن‌باز قدردانی می‌کند."
+    },
+    {
+      "id": "native.apple.35714980723b430d",
+      "source": "OpenClaw app version",
+      "translated": "نسخه برنامه OpenClaw"
+    },
+    {
+      "id": "native.apple.bbb2c589c2049217",
+      "source": "iOS",
+      "translated": "iOS"
     },
     {
       "id": "native.apple.0f4e7486619df175",
@@ -5679,11 +5914,6 @@
       "translated": "عامل پیش‌فرض"
     },
     {
-      "id": "native.apple.bf6ddc5fa4832324",
-      "source": "Agent",
-      "translated": "عامل"
-    },
-    {
       "id": "native.apple.6ace5e6f09ec98c7",
       "source": "Default",
       "translated": "پیش‌فرض"
@@ -5692,11 +5922,6 @@
       "id": "native.apple.3de045f17ea3c6d0",
       "source": "Used for new Chat and Talk sessions.",
       "translated": "برای جلسه‌های جدید Chat و Talk استفاده می‌شود."
-    },
-    {
-      "id": "native.apple.d8a5510f1a2e1701",
-      "source": "Setup Code",
-      "translated": "کد راه‌اندازی"
     },
     {
       "id": "native.apple.313eb24efcb8d4a0",
@@ -5714,6 +5939,11 @@
       "translated": "اتصال"
     },
     {
+      "id": "native.apple.d8a5510f1a2e1701",
+      "source": "Setup Code",
+      "translated": "کد راه‌اندازی"
+    },
+    {
       "id": "native.apple.adb22453596f1d78",
       "source": "Discovered Gateways",
       "translated": "Gatewayهای کشف‌شده"
@@ -5722,6 +5952,11 @@
       "id": "native.apple.64b89f4aa3a81aef",
       "source": "No gateways found yet. Use manual setup if Bonjour is blocked.",
       "translated": "هنوز Gatewayی پیدا نشده است. اگر Bonjour مسدود شده است، از راه‌اندازی دستی استفاده کنید."
+    },
+    {
+      "id": "native.apple.08a67e763668db42",
+      "source": "Manual Gateway",
+      "translated": "Gateway دستی"
     },
     {
       "id": "native.apple.c39f3a597f674aca",
@@ -5794,6 +6029,11 @@
       "translated": "کلمات بیدارباش"
     },
     {
+      "id": "native.apple.698d47c5569f8d3b",
+      "source": "Voice",
+      "translated": "صدا"
+    },
+    {
       "id": "native.apple.24ee619948d75837",
       "source": "Provider",
       "translated": "ارائه‌دهنده"
@@ -5864,6 +6104,11 @@
       "translated": "گزارش‌های کشف"
     },
     {
+      "id": "native.apple.f0a16e985312895b",
+      "source": "Device",
+      "translated": "دستگاه"
+    },
+    {
       "id": "native.apple.540b648f9486bb50",
       "source": "Device Name",
       "translated": "نام دستگاه"
@@ -5872,11 +6117,6 @@
       "id": "native.apple.b7c2d54bc3894446",
       "source": "Instance ID",
       "translated": "شناسه نمونه"
-    },
-    {
-      "id": "native.apple.0fca0d66e1fc4fa0",
-      "source": "On",
-      "translated": "روشن"
     },
     {
       "id": "native.apple.1e38b2ba7a1c1e45",
@@ -6029,34 +6269,84 @@
       "translated": "فعلاً نه"
     },
     {
-      "id": "native.apple.96d3e8f61c156202",
+      "id": "native.apple.e4b15aef3c2e3da7",
       "source": "Talk",
       "translated": "گفت‌وگو"
     },
     {
-      "id": "native.apple.959cbf0dc86b975f",
-      "source": "Speakerphone",
-      "translated": "بلندگوی تلفن"
+      "id": "native.apple.ab3381742bdff650",
+      "source": "Conversation",
+      "translated": "مکالمه"
     },
     {
-      "id": "native.apple.a970f0cda8dbd58e",
+      "id": "native.apple.7af100f6640c6a69",
+      "source": "Agent",
+      "translated": "عامل"
+    },
+    {
+      "id": "native.apple.49c4de60117b1a98",
+      "source": "Session",
+      "translated": "نشست"
+    },
+    {
+      "id": "native.apple.37c29d2506b955e9",
+      "source": "Runtime",
+      "translated": "زمان اجرا"
+    },
+    {
+      "id": "native.apple.13e0ad79b141576e",
+      "source": "Voice Mode",
+      "translated": "حالت صوتی"
+    },
+    {
+      "id": "native.apple.e8035b71bab833c7",
+      "source": "Configured",
+      "translated": "پیکربندی‌شده"
+    },
+    {
+      "id": "native.apple.1b2845ec89d20eef",
+      "source": "Active",
+      "translated": "فعال"
+    },
+    {
+      "id": "native.apple.a82c07df64d13b23",
+      "source": "Transport",
+      "translated": "انتقال"
+    },
+    {
+      "id": "native.apple.384e097278f76954",
+      "source": "Last issue",
+      "translated": "آخرین مشکل"
+    },
+    {
+      "id": "native.apple.a6d8fc7bfd98836f",
+      "source": "Permission",
+      "translated": "مجوز"
+    },
+    {
+      "id": "native.apple.983bdcd5e3f1baa8",
+      "source": "Speech language",
+      "translated": "زبان گفتار"
+    },
+    {
+      "id": "native.apple.32e7fa2b1798e9c3",
+      "source": "Controls",
+      "translated": "کنترل‌ها"
+    },
+    {
+      "id": "native.apple.0eb012a5d3d81b32",
+      "source": "Speakerphone",
+      "translated": "بلندگو"
+    },
+    {
+      "id": "native.apple.ef8699e2718346da",
       "source": "Background listening",
       "translated": "گوش‌دادن در پس‌زمینه"
     },
     {
-      "id": "native.apple.76b07adcc9de7470",
-      "source": "Voice & Talk settings",
+      "id": "native.apple.1e6938a09b4fbe77",
+      "source": "Voice & Talk Settings",
       "translated": "تنظیمات صدا و گفت‌وگو"
-    },
-    {
-      "id": "native.apple.942dedfe130d0750",
-      "source": "Off",
-      "translated": "خاموش"
-    },
-    {
-      "id": "native.apple.82725d788d542179",
-      "source": "On",
-      "translated": "روشن"
     },
     {
       "id": "native.apple.05c434bb5fe3c275",
@@ -6082,26 +6372,6 @@
       "id": "native.apple.364bb50be18c79c7",
       "source": "Voice config failed",
       "translated": "پیکربندی صدا ناموفق بود"
-    },
-    {
-      "id": "native.apple.cf6697421a83de7f",
-      "source": "Needs approval",
-      "translated": "نیازمند تأیید"
-    },
-    {
-      "id": "native.apple.1fce63d9610404eb",
-      "source": "Pending",
-      "translated": "در انتظار"
-    },
-    {
-      "id": "native.apple.431c0caa27837957",
-      "source": "API key",
-      "translated": "کلید API"
-    },
-    {
-      "id": "native.apple.80a285e8c353f87f",
-      "source": "Config",
-      "translated": "پیکربندی"
     },
     {
       "id": "native.apple.87fca324b443b623",
@@ -6149,14 +6419,14 @@
       "translated": "جزئیات"
     },
     {
-      "id": "native.apple.677a41ec947a185b",
-      "source": "Technical details",
-      "translated": "جزئیات فنی"
-    },
-    {
       "id": "native.apple.79b30b1d014a383d",
       "source": "Copy diagnostics",
       "translated": "کپی کردن داده‌های تشخیصی"
+    },
+    {
+      "id": "native.apple.677a41ec947a185b",
+      "source": "Technical details",
+      "translated": "جزئیات فنی"
     },
     {
       "id": "native.apple.e87c850114041ce8",
@@ -6314,19 +6584,14 @@
       "translated": "نیاز به توجه دارد"
     },
     {
-      "id": "native.apple.fd04cd49334845a9",
-      "source": "Request",
-      "translated": "درخواست"
-    },
-    {
       "id": "native.apple.ae581f232bd0ecc0",
       "source": "Copy request ID",
       "translated": "کپی شناسه درخواست"
     },
     {
-      "id": "native.apple.50622ef698ba07f5",
-      "source": "Gateway command",
-      "translated": "دستور Gateway"
+      "id": "native.apple.fd04cd49334845a9",
+      "source": "Request",
+      "translated": "درخواست"
     },
     {
       "id": "native.apple.98df0e8ba486e4d1",
@@ -6334,9 +6599,9 @@
       "translated": "کپی دستور"
     },
     {
-      "id": "native.apple.6b1a61d6c9510bdb",
-      "source": "Help",
-      "translated": "راهنما"
+      "id": "native.apple.50622ef698ba07f5",
+      "source": "Gateway command",
+      "translated": "دستور Gateway"
     },
     {
       "id": "native.apple.32ea6ea1f9aea920",
@@ -6344,12 +6609,17 @@
       "translated": "باز کردن مستندات"
     },
     {
+      "id": "native.apple.6b1a61d6c9510bdb",
+      "source": "Help",
+      "translated": "راهنما"
+    },
+    {
       "id": "native.apple.7041ebbb775bfdd7",
       "source": "Technical details",
       "translated": "جزئیات فنی"
     },
     {
-      "id": "native.apple.d33a0c45a54fa8a3",
+      "id": "native.apple.f307f967ec2df705",
       "source": "Connection problem",
       "translated": "مشکل اتصال"
     },
@@ -6389,7 +6659,7 @@
       "translated": "هنوز هیچ gatewayای پیدا نشده است. مطمئن شوید gateway شما در حال اجراست و کشف Bonjour فعال است."
     },
     {
-      "id": "native.apple.476757fc54c63560",
+      "id": "native.apple.d2445a87f9cb6ff4",
       "source": "Quick Setup",
       "translated": "راه‌اندازی سریع"
     },
@@ -6499,6 +6769,111 @@
       "translated": "OpenClaw برای حالت گفت‌وگو و بیدارباش صوتی از تشخیص گفتار روی دستگاه استفاده می‌کند."
     },
     {
+      "id": "native.apple.cf0450b542893fb5",
+      "source": "Off",
+      "translated": "خاموش"
+    },
+    {
+      "id": "native.apple.c470d02f26ac51f6",
+      "source": "While Using",
+      "translated": "هنگام استفاده"
+    },
+    {
+      "id": "native.apple.663b3e453bb47c07",
+      "source": "Always",
+      "translated": "همیشه"
+    },
+    {
+      "id": "native.apple.2dc593065171c201",
+      "source": "Location sharing is disabled in OpenClaw. Location Services are off in iOS Settings.",
+      "translated": "اشتراک‌گذاری مکان در OpenClaw غیرفعال است. خدمات مکان در تنظیمات iOS خاموش است."
+    },
+    {
+      "id": "native.apple.1dc990a9cc0500c5",
+      "source": "Location sharing is disabled in OpenClaw. iOS currently allows Always.",
+      "translated": "اشتراک‌گذاری مکان در OpenClaw غیرفعال است. iOS در حال حاضر اجازه «همیشه» را می‌دهد."
+    },
+    {
+      "id": "native.apple.9a4e858d2b218d41",
+      "source": "Location sharing is disabled in OpenClaw. iOS currently allows While Using.",
+      "translated": "اشتراک‌گذاری مکان در OpenClaw غیرفعال است. iOS در حال حاضر اجازه «هنگام استفاده» را می‌دهد."
+    },
+    {
+      "id": "native.apple.ab481eb11214797f",
+      "source": "Location sharing is disabled.",
+      "translated": "اشتراک‌گذاری مکان غیرفعال است."
+    },
+    {
+      "id": "native.apple.34699b6a26b51110",
+      "source": "Location Services are off in iOS Settings.",
+      "translated": "خدمات مکان در تنظیمات iOS خاموش است."
+    },
+    {
+      "id": "native.apple.3b96b639e7442ee3",
+      "source": "Foreground location requests are allowed. Precise Location is on.",
+      "translated": "درخواست‌های مکان در پیش‌زمینه مجاز هستند. مکان دقیق روشن است."
+    },
+    {
+      "id": "native.apple.9e537e22f834f4d5",
+      "source": "Foreground location requests are allowed. Precise Location is off.",
+      "translated": "درخواست‌های مکان در پیش‌زمینه مجاز هستند. مکان دقیق خاموش است."
+    },
+    {
+      "id": "native.apple.3241d6de1ab6b340",
+      "source": "Foreground location requests are allowed.",
+      "translated": "درخواست‌های مکان در پیش‌زمینه مجاز هستند."
+    },
+    {
+      "id": "native.apple.7b16935cf96c6ee3",
+      "source": "Background location requests and significant-change updates are allowed. Precise Location is on.",
+      "translated": "درخواست‌های مکان در پس‌زمینه و به‌روزرسانی‌های تغییر مهم مجاز هستند. مکان دقیق روشن است."
+    },
+    {
+      "id": "native.apple.b1503179f7e1058d",
+      "source": "Background location requests and significant-change updates are allowed. Precise Location is off.",
+      "translated": "درخواست‌های مکان در پس‌زمینه و به‌روزرسانی‌های تغییر مهم مجاز هستند. مکان دقیق خاموش است."
+    },
+    {
+      "id": "native.apple.6f63c4f93b7a9ab5",
+      "source": "Background location requests and significant-change updates are allowed.",
+      "translated": "درخواست‌های مکان در پس‌زمینه و به‌روزرسانی‌های تغییر مهم مجاز هستند."
+    },
+    {
+      "id": "native.apple.95a6772115ad8b63",
+      "source": "Always is selected, but iOS currently allows location only while using the app. Precise Location is on.",
+      "translated": "Always انتخاب شده است، اما iOS در حال حاضر فقط هنگام استفاده از برنامه اجازهٔ دسترسی به موقعیت مکانی را می‌دهد. Precise Location روشن است."
+    },
+    {
+      "id": "native.apple.8ab7fd180dc593f6",
+      "source": "Always is selected, but iOS currently allows location only while using the app. Precise Location is off.",
+      "translated": "Always انتخاب شده است، اما iOS در حال حاضر فقط هنگام استفاده از برنامه اجازهٔ دسترسی به موقعیت مکانی را می‌دهد. Precise Location خاموش است."
+    },
+    {
+      "id": "native.apple.15bc589594491413",
+      "source": "Always is selected, but iOS currently allows location only while using the app.",
+      "translated": "Always انتخاب شده است، اما iOS در حال حاضر فقط هنگام استفاده از برنامه اجازهٔ دسترسی به موقعیت مکانی را می‌دهد."
+    },
+    {
+      "id": "native.apple.30ce7ced43a0a752",
+      "source": "Location permission is denied in iOS Settings.",
+      "translated": "دسترسی به موقعیت مکانی در تنظیمات iOS رد شده است."
+    },
+    {
+      "id": "native.apple.0de03d90e4280432",
+      "source": "Location permission is restricted on this device.",
+      "translated": "دسترسی به موقعیت مکانی در این دستگاه محدود شده است."
+    },
+    {
+      "id": "native.apple.0d0506a7417e7d92",
+      "source": "Choose a location mode to request iOS permission.",
+      "translated": "برای درخواست مجوز iOS، یک حالت موقعیت مکانی انتخاب کنید."
+    },
+    {
+      "id": "native.apple.633f011b81108a8c",
+      "source": "OpenClaw cannot determine the current iOS location permission.",
+      "translated": "OpenClaw نمی‌تواند مجوز فعلی موقعیت مکانی iOS را تشخیص دهد."
+    },
+    {
       "id": "native.apple.0d030e96f7738497",
       "source": "Action required",
       "translated": "اقدام لازم است"
@@ -6559,34 +6934,19 @@
       "translated": "به OpenClaw خوش آمدید"
     },
     {
-      "id": "native.apple.116e17ea3a036818",
-      "source": "Turn this device into a secure OpenClaw node for chat, voice, camera, and device tools.",
-      "translated": "این دستگاه را به یک گره امن OpenClaw برای چت، صدا، دوربین و ابزارهای دستگاه تبدیل کنید."
+      "id": "native.apple.aec45c66e9d1436e",
+      "source": "The connected agent can use capabilities you enable, including camera, microphone, photos, contacts, calendar, and location. Continue only if you trust the gateway and agent.",
+      "translated": "عامل متصل می‌تواند از قابلیت‌هایی که فعال می‌کنید استفاده کند، از جمله دوربین، میکروفون، عکس‌ها، مخاطبان، تقویم و موقعیت مکانی. فقط در صورتی ادامه دهید که به gateway و عامل اعتماد دارید."
     },
     {
-      "id": "native.apple.a715ab755d539d54",
-      "source": "Connect to your gateway",
-      "translated": "به gateway خود متصل شوید"
+      "id": "native.apple.f755248f69e3e497",
+      "source": "Security",
+      "translated": "امنیت"
     },
     {
-      "id": "native.apple.701ae9ceb7952290",
-      "source": "Choose device permissions",
-      "translated": "مجوزهای دستگاه را انتخاب کنید"
-    },
-    {
-      "id": "native.apple.3d6efa9b4d988d3a",
-      "source": "Use OpenClaw from your phone",
-      "translated": "از OpenClaw در تلفن خود استفاده کنید"
-    },
-    {
-      "id": "native.apple.09e7832b23cf14f6",
-      "source": "Security notice",
-      "translated": "اعلان امنیتی"
-    },
-    {
-      "id": "native.apple.26d5f6d128f7d123",
-      "source": "The connected OpenClaw agent can use device capabilities you enable, such as camera, microphone, photos, contacts, calendar, and location. Continue only if you trust the gateway and agent you connect to.",
-      "translated": "عامل متصل OpenClaw می‌تواند از قابلیت‌های دستگاه که فعال می‌کنید، مانند دوربین، میکروفون، عکس‌ها، مخاطبین، تقویم و موقعیت مکانی استفاده کند. فقط در صورتی ادامه دهید که به Gateway و عاملی که به آن متصل می‌شوید اعتماد دارید."
+      "id": "native.apple.116debd4caba7aff",
+      "source": "You can change permissions later in Settings.",
+      "translated": "بعداً می‌توانید مجوزها را در Settings تغییر دهید."
     },
     {
       "id": "native.apple.cae311a6e975c879",
@@ -6599,29 +6959,34 @@
       "translated": "اتصال Gateway"
     },
     {
-      "id": "native.apple.e38067caa3fed1cd",
-      "source": "Scan a QR code from your OpenClaw gateway or continue with manual setup.",
-      "translated": "یک کد QR را از Gateway ‏OpenClaw خود اسکن کنید یا با راه‌اندازی دستی ادامه دهید."
-    },
-    {
-      "id": "native.apple.90592a5f545c102a",
-      "source": "How to pair",
-      "translated": "نحوه جفت‌سازی"
-    },
-    {
-      "id": "native.apple.005ae52ec5edd8a1",
-      "source": "In your OpenClaw chat, run",
-      "translated": "در گفتگوی OpenClaw خود، اجرا کنید"
-    },
-    {
       "id": "native.apple.9f65b2eadb6aee92",
       "source": "/pair qr",
       "translated": "/pair qr"
     },
     {
-      "id": "native.apple.470229f716c184bb",
-      "source": "Then scan the QR code here to connect this device.",
-      "translated": "سپس کد QR را اینجا اسکن کنید تا این دستگاه متصل شود."
+      "id": "native.apple.fe3269c93d6f8524",
+      "source": "Copied",
+      "translated": "کپی شد"
+    },
+    {
+      "id": "native.apple.bad4a8110ca864e1",
+      "source": "Copy",
+      "translated": "کپی"
+    },
+    {
+      "id": "native.apple.b6f3f5c300b28f17",
+      "source": "Copy pair command",
+      "translated": "کپی کردن فرمان جفت‌سازی"
+    },
+    {
+      "id": "native.apple.7308cbcb1e40d70e",
+      "source": "Pair command copied",
+      "translated": "فرمان جفت‌سازی کپی شد"
+    },
+    {
+      "id": "native.apple.b727174424127618",
+      "source": "Run this in your OpenClaw chat, then scan the code.",
+      "translated": "این را در چت OpenClaw خود اجرا کنید، سپس کد را اسکن کنید."
     },
     {
       "id": "native.apple.429ac70f39c21302",
@@ -6689,7 +7054,7 @@
       "translated": "تأیید"
     },
     {
-      "id": "native.apple.a5fe3de8fc43f3da",
+      "id": "native.apple.80a2693bba128a6c",
       "source": "Scan QR Code",
       "translated": "اسکن کد QR"
     },
@@ -6769,11 +7134,6 @@
       "translated": "بازگشت به انتخاب حالت"
     },
     {
-      "id": "native.apple.07ebd3b75969629f",
-      "source": "Discovered Gateways",
-      "translated": "Gatewayهای کشف‌شده"
-    },
-    {
       "id": "native.apple.2f00ef4bc35ecb8d",
       "source": "No gateways found yet.",
       "translated": "هنوز هیچ gatewayی پیدا نشده است."
@@ -6787,6 +7147,11 @@
       "id": "native.apple.94c9697fb748d05d",
       "source": "Restart Discovery",
       "translated": "شروع دوبارهٔ کشف"
+    },
+    {
+      "id": "native.apple.07ebd3b75969629f",
+      "source": "Discovered Gateways",
+      "translated": "Gatewayهای کشف‌شده"
     },
     {
       "id": "native.apple.1284354b0d0098ad",
@@ -6844,9 +7209,9 @@
       "translated": "تلاش دوباره برای اتصال"
     },
     {
-      "id": "native.apple.f50052c1d760ec10",
-      "source": "Open OpenClaw",
-      "translated": "باز کردن OpenClaw"
+      "id": "native.apple.e674edbcb002aec6",
+      "source": "Go to Chat",
+      "translated": "رفتن به چت"
     },
     {
       "id": "native.apple.4679e949156e07e3",
@@ -7084,6 +7449,11 @@
       "translated": "وظایف Cron"
     },
     {
+      "id": "native.apple.b3b5114b91a8db8f",
+      "source": "Terminal",
+      "translated": "ترمینال"
+    },
+    {
       "id": "native.apple.584dfce592c64899",
       "source": "Docs",
       "translated": "اسناد"
@@ -7102,11 +7472,6 @@
       "id": "native.apple.e69088f1f2dcbd99",
       "source": "Connection",
       "translated": "اتصال"
-    },
-    {
-      "id": "native.apple.bb572eab08269809",
-      "source": "Privacy & Access",
-      "translated": "حریم خصوصی و دسترسی"
     },
     {
       "id": "native.apple.4dac301c7e0c921c",
@@ -7152,6 +7517,11 @@
       "id": "native.apple.d6fd5e9f85b0e298",
       "source": "List, add, and complete reminders.",
       "translated": "یادآورها را فهرست، اضافه و کامل کنید."
+    },
+    {
+      "id": "native.apple.bb572eab08269809",
+      "source": "Privacy & Access",
+      "translated": "حریم خصوصی و دسترسی"
     },
     {
       "id": "native.apple.651cc89381dd69c0",
@@ -7222,6 +7592,31 @@
       "id": "native.apple.994760420a194561",
       "source": "Voice Wake triggered",
       "translated": "بیدارباش صوتی فعال شد"
+    },
+    {
+      "id": "native.apple.8ba33bf5712e3af2",
+      "source": "Terminal",
+      "translated": "ترمینال"
+    },
+    {
+      "id": "native.apple.2f67b32536f24e9d",
+      "source": "Gateway settings",
+      "translated": "تنظیمات Gateway"
+    },
+    {
+      "id": "native.apple.25e3befd890f1a73",
+      "source": "Terminal needs a connected gateway",
+      "translated": "ترمینال به یک Gateway متصل نیاز دارد"
+    },
+    {
+      "id": "native.apple.197411362978db2d",
+      "source": "Connect to your gateway to open a shell in the agent workspace.",
+      "translated": "برای باز کردن یک shell در فضای کاری عامل، به Gateway خود متصل شوید."
+    },
+    {
+      "id": "native.apple.0a687ce373931085",
+      "source": "Open Gateway Settings",
+      "translated": "باز کردن تنظیمات Gateway"
     },
     {
       "id": "native.apple.3b21081fb5ce84ba",
@@ -7609,6 +8004,11 @@
       "translated": "رد کردن"
     },
     {
+      "id": "native.apple.6fdc607c6178ba31",
+      "source": "OpenClaw on GitHub",
+      "translated": "OpenClaw در GitHub"
+    },
+    {
       "id": "native.apple.5ac0c79487a492b4",
       "source": "OpenClaw",
       "translated": "OpenClaw"
@@ -7687,6 +8087,26 @@
       "id": "native.apple.69b64bb81b900cc4",
       "source": "\\(user)@\\(host):\\(port)",
       "translated": "\\(user)@\\(host):\\(port)"
+    },
+    {
+      "id": "native.apple.cfc2509b8bbcf1d7",
+      "source": "OpenClaw Gateway \\(version) is ready.",
+      "translated": "OpenClaw Gateway \\(version) آماده است."
+    },
+    {
+      "id": "native.apple.9b767e46895714f9",
+      "source": "OpenClaw Gateway is not installed yet.",
+      "translated": "OpenClaw Gateway هنوز نصب نشده است."
+    },
+    {
+      "id": "native.apple.b4dc58a1b294e140",
+      "source": "The OpenClaw Gateway could not be verified. Setup will repair it.",
+      "translated": "OpenClaw Gateway تأیید نشد. راه‌اندازی آن را تعمیر خواهد کرد."
+    },
+    {
+      "id": "native.apple.4088056ae7b0f3b4",
+      "source": "Gateway \\(found) does not match app \\(required). Setup will update it.",
+      "translated": "Gateway \\(found) با برنامه \\(required) مطابقت ندارد. راه‌اندازی آن را به‌روزرسانی خواهد کرد."
     },
     {
       "id": "native.apple.6f14c557e2573526",
@@ -9934,6 +10354,36 @@
       "translated": "بعدی"
     },
     {
+      "id": "native.apple.6124d93872cfcfe4",
+      "source": "Crestodian is working…",
+      "translated": "Crestodian در حال کار است…"
+    },
+    {
+      "id": "native.apple.105683a219ce17d7",
+      "source": "Restart",
+      "translated": "راه‌اندازی مجدد"
+    },
+    {
+      "id": "native.apple.839da8db3e4256b2",
+      "source": "Enter secret…",
+      "translated": "رمز را وارد کنید…"
+    },
+    {
+      "id": "native.apple.3e9e9347173fffbc",
+      "source": "Reply to Crestodian… (yes sets everything up)",
+      "translated": "به Crestodian پاسخ دهید… (yes همه‌چیز را راه‌اندازی می‌کند)"
+    },
+    {
+      "id": "native.apple.a63c9bf74cc6fa3e",
+      "source": "Talk to Crestodian",
+      "translated": "با Crestodian صحبت کنید"
+    },
+    {
+      "id": "native.apple.c29bee62e4f63d1c",
+      "source": "Crestodian is OpenClaw's setup custodian. It finds AI access you already have — a Claude Code or Codex login, or API keys — and sets everything up when you say yes. Just tell it what you want.",
+      "translated": "Crestodian متولی راه‌اندازی OpenClaw است. دسترسی‌های AI را که از قبل دارید پیدا می‌کند — ورود به Claude Code یا Codex، یا کلیدهای API — و وقتی yes بگویید همه‌چیز را راه‌اندازی می‌کند. فقط به آن بگویید چه می‌خواهید."
+    },
+    {
       "id": "native.apple.c8a2f8dc424fe447",
       "source": "Back",
       "translated": "بازگشت"
@@ -9944,29 +10394,54 @@
       "translated": "به OpenClaw خوش آمدید"
     },
     {
-      "id": "native.apple.69f81c58c14a5df4",
-      "source": "OpenClaw is a powerful personal AI assistant that can connect to WhatsApp or Telegram.",
-      "translated": "OpenClaw یک دستیار هوش مصنوعی شخصی قدرتمند است که می‌تواند به WhatsApp یا Telegram متصل شود."
+      "id": "native.apple.dd7411f18b0fe203",
+      "source": "OpenClaw is your personal AI assistant. It can answer questions, work with files and apps, and connect to services like WhatsApp and Telegram through a Gateway you control.",
+      "translated": "OpenClaw دستیار هوش مصنوعی شخصی شماست. می‌تواند به پرسش‌ها پاسخ دهد، با فایل‌ها و برنامه‌ها کار کند و از طریق Gateway که شما کنترل می‌کنید به سرویس‌هایی مانند WhatsApp و Telegram متصل شود."
     },
     {
-      "id": "native.apple.e75671ec2ae4bf9d",
-      "source": "Security notice",
-      "translated": "اعلان امنیتی"
+      "id": "native.apple.86e4509eb0626ec8",
+      "source": "Ask, create, and automate",
+      "translated": "بپرسید، خلق کنید و خودکارسازی کنید"
     },
     {
-      "id": "native.apple.c4778e8647a5aa9f",
-      "source": "The connected AI agent (e.g. Claude) can trigger powerful actions on your Mac, including running commands, reading/writing files, and capturing screenshots — depending on the permissions you grant.\n\nOnly enable OpenClaw if you understand the risks and trust the prompts and integrations you use.",
-      "translated": "عامل هوش مصنوعی متصل (مثلاً Claude) می‌تواند بسته به مجوزهایی که اعطا می‌کنید، اقدام‌های قدرتمندی را روی Mac شما اجرا کند، از جمله اجرای فرمان‌ها، خواندن/نوشتن فایل‌ها و گرفتن اسکرین‌شات.\n\nفقط در صورتی OpenClaw را فعال کنید که خطرات را درک می‌کنید و به پرامپت‌ها و یکپارچه‌سازی‌هایی که استفاده می‌کنید اعتماد دارید."
+      "id": "native.apple.a6950fed99ae450d",
+      "source": "Give your assistant tasks and let it help across your Mac.",
+      "translated": "به دستیار خود وظایفی بدهید و بگذارید در سراسر Mac به شما کمک کند."
     },
     {
-      "id": "native.apple.9fb535bde270a73e",
-      "source": "Choose your Gateway",
-      "translated": "Gateway خود را انتخاب کنید"
+      "id": "native.apple.16ab10ed9293b718",
+      "source": "Connect the tools you use",
+      "translated": "ابزارهایی را که استفاده می‌کنید متصل کنید"
     },
     {
-      "id": "native.apple.16dfe3ecc39e7bd5",
-      "source": "OpenClaw uses a single Gateway that stays running. Pick this Mac, connect to a discovered gateway nearby, or configure later.",
-      "translated": "OpenClaw از یک Gateway واحد استفاده می‌کند که در حال اجرا باقی می‌ماند. این Mac را انتخاب کنید، به یک gateway شناسایی‌شده در نزدیکی متصل شوید، یا بعداً پیکربندی کنید."
+      "id": "native.apple.687c1c2abdb8581e",
+      "source": "Bring conversations and services together in one assistant.",
+      "translated": "گفتگوها و سرویس‌ها را در یک دستیار گرد هم بیاورید."
+    },
+    {
+      "id": "native.apple.caf822c2d393914f",
+      "source": "Stay in control",
+      "translated": "کنترل را در دست داشته باشید"
+    },
+    {
+      "id": "native.apple.203bfa5e80135faa",
+      "source": "Choose where the Gateway runs and which permissions OpenClaw receives.",
+      "translated": "انتخاب کنید Gateway کجا اجرا شود و OpenClaw چه مجوزهایی دریافت کند."
+    },
+    {
+      "id": "native.apple.fb64a5b187cfdc15",
+      "source": "OpenClaw can take actions using the permissions and services you enable. Review prompts and only connect tools you trust.",
+      "translated": "OpenClaw می‌تواند با استفاده از مجوزها و سرویس‌هایی که فعال می‌کنید اقداماتی انجام دهد. اعلان‌ها را بررسی کنید و فقط ابزارهایی را متصل کنید که به آن‌ها اعتماد دارید."
+    },
+    {
+      "id": "native.apple.2033d33228ce52d7",
+      "source": "Where should OpenClaw run?",
+      "translated": "OpenClaw کجا باید اجرا شود؟"
+    },
+    {
+      "id": "native.apple.4791cce2ae762f19",
+      "source": "For the simplest setup, run the Gateway on this Mac. OpenClaw installs it and keeps it running for you.",
+      "translated": "برای ساده‌ترین راه‌اندازی، Gateway را روی این Mac اجرا کنید. OpenClaw آن را نصب می‌کند و برای شما در حال اجرا نگه می‌دارد."
     },
     {
       "id": "native.apple.300a583f28880928",
@@ -10139,49 +10614,49 @@
       "translated": "اعطای مجوزها"
     },
     {
-      "id": "native.apple.0cbf774c4168d80b",
-      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac.",
-      "translated": "این مجوزهای macOS به OpenClaw اجازه می‌دهند برنامه‌ها را خودکارسازی کند و زمینه را در این Mac ثبت کند."
+      "id": "native.apple.ce0d1241d7417406",
+      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac. Status updates automatically.",
+      "translated": "این مجوزهای macOS به OpenClaw اجازه می‌دهند برنامه‌ها را خودکار کند و زمینه را در این Mac ثبت کند. وضعیت به‌طور خودکار به‌روزرسانی می‌شود."
     },
     {
-      "id": "native.apple.c9c5c08199b23e4a",
-      "source": "Refresh status",
-      "translated": "تازه‌سازی وضعیت"
+      "id": "native.apple.8d7590f1d8f61a1d",
+      "source": "Setting up OpenClaw",
+      "translated": "در حال راه‌اندازی OpenClaw"
     },
     {
-      "id": "native.apple.507f071d2b76be9e",
-      "source": "Install the CLI",
-      "translated": "نصب CLI"
+      "id": "native.apple.e88512a0fe7fb140",
+      "source": "OpenClaw is installing the local Gateway and its managed runtime.",
+      "translated": "OpenClaw در حال نصب Gateway محلی و محیط اجرای مدیریت‌شدهٔ آن است."
     },
     {
-      "id": "native.apple.5ced9b0fad1555e0",
-      "source": "Required for local mode: installs `openclaw` so launchd can run the gateway.",
-      "translated": "برای حالت محلی لازم است: `openclaw` را نصب می‌کند تا launchd بتواند Gateway را اجرا کند."
+      "id": "native.apple.0c05ab4b362710de",
+      "source": "Checking existing setup…",
+      "translated": "در حال بررسی راه‌اندازی موجود…"
     },
     {
-      "id": "native.apple.fa55cb789ef49397",
-      "source": "Install CLI",
-      "translated": "نصب CLI"
+      "id": "native.apple.56b68eb592ecf449",
+      "source": "Installing the Gateway…",
+      "translated": "در حال نصب Gateway…"
     },
     {
-      "id": "native.apple.03ab2f6a2e08734d",
-      "source": "Reinstall CLI",
-      "translated": "نصب دوباره CLI"
+      "id": "native.apple.80155398d97fbe63",
+      "source": "Gateway installed",
+      "translated": "Gateway نصب شد"
     },
     {
-      "id": "native.apple.d977c700e4ece7fb",
-      "source": "Copy install command",
-      "translated": "کپی فرمان نصب"
+      "id": "native.apple.2d2acbf2e16f8604",
+      "source": "Retry setup",
+      "translated": "تلاش دوباره برای راه‌اندازی"
     },
     {
-      "id": "native.apple.e6a9668517354178",
-      "source": "Installed at \\(loc)",
-      "translated": "در \\(loc) نصب شد"
+      "id": "native.apple.4d58294df8d0b1e6",
+      "source": "Check again",
+      "translated": "دوباره بررسی کنید"
     },
     {
-      "id": "native.apple.ac9f9e9da6ae6605",
-      "source": "Installs a user-space Node 22.19+ runtime and the CLI (no Homebrew).\nRerun anytime to reinstall or update.",
-      "translated": "یک runtime کاربری Node 22.19+ و CLI را نصب می‌کند (بدون Homebrew).\nبرای نصب دوباره یا به‌روزرسانی، هر زمان دوباره اجرا کنید."
+      "id": "native.apple.15cfa96c75b57b04",
+      "source": "Uses a private user-space install. No Terminal, administrator access, or Homebrew required.",
+      "translated": "از نصب خصوصی در فضای کاربر استفاده می‌کند. به Terminal، دسترسی administrator یا Homebrew نیازی نیست."
     },
     {
       "id": "native.apple.155fc8bc8b9f8c3f",
@@ -10244,9 +10719,9 @@
       "translated": "با عامل خود آشنا شوید"
     },
     {
-      "id": "native.apple.dad36dffbcbdfa9c",
-      "source": "This is a dedicated onboarding chat. Your agent will introduce itself, learn who you are, and help you connect WhatsApp or Telegram if you want.",
-      "translated": "این یک گفت‌وگوی اختصاصی برای شروع کار است. عامل شما خود را معرفی می‌کند، با شما آشنا می‌شود و اگر بخواهید به شما کمک می‌کند WhatsApp یا Telegram را متصل کنید."
+      "id": "native.apple.2c5c8568a34d4f0f",
+      "source": "This is a dedicated onboarding chat. Your agent will introduce itself, learn who you are, and help you connect Discord, Slack, Telegram, WhatsApp, or another channel if you want.",
+      "translated": "این یک گفتگوی اختصاصی برای راه‌اندازی اولیه است. عامل شما خود را معرفی می‌کند، با شما آشنا می‌شود و اگر بخواهید به شما کمک می‌کند Discord، Slack، Telegram، WhatsApp یا کانال دیگری را متصل کنید."
     },
     {
       "id": "native.apple.5e1277166b2ad41a",
@@ -10284,9 +10759,9 @@
       "translated": "برای گفت‌وگوی سریع و وضعیت، روی آیکن نوار منوی OpenClaw کلیک کنید."
     },
     {
-      "id": "native.apple.1a91058f54cbd6e2",
-      "source": "Connect WhatsApp or Telegram",
-      "translated": "اتصال WhatsApp یا Telegram"
+      "id": "native.apple.1b6cfcf3be8765c2",
+      "source": "Connect Discord, Slack, Telegram, WhatsApp, …",
+      "translated": "اتصال Discord، Slack، Telegram، WhatsApp، …"
     },
     {
       "id": "native.apple.568b8fcf5608d3ea",
@@ -10367,56 +10842,6 @@
       "id": "native.apple.b82621bc28d4c6e3",
       "source": "No skills reported yet.",
       "translated": "هنوز هیچ Skillsی گزارش نشده است."
-    },
-    {
-      "id": "native.apple.a611a5555d06da70",
-      "source": "Setup Wizard",
-      "translated": "جادوگر راه‌اندازی"
-    },
-    {
-      "id": "native.apple.195e6fbfdd7f4647",
-      "source": "Follow the guided setup from the Gateway. This keeps onboarding in sync with the CLI.",
-      "translated": "راه‌اندازی هدایت‌شده را از Gateway دنبال کنید. این کار فرایند ورود اولیه را با CLI همگام نگه می‌دارد."
-    },
-    {
-      "id": "native.apple.593a59a20ed22b12",
-      "source": "Wizard error",
-      "translated": "خطای جادوگر"
-    },
-    {
-      "id": "native.apple.5ad203347ffbe0e8",
-      "source": "Retry",
-      "translated": "تلاش دوباره"
-    },
-    {
-      "id": "native.apple.48cc28b5b02b9140",
-      "source": "Starting wizard…",
-      "translated": "در حال شروع جادوگر…"
-    },
-    {
-      "id": "native.apple.3559abd61b4a02b3",
-      "source": "Wizard complete. Continue to the next step.",
-      "translated": "جادوگر کامل شد. به مرحله بعد ادامه دهید."
-    },
-    {
-      "id": "native.apple.4b16d82449e62fef",
-      "source": "Waiting for wizard…",
-      "translated": "در انتظار جادوگر…"
-    },
-    {
-      "id": "native.apple.3000242e4a2f9031",
-      "source": "Unsupported step type",
-      "translated": "نوع مرحله پشتیبانی‌نشده"
-    },
-    {
-      "id": "native.apple.bceef69ef30abb27",
-      "source": "Continue",
-      "translated": "ادامه"
-    },
-    {
-      "id": "native.apple.96628eeeceb361fb",
-      "source": "Run",
-      "translated": "اجرا"
     },
     {
       "id": "native.apple.6223e5f12aa9464b",
@@ -11904,6 +12329,26 @@
       "translated": "توقف"
     },
     {
+      "id": "native.apple.9d4bdedcbf74d86c",
+      "source": "Loading commands",
+      "translated": "در حال بارگذاری دستورها"
+    },
+    {
+      "id": "native.apple.fdd34aa94629c962",
+      "source": "Commands unavailable",
+      "translated": "دستورها در دسترس نیستند"
+    },
+    {
+      "id": "native.apple.a1953e3e9be8b8d5",
+      "source": "Retry",
+      "translated": "تلاش مجدد"
+    },
+    {
+      "id": "native.apple.0f942ca442f88936",
+      "source": "No matching commands",
+      "translated": "دستور مطابقی وجود ندارد"
+    },
+    {
       "id": "native.apple.afd8a2b9e3bf6d60",
       "source": "Stop response",
       "translated": "توقف پاسخ"
@@ -11962,6 +12407,16 @@
       "id": "native.apple.43be8a2336e42faf",
       "source": "Sessions",
       "translated": "جلسه‌ها"
+    },
+    {
+      "id": "native.apple.f84b674ad395b694",
+      "source": "Jump to latest",
+      "translated": "پرش به آخرین مورد"
+    },
+    {
+      "id": "native.apple.429d825201b2cb85",
+      "source": "Jump to latest reply",
+      "translated": "پرش به آخرین پاسخ"
     },
     {
       "id": "native.apple.9ab586b85834705c",

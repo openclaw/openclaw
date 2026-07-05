@@ -122,6 +122,7 @@ function createGatewayCloseTestDeps(
     lifecycleUnsub: null,
     chatRunState: createTestChatRunState(),
     chatAbortControllers: new Map(),
+    chatQueuedTurns: new Map(),
     restartRecoveryCandidates: new Map(),
     removeChatRun: vi.fn(),
     agentRunSeq: new Map(),
@@ -616,6 +617,40 @@ describe("createGatewayCloseHandler", () => {
     );
   });
 
+  it("aborts queued turns before restart shutdown continues", async () => {
+    const controller = new AbortController();
+    const chatQueuedTurns = new Map([
+      [
+        "queued-1",
+        {
+          controller,
+          sessionId: "session-1",
+          sessionKey: "session-1",
+        },
+      ],
+    ]);
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        chatQueuedTurns,
+      }),
+    );
+
+    const result = await close({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+
+    expect(result.warnings).toContain("restart-reply-drain");
+    expect(controller.signal.aborted).toBe(true);
+    expect(chatQueuedTurns.size).toBe(0);
+    expect(
+      mocks.logWarn.mock.calls.some(([message]) =>
+        String(message).includes("aborted 1 queued turn(s) during restart shutdown"),
+      ),
+    ).toBe(true);
+  });
+
   it("does not drain or abort active runs for normal shutdown", async () => {
     const controller = new AbortController();
     const chatAbortControllers = new Map([
@@ -678,6 +713,39 @@ describe("createGatewayCloseHandler", () => {
         String(message).includes("restart reply drain timed out after 0ms"),
       ),
     ).toBe(true);
+  });
+
+  it("does not abort a finalizing completed run when restart drain expires", async () => {
+    const controller = new AbortController();
+    const chatAbortControllers = new Map([
+      [
+        "run-finalizing",
+        {
+          controller,
+          sessionId: "run-finalizing",
+          sessionKey: "session-finalizing",
+          projectSessionActive: false,
+          isAbortable: () => false,
+          startedAtMs: Date.now(),
+          expiresAtMs: Date.now() + 60_000,
+        },
+      ],
+    ]);
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        chatAbortControllers,
+      }),
+    );
+
+    const result = await close({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+
+    expect(result.warnings).toContain("restart-reply-drain");
+    expect(controller.signal.aborted).toBe(false);
+    expect(chatAbortControllers.has("run-finalizing")).toBe(true);
   });
 
   it("marks active main sessions for restart recovery before aborting restart-drained runs", async () => {
@@ -909,7 +977,7 @@ describe("createGatewayCloseHandler", () => {
       createGatewayCloseTestDeps({
         broadcast,
         chatAbortControllers,
-        getPendingReplyCount: () => 1,
+        getPendingReplyCount: vi.fn().mockReturnValueOnce(1).mockReturnValue(0),
         markMainSessionsAbortedForRestart,
         nodeSendToSession,
       }),
@@ -963,7 +1031,7 @@ describe("createGatewayCloseHandler", () => {
     const close = createGatewayCloseHandler(
       createGatewayCloseTestDeps({
         chatAbortControllers,
-        getPendingReplyCount: () => 1,
+        getPendingReplyCount: vi.fn().mockReturnValueOnce(1).mockReturnValue(0),
         markMainSessionsAbortedForRestart,
       }),
     );

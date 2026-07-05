@@ -117,6 +117,21 @@ describe("buildReplyPayloads media filter integration", () => {
           plugin: createChannelTestPluginBase({ id: "discord" }),
           source: "test",
         },
+        {
+          pluginId: "feishu-plugin",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "feishu" }),
+            meta: {
+              id: "feishu",
+              label: "Feishu",
+              selectionLabel: "Feishu",
+              docsPath: "/channels/feishu",
+              blurb: "test stub",
+              aliases: ["lark"],
+            },
+          },
+        },
       ]),
     );
   });
@@ -445,28 +460,6 @@ describe("buildReplyPayloads media filter integration", () => {
   });
 
   it("delivers distinct same-target replies when target provider is channel alias", async () => {
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "feishu-plugin",
-          source: "test",
-          plugin: {
-            id: "feishu",
-            meta: {
-              id: "feishu",
-              label: "Feishu",
-              selectionLabel: "Feishu",
-              docsPath: "/channels/feishu",
-              blurb: "test stub",
-              aliases: ["lark"],
-            },
-            capabilities: { chatTypes: ["direct"] },
-            config: { listAccountIds: () => [], resolveAccount: () => ({}) },
-          },
-        },
-      ]),
-    );
     await expectSameTargetRepliesDelivered({ provider: "lark", to: "ou_abc123" });
   });
 

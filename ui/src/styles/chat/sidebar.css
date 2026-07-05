@@ -9,7 +9,24 @@
 }
 
 .chat-workbench--workspace-collapsed {
-  grid-template-columns: minmax(0, 1fr) 52px;
+  /* Collapsed rail is a slim always-visible icon strip (Cursor-style); it
+     stays in layout so it never overlays or floats over chat content. */
+  grid-template-columns: minmax(0, 1fr) 44px;
+}
+
+/* The workspace rail docks flush to the window edge like the terminal panel:
+   drop the chat content's right gutter and square the card's right corners in
+   both rail states. Guarded to viewports where the rail actually renders
+   (it is display:none <=1120px, where the gutter should stay). */
+@media (min-width: 1121px) {
+  .content--chat:has(.chat-workbench) {
+    padding-right: 0;
+  }
+
+  .content--chat:has(.chat-workbench) .chat {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
 }
 
 .chat-split-container {
@@ -54,7 +71,7 @@
 .chat-workspace-rail--collapsed {
   align-items: center;
   gap: 10px;
-  padding: 12px 8px;
+  padding: 12px 6px;
 }
 
 .chat-workspace-rail__header {

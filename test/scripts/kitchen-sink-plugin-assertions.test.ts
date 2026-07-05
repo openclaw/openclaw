@@ -842,6 +842,7 @@ exit "$status"
     const scratchRoot = path.join(parent, "scratch");
     const fixtureDir = path.join(scratchRoot, "clawhub-fixture");
     const nodeShim = path.join(fakeBin, "node");
+    const sleepShim = path.join(fakeBin, "sleep");
     try {
       mkdirSync(fakeBin, { recursive: true });
       mkdirSync(fixtureDir, { recursive: true });
@@ -852,11 +853,24 @@ exit "$status"
           "printf 'DO_NOT_DUMP_CLAWHUB_PREFIX\\n'",
           "head -c 2048 /dev/zero | tr '\\0' x",
           "printf '\\nFIXTURE_TAIL_MARKER\\n'",
-          "sleep 30",
+          "/bin/sleep 30",
           "",
         ].join("\n"),
       );
       chmodSync(nodeShim, 0o755);
+      writeFileSync(
+        sleepShim,
+        [
+          "#!/usr/bin/env bash",
+          "for _ in $(seq 1 50); do",
+          '  grep -q "FIXTURE_TAIL_MARKER" "$FIXTURE_DIR/clawhub-fixture.log" && exit 0',
+          "  /bin/sleep 0.01",
+          "done",
+          "exit 1",
+          "",
+        ].join("\n"),
+      );
+      chmodSync(sleepShim, 0o755);
 
       const result = runSweepShell(
         `
@@ -864,7 +878,7 @@ set -euo pipefail
 export PATH="$FAKE_BIN:$PATH"
 export KITCHEN_SINK_SWEEP_SOURCE_ONLY=1
 export KITCHEN_SINK_TMP_DIR="$SCRATCH_ROOT"
-export OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS=25
+export OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS=1
 export OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES=64
 source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
 set +e

@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -90,7 +91,6 @@ import { CommandLaneClearedError, GatewayDrainingError } from "../../process/com
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
-import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
 import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
@@ -117,6 +117,7 @@ import {
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
   clearDroppedCliSessionBinding,
+  createCliReasoningStreamBridge,
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
@@ -141,6 +142,7 @@ import {
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import {
   classifyProviderRequestError,
   PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
@@ -1475,16 +1477,25 @@ function resolveRestartLifecycleError(
 }
 
 function isReplyOperationUserAbort(replyOperation?: ReplyOperation): boolean {
-  return (
-    replyOperation?.result?.kind === "aborted" && replyOperation.result.code === "aborted_by_user"
-  );
+  if (
+    replyOperation?.result?.kind === "aborted" &&
+    replyOperation.result.code === "aborted_by_user"
+  ) {
+    return true;
+  }
+  const abortSignal = replyOperation?.abortSignal;
+  return abortSignal?.aborted === true && !isAgentRunRestartAbortReason(abortSignal.reason);
 }
 
 function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean {
-  return (
+  if (
     replyOperation?.result?.kind === "aborted" &&
     replyOperation.result.code === "aborted_for_restart"
-  );
+  ) {
+    return true;
+  }
+  const abortSignal = replyOperation?.abortSignal;
+  return abortSignal?.aborted === true && isAgentRunRestartAbortReason(abortSignal.reason);
 }
 
 function emitModelFallbackStepLifecycle(params: {
@@ -1593,42 +1604,44 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
   };
 }
 
-/** Runs the agent turn with provider/model fallback, retry, and failure mapping. */
-export async function runAgentTurnWithFallback(params: {
-  commandBody: string;
-  transcriptCommandBody?: string;
-  followupRun: FollowupRun;
-  sessionCtx: TemplateContext;
-  replyThreading?: TemplateContext["ReplyThreading"];
-  replyOperation?: ReplyOperation;
-  opts?: GetReplyOptions;
-  typingSignals: TypingSignaler;
-  blockReplyPipeline: BlockReplyPipeline | null;
-  blockStreamingEnabled: boolean;
-  blockReplyChunking?: {
-    minChars: number;
-    maxChars: number;
-    breakPreference: "paragraph" | "newline" | "sentence";
-    flushOnParagraph?: boolean;
-  };
-  resolvedBlockStreamingBreak: "text_end" | "message_end";
-  applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
-  shouldEmitToolResult: () => boolean;
-  shouldEmitToolOutput: () => boolean;
-  pendingToolTasks: Set<Promise<void>>;
-  resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
-  isHeartbeat: boolean;
-  sessionKey?: string;
-  runtimePolicySessionKey?: string;
-  getActiveSessionEntry: () => SessionEntry | undefined;
-  activeSessionStore?: Record<string, SessionEntry>;
-  storePath?: string;
-  resolvedVerboseLevel: VerboseLevel;
-  toolProgressDetail?: "explain" | "raw";
-  replyMediaContext?: ReplyMediaContext;
-  onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
-  isRestartRecoveryArmed?: () => boolean;
-}): Promise<AgentRunLoopResult> {
+async function runAgentTurnWithFallbackInternal(
+  params: {
+    commandBody: string;
+    transcriptCommandBody?: string;
+    followupRun: FollowupRun;
+    sessionCtx: TemplateContext;
+    replyThreading?: TemplateContext["ReplyThreading"];
+    replyOperation?: ReplyOperation;
+    opts?: GetReplyOptions;
+    typingSignals: TypingSignaler;
+    blockReplyPipeline: BlockReplyPipeline | null;
+    blockStreamingEnabled: boolean;
+    blockReplyChunking?: {
+      minChars: number;
+      maxChars: number;
+      breakPreference: "paragraph" | "newline" | "sentence";
+      flushOnParagraph?: boolean;
+    };
+    resolvedBlockStreamingBreak: "text_end" | "message_end";
+    applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
+    shouldEmitToolResult: () => boolean;
+    shouldEmitToolOutput: () => boolean;
+    pendingToolTasks: Set<Promise<void>>;
+    resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
+    isHeartbeat: boolean;
+    sessionKey?: string;
+    runtimePolicySessionKey?: string;
+    getActiveSessionEntry: () => SessionEntry | undefined;
+    activeSessionStore?: Record<string, SessionEntry>;
+    storePath?: string;
+    resolvedVerboseLevel: VerboseLevel;
+    toolProgressDetail?: "explain" | "raw";
+    replyMediaContext?: ReplyMediaContext;
+    onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
+    isRestartRecoveryArmed?: () => boolean;
+  },
+  commitTerminalOutcome: () => void,
+): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
   let autoCompactionCount = 0;
@@ -2356,11 +2369,9 @@ export async function runAgentTurnWithFallback(params: {
                     }
                     await params.opts.onPartialReply({ text: textForTyping });
                   },
-                  onReasoningText: async (text) => {
-                    await params.opts?.onReasoningStream?.({
-                      text,
-                      requiresReasoningProgressOptIn: true,
-                    });
+                  onReasoningText: createCliReasoningStreamBridge(params.opts?.onReasoningStream),
+                  onReasoningProgress: async (payload) => {
+                    await params.opts?.onReasoningProgress?.(payload);
                   },
                   onToolEvent: async (payload) => {
                     await cliToolSummaryTracker.noteToolEvent(payload);
@@ -2454,6 +2465,7 @@ export async function runAgentTurnWithFallback(params: {
                     allowEmptyAssistantReplyAsSilent:
                       params.followupRun.run.allowEmptyAssistantReplyAsSilent,
                     extraSystemPromptStatic: params.followupRun.run.extraSystemPromptStatic,
+                    cliSessionBindingFacts: params.followupRun.run.cliSessionBindingFacts,
                     ownerNumbers: params.followupRun.run.ownerNumbers,
                     cliSessionId: cliSessionBinding?.sessionId,
                     cliSessionBinding,
@@ -2684,7 +2696,7 @@ export async function runAgentTurnWithFallback(params: {
                         }
                         // Trigger typing when tools start executing.
                         // Must await to ensure typing indicator starts before tool summaries are emitted.
-                        if (evt.stream === "tool") {
+                        if (evt.stream === "tool" && evt.data.hideFromChannelProgress !== true) {
                           const phase = readStringValue(evt.data.phase) ?? "";
                           const name = readStringValue(evt.data.name);
                           const toolCallId = readStringValue(evt.data.toolCallId) ?? "";
@@ -2728,6 +2740,8 @@ export async function runAgentTurnWithFallback(params: {
                           evt.stream === "item" &&
                           evt.data.suppressChannelProgress === true &&
                           Boolean(params.opts?.onToolStart);
+                        const hideItemFromChannelProgress =
+                          evt.stream === "item" && evt.data.hideFromChannelProgress === true;
                         const itemPhase =
                           evt.stream === "item" ? readStringValue(evt.data.phase) : "";
                         const itemName =
@@ -2780,6 +2794,7 @@ export async function runAgentTurnWithFallback(params: {
                         }
                         if (
                           evt.stream === "item" &&
+                          !hideItemFromChannelProgress &&
                           !suppressItemChannelProgress &&
                           (!suppressProgressAfterMessageToolDelivery ||
                             completedMessageToolDelivery)
@@ -3046,6 +3061,20 @@ export async function runAgentTurnWithFallback(params: {
           ? restartAbortReason
           : createAgentRunRestartAbortError();
       }
+      if (isReplyOperationUserAbort(params.replyOperation)) {
+        settledLifecycleTerminal?.emit("end", runResult);
+        await drainPendingToolTasks({
+          tasks: params.pendingToolTasks,
+          onTimeout: logVerbose,
+        });
+        return {
+          kind: "final",
+          payload: {
+            text: SILENT_REPLY_TOKEN,
+          },
+        };
+      }
+      commitTerminalOutcome();
       fallbackAttempts = Array.isArray(fallbackResult.attempts)
         ? fallbackResult.attempts.map((attempt) => ({
             provider: attempt.provider,
@@ -3511,4 +3540,23 @@ export async function runAgentTurnWithFallback(params: {
       (payload): payload is ReplyPayload => payload !== undefined,
     ),
   };
+}
+
+/** Runs the agent turn with provider/model fallback, retry, and failure mapping. */
+export async function runAgentTurnWithFallback(
+  params: Parameters<typeof runAgentTurnWithFallbackInternal>[0],
+): Promise<AgentRunLoopResult> {
+  let terminalOutcomeCommitted = false;
+  const commitTerminalOutcome = () => {
+    if (terminalOutcomeCommitted) {
+      return;
+    }
+    terminalOutcomeCommitted = true;
+    params.replyOperation?.freezeAbort();
+  };
+  try {
+    return await runAgentTurnWithFallbackInternal(params, commitTerminalOutcome);
+  } finally {
+    commitTerminalOutcome();
+  }
 }

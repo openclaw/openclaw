@@ -1941,6 +1941,7 @@ describe("before_tool_call requireApproval handling", () => {
       currentMessagingTarget: "channel:deliverable-1",
       agentAccountId: "acct-1",
       currentThreadTs: "thread-1",
+      approvalReviewerDeviceId: "device-tui-reviewer",
     });
     const readTool = tools.find((tool) => tool.name === "read");
     if (!readTool) {
@@ -1955,6 +1956,7 @@ describe("before_tool_call requireApproval handling", () => {
     expect(requestParams.turnSourceTo).toBe("channel:deliverable-1");
     expect(requestParams.turnSourceAccountId).toBe("acct-1");
     expect(requestParams.turnSourceThreadId).toBe("thread-1");
+    expect(requestParams.approvalReviewerDeviceIds).toEqual(["device-tui-reviewer"]);
   });
 
   it("omits turn source routing fields when ctx does not carry them", async () => {

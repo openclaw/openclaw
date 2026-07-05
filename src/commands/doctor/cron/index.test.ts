@@ -16,6 +16,7 @@ import {
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import { withRestoredMocks } from "../../../test-utils/vitest-spies.js";
 import {
+  collectLegacyCronStoreHealthFindings,
   collectLegacyWhatsAppCrontabHealthWarning,
   maybeRepairLegacyCronStore,
   noteLegacyWhatsAppCrontabHealthCheck,
@@ -37,6 +38,7 @@ async function makeTempStorePath() {
 }
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   noteMock.mockClear();
   if (tempRoot) {
     await fs.rm(tempRoot, { recursive: true, force: true });
@@ -208,6 +210,95 @@ function mockExdevRename(filePath: string) {
     return await realRename(oldPath, newPath);
   });
 }
+
+describe("collectLegacyCronStoreHealthFindings", () => {
+  it("reports legacy cron store, run-log, and payload findings without mutating files", async () => {
+    const storePath = await makeTempStorePath();
+    await writeLegacyCronArrayStore(storePath, [
+      createLegacyCronJob({
+        jobId: "legacy-notify",
+        payload: {
+          kind: "systemEvent",
+          text: "Morning brief",
+        },
+      }),
+    ]);
+    const runLogPath = path.join(path.dirname(storePath), "runs", "legacy-notify.jsonl");
+    await fs.mkdir(path.dirname(runLogPath), { recursive: true });
+    await fs.writeFile(runLogPath, "", "utf-8");
+
+    const findings = await collectLegacyCronStoreHealthFindings({
+      cfg: createCronConfig(storePath),
+    });
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "core/doctor/legacy-cron-store",
+          severity: "warning",
+          path: storePath,
+          requirement: "legacy-cron-store",
+        }),
+        expect.objectContaining({
+          checkId: "core/doctor/legacy-cron-store",
+          severity: "warning",
+          path: storePath,
+          requirement: "legacy-notify-fallback",
+        }),
+      ]),
+    );
+    expect(findings.some((finding) => finding.requirement === "legacy-cron-run-logs")).toBe(true);
+    await expect(fs.readFile(storePath, "utf-8")).resolves.toContain("legacy-notify");
+    await expect(fs.stat(runLogPath)).resolves.toBeDefined();
+  });
+
+  it("reports quarantined cron rows while leaving the active store untouched", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCurrentCronStore(storePath, []);
+    await fs.mkdir(path.dirname(resolveCronQuarantinePath(storePath)), { recursive: true });
+    await fs.writeFile(
+      resolveCronQuarantinePath(storePath),
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              quarantinedAtMs: Date.parse("2026-05-29T09:00:00.000Z"),
+              sourceIndex: 1,
+              reason: "missing-schedule",
+              job: { id: "bad-cron", name: "Bad cron" },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const findings = await collectLegacyCronStoreHealthFindings({
+      cfg: createCronConfig(storePath),
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/legacy-cron-store",
+        path: resolveCronQuarantinePath(storePath),
+        requirement: "quarantined-cron-rows",
+      }),
+    ]);
+    await expect(readPersistedJobs(storePath)).resolves.toEqual([]);
+  });
+
+  it("returns no findings for an already-normalized empty cron store", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCurrentCronStore(storePath, []);
+
+    await expect(
+      collectLegacyCronStoreHealthFindings({ cfg: createCronConfig(storePath) }),
+    ).resolves.toEqual([]);
+  });
+});
 
 describe("maybeRepairLegacyCronStore", () => {
   it("reports quarantined cron rows even when the active store is already sanitized", async () => {
@@ -555,7 +646,9 @@ describe("maybeRepairLegacyCronStore", () => {
       await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.readFile(archivePath, "utf-8")).resolves.toContain("legacy-job");
       const archiveStat = await fs.stat(archivePath);
-      expect(archiveStat.mode & 0o777).toBe(0o640);
+      if (process.platform !== "win32") {
+        expect(archiveStat.mode & 0o777).toBe(0o640);
+      }
       expect(archiveStat.mtimeMs).toBe(sourceMtime.getTime());
       expectNoteContaining("Cron store migrated to SQLite", "Doctor changes");
       expectNoNoteContaining("could not archive the legacy cron file", "Doctor warnings");

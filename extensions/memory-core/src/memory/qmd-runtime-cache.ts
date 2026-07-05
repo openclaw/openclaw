@@ -194,11 +194,19 @@ function multiCollectionProbeEntryKey(params: QmdRuntimeMultiCollectionProbeCach
   );
 }
 
-function normalizeCollectionValidationEntry(
+type QmdRuntimeCacheEnvelope = {
+  record: Record<string, unknown>;
+  createdAtMs: number;
+  expiresAtMs: number;
+  keyHash: string;
+};
+
+/** Validates the shared cache-entry envelope: version, expiry window, and key hash. */
+function normalizeCacheEntryEnvelope(
   value: unknown,
   nowMs: number,
   expectedKeyHash: string,
-): QmdRuntimeCacheCollectionValidationEntry | undefined {
+): QmdRuntimeCacheEnvelope | undefined {
   if (typeof value !== "object" || value === null) {
     return undefined;
   }
@@ -228,6 +236,20 @@ function normalizeCollectionValidationEntry(
   if (keyHash !== expectedKeyHash) {
     return undefined;
   }
+
+  return { record, createdAtMs, expiresAtMs, keyHash };
+}
+
+function normalizeCollectionValidationEntry(
+  value: unknown,
+  nowMs: number,
+  expectedKeyHash: string,
+): QmdRuntimeCacheCollectionValidationEntry | undefined {
+  const envelope = normalizeCacheEntryEnvelope(value, nowMs, expectedKeyHash);
+  if (!envelope) {
+    return undefined;
+  }
+  const { record, createdAtMs, expiresAtMs, keyHash } = envelope;
 
   const validation = record.validation;
   if (typeof validation !== "object" || validation === null) {
@@ -262,35 +284,11 @@ function normalizeMultiCollectionProbeEntry(
   nowMs: number,
   expectedKeyHash: string,
 ): QmdRuntimeCacheMultiCollectionProbeEntry | undefined {
-  if (typeof value !== "object" || value === null) {
+  const envelope = normalizeCacheEntryEnvelope(value, nowMs, expectedKeyHash);
+  if (!envelope) {
     return undefined;
   }
-  const record = value as Record<string, unknown>;
-  if (record.version !== QMD_RUNTIME_CACHE_ENTRY_VERSION) {
-    return undefined;
-  }
-
-  const createdAtMs =
-    typeof record.createdAtMs === "number"
-      ? Math.max(0, Math.floor(record.createdAtMs))
-      : Number.NaN;
-  const expiresAtMs =
-    typeof record.expiresAtMs === "number"
-      ? Math.max(0, Math.floor(record.expiresAtMs))
-      : Number.NaN;
-  if (
-    !Number.isFinite(createdAtMs) ||
-    !Number.isFinite(expiresAtMs) ||
-    !Number.isFinite(nowMs) ||
-    nowMs >= expiresAtMs
-  ) {
-    return undefined;
-  }
-
-  const keyHash = normalizeText(typeof record.keyHash === "string" ? record.keyHash : "");
-  if (keyHash !== expectedKeyHash) {
-    return undefined;
-  }
+  const { record, createdAtMs, expiresAtMs, keyHash } = envelope;
 
   const probe = record.multiCollectionProbe;
   if (typeof probe !== "object" || probe === null) {

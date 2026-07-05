@@ -21,6 +21,14 @@ const getIMessageSetupStatus = createPluginSetupWizardStatus({
 } as never);
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const setupToolsMocks = vi.hoisted(() => ({
+  detectBinary: vi.fn(async () => false),
+}));
+
+vi.mock("openclaw/plugin-sdk/setup-tools", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/setup-tools")>()),
+  ...setupToolsMocks,
+}));
 
 function createMockChildProcess() {
   const child = new EventEmitter() as EventEmitter & {
@@ -182,6 +190,10 @@ describe("createIMessageRpcClient", () => {
 });
 
 describe("imessage setup status", () => {
+  beforeEach(() => {
+    setupToolsMocks.detectBinary.mockClear();
+  });
+
   it("does not inherit configured state from a sibling account", async () => {
     const result = await getIMessageSetupStatus({
       cfg: {

@@ -470,6 +470,15 @@ export async function runGatewayUpdateCheck(params: {
   if (params.isNixMode) {
     return;
   }
+  const configuredChannel =
+    normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
+  if (configuredChannel === "extended-stable") {
+    setUpdateAvailableCache({
+      next: null,
+      onUpdateAvailableChange: params.onUpdateAvailableChange,
+    });
+    return;
+  }
   const auto = resolveAutoUpdatePolicy(params.cfg);
   const autoDisabledByEnv = isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE);
   const shouldRunAutoUpdate = auto.enabled && !autoDisabledByEnv;
@@ -534,7 +543,7 @@ export async function runGatewayUpdateCheck(params: {
     return;
   }
 
-  const channel = normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
+  const channel = configuredChannel;
   const resolved = await resolveNpmChannelTag({ channel, timeoutMs: 2500 });
   const tag = resolved.tag;
   if (!resolved.version) {
@@ -675,6 +684,10 @@ export function scheduleGatewayUpdateCheck(params: {
   isNixMode: boolean;
   onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
 }): () => void {
+  const channel = normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
+  if (channel === "extended-stable") {
+    return () => {};
+  }
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let running = false;

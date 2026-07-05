@@ -359,7 +359,10 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       requesterSenderUsername: params.requesterSenderUsername,
       requesterSenderE164: params.requesterSenderE164,
     });
-    if (params.queuePolicy === "required") {
+    // Public queuePolicy:"required" is the exact-delivery contract preflighted below.
+    // Lower-level queue-required callers must leave this internal opt-in unset.
+    const requireUnknownSendReconciliation = params.queuePolicy === "required";
+    if (requireUnknownSendReconciliation) {
       await assertRequiredMessageSendDurability({
         cfg,
         channel: outboundChannel,
@@ -382,6 +385,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       forceDocument: params.forceDocument,
       deps: params.deps,
       bestEffort: params.bestEffort,
+      ...(requireUnknownSendReconciliation ? { requireUnknownSendReconciliation: true } : {}),
       durability:
         params.bestEffort || params.queuePolicy === "best_effort" ? "best_effort" : "required",
       signal: params.abortSignal,
