@@ -7,9 +7,6 @@
     "": {
       "name": "openclaw",
       "version": "2026.6.11",
-      "bundleDependencies": [
-        "@openclaw/ai"
-      ],
       "hasInstallScript": true,
       "license": "MIT",
       "dependencies": {

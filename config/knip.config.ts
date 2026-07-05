@@ -138,9 +138,13 @@ const config = {
       entry: rootEntries,
       ignoreDependencies: [
         "@openclaw/*",
+        // Docker packaging stages @openclaw/ai without nested dependencies after
+        // verifying the root owns its exact runtime dependency versions.
+        "@mistralai/mistralai",
         "cross-spawn",
         "file-type",
         "playwright-core",
+        "partial-json",
         "sqlite-vec",
         "tree-sitter-bash",
         ...rootBundledPluginRuntimeDependencies,
