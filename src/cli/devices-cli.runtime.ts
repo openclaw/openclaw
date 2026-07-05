@@ -330,6 +330,24 @@ function isScopeUpgradePendingApproval(error: unknown): boolean {
   );
 }
 
+/** Check whether the CLI is targeting a local loopback gateway (safe for file-based fallback). */
+function isLocalLoopbackGateway(opts: DevicesRpcOpts): boolean {
+  if (typeof opts.url === "string" && opts.url.trim().length > 0) {
+    // Explicit --url might point at a remote/tunneled gateway; never silently
+    // switch to local pairing files in that case.
+    return false;
+  }
+  const connection = buildGatewayConnectionDetails();
+  if (connection.urlSource !== "local loopback") {
+    return false;
+  }
+  try {
+    return isLoopbackHost(new URL(connection.url).hostname);
+  } catch {
+    return false;
+  }
+}
+
 function resolveLocalPairingFallback(
   opts: DevicesRpcOpts,
   error: unknown,
@@ -340,20 +358,82 @@ function resolveLocalPairingFallback(
   if (!details) {
     return null;
   }
-  if (typeof opts.url === "string" && opts.url.trim().length > 0) {
-    // Explicit --url might point at a remote/tunneled gateway; never silently
-    // switch to local pairing files in that case.
+  if (!isLocalLoopbackGateway(opts)) {
     return null;
   }
-  const connection = buildGatewayConnectionDetails();
-  if (connection.urlSource !== "local loopback") {
+  return { details };
+}
+
+/**
+ * When the gateway returns "unknown requestId" (password auth mode), the CLI
+ * connected successfully but the pending request was refreshed by a node-host
+ * reconnect before approval landed. On a local loopback gateway we can still
+ * approve via local pairing files. This helper attempts that path and returns
+ * the approval result, or `undefined` if local fallback is not applicable.
+ */
+async function tryLocalApproveForLoopback(
+  opts: DevicesRpcOpts,
+  requestId: string,
+  originalRequest: PendingDevice | null,
+): Promise<Record<string, unknown> | null | undefined> {
+  if (!isLocalLoopbackGateway(opts)) {
+    return undefined;
+  }
+  const local = await listDevicePairing();
+  const localPending = local.pending as PendingDevice[];
+  // The original requestId may still exist locally, or the node-host may have
+  // already refreshed it. Try the original first, then look for a replacement.
+  if (findPendingRequestById(localPending, requestId)) {
+    const approved = await approveDevicePairing(requestId, {
+      callerScopes: ["operator.admin"],
+    });
+    if (approved && approved.status !== "forbidden") {
+      if (opts.json !== true) {
+        defaultRuntime.log(theme.warn(FALLBACK_NOTICE));
+      }
+      return {
+        requestId,
+        device: redactLocalPairedDevice(approved.device),
+      };
+    }
+    if (approved?.status === "forbidden") {
+      throw new Error(formatDevicePairingForbiddenMessage(approved));
+    }
     return null;
   }
-  try {
-    return isLoopbackHost(new URL(connection.url).hostname) ? { details } : null;
-  } catch {
-    return null;
+  // Search for a replacement request from the same device.
+  if (originalRequest) {
+    const sameDeviceReplacement = localPending.find(
+      (req) =>
+        req.deviceId === originalRequest.deviceId &&
+        req.requestId !== requestId,
+    );
+    if (sameDeviceReplacement) {
+      const approved = await approveDevicePairing(sameDeviceReplacement.requestId, {
+        callerScopes: ["operator.admin"],
+      });
+      if (approved && approved.status !== "forbidden") {
+        if (opts.json !== true) {
+          defaultRuntime.log(
+            theme.warn(
+              `Pending request ${sanitizeForLog(requestId)} was replaced by same-device repair ${sanitizeForLog(sameDeviceReplacement.requestId)}; approving latest compatible request.`,
+            ),
+          );
+          defaultRuntime.log(theme.warn(FALLBACK_NOTICE));
+        }
+        return {
+          requestId: sameDeviceReplacement.requestId,
+          resolved: {
+            kind: "same-device-replacement" as const,
+            requestedRequestId: requestId,
+            approvedRequestId: sameDeviceReplacement.requestId,
+          },
+          device: redactLocalPairedDevice(approved.device),
+        };
+      }
+    }
   }
+  return undefined;
 }
 
 function buildFallbackStateMismatchError(details: ConnectPairingRequiredDetails): Error {
@@ -436,6 +516,17 @@ async function approvePairingWithFallback(
         );
       } catch (adminError) {
         if (isUnknownRequestIdError(adminError)) {
+          // Gateway connected (password mode) but the pending request was
+          // refreshed by node-host reconnect before we could approve it.
+          // Try local file-based fallback for loopback setups.
+          const localApproved = await tryLocalApproveForLoopback(
+            opts,
+            requestId,
+            originalRequest,
+          );
+          if (localApproved !== undefined) {
+            return localApproved;
+          }
           return null;
         }
         throw adminError;
@@ -444,6 +535,19 @@ async function approvePairingWithFallback(
     const fallback = resolveLocalPairingFallback(opts, error);
     if (!fallback) {
       if (isUnknownRequestIdError(error)) {
+        // In password auth mode the gateway connection succeeds but the
+        // pending request may have been refreshed (requestId rotated) by
+        // node-host reconnect, yielding a method-level "unknown requestId"
+        // error instead of the connection-level "pairing required" error.
+        // Fall back to local file-based approval for loopback setups.
+        const localApproved = await tryLocalApproveForLoopback(
+          opts,
+          requestId,
+          originalRequest,
+        );
+        if (localApproved !== undefined) {
+          return localApproved;
+        }
         return null;
       }
       throw error;
