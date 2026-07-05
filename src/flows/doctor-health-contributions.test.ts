@@ -137,6 +137,10 @@ const mocks = vi.hoisted(() => ({
   ),
   shortenHomePath: vi.fn((p: string) => p),
   formatCliCommand: vi.fn((cmd: string) => cmd),
+  isSystemdUserServiceAvailable: vi.fn(async () => true),
+  readSystemdUserLingerStatus: vi.fn(async () => ({ user: "alice", linger: "no" as const })),
+  gatewayServiceIsLoaded: vi.fn(async () => true),
+  resolveGatewayService: vi.fn(),
 }));
 
 const DOCTOR_GATEWAY_HEALTH_ID = "doctor:gateway-health";
@@ -191,6 +195,23 @@ vi.mock("../commands/doctor-auth-flat-profiles.js", () => ({
 vi.mock("../commands/doctor-gateway-daemon-flow.js", () => ({
   maybeRepairGatewayDaemon: mocks.maybeRepairGatewayDaemon,
 }));
+
+vi.mock("../daemon/service.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../daemon/service.js")>();
+  return {
+    ...actual,
+    resolveGatewayService: mocks.resolveGatewayService,
+  };
+});
+
+vi.mock("../daemon/systemd.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../daemon/systemd.js")>();
+  return {
+    ...actual,
+    isSystemdUserServiceAvailable: mocks.isSystemdUserServiceAvailable,
+    readSystemdUserLingerStatus: mocks.readSystemdUserLingerStatus,
+  };
+});
 
 vi.mock("../commands/doctor-auth-legacy-oauth.js", () => ({
   maybeRepairLegacyOAuthProfileIds: mocks.maybeRepairLegacyOAuthProfileIds,
@@ -445,6 +466,21 @@ function buildDoctorPrompter(shouldRepair: boolean): DoctorPrompter {
 }
 
 describe("doctor health contributions", () => {
+  async function withProcessPlatform<T>(
+    platform: NodeJS.Platform,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const original = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    try {
+      return await run();
+    } finally {
+      if (original) {
+        Object.defineProperty(process, "platform", original);
+      }
+    }
+  }
+
   beforeEach(() => {
     mocks.maybeRunConfiguredPluginInstallReleaseStep.mockReset();
     mocks.registerBundledHealthChecks.mockReset();
@@ -581,6 +617,10 @@ describe("doctor health contributions", () => {
     mocks.gatherDaemonStatus.mockReset();
     mocks.gatherDaemonStatus.mockResolvedValue({});
     mocks.noteWorkspaceStatus.mockReset();
+    mocks.resolveGatewayService.mockReset();
+    mocks.resolveGatewayService.mockReturnValue({ isLoaded: mocks.gatewayServiceIsLoaded });
+    mocks.gatewayServiceIsLoaded.mockReset();
+    mocks.gatewayServiceIsLoaded.mockResolvedValue(true);
     mocks.collectWorkspaceStatusHealthFindings.mockReset();
     mocks.collectWorkspaceStatusHealthFindings.mockResolvedValue([]);
     mocks.collectDiskSpaceHealthFindings.mockReset();
@@ -610,6 +650,10 @@ describe("doctor health contributions", () => {
     mocks.collectStalePluginRuntimeSymlinkHealthFindings.mockResolvedValue([]);
     mocks.collectChannelPreviewWarningHealthFindings.mockReset();
     mocks.collectChannelPreviewWarningHealthFindings.mockResolvedValue([]);
+    mocks.isSystemdUserServiceAvailable.mockReset();
+    mocks.isSystemdUserServiceAvailable.mockResolvedValue(true);
+    mocks.readSystemdUserLingerStatus.mockReset();
+    mocks.readSystemdUserLingerStatus.mockResolvedValue({ user: "alice", linger: "no" });
   });
 
   afterEach(() => {
@@ -1428,7 +1472,73 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/channel-plugin-blockers");
     expect(contributionIds).toContain("core/doctor/channel-preview-warnings");
     expect(contributionIds).toContain("core/doctor/tool-result-cap");
+    expect(contributionIds).toContain("core/doctor/systemd-linger");
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
+  });
+
+  it("keeps systemd linger opt-in and reports disabled linger when selected", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const systemdLingerCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/systemd-linger",
+    );
+    expect(systemdLingerCheck).toMatchObject({ defaultEnabled: false });
+    expect(systemdLingerCheck).toBeDefined();
+
+    const ctx = {
+      cfg: { gateway: { mode: "local" } },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [systemdLingerCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    await withProcessPlatform("linux", async () => {
+      await expect(
+        runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/systemd-linger"] }),
+      ).resolves.toMatchObject({
+        checksRun: 1,
+        checksSkipped: 0,
+        findings: [
+          expect.objectContaining({
+            checkId: "core/doctor/systemd-linger",
+            fixHint: "Run: sudo loginctl enable-linger alice",
+            target: "systemd.user.alice",
+          }),
+        ],
+      });
+    });
+  });
+
+  it("keeps selected systemd linger quiet when the gateway service is not loaded", async () => {
+    mocks.gatewayServiceIsLoaded.mockResolvedValue(false);
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const systemdLingerCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/systemd-linger",
+    );
+    expect(systemdLingerCheck).toBeDefined();
+
+    const ctx = {
+      cfg: { gateway: { mode: "local" } },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+
+    await withProcessPlatform("linux", async () => {
+      await expect(
+        runDoctorLintChecks(ctx, {
+          checks: [systemdLingerCheck!],
+          onlyIds: ["core/doctor/systemd-linger"],
+        }),
+      ).resolves.toMatchObject({
+        checksRun: 1,
+        checksSkipped: 0,
+        findings: [],
+      });
+    });
+    expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
   });
 
   it("keeps tool result cap opt-in for default lint selection", async () => {

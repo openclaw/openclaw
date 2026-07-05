@@ -1433,6 +1433,10 @@
       "types": "./dist/plugin-sdk/tool-payload.d.ts",
       "default": "./dist/plugin-sdk/tool-payload.js"
     },
+    "./plugin-sdk/tool-results": {
+      "types": "./dist/plugin-sdk/tool-results.d.ts",
+      "default": "./dist/plugin-sdk/tool-results.js"
+    },
     "./plugin-sdk/tool-send": {
       "types": "./dist/plugin-sdk/tool-send.d.ts",
       "default": "./dist/plugin-sdk/tool-send.js"
@@ -2049,7 +2053,7 @@
     "lit": "3.3.3",
     "oxfmt": "0.57.0",
     "oxlint": "1.72.0",
-    "oxlint-tsgolint": "0.23.0",
+    "oxlint-tsgolint": "0.24.0",
     "shiki": "4.3.0",
     "signal-utils": "0.21.1",
     "sigstore": "4.1.1",

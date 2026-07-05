@@ -403,7 +403,6 @@ export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
 }
 
 export function canSubmitTuiChatMessage(params: {
-  local?: boolean;
   activeChatRunId?: string | null;
   pendingChatRunId?: string | null;
   pendingOptimisticUserMessage?: boolean;
@@ -413,11 +412,7 @@ export function canSubmitTuiChatMessage(params: {
   if (stopText && (params.activeChatRunId || params.pendingChatRunId)) {
     return true;
   }
-  const pending = Boolean(params.pendingChatRunId) || params.pendingOptimisticUserMessage === true;
-  if (!params.local && params.activeChatRunId) {
-    return false;
-  }
-  return !pending;
+  return !params.pendingChatRunId && params.pendingOptimisticUserMessage !== true;
 }
 
 const TUI_BUSY_ACTIVITY_STATUSES = new Set([
@@ -1428,7 +1423,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   updateAutocompleteProvider();
   const canSubmitChatMessage = (message: string) =>
     canSubmitTuiChatMessage({
-      local: isLocalMode,
       activeChatRunId: state.activeChatRunId,
       pendingChatRunId: state.pendingChatRunId,
       pendingOptimisticUserMessage: state.pendingOptimisticUserMessage,

@@ -303,14 +303,20 @@ import {
 } from "./tasks.js";
 import {
   TerminalAckResultSchema,
+  TerminalAttachParamsSchema,
+  TerminalAttachResultSchema,
   TerminalCloseParamsSchema,
   TerminalDataEventSchema,
   TerminalEventSchema,
   TerminalExitEventSchema,
   TerminalInputParamsSchema,
+  TerminalListResultSchema,
   TerminalOpenParamsSchema,
   TerminalOpenResultSchema,
   TerminalResizeParamsSchema,
+  TerminalSessionInfoSchema,
+  TerminalTextParamsSchema,
+  TerminalTextResultSchema,
 } from "./terminal.js";
 import {
   WizardCancelParamsSchema,
@@ -574,6 +580,12 @@ export const ProtocolSchemas = {
   TerminalInputParams: TerminalInputParamsSchema,
   TerminalResizeParams: TerminalResizeParamsSchema,
   TerminalCloseParams: TerminalCloseParamsSchema,
+  TerminalAttachParams: TerminalAttachParamsSchema,
+  TerminalAttachResult: TerminalAttachResultSchema,
+  TerminalSessionInfo: TerminalSessionInfoSchema,
+  TerminalListResult: TerminalListResultSchema,
+  TerminalTextParams: TerminalTextParamsSchema,
+  TerminalTextResult: TerminalTextResultSchema,
   TerminalAckResult: TerminalAckResultSchema,
   TerminalDataEvent: TerminalDataEventSchema,
   TerminalExitEvent: TerminalExitEventSchema,

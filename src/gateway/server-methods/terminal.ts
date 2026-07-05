@@ -6,12 +6,15 @@ import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  validateTerminalAttachParams,
   validateTerminalCloseParams,
   validateTerminalInputParams,
   validateTerminalOpenParams,
   validateTerminalResizeParams,
+  validateTerminalTextParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { buildTerminalEnv, resolveTerminalLaunch } from "../terminal/launch.js";
+import { renderTerminalBufferText } from "../terminal/buffer-text.js";
+import { buildTerminalEnv } from "../terminal/launch.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 function invalid(respond: GatewayRequestHandlerOptions["respond"], detail: string): void {
@@ -28,7 +31,7 @@ function requireConnId(opts: GatewayRequestHandlerOptions): string | null {
 }
 
 function terminalEnabled(context: GatewayRequestHandlerOptions["context"]): boolean {
-  return context.getRuntimeConfig().gateway?.terminal?.enabled ?? true;
+  return context.isTerminalEnabled();
 }
 
 /** Handlers for the operator terminal method family. */
@@ -51,17 +54,8 @@ export const terminalHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal is not available"));
       return;
     }
-    const cfg = context.getRuntimeConfig();
-    const terminalCfg = cfg.gateway?.terminal;
-    const enabled = terminalCfg?.enabled ?? true;
     const p = params as { agentId?: string; cols: number; rows: number };
-
-    const launch = resolveTerminalLaunch({
-      config: cfg,
-      enabled,
-      agentId: p.agentId,
-      configuredShell: terminalCfg?.shell,
-    });
+    const launch = context.resolveTerminalLaunchPolicy(p.agentId);
     if (!launch.ok) {
       if (launch.block.kind === "disabled") {
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal is disabled"));
@@ -179,5 +173,101 @@ export const terminalHandlers: GatewayRequestHandlers = {
     const p = params as { sessionId: string };
     const ok = context.terminalSessions?.close(connId, p.sessionId) ?? false;
     respond(true, { ok });
+  },
+
+  "terminal.attach": async (opts) => {
+    const { params, respond, context } = opts;
+    if (!validateTerminalAttachParams(params)) {
+      invalid(
+        respond,
+        `invalid terminal.attach params: ${formatValidationErrors(validateTerminalAttachParams.errors)}`,
+      );
+      return;
+    }
+    const connId = requireConnId(opts);
+    if (!connId) {
+      return;
+    }
+    const p = params as { sessionId: string };
+    // Same defense-in-depth as input/resize: the disable restart may still be
+    // in flight, so refuse handing a live PTY stream to a new connection.
+    if (!context.terminalSessions || !terminalEnabled(context)) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal is not available"));
+      return;
+    }
+    const attached = context.terminalSessions.attach(connId, p.sessionId);
+    if (!attached) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `unknown terminal session "${p.sessionId}"`),
+      );
+      return;
+    }
+    context.logGateway.info(
+      `terminal attached session=${attached.sessionId} agent=${attached.agentId} conn=${connId}`,
+    );
+    respond(true, {
+      sessionId: attached.sessionId,
+      agentId: attached.agentId,
+      shell: attached.shell,
+      cwd: attached.cwd,
+      confined: false,
+      buffer: attached.buffer,
+    });
+  },
+
+  "terminal.list": async (opts) => {
+    const { respond, context } = opts;
+    const connId = requireConnId(opts);
+    if (!connId) {
+      return;
+    }
+    // An empty list (not an error) when the surface is off/unwired keeps the
+    // reconnect flow simple: clients just fall back to opening fresh sessions.
+    const sessions =
+      context.terminalSessions && terminalEnabled(context)
+        ? context.terminalSessions.list().map((session) => ({
+            sessionId: session.sessionId,
+            agentId: session.agentId,
+            shell: session.shell,
+            cwd: session.cwd,
+            // Mirrors terminal.open: only unconfined host shells exist today.
+            confined: false,
+            attached: session.attached,
+            createdAtMs: session.createdAtMs,
+          }))
+        : [];
+    respond(true, { sessions });
+  },
+
+  "terminal.text": async (opts) => {
+    const { params, respond, context } = opts;
+    if (!validateTerminalTextParams(params)) {
+      invalid(
+        respond,
+        `invalid terminal.text params: ${formatValidationErrors(validateTerminalTextParams.errors)}`,
+      );
+      return;
+    }
+    const connId = requireConnId(opts);
+    if (!connId) {
+      return;
+    }
+    const p = params as { sessionId: string };
+    if (!context.terminalSessions || !terminalEnabled(context)) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal is not available"));
+      return;
+    }
+    const raw = context.terminalSessions.snapshot(p.sessionId);
+    if (raw === undefined) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `unknown terminal session "${p.sessionId}"`),
+      );
+      return;
+    }
+    respond(true, { text: renderTerminalBufferText(raw) });
   },
 };

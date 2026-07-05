@@ -394,6 +394,19 @@ function formatTelegramProgressLine(text: string): string {
     : formatProgressAsMarkdownCode(text);
 }
 
+function buildTelegramThinkingProgressLine(progressTokens: number): ChannelProgressDraftLine {
+  const label = `Thinking… (~${Math.round(progressTokens)} tokens)`;
+  const text = `🧠 ${label}`;
+  return {
+    id: "reasoning:token-progress",
+    kind: "item",
+    icon: "🧠",
+    label,
+    text,
+    prefix: false,
+  };
+}
+
 function escapeTelegramProgressHtml(text: string): string {
   return text
     .replaceAll("&", "&amp;")
@@ -1149,6 +1162,16 @@ export const dispatchTelegramMessage = async ({
     return await progressDraft.pushReasoningProgress(payload.text, {
       snapshot: payload.isReasoningSnapshot === true,
     });
+  };
+  const pushStreamThinkingTokenProgress = async (progressTokens: number) => {
+    const rendered = await pushStreamToolProgress(
+      buildTelegramThinkingProgressLine(progressTokens),
+      { startImmediately: true },
+    );
+    if (rendered) {
+      progressSummary.noteReasoningActivity();
+    }
+    return rendered;
   };
   const markProgressFinalStarted = () => {
     finalAnswerDeliveryStarted = true;
@@ -2631,6 +2654,12 @@ export const dispatchTelegramMessage = async ({
                             await pushStreamReasoningProgress(payload);
                           })
                       : undefined,
+                  onReasoningProgress: answerLane.stream
+                    ? (payload) =>
+                        enqueueDraftLaneEvent(async () => {
+                          await pushStreamThinkingTokenProgress(payload.progressTokens);
+                        })
+                    : undefined,
                   onAssistantMessageStart: answerLane.stream
                     ? () =>
                         enqueueDraftLaneEvent(async () => {

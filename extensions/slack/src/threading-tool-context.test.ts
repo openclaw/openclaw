@@ -230,6 +230,26 @@ describe("buildSlackThreadingToolContext", () => {
     expect(result.replyToMode).toBe("first");
   });
 
+  it("prefers the prepared per-channel reply mode over account config", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: {
+        channels: {
+          slack: { replyToMode: "all" },
+        },
+      } as OpenClawConfig,
+      accountId: null,
+      context: {
+        ChatType: "channel",
+        To: "channel:C123",
+        ReplyToMode: "off",
+        CurrentMessageId: "1771999998.834199",
+        ReplyToId: "1771999998.834199",
+      },
+    });
+
+    expect(result.replyToMode).toBe("off");
+  });
+
   it("defaults to off when no replyToMode is configured", () => {
     const result = buildSlackThreadingToolContext({
       cfg: emptyCfg,

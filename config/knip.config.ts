@@ -156,7 +156,7 @@ const config = {
       entry: [
         "index.html!",
         "src/main.ts!",
-        "src/ui/browser-redact.ts!",
+        "src/lib/browser-redact.ts!",
         "vite.config.ts!",
         "vitest*.ts!",
       ],

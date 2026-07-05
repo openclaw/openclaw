@@ -27,7 +27,7 @@ const AGENT_RUN_TIMEOUT_RETRY_GRACE_MS = 15_000;
 
 const agentRunCache = new Map<string, AgentRunSnapshot>();
 const agentRunStarts = new Map<string, number>();
-const pendingAgentRunErrors = new Map<string, PendingAgentRunError>();
+const pendingAgentRunErrors = new Map<string, PendingAgentRunTerminal>();
 const pendingAgentRunTimeouts = new Map<string, PendingAgentRunTerminal>();
 const agentRunWaiterCounts = new Map<string, number>();
 let agentRunListenerStarted = false;
@@ -42,8 +42,6 @@ type PendingAgentRunTerminal = {
   dueAt: number;
   timer: NodeJS.Timeout;
 };
-
-type PendingAgentRunError = PendingAgentRunTerminal;
 
 function pruneAgentRunCache(now = Date.now()) {
   for (const [runId, entry] of agentRunCache) {
