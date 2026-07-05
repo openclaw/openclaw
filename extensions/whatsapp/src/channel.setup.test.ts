@@ -63,8 +63,8 @@ vi.mock("openclaw/plugin-sdk/setup", async () => {
     if (!raw) {
       return "";
     }
-    const digits = raw.replace(/[^\d+]/g, "");
-    return digits.startsWith("+") ? digits : `+${digits}`;
+    const digits = raw.replace(/\D/g, "");
+    return digits ? `+${digits}` : "";
   };
   return {
     ...actual,
