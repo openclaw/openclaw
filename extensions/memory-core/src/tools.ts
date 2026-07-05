@@ -270,7 +270,6 @@ function queueShortTermRecallTracking(params: {
   rawResults: MemorySearchResult[];
   surfacedResults: MemorySearchResult[];
   timezone?: string;
-  sourceActor?: MemorySourceActorContext;
 }): void {
   const trackingResults = resolveRecallTrackingResults(params.rawResults, params.surfacedResults);
   void recordShortTermRecalls({
@@ -278,7 +277,6 @@ function queueShortTermRecallTracking(params: {
     query: params.query,
     results: trackingResults,
     timezone: params.timezone,
-    sourceActor: params.sourceActor,
   }).catch(() => {
     // Recall tracking is best-effort and must never block memory recall.
   });
@@ -650,7 +648,6 @@ export function createMemorySearchTool(options: {
                       rawResults,
                       surfacedResults: memoryResults,
                       timezone: dreaming.timezone,
-                      sourceActor: options.sourceActor,
                     });
                   }
                   provider = status.provider;

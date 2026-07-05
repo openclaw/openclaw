@@ -15,7 +15,6 @@ type RecordShortTermRecallsFn = (params: {
   results: MemorySearchResult[];
   nowMs?: number;
   timezone?: string;
-  sourceActor?: unknown;
 }) => Promise<void>;
 
 const recallTrackingMock = vi.hoisted(() => ({
@@ -203,6 +202,52 @@ describe("memory_search recall tracking", () => {
     expect(recallTrackingMock.recordShortTermRecalls).toHaveBeenCalledTimes(1);
     const [firstCall] = recallTrackingMock.recordShortTermRecalls.mock.calls;
     expect(firstCall?.[0]?.timezone).toBe("Europe/London");
+  });
+
+  it("does not persist source actor metadata into short-term recall tracking", async () => {
+    setMemorySearchImpl(async () => [
+      {
+        path: "memory/2026-04-03.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.95,
+        snippet: "Move backups to S3 Glacier.",
+        source: "memory" as const,
+      },
+    ]);
+
+    const tool = createMemorySearchTool({
+      config: asOpenClawConfig({
+        agents: { list: [{ id: "main", default: true }] },
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      }),
+      sourceActor: {
+        id: "signal:participant-redacted",
+        peerId: "signal:peer-redacted",
+        displayName: "Participant Redacted",
+        role: "participant",
+        context: "signal",
+      },
+    });
+    if (!tool) {
+      throw new Error("memory_search tool missing");
+    }
+
+    await tool.execute("call_recall_actor_not_persisted", { query: "glacier" });
+
+    expect(recallTrackingMock.recordShortTermRecalls).toHaveBeenCalledTimes(1);
+    const [firstCall] = recallTrackingMock.recordShortTermRecalls.mock.calls;
+    expect(firstCall?.[0]).not.toHaveProperty("sourceActor");
   });
 
   it("skips recall tracking when dreaming is disabled", async () => {

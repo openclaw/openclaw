@@ -1374,7 +1374,6 @@ export async function recordShortTermRecalls(params: {
   dayBucket?: string;
   nowMs?: number;
   timezone?: string;
-  sourceActor?: MemorySourceActorContext;
 }): Promise<void> {
   const workspaceDir = params.workspaceDir?.trim();
   if (!workspaceDir) {
