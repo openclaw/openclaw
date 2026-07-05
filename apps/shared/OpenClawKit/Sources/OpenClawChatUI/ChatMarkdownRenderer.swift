@@ -18,21 +18,40 @@ struct ChatMarkdownRenderer: View {
     let variant: ChatMarkdownVariant
     let font: Font
     let textColor: Color
+    /// False while the message is still streaming: trailing open fences and
+    /// growing tables then stay on the cheap plain-text path.
+    var isComplete: Bool = true
 
     var body: some View {
         let processed = ChatMarkdownPreprocessor.preprocess(markdown: self.text)
-        let renderMarkdown = ChatMarkdownDisplayPreprocessor.preserveChatSoftBreaks(in: processed.cleaned)
+        let blocks = ChatMarkdownBlockSegmenter.segments(
+            markdown: processed.cleaned,
+            isComplete: self.isComplete)
         VStack(alignment: .leading, spacing: 10) {
-            Text(self.markdownText(renderMarkdown))
+            ForEach(Array(blocks.enumerated()), id: \.offset) { entry in
+                self.blockView(entry.element)
+            }
+
+            if !processed.images.isEmpty {
+                InlineImageList(images: processed.images)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func blockView(_ block: ChatMarkdownBlock) -> some View {
+        switch block {
+        case .prose(let markdown):
+            Text(self.markdownText(ChatMarkdownDisplayPreprocessor.preserveChatSoftBreaks(in: markdown)))
                 .font(self.font)
                 .foregroundStyle(self.textColor)
                 .tint(self.linkColor)
                 .textSelection(.enabled)
                 .lineSpacing(self.variant == .compact ? 2 : 4)
-
-            if !processed.images.isEmpty {
-                InlineImageList(images: processed.images)
-            }
+        case .code(let code):
+            ChatCodeBlockView(block: code, textColor: self.textColor)
+        case .table(let table):
+            ChatMarkdownTableView(table: table, textColor: self.textColor)
         }
     }
 
@@ -48,6 +67,8 @@ struct ChatMarkdownRenderer: View {
     }
 }
 
+/// Fenced code and GFM tables are split out by `ChatMarkdownBlockSegmenter`
+/// before this runs, so prose only needs chat-style soft-break preservation.
 enum ChatMarkdownDisplayPreprocessor {
     static func preserveChatSoftBreaks(in markdown: String) -> String {
         let normalized = markdown.replacingOccurrences(of: "\r\n", with: "\n")
@@ -55,34 +76,14 @@ enum ChatMarkdownDisplayPreprocessor {
         guard lines.count > 1 else { return normalized }
 
         var output = ""
-        var fence: Fence?
-        let tableRows = self.tableRowIndices(in: lines)
-
         for index in lines.indices {
-            let line = lines[index]
-            let wasInFence = fence != nil
-            let fenceBoundary = self.fenceBoundary(in: line, activeFence: fence)
-            if case let .open(nextFence) = fenceBoundary {
-                fence = nextFence
-            } else if case .close = fenceBoundary {
-                fence = nil
-            }
-
-            output += line
+            output += lines[index]
 
             guard index < lines.index(before: lines.endIndex) else {
                 continue
             }
 
-            let nextLine = lines[lines.index(after: index)]
-            let nextIndex = lines.index(after: index)
-            if self.shouldPreserveSoftBreak(
-                after: line,
-                before: nextLine,
-                inTable: tableRows.contains(index) || tableRows.contains(nextIndex),
-                inFence: wasInFence,
-                fenceBoundary: fenceBoundary)
-            {
+            if self.shouldPreserveSoftBreak(after: lines[index], before: lines[index + 1]) {
                 output += "  \n"
             } else {
                 output += "\n"
@@ -92,29 +93,7 @@ enum ChatMarkdownDisplayPreprocessor {
         return output
     }
 
-    private enum FenceBoundary {
-        case none
-        case open(Fence)
-        case close
-    }
-
-    private struct Fence {
-        let character: Character
-        let count: Int
-        let hasOnlyTrailingWhitespace: Bool
-    }
-
-    private static func shouldPreserveSoftBreak(
-        after line: String,
-        before nextLine: String,
-        inTable: Bool,
-        inFence: Bool,
-        fenceBoundary: FenceBoundary) -> Bool
-    {
-        guard !inTable else { return false }
-        guard !inFence else { return false }
-        guard case .none = fenceBoundary else { return false }
-
+    private static func shouldPreserveSoftBreak(after line: String, before nextLine: String) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextTrimmed = nextLine.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !nextTrimmed.isEmpty else { return false }
@@ -137,78 +116,6 @@ enum ChatMarkdownDisplayPreprocessor {
             || self.matches(line, #"^\s{0,3}\d{1,9}[.)]\s+"#)
             || self.matches(line, #"^( {4}|\t)"#)
             || self.matches(line, #"^\s{0,3}((\*\s*){3,}|(-\s*){3,}|(_\s*){3,}|={3,})$"#)
-    }
-
-    private static func tableRowIndices(in lines: [String]) -> Set<Int> {
-        var indices = Set<Int>()
-        for index in lines.indices where index > lines.startIndex {
-            guard self.isTableDelimiterLine(lines[index]), lines[lines.index(before: index)].contains("|") else {
-                continue
-            }
-
-            indices.insert(lines.index(before: index))
-            indices.insert(index)
-
-            var cursor = lines.index(after: index)
-            while cursor < lines.endIndex, lines[cursor].contains("|") {
-                indices.insert(cursor)
-                cursor = lines.index(after: cursor)
-            }
-        }
-        return indices
-    }
-
-    private static func isTableDelimiterLine(_ line: String) -> Bool {
-        self.matches(line, #"^\s{0,3}\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$"#)
-    }
-
-    private static func fenceBoundary(in line: String, activeFence: Fence?) -> FenceBoundary {
-        guard let candidate = self.fenceCandidate(in: line) else {
-            return .none
-        }
-
-        guard let activeFence else {
-            return .open(candidate)
-        }
-
-        if candidate.character == activeFence.character,
-           candidate.count >= activeFence.count,
-           candidate.hasOnlyTrailingWhitespace
-        {
-            return .close
-        }
-        return .none
-    }
-
-    private static func fenceCandidate(in line: String) -> Fence? {
-        var cursor = line.startIndex
-        var spaces = 0
-        while cursor < line.endIndex, line[cursor] == " ", spaces < 4 {
-            spaces += 1
-            cursor = line.index(after: cursor)
-        }
-        guard spaces <= 3, cursor < line.endIndex else {
-            return nil
-        }
-
-        let character = line[cursor]
-        guard character == "`" || character == "~" else {
-            return nil
-        }
-
-        var count = 0
-        while cursor < line.endIndex, line[cursor] == character {
-            count += 1
-            cursor = line.index(after: cursor)
-        }
-        guard count >= 3 else {
-            return nil
-        }
-        let trailing = line[cursor...]
-        return Fence(
-            character: character,
-            count: count,
-            hasOnlyTrailingWhitespace: trailing.allSatisfy(\.isWhitespace))
     }
 
     private static func matches(_ line: String, _ pattern: String) -> Bool {

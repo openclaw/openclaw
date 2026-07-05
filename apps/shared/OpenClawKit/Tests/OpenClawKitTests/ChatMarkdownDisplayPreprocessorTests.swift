@@ -45,51 +45,9 @@ struct ChatMarkdownDisplayPreprocessorTests {
         #expect(prepared == markdown)
     }
 
-    @Test func `preserves fenced code blocks`() {
-        let markdown = """
-        ```swift
-        alpha
-        beta
-        ```
-        after
-        next
-        """
-
-        let prepared = ChatMarkdownDisplayPreprocessor.preserveChatSoftBreaks(in: markdown)
-
-        #expect(
-            prepared == """
-            ```swift
-            alpha
-            beta
-            ```
-            after  
-            next
-            """)
-    }
-
-    @Test func `keeps fence like code content inside active fence`() {
-        let markdown = """
-        ```text
-        ``` not a close
-        still code
-        ```
-        after
-        next
-        """
-
-        let prepared = ChatMarkdownDisplayPreprocessor.preserveChatSoftBreaks(in: markdown)
-
-        #expect(
-            prepared == """
-            ```text
-            ``` not a close
-            still code
-            ```
-            after  
-            next
-            """)
-    }
+    // Fenced code and table handling moved to ChatMarkdownBlockSegmenter,
+    // which strips those blocks before prose reaches this preprocessor; see
+    // ChatMarkdownBlockSegmenterTests.
 
     @Test func `preserves block markdown structure`() {
         let markdown = """
@@ -99,18 +57,6 @@ struct ChatMarkdownDisplayPreprocessorTests {
 
         # Heading
         > quote
-        """
-
-        let prepared = ChatMarkdownDisplayPreprocessor.preserveChatSoftBreaks(in: markdown)
-
-        #expect(prepared == markdown)
-    }
-
-    @Test func `preserves table like markdown rows`() {
-        let markdown = """
-        A | B
-        --- | ---
-        1 | 2
         """
 
         let prepared = ChatMarkdownDisplayPreprocessor.preserveChatSoftBreaks(in: markdown)
