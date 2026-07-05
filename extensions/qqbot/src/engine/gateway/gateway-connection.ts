@@ -35,6 +35,7 @@ interface GatewayConnectionContext {
   onReady?: (data: unknown) => void;
   onResumed?: (data: unknown) => void;
   onError?: (error: Error) => void;
+  onDisconnected?: (info: { reason?: string; fatal?: boolean }) => void;
   handleMessage: (event: QueuedMessage) => Promise<void>;
   onInteraction?: (event: InteractionEvent) => void;
 }
@@ -132,6 +133,11 @@ export class GatewayConnection {
     const { account: _account, log } = this.ctx;
     if (this.isAborted || this.reconnect.isExhausted()) {
       log?.error(`Max reconnect attempts reached or aborted`);
+      // Exhaustion is a permanent give-up: report it as fatal so the
+      // channel status does not keep claiming a live connection.
+      if (!this.isAborted) {
+        this.ctx.onDisconnected?.({ reason: "reconnect attempts exhausted", fatal: true });
+      }
       return;
     }
     if (this.reconnectTimer) {
@@ -346,6 +352,13 @@ export class GatewayConnection {
     }
 
     this.cleanup();
+
+    // Publish the disconnect so channel status stops claiming a live
+    // connection; a fatal close (bot banned / offline) never reconnects.
+    // Abort-driven closes are an intentional stop, not a status change.
+    if (!this.isAborted) {
+      this.ctx.onDisconnected?.({ reason: action.reason, fatal: action.fatal });
+    }
 
     if (action.fatal) {
       return;

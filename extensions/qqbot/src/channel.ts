@@ -384,6 +384,21 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
             lastError: error.message,
           });
         },
+        onDisconnected: ({ reason, fatal }) => {
+          log?.info(
+            `[qqbot:${account.accountId}] Gateway disconnected${reason ? `: ${reason}` : ""}`,
+          );
+          // Keep channel status honest: the websocket is down, so stop
+          // reporting connected. Fatal closes (banned / offline / retries
+          // exhausted) never reconnect, so surface the reason as lastError.
+          // `running` stays owned by the gateway lifecycle store — the
+          // account task is still held until an explicit stop/abort.
+          ctx.setStatus({
+            ...ctx.getStatus(),
+            connected: false,
+            ...(fatal && reason ? { lastError: reason } : {}),
+          });
+        },
       });
     },
     logoutAccount: async ({ accountId, cfg }) => {
