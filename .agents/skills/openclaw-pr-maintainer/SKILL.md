@@ -313,5 +313,5 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
 
 ## Extra safety
 
-- If a close or reopen action would affect more than 5 PRs, ask for explicit confirmation with the exact count and target query first.
+- If a close or reopen action would affect more than 20 PRs, ask for explicit confirmation with the exact count and target query first.
 - `sync` means: if the tree is dirty, commit all changes with a sensible Conventional Commit message, then `git pull --rebase`, then `git push`. Stop if rebase conflicts cannot be resolved safely.
