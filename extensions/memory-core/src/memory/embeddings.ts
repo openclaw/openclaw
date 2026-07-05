@@ -141,7 +141,9 @@ function isOpenAICompatibleApi(api: string | undefined): boolean {
   // Only skip the legacy adapter when the provider explicitly uses an
   // OpenAI-compatible API.  Non-OpenAI providers (ollama, anthropic, …)
   // own their adapter paths and handle baseUrl internally.
-  if (!api) return false;
+  if (!api) {
+    return false;
+  }
   return api === "openai" || api === "openai-completions" || api === "openai-responses";
 }
 
