@@ -7,8 +7,8 @@ import OpenClawKit
 /// - a `role=node` session for device capabilities (`node.invoke.*`)
 /// - a `role=operator` session for chat/talk/config (`chat.*`, `talk.*`, etc.)
 ///
-/// Both sessions should derive all connection inputs from this config so we
-/// don't accidentally persist gateway-scoped state under different keys.
+/// Both sessions derive routing from `stableID` and authentication ownership from
+/// `nodeOptions.deviceAuthGatewayID`; Bonjour and manual routes may reach one gateway.
 struct GatewayConnectConfig {
     let url: URL
     let stableID: String
@@ -18,7 +18,7 @@ struct GatewayConnectConfig {
     let password: String?
     let nodeOptions: GatewayConnectOptions
 
-    /// Stable, non-empty identifier used for gateway-scoped persistence keys.
+    /// Stable, non-empty route identifier used for UI/event ownership.
     /// If the caller doesn't provide a stableID, fall back to URL identity.
     var effectiveStableID: String {
         let trimmed = self.stableID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -64,6 +64,8 @@ struct GatewayConnectConfig {
             lhs.clientDisplayName == rhs.clientDisplayName &&
             lhs.deviceIdentityProfile == rhs.deviceIdentityProfile &&
             lhs.includeDeviceIdentity == rhs.includeDeviceIdentity &&
+            lhs.allowStoredDeviceAuth == rhs.allowStoredDeviceAuth &&
+            lhs.deviceAuthGatewayID == rhs.deviceAuthGatewayID &&
             lhsScopes == rhsScopes &&
             lhsCaps == rhsCaps &&
             lhsCommands == rhsCommands &&

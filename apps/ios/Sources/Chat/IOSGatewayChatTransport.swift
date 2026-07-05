@@ -237,6 +237,23 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
+        try await self.sendMessage(
+            sessionKey: sessionKey,
+            message: message,
+            thinking: thinking,
+            idempotencyKey: idempotencyKey,
+            attachments: attachments,
+            ifCurrentRoute: nil)
+    }
+
+    func sendMessage(
+        sessionKey: String,
+        message: String,
+        thinking: String,
+        idempotencyKey: String,
+        attachments: [OpenClawChatAttachmentPayload],
+        ifCurrentRoute expectedRoute: GatewayNodeSessionRoute?) async throws -> OpenClawChatSendResponse
+    {
         let startLogMessage =
             "chat.send start sessionKey=\(sessionKey) "
                 + "len=\(message.count) attachments=\(attachments.count)"
@@ -250,7 +267,11 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             idempotencyKey: idempotencyKey,
             attachments: attachments)
         do {
-            let res = try await self.gateway.request(method: "chat.send", paramsJSON: json, timeoutSeconds: 35)
+            let res = try await self.gateway.request(
+                method: "chat.send",
+                paramsJSON: json,
+                timeoutSeconds: 35,
+                ifCurrentRoute: expectedRoute)
             let decoded = try JSONDecoder().decode(OpenClawChatSendResponse.self, from: res)
             Self.logger.info("chat.send ok runId=\(decoded.runId, privacy: .public)")
             GatewayDiagnostics.log("chat.send ok runId=\(decoded.runId) status=\(decoded.status)")
@@ -294,6 +315,17 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     }
 
     func waitForRunCompletion(runId rawRunId: String, timeoutMs: Int) async -> Bool {
+        await self.waitForRunCompletion(
+            runId: rawRunId,
+            timeoutMs: timeoutMs,
+            ifCurrentRoute: nil)
+    }
+
+    func waitForRunCompletion(
+        runId rawRunId: String,
+        timeoutMs: Int,
+        ifCurrentRoute expectedRoute: GatewayNodeSessionRoute?) async -> Bool
+    {
         let runId = rawRunId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !runId.isEmpty else { return false }
 
@@ -304,7 +336,8 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             let res = try await self.gateway.request(
                 method: "agent.wait",
                 paramsJSON: json,
-                timeoutSeconds: requestTimeoutSeconds)
+                timeoutSeconds: requestTimeoutSeconds,
+                ifCurrentRoute: expectedRoute)
             let completion = try Self.decodeAgentWaitCompletion(res, fallbackRunId: runId)
             GatewayDiagnostics.log("agent.wait completed runId=\(completion.runId) status=\(completion.status)")
             if !completion.completed {

@@ -82,14 +82,16 @@ struct WatchQuickReplyEvent: Equatable {
     var actionId: String
     var actionLabel: String?
     var sessionKey: String?
+    var gatewayStableID: String?
     var note: String?
     var sentAtMs: Int?
     var transport: String
 }
 
-struct WatchExecApprovalResolveEvent: Equatable {
+struct WatchExecApprovalResolveEvent: Codable, Equatable {
     var replyId: String
     var approvalId: String
+    var gatewayStableID: String?
     var decision: OpenClawWatchExecApprovalDecision
     var sentAtMs: Int?
     var transport: String

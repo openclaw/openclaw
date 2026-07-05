@@ -4,40 +4,61 @@ import Foundation
 final class WatchReplyCoordinator {
     enum Decision {
         case dropMissingFields
+        case dropMissingTarget
+        case dropMismatchedTarget
         case deduped(replyId: String)
         case queue(replyId: String, actionId: String)
         case forward
     }
 
-    private var queuedReplies: [WatchQuickReplyEvent] = []
+    private struct QueuedReply {
+        var gatewayStableID: String
+        var event: WatchQuickReplyEvent
+    }
+
+    private var queuedReplies: [QueuedReply] = []
     private var seenReplyIds = Set<String>()
 
-    func ingest(_ event: WatchQuickReplyEvent, isGatewayConnected: Bool) -> Decision {
+    func ingest(
+        _ event: WatchQuickReplyEvent,
+        isGatewayConnected: Bool,
+        currentGatewayStableID: String?) -> Decision
+    {
         let replyId = event.replyId.trimmingCharacters(in: .whitespacesAndNewlines)
         let actionId = event.actionId.trimmingCharacters(in: .whitespacesAndNewlines)
         if replyId.isEmpty || actionId.isEmpty {
             return .dropMissingFields
         }
+        let owner = event.gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !owner.isEmpty else { return .dropMissingTarget }
+        let currentOwner = currentGatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard currentOwner.isEmpty || owner == currentOwner else { return .dropMismatchedTarget }
         if self.seenReplyIds.contains(replyId) {
             return .deduped(replyId: replyId)
         }
         self.seenReplyIds.insert(replyId)
-        if !isGatewayConnected {
-            self.queuedReplies.append(event)
+        if currentOwner.isEmpty || !isGatewayConnected {
+            self.queuedReplies.append(QueuedReply(gatewayStableID: owner, event: event))
             return .queue(replyId: replyId, actionId: actionId)
         }
         return .forward
     }
 
-    func drainIfConnected(_ isGatewayConnected: Bool) -> [WatchQuickReplyEvent] {
-        guard isGatewayConnected, !self.queuedReplies.isEmpty else { return [] }
-        let pending = self.queuedReplies
-        self.queuedReplies.removeAll()
-        return pending
+    func nextQueuedReplyIfConnected(
+        _ isGatewayConnected: Bool,
+        gatewayStableID: String?) -> WatchQuickReplyEvent?
+    {
+        let owner = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard isGatewayConnected, !owner.isEmpty,
+              let index = self.queuedReplies.firstIndex(where: { $0.gatewayStableID == owner })
+        else { return nil }
+        return self.queuedReplies.remove(at: index).event
     }
 
-    func requeueFront(_ event: WatchQuickReplyEvent) {
-        self.queuedReplies.insert(event, at: 0)
+    func requeueFront(_ event: WatchQuickReplyEvent, gatewayStableID: String) {
+        let owner = gatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !owner.isEmpty else { return }
+        self.queuedReplies.insert(QueuedReply(gatewayStableID: owner, event: event), at: 0)
     }
 
     var queuedCount: Int {

@@ -39,6 +39,7 @@ struct SettingsProTab: View {
     @State var selectedAgentPickerId = ""
     @State var gatewayToken = ""
     @State var gatewayPassword = ""
+    @State var gatewayCredentialFieldStableID: String?
     @State var manualGatewayPortText = ""
     @State var setupStatusText: String?
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
@@ -165,12 +166,6 @@ struct SettingsProTab: View {
                 if newValue != self.selectedAgentPickerId {
                     self.selectedAgentPickerId = newValue
                 }
-            }
-            .onChange(of: self.gatewayToken) { _, newValue in
-                self.persistGatewayToken(newValue)
-            }
-            .onChange(of: self.gatewayPassword) { _, newValue in
-                self.persistGatewayPassword(newValue)
             }
             .onChange(of: self.setupCode) { _, newValue in
                 if !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

@@ -38,6 +38,7 @@ enum WatchExecApprovalCloseReason: String, Codable, Equatable {
 
 struct WatchExecApprovalItem: Codable, Equatable, Identifiable {
     var id: String
+    var gatewayStableID: String?
     var commandText: String
     var commandPreview: String?
     var host: String?
@@ -57,6 +58,7 @@ struct WatchExecApprovalPromptMessage: Codable, Equatable {
 
 struct WatchExecApprovalResolvedMessage: Codable, Equatable {
     var approvalId: String
+    var gatewayStableID: String?
     var decision: WatchExecApprovalDecision?
     var resolvedAtMs: Int?
     var source: String?
@@ -64,6 +66,7 @@ struct WatchExecApprovalResolvedMessage: Codable, Equatable {
 
 struct WatchExecApprovalExpiredMessage: Codable, Equatable {
     var approvalId: String
+    var gatewayStableID: String?
     var reason: WatchExecApprovalCloseReason
     var expiredAtMs: Int?
 }
@@ -81,6 +84,7 @@ struct WatchExecApprovalSnapshotRequestMessage: Codable, Equatable {
 
 struct WatchExecApprovalResolveMessage: Codable, Equatable {
     var approvalId: String
+    var gatewayStableID: String?
     var decision: WatchExecApprovalDecision
     var replyId: String
     var sentAtMs: Int?
@@ -147,6 +151,7 @@ struct WatchNotifyMessage {
     var sentAtMs: Int?
     var promptId: String?
     var sessionKey: String?
+    var gatewayStableID: String?
     var kind: String?
     var details: String?
     var expiresAtMs: Int?
@@ -177,6 +182,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         var lastDeliveryKey: String?
         var promptId: String?
         var sessionKey: String?
+        var gatewayStableID: String?
         var kind: String?
         var details: String?
         var expiresAtMs: Int?
@@ -187,6 +193,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         var execApprovals: [WatchExecApprovalRecord]
         var selectedExecApprovalID: String?
         var lastExecApprovalSnapshotID: String?
+        var lastExecApprovalSnapshotSentAtMs: Int?
         var lastExecApprovalOutcomeText: String?
         var lastExecApprovalOutcomeAt: Date?
         var appSnapshot: WatchAppSnapshotMessage?
@@ -206,6 +213,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
     var updatedAt: Date?
     var promptId: String?
     var sessionKey: String?
+    var gatewayStableID: String?
     var kind: String?
     var details: String?
     var expiresAtMs: Int?
@@ -227,6 +235,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
     var execApprovalReviewStatusText: String?
     var execApprovalReviewStatusAt: Date?
     private var lastExecApprovalSnapshotID: String?
+    private var lastExecApprovalSnapshotSentAtMs: Int?
     private var hasCompletedExecApprovalSnapshotRefreshInSession = false
     private var lastDeliveryKey: String?
 
@@ -336,6 +345,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
     }
 
     func consume(message: WatchNotifyMessage, transport: String) {
+        guard self.acceptsGatewayOwner(message.gatewayStableID) else { return }
         let messageID = message.id?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let deliveryKey = self.deliveryKey(
@@ -353,6 +363,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         self.updatedAt = Date()
         self.promptId = message.promptId
         self.sessionKey = message.sessionKey
+        self.gatewayStableID = message.gatewayStableID
         self.kind = message.kind
         self.details = message.details
         self.expiresAtMs = message.expiresAtMs
@@ -369,7 +380,8 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
                 identifier: deliveryKey,
                 title: normalizedTitle,
                 body: message.body,
-                risk: message.risk)
+                risk: message.risk,
+                stillCurrent: { self.lastDeliveryKey == deliveryKey })
         }
     }
 
@@ -377,22 +389,33 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         execApprovalPrompt message: WatchExecApprovalPromptMessage,
         transport: String)
     {
+        guard self.acceptsGatewayOwner(message.approval.gatewayStableID) else { return }
         self.pruneExpiredExecApprovals(nowMs: Self.nowMs())
         self.upsertExecApproval(
             message.approval,
             transport: transport,
             keepSelectionIfPossible: true,
             resetResolvingState: message.resetResolvingState == true)
+        let approvalID = message.approval.id
+        let approvalGatewayID = message.approval.gatewayStableID
+        guard let notificationIdentifier = Self.execApprovalNotificationIdentifier(for: message.approval) else {
+            return
+        }
         self.markExecApprovalReviewLoaded()
         self.lastExecApprovalOutcomeText = nil
         self.lastExecApprovalOutcomeAt = nil
 
         Task {
             await self.postLocalNotification(
-                identifier: "watch.execApproval.\(message.approval.id)",
+                identifier: notificationIdentifier,
                 title: "Exec approval required",
                 body: message.approval.commandPreview ?? message.approval.commandText,
-                risk: message.approval.risk?.rawValue)
+                risk: message.approval.risk?.rawValue,
+                stillCurrent: {
+                    self.execApprovals.contains { record in
+                        record.id == approvalID && record.approval.gatewayStableID == approvalGatewayID
+                    }
+                })
         }
     }
 
@@ -404,16 +427,28 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         if let snapshotID, !snapshotID.isEmpty, snapshotID == lastExecApprovalSnapshotID {
             return
         }
+        if let sentAtMs = message.sentAtMs,
+           let lastSentAtMs = self.lastExecApprovalSnapshotSentAtMs,
+           sentAtMs < lastSentAtMs
+        {
+            return
+        }
 
+        let existingRecords = self.execApprovals
         let existingRecordsByID = Dictionary(
-            uniqueKeysWithValues: execApprovals.map { ($0.id, $0) })
-        self.execApprovals = message.approvals.map { approval in
+            uniqueKeysWithValues: existingRecords.map { ($0.id, $0) })
+        self.execApprovals = message.approvals.filter { approval in
+            self.acceptsGatewayOwner(approval.gatewayStableID)
+        }.map { approval in
             self.mergedExecApprovalRecord(
                 approval: approval,
                 transport: transport,
                 existingRecord: existingRecordsByID[approval.id])
         }
         self.lastExecApprovalSnapshotID = snapshotID
+        if let sentAtMs = message.sentAtMs {
+            self.lastExecApprovalSnapshotSentAtMs = sentAtMs
+        }
         self.hasCompletedExecApprovalSnapshotRefreshInSession = true
         if let selectedExecApprovalID,
            !self.execApprovals.contains(where: { $0.id == selectedExecApprovalID })
@@ -423,6 +458,14 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
             selectedExecApprovalID = self.sortedExecApprovals.first?.id
         }
         self.pruneExpiredExecApprovals(nowMs: Self.nowMs())
+        let currentNotificationIdentifiers = Set(self.execApprovals.compactMap { record in
+            Self.execApprovalNotificationIdentifier(for: record.approval)
+        })
+        let removedApprovals = existingRecords.map(\.approval).filter { approval in
+            guard let identifier = Self.execApprovalNotificationIdentifier(for: approval) else { return false }
+            return !currentNotificationIdentifiers.contains(identifier)
+        }
+        self.removeExecApprovalNotifications(approvals: removedApprovals)
         self.markExecApprovalReviewLoaded()
         self.persistState()
     }
@@ -432,16 +475,47 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         if let snapshotID, !snapshotID.isEmpty, snapshotID == appSnapshot?.snapshotId {
             return
         }
-        var merged = message
-        if merged.chatItems == nil {
-            merged.chatItems = self.appSnapshot?.chatItems
+        if let sentAtMs = message.sentAtMs,
+           let currentSentAtMs = self.appSnapshot?.sentAtMs,
+           sentAtMs < currentSentAtMs
+        {
+            return
         }
-        if merged.chatStatusText == nil {
-            merged.chatStatusText = self.appSnapshot?.chatStatusText
+        let previousGatewayID = Self.normalizedGatewayID(self.appSnapshot?.gatewayStableID)
+        let nextGatewayID = Self.normalizedGatewayID(message.gatewayStableID)
+        var merged = message
+        if previousGatewayID == nextGatewayID {
+            if merged.chatItems == nil {
+                merged.chatItems = self.appSnapshot?.chatItems
+            }
+            if merged.chatStatusText == nil {
+                merged.chatStatusText = self.appSnapshot?.chatStatusText
+            }
         }
         self.appSnapshot = merged
         self.appSnapshotUpdatedAt = Date()
         self.appSnapshotStatusText = nil
+        if previousGatewayID != nextGatewayID {
+            if Self.normalizedGatewayID(self.gatewayStableID) != nextGatewayID {
+                self.clearMessagePrompt()
+            }
+            let invalidatedApprovals = self.execApprovals.compactMap { record -> WatchExecApprovalItem? in
+                guard let nextGatewayID else { return record.approval }
+                return Self.normalizedGatewayID(record.approval.gatewayStableID) == nextGatewayID
+                    ? nil
+                    : record.approval
+            }
+            self.execApprovals.removeAll { record in
+                guard let nextGatewayID else { return true }
+                return Self.normalizedGatewayID(record.approval.gatewayStableID) != nextGatewayID
+            }
+            self.removeExecApprovalNotifications(approvals: invalidatedApprovals)
+            if let selectedExecApprovalID,
+               !self.execApprovals.contains(where: { $0.id == selectedExecApprovalID })
+            {
+                self.selectedExecApprovalID = self.sortedExecApprovals.first?.id
+            }
+        }
         self.persistState()
     }
 
@@ -504,7 +578,8 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
     }
 
     func consume(execApprovalResolved message: WatchExecApprovalResolvedMessage) {
-        self.removeExecApproval(id: message.approvalId)
+        guard self.acceptsGatewayOwner(message.gatewayStableID) else { return }
+        self.removeExecApproval(id: message.approvalId, gatewayStableID: message.gatewayStableID)
         let statusText = switch message.decision {
         case .allowOnce:
             "Allowed once"
@@ -519,7 +594,8 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
     }
 
     func consume(execApprovalExpired message: WatchExecApprovalExpiredMessage) {
-        self.removeExecApproval(id: message.approvalId)
+        guard self.acceptsGatewayOwner(message.gatewayStableID) else { return }
+        self.removeExecApproval(id: message.approvalId, gatewayStableID: message.gatewayStableID)
         let statusText = switch message.reason {
         case .expired:
             "Approval expired"
@@ -627,21 +703,95 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
             statusAt: statusAt)
     }
 
-    private func removeExecApproval(id: String) {
+    private func removeExecApproval(id: String, gatewayStableID: String?) {
         let normalizedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedID.isEmpty else { return }
-        self.execApprovals.removeAll { $0.id == normalizedID }
+        let normalizedGatewayID = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let removedApprovals = self.execApprovals.compactMap { record -> WatchExecApprovalItem? in
+            guard record.id == normalizedID else { return nil }
+            // Legacy ownerless lifecycle messages may only close legacy ownerless prompts.
+            return record.approval.gatewayStableID == normalizedGatewayID ? record.approval : nil
+        }
+        self.execApprovals.removeAll { record in
+            guard record.id == normalizedID else { return false }
+            // Legacy ownerless lifecycle messages may only close legacy ownerless prompts.
+            return record.approval.gatewayStableID == normalizedGatewayID
+        }
+        self.removeExecApprovalNotifications(approvals: removedApprovals)
         if self.selectedExecApprovalID == normalizedID {
             self.selectedExecApprovalID = self.sortedExecApprovals.first?.id
         }
         self.persistState()
     }
 
+    private func acceptsGatewayOwner(_ gatewayStableID: String?) -> Bool {
+        guard let incomingGatewayID = Self.normalizedGatewayID(gatewayStableID) else {
+            return false
+        }
+        guard let activeGatewayID = Self.normalizedGatewayID(self.appSnapshot?.gatewayStableID) else {
+            return true
+        }
+        return incomingGatewayID == activeGatewayID
+    }
+
+    private func clearMessagePrompt() {
+        let notificationIdentifier = self.lastDeliveryKey
+        self.title = Self.defaultTitle
+        self.body = Self.defaultBody
+        self.transport = "none"
+        self.updatedAt = nil
+        self.lastDeliveryKey = nil
+        self.promptId = nil
+        self.sessionKey = nil
+        self.gatewayStableID = nil
+        self.kind = nil
+        self.details = nil
+        self.expiresAtMs = nil
+        self.risk = nil
+        self.actions = []
+        self.replyStatusText = nil
+        self.replyStatusAt = nil
+        self.isReplySending = false
+
+        guard let notificationIdentifier else { return }
+        self.removeLocalNotifications(identifiers: [notificationIdentifier])
+    }
+
+    private func removeExecApprovalNotifications(approvals: [WatchExecApprovalItem]) {
+        self.removeLocalNotifications(identifiers: approvals.compactMap { approval in
+            Self.execApprovalNotificationIdentifier(for: approval)
+        })
+    }
+
+    private func removeLocalNotifications(identifiers: [String]) {
+        guard !identifiers.isEmpty else { return }
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: identifiers)
+        center.removeDeliveredNotifications(withIdentifiers: identifiers)
+    }
+
+    private static func normalizedGatewayID(_ gatewayStableID: String?) -> String? {
+        let normalized = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    private static func execApprovalNotificationIdentifier(for approval: WatchExecApprovalItem) -> String? {
+        guard let gatewayStableID = normalizedGatewayID(approval.gatewayStableID) else { return nil }
+        let approvalID = approval.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !approvalID.isEmpty else { return nil }
+        return "watch.execApproval.\(gatewayStableID.utf8.count):\(gatewayStableID)\(approvalID)"
+    }
+
     private func pruneExpiredExecApprovals(nowMs: Int) {
+        let expiredApprovals = self.execApprovals.compactMap { record -> WatchExecApprovalItem? in
+            guard let expiresAtMs = record.approval.expiresAtMs, expiresAtMs <= nowMs else { return nil }
+            return record.approval
+        }
         self.execApprovals.removeAll { record in
             guard let expiresAtMs = record.approval.expiresAtMs else { return false }
             return expiresAtMs <= nowMs
         }
+        self.removeExecApprovalNotifications(approvals: expiredApprovals)
         if let selectedExecApprovalID,
            !self.execApprovals.contains(where: { $0.id == selectedExecApprovalID })
         {
@@ -664,6 +814,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         self.lastDeliveryKey = state.lastDeliveryKey
         self.promptId = state.promptId
         self.sessionKey = state.sessionKey
+        self.gatewayStableID = state.gatewayStableID
         self.kind = state.kind
         self.details = state.details
         self.expiresAtMs = state.expiresAtMs
@@ -671,15 +822,36 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         self.actions = state.actions ?? []
         self.replyStatusText = state.replyStatusText
         self.replyStatusAt = state.replyStatusAt
-        self.execApprovals = state.execApprovals
+        let ownerlessApprovals = state.execApprovals.filter { record in
+            Self.normalizedGatewayID(record.approval.gatewayStableID) == nil
+        }
+        self.execApprovals = state.execApprovals.filter { record in
+            Self.normalizedGatewayID(record.approval.gatewayStableID) != nil
+        }
         self.selectedExecApprovalID = state.selectedExecApprovalID
         self.lastExecApprovalSnapshotID = state.lastExecApprovalSnapshotID
+        self.lastExecApprovalSnapshotSentAtMs = state.lastExecApprovalSnapshotSentAtMs
         self.lastExecApprovalOutcomeText = state.lastExecApprovalOutcomeText
         self.lastExecApprovalOutcomeAt = state.lastExecApprovalOutcomeAt
         self.appSnapshot = state.appSnapshot
         self.appSnapshotUpdatedAt = state.appSnapshotUpdatedAt
         self.appSnapshotStatusText = state.appSnapshotStatusText
         self.appCommandStatusText = state.appCommandStatusText
+
+        guard !ownerlessApprovals.isEmpty else { return }
+        // Older Watch state has no gateway owner and cannot be resolved safely after
+        // gateway switches. Drop it, clear its old alert keys, and force a fresh snapshot.
+        self.lastExecApprovalSnapshotID = nil
+        self.lastExecApprovalSnapshotSentAtMs = nil
+        if let selectedExecApprovalID,
+           !self.execApprovals.contains(where: { $0.id == selectedExecApprovalID })
+        {
+            self.selectedExecApprovalID = self.sortedExecApprovals.first?.id
+        }
+        self.removeLocalNotifications(identifiers: ownerlessApprovals.compactMap { record in
+            let approvalID = record.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            return approvalID.isEmpty ? nil : "watch.execApproval.\(approvalID)"
+        })
     }
 
     private func persistState() {
@@ -692,6 +864,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
             lastDeliveryKey: lastDeliveryKey,
             promptId: promptId,
             sessionKey: sessionKey,
+            gatewayStableID: gatewayStableID,
             kind: kind,
             details: details,
             expiresAtMs: expiresAtMs,
@@ -702,6 +875,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
             execApprovals: execApprovals,
             selectedExecApprovalID: selectedExecApprovalID,
             lastExecApprovalSnapshotID: lastExecApprovalSnapshotID,
+            lastExecApprovalSnapshotSentAtMs: lastExecApprovalSnapshotSentAtMs,
             lastExecApprovalOutcomeText: lastExecApprovalOutcomeText,
             lastExecApprovalOutcomeAt: lastExecApprovalOutcomeAt,
             appSnapshot: appSnapshot,
@@ -749,6 +923,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
             actionId: action.id,
             actionLabel: action.label,
             sessionKey: self.sessionKey,
+            gatewayStableID: self.gatewayStableID,
             note: nil,
             sentAtMs: Self.nowMs())
     }
@@ -775,7 +950,14 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         self.persistState()
     }
 
-    private func postLocalNotification(identifier: String, title: String, body: String, risk: String?) async {
+    private func postLocalNotification(
+        identifier: String,
+        title: String,
+        body: String,
+        risk: String?,
+        stillCurrent: @MainActor @Sendable () -> Bool = { true }) async
+    {
+        guard stillCurrent() else { return }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
@@ -787,7 +969,12 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
             content: content,
             trigger: UNTimeIntervalNotificationTrigger(timeInterval: 0.2, repeats: false))
 
-        _ = try? await UNUserNotificationCenter.current().add(request)
+        let center = UNUserNotificationCenter.current()
+        _ = try? await center.add(request)
+        guard stillCurrent() else {
+            self.removeLocalNotifications(identifiers: [identifier])
+            return
+        }
         WKInterfaceDevice.current().play(self.mapHapticRisk(risk))
     }
 
