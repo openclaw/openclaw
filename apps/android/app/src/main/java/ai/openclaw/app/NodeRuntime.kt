@@ -870,13 +870,15 @@ class NodeRuntime(
    */
   private fun chatCacheGatewayId(): String? {
     connectedEndpoint?.stableId?.let { return it }
-    if (manualEnabled.value) {
-      val host = manualHost.value.trim()
-      val port = manualPort.value
+    // Chat bootstrap can call this during construction, before the public preference aliases below
+    // initialize. Read their owner directly or onboarding can crash on a null StateFlow field.
+    if (prefs.manualEnabled.value) {
+      val host = prefs.manualHost.value.trim()
+      val port = prefs.manualPort.value
       if (host.isEmpty() || port !in 1..65535) return null
       return GatewayEndpoint.manual(host = host, port = port).stableId
     }
-    return lastDiscoveredStableId.value.trim().takeIf { it.isNotEmpty() }
+    return prefs.lastDiscoveredStableId.value.trim().takeIf { it.isNotEmpty() }
   }
 
   private fun chatCacheScope(): ChatCacheScope? =
