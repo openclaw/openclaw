@@ -219,7 +219,7 @@ Full object form accepts `{ mode, preview, progress }`:
 
 | `streaming`       | Behavior                                                                                                                                                 |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `"off"` (default) | Wait for the full reply, send once. `true` <-> `"partial"`, `false` <-> `"off"`.                                                                         |
+| `"off"` (default) | Wait for the full reply, send once. `true` maps to `"partial"`; `false` maps to `"off"`.                                                                 |
 | `"partial"`       | Edit one normal text message in place as the model writes the current block. Stock clients may notify on the first preview, not the final edit.          |
 | `"quiet"`         | Same as `"partial"` but the message is a non-notifying notice. Recipients are notified once a per-user push rule matches the finalized edit (see below). |
 | `"progress"`      | Sends individual compact progress lines using a progress draft.                                                                                          |
@@ -880,7 +880,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 - `replyToMode`: `"off"` (default), `"first"`, `"all"`, or `"batched"`.
 - `threadReplies`: `"off"` (top-level default resolves to `"inbound"` unless explicitly set), `"inbound"`, or `"always"`.
 - `threadBindings`: per-channel overrides for thread-bound session routing and lifecycle.
-- `streaming`: `"off"` (default), `"partial"`, `"quiet"`, `"progress"`, or object form `{ mode, preview: { toolProgress }, progress: { label, labels, maxLines, maxLineChars, toolProgress } }`. `true` <-> `"partial"`, `false` <-> `"off"`.
+- `streaming`: `"off"` (default), `"partial"`, `"quiet"`, `"progress"`, or object form `{ mode, preview: { toolProgress }, progress: { label, labels, maxLines, maxLineChars, toolProgress } }`. `true` maps to `"partial"`; `false` maps to `"off"`.
 - `blockStreaming`: when `true`, completed assistant blocks are kept as separate progress messages. Default: `false`.
 - `markdown`: optional Markdown rendering config for outbound text.
 - `responsePrefix`: optional string prepended to outbound replies.

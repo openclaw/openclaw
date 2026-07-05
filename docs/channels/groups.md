@@ -429,6 +429,8 @@ Account-level channel configs can set the same policy under `channels.<channel>.
   </Accordion>
 </AccordionGroup>
 
+<a id="groupchannel-tool-restrictions-optional" />
+
 ## Group/channel tool restrictions (optional)
 
 Some channel configs support restricting which tools are available **inside a specific group/room/channel**.

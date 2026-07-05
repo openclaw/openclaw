@@ -384,6 +384,8 @@ channels:
 | Indicator-only (no messages)             | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
 | OKs in one channel only                  | `channels.telegram.heartbeat: { showOk: true }`                                          |
 
+<a id="heartbeatmd-optional" />
+
 ## HEARTBEAT.md (optional)
 
 If a `HEARTBEAT.md` file exists in the workspace, the default prompt tells the agent to read it. Think of it as your "heartbeat checklist": small, stable, and safe to consider every 30 minutes.

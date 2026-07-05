@@ -58,6 +58,8 @@ title: "Thinking levels"
 - **Embedded OpenClaw**: the resolved level is passed to the in-process OpenClaw agent runtime.
 - **Claude CLI backend**: non-off levels are passed to Claude Code as `--effort` when using `claude-cli`; see [CLI backends](/gateway/cli-backends).
 
+<a id="fast-mode-fast" />
+
 ## Fast mode (/fast)
 
 - Levels: `auto|on|off|default`.

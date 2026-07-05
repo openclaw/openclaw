@@ -168,6 +168,8 @@ To manage `signal-cli` yourself (slow JVM cold starts, container init, shared CP
 
 This skips auto-spawn and OpenClaw's startup wait. For slow auto-spawned starts, set `channels.signal.startupTimeoutMs`.
 
+<a id="container-mode-bbernhardsignal-cli-rest-api" />
+
 ## Container mode (bbernhard/signal-cli-rest-api)
 
 Instead of running `signal-cli` natively, use the [bbernhard/signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api) Docker container, which wraps `signal-cli` behind a REST + WebSocket interface.
