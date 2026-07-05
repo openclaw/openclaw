@@ -10,6 +10,8 @@ import {
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "../src/infra/package-dist-inventory.ts";
+import { EXTENDED_STABLE_PLUGIN_COHORT_PATH } from "../src/plugins/extended-stable-plugin-cohort.ts";
+import { EXTENDED_STABLE_PLUGIN_SUPPORT_PATH } from "../src/plugins/extended-stable-plugin-support.ts";
 import {
   compareReleaseVersions as compareReleaseVersionsBase,
   collectReleaseVersionFloorErrors as collectReleaseVersionFloorErrorsBase,
@@ -71,8 +73,6 @@ const REQUIRED_PACKED_PATHS = [
   "dist/control-ui/index.html",
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ];
-const EXTENDED_STABLE_SUPPORT_PATH = "release/extended-stable-plugin-support.json";
-const EXTENDED_STABLE_COHORT_PATH = "release/extended-stable-plugin-cohort.json";
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
 const FORBIDDEN_PACKED_PATH_RULES = [
   ...LOCAL_BUILD_METADATA_DIST_PATHS.map((prefix) => ({
@@ -645,10 +645,10 @@ export function collectExtendedStableMetadataPackErrors(
   packageVersion: string,
 ): string[] {
   const packedPaths = new Set(paths);
-  const required = [EXTENDED_STABLE_SUPPORT_PATH];
+  const required = [EXTENDED_STABLE_PLUGIN_SUPPORT_PATH];
   const parsed = parseReleaseVersion(packageVersion);
   if (parsed?.channel === "stable" && parsed.correctionNumber === undefined && parsed.patch >= 33) {
-    required.push(EXTENDED_STABLE_COHORT_PATH);
+    required.push(EXTENDED_STABLE_PLUGIN_COHORT_PATH);
   }
   return required
     .filter((path) => !packedPaths.has(path))

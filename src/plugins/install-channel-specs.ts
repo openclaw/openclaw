@@ -4,6 +4,7 @@ import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import {
   resolveExtendedStablePluginTarget,
+  type ExtendedStablePluginTargetCode,
   type ExtendedStablePluginTargetContext,
 } from "./extended-stable-plugin-target.js";
 
@@ -12,7 +13,7 @@ export type ChannelInstallSpecs = {
   recordSpec: string;
   fallbackSpec?: string;
   fallbackLabel?: string;
-  targetCode?: "extended_stable_target" | "monthly_cohort_target" | "user_pin_preserved";
+  targetCode?: ExtendedStablePluginTargetCode;
 };
 
 function isDefaultNpmSpecForBetaChannel(spec: string): { name: string } | null {

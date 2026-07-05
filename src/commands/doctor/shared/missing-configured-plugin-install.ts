@@ -33,7 +33,7 @@ import {
   type ClawHubRiskAcknowledgementRequest,
 } from "../../../plugins/clawhub.js";
 import {
-  loadExtendedStablePluginTargetContext,
+  loadExtendedStablePluginTargetContextFromRoot,
   type ExtendedStablePluginTargetContext,
 } from "../../../plugins/extended-stable-plugin-target.js";
 import { collectConfiguredMemoryEmbeddingProviderIds } from "../../../plugins/gateway-startup-plugin-ids.js";
@@ -78,7 +78,7 @@ import {
   resolveWebSearchInstallCatalogEntry,
 } from "../../../plugins/web-search-install-catalog.js";
 import { resolveUserPath } from "../../../utils.js";
-import { resolveCompatibilityHostVersion, VERSION } from "../../../version.js";
+import { VERSION } from "../../../version.js";
 import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
 import {
   collectConfiguredRuntimePluginIds,
@@ -1051,6 +1051,7 @@ async function installCandidate(params: {
   env: NodeJS.ProcessEnv;
   updateChannel?: UpdateChannel;
   extendedStableTargetContext?: ExtendedStablePluginTargetContext;
+  requestedNpmSpec?: string;
   mode?: "install" | "update";
   preferNpm?: boolean;
   repairReason?: InstallCandidateRepairReason;
@@ -1073,12 +1074,13 @@ async function installCandidate(params: {
         updateChannel: params.updateChannel,
       })
     : null;
-  const npmSpecs = candidate.npmSpec
+  const requestedNpmSpec = params.requestedNpmSpec ?? candidate.npmSpec;
+  const npmSpecs = requestedNpmSpec
     ? resolveNpmInstallSpecsForUpdateChannel({
-        spec: candidate.npmSpec,
+        spec: requestedNpmSpec,
         updateChannel: params.updateChannel,
         officialPackageName: candidate.trustedSourceLinkedOfficialInstall
-          ? parseRegistryNpmSpec(candidate.npmSpec)?.name
+          ? parseRegistryNpmSpec(candidate.npmSpec ?? requestedNpmSpec)?.name
           : undefined,
         extendedStableTargetContext: params.extendedStableTargetContext,
       })
@@ -1369,6 +1371,7 @@ function resolveCandidateInstallSpec(params: {
   candidate: DownloadableInstallCandidate;
   updateChannel: UpdateChannel;
   extendedStableTargetContext?: ExtendedStablePluginTargetContext;
+  requestedNpmSpec?: string;
 }): string | undefined {
   if (params.candidate.defaultChoice !== "npm" && params.candidate.clawhubSpec) {
     return resolveClawHubInstallSpecsForUpdateChannel({
@@ -1376,12 +1379,13 @@ function resolveCandidateInstallSpec(params: {
       updateChannel: params.updateChannel,
     }).installSpec;
   }
-  if (params.candidate.npmSpec) {
+  const requestedNpmSpec = params.requestedNpmSpec ?? params.candidate.npmSpec;
+  if (requestedNpmSpec) {
     return resolveNpmInstallSpecsForUpdateChannel({
-      spec: params.candidate.npmSpec,
+      spec: requestedNpmSpec,
       updateChannel: params.updateChannel,
       officialPackageName: params.candidate.trustedSourceLinkedOfficialInstall
-        ? parseRegistryNpmSpec(params.candidate.npmSpec)?.name
+        ? parseRegistryNpmSpec(params.candidate.npmSpec ?? requestedNpmSpec)?.name
         : undefined,
       extendedStableTargetContext: params.extendedStableTargetContext,
     }).installSpec;
@@ -1416,9 +1420,8 @@ function resolveDoctorExtendedStableTargetContext(params: {
       "Could not resolve the installed OpenClaw package root for extended-stable plugin repair.",
     );
   }
-  return loadExtendedStablePluginTargetContext({
+  return loadExtendedStablePluginTargetContextFromRoot({
     rootDir,
-    installedCoreVersion: resolveCompatibilityHostVersion(params.env),
   });
 }
 
@@ -1665,6 +1668,8 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
       candidate,
       updateChannel,
       extendedStableTargetContext,
+      requestedNpmSpec:
+        shouldReplaceBrokenOfficialInstall && record?.source === "npm" ? record.spec : undefined,
     });
     if (shouldReplaceBrokenOfficialInstall) {
       const installPath = resolveRecordInstallPath(record, env);
@@ -2187,6 +2192,8 @@ async function repairMissingPluginInstalls(params: {
       env,
       updateChannel,
       extendedStableTargetContext,
+      requestedNpmSpec:
+        shouldReplaceBrokenOfficialInstall && record?.source === "npm" ? record.spec : undefined,
       mode: shouldReplaceBrokenOfficialInstall ? "update" : "install",
       preferNpm: preferNpmInstalls,
       ...(installedPluginIdsWithStaleVersionBoundRuntimePackages.has(candidate.pluginId)

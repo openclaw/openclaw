@@ -3,17 +3,13 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { parseRegistryNpmSpec } from "../src/infra/npm-registry-spec.js";
 import {
   EXTENDED_STABLE_PLUGIN_COHORT_PATH,
   loadExtendedStablePluginCohort,
   parseExtendedStablePluginCohort,
   type ExtendedStablePluginCohort,
 } from "../src/plugins/extended-stable-plugin-cohort.js";
-import {
-  listOfficialExternalPluginCatalogEntries,
-  resolveOfficialExternalPluginInstall,
-} from "../src/plugins/official-external-plugin-catalog.js";
+import { resolveExtendedStableCohortPackageNames } from "../src/plugins/extended-stable-plugin-target.js";
 import { loadExtendedStablePluginSupport } from "./lib/extended-stable-plugin-support.js";
 import { collectPublishablePluginPackages } from "./lib/plugin-npm-release.js";
 import { parseReleaseVersion } from "./openclaw-npm-release-check.js";
@@ -114,27 +110,21 @@ export function parseEligibleCohortEvidence(params: {
 }
 
 export function collectExtendedStableCohortPackageNames(rootDir = resolve(".")): string[] {
+  const support = loadExtendedStablePluginSupport(rootDir);
+  const cohortPackageNames = [...resolveExtendedStableCohortPackageNames({ support })].toSorted();
+  const allCatalogPackageNames = [
+    ...cohortPackageNames,
+    ...support.plugins.map((plugin) => plugin.packageName),
+  ].toSorted();
   const publishablePackageNames = collectPublishablePluginPackages(rootDir).map(
     (plugin) => plugin.packageName,
   );
-  const catalogPackageNames = [
-    ...new Set(
-      listOfficialExternalPluginCatalogEntries()
-        .filter((entry) => entry.source === "official")
-        .map((entry) => resolveOfficialExternalPluginInstall(entry)?.npmSpec)
-        .map((npmSpec) => (npmSpec ? parseRegistryNpmSpec(npmSpec)?.name : undefined))
-        .filter((packageName): packageName is string => packageName !== undefined),
-    ),
-  ].toSorted();
-  if (!sameStrings(catalogPackageNames, publishablePackageNames)) {
+  if (!sameStrings(allCatalogPackageNames, publishablePackageNames)) {
     throw new Error(
       "Official npm catalog package set must exactly match the all-publishable plugin release plan.",
     );
   }
-  const covered = new Set(
-    loadExtendedStablePluginSupport(rootDir).plugins.map((plugin) => plugin.packageName),
-  );
-  return catalogPackageNames.filter((packageName) => !covered.has(packageName));
+  return cohortPackageNames;
 }
 
 export function collectAllPublishablePluginPackageNames(rootDir = resolve(".")): string[] {
@@ -196,8 +186,11 @@ export function generateExtendedStablePluginCohort(params: {
   };
   const releaseVersion = typeof packageJson.version === "string" ? packageJson.version : "";
   const release = parseReleaseVersion(releaseVersion);
-  if (release?.channel !== "stable" || release.correctionNumber !== undefined) {
-    throw new Error("Root package version must be a final YYYY.M.PATCH release.");
+  if (!release) {
+    throw new Error("Root package version must be a valid OpenClaw release.");
+  }
+  if (release.channel !== "stable" || release.correctionNumber !== undefined) {
+    return { action: "not-required" };
   }
   if (release.patch < 33) {
     return { action: "not-required" };
@@ -213,9 +206,14 @@ export function generateExtendedStablePluginCohort(params: {
     evidence: readEvidenceDirectory(params.evidenceDir),
   });
   const cohortPath = join(params.rootDir, EXTENDED_STABLE_PLUGIN_COHORT_PATH);
-  if (release.patch === 33 && params.fix && !existsSync(cohortPath)) {
-    writeFileSync(cohortPath, `${JSON.stringify(cohort, null, 2)}\n`);
-    return { action: "written", baselineVersion: cohort.baselineVersion };
+  if (release.patch === 33 && params.fix) {
+    const existing = existsSync(cohortPath)
+      ? loadExtendedStablePluginCohort(params.rootDir)
+      : undefined;
+    if (!existing || existing.releaseLine !== cohort.releaseLine) {
+      writeFileSync(cohortPath, `${JSON.stringify(cohort, null, 2)}\n`);
+      return { action: "written", baselineVersion: cohort.baselineVersion };
+    }
   }
   if (!existsSync(cohortPath)) {
     throw new Error(

@@ -26,7 +26,7 @@ import {
   enableExplicitlySelectedPluginInConfig,
   type PluginEnableResult,
 } from "../plugins/enable.js";
-import { loadExtendedStablePluginTargetContext } from "../plugins/extended-stable-plugin-target.js";
+import { loadExtendedStablePluginTargetContextFromRoot } from "../plugins/extended-stable-plugin-target.js";
 import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
@@ -1131,7 +1131,7 @@ export async function ensureOnboardingPluginInstalled(params: {
   });
   const extendedStableTargetContext =
     updateChannel === "extended-stable"
-      ? loadExtendedStablePluginTargetContext({
+      ? loadExtendedStablePluginTargetContextFromRoot({
           rootDir:
             resolveOpenClawPackageRootSync({
               cwd: workspaceDir,
@@ -1140,7 +1140,6 @@ export async function ensureOnboardingPluginInstalled(params: {
             }) ??
             workspaceDir ??
             process.cwd(),
-          installedCoreVersion: VERSION,
         })
       : undefined;
   const clawhubSpecs = clawhubSpec

@@ -1,4 +1,6 @@
 // Resolves exact plugin targets for the additive extended-stable channel.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import {
@@ -15,7 +17,12 @@ import {
   type OfficialExternalPluginCatalogEntry,
 } from "./official-external-plugin-catalog.js";
 
-export type ExtendedStablePluginTargetDecision =
+export type ExtendedStablePluginTargetCode =
+  | "extended_stable_target"
+  | "monthly_cohort_target"
+  | "user_pin_preserved";
+
+type ExtendedStablePluginTargetDecision =
   | { kind: "covered"; code: "extended_stable_target"; installSpec: string; recordSpec: string }
   | { kind: "cohort"; code: "monthly_cohort_target"; installSpec: string; recordSpec: string }
   | { kind: "preserved"; code: "user_pin_preserved"; installSpec: string; recordSpec: string }
@@ -46,6 +53,39 @@ export function loadExtendedStablePluginTargetContext(params: {
     cohort,
     cohortPackageNames: resolveExtendedStableCohortPackageNames({ support }),
   };
+}
+
+export function loadExtendedStablePluginTargetContextFromRoot(params: {
+  rootDir: string;
+  expectedCoreVersion?: string;
+}): ExtendedStablePluginTargetContext {
+  let packageJson: { name?: unknown; version?: unknown };
+  try {
+    packageJson = JSON.parse(readFileSync(join(params.rootDir, "package.json"), "utf8")) as {
+      name?: unknown;
+      version?: unknown;
+    };
+  } catch (error) {
+    throw new Error(`Could not read installed core package version: ${String(error)}`, {
+      cause: error,
+    });
+  }
+  if (packageJson.name !== "openclaw") {
+    throw new Error("Installed core package identity must be openclaw.");
+  }
+  const version = packageJson.version;
+  if (typeof version !== "string" || !version.trim()) {
+    throw new Error("Installed core package version is missing.");
+  }
+  if (params.expectedCoreVersion && version !== params.expectedCoreVersion) {
+    throw new Error(
+      `Installed core package version ${version} does not match expected ${params.expectedCoreVersion}.`,
+    );
+  }
+  return loadExtendedStablePluginTargetContext({
+    rootDir: params.rootDir,
+    installedCoreVersion: version,
+  });
 }
 
 function isDefaultIntent(spec: string): { packageName: string } | null {

@@ -34,7 +34,7 @@ import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records
 import { installPluginFromClawHub, type ClawHubRiskAcknowledgementRequest } from "./clawhub.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import {
-  resolveExtendedStablePluginTarget,
+  type ExtendedStablePluginTargetCode,
   type ExtendedStablePluginTargetContext,
 } from "./extended-stable-plugin-target.js";
 import {
@@ -1064,7 +1064,7 @@ function resolveNpmUpdateSpecs(params: {
   recordSpec?: string;
   fallbackSpec?: string;
   fallbackLabel?: string;
-  targetCode?: "extended_stable_target" | "monthly_cohort_target" | "user_pin_preserved";
+  targetCode?: ExtendedStablePluginTargetCode;
 } {
   const requestedSpec = params.specOverride ?? params.record.spec ?? params.officialSpecOverride;
   if (
@@ -1073,19 +1073,14 @@ function resolveNpmUpdateSpecs(params: {
     params.updateChannel === "extended-stable" &&
     params.extendedStableTargetContext
   ) {
-    const officialPackageName = resolveNpmSpecPackageName(params.officialSpecOverride);
-    const decision = resolveExtendedStablePluginTarget({
-      requestedSpec,
-      officialPackageName,
+    const channelSpecs = resolveNpmInstallSpecsForUpdateChannel({
+      spec: requestedSpec,
       updateChannel: params.updateChannel,
-      ...params.extendedStableTargetContext,
+      officialPackageName: resolveNpmSpecPackageName(params.officialSpecOverride),
+      extendedStableTargetContext: params.extendedStableTargetContext,
     });
-    if (decision.kind !== "unchanged") {
-      return {
-        installSpec: decision.installSpec,
-        recordSpec: decision.recordSpec,
-        targetCode: decision.code,
-      };
+    if (channelSpecs.targetCode) {
+      return channelSpecs;
     }
   }
   const recordSpec = params.specOverride ?? params.officialSpecOverride ?? params.record.spec;
@@ -1425,7 +1420,7 @@ export async function updateNpmInstalledPlugins(params: {
     channelFallback?: PluginUpdateChannelFallback,
     code?: string,
   ) => {
-    if (params.disableOnFailure && !params.dryRun) {
+    if (params.disableOnFailure && !params.dryRun && !code) {
       const disabledMessage =
         `Disabled "${pluginId}" after plugin update failure; OpenClaw will continue without it. ` +
         message;
@@ -1485,10 +1480,21 @@ export async function updateNpmInstalledPlugins(params: {
         config: normalizedPluginConfig,
         rootConfig: params.config,
       });
-      if (!enableState.enabled && !officialNpmSpec && !officialClawHubSpec) {
+      const preserveDisabledExtendedStableOfficial =
+        officialSyncUpdateChannel === "extended-stable" &&
+        Boolean(officialNpmSpec || officialClawHubSpec);
+      if (
+        !enableState.enabled &&
+        (preserveDisabledExtendedStableOfficial || (!officialNpmSpec && !officialClawHubSpec))
+      ) {
         outcomes.push({
           pluginId,
           status: "skipped",
+          ...(officialSyncUpdateChannel === "extended-stable"
+            ? {
+                code: enableState.reason?.includes("deny") ? "denied" : "disabled",
+              }
+            : {}),
           message: `Skipping "${pluginId}" (${enableState.reason ?? "disabled by plugin config"}).`,
         });
         continue;
@@ -1499,6 +1505,9 @@ export async function updateNpmInstalledPlugins(params: {
       outcomes.push({
         pluginId,
         status: "skipped",
+        ...(officialSyncUpdateChannel === "extended-stable"
+          ? { code: "unsupported_install_source" }
+          : {}),
         message: `Skipping "${pluginId}" (source: ${record.source}).`,
       });
       continue;

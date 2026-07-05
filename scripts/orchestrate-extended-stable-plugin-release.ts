@@ -13,7 +13,7 @@ import {
   parseEligibleCohortEvidence,
 } from "./generate-extended-stable-plugin-cohort.js";
 import { loadExtendedStablePluginSupport } from "./lib/extended-stable-plugin-support.js";
-import { verifyNpmPackage } from "./lib/release-beta-verifier.js";
+import { verifyNpmPackage } from "./lib/npm-package-readback.js";
 import { verifySelectorHandoff } from "./verify-extended-stable-selector-handoff.js";
 
 type Args = {

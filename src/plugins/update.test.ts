@@ -711,6 +711,7 @@ describe("updateNpmInstalledPlugins", () => {
       pluginIds: ["acpx"],
       updateChannel: "extended-stable",
       syncOfficialPluginInstalls: true,
+      disableOnFailure: true,
       extendedStableTargetContext: {
         installedCoreVersion: "2026.6.34",
         support: { schemaVersion: 1, plugins: [] },
@@ -752,6 +753,7 @@ describe("updateNpmInstalledPlugins", () => {
       pluginIds: ["acpx"],
       updateChannel: "extended-stable",
       syncOfficialPluginInstalls: true,
+      disableOnFailure: true,
       extendedStableTargetContext: {
         installedCoreVersion: "2026.6.34",
         support: { schemaVersion: 1, plugins: [] },
@@ -796,6 +798,7 @@ describe("updateNpmInstalledPlugins", () => {
       pluginIds: ["acpx"],
       updateChannel: "extended-stable",
       syncOfficialPluginInstalls: true,
+      disableOnFailure: true,
       extendedStableTargetContext: {
         installedCoreVersion: "2026.6.34",
         support: { schemaVersion: 1, plugins: [] },
@@ -813,6 +816,7 @@ describe("updateNpmInstalledPlugins", () => {
       status: "error",
       code: "cohort_package_unavailable",
     });
+    expect(result.config.plugins?.entries?.acpx?.enabled).not.toBe(false);
     expect(result.config.plugins?.installs?.acpx?.spec).toBe("@openclaw/acpx");
   });
 
@@ -2377,6 +2381,59 @@ describe("updateNpmInstalledPlugins", () => {
       currentVersion: "2026.5.3",
       nextVersion: "2026.5.4",
     });
+  });
+
+  it("preserves disabled official installs under extended-stable", async () => {
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          entries: { codex: { enabled: false } },
+          installs: {
+            codex: {
+              source: "npm",
+              spec: "@openclaw/codex",
+              installPath: "/tmp/codex",
+              resolvedName: "@openclaw/codex",
+            },
+          },
+        },
+      },
+      pluginIds: ["codex"],
+      skipDisabledPlugins: true,
+      syncOfficialPluginInstalls: true,
+      updateChannel: "extended-stable",
+      extendedStableTargetContext: {
+        installedCoreVersion: "2026.6.34",
+        support: {
+          schemaVersion: 1,
+          plugins: [
+            {
+              pluginId: "codex",
+              packageName: "@openclaw/codex",
+              packageDir: "extensions/codex",
+              acceptanceProfile: "codex-provider-v1",
+            },
+          ],
+        },
+        cohort: {
+          schemaVersion: 1,
+          releaseLine: "2026.6",
+          baselineVersion: "2026.6.21",
+        },
+        cohortPackageNames: new Set(),
+      },
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "codex",
+        status: "skipped",
+        code: "disabled",
+        message: 'Skipping "codex" (disabled in config).',
+      },
+    ]);
   });
 
   it("preserves exact official npm pins when official install sync is not requested", async () => {

@@ -105,6 +105,44 @@ describe("monthly compatibility cohort generation", () => {
     ).toEqual({ action: "not-required" });
   });
 
+  it("does not apply cohort generation to prerelease or correction versions", () => {
+    for (const version of ["2026.6.22-beta.1", "2026.6.21-1"]) {
+      const rootDir = makeTempDir(tempDirs, "openclaw-plugin-cohort-nonfinal-");
+      writeFileSync(join(rootDir, "package.json"), `${JSON.stringify({ version })}\n`);
+      expect(
+        generateExtendedStablePluginCohort({
+          rootDir,
+          expectedPackageNames: packageNames,
+          fix: true,
+        }),
+      ).toEqual({ action: "not-required" });
+    }
+  });
+
+  it("replaces the previous month's cohort on a new .33 activation", () => {
+    const rootDir = makeTempDir(tempDirs, "openclaw-plugin-cohort-rollover-");
+    const evidenceDir = makeTempDir(tempDirs, "openclaw-plugin-cohort-rollover-evidence-");
+    mkdirSync(join(rootDir, "release"));
+    writeFileSync(join(rootDir, "package.json"), '{"version":"2026.7.33"}\n');
+    writeFileSync(
+      join(rootDir, "release/extended-stable-plugin-cohort.json"),
+      '{"schemaVersion":1,"releaseLine":"2026.6","baselineVersion":"2026.6.21"}\n',
+    );
+    writeEvidence(evidenceDir, "22.json", evidence("2026.7.22"));
+
+    expect(
+      generateExtendedStablePluginCohort({
+        rootDir,
+        evidenceDir,
+        expectedPackageNames: packageNames,
+        fix: true,
+      }),
+    ).toEqual({ action: "written", baselineVersion: "2026.7.22" });
+    expect(
+      JSON.parse(readFileSync(join(rootDir, "release/extended-stable-plugin-cohort.json"), "utf8")),
+    ).toEqual({ schemaVersion: 1, releaseLine: "2026.7", baselineVersion: "2026.7.22" });
+  });
+
   it("rejects .33 check mode without generated metadata and .34 baseline drift", () => {
     const rootDir = makeTempDir(tempDirs, "openclaw-plugin-cohort-drift-");
     const evidenceDir = makeTempDir(tempDirs, "openclaw-plugin-cohort-drift-evidence-");

@@ -112,7 +112,7 @@ import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runne
 import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 import {
-  loadExtendedStablePluginTargetContext,
+  loadExtendedStablePluginTargetContextFromRoot,
   type ExtendedStablePluginTargetContext,
 } from "../../plugins/extended-stable-plugin-target.js";
 import {
@@ -791,9 +791,9 @@ export async function previewExtendedStablePluginMetadata(params: {
       timeoutMs: params.timeoutMs,
       rootMarkers: ["package.json"],
       onExtracted: async (rootDir) => {
-        const context = loadExtendedStablePluginTargetContext({
+        const context = loadExtendedStablePluginTargetContextFromRoot({
           rootDir,
-          installedCoreVersion: params.targetVersion,
+          expectedCoreVersion: params.targetVersion,
         });
         return {
           ok: true as const,
@@ -2041,9 +2041,9 @@ export async function updatePluginsAfterCoreUpdate(params: {
       if (!installedCoreVersion) {
         throw new Error("installed core version is missing");
       }
-      extendedStableTargetContext = loadExtendedStablePluginTargetContext({
+      extendedStableTargetContext = loadExtendedStablePluginTargetContextFromRoot({
         rootDir: params.root,
-        installedCoreVersion,
+        expectedCoreVersion: installedCoreVersion,
       });
     } catch (error) {
       return buildExtendedStablePluginMetadataError(error);

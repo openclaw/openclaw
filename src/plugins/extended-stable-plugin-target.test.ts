@@ -1,5 +1,9 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  loadExtendedStablePluginTargetContextFromRoot,
   resolveExtendedStableCohortPackageNames,
   resolveExtendedStablePluginTarget,
 } from "./extended-stable-plugin-target.js";
@@ -19,6 +23,58 @@ const cohort = { schemaVersion: 1 as const, releaseLine: "2026.6", baselineVersi
 const cohortPackageNames = new Set(["@openclaw/matrix"]);
 
 describe("resolveExtendedStablePluginTarget", () => {
+  it("reads core identity and version from the same package root as cohort metadata", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "openclaw-target-context-"));
+    mkdirSync(join(rootDir, "release"));
+    writeFileSync(join(rootDir, "package.json"), '{"name":"openclaw","version":"2026.6.34"}\n');
+    writeFileSync(
+      join(rootDir, "release/extended-stable-plugin-support.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        plugins: [
+          {
+            pluginId: "codex",
+            packageName: "@openclaw/codex",
+            packageDir: "extensions/codex",
+            acceptanceProfile: "codex-provider-v1",
+          },
+          {
+            pluginId: "discord",
+            packageName: "@openclaw/discord",
+            packageDir: "extensions/discord",
+            acceptanceProfile: "discord-channel-v1",
+          },
+          {
+            pluginId: "slack",
+            packageName: "@openclaw/slack",
+            packageDir: "extensions/slack",
+            acceptanceProfile: "slack-channel-v1",
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      join(rootDir, "release/extended-stable-plugin-cohort.json"),
+      '{"schemaVersion":1,"releaseLine":"2026.6","baselineVersion":"2026.6.21"}\n',
+    );
+    try {
+      expect(() =>
+        loadExtendedStablePluginTargetContextFromRoot({
+          rootDir,
+          expectedCoreVersion: "2026.6.35",
+        }),
+      ).toThrow(/does not match expected/u);
+      expect(
+        loadExtendedStablePluginTargetContextFromRoot({
+          rootDir,
+          expectedCoreVersion: "2026.6.34",
+        }).installedCoreVersion,
+      ).toBe("2026.6.34");
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("derives deduplicated official npm cohort membership minus support", () => {
     const entries = [
       { source: "official", openclaw: { install: { npmSpec: "@openclaw/slack" } } },

@@ -3,6 +3,12 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { readBoundedResponseText } from "./bounded-response.ts";
+import {
+  parseNpmViewFields,
+  runNpmViewWithRetry,
+  verifyNpmPackage,
+  type NpmViewFields,
+} from "./npm-package-readback.ts";
 import { collectClawHubPublishablePluginPackages } from "./plugin-clawhub-release.ts";
 import {
   collectPublishablePluginPackages,
@@ -36,12 +42,12 @@ export type ReleaseVerifyBetaArgs = {
   };
 };
 
-export type NpmViewFields = {
-  version?: string;
-  distTagVersion?: string;
-  integrity?: string;
-  tarball?: string;
-};
+export {
+  parseNpmViewFields,
+  runNpmViewWithRetry,
+  verifyNpmPackage,
+  type NpmViewFields,
+} from "./npm-package-readback.ts";
 
 type FetchWithRetryResult = {
   response: Response;
@@ -78,10 +84,6 @@ const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_CLAWHUB_REGISTRY = "https://clawhub.ai";
 const CLAWHUB_REQUEST_TIMEOUT_MS = 20_000;
 const CLAWHUB_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
-// Trusted publish can finish before npm registry metadata converges. Keep the
-// verifier on the same release train instead of forcing a republish/correction.
-const NPM_VIEW_ATTEMPTS = 30;
-const NPM_VIEW_RETRY_MAX_DELAY_MS = 10_000;
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -113,38 +115,6 @@ function runCommandInherited(command: string, args: string[]): void {
   });
 }
 
-export async function runNpmViewWithRetry(
-  args: string[],
-  options: {
-    attempts?: number;
-    delay?: (delayMs: number) => Promise<void>;
-    run?: (args: string[]) => string;
-  } = {},
-): Promise<string> {
-  const attempts = options.attempts ?? NPM_VIEW_ATTEMPTS;
-  const delay =
-    options.delay ??
-    ((delayMs: number) =>
-      new Promise((resolveDelay) => {
-        setTimeout(resolveDelay, delayMs);
-      }));
-  const run = options.run ?? ((npmArgs: string[]) => runCommand("npm", npmArgs));
-  let lastError: unknown;
-
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      return run([...args, "--prefer-online"]);
-    } catch (error) {
-      lastError = error;
-    }
-    if (attempt < attempts) {
-      await delay(Math.min(attempt * 1000, NPM_VIEW_RETRY_MAX_DELAY_MS));
-    }
-  }
-
-  throw lastError;
-}
-
 function parseJson(raw: string, label: string): unknown {
   try {
     return JSON.parse(raw) as unknown;
@@ -152,29 +122,6 @@ function parseJson(raw: string, label: string): unknown {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`${label} returned invalid JSON: ${message}`, { cause: error });
   }
-}
-
-export function parseNpmViewFields(raw: string, distTag: string): NpmViewFields {
-  const parsed = parseJson(raw, "npm view");
-  if (Array.isArray(parsed)) {
-    return {
-      version: readString(parsed[0]),
-      distTagVersion: readString(parsed[1]),
-      integrity: readString(parsed[2]),
-      tarball: readString(parsed[3]),
-    };
-  }
-  if (!isRecord(parsed)) {
-    throw new Error("npm view returned an unsupported JSON shape.");
-  }
-  const distTags = isRecord(parsed["dist-tags"]) ? parsed["dist-tags"] : undefined;
-  const dist = isRecord(parsed.dist) ? parsed.dist : undefined;
-  return {
-    version: readString(parsed.version),
-    distTagVersion: readString(parsed[`dist-tags.${distTag}`]) ?? readString(distTags?.[distTag]),
-    integrity: readString(parsed["dist.integrity"]) ?? readString(dist?.integrity),
-    tarball: readString(parsed["dist.tarball"]) ?? readString(dist?.tarball),
-  };
 }
 
 export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArgs {
@@ -367,44 +314,6 @@ export async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"):
   } finally {
     await cancelResponseBody(response);
   }
-}
-
-export async function verifyNpmPackage(
-  packageName: string,
-  version: string,
-  distTag?: string,
-): Promise<NpmViewFields> {
-  const readbackDistTag = distTag ?? "latest";
-  const fieldsToRead = [
-    "version",
-    `dist-tags.${readbackDistTag}`,
-    "dist.integrity",
-    "dist.tarball",
-  ];
-  const raw = await runNpmViewWithRetry([
-    "view",
-    `${packageName}@${version}`,
-    ...fieldsToRead,
-    "--json",
-  ]);
-  const fields = parseNpmViewFields(raw, readbackDistTag);
-  if (fields.version !== version) {
-    throw new Error(
-      `${packageName}: expected npm version ${version}, got ${fields.version ?? "<missing>"}.`,
-    );
-  }
-  if (distTag && fields.distTagVersion !== version) {
-    throw new Error(
-      `${packageName}: npm dist-tag ${distTag} points to ${fields.distTagVersion ?? "<missing>"}, expected ${version}.`,
-    );
-  }
-  if (fields.integrity === undefined) {
-    throw new Error(`${packageName}: npm dist.integrity missing for ${version}.`);
-  }
-  if (fields.tarball === undefined) {
-    throw new Error(`${packageName}: npm dist.tarball missing for ${version}.`);
-  }
-  return fields;
 }
 
 function readClawHubTags(detail: unknown): Record<string, string> {
