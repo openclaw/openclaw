@@ -333,19 +333,25 @@ export function selectBatchFrames(params: {
   }
   const first = params.frames[0];
   const firstDay = dayKeyFor(first.capturedAtMs);
-  const windowEnd = first.capturedAtMs + params.windowMs;
+  const nextDayStart = new Date(first.capturedAtMs);
+  nextDayStart.setHours(24, 0, 0, 0);
+  const windowEnd = Math.min(first.capturedAtMs + params.windowMs, nextDayStart.getTime());
   const selected: Array<{ id: number; capturedAtMs: number }> = [];
   let previousTs = first.capturedAtMs;
+  let endedEarly = false;
   for (const frame of params.frames) {
     if (frame.capturedAtMs >= windowEnd) {
+      endedEarly = dayKeyFor(frame.capturedAtMs) !== firstDay;
       break;
     }
     if (selected.length > 0 && frame.capturedAtMs - previousTs > BATCH_MAX_GAP_MS) {
+      endedEarly = true;
       break;
     }
     // Batches never span local midnight: every downstream clock (observations,
     // cards, day keys) is parsed against the batch's single day.
     if (selected.length > 0 && dayKeyFor(frame.capturedAtMs) !== firstDay) {
+      endedEarly = true;
       break;
     }
     selected.push(frame);
@@ -359,7 +365,6 @@ export function selectBatchFrames(params: {
   // it), so a window in progress keeps accumulating frames; `force` closes an
   // in-progress window immediately (analyze now).
   const windowElapsed = params.nowMs >= windowEnd;
-  const endedEarly = selected.length < params.frames.length;
   if (!windowElapsed && !endedEarly && !params.force) {
     return null;
   }

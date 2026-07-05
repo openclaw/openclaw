@@ -184,6 +184,13 @@ describe("selectBatchFrames", () => {
     expect(selection?.endMs).toBe(t0 + windowMs);
   });
 
+  it("keeps the boundary when the next frame starts the following window", () => {
+    const frames = [frame(1, 0), frame(2, 30), frame(3, 60), frame(4, 15 * 60)];
+    const selection = selectBatchFrames({ frames, windowMs, nowMs: t0 + windowMs + 1000 });
+    expect(selection?.frameIds).toEqual([1, 2, 3]);
+    expect(selection?.endMs).toBe(t0 + windowMs);
+  });
+
   it("splits on capture gaps without claiming the idle span", () => {
     const frames = [frame(1, 0), frame(2, 30), frame(3, 400)];
     const selection = selectBatchFrames({ frames, windowMs, nowMs: t0 + 60_000 });
@@ -208,6 +215,20 @@ describe("selectBatchFrames", () => {
     ];
     const selection = selectBatchFrames({ frames, windowMs, nowMs: nearMidnight + 60_000 });
     expect(selection?.frameIds).toEqual([1, 2]);
+    expect(selection?.endMs).toBe(nearMidnight + 20_000 + 1);
+  });
+
+  it("caps an elapsed window at midnight without a next-day frame", () => {
+    const nearMidnight = new Date(`${DAY}T23:59:30`).getTime();
+    const midnight = new Date(nearMidnight);
+    midnight.setHours(24, 0, 0, 0);
+    const frames = [
+      { id: 1, capturedAtMs: nearMidnight },
+      { id: 2, capturedAtMs: nearMidnight + 20_000 },
+    ];
+    const selection = selectBatchFrames({ frames, windowMs, nowMs: nearMidnight + windowMs });
+    expect(selection?.frameIds).toEqual([1, 2]);
+    expect(selection?.endMs).toBe(midnight.getTime());
   });
 });
 
