@@ -39,6 +39,8 @@ private data class CodeLanguageSpec(
   val nestedBlockComments: Boolean = false,
   val quoteChars: Set<Char>,
   val tripleQuotes: Boolean = false,
+  // Kotlin raw triple strings do not process backslashes; Python and Swift do.
+  val tripleQuoteEscapes: Boolean = true,
   val singleQuoteEscapes: Boolean = true,
   // Shell strings span newlines; most other languages terminate ordinary quotes at end of line.
   val multilineStrings: Boolean = false,
@@ -58,6 +60,7 @@ private val kotlinSpec =
     nestedBlockComments = true,
     quoteChars = setOf('"'),
     tripleQuotes = true,
+    tripleQuoteEscapes = false,
   )
 
 private val swiftSpec =
@@ -258,8 +261,13 @@ private fun scanString(
   val quote = code[start]
   val triple = spec.tripleQuotes && code.startsWith("$quote$quote$quote", start)
   if (triple) {
-    val close = code.indexOf("$quote$quote$quote", start + 3)
-    return if (close == -1) code.length else close + 3
+    val delimiter = "$quote$quote$quote"
+    var i = start + delimiter.length
+    while (i < code.length) {
+      if (code.startsWith(delimiter, i)) return i + delimiter.length
+      i += if (spec.tripleQuoteEscapes && code[i] == '\\') 2 else 1
+    }
+    return code.length
   }
   var i = start + 1
   while (i < code.length) {

@@ -238,4 +238,22 @@ class ChatMarkdownTest {
     assertEquals(bash.indexOf("'\n", string.start + 1) + 1, string.end)
     assertTrue(bashTokens.any { it.kind == CodeTokenKind.KEYWORD && bash.substring(it.start, it.end) == "if" })
   }
+
+  @Test
+  fun escapedTripleQuotesDoNotEndPythonOrSwiftStrings() {
+    val samples =
+      listOf(
+        "python" to "message = \"\"\"before \\\"\"\" after\"\"\"\nreturn 1\n",
+        "swift" to "let message = \"\"\"\nbefore \\\"\"\" after\n\"\"\"\nreturn 1\n",
+      )
+
+    samples.forEach { (language, code) ->
+      val tokens = codeHighlightTokens(code, language)
+      val string = tokens.single { it.kind == CodeTokenKind.STRING }
+
+      assertEquals(code.indexOf("\"\"\""), string.start)
+      assertEquals(code.lastIndexOf("\"\"\"") + 3, string.end)
+      assertTrue(tokens.any { it.kind == CodeTokenKind.KEYWORD && code.substring(it.start, it.end) == "return" })
+    }
+  }
 }
