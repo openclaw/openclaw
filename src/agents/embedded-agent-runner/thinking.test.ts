@@ -1355,7 +1355,7 @@ describe("stripAllNonLatestThinkingSignatures", () => {
     ]);
   });
 
-  it("preserves all signatures when preserveLatestAssistant is false and only one assistant turn exists", () => {
+  it("strips signatures when preserveLatestAssistant is false and only one assistant turn exists", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "assistant",
@@ -1370,8 +1370,13 @@ describe("stripAllNonLatestThinkingSignatures", () => {
       preserveLatestAssistant: false,
     });
 
-    // With preserveLatestAssistant: false, there's no "latest" to protect
-    expect(result).toBe(messages);
+    // With preserveLatestAssistant: false, there's no "latest" to protect, so the signature gets stripped
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([
+      { type: "thinking", thinking: "only turn" },
+      { type: "text", text: "answer" },
+    ]);
+    expect(result).not.toBe(messages);
   });
 
   it("can strip invalid signatures from the latest assistant message when preserveLatestAssistant is false", () => {

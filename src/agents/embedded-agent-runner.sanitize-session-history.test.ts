@@ -1924,44 +1924,51 @@ describe("sanitizeSessionHistory", () => {
       modelApi: "bedrock-converse-stream",
       label: "bedrock",
     },
-  ])("strips invalid thinking signatures before $label replay", async ({ provider, modelApi }) => {
-    setNonGoogleModelApi();
+  ])(
+    "strips all non-latest thinking signatures before $label replay (#94228)",
+    async ({ provider, modelApi }) => {
+      setNonGoogleModelApi();
 
-    const messages = castAgentMessages([
-      makeUserMessage("first"),
-      makeAssistantMessage([
+      const messages = castAgentMessages([
+        makeUserMessage("first"),
+        makeAssistantMessage([
+          { type: "thinking", thinking: "missing signature" },
+          { type: "thinking", thinking: "blank signature", thinkingSignature: "   " },
+          { type: "thinking", thinking: "signed", thinkingSignature: "sig_old" },
+          { type: "text", text: "old visible answer" },
+        ]),
+        makeUserMessage("second"),
+        makeAssistantMessage([
+          { type: "thinking", thinking: "latest missing signature" },
+          { type: "thinking", thinking: "latest blank signature", thinkingSignature: "   " },
+          { type: "thinking", thinking: "latest signed", thinkingSignature: "sig_latest" },
+          { type: "text", text: "latest visible answer" },
+        ]),
+      ]);
+
+      const result = await sanitizeAnthropicHistory({
+        provider,
+        modelApi,
+        messages,
+        modelId: "claude-sonnet-4-6",
+      });
+
+      // Non-latest turns have ALL thinking signatures stripped unconditionally (#94228)
+      expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
         { type: "thinking", thinking: "missing signature" },
-        { type: "thinking", thinking: "blank signature", thinkingSignature: "   " },
-        { type: "thinking", thinking: "signed", thinkingSignature: "sig_old" },
+        { type: "thinking", thinking: "blank signature" },
+        { type: "thinking", thinking: "signed" },
         { type: "text", text: "old visible answer" },
-      ]),
-      makeUserMessage("second"),
-      makeAssistantMessage([
+      ]);
+      // Latest turn preserves signatures for provider compatibility
+      expect((result[3] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
         { type: "thinking", thinking: "latest missing signature" },
         { type: "thinking", thinking: "latest blank signature", thinkingSignature: "   " },
         { type: "thinking", thinking: "latest signed", thinkingSignature: "sig_latest" },
         { type: "text", text: "latest visible answer" },
-      ]),
-    ]);
-
-    const result = await sanitizeAnthropicHistory({
-      provider,
-      modelApi,
-      messages,
-      modelId: "claude-sonnet-4-6",
-    });
-
-    expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
-      { type: "thinking", thinking: "signed", thinkingSignature: "sig_old" },
-      { type: "text", text: "old visible answer" },
-    ]);
-    expect((result[3] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
-      { type: "thinking", thinking: "latest missing signature" },
-      { type: "thinking", thinking: "latest blank signature", thinkingSignature: "   " },
-      { type: "thinking", thinking: "latest signed", thinkingSignature: "sig_latest" },
-      { type: "text", text: "latest visible answer" },
-    ]);
-  });
+      ]);
+    },
+  );
 
   it.each([
     {
