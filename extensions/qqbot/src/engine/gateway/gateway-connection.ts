@@ -254,12 +254,20 @@ export class GatewayConnection {
               break;
 
             case GatewayOp.RECONNECT:
+              this.ctx.onDisconnected?.({
+                reason: "server requested reconnect",
+                fatal: false,
+              });
               this.cleanup();
               this.scheduleReconnect();
               break;
 
             case GatewayOp.INVALID_SESSION: {
               const canResume = d as boolean;
+              this.ctx.onDisconnected?.({
+                reason: canResume ? "session resume rejected" : "session invalidated",
+                fatal: false,
+              });
               if (!canResume) {
                 this.sessionId = null;
                 this.lastSeq = null;

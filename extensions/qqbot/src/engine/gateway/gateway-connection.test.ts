@@ -170,6 +170,10 @@ describe("GatewayConnection disconnect status", () => {
     // replacement is scheduled, then becomes live.
     staleWs.emit("open");
     staleWs.emit("message", JSON.stringify({ op: 7 }));
+    expect(onDisconnected).toHaveBeenCalledWith({
+      reason: "server requested reconnect",
+      fatal: false,
+    });
     await vi.advanceTimersByTimeAsync(1_100);
     await vi.waitFor(() => {
       expect(createQQWSClientMock).toHaveBeenCalledTimes(2);
@@ -180,7 +184,7 @@ describe("GatewayConnection disconnect status", () => {
     // the live replacement's status.
     staleWs.emit("close", 1000, Buffer.from(""));
 
-    expect(onDisconnected).not.toHaveBeenCalled();
+    expect(onDisconnected).toHaveBeenCalledTimes(1);
     controller.abort();
     await started;
   });
@@ -207,12 +211,32 @@ describe("GatewayConnection disconnect status", () => {
 
     staleWs.emit("open");
     staleWs.emit("message", JSON.stringify({ op: 7 }));
+    expect(onDisconnected).toHaveBeenCalledWith({
+      reason: "server requested reconnect",
+      fatal: false,
+    });
     staleWs.emit("close", 1006, Buffer.from(""));
 
-    expect(onDisconnected).not.toHaveBeenCalled();
+    expect(onDisconnected).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1_100);
     await vi.waitFor(() => {
       expect(createQQWSClientMock).toHaveBeenCalledTimes(2);
+    });
+
+    controller.abort();
+    await started;
+  });
+
+  it("reports a disconnect when the server invalidates the session", async () => {
+    const onDisconnected = vi.fn();
+    const { ws, controller, started } = await startConnection({ onDisconnected });
+
+    ws.emit("open");
+    ws.emit("message", JSON.stringify({ op: 9, d: false }));
+
+    expect(onDisconnected).toHaveBeenCalledWith({
+      reason: "session invalidated",
+      fatal: false,
     });
 
     controller.abort();
