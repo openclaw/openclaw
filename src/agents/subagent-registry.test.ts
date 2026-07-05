@@ -5730,7 +5730,7 @@ describe("subagent registry seam flow", () => {
       throw new Error("simulated sweep failure");
     });
 
-    await expect(mod.testing.runSweeperTickForTests()).resolves.toBeUndefined();
     await expect(mod.testing.sweepOnceForTests()).rejects.toThrow("simulated sweep failure");
+    await expect(mod.testing.runSweeperTickForTests()).resolves.toBeUndefined();
   });
 });

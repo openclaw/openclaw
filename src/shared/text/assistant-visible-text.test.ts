@@ -400,6 +400,10 @@ describe("stripAssistantInternalScaffolding", () => {
       );
       expectVisibleText('<parameter name="data">{"key":"value"}</parameter>', '{"key":"value"}');
       expectVisibleText('<parameter name="items">[1,2]</parameter>', "[1,2]");
+      expectVisibleText(
+        'Results:<parameter name="x">\nline\n</parameter>after',
+        "Results:\nline\nafter",
+      );
     });
 
     it("keeps truncated tool-call parameters fail-closed", () => {
