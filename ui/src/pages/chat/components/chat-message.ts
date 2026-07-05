@@ -117,10 +117,14 @@ export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampD
   };
 }
 
-function renderChatTimestamp(timestamp: number) {
+function renderChatTimestamp(timestamp: number, interactive = false) {
   const display = formatChatTimestampForDisplay(timestamp);
   return html`
-    <time class="chat-group-timestamp" datetime=${display.dateTime} title=${display.title}>
+    <time
+      class="chat-group-timestamp"
+      datetime=${display.dateTime}
+      title=${interactive ? nothing : display.title}
+    >
       ${display.label}
     </time>
   `;
@@ -749,7 +753,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         )}
         <div class="chat-group-footer">
           <span class="chat-sender-name">${who}</span>
-          ${renderChatTimestamp(group.timestamp)} ${renderMessageMeta(meta)}
+          ${renderMessageMeta(group.timestamp, meta)}
           ${opts.onDelete
             ? renderDeleteButton(opts.onDelete, normalizedRole === "user" ? "left" : "right")
             : nothing}
@@ -820,9 +824,9 @@ function extractGroupMeta(group: MessageGroup, contextWindow: number | null): Gr
   return { input, output, cacheRead, cacheWrite, cost, model, contextPercent };
 }
 
-function renderMessageMeta(meta: GroupMeta | null) {
+function renderMessageMeta(timestamp: number, meta: GroupMeta | null) {
   if (!meta) {
-    return nothing;
+    return renderChatTimestamp(timestamp);
   }
 
   const parts: Array<ReturnType<typeof html>> = [];
@@ -874,14 +878,15 @@ function renderMessageMeta(meta: GroupMeta | null) {
   }
 
   if (parts.length === 0) {
-    return nothing;
+    return renderChatTimestamp(timestamp);
   }
+
+  const display = formatChatTimestampForDisplay(timestamp);
 
   return html`
     <details class="msg-meta">
-      <summary class="msg-meta__summary">
-        <span class="msg-meta__summary-icon" aria-hidden="true">${icons.chevronRight}</span>
-        <span>Context</span>
+      <summary class="msg-meta__summary" aria-label=${`Message context for ${display.title}`}>
+        ${renderChatTimestamp(timestamp, true)}
       </summary>
       <span class="msg-meta__details">${parts}</span>
     </details>

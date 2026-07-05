@@ -124,6 +124,32 @@ function activityAlignmentHtml() {
   `;
 }
 
+function messageMetaHtml() {
+  return `
+    <div class="chat-group assistant">
+      <div class="chat-avatar assistant">A</div>
+      <div class="chat-group-messages">
+        <div class="chat-bubble"><div class="chat-text">Done.</div></div>
+        <div class="chat-group-footer">
+          <span class="chat-sender-name">Claw</span>
+          <details class="msg-meta">
+            <summary class="msg-meta__summary" aria-label="Message context">
+              <time class="chat-group-timestamp">Jul 5, 2026, 9:51 AM</time>
+            </summary>
+            <span class="msg-meta__details">
+              <span class="msg-meta__tokens">↑19.6k</span>
+              <span class="msg-meta__tokens">↓126</span>
+              <span class="msg-meta__cache">R2.4k</span>
+              <span class="msg-meta__ctx">8% ctx</span>
+              <span class="msg-meta__model">gpt-5.5</span>
+            </span>
+          </details>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function chatBubbleActionsHtml() {
   return `
     <div class="chat-bubble-actions">
@@ -530,6 +556,32 @@ describeBrowserLayout("chat responsive browser layout", () => {
         callBackground: "rgba(0, 0, 0, 0)",
         tool: "text",
       });
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("reveals message context on timestamp hover and keeps click-to-open", async () => {
+    const page = await openBrowserPage(1366, 900);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${messageMetaHtml()}</body></html>`,
+      );
+
+      const details = page.locator("details.msg-meta");
+      const context = page.locator(".msg-meta__details");
+      const contextDisplay = () => context.evaluate((node) => getComputedStyle(node).display);
+      expect(await contextDisplay()).toBe("none");
+
+      await page.locator(".msg-meta__summary").hover();
+      expect(await contextDisplay()).toBe("inline-flex");
+
+      await page.mouse.move(0, 0);
+      expect(await contextDisplay()).toBe("none");
+
+      await page.locator(".msg-meta__summary").click();
+      expect(await details.getAttribute("open")).toBe("");
+      expect(await contextDisplay()).toBe("inline-flex");
     } finally {
       await closeBrowserPage(page);
     }
