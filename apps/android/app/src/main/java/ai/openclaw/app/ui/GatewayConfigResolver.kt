@@ -202,7 +202,11 @@ internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseR
   val uri =
     runCatching { URI(normalized) }.getOrNull()
       ?: return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
-  val host = uri.host?.trim()?.trim('[', ']').orEmpty()
+  val host =
+    uri.host
+      ?.trim()
+      ?.trim('[', ']')
+      .orEmpty()
   if (host.isEmpty()) return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
   // OkHttp rejects scoped IPv6 hosts after URI decoding, so fail before saving an endpoint that can never dial.
   if (host.contains(':') && host.contains('%')) {
@@ -314,6 +318,9 @@ internal fun gatewayEndpointValidationMessage(
       }
   }
 
+private const val defaultManualGatewayPort = 18789
+private const val tailnetTlsGatewayPort = 443
+
 private fun gatewayPort(
   port: Int,
   defaultPort: Int,
@@ -324,36 +331,24 @@ private fun gatewayPort(
     else -> null
   }
 
-/** Tailscale MagicDNS hosts default to HTTPS/WSS port 443 when the port field is blank. */
-internal fun shouldForceTlsForGatewayHost(host: String): Boolean {
-  val trimmed = host.trim().trimEnd('/').lowercase()
-  if (trimmed.isEmpty()) return false
-  return trimmed.endsWith(".ts.net") || trimmed.endsWith(".ts.net.")
-}
-
-/** Resolves the default manual port when TLS is on and the port field is blank. */
-internal fun resolveEmptyManualPort(
+/** Resolves the manual port default shared by onboarding, settings, and the Connect tab. */
+internal fun resolveDefaultManualGatewayPort(
   hostInput: String,
   tls: Boolean,
-): Int? {
-  if (!tls) return null
-  val host = hostInput.trim().trimEnd('/')
-  if (host.isEmpty() || host.contains('/')) return null
-  return if (shouldForceTlsForGatewayHost(host)) 443 else 18789
+): Int {
+  val host = hostInput.trim().removeSuffix(".").lowercase(Locale.US)
+  return if (tls && host.endsWith(".ts.net")) tailnetTlsGatewayPort else defaultManualGatewayPort
 }
 
-/** Connect-tab placeholder/label for the manual port field when it is left blank. */
+/** Connect-tab placeholder for the port that an empty manual field will use. */
 internal fun resolveManualPortPlaceholder(
   hostInput: String,
-  portInput: String,
   tls: Boolean,
 ): String {
-  if (!tls) return "18789"
-  if (portInput.trim().isNotEmpty()) return portInput.trim()
-  composeGatewayManualUrl(hostInput, "", tls)?.let { url ->
-    parseGatewayEndpoint(url)?.port?.let { return it.toString() }
+  if (hostInput.contains("://")) {
+    parseGatewayEndpoint(hostInput)?.port?.let { return it.toString() }
   }
-  return resolveEmptyManualPort(hostInput, tls)?.toString() ?: "18789"
+  return resolveDefaultManualGatewayPort(hostInput, tls).toString()
 }
 
 /** Builds a URL from manual host/port/tls fields for shared endpoint parsing. */
@@ -375,7 +370,7 @@ internal fun composeGatewayManualUrl(
   val portTrimmed = portInput.trim()
   val port =
     if (portTrimmed.isEmpty()) {
-      resolveEmptyManualPort(bareHost, tls) ?: return null
+      resolveDefaultManualGatewayPort(bareHost, tls)
     } else {
       portTrimmed.toIntOrNull() ?: return null
     }

@@ -1,9 +1,7 @@
 package ai.openclaw.app.ui
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -193,14 +191,13 @@ class GatewayConfigResolverTest {
   @Test
   fun parseGatewayEndpointReportsUnsupportedIpv6ZoneIds() {
     listOf(
-        "ws://[fe80::1%25eth0]",
-        "wss://[fe80::1%25wlan0]:443",
-      )
-      .forEach { url ->
-        val parsed = parseGatewayEndpointResult(url)
-        assertNull(url, parsed.config)
-        assertEquals(url, GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED, parsed.error)
-      }
+      "ws://[fe80::1%25eth0]",
+      "wss://[fe80::1%25wlan0]:443",
+    ).forEach { url ->
+      val parsed = parseGatewayEndpointResult(url)
+      assertNull(url, parsed.config)
+      assertEquals(url, GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED, parsed.error)
+    }
   }
 
   @Test
@@ -823,42 +820,33 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun shouldForceTlsForGatewayHost_matchesIosTailnetSuffixRules() {
-    assertTrue(shouldForceTlsForGatewayHost("device.sample.ts.net"))
-    assertTrue(shouldForceTlsForGatewayHost("device.sample.ts.net."))
-    assertFalse(shouldForceTlsForGatewayHost("gateway.example.com"))
-    assertFalse(shouldForceTlsForGatewayHost("gateway.ts.net.evil.com"))
+  fun composeGatewayManualUrlDoesNotTreatLookalikeTailnetSuffixAsTailnet() {
+    val url = composeGatewayManualUrl("gateway.ts.net.evil.com", "", tls = true)
+
+    assertEquals("https://gateway.ts.net.evil.com:18789", url)
   }
 
   @Test
   fun resolveManualPortPlaceholder_matchesResolvedEndpointForBareAndCompleteUrls() {
     assertEquals(
       "18789",
-      resolveManualPortPlaceholder("gateway.example.com", "", tls = true),
+      resolveManualPortPlaceholder("gateway.example.com", tls = true),
     )
     assertEquals(
       "443",
-      resolveManualPortPlaceholder("device.sample.ts.net", "", tls = true),
+      resolveManualPortPlaceholder("device.sample.ts.net", tls = true),
     )
     assertEquals(
       "443",
-      resolveManualPortPlaceholder("wss://gateway.example", "", tls = true),
+      resolveManualPortPlaceholder("wss://gateway.example", tls = true),
     )
   }
 
   @Test
-  fun resolveManualPortPlaceholder_usesExplicitPortWhenProvided() {
-    assertEquals(
-      "8443",
-      resolveManualPortPlaceholder("gateway.example.com", "8443", tls = true),
-    )
-  }
-
-  @Test
-  fun composeGatewayManualUrlRejectsBlankPortWhenTlsIsOff() {
+  fun composeGatewayManualUrlDefaultsBlankCleartextPortTo18789() {
     val url = composeGatewayManualUrl("127.0.0.1", "", tls = false)
 
-    assertNull(url)
+    assertEquals("http://127.0.0.1:18789", url)
   }
 
   @Test

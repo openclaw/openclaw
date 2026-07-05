@@ -146,8 +146,8 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
       composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput)?.let { parseGatewayEndpoint(it)?.displayUrl }
     }
   val defaultManualPortPlaceholder =
-    remember(manualHostInput, manualPortInput, manualTlsInput) {
-      resolveManualPortPlaceholder(manualHostInput, manualPortInput, manualTlsInput)
+    remember(manualHostInput, manualTlsInput) {
+      resolveManualPortPlaceholder(manualHostInput, manualTlsInput)
     }
 
   val activeEndpoint =
@@ -484,11 +484,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
               colors = outlinedColors(),
             )
 
-            Text(
-              if (manualTlsInput) "Port (optional, defaults to $defaultManualPortPlaceholder)" else "Port",
-              style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
-              color = mobileTextSecondary,
-            )
+            Text("Port (optional)", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
             OutlinedTextField(
               value = manualPortInput,
               onValueChange = {
