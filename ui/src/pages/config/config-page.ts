@@ -404,6 +404,7 @@ export class ConfigPage extends LitElement {
       this.systemInfoUnavailable = false;
     } else if (!snapshot.connected) {
       this.invalidateSystemInfoRequest();
+      this.systemInfo = null;
     }
     if (snapshot.connected && snapshot.hello) {
       this.systemInfoUnavailable = !hasSystemInfo;
