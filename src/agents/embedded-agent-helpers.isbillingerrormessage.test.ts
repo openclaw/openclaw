@@ -1068,18 +1068,6 @@ describe("classifyAssistantFailoverReason", () => {
     expect(classifyAssistantFailoverReason(opencodeGoStalledStreamError)).toBe("timeout");
   });
 
-  it("classifies Ollama incomplete stream terminal errors as server errors", () => {
-    expect(
-      classifyAssistantFailoverReason({
-        ...opencodeGoStalledStreamError,
-        api: "ollama",
-        provider: "ollama",
-        model: "repro-bad:latest",
-        errorMessage: "Ollama API stream ended without a final response",
-      }),
-    ).toBe("server_error");
-  });
-
   it("does not classify caller-aborted assistant messages as provider failover", () => {
     expect(
       classifyAssistantFailoverReason({
@@ -1289,9 +1277,6 @@ describe("classifyFailoverReason provider messages", () => {
         "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
       ),
     ).toBe("timeout");
-    expect(classifyFailoverReason("Ollama API stream ended without a final response")).toBe(
-      "server_error",
-    );
     expect(classifyFailoverReason(OPENAI_SERVER_ERROR_PAYLOAD)).toBe("server_error");
     expect(
       classifyFailoverReason(

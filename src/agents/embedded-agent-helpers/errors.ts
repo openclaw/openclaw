@@ -1026,10 +1026,6 @@ function isExactUnknownNoDetailsError(raw: string): boolean {
   );
 }
 
-function isOllamaIncompleteStreamFinalResponseError(raw: string): boolean {
-  return /^\s*ollama api stream ended without a final response\.?\s*$/i.test(raw);
-}
-
 function classifyFailoverClassificationFromMessage(
   raw: string,
   provider?: string,
@@ -1072,9 +1068,6 @@ function classifyFailoverClassificationFromMessage(
   }
   if (isOverloadedErrorMessage(raw)) {
     return toReasonClassification("overloaded");
-  }
-  if (isOllamaIncompleteStreamFinalResponseError(raw)) {
-    return toReasonClassification("server_error");
   }
   if (
     isStructuredServerErrorMessage(raw) &&
