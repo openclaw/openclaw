@@ -243,6 +243,21 @@ describe("promosClaimCommand", () => {
     await expect(promosClaimCommand("spring-models", {}, makeRuntime())).rejects.toThrow(/ended/);
   });
 
+  it("enforces the window even when the payload claims active", async () => {
+    mocks.fetchClawHubPromotion.mockResolvedValue(
+      makePromotion({ active: true, endsAt: now - 60_000 }),
+    );
+    await expect(promosClaimCommand("spring-models", {}, makeRuntime())).rejects.toThrow(/ended/);
+
+    mocks.fetchClawHubPromotion.mockResolvedValue(
+      makePromotion({ active: true, startsAt: now + 60_000, endsAt: now + 86_400_000 }),
+    );
+    await expect(promosClaimCommand("spring-models", {}, makeRuntime())).rejects.toThrow(
+      /not live/,
+    );
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
   it("maps 404 responses to a friendly not-found error", async () => {
     mocks.fetchClawHubPromotion.mockRejectedValue(
       new ClawHubRequestError({ path: "/api/v1/promotions/nope", status: 404, body: "not found" }),

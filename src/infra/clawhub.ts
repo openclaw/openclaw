@@ -1758,6 +1758,10 @@ function parseClawHubPromotionModel(value: unknown, context: string): ClawHubPro
   return model;
 }
 
+// ClawHub's server-side slug contract. Enforced here because slugs are echoed
+// into copy-paste CLI commands; anything else would be a shell-injection path.
+const CLAWHUB_PROMOTION_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+
 export function parseClawHubPromotion(value: unknown): ClawHubPromotion {
   const context = "promotion";
   if (!isJsonObject(value)) {
@@ -1767,8 +1771,12 @@ export function parseClawHubPromotion(value: unknown): ClawHubPromotion {
   if (!Array.isArray(modelsRaw) || modelsRaw.length === 0) {
     throw new Error(`Malformed ClawHub ${context}: expected models to be a non-empty array.`);
   }
+  const slug = requiredStringField(value, "slug", context);
+  if (!CLAWHUB_PROMOTION_SLUG_RE.test(slug)) {
+    throw new Error(`Malformed ClawHub ${context}: slug must be lowercase [a-z0-9-].`);
+  }
   const promotion: ClawHubPromotion = {
-    slug: requiredStringField(value, "slug", context),
+    slug,
     title: requiredStringField(value, "title", context),
     blurb: requiredStringField(value, "blurb", context),
     status: requiredStringField(value, "status", context),

@@ -58,16 +58,19 @@ async function fetchLivePromotion(slug: string): Promise<ClawHubPromotion> {
   }
 }
 
+// Enforce the window client-side; the server-provided `active` flag is only an
+// additional signal, never a bypass — a stale or hostile payload must not
+// register expired or unlaunched offers.
 function requireLiveWindow(promotion: ClawHubPromotion) {
-  if (promotion.active) {
-    return;
-  }
-  if (Date.now() > promotion.endsAt) {
+  const now = Date.now();
+  if (now > promotion.endsAt) {
     throw new Error(
       `Promotion "${promotion.slug}" ended on ${new Date(promotion.endsAt).toLocaleDateString()}.`,
     );
   }
-  throw new Error(`Promotion "${promotion.slug}" is not live yet.`);
+  if (now < promotion.startsAt || !promotion.active) {
+    throw new Error(`Promotion "${promotion.slug}" is not live yet.`);
+  }
 }
 
 // Mirrors applyAuthChoiceLoadedPluginProvider's own resolution order: loaded
