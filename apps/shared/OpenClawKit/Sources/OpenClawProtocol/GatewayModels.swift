@@ -3154,21 +3154,25 @@ public struct CrestodianChatParams: Codable, Sendable {
 public struct CrestodianChatResult: Codable, Sendable {
     public let sessionid: String
     public let reply: String
+    public let sensitive: Bool?
     public let action: AnyCodable
 
     public init(
         sessionid: String,
         reply: String,
+        sensitive: Bool? = nil,
         action: AnyCodable)
     {
         self.sessionid = sessionid
         self.reply = reply
+        self.sensitive = sensitive
         self.action = action
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionid = "sessionId"
         case reply
+        case sensitive
         case action
     }
 }

@@ -58,12 +58,26 @@ function extractRunText(result: EmbeddedRunResult): string | undefined {
   );
 }
 
-async function ensureCrestodianDirs(): Promise<{ workspaceDir: string; sessionFile: string }> {
+async function ensureCrestodianDirs(
+  sessionId: string,
+): Promise<{ workspaceDir: string; sessionFile: string }> {
   const base = path.join(resolveStateDir(), "crestodian");
   const workspaceDir = path.join(base, "workspace");
   await fs.mkdir(workspaceDir, { recursive: true });
   await fs.mkdir(path.join(base, "sessions"), { recursive: true });
-  return { workspaceDir, sessionFile: path.join(base, "sessions", "agent.jsonl") };
+  return { workspaceDir, sessionFile: path.join(base, "sessions", `${sessionId}.jsonl`) };
+}
+
+export async function cleanupCrestodianAgentSession(
+  session: CrestodianAgentSession,
+): Promise<void> {
+  const sessionFile = path.join(
+    resolveStateDir(),
+    "crestodian",
+    "sessions",
+    `${session.sessionId}.jsonl`,
+  );
+  await fs.rm(sessionFile, { force: true });
 }
 
 /**
@@ -85,7 +99,7 @@ export const runCrestodianAgentTurn: CrestodianAgentTurnRunner = async (params) 
     return null;
   }
 
-  const { workspaceDir, sessionFile } = await ensureCrestodianDirs();
+  const { workspaceDir, sessionFile } = await ensureCrestodianDirs(params.session.sessionId);
   const { runEmbeddedAgent } = await import("../agents/embedded-agent.js");
   const { readConfigFileSnapshot } = await import("../config/config.js");
 

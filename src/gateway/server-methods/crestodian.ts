@@ -24,7 +24,7 @@ export type CrestodianChatSession = {
 
 const MAX_CRESTODIAN_SESSIONS = 8;
 
-function evictOldestSession(sessions: Map<string, CrestodianChatSession>): void {
+async function evictOldestSession(sessions: Map<string, CrestodianChatSession>): Promise<void> {
   if (sessions.size < MAX_CRESTODIAN_SESSIONS) {
     return;
   }
@@ -37,6 +37,7 @@ function evictOldestSession(sessions: Map<string, CrestodianChatSession>): void 
     }
   }
   if (oldestKey !== undefined) {
+    await sessions.get(oldestKey)?.engine.dispose();
     sessions.delete(oldestKey);
   }
 }
@@ -49,6 +50,7 @@ export const crestodianHandlers: GatewayRequestHandlers = {
     const sessions = context.crestodianSessions;
     const sessionId = params.sessionId;
     if (params.reset) {
+      await sessions.get(sessionId)?.engine.dispose();
       sessions.delete(sessionId);
     }
     let session = sessions.get(sessionId);
@@ -63,7 +65,7 @@ export const crestodianHandlers: GatewayRequestHandlers = {
         welcome = formatCrestodianStartupMessage(await engine.loadOverview());
         engine.noteAssistantMessage(welcome);
       }
-      evictOldestSession(sessions);
+      await evictOldestSession(sessions);
       session = { engine, welcome, lastUsedAt: Date.now() };
       sessions.set(sessionId, session);
       if (params.message === undefined || !params.message.trim()) {
@@ -90,6 +92,7 @@ export const crestodianHandlers: GatewayRequestHandlers = {
             ? "Setup here is done — continue with your agent."
             : "Nothing to change."),
         action,
+        ...(reply.sensitive === true ? { sensitive: true } : {}),
       },
       undefined,
     );

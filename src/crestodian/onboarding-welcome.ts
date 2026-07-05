@@ -18,23 +18,25 @@ export async function buildOnboardingWelcome(params: {
   // "Configured" must match the app onboarding gate (wizard metadata or
   // gateway auth), not just a model: a model-only config would otherwise get
   // the ready-guide welcome while the gate stays locked, stranding the page.
-  const hasAuthoredSetup = await (async () => {
+  const authoredConfig = await (async () => {
     if (!overview.config.exists || !overview.config.valid) {
-      return false;
+      return undefined;
     }
     try {
       const { readConfigFileSnapshot } = await import("../config/config.js");
       const snapshot = await readConfigFileSnapshot();
-      const cfg = snapshot.sourceConfig ?? snapshot.config ?? {};
-      const auth = cfg.gateway?.auth;
-      return (
-        Boolean(cfg.wizard && Object.keys(cfg.wizard).length > 0) ||
-        Boolean(auth?.mode ?? auth?.token ?? auth?.password)
-      );
+      return snapshot.sourceConfig ?? snapshot.config ?? {};
     } catch {
-      return false;
+      return undefined;
     }
   })();
+  const auth = authoredConfig?.gateway?.auth;
+  const hasAuthoredSetup = Boolean(
+    (authoredConfig?.wizard && Object.keys(authoredConfig.wizard).length > 0) ||
+    auth?.mode ||
+    auth?.token ||
+    auth?.password,
+  );
   if (hasAuthoredSetup && overview.defaultModel) {
     const welcome = formatCrestodianOnboardingWelcome(overview);
     params.engine.noteAssistantMessage(welcome);
@@ -50,7 +52,11 @@ export async function buildOnboardingWelcome(params: {
   const detected = candidates.find(
     (candidate) => candidate.kind !== "existing-model" && candidate.credentials !== false,
   );
-  const workspace = resolveUserPath(params.workspace ?? DEFAULT_WORKSPACE);
+  const workspace = resolveUserPath(
+    params.workspace?.trim() ||
+      authoredConfig?.agents?.defaults?.workspace?.trim() ||
+      DEFAULT_WORKSPACE,
+  );
 
   params.engine.propose({ kind: "setup", workspace });
 

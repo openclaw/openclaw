@@ -216,6 +216,7 @@ class CrestodianTuiBackend implements TuiBackend {
 
   async resetSession(): Promise<{ ok: boolean }> {
     // Reset drops in-flight approvals/wizards along with the transcript.
+    await this.engine.dispose();
     this.engine = createChatEngine(this.opts);
     const overview = await loadOverviewForTui(this.opts);
     this.messages.splice(
@@ -233,6 +234,10 @@ class CrestodianTuiBackend implements TuiBackend {
 
   async listModels(): Promise<TuiModelChoice[]> {
     return [];
+  }
+
+  async dispose(): Promise<void> {
+    await this.engine.dispose();
   }
 
   private nextSeq(): number {
@@ -312,15 +317,19 @@ export async function runCrestodianTui(
     welcomeVariant = undefined;
     const backend = new CrestodianTuiBackend(opts, welcome, engine);
     const runTui = opts.runTui ?? defaultRunTui;
-    await runTui({
-      local: true,
-      session: CRESTODIAN_SESSION_KEY,
-      historyLimit: 200,
-      backend,
-      config: {},
-      title: "openclaw crestodian",
-      ...(nextInput ? { message: nextInput } : {}),
-    });
+    try {
+      await runTui({
+        local: true,
+        session: CRESTODIAN_SESSION_KEY,
+        historyLimit: 200,
+        backend,
+        config: {},
+        title: "openclaw crestodian",
+        ...(nextInput ? { message: nextInput } : {}),
+      });
+    } finally {
+      await backend.dispose();
+    }
 
     const handoff = backend.consumeHandoff();
     if (!handoff) {

@@ -23,6 +23,7 @@ final class CrestodianOnboardingChatModel {
     private(set) var messages: [Message] = []
     private(set) var isSending = false
     private(set) var errorMessage: String?
+    private(set) var expectsSensitiveReply = false
     var input = ""
     /// Set when Crestodian hands off to the normal agent ("talk to agent").
     var onAgentHandoff: (() -> Void)?
@@ -36,6 +37,7 @@ final class CrestodianOnboardingChatModel {
         let sessionId: String
         let reply: String
         let action: String
+        let sensitive: Bool?
     }
 
     func startIfNeeded() async {
@@ -46,18 +48,19 @@ final class CrestodianOnboardingChatModel {
 
     func send() {
         let text = self.input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !self.isSending else { return }
+        guard !text.isEmpty, !self.isSending, self.errorMessage == nil else { return }
         self.input = ""
-        self.messages.append(Message(role: .user, text: text))
+        self.messages.append(Message(
+            role: .user,
+            text: self.expectsSensitiveReply ? "<redacted secret>" : text))
         Task { await self.requestReply(message: text) }
     }
 
-    func retryWelcome() {
-        self.started = false
-        Task { await self.startIfNeeded() }
+    func restartAfterError() {
+        Task { await self.requestReply(message: nil, reset: true) }
     }
 
-    private func requestReply(message: String?) async {
+    private func requestReply(message: String?, reset: Bool = false) async {
         self.isSending = true
         self.errorMessage = nil
         defer { self.isSending = false }
@@ -69,11 +72,20 @@ final class CrestodianOnboardingChatModel {
             if let message {
                 params["message"] = AnyCodable(message)
             }
+            if reset {
+                params["reset"] = AnyCodable(true)
+            }
             let data = try await GatewayConnection.shared.request(
                 method: "crestodian.chat",
                 params: params,
-                timeoutMs: 120_000)
+                timeoutMs: 190_000,
+                retryTransportFailures: false)
             let result = try JSONDecoder().decode(ChatResult.self, from: data)
+            if reset {
+                self.messages.removeAll()
+                self.input = ""
+            }
+            self.expectsSensitiveReply = result.sensitive == true
             self.messages.append(Message(role: .assistant, text: result.reply))
             self.onReplyReceived?()
             if result.action == "open-agent" {
@@ -126,16 +138,27 @@ struct CrestodianOnboardingChatView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                     Spacer(minLength: 0)
-                    Button("Retry") { self.model.retryWelcome() }
-                        .buttonStyle(.link)
+                    Button("Restart") {
+                        self.model.restartAfterError()
+                    }
+                    .buttonStyle(.link)
                 }
                 .padding(.horizontal, 10)
             }
 
             HStack(spacing: 8) {
-                TextField("Reply to Crestodian… (yes sets everything up)", text: self.$model.input)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { self.model.send() }
+                Group {
+                    if self.model.expectsSensitiveReply {
+                        SecureField("Enter secret…", text: self.$model.input)
+                    } else {
+                        TextField(
+                            "Reply to Crestodian… (yes sets everything up)",
+                            text: self.$model.input)
+                    }
+                }
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { self.model.send() }
+                .disabled(self.model.errorMessage != nil)
                 Button {
                     self.model.send()
                 } label: {
@@ -144,6 +167,7 @@ struct CrestodianOnboardingChatView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(self.model.isSending ||
+                    self.model.errorMessage != nil ||
                     self.model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             .padding([.horizontal, .bottom], 10)

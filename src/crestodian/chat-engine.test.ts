@@ -77,6 +77,25 @@ describe("CrestodianChatEngine", () => {
     expect(engine.hasPendingProposal()).toBe(false);
   });
 
+  it("drops an agent-loop proposal when the user declines", async () => {
+    const runAgentTurn = vi.fn(
+      async (params: { session: { proposalRef: { current?: string } } }) => {
+        params.session.proposalRef.current = "registered-operation";
+        return { text: "I can change that after your approval." };
+      },
+    );
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: runAgentTurn as never,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    await engine.handle("change the model");
+    const declined = await engine.handle("no thanks");
+
+    expect(declined.text).toContain("Skipped");
+    expect(runAgentTurn).toHaveBeenCalledOnce();
+  });
+
   it("hosts a channel setup wizard as chat turns after approval", async () => {
     useTempStateDir();
     const wizardRuns: string[] = [];
@@ -108,6 +127,62 @@ describe("CrestodianChatEngine", () => {
     const done = await engine.handle("2");
     expect(done.text).toContain("telegram is configured");
     expect(wizardRuns).toEqual(["telegram", "token:123:abc", "mode:open"]);
+  });
+
+  it("marks sensitive hosted-wizard replies and auto-advances notes", async () => {
+    useTempStateDir();
+    const engine = new CrestodianChatEngine({
+      yes: true,
+      surface: "gateway",
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.note("Before entering the token, open the provider console.");
+        await prompter.text({ message: "Bot token", sensitive: true });
+      },
+    });
+
+    const tokenStep = await engine.handle("connect telegram");
+
+    expect(tokenStep.text).toContain("Before entering the token");
+    expect(tokenStep.text).toContain("Bot token");
+    expect(tokenStep.sensitive).toBe(true);
+  });
+
+  it("routes sensitive CLI wizard prompts to the masked channel setup flow", async () => {
+    useTempStateDir();
+    const engine = new CrestodianChatEngine({
+      yes: true,
+      surface: "cli",
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token", sensitive: true });
+      },
+    });
+
+    const reply = await engine.handle("connect telegram");
+
+    expect(reply.text).toContain("Sensitive input is not accepted");
+    expect(reply.text).toContain("openclaw channels add --channel telegram");
+    expect(reply.sensitive).toBeUndefined();
+  });
+
+  it("keeps hosted-wizard validation errors on the current prompt", async () => {
+    useTempStateDir();
+    const engine = new CrestodianChatEngine({
+      yes: true,
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({
+          message: "Port",
+          validate: (value) => (value === "18789" ? undefined : "Enter port 18789"),
+        });
+      },
+    });
+
+    const prompt = await engine.handle("connect telegram");
+    expect(prompt.text).toContain("Port");
+    const invalid = await engine.handle("banana");
+    expect(invalid.text).toContain("Enter port 18789");
+    expect(invalid.text).toContain("Port");
+    const done = await engine.handle("18789");
+    expect(done.text).toContain("telegram is configured");
   });
 
   it("cancels a hosted wizard mid-flight", async () => {

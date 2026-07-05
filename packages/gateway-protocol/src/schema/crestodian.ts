@@ -25,6 +25,8 @@ export const CrestodianChatResultSchema = Type.Object(
   {
     sessionId: NonEmptyString,
     reply: NonEmptyString,
+    /** The next reply is a hosted-wizard secret and clients must mask its input/echo. */
+    sensitive: Type.Optional(Type.Boolean()),
     action: Type.Union([
       Type.Literal("none"),
       // The user asked to talk to their agent; clients should move to their

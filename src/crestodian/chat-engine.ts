@@ -2,6 +2,7 @@
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardSession, type WizardStep } from "../wizard/session.js";
 import {
+  cleanupCrestodianAgentSession,
   createCrestodianAgentSession,
   runCrestodianAgentTurn,
   type CrestodianAgentSession,
@@ -49,6 +50,8 @@ export type CrestodianChatReplyAction = "none" | "exit" | "open-tui";
 export type CrestodianChatReply = {
   text: string;
   action: CrestodianChatReplyAction;
+  /** The next hosted-wizard reply contains a secret and must be masked/redacted by hosts. */
+  sensitive?: boolean;
   /** Present when action is "open-tui"; the TUI host executes it. */
   handoff?: CrestodianOperation;
 };
@@ -83,14 +86,21 @@ function defaultChannelSetupWizardRunner(
   channel: string,
 ): (prompter: WizardPrompterLike) => Promise<void> {
   return async (prompter) => {
-    const [{ readSetupConfigFileSnapshot, writeWizardConfigFile }, { setupChannels }] =
-      await Promise.all([
-        import("../wizard/setup.shared.js"),
-        import("../commands/onboard-channels.js"),
-      ]);
+    const [
+      { readSetupConfigFileSnapshot, writeWizardConfigFile },
+      {
+        createChannelOnboardingPostWriteHookCollector,
+        runCollectedChannelOnboardingPostWriteHooks,
+        setupChannels,
+      },
+    ] = await Promise.all([
+      import("../wizard/setup.shared.js"),
+      import("../commands/onboard-channels.js"),
+    ]);
     const snapshot = await readSetupConfigFileSnapshot();
     const baseConfig = snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
     const { defaultRuntime } = await import("../runtime.js");
+    const postWriteHooks = createChannelOnboardingPostWriteHookCollector();
     const nextConfig = await setupChannels(baseConfig, defaultRuntime, prompter, {
       initialSelection: [channel],
       forceAllowFromChannels: [channel],
@@ -99,8 +109,16 @@ function defaultChannelSetupWizardRunner(
       quickstartDefaults: true,
       skipDmPolicyPrompt: true,
       skipConfirm: true,
+      onPostWriteHook: (hook) => postWriteHooks.collect(hook),
     });
-    await writeWizardConfigFile(nextConfig, { allowConfigSizeDrop: false });
+    const committedConfig = await writeWizardConfigFile(nextConfig, {
+      allowConfigSizeDrop: false,
+    });
+    await runCollectedChannelOnboardingPostWriteHooks({
+      hooks: postWriteHooks.drain(),
+      cfg: committedConfig,
+      runtime: defaultRuntime,
+    });
   };
 }
 
@@ -238,6 +256,7 @@ export class CrestodianChatEngine {
    * onboarding: the welcome message states the plan, the user just agrees.
    */
   propose(operation: CrestodianOperation): string {
+    this.clearPendingProposals();
     this.pending = operation;
     return describeCrestodianPersistentOperation(operation);
   }
@@ -251,6 +270,12 @@ export class CrestodianChatEngine {
     this.history.push({ role: "assistant", text });
   }
 
+  async dispose(): Promise<void> {
+    this.wizardBridge?.session.cancel();
+    this.wizardBridge = null;
+    await cleanupCrestodianAgentSession(this.agentSession);
+  }
+
   async handle(text: string): Promise<CrestodianChatReply> {
     // Snapshot before resolving: wizard answers to sensitive steps (tokens,
     // passwords) must never enter the AI-visible history.
@@ -260,7 +285,10 @@ export class CrestodianChatEngine {
     if (reply.text) {
       this.history.push({ role: "assistant", text: reply.text });
     }
-    return reply;
+    return {
+      ...reply,
+      ...(this.wizardBridge?.step?.sensitive === true ? { sensitive: true } : {}),
+    };
   }
 
   private async resolveTurn(text: string): Promise<CrestodianChatReply> {
@@ -274,7 +302,7 @@ export class CrestodianChatEngine {
       // so questions ("what's a workspace?") don't silently cancel setup.
       if (isYes(text)) {
         const pending = this.pending;
-        this.pending = null;
+        this.clearPendingProposals();
         if (pending.kind === "channel-setup") {
           return { text: await this.startChannelSetupWizard(pending.channel), action: "none" };
         }
@@ -298,9 +326,14 @@ export class CrestodianChatEngine {
         };
       }
       if (DECLINE_RE.test(text.trim())) {
-        this.pending = null;
+        this.clearPendingProposals();
         return { text: "Skipped. No barnacles on config today.", action: "none" };
       }
+    }
+
+    if (DECLINE_RE.test(text.trim()) && this.agentSession.proposalRef.current) {
+      this.clearPendingProposals();
+      return { text: "Skipped. No barnacles on config today.", action: "none" };
     }
 
     // Exact typed commands run deterministically (instant, no model); strict
@@ -412,6 +445,7 @@ export class CrestodianChatEngine {
 
     const capture = createCaptureRuntime();
     if (isPersistentCrestodianOperation(operation) && !this.opts.yes) {
+      this.clearPendingProposals();
       this.pending = operation;
       await executeCrestodianOperation(operation, capture, {
         approved: false,
@@ -492,6 +526,11 @@ export class CrestodianChatEngine {
     };
   }
 
+  private clearPendingProposals(): void {
+    this.pending = null;
+    this.agentSession.proposalRef.current = undefined;
+  }
+
   private async startChannelSetupWizard(channel: string): Promise<string> {
     const runWizard =
       this.opts.runChannelSetupWizard ??
@@ -564,6 +603,27 @@ export class CrestodianChatEngine {
         await bridge.session.answer(step.id, auto.value);
         return await this.pumpWizardBridge();
       }
+      if (this.opts.surface === "cli" && bridge.step.sensitive === true) {
+        bridge.session.cancel();
+        this.wizardBridge = null;
+        return [
+          "Sensitive input is not accepted in the Crestodian TUI because terminal input is visible.",
+          `Run \`openclaw channels add --channel ${bridge.label}\` to finish setup with masked prompts.`,
+        ].join("\n");
+      }
+      if (bridge.step.type === "note" || bridge.step.type === "progress") {
+        const step = bridge.step;
+        bridge.step = null;
+        await bridge.session.answer(step.id, undefined);
+        const next = await this.pumpWizardBridge();
+        return [renderWizardStep(step), next].filter(Boolean).join("\n\n");
+      }
+      if (bridge.step.type === "action" && bridge.step.executor !== "client") {
+        const step = bridge.step;
+        bridge.step = null;
+        await bridge.session.answer(step.id, true);
+        return await this.pumpWizardBridge();
+      }
     }
     return bridge.step ? renderWizardStep(bridge.step) : "";
   }
@@ -585,7 +645,10 @@ export class CrestodianChatEngine {
     if (!answer) {
       return ["I could not match that answer.", renderWizardStep(step)].join("\n");
     }
-    await bridge.session.answer(step.id, answer.value);
+    const validationError = await bridge.session.answer(step.id, answer.value);
+    if (validationError) {
+      return [validationError, renderWizardStep(step)].join("\n\n");
+    }
     return await this.pumpWizardBridge();
   }
 }

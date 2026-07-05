@@ -74,6 +74,20 @@ describe("crestodian.chat", () => {
     expect(call.payload).toMatchObject({ reply: "did the thing", action: "none" });
   });
 
+  it("forwards sensitive-input metadata to clients", async () => {
+    const engine = new CrestodianChatEngine({});
+    vi.spyOn(engine, "handle").mockResolvedValue({
+      text: "Enter the bot token",
+      action: "none",
+      sensitive: true,
+    });
+    const sessions = new Map<string, CrestodianChatSession>([["s1", seededSession({ engine })]]);
+
+    const call = await callChat(makeContext(sessions), { sessionId: "s1", message: "yes" });
+
+    expect(call.payload).toMatchObject({ sensitive: true });
+  });
+
   it("maps the TUI handoff to an open-agent action for clients", async () => {
     const engine = new CrestodianChatEngine({});
     vi.spyOn(engine, "handle").mockResolvedValue({
@@ -95,6 +109,7 @@ describe("crestodian.chat", () => {
   it("resets a session on request", async () => {
     const engine = new CrestodianChatEngine({});
     const handle = vi.spyOn(engine, "handle");
+    const dispose = vi.spyOn(engine, "dispose").mockResolvedValue();
     const sessions = new Map<string, CrestodianChatSession>([["s1", seededSession({ engine })]]);
     // Reset drops the stored session; loading a fresh welcome would hit real
     // discovery, so stub the overview loader on the replacement engine path by
@@ -108,6 +123,7 @@ describe("crestodian.chat", () => {
     } as never);
     await pending;
     expect(handle).not.toHaveBeenCalled();
+    expect(dispose).toHaveBeenCalledOnce();
     expect(sessions.get("s1")?.engine).not.toBe(engine);
     expect(calls[0]?.ok).toBe(true);
   });
