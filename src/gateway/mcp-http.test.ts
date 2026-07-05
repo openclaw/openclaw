@@ -1055,13 +1055,6 @@ describe("mcp loopback server", () => {
     const content = [
       { type: "text", text: "caption", annotations: { audience: ["user"] } },
       { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
-      { type: "audio", data: "YXVkaW8=", mimeType: "audio/mpeg" },
-      {
-        type: "resource_link",
-        name: "report",
-        uri: "https://example.test/report.pdf",
-        mimeType: "application/pdf",
-      },
       {
         type: "resource",
         resource: { uri: "memo://one", text: "memo body", mimeType: "text/plain" },
@@ -1083,10 +1076,17 @@ describe("mcp loopback server", () => {
     expect(payload.result?.content).toEqual(content);
   });
 
-  it("converts malformed and unknown MCP content blocks to text", async () => {
+  it("converts malformed, unknown, and unsupported MCP content blocks to text", async () => {
     const malformed = [
       { type: "image", mimeType: "image/png" },
       { type: "audio", data: "not base64!", mimeType: "audio/mpeg" },
+      { type: "audio", data: "YXVkaW8=", mimeType: "audio/mpeg" },
+      {
+        type: "resource_link",
+        name: "report",
+        uri: "https://example.test/report.pdf",
+        mimeType: "application/pdf",
+      },
       { type: "tool_use", id: "unexpected" },
     ];
     mockScopedTools([

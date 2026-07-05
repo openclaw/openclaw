@@ -22,15 +22,21 @@ function stringifyMcpContent(value: unknown): string {
   return typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
 }
 
+const MCP_LOOPBACK_CONTENT_TYPES = new Set<ContentBlock["type"]>([
+  "text",
+  "image",
+  "resource",
+]);
+
 // Tool implementations may return MCP content blocks, plain strings, or
-// arbitrary JSON. Preserve only structurally valid SDK content blocks; malformed
-// and future unknown shapes remain visible as text instead of leaking invalid MCP.
+// arbitrary JSON. Preserve the valid block types shared by every protocol revision
+// this server advertises; newer and malformed shapes remain visible as text.
 function normalizeToolCallContent(result: unknown): ContentBlock[] {
   const content = (result as { content?: unknown })?.content;
   if (Array.isArray(content)) {
     return content.map((block) => {
       const parsed = ContentBlockSchema.safeParse(block);
-      if (parsed.success) {
+      if (parsed.success && MCP_LOOPBACK_CONTENT_TYPES.has(parsed.data.type)) {
         return parsed.data;
       }
       return {
