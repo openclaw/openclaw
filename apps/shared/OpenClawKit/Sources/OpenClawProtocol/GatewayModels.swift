@@ -7103,7 +7103,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         alloweddecisions: [String]?,
         agentid: String? = nil,
         sessionkey: String?,
-        approvalreviewerdeviceids: [String]?,
+        approvalreviewerdeviceids: [String]? = nil,
         turnsourcechannel: String?,
         turnsourceto: String?,
         turnsourceaccountid: String?,
