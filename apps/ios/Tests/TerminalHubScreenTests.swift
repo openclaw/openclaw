@@ -64,10 +64,33 @@ struct TerminalHubScreenTests {
         #expect(script?.contains("\"gatewayUrl\":\"wss:\\/\\/gateway.example.com:8443\"") == true)
     }
 
+    @Test func `auth user script falls back to stored operator token`() throws {
+        let config = try Self.makeConfig(
+            url: #require(URL(string: "wss://gateway.example.com:8443")),
+            token: nil,
+            password: nil)
+
+        let script = TerminalHubScreen.terminalAuthUserScript(
+            config: config,
+            storedOperatorToken: " stored-token ")
+
+        #expect(script?.contains("\"token\":\"stored-token\"") == true)
+    }
+
+    @Test func `web content identity changes with stored operator token`() throws {
+        let config = try Self.makeConfig(url: #require(URL(string: "wss://gateway.example.com")))
+
+        #expect(
+            TerminalHubScreen.webContentIdentity(config: config, storedOperatorToken: "token-a") !=
+                TerminalHubScreen.webContentIdentity(config: config, storedOperatorToken: "token-b"))
+    }
+
     @Test func `auth user script is omitted without credentials`() throws {
         let config = try Self.makeConfig(url: #require(URL(string: "wss://gateway.example.com")), token: "   ")
 
-        #expect(TerminalHubScreen.terminalAuthUserScript(config: config) == nil)
-        #expect(TerminalHubScreen.terminalAuthUserScript(config: nil) == nil)
+        #expect(
+            TerminalHubScreen.terminalAuthUserScript(config: config, storedOperatorToken: nil) == nil)
+        #expect(
+            TerminalHubScreen.terminalAuthUserScript(config: nil, storedOperatorToken: nil) == nil)
     }
 }

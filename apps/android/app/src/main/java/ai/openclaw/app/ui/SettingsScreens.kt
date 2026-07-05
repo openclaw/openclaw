@@ -977,9 +977,9 @@ private fun GatewaySettingsScreen(
       Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(text = "Pair New Gateway", style = ClawTheme.type.section, color = ClawTheme.colors.text)
         Text(text = "Clear this phone's saved gateway access and scan a fresh setup code.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-          ClawSecondaryButton(text = "Pair New Gateway", onClick = viewModel::pairNewGateway, modifier = Modifier.weight(1f), icon = Icons.Default.QrCode2)
-          ClawSecondaryButton(text = "Setup Code", onClick = { showSetupCodeHelp = !showSetupCodeHelp }, modifier = Modifier.weight(1f), icon = Icons.Default.Info)
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          ClawSecondaryButton(text = "Pair New Gateway", onClick = viewModel::pairNewGateway, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.QrCode2)
+          ClawSecondaryButton(text = "Setup Code", onClick = { showSetupCodeHelp = !showSetupCodeHelp }, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.Info)
         }
         if (showSetupCodeHelp) {
           Text(

@@ -1,6 +1,5 @@
 // Shared Nodes operations used by the Control UI page and Gateway event hooks.
 import { getPublicKeyAsync, signAsync, utils } from "@noble/ed25519";
-import type { DevicePairSetupCodeResult } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   clearDeviceAuthTokenFromStore,
   type DeviceAuthEntry,
@@ -57,15 +56,6 @@ export type PairedDevice = {
 export type DevicePairingList = {
   pending: PendingDevice[];
   paired: PairedDevice[];
-};
-
-export type DevicePairSetup = DevicePairSetupCodeResult;
-
-export type DevicePairSetupState = NodesGatewaySnapshot & {
-  devicePairSetupOpen: boolean;
-  devicePairSetupLoading: boolean;
-  devicePairSetupError: string | null;
-  devicePairSetup: DevicePairSetup | null;
 };
 
 export type ExecApprovalsDefaults = {
@@ -154,7 +144,6 @@ export type DeviceIdentity = {
 
 const DEVICE_AUTH_STORAGE_KEY = "openclaw.device.auth.v1";
 const DEVICE_IDENTITY_STORAGE_KEY = "openclaw-device-identity-v1";
-const devicePairSetupRequests = new WeakMap<DevicePairSetupState, object>();
 
 export function createInitialNodesState(
   snapshot: Partial<NodesGatewaySnapshot> = {},
@@ -232,56 +221,6 @@ export async function loadDevices(state: DevicesState, opts?: { quiet?: boolean 
       state.devicesLoading = false;
     }
   }
-}
-
-export async function openDevicePairSetup(state: DevicePairSetupState) {
-  state.devicePairSetupOpen = true;
-  await refreshDevicePairSetup(state);
-}
-
-export async function refreshDevicePairSetup(state: DevicePairSetupState) {
-  const client = state.client;
-  if (!client || !state.connected || state.devicePairSetupLoading) {
-    return;
-  }
-  const requestToken = {};
-  devicePairSetupRequests.set(state, requestToken);
-  state.devicePairSetupLoading = true;
-  state.devicePairSetupError = null;
-  try {
-    const result = await client.request<DevicePairSetup>("device.pair.setupCode", {});
-    if (
-      devicePairSetupRequests.get(state) !== requestToken ||
-      state.client !== client ||
-      !state.connected ||
-      !state.devicePairSetupOpen
-    ) {
-      return;
-    }
-    state.devicePairSetup = result;
-  } catch (err) {
-    if (
-      devicePairSetupRequests.get(state) === requestToken &&
-      state.client === client &&
-      state.devicePairSetupOpen
-    ) {
-      state.devicePairSetupError = String(err);
-    }
-  } finally {
-    // A retired request must not clear the loading state of a replacement request.
-    if (devicePairSetupRequests.get(state) === requestToken) {
-      devicePairSetupRequests.delete(state);
-      state.devicePairSetupLoading = false;
-    }
-  }
-}
-
-export function closeDevicePairSetup(state: DevicePairSetupState) {
-  devicePairSetupRequests.delete(state);
-  state.devicePairSetupOpen = false;
-  state.devicePairSetupLoading = false;
-  state.devicePairSetupError = null;
-  state.devicePairSetup = null;
 }
 
 export async function approveDevicePairing(state: DevicesState, requestId: string) {

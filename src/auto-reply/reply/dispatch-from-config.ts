@@ -5,6 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   hasOutboundReplyContent,
   isFastModeAutoProgressPayload,
@@ -96,7 +97,6 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveSilentReplyPolicyFromPolicies } from "../../shared/silent-reply-policy.js";
-import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import {
   normalizeTtsAutoMode,

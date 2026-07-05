@@ -5,7 +5,10 @@ import {
   resolveChannelEntryMatchWithFallback,
   type ChannelMatchSource,
 } from "openclaw/plugin-sdk/channel-targets";
-import type { ChannelBotLoopProtectionConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  ChannelBotLoopProtectionConfig,
+  ReplyToMode,
+} from "openclaw/plugin-sdk/config-contracts";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeSlackSlug } from "./allow-list.js";
@@ -14,6 +17,7 @@ export type SlackChannelConfigResolved = {
   allowed: boolean;
   requireMention: boolean;
   ignoreOtherMentions?: boolean;
+  replyToMode?: ReplyToMode;
   allowBots?: boolean | "mentions";
   botLoopProtection?: ChannelBotLoopProtectionConfig;
   users?: Array<string | number>;
@@ -27,6 +31,7 @@ type SlackChannelConfigEntry = {
   enabled?: boolean;
   requireMention?: boolean;
   ignoreOtherMentions?: boolean;
+  replyToMode?: ReplyToMode;
   allowBots?: boolean | "mentions";
   botLoopProtection?: ChannelBotLoopProtectionConfig;
   users?: Array<string | number>;
@@ -120,6 +125,7 @@ export function resolveSlackChannelConfig(params: {
     fallback?.ignoreOtherMentions,
   );
   const allowBots = firstDefined(resolved.allowBots, fallback?.allowBots);
+  const replyToMode = firstDefined(resolved.replyToMode, fallback?.replyToMode);
   const botLoopProtection = mergePairLoopGuardConfig(
     fallback?.botLoopProtection,
     matched?.botLoopProtection,
@@ -131,6 +137,7 @@ export function resolveSlackChannelConfig(params: {
     allowed,
     requireMention,
     ignoreOtherMentions,
+    replyToMode,
     allowBots,
     botLoopProtection,
     users,

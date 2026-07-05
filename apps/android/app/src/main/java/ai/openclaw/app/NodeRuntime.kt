@@ -661,6 +661,7 @@ class NodeRuntime(
         _gatewayUpdateAvailable.value = hello.updateAvailable
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
         syncMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
+        refreshGatewayControlPage()
         updateStatus {
           operatorConnectionProblem = null
           operatorConnected = true
@@ -1872,6 +1873,7 @@ class NodeRuntime(
     activeGatewayAuth = auth
     val tls = connectionManager.resolveTlsParams(endpoint)
     val storedOperatorEntry = loadStoredRoleDeviceAuthEntry("operator")
+    refreshGatewayControlPage(endpoint, auth, storedOperatorEntry?.token)
     val usesStoredOperatorDeviceToken =
       operatorSessionUsesStoredDeviceToken(auth, storedOperatorEntry?.token)
     val operatorAuth =
@@ -1971,6 +1973,24 @@ class NodeRuntime(
 
   private fun isCurrentConnectAttempt(connectAttemptId: Long): Boolean = connectAttemptSeq.get() == connectAttemptId
 
+  private fun refreshGatewayControlPage(
+    endpoint: GatewayEndpoint? = connectedEndpoint,
+    auth: GatewayConnectAuth = activeGatewayAuth ?: resolveGatewayConnectAuth(),
+    storedOperatorToken: String? = loadStoredRoleDeviceAuthEntry("operator")?.token,
+  ) {
+    if (endpoint == null) {
+      _gatewayControlPage.value = null
+      return
+    }
+    val pageAuth = resolveGatewayControlPageAuth(auth, storedOperatorToken)
+    _gatewayControlPage.value =
+      GatewayControlPage(
+        baseUrl = gatewayControlPageBaseUrl(endpoint),
+        token = pageAuth.token,
+        password = pageAuth.password,
+      )
+  }
+
   private fun connectAfterTlsCheck(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
@@ -1978,12 +1998,6 @@ class NodeRuntime(
   ) {
     if (!isCurrentConnectAttempt(connectAttemptId)) return
     connectedEndpoint = endpoint
-    _gatewayControlPage.value =
-      GatewayControlPage(
-        baseUrl = gatewayControlPageBaseUrl(endpoint),
-        token = auth.token?.trim()?.takeIf { it.isNotEmpty() },
-        password = auth.password?.trim()?.takeIf { it.isNotEmpty() },
-      )
     updateStatus {
       operatorConnectionProblem = null
       nodeConnectionProblem = null
@@ -3469,6 +3483,44 @@ internal fun resolveOperatorSessionConnectAuth(
   val explicitBootstrapToken = auth.bootstrapToken?.trim()?.takeIf { it.isNotEmpty() }
   if (explicitBootstrapToken != null) {
     return null
+  }
+
+  return NodeRuntime.GatewayConnectAuth(
+    token = null,
+    bootstrapToken = null,
+    password = null,
+  )
+}
+
+internal fun resolveGatewayControlPageAuth(
+  auth: NodeRuntime.GatewayConnectAuth,
+  storedOperatorToken: String?,
+): NodeRuntime.GatewayConnectAuth {
+  val explicitToken = auth.token?.trim()?.takeIf { it.isNotEmpty() }
+  if (explicitToken != null) {
+    return NodeRuntime.GatewayConnectAuth(
+      token = explicitToken,
+      bootstrapToken = null,
+      password = null,
+    )
+  }
+
+  val explicitPassword = auth.password?.trim()?.takeIf { it.isNotEmpty() }
+  if (explicitPassword != null) {
+    return NodeRuntime.GatewayConnectAuth(
+      token = null,
+      bootstrapToken = null,
+      password = explicitPassword,
+    )
+  }
+
+  val storedToken = storedOperatorToken?.trim()?.takeIf { it.isNotEmpty() }
+  if (storedToken != null) {
+    return NodeRuntime.GatewayConnectAuth(
+      token = storedToken,
+      bootstrapToken = null,
+      password = null,
+    )
   }
 
   return NodeRuntime.GatewayConnectAuth(

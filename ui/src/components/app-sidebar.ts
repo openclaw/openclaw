@@ -80,6 +80,7 @@ export class AppSidebar extends LitElement {
   @property({ attribute: false }) enabledRouteIds?: readonly NavigationRouteId[];
   @property({ attribute: false }) collapsed = false;
   @property({ attribute: false }) connected = false;
+  @property({ attribute: false }) canPairDevice = false;
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) navGroupsCollapsed: Record<string, boolean> = {};
   @property({ attribute: false }) recentSessionsCollapsed = false;
@@ -87,6 +88,7 @@ export class AppSidebar extends LitElement {
   @property({ attribute: false }) onToggleCollapsed?: () => void;
   @property({ attribute: false }) onToggleGroup?: (label: string) => void;
   @property({ attribute: false }) onToggleRecentSessions?: () => void;
+  @property({ attribute: false }) onPairMobile?: () => void;
   @property({ attribute: false })
   onNavigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   @property({ attribute: false }) onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
@@ -778,22 +780,39 @@ export class AppSidebar extends LitElement {
               <div class="sidebar-mode-switch">
                 <openclaw-theme-mode-toggle .mode=${this.themeMode}></openclaw-theme-mode-toggle>
               </div>
-              <div class="sidebar-status">
-                <openclaw-tooltip .content=${gatewayStatus}>
-                  <span
-                    class="sidebar-status__dot ${this.connected
-                      ? "sidebar-connection-status--online"
-                      : "sidebar-connection-status--offline"}"
-                    role="img"
-                    aria-live="polite"
-                    aria-label=${gatewayStatus}
-                  ></span>
+              <div class="sidebar-footer-row">
+                <div class="sidebar-status">
+                  <openclaw-tooltip .content=${gatewayStatus}>
+                    <span
+                      class="sidebar-status__dot ${this.connected
+                        ? "sidebar-connection-status--online"
+                        : "sidebar-connection-status--offline"}"
+                      role="img"
+                      aria-live="polite"
+                      aria-label=${gatewayStatus}
+                    ></span>
+                  </openclaw-tooltip>
+                  ${this.collapsed
+                    ? nothing
+                    : html`<span class="sidebar-status__text"
+                        >${this.connected ? t("common.online") : t("common.offline")}</span
+                      >`}
+                </div>
+                <openclaw-tooltip
+                  .content=${this.canPairDevice
+                    ? t("nodes.pairing.button")
+                    : t("nodes.pairing.adminRequired")}
+                >
+                  <button
+                    class="sidebar-pair-mobile"
+                    type="button"
+                    aria-label=${t("nodes.pairing.button")}
+                    ?disabled=${!this.canPairDevice}
+                    @click=${() => this.onPairMobile?.()}
+                  >
+                    <span aria-hidden="true">${icons.smartphone}</span>
+                  </button>
                 </openclaw-tooltip>
-                ${this.collapsed
-                  ? nothing
-                  : html`<span class="sidebar-status__text"
-                      >${this.connected ? t("common.online") : t("common.offline")}</span
-                    >`}
               </div>
             </div>
           </div>

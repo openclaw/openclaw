@@ -5,17 +5,13 @@ import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import { copyToClipboard } from "../../lib/clipboard.ts";
 import { currentConfigObject } from "../../lib/config/index.ts";
 import {
   approveDevicePairing,
-  closeDevicePairSetup,
   createInitialNodesState,
   loadDevices,
   loadExecApprovals,
   loadNodes,
-  openDevicePairSetup,
-  refreshDevicePairSetup,
   rejectDevicePairing,
   removeExecApprovalsFormValue,
   revokeDeviceToken,
@@ -23,8 +19,6 @@ import {
   saveExecApprovals,
   updateExecApprovalsFormValue,
   type DevicePairingList,
-  type DevicePairSetup,
-  type DevicePairSetupState,
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
   type ExecApprovalsTarget,
@@ -38,7 +32,7 @@ export type NodesRouteData = {
 
 const NODES_ACTIVE_POLL_INTERVAL_MS = 30_000;
 
-export class NodesPage extends LitElement implements NodesPageDataState, DevicePairSetupState {
+export class NodesPage extends LitElement implements NodesPageDataState {
   override createRenderRoot() {
     return this;
   }
@@ -57,10 +51,6 @@ export class NodesPage extends LitElement implements NodesPageDataState, DeviceP
   @state() devicesLoading = false;
   @state() devicesError: string | null = null;
   @state() devicesList: DevicePairingList | null = null;
-  @state() devicePairSetupOpen = false;
-  @state() devicePairSetupLoading = false;
-  @state() devicePairSetupError: string | null = null;
-  @state() devicePairSetup: DevicePairSetup | null = null;
   @state() private canPairDevice = false;
   @state() execApprovalsLoading = false;
   @state() execApprovalsSaving = false;
@@ -112,7 +102,6 @@ export class NodesPage extends LitElement implements NodesPageDataState, DeviceP
   }
 
   override disconnectedCallback() {
-    closeDevicePairSetup(this);
     this.stopPolling();
     this.stopGatewaySubscription?.();
     this.stopGatewaySubscription = undefined;
@@ -159,7 +148,6 @@ export class NodesPage extends LitElement implements NodesPageDataState, DeviceP
   }
 
   private resetServerState() {
-    closeDevicePairSetup(this);
     const next = createInitialNodesState(this.context.gateway.snapshot);
     this.nodesLoading = next.nodesLoading;
     this.nodes = next.nodes;
@@ -238,10 +226,6 @@ export class NodesPage extends LitElement implements NodesPageDataState, DeviceP
           devicesLoading: this.devicesLoading,
           devicesError: this.devicesError,
           devicesList: this.devicesList,
-          devicePairSetupOpen: this.devicePairSetupOpen,
-          devicePairSetupLoading: this.devicePairSetupLoading,
-          devicePairSetupError: this.devicePairSetupError,
-          devicePairSetup: this.devicePairSetup,
           canPairDevice: this.canPairDevice,
           configForm: currentConfigObject(config),
           configLoading: config.configLoading,
@@ -258,10 +242,7 @@ export class NodesPage extends LitElement implements NodesPageDataState, DeviceP
           execApprovalsTargetNodeId: this.execApprovalsTargetNodeId,
           onRefresh: () => void loadNodes(this),
           onDevicesRefresh: () => void loadDevices(this),
-          onDevicePairSetupOpen: () => void openDevicePairSetup(this),
-          onDevicePairSetupRefresh: () => void refreshDevicePairSetup(this),
-          onDevicePairSetupClose: () => closeDevicePairSetup(this),
-          onDevicePairSetupCopy: (setupCode) => void copyToClipboard(setupCode),
+          onDevicePairSetupOpen: () => void this.context.overlays.openDevicePairSetup(),
           onDeviceApprove: (requestId) => void approveDevicePairing(this, requestId),
           onDeviceReject: (requestId) => void rejectDevicePairing(this, requestId),
           onDeviceRotate: (deviceId, role, scopes) =>

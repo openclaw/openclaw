@@ -1,3 +1,4 @@
+import OpenClawKit
 import SwiftUI
 import WebKit
 
@@ -22,13 +23,20 @@ struct TerminalHubScreen: View {
 
     var body: some View {
         let config = self.appModel.activeGatewayConnectConfig
+        let storedOperatorToken = config == nil ? nil : Self.storedOperatorToken()
         ZStack {
             OpenClawProBackground()
             if let url = Self.terminalURL(config: config) {
-                TerminalWebView(url: url, authScript: Self.terminalAuthUserScript(config: config))
+                TerminalWebView(
+                    url: url,
+                    authScript: Self.terminalAuthUserScript(
+                        config: config,
+                        storedOperatorToken: storedOperatorToken))
                     // Recreate the web view only when the connection inputs
                     // change; SwiftUI update passes must not restart live shells.
-                        .id(Self.webContentIdentity(config: config))
+                        .id(Self.webContentIdentity(
+                            config: config,
+                            storedOperatorToken: storedOperatorToken))
                         .ignoresSafeArea(.container, edges: .bottom)
             } else {
                 self.unavailableCard
@@ -97,14 +105,24 @@ struct TerminalHubScreen: View {
     /// (the same mechanism the macOS Dashboard window uses), so the token never
     /// appears in the page URL, WebKit history, or gateway request logs.
     static func terminalAuthUserScript(config: GatewayConnectConfig?) -> String? {
+        self.terminalAuthUserScript(config: config, storedOperatorToken: self.storedOperatorToken())
+    }
+
+    static func terminalAuthUserScript(
+        config: GatewayConnectConfig?,
+        storedOperatorToken: String?) -> String?
+    {
         guard let config, let pageURL = terminalURL(config: config) else {
             return nil
         }
         var payload: [String: String] = ["gatewayUrl": config.url.absoluteString]
         let token = config.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let storedToken = storedOperatorToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let password = config.password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !token.isEmpty {
             payload["token"] = token
+        } else if !storedToken.isEmpty {
+            payload["token"] = storedToken
         }
         if !password.isEmpty {
             payload["password"] = password
@@ -134,11 +152,22 @@ struct TerminalHubScreen: View {
     /// Identity for the embedded web view: recreate it only when the gateway
     /// endpoint or credentials actually change.
     static func webContentIdentity(config: GatewayConnectConfig?) -> Int {
+        self.webContentIdentity(config: config, storedOperatorToken: self.storedOperatorToken())
+    }
+
+    static func webContentIdentity(config: GatewayConnectConfig?, storedOperatorToken: String?) -> Int {
         var hasher = Hasher()
         hasher.combine(config?.url)
         hasher.combine(config?.token)
         hasher.combine(config?.password)
+        hasher.combine(storedOperatorToken?.trimmingCharacters(in: .whitespacesAndNewlines))
         return hasher.finalize()
+    }
+
+    private static func storedOperatorToken() -> String? {
+        let identity = DeviceIdentityStore.loadOrCreate()
+        return DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "operator")?
+            .token
     }
 
     static func originString(for url: URL) -> String {

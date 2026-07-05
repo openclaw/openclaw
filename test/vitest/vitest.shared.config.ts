@@ -242,6 +242,38 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "index.ts"),
       },
       {
+        find: /^@openclaw\/ai\/internal\/(.+)$/,
+        replacement: path.join(repoRoot, "packages", "ai", "src", "internal", "$1.ts"),
+      },
+      {
+        find: "@openclaw/ai/diagnostics",
+        replacement: path.join(repoRoot, "packages", "ai", "src", "utils", "diagnostics.ts"),
+      },
+      {
+        find: "@openclaw/ai/event-stream",
+        replacement: path.join(repoRoot, "packages", "ai", "src", "utils", "event-stream.ts"),
+      },
+      {
+        find: "@openclaw/ai/providers",
+        replacement: path.join(repoRoot, "packages", "ai", "src", "providers.ts"),
+      },
+      {
+        find: "@openclaw/ai/types",
+        replacement: path.join(repoRoot, "packages", "ai", "src", "types.ts"),
+      },
+      {
+        find: "@openclaw/ai/validation",
+        replacement: path.join(repoRoot, "packages", "ai", "src", "validation.ts"),
+      },
+      {
+        find: /^@openclaw\/ai\/(.+)$/,
+        replacement: path.join(repoRoot, "packages", "ai", "src", "$1.ts"),
+      },
+      {
+        find: "@openclaw/ai",
+        replacement: path.join(repoRoot, "packages", "ai", "src", "index.ts"),
+      },
+      {
         find: "@openclaw/llm-core/diagnostics",
         replacement: path.join(repoRoot, "packages", "llm-core", "src", "utils", "diagnostics.ts"),
       },
@@ -416,9 +448,15 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/normalization-core/utf16-slice",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "utf16-slice.ts"),
+      },
+      {
         find: /^@openclaw\/normalization-core$/u,
         replacement: path.join(repoRoot, "packages", "normalization-core", "src", "index.ts"),
       },
+      sourcePackageAlias("markdown-core", "code-spans"),
+      sourcePackageAlias("markdown-core", "fences"),
       sourcePackageAlias("media-core", "base64"),
       sourcePackageAlias("media-core", "constants"),
       sourcePackageAlias("media-core", "content-length"),
