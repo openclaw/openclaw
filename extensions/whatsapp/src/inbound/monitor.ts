@@ -28,7 +28,7 @@ import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../au
 import { getRegisteredWhatsAppConnectionController } from "../connection-controller-registry.js";
 import { getPrimaryIdentityId, identitiesOverlap, resolveComparableIdentity } from "../identity.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
-import { buildOutboundQuotedMeta, cacheInboundMessageMeta } from "../quoted-message.js";
+import { cacheInboundMessageMeta } from "../quoted-message.js";
 import { DEFAULT_RECONNECT_POLICY, computeBackoff, sleepWithAbort } from "../reconnect.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createWaSocket, formatError, getStatusCode, waitForWaConnection } from "../session.js";
@@ -620,21 +620,12 @@ export async function attachWebInboxToSocket(
         ? (result as { message?: proto.IMessage }).message
         : undefined;
     rememberBaileysMessage(remoteJid, messageId, message);
-    // Cache quote metadata for the bot's own outbound message so a later user
-    // swipe-reply to it resolves the quote key with fromMe:true and the bot's
-    // own participant JID. Without this the cache-miss fallback emits a
-    // mismatched quote key that WhatsApp Desktop silently drops (#91445).
-    const outboundBody = extractText(message ?? undefined);
-    cacheInboundMessageMeta(
-      options.accountId,
-      remoteJid,
-      messageId,
-      buildOutboundQuotedMeta({
-        remoteJid,
-        self,
-        body: outboundBody,
-      }),
-    );
+    // Baileys derives the participant for fromMe quotes from its own userJid.
+    // Retain only the facts needed to avoid the cache-miss fromMe=false fallback.
+    cacheInboundMessageMeta(options.accountId, remoteJid, messageId, {
+      fromMe: true,
+      body: extractText(message ?? undefined),
+    });
   };
   const trackLateAcceptedSend = (jid: string, promise: Promise<WAMessage | undefined>) => {
     // The local send has failed terminally, but Baileys may still deliver it.

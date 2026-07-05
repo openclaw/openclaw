@@ -1,7 +1,8 @@
 // Whatsapp tests cover quoted message plugin behavior.
+import { generateWAMessageFromContent } from "baileys";
 import { describe, expect, it } from "vitest";
 import {
-  buildOutboundQuotedMeta,
+  buildQuotedMessageOptions,
   cacheInboundMessageMeta,
   lookupInboundMessageMeta,
   lookupInboundMessageMetaForTarget,
@@ -72,49 +73,37 @@ describe("quoted message metadata cache", () => {
     });
   });
 
-  it("marks the bot's own outbound group message with fromMe and the bot's participant JID (#91445)", () => {
-    const meta = buildOutboundQuotedMeta({
-      remoteJid: "120363400000000000@g.us",
-      self: { jid: "15551112222@s.whatsapp.net", lid: "99999@lid" },
-      body: "  bot reply text  ",
-    });
-    expect(meta).toEqual({
+  it("lets Baileys encode the self participant for a cached outbound quote (#91445)", () => {
+    const remoteJid = "120363400000000000@g.us";
+    const userJid = "15551112222@s.whatsapp.net";
+    cacheInboundMessageMeta("account-self", remoteJid, "bot-msg-1", {
       fromMe: true,
-      participant: "15551112222@s.whatsapp.net",
       body: "bot reply text",
     });
-
-    // A later swipe-reply to that message must resolve the quote key with the
-    // bot's own identity, not the cache-miss fallback (fromMe:false + replier).
-    cacheInboundMessageMeta("account-self", "120363400000000000@g.us", "bot-msg-1", meta);
-    expect(
-      lookupInboundMessageMeta("account-self", "120363400000000000@g.us", "bot-msg-1"),
-    ).toEqual({
-      participant: "15551112222@s.whatsapp.net",
-      participantE164: undefined,
-      body: "bot reply text",
-      fromMe: true,
+    const cached = lookupInboundMessageMeta("account-self", remoteJid, "bot-msg-1");
+    const quoteOptions = buildQuotedMessageOptions({
+      messageId: "bot-msg-1",
+      remoteJid,
+      fromMe: cached?.fromMe,
+      participant: cached?.participant,
+      messageText: cached?.body,
     });
-  });
+    if (!quoteOptions) {
+      throw new Error("expected quote options");
+    }
 
-  it("omits the participant for the bot's own outbound direct-chat message (#91445)", () => {
-    const meta = buildOutboundQuotedMeta({
-      remoteJid: "15559998888@s.whatsapp.net",
-      self: { jid: "15551112222@s.whatsapp.net" },
-      body: "direct reply",
-    });
-    expect(meta).toEqual({ fromMe: true, body: "direct reply" });
-    expect(meta.participant).toBeUndefined();
-  });
+    const encoded = generateWAMessageFromContent(
+      remoteJid,
+      { extendedTextMessage: { text: "user reply" } },
+      { ...quoteOptions, userJid },
+    );
 
-  it("falls back to the bot's lid when no self jid is known, and drops empty body", () => {
-    const meta = buildOutboundQuotedMeta({
-      remoteJid: "120363400000000000@g.us",
-      self: { jid: null, lid: "77777@lid" },
-      body: "   ",
+    expect(quoteOptions.quoted?.key.participant).toBeUndefined();
+    expect(encoded.message?.extendedTextMessage?.contextInfo).toMatchObject({
+      participant: userJid,
+      stanzaId: "bot-msg-1",
+      quotedMessage: { conversation: "bot reply text" },
     });
-    expect(meta).toEqual({ fromMe: true, participant: "77777@lid" });
-    expect(meta.body).toBeUndefined();
   });
 
   it("does not recover metadata from another chat when the target conversation differs", () => {
