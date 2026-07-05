@@ -507,14 +507,14 @@ function shouldApplyRunScopedStatusUpdate(params: {
   nextEndedAt?: number;
 }): boolean {
   if (
-    params.currentStatus === "cancelled" &&
+    params.currentRuntime === "subagent" &&
     params.nextStatus === "cancelled" &&
     params.nextError === SUBAGENT_KILL_TASK_ERROR &&
-    params.currentError !== undefined &&
-    params.currentError !== SUBAGENT_KILL_TASK_ERROR
+    isTerminalTaskStatus(params.currentStatus) &&
+    !(params.currentStatus === "cancelled" && params.currentError === SUBAGENT_KILL_TASK_ERROR)
   ) {
-    // The kill marker is provisional. Never let a repeated kill replace an
-    // operator cancellation that already made the terminal state sticky.
+    // The kill marker is provisional. It may refresh only its own tombstone;
+    // canonical completion or operator cancellation already won this race.
     return false;
   }
   if (params.currentStatus === params.nextStatus) {

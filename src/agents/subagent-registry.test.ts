@@ -5194,6 +5194,40 @@ describe("subagent registry seam flow", () => {
     expect(mocks.onSubagentEnded).not.toHaveBeenCalled();
   });
 
+  it("does not replace durable task completion when a provisional kill is replayed", () => {
+    const runId = "run-repeated-kill-after-task-success";
+    const childSessionKey = "agent:main:subagent:repeated-kill-after-task-success";
+    mod.registerSubagentRun({
+      runId,
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "finish before registry reconciliation persists",
+      cleanup: "keep",
+    });
+
+    expect(mod.markSubagentRunTerminated({ runId, reason: "manual kill" })).toBe(1);
+    expect(
+      finalizeTaskRunByRunId({
+        runId,
+        runtime: "subagent",
+        sessionKey: childSessionKey,
+        status: "succeeded",
+        endedAt: Date.now() + 1,
+        lastEventAt: Date.now() + 1,
+        progressSummary: "durable provider completion",
+      }),
+    ).toHaveLength(1);
+
+    // Simulate task-first completion followed by a failed registry commit and
+    // a repeated admin kill against the retained reconciliation tombstone.
+    expect(mod.markSubagentRunTerminated({ runId, reason: "manual kill" })).toBe(1);
+    expect(findTaskByRunIdForStatus(runId)).toMatchObject({
+      status: "succeeded",
+      progressSummary: "durable provider completion",
+    });
+  });
+
   it("suppresses task delivery immediately when requester teardown kills a run", () => {
     mod.registerSubagentRun({
       runId: "run-requester-teardown",
