@@ -146,13 +146,12 @@ describe("pw-session getPageForTargetId", () => {
       urls: ["https://alpha.example", "https://beta.example"],
     }).pages;
 
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      json: async () => [
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json([
         { id: "TARGET_A", url: "https://alpha.example" },
         { id: "TARGET_B", url: "https://beta.example" },
-      ],
-    } as Response);
+      ]),
+    );
 
     try {
       const resolved = await getPageForTargetId({
@@ -180,13 +179,12 @@ describe("pw-session getPageForTargetId", () => {
     });
     const [, pageB] = pages;
 
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      json: async () => [
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json([
         { id: "TARGET_A", url: "https://alpha.example" },
         { id: "TARGET_B", url: "https://beta.example" },
-      ],
-    } as Response);
+      ]),
+    );
 
     try {
       const resolved = await getPageForTargetId({

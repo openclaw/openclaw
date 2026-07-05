@@ -1,5 +1,6 @@
 // Browser tests cover tabs.attach only plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withBrowserFetchPreconnect } from "../../../test-fetch.js";
 import "../../../test-support.js";
 import "../server-context.chrome-test-harness.js";
 import "../../test-support/browser-security.mock.js";
@@ -52,7 +53,7 @@ describe("browser tab routes attachOnly loopback profiles", () => {
         ],
       } as unknown as Response;
     });
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("fetch", withBrowserFetchPreconnect(fetchMock));
 
     const ctx = createBrowserRouteContext({ getState: () => state });
     const { app, getHandlers } = createBrowserRouteApp();

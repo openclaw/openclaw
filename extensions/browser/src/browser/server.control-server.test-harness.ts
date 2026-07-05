@@ -554,11 +554,19 @@ export function makeResponse(
   const ok = init?.ok ?? true;
   const status = init?.status ?? 200;
   const text = init?.text ?? "";
+  const hasTextBody = init?.text !== undefined;
   return {
     ok,
     status,
     json: async () => body,
     text: async () => text,
+    arrayBuffer: async () => {
+      if (hasTextBody) {
+        return new Response(text).arrayBuffer();
+      }
+      return Response.json(body).arrayBuffer();
+    },
+    headers: new Headers(),
   } as unknown as Response;
 }
 
