@@ -60,8 +60,11 @@ describe("activateSetupInference", () => {
   });
 
   it("persists setup only after the live test succeeds", async () => {
-    const applySetup = vi.fn(async () => ({ configPath: "/tmp/openclaw.json", lines: ["ok"] }));
-    const runCliAgent = vi.fn(async () => ({
+    const applySetup = vi.fn(async (_params: unknown) => ({
+      configPath: "/tmp/openclaw.json",
+      lines: ["ok"],
+    }));
+    const runCliAgent = vi.fn(async (_params: unknown) => ({
       meta: { finalAssistantVisibleText: "OK" },
     }));
     const result = await activateSetupInference({
@@ -145,7 +148,7 @@ describe("activateSetupInference", () => {
       required: false,
       installed: false,
     }));
-    const runEmbeddedAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async (_params: unknown) => ({
       meta: { finalAssistantVisibleText: "OK" },
     }));
     const result = await activateSetupInference({
