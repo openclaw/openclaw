@@ -1,11 +1,13 @@
 // Doctor health contribution helpers collect health checks from plugin manifests.
 import fs from "node:fs";
+import nodePath from "node:path";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import {
   isLegacyParentWritableUpdateDoctorPass,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
 } from "../commands/doctor/shared/update-phase.js";
+import { resolveIsNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
@@ -1308,6 +1310,93 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
   }
 }
 
+async function collectWriteConfigHealthFindings(
+  ctx: Parameters<HealthCheck["detect"]>[0],
+): Promise<readonly HealthFinding[]> {
+  const findings: HealthFinding[] = [];
+  const configPath = ctx.configPath;
+  if (resolveIsNixMode(process.env)) {
+    findings.push({
+      checkId: "core/doctor/write-config",
+      severity: "warning",
+      message: "Doctor config writes are disabled because OpenClaw is running in Nix mode.",
+      ...(configPath ? { path: configPath } : {}),
+      requirement: "mutable-config-write-path",
+      fixHint:
+        "Edit the Nix source for this install and rebuild; do not run doctor --fix against this config file.",
+    });
+  }
+  if (!configPath) {
+    return findings;
+  }
+  const configDirectory = nodePath.dirname(configPath);
+  const configPathExists = fs.existsSync(configPath);
+  const existingParent = configPathExists
+    ? configDirectory
+    : findNearestExistingParent(configDirectory);
+  if (!isDirectoryPath(existingParent)) {
+    findings.push({
+      checkId: "core/doctor/write-config",
+      severity: "warning",
+      message: "Doctor cannot create the config directory because a path component is a file.",
+      path: existingParent,
+      target: configDirectory,
+      requirement: "config-directory-path",
+      fixHint: "Move the file blocking the config directory path before running doctor --fix.",
+    });
+    return findings;
+  }
+  try {
+    fs.accessSync(existingParent, fs.constants.W_OK | fs.constants.X_OK);
+  } catch {
+    findings.push({
+      checkId: "core/doctor/write-config",
+      severity: "warning",
+      message: configPathExists
+        ? "Doctor cannot write config because the config directory is not writable."
+        : "Doctor cannot create the config directory because the nearest existing parent is not writable.",
+      path: existingParent,
+      target: configPathExists ? configPath : configDirectory,
+      requirement: "writable-config-directory",
+      fixHint:
+        "Make the existing config directory or parent directory writable before running doctor --fix.",
+    });
+  }
+  return findings;
+}
+
+function findNearestExistingParent(path: string): string {
+  let candidate = path;
+  while (!pathEntryExists(candidate)) {
+    const parent = nodePath.dirname(candidate);
+    if (parent === candidate) {
+      return candidate;
+    }
+    candidate = parent;
+  }
+  return candidate;
+}
+
+function pathEntryExists(path: string): boolean {
+  if (fs.existsSync(path)) {
+    return true;
+  }
+  try {
+    fs.lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isDirectoryPath(path: string): boolean {
+  try {
+    return fs.statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 async function runWorkspaceSuggestionsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (ctx.options.workspaceSuggestions === false) {
     return;
@@ -2042,6 +2131,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:write-config",
       label: "Write config",
+      healthChecks: {
+        id: "core/doctor/write-config",
+        description: "Config write blockers are findings before doctor repair writes.",
+        defaultEnabled: false,
+        detect: collectWriteConfigHealthFindings,
+      },
       run: runWriteConfigHealth,
     }),
     createDoctorHealthContribution({
