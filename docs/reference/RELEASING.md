@@ -506,7 +506,11 @@ behavior or `npm_dist_tag=extended-stable` for the guarded monthly path. The
 extended-stable option requires `publish_scope=all-publishable`, an empty
 `plugins` input, a final patch at or above `33`, and the canonical
 `extended-stable/YYYY.M.33` branch at its exact tip. It never moves plugin
-`latest` or `beta`.
+`latest` or `beta`. New package versions receive `extended-stable` atomically
+through OIDC trusted publication (`npm publish --tag extended-stable`); this
+source workflow does not use token-authenticated `npm dist-tag add`. Retries
+skip exact versions already present in npm, then fail closed unless complete
+readback confirms that every exact package and `extended-stable` tag converged.
 
 `OpenClaw Release Publish` accepts these operator-controlled inputs:
 

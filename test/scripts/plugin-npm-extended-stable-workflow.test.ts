@@ -81,24 +81,29 @@ describe("plugin npm extended-stable workflow", () => {
     );
   });
 
-  it("repairs every publishable extended-stable tag before final readback", () => {
+  it("publishes extended-stable with OIDC only and verifies every package tag", () => {
     const parsed = workflow();
-    const reconcile = parsed.jobs?.reconcile_plugins_npm;
-    expect(reconcile?.needs).toEqual(["preview_plugins_npm", "publish_plugins_npm"]);
-    expect(reconcile?.environment).toBe("npm-release");
-    expect(reconcile?.if).toContain("has_candidates == 'false'");
-    expect(reconcile?.strategy?.matrix?.plugin).toContain("all_matrix");
-    const repair = step(reconcile, "Reconcile extended-stable tag");
-    expect(repair.run).toContain(
+    const publish = step(parsed.jobs?.publish_plugins_npm, "Publish");
+    const tokenExpression =
+      "${{ inputs.npm_dist_tag != 'extended-stable' && secrets.NPM_TOKEN || '' }}";
+    expect(publish.env).toMatchObject({
+      NODE_AUTH_TOKEN: tokenExpression,
+      NPM_TOKEN: tokenExpression,
+      OPENCLAW_NPM_PUBLISH_AUTH_MODE: "trusted-publisher",
+    });
+    expect(parsed.jobs?.reconcile_plugins_npm).toBeUndefined();
+    expect(readFileSync(workflowPath, "utf8")).not.toContain(
       'npm dist-tag add "${PACKAGE_NAME}@${PACKAGE_VERSION}" extended-stable',
     );
-    expect(repair.run).toContain('NPM_CONFIG_USERCONFIG="${userconfig}"');
 
     const verify = parsed.jobs?.verify_plugins_npm;
-    expect(verify?.needs).toEqual(["preview_plugins_npm", "reconcile_plugins_npm"]);
+    expect(verify?.needs).toEqual(["preview_plugins_npm", "publish_plugins_npm"]);
     expect(verify?.if).toContain("always()");
+    expect(verify?.if).toContain("has_candidates == 'false'");
+    expect(verify?.strategy?.matrix?.plugin).toContain("all_matrix");
     const readback = step(verify, "Verify complete plugin registry readback");
     expect(readback.run).toContain('npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version');
     expect(readback.run).toContain('npm view "${PACKAGE_NAME}@extended-stable" version');
+    expect(readback.run).toContain("OIDC-only source workflow does not mutate tags");
   });
 });

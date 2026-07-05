@@ -339,8 +339,8 @@ jobs:
       - name: Publish
         if: steps.npm_package_version.outputs.already_published != 'true'
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ inputs.npm_dist_tag != 'extended-stable' && secrets.NPM_TOKEN || '' }}
+          NPM_TOKEN: ${{ inputs.npm_dist_tag != 'extended-stable' && secrets.NPM_TOKEN || '' }}
           OPENCLAW_NPM_PUBLISH_AUTH_MODE: trusted-publisher
           OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
         run: bash scripts/plugin-npm-publish.sh --publish "${{ matrix.plugin.packageDir }}"
@@ -351,45 +351,9 @@ jobs:
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
         run: node scripts/verify-plugin-npm-published-runtime.mjs "${PACKAGE_NAME}@${PACKAGE_VERSION}"
 
-  reconcile_plugins_npm:
+  verify_plugins_npm:
     needs: [preview_plugins_npm, publish_plugins_npm]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.npm_dist_tag == 'extended-stable' && needs.preview_plugins_npm.result == 'success' && (needs.publish_plugins_npm.result == 'success' || (needs.preview_plugins_npm.outputs.has_candidates == 'false' && needs.publish_plugins_npm.result == 'skipped')) }}
-    runs-on: ubuntu-latest
-    environment: npm-release
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.all_matrix) }}
-    steps:
-      - name: Reconcile extended-stable tag
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
-          PACKAGE_VERSION: ${{ matrix.plugin.version }}
-        run: |
-          set -euo pipefail
-          exact_version="$(npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version 2>/dev/null || true)"
-          if [[ "${exact_version}" != "${PACKAGE_VERSION}" ]]; then
-            echo "Cannot reconcile ${PACKAGE_NAME}@extended-stable: ${PACKAGE_NAME}@${PACKAGE_VERSION} is not published." >&2
-            exit 1
-          fi
-          tagged_version="$(npm view "${PACKAGE_NAME}@extended-stable" version 2>/dev/null || true)"
-          if [[ "${tagged_version}" == "${PACKAGE_VERSION}" ]]; then
-            echo "${PACKAGE_NAME}@extended-stable already points to ${PACKAGE_VERSION}."
-            exit 0
-          fi
-          userconfig="$(mktemp)"
-          trap 'rm -f "${userconfig}"' EXIT
-          chmod 0600 "${userconfig}"
-          printf '//registry.npmjs.org/:_authToken=%s\n' "${NPM_TOKEN}" > "${userconfig}"
-          NPM_CONFIG_USERCONFIG="${userconfig}" npm dist-tag add "${PACKAGE_NAME}@${PACKAGE_VERSION}" extended-stable
-          echo "Reconciled ${PACKAGE_NAME}@extended-stable from ${tagged_version:-<missing>} to ${PACKAGE_VERSION}."
-
-  verify_plugins_npm:
-    needs: [preview_plugins_npm, reconcile_plugins_npm]
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.npm_dist_tag == 'extended-stable' && needs.preview_plugins_npm.result == 'success' && needs.reconcile_plugins_npm.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -431,4 +395,5 @@ jobs:
             fi
           done
           echo "npm registry did not converge for ${PACKAGE_NAME}@${PACKAGE_VERSION} (exact=${exact_version:-missing}, extended-stable=${tagged_version:-missing})." >&2
+          echo "This OIDC-only source workflow does not mutate tags on an already-published package; use credential-isolated release tooling for manual tag repair." >&2
           exit 1
