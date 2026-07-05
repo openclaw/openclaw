@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { runCrestodianAgentTurnWithDeps } from "./agent-turn.js";
 import { CrestodianChatEngine } from "./chat-engine.js";
 
 const mocks = vi.hoisted(() => ({
@@ -381,16 +382,138 @@ describe("CrestodianChatEngine", () => {
   });
 });
 
-function fakeOverviewLoader() {
+describe("Crestodian agent loop backends", () => {
+  it("runs a configured claude-cli model through the CLI loop with the ring-zero MCP tool", async () => {
+    useTempStateDir();
+    const snapshot = {
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      hash: "h",
+      config: {},
+      sourceConfig: {},
+      runtimeConfig: {
+        agents: {
+          defaults: {
+            model: { primary: "claude-cli/claude-opus-4-8" },
+            cliBackends: { "claude-cli": {} },
+          },
+        },
+      },
+      issues: [],
+    };
+    const runCliAgent = vi.fn(async (_params: Record<string, unknown>) => ({
+      payloads: [{ text: "*click* CLI loop checked your shell." }],
+      meta: { agentMeta: { cliSessionBinding: { sessionId: "native-1" } } },
+    }));
+    const planner = vi.fn(async () => null);
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: (params) =>
+        runCrestodianAgentTurnWithDeps(params, {
+          runCliAgent: runCliAgent as never,
+          readConfigFileSnapshot: (async () => snapshot) as never,
+        }),
+      planWithAssistant: planner,
+      deps: { loadOverview: fakeOverviewLoader({ defaultModel: "claude-cli/claude-opus-4-8" }) },
+    });
+
+    const reply = await engine.handle("how is my setup looking?");
+
+    expect(reply.text).toContain("CLI loop checked your shell");
+    expect(planner).not.toHaveBeenCalled();
+    const call = runCliAgent.mock.calls[0][0];
+    expect(call.provider).toBe("claude-cli");
+    expect(call.model).toBe("claude-opus-4-8");
+    expect(call.crestodianTool).toEqual({ surface: "cli", approvalArmed: false, proposalRef: {} });
+    // CLI harnesses reject toolsAllow; the restriction rides on the MCP config.
+    expect(call.toolsAllow).toBeUndefined();
+    expect(call.cliSessionId).toBeUndefined();
+    expect(call.cleanupCliLiveSessionOnRunEnd).toBe(true);
+
+    // The captured native CLI session resumes on the next turn.
+    await engine.handle("and the gateway?");
+    expect(runCliAgent.mock.calls[1][0].cliSessionId).toBe("native-1");
+  });
+
+  it("drives the detected Claude Code CLI through the loop when no model is configured", async () => {
+    useTempStateDir();
+    const runCliAgent = vi.fn(async (_params: Record<string, unknown>) => ({
+      payloads: [{ text: "detected loop reply" }],
+      meta: {},
+    }));
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: (params) =>
+        runCrestodianAgentTurnWithDeps(params, { runCliAgent: runCliAgent as never }),
+      planWithAssistant: vi.fn(async () => null),
+      deps: { loadOverview: fakeOverviewLoader({ claudeFound: true }) },
+    });
+
+    const reply = await engine.handle("how do things look?");
+
+    expect(reply.text).toBe("detected loop reply");
+    const call = runCliAgent.mock.calls[0][0];
+    expect(call.provider).toBe("claude-cli");
+    expect(call.model).toBe("claude-opus-4-8");
+    expect(call.crestodianTool).toEqual({ surface: "cli", approvalArmed: false, proposalRef: {} });
+    const config = call.config as {
+      agents?: { defaults?: { model?: { primary?: string } } };
+    };
+    expect(config.agents?.defaults?.model?.primary).toBe("claude-cli/claude-opus-4-8");
+  });
+
+  it("falls back to the single-turn planner when the CLI loop fails", async () => {
+    useTempStateDir();
+    const runCliAgent = vi.fn(async () => {
+      throw new Error("claude exploded");
+    });
+    const planner = vi.fn(async () => ({ reply: "planner fallback reply" }));
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: (params) =>
+        runCrestodianAgentTurnWithDeps(params, { runCliAgent: runCliAgent as never }),
+      planWithAssistant: planner,
+      deps: { loadOverview: fakeOverviewLoader({ claudeFound: true }) },
+    });
+
+    const reply = await engine.handle("do a health check");
+
+    expect(runCliAgent).toHaveBeenCalledOnce();
+    expect(reply.text).toContain("planner fallback reply");
+  });
+
+  it("keeps the codex embedded fallback with the enforced ring-zero toolset", async () => {
+    useTempStateDir();
+    const runEmbeddedAgent = vi.fn(async (_params: Record<string, unknown>) => ({
+      payloads: [{ text: "embedded reply" }],
+    }));
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: (params) =>
+        runCrestodianAgentTurnWithDeps(params, { runEmbeddedAgent: runEmbeddedAgent as never }),
+      planWithAssistant: vi.fn(async () => null),
+      deps: { loadOverview: fakeOverviewLoader({ codexFound: true }) },
+    });
+
+    const reply = await engine.handle("hello there");
+
+    expect(reply.text).toBe("embedded reply");
+    const call = runEmbeddedAgent.mock.calls[0][0];
+    expect(call.toolsAllow).toEqual(["crestodian"]);
+    expect(call.agentHarnessId).toBe("codex");
+    expect(call.crestodianTool).toEqual({ surface: "cli", approvalArmed: false, proposalRef: {} });
+  });
+});
+
+function fakeOverviewLoader(
+  overrides: { defaultModel?: string; claudeFound?: boolean; codexFound?: boolean } = {},
+) {
   return async () =>
     ({
       config: { path: "/tmp/openclaw.json", exists: false, valid: true, issues: [], hash: null },
       agents: [],
       defaultAgentId: "main",
-      defaultModel: undefined,
+      defaultModel: overrides.defaultModel,
       tools: {
-        codex: { command: "codex", found: false },
-        claude: { command: "claude", found: false },
+        codex: { command: "codex", found: overrides.codexFound ?? false },
+        claude: { command: "claude", found: overrides.claudeFound ?? false },
         apiKeys: { openai: false, anthropic: false },
       },
       gateway: { url: "ws://127.0.0.1:18789", source: "local", reachable: false },
