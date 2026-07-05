@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "project": "openclaw-dev",
+  "repoPath": "/Users/jakeshrader/openclaw",
+  "product": "OpenClaw gateway fork (shrad3r/openclaw)",
+  "stack": {
+    "language": "TypeScript",
+    "framework": "pnpm monorepo",
+    "packageManager": "pnpm"
+  },
+  "commands": {
+    "dev": "pnpm openclaw",
+    "test": "pnpm test",
+    "lint": "pnpm lint",
+    "build": "pnpm build",
+    "deploy": "deploy-desk-to-mini.sh (fleet policy/scripts)"
+  },
+  "ports": [
+    18789
+  ],
+  "fleet": {
+    "lane": "henri",
+    "agent": "henri",
+    "registryGrep": "openclaw"
+  },
+  "readOrder": [
+    "AGENTS.md",
+    "docs/DESK_CONTEXT.md",
+    "README.md"
+  ],
+  "adapters": {
+    "antigravity": ".agents/",
+    "cursor": ".cursor/"
+  },
+  "lastSynced": "2026-07-03"
+}
