@@ -90,6 +90,61 @@ interface ParsedToolCallTag {
   isTruncated: boolean;
 }
 
+function parseXmlTagAt(text: string, start: number): ParsedToolCallTag | null {
+  if (text[start] !== "<") {
+    return null;
+  }
+
+  let cursor = start + 1;
+  while (cursor < text.length && /\s/.test(text[cursor])) {
+    cursor += 1;
+  }
+
+  let isClose = false;
+  if (text[cursor] === "/") {
+    isClose = true;
+    cursor += 1;
+    while (cursor < text.length && /\s/.test(text[cursor])) {
+      cursor += 1;
+    }
+  }
+
+  const nameStart = cursor;
+  if (!/[A-Za-z_:]/.test(text[cursor] ?? "")) {
+    return null;
+  }
+  cursor += 1;
+  while (cursor < text.length && /[A-Za-z0-9_.:-]/.test(text[cursor])) {
+    cursor += 1;
+  }
+
+  const tagName = normalizeLowercaseStringOrEmpty(text.slice(nameStart, cursor));
+  if (!isToolCallBoundary(text[cursor])) {
+    return null;
+  }
+  const contentStart = cursor;
+  const closeIndex = findTagCloseIndex(text, cursor);
+  if (closeIndex === -1) {
+    return {
+      contentStart,
+      end: text.length,
+      isClose,
+      isSelfClosing: false,
+      tagName,
+      isTruncated: true,
+    };
+  }
+
+  return {
+    contentStart,
+    end: closeIndex + 1,
+    isClose,
+    isSelfClosing: !isClose && /\/\s*$/.test(text.slice(cursor, closeIndex)),
+    tagName,
+    isTruncated: false,
+  };
+}
+
 function isToolCallBoundary(char: string | undefined): boolean {
   return !char || /\s/.test(char) || char === "/" || char === ">";
 }
@@ -279,64 +334,104 @@ function findAdjacentOpeningToolCallTag(
 }
 
 function parseToolCallTagAt(text: string, start: number): ParsedToolCallTag | null {
-  if (text[start] !== "<") {
-    return null;
-  }
+  const tag = parseXmlTagAt(text, start);
+  return tag && TOOL_CALL_TAG_NAMES.has(tag.tagName) ? tag : null;
+}
 
-  let cursor = start + 1;
+function hasMatchingXmlCloseTag(text: string, start: number, tagName: string): boolean {
+  let depth = 1;
+  for (let idx = start; idx < text.length; idx += 1) {
+    if (text[idx] !== "<") {
+      continue;
+    }
+    const tag = parseXmlTagAt(text, idx);
+    if (!tag || tag.tagName !== tagName || tag.isTruncated) {
+      continue;
+    }
+    if (tag.isClose) {
+      depth -= 1;
+      if (depth === 0) {
+        return true;
+      }
+    } else if (!tag.isSelfClosing) {
+      depth += 1;
+    }
+    idx = Math.max(idx, tag.end - 1);
+  }
+  return false;
+}
+
+function isDanglingFunctionParameterParent(text: string, tag: ParsedToolCallTag): boolean {
+  if (tag.tagName !== "function" || !/\bname\s*=/.test(text.slice(tag.contentStart, tag.end))) {
+    return false;
+  }
+  let cursor = tag.end;
   while (cursor < text.length && /\s/.test(text[cursor])) {
     cursor += 1;
   }
+  const nextTag = parseXmlTagAt(text, cursor);
+  return nextTag?.tagName === "parameter" && !nextTag.isClose;
+}
 
-  let isClose = false;
-  if (text[cursor] === "/") {
-    isClose = true;
-    cursor += 1;
-    while (cursor < text.length && /\s/.test(text[cursor])) {
-      cursor += 1;
+function unwrapStandaloneParameterTags(text: string): string {
+  if (!/<\s*\/?\s*parameter\b/i.test(text)) {
+    return text;
+  }
+
+  const codeRegions = findCodeRegions(text);
+  const openTags: Array<{ name: string; unwrap: boolean }> = [];
+  let result = "";
+  let lastIndex = 0;
+
+  for (let idx = 0; idx < text.length; idx += 1) {
+    if (text[idx] !== "<" || isInsideCode(idx, codeRegions)) {
+      continue;
     }
+    const tag = parseXmlTagAt(text, idx);
+    if (!tag || tag.isTruncated) {
+      continue;
+    }
+
+    if (tag.isClose) {
+      const openIndex = openTags.findLastIndex((entry) => entry.name === tag.tagName);
+      if (openIndex !== -1) {
+        const opening = openTags[openIndex];
+        if (opening.unwrap) {
+          result += text.slice(lastIndex, idx);
+          lastIndex = tag.end;
+        }
+        openTags.splice(openIndex);
+      }
+    } else if (tag.isSelfClosing) {
+      if (tag.tagName === "parameter" && openTags.length === 0) {
+        result += text.slice(lastIndex, idx);
+        lastIndex = tag.end;
+      }
+    } else if (
+      hasMatchingXmlCloseTag(text, tag.end, tag.tagName) ||
+      isDanglingFunctionParameterParent(text, tag)
+    ) {
+      const unwrap = tag.tagName === "parameter" && openTags.length === 0;
+      if (unwrap) {
+        result += text.slice(lastIndex, idx);
+        lastIndex = tag.end;
+      }
+      openTags.push({ name: tag.tagName, unwrap });
+    }
+    idx = Math.max(idx, tag.end - 1);
   }
 
-  const nameStart = cursor;
-  while (cursor < text.length && /[A-Za-z_:]/.test(text[cursor])) {
-    cursor += 1;
-  }
-
-  const tagName = normalizeLowercaseStringOrEmpty(text.slice(nameStart, cursor));
-  if (!TOOL_CALL_TAG_NAMES.has(tagName) || !isToolCallBoundary(text[cursor])) {
-    return null;
-  }
-  const contentStart = cursor;
-
-  const closeIndex = findTagCloseIndex(text, cursor);
-  if (closeIndex === -1) {
-    return {
-      contentStart,
-      end: text.length,
-      isClose,
-      isSelfClosing: false,
-      tagName,
-      isTruncated: true,
-    };
-  }
-
-  return {
-    contentStart,
-    end: closeIndex + 1,
-    isClose,
-    isSelfClosing: !isClose && /\/\s*$/.test(text.slice(cursor, closeIndex)),
-    tagName,
-    isTruncated: false,
-  };
+  return result + text.slice(lastIndex);
 }
 
 export function stripToolCallXmlTags(
-  text: string,
+  input: string,
   options: {
     stripFunctionCallsXmlPayloads?: boolean;
     stripFunctionResponseAfterPluralToolCalls?: boolean;
   } = {},
 ): string {
+  const text = input;
   if (!text || !TOOL_CALL_QUICK_RE.test(text)) {
     return text;
   }
@@ -484,7 +579,7 @@ export function stripToolCallXmlTags(
     result += text.slice(toolCallBlockStart);
   }
 
-  return result;
+  return unwrapStandaloneParameterTags(result);
 }
 
 /**
