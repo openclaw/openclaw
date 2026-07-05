@@ -46,6 +46,7 @@ export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
     chatQueue: ChatQueueItem[];
     chatModelCatalog: ModelCatalogEntry[];
     sessionsResult?: SessionsListResult | null;
+    sessionsResultAgentId?: string | null;
     createChatSession?: () => Promise<void>;
     exportCurrentChat?: () => Promise<void> | void;
     refreshCurrentSessionTools?: () => Promise<void>;
@@ -229,6 +230,7 @@ export async function dispatchChatSlashCommand(
       sessions: host.sessions,
       chatModelCatalog: host.chatModelCatalog,
       sessionsResult: host.sessionsResult,
+      sessionsResultAgentId: host.sessionsResultAgentId,
       agentId: scopedAgentIdForSession(host, targetSessionKey),
     });
   } catch (err) {

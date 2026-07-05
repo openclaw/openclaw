@@ -55,6 +55,73 @@ describe("chat run controls", () => {
     await i18n.setLocale("en");
   });
 
+  it("uses the primary action for voice when empty, send when composed, and stop while recording", () => {
+    const container = document.createElement("div");
+    const onToggleVoice = vi.fn();
+    const emptyProps = {
+      ...createProps({ showSecondary: false }),
+      onToggleVoice,
+    } as ChatRunControlsProps & {
+      onToggleVoice: () => void;
+    };
+
+    render(renderChatRunControls(emptyProps), container);
+
+    const voiceButton = getButton(container, 'button[aria-label="Start voice input"]');
+    expect(
+      container.querySelector(`button[aria-label="${t("chat.runControls.sendMessage")}"]`),
+    ).toBeNull();
+    voiceButton.click();
+    expect(onToggleVoice).toHaveBeenCalledTimes(1);
+
+    render(
+      renderChatRunControls({
+        ...emptyProps,
+        draft: "Send this",
+      }),
+      container,
+    );
+    expect(getButton(container, `button[aria-label="${t("chat.runControls.sendMessage")}"]`)).toBe(
+      container.querySelector(".chat-send-btn"),
+    );
+    expect(container.querySelector('button[aria-label="Start voice input"]')).toBeNull();
+
+    render(
+      renderChatRunControls({
+        ...emptyProps,
+        voiceActive: true,
+      } as ChatRunControlsProps & {
+        onToggleVoice: () => void;
+        voiceActive: boolean;
+      }),
+      container,
+    );
+    const stopVoiceButton = getButton(container, 'button[aria-label="Stop voice input"]');
+    expect(stopVoiceButton.classList.contains("chat-send-btn--stop")).toBe(true);
+    stopVoiceButton.click();
+    expect(onToggleVoice).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps attachment-only messages on the send action", () => {
+    const container = document.createElement("div");
+    render(
+      renderChatRunControls({
+        ...createProps({ showSecondary: false }),
+        hasAttachments: true,
+        onToggleVoice: () => undefined,
+      } as ChatRunControlsProps & {
+        hasAttachments: boolean;
+        onToggleVoice: () => void;
+      }),
+      container,
+    );
+
+    expect(
+      getButton(container, `button[aria-label="${t("chat.runControls.sendMessage")}"]`),
+    ).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Start voice input"]')).toBeNull();
+  });
+
   it("switches between idle and abort actions", () => {
     const container = document.createElement("div");
     const onAbort = vi.fn();
@@ -378,7 +445,7 @@ describe("context notice", () => {
     const lowNotice = container.querySelector<HTMLElement>(".context-ring");
     expect(lowNotice).toBeInstanceOf(HTMLElement);
     expect([...lowNotice!.classList]).toEqual(["context-ring"]);
-    expect(lowNotice!.textContent?.replace(/\s+/gu, " ").trim()).toBe("23%");
+    expect(lowNotice!.textContent?.replace(/\s+/gu, " ").trim()).toBe("46k / 200k");
     expect(lowNotice!.getAttribute("aria-label")).toBe("Session context usage: 46k of 200k (23%)");
     expect(lowNotice!.tagName.toLowerCase()).toBe("summary");
     const usageDetails = container.querySelector<HTMLDetailsElement>(".context-usage details");
@@ -424,7 +491,7 @@ describe("context notice", () => {
     expect(getContextNoticeViewModel(session, 200_000)?.compactRecommended).toBe(true);
     const notice = container.querySelector<HTMLElement>(".context-ring");
     expect(notice).toBeInstanceOf(HTMLElement);
-    expect(notice!.textContent?.replace(/\s+/gu, " ").trim()).toBe("95%");
+    expect(notice!.textContent?.replace(/\s+/gu, " ").trim()).toBe("190k / 200k");
     expect([...notice!.classList]).toEqual(["context-ring", "context-ring--warning"]);
     expect(notice!.getAttribute("aria-label")).toBe("Session context usage: 190k of 200k (95%)");
     const usage = container.querySelector<HTMLElement>(".context-usage");

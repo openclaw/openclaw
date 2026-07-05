@@ -1,11 +1,20 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-07-05T21:02:29.694Z",
+  "fallbackKeys": [
+    "chat.composer.dismissVoiceInputError",
+    "chat.composer.startVoiceInput",
+    "chat.composer.stopVoiceInput",
+    "chat.composer.takePhoto",
+    "chat.composer.voiceOptions",
+    "chat.composer.voiceTranscript",
+    "chat.usageRemaining",
+    "chat.voiceSettings"
+  ],
+  "generatedAt": "2026-07-05T21:03:51.410Z",
   "locale": "pl",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "116e85303569dc538dcd374ee7788ea9664fd8aae5cda4a2f0f2451cfefeaccf",
-  "totalKeys": 1528,
-  "translatedKeys": 1528,
+  "sourceHash": "a6360a727b4bbefddd39f760a5dbdcc32f655ac87354caac9b7d277eb5c62efe",
+  "totalKeys": 1532,
+  "translatedKeys": 1524,
   "workflow": 1
 }

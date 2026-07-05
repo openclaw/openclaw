@@ -849,6 +849,7 @@ export type ModelCatalogEntry = {
   name: string;
   provider: string;
   alias?: string;
+  available?: boolean;
   contextWindow?: number;
   reasoning?: boolean;
   input?: Array<"text" | "image" | "document">;

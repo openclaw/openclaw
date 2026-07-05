@@ -53,6 +53,7 @@ import {
   handleChatManualRefresh,
   handlePageGatewayEvent,
   refreshChatCommands,
+  refreshChatMetadata,
   refreshChatModelAuthStatus,
   refreshPageChat,
   refreshRouteSessionOptions,
@@ -127,6 +128,7 @@ export class ChatPage extends LitElement {
       return;
     }
     const previousSessionKey = state.sessionKey;
+    const previousAgentId = resolveChatAgentId(state);
     const previousSessionsResult = state.sessionsResult;
     const nextSessionRow = state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey);
     const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
@@ -137,10 +139,20 @@ export class ChatPage extends LitElement {
     }
     void state.loadAssistantIdentity();
     void refreshChatAvatar(state);
-    void refreshSlashCommands({
-      client: state.client,
-      agentId: parseAgentSessionKey(nextSessionKey)?.agentId,
-    });
+    const nextAgentId = resolveChatAgentId(state);
+    if (nextAgentId === previousAgentId) {
+      if (state.chatModelCatalog.length === 0) {
+        void refreshChatMetadata(state).finally(() => state.requestUpdate());
+      } else {
+        void refreshSlashCommands({
+          client: state.client,
+          agentId: parseAgentSessionKey(nextSessionKey)?.agentId,
+        });
+      }
+    } else {
+      state.chatModelCatalog = [];
+      void refreshChatMetadata(state).finally(() => state.requestUpdate());
+    }
     const subscriptionSync = syncSelectedSessionMessageSubscription(state);
     const historyLoad = loadChatHistory(state);
     state.requestUpdate();
@@ -284,12 +296,6 @@ export class ChatPage extends LitElement {
       });
       return;
     }
-    if (state.realtimeTalkOptionsOpen) {
-      event.preventDefault();
-      state.realtimeTalkOptionsOpen = false;
-      state.requestUpdate();
-      return;
-    }
     if (!state.chatMobileControlsOpen) {
       return;
     }
@@ -310,17 +316,6 @@ export class ChatPage extends LitElement {
         changed = true;
       }
     });
-    if (state.realtimeTalkOptionsOpen) {
-      const insideTalkOptions = Array.from(
-        this.querySelectorAll(
-          ".agent-chat__talk-options, [aria-label='Talk settings'], [aria-label='Talk options']",
-        ),
-      ).some((node) => path.includes(node));
-      if (!insideTalkOptions) {
-        state.realtimeTalkOptionsOpen = false;
-        changed = true;
-      }
-    }
     if (changed) {
       state.requestUpdate();
     }
@@ -650,9 +645,6 @@ export class ChatPage extends LitElement {
       realtimeTalkDetail: state.realtimeTalkDetail,
       realtimeTalkTranscript: state.realtimeTalkTranscript,
       realtimeTalkConversation: state.realtimeTalkConversation,
-      realtimeTalkOptionsOpen: state.realtimeTalkOptionsOpen,
-      realtimeTalkOptions: state.realtimeTalkOptions,
-      canOpenRealtimeTalkSettings,
       connected: state.connected,
       canSend: state.connected && !selectedSessionArchived,
       disabledReason,
@@ -693,7 +685,16 @@ export class ChatPage extends LitElement {
         sessionKey: state.sessionKey,
         sessionsResult: state.sessionsResult,
         stream: state.chatStream,
+        realtimeTalkOptions: state.realtimeTalkOptions,
+        canOpenRealtimeTalkSettings,
         onRefresh: () => handleChatManualRefresh(state),
+        onRealtimeTalkOptionsChange: state.updateRealtimeTalkOptions,
+        onOpenRealtimeTalkSettings: () => {
+          if (canOpenRealtimeTalkSettings) {
+            state.setChatMobileControlsOpen(false);
+            this.context.navigate("communications", { search: "?section=talk" });
+          }
+        },
         onSettingsChange: state.applySettings,
         onSettingsOpenChange: state.setChatMobileControlsOpen,
         onToggleCronSessions: () => {
@@ -730,18 +731,6 @@ export class ChatPage extends LitElement {
         this.context.navigate("sessions", { search: `?${search.toString()}` });
       },
       onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
-      onToggleRealtimeTalkOptions: () => {
-        state.realtimeTalkOptionsOpen = !state.realtimeTalkOptionsOpen;
-        state.requestUpdate?.();
-      },
-      onRealtimeTalkOptionsChange: state.updateRealtimeTalkOptions,
-      onOpenRealtimeTalkSettings: () => {
-        if (!canOpenRealtimeTalkSettings) {
-          return;
-        }
-        state.realtimeTalkOptionsOpen = false;
-        this.context.navigate("communications", { search: "?section=talk" });
-      },
       onDismissError: () => {
         dismissChatError(state as never);
         state.requestUpdate?.();

@@ -32,7 +32,6 @@ import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversatio
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
-import { renderRealtimeTalkOptions, type RealtimeTalkOptions } from "./chat-realtime-controls.ts";
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
@@ -82,9 +81,6 @@ export type ChatComposerProps = {
   realtimeTalkDetail?: string | null;
   realtimeTalkTranscript?: string | null;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
-  realtimeTalkOptionsOpen?: boolean;
-  realtimeTalkOptions?: RealtimeTalkOptions;
-  canOpenRealtimeTalkSettings?: boolean;
   composerControls?: TemplateResult | typeof nothing;
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
@@ -94,9 +90,6 @@ export type ChatComposerProps = {
   onSend: () => void;
   onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
-  onToggleRealtimeTalkOptions?: () => void;
-  onRealtimeTalkOptionsChange?: (next: Partial<RealtimeTalkOptions>) => void;
-  onOpenRealtimeTalkSettings?: () => void;
   onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
@@ -863,15 +856,20 @@ function isSupportedChatAttachmentFile(file: Pick<File, "name" | "type">): boole
   return !/\.(?:avi|m4v|mov|mp4|mpeg|mpg|webm)$/i.test(file.name);
 }
 
-export function clickComposerFileInput(event: MouseEvent) {
+function clickComposerInput(event: MouseEvent, selector: string) {
   const target = event.currentTarget;
   if (!(target instanceof HTMLElement)) {
     return;
   }
-  target
-    .closest(".agent-chat__input")
-    ?.querySelector<HTMLInputElement>(".agent-chat__file-input")
-    ?.click();
+  target.closest(".agent-chat__composer-shell")?.querySelector<HTMLInputElement>(selector)?.click();
+}
+
+export function clickComposerFileInput(event: MouseEvent) {
+  clickComposerInput(event, ".agent-chat__file-input");
+}
+
+export function clickComposerCameraInput(event: MouseEvent) {
+  clickComposerInput(event, ".agent-chat__camera-input");
 }
 
 function generateAttachmentId(): string {
@@ -1411,7 +1409,7 @@ export function renderContextNotice(
               stroke-dashoffset=${dashOffset.toFixed(2)}
             />
           </svg>
-          <span class="context-ring__pct">${model.pct}%</span>
+          <span class="context-ring__detail">${model.detail}</span>
         </summary>
         <section class="context-usage__popover" aria-label=${t("chat.composer.contextUsage.title")}>
           <div class="context-usage__header">
@@ -1509,21 +1507,26 @@ export function renderContextNotice(
 
 export type ChatRunControlsProps = {
   canAbort: boolean;
+  cameraAction?: TemplateResult;
   connected: boolean;
   draft: string;
+  hasAttachments?: boolean;
   hasMessages: boolean;
   isBusy: boolean;
   sending: boolean;
+  voiceActive?: boolean;
   onAbort?: () => void;
   onExport: () => void;
   onNewSession: () => void;
   onSend: () => void;
   onStoreDraft: (draft: string) => void;
+  onToggleVoice?: () => void;
   showSecondary?: boolean;
 };
 
 export function renderChatRunControls(props: ChatRunControlsProps) {
   const showSecondary = props.showSecondary ?? true;
+  const hasComposedContent = Boolean(props.draft.trim() || props.hasAttachments);
   const storeDraftAndSend = () => {
     if (props.draft.trim()) {
       props.onStoreDraft(props.draft);
@@ -1533,6 +1536,7 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
 
   return html`
     <div class="agent-chat__toolbar-right">
+      ${props.cameraAction ?? nothing}
       ${showSecondary && !props.canAbort
         ? html`
             <openclaw-tooltip .content=${t("chat.runControls.newSession")}>
@@ -1562,49 +1566,88 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
             </openclaw-tooltip>
           `
         : nothing}
-      ${props.canAbort
+      ${props.voiceActive && props.onToggleVoice
         ? html`
-            <openclaw-tooltip .content=${t("chat.runControls.queue")}>
-              <button
-                class="chat-send-btn"
-                @click=${storeDraftAndSend}
-                ?disabled=${!props.connected || props.sending}
-                aria-label=${t("chat.runControls.queueMessage")}
-              >
-                ${icons.send}
-                <span class="agent-chat__control-label">${t("chat.runControls.queue")}</span>
-              </button>
-            </openclaw-tooltip>
-            <openclaw-tooltip .content=${t("chat.runControls.stop")}>
+            <openclaw-tooltip .content=${t("chat.composer.stopVoiceInput")}>
               <button
                 class="chat-send-btn chat-send-btn--stop"
-                @click=${props.onAbort}
-                aria-label=${t("chat.runControls.stopGenerating")}
+                @click=${props.onToggleVoice}
+                aria-label=${t("chat.composer.stopVoiceInput")}
               >
                 ${icons.stop}
-                <span class="agent-chat__control-label">${t("chat.runControls.stop")}</span>
+                <span class="agent-chat__control-label">${t("chat.composer.stopVoiceInput")}</span>
               </button>
             </openclaw-tooltip>
           `
-        : html`
-            <openclaw-tooltip
-              .content=${props.isBusy ? t("chat.runControls.queue") : t("chat.runControls.send")}
-            >
-              <button
-                class="chat-send-btn"
-                @click=${storeDraftAndSend}
-                ?disabled=${!props.connected || props.sending}
-                aria-label=${props.isBusy
-                  ? t("chat.runControls.queueMessage")
-                  : t("chat.runControls.sendMessage")}
-              >
-                ${icons.send}
-                <span class="agent-chat__control-label"
-                  >${props.isBusy ? t("chat.runControls.queue") : t("chat.runControls.send")}</span
+        : props.canAbort
+          ? html`
+              ${hasComposedContent
+                ? html`
+                    <openclaw-tooltip .content=${t("chat.runControls.queue")}>
+                      <button
+                        class="chat-send-btn"
+                        @click=${storeDraftAndSend}
+                        ?disabled=${!props.connected || props.sending}
+                        aria-label=${t("chat.runControls.queueMessage")}
+                      >
+                        ${icons.send}
+                        <span class="agent-chat__control-label"
+                          >${t("chat.runControls.queue")}</span
+                        >
+                      </button>
+                    </openclaw-tooltip>
+                  `
+                : nothing}
+              <openclaw-tooltip .content=${t("chat.runControls.stop")}>
+                <button
+                  class="chat-send-btn chat-send-btn--stop"
+                  @click=${props.onAbort}
+                  aria-label=${t("chat.runControls.stopGenerating")}
                 >
-              </button>
-            </openclaw-tooltip>
-          `}
+                  ${icons.stop}
+                  <span class="agent-chat__control-label">${t("chat.runControls.stop")}</span>
+                </button>
+              </openclaw-tooltip>
+            `
+          : hasComposedContent || !props.onToggleVoice
+            ? html`
+                <openclaw-tooltip
+                  .content=${props.isBusy
+                    ? t("chat.runControls.queue")
+                    : t("chat.runControls.send")}
+                >
+                  <button
+                    class="chat-send-btn"
+                    @click=${storeDraftAndSend}
+                    ?disabled=${!props.connected || props.sending}
+                    aria-label=${props.isBusy
+                      ? t("chat.runControls.queueMessage")
+                      : t("chat.runControls.sendMessage")}
+                  >
+                    ${icons.send}
+                    <span class="agent-chat__control-label"
+                      >${props.isBusy
+                        ? t("chat.runControls.queue")
+                        : t("chat.runControls.send")}</span
+                    >
+                  </button>
+                </openclaw-tooltip>
+              `
+            : html`
+                <openclaw-tooltip .content=${t("chat.composer.startVoiceInput")}>
+                  <button
+                    class="chat-send-btn chat-send-btn--voice"
+                    @click=${props.onToggleVoice}
+                    ?disabled=${!props.connected || props.sending || props.isBusy}
+                    aria-label=${t("chat.composer.startVoiceInput")}
+                  >
+                    ${icons.mic}
+                    <span class="agent-chat__control-label"
+                      >${t("chat.composer.startVoiceInput")}</span
+                    >
+                  </button>
+                </openclaw-tooltip>
+              `}
     </div>
   `;
 }
@@ -1629,7 +1672,31 @@ export function renderChatComposer(props: ChatComposerProps) {
   let composerTextarea: HTMLTextAreaElement | null = null;
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const tokens = tokenEstimate(visibleDraft);
-  const composerControls = props.composerControls;
+  const contextNotice = renderContextNotice(
+    activeSession,
+    props.sessions?.defaults?.contextTokens ?? null,
+    {
+      compactBusy,
+      compactDisabled: !canCompose || isBusy || showAbortableUi,
+      messages: props.messages,
+      onCompact: props.onCompact,
+    },
+  );
+  const cameraAction = html`
+    <openclaw-tooltip .content=${t("chat.composer.takePhoto")}>
+      <button
+        type="button"
+        class="agent-chat__input-btn agent-chat__camera-btn"
+        @click=${clickComposerCameraInput}
+        aria-label=${t("chat.composer.takePhoto")}
+        ?disabled=${!canCompose}
+      >
+        ${icons.camera}
+      </button>
+    </openclaw-tooltip>
+  `;
+  const composerControls = props.composerControls ?? nothing;
+  const runStatusIndicator = renderChatRunStatusIndicator(composerRunStatus);
   const requestUpdate = props.onRequestUpdate ?? (() => {});
 
   const placeholder = !props.connected
@@ -1793,6 +1860,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     adjustTextareaHeight(target);
     commitComposerDraft(props, target.value);
     updateSlashMenu(target.value, requestUpdate, props, {}, () => target.value);
+    requestUpdate();
   };
   const handleBeforeInput = (event: InputEvent) => {
     if (!composerState.composerComposing && !event.isComposing) {
@@ -1834,6 +1902,18 @@ export function renderChatComposer(props: ChatComposerProps) {
     props.onSend();
     syncComposerDraftAfterSend(composerTextarea);
   };
+  const handleVoicePrimaryAction = () => {
+    if (props.realtimeTalkActive) {
+      props.onToggleRealtimeTalk?.();
+      return;
+    }
+    const liveDraft = composerTextarea?.value ?? visibleDraft;
+    if (liveDraft.trim() || props.attachments?.length) {
+      handleSend();
+      return;
+    }
+    props.onToggleRealtimeTalk?.();
+  };
   const slashMenuVisible = canCompose && isSlashMenuVisible();
   const activeSlashMenuOptionId = getActiveSlashMenuOptionId();
   const activeSlashMenuOptionLabel = getActiveSlashMenuOptionLabel();
@@ -1855,138 +1935,164 @@ export function renderChatComposer(props: ChatComposerProps) {
         `
       : nothing}
 
-    <div
-      class="agent-chat__input"
-      @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
-    >
-      ${slashMenuVisible ? renderSlashMenu(requestUpdate, props, visibleDraft) : nothing}
-      ${renderAttachmentPreview(props)}
-      ${props.replyTarget
-        ? html`
-            <div class="chat-reply-preview">
-              <span class="chat-reply-preview__icon">${icons.messageSquare}</span>
-              <span class="chat-reply-preview__label"
-                >Replying to ${props.replyTarget.senderLabel ?? "message"}</span
-              >
-              <span class="chat-reply-preview__text"
-                >${props.replyTarget.text.slice(0, 120)}${props.replyTarget.text.length > 120
-                  ? "..."
-                  : ""}</span
-              >
-              <button
-                type="button"
-                class="chat-reply-preview__dismiss"
-                @click=${() => props.onClearReply?.()}
-                aria-label="Cancel reply"
-                title="Cancel reply"
-              >
-                ${icons.x}
-              </button>
-            </div>
-          `
-        : nothing}
-      <div class="agent-chat__composer-status-stack">
-        ${renderFallbackIndicator(props.fallbackStatus)}
-        ${renderCompactionIndicator(props.compactionStatus)} ${renderChatGoal(activeSession?.goal)}
-      </div>
+    <div class="agent-chat__composer-shell">
+      <div
+        class="agent-chat__input"
+        @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
+      >
+        ${slashMenuVisible ? renderSlashMenu(requestUpdate, props, visibleDraft) : nothing}
+        ${composerControls !== nothing
+          ? html`
+              <div class="agent-chat__composer-header">
+                <div class="agent-chat__composer-controls">${composerControls}</div>
+              </div>
+            `
+          : nothing}
+        ${renderAttachmentPreview(props)}
+        ${props.replyTarget
+          ? html`
+              <div class="chat-reply-preview">
+                <span class="chat-reply-preview__icon">${icons.messageSquare}</span>
+                <span class="chat-reply-preview__label"
+                  >Replying to ${props.replyTarget.senderLabel ?? "message"}</span
+                >
+                <span class="chat-reply-preview__text"
+                  >${props.replyTarget.text.slice(0, 120)}${props.replyTarget.text.length > 120
+                    ? "..."
+                    : ""}</span
+                >
+                <button
+                  type="button"
+                  class="chat-reply-preview__dismiss"
+                  @click=${() => props.onClearReply?.()}
+                  aria-label="Cancel reply"
+                  title="Cancel reply"
+                >
+                  ${icons.x}
+                </button>
+              </div>
+            `
+          : nothing}
+        <div class="agent-chat__composer-status-stack">
+          ${renderFallbackIndicator(props.fallbackStatus)}
+          ${renderCompactionIndicator(props.compactionStatus)}
+          ${renderChatGoal(activeSession?.goal)}
+        </div>
 
-      <input
-        type="file"
-        accept=${CHAT_ATTACHMENT_ACCEPT}
-        multiple
-        class="agent-chat__file-input"
-        ?disabled=${!canCompose}
-        @change=${(event: Event) => {
-          if (canCompose) {
-            handleChatAttachmentFileSelect(event, props);
-          }
-        }}
-      />
-
-      ${renderRealtimeTalkOptions(props)}
-      ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
-        ? html`
-            <div
-              class="agent-chat__stt-interim agent-chat__talk-status"
-              role=${props.realtimeTalkStatus === "error" ? "alert" : nothing}
-            >
-              <span class="agent-chat__talk-status-text">
-                ${props.realtimeTalkDetail ??
-                ((props.realtimeTalkConversation?.length ?? 0) === 0
-                  ? props.realtimeTalkTranscript
-                  : null) ??
-                (props.realtimeTalkStatus === "thinking"
-                  ? "Asking OpenClaw..."
-                  : props.realtimeTalkStatus === "connecting"
-                    ? "Connecting Talk..."
-                    : "Talk live")}
-              </span>
-              ${props.realtimeTalkStatus === "error" && props.onDismissRealtimeTalkError
-                ? html`
-                    <openclaw-tooltip .content=${t("chat.composer.dismissTalkError")}>
-                      <button
-                        class="callout__dismiss"
-                        type="button"
-                        @click=${props.onDismissRealtimeTalkError}
-                        aria-label=${t("chat.composer.dismissTalkError")}
-                      >
-                        ${icons.x}
-                      </button>
-                    </openclaw-tooltip>
-                  `
-                : nothing}
-            </div>
-          `
-        : nothing}
-
-      <div class="agent-chat__composer-combobox">
-        <textarea
-          ${ref((element) => {
-            const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
-            if (composerTextarea && composerTextarea !== nextTextarea) {
-              disconnectTextareaOverflowObserver(composerTextarea);
-            }
-            composerTextarea = nextTextarea;
-            if (composerTextarea) {
-              observeTextareaOverflow(composerTextarea);
-              scheduleTextareaHeightAdjustment(composerTextarea);
-            }
-          })}
-          .value=${visibleDraft}
-          dir=${detectTextDirection(visibleDraft)}
+        <input
+          type="file"
+          accept=${CHAT_ATTACHMENT_ACCEPT}
+          multiple
+          class="agent-chat__file-input"
           ?disabled=${!canCompose}
-          aria-autocomplete="list"
-          aria-controls=${ifDefined(slashMenuVisible ? SLASH_MENU_LISTBOX_ID : undefined)}
-          aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
-          aria-describedby=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
-          @keydown=${handleKeyDown}
-          @beforeinput=${handleBeforeInput}
-          @input=${handleInput}
-          @compositionstart=${() => {
-            composerState.composerComposing = true;
-          }}
-          @compositionend=${handleCompositionEnd}
-          @blur=${handleBlur}
-          @paste=${(event: ClipboardEvent) => {
+          @change=${(event: Event) => {
             if (canCompose) {
-              handleChatAttachmentPaste(event, props);
+              handleChatAttachmentFileSelect(event, props);
             }
           }}
-          placeholder=${placeholder}
-          rows="1"
-        ></textarea>
-        <span
-          id=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
-          class="agent-chat__sr-only"
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-          >${activeSlashMenuOptionLabel}</span
-        >
-      </div>
+        />
+        <input
+          type="file"
+          accept="image/*"
+          capture="environment"
+          class="agent-chat__camera-input"
+          ?disabled=${!canCompose}
+          @change=${(event: Event) => {
+            if (canCompose) {
+              handleChatAttachmentFileSelect(event, props);
+            }
+          }}
+        />
 
-      <div class="agent-chat__toolbar">
-        <div class="agent-chat__toolbar-left">
+        ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
+          ? html`
+              <div
+                class="agent-chat__stt-interim agent-chat__talk-status"
+                role=${props.realtimeTalkStatus === "error" ? "alert" : nothing}
+              >
+                <span class="agent-chat__talk-status-text">
+                  ${props.realtimeTalkDetail ??
+                  ((props.realtimeTalkConversation?.length ?? 0) === 0
+                    ? props.realtimeTalkTranscript
+                    : null) ??
+                  (props.realtimeTalkStatus === "thinking"
+                    ? "Asking OpenClaw..."
+                    : props.realtimeTalkStatus === "connecting"
+                      ? "Connecting voice input..."
+                      : "Listening...")}
+                </span>
+                ${props.realtimeTalkStatus === "error" && props.onDismissRealtimeTalkError
+                  ? html`
+                      <openclaw-tooltip .content=${t("chat.composer.dismissVoiceInputError")}>
+                        <button
+                          class="callout__dismiss"
+                          type="button"
+                          @click=${props.onDismissRealtimeTalkError}
+                          aria-label=${t("chat.composer.dismissVoiceInputError")}
+                        >
+                          ${icons.x}
+                        </button>
+                      </openclaw-tooltip>
+                    `
+                  : nothing}
+              </div>
+            `
+          : nothing}
+
+        <div class="agent-chat__composer-combobox">
+          <textarea
+            ${ref((element) => {
+              const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
+              if (composerTextarea && composerTextarea !== nextTextarea) {
+                disconnectTextareaOverflowObserver(composerTextarea);
+              }
+              composerTextarea = nextTextarea;
+              if (composerTextarea) {
+                observeTextareaOverflow(composerTextarea);
+                scheduleTextareaHeightAdjustment(composerTextarea);
+              }
+            })}
+            .value=${visibleDraft}
+            dir=${detectTextDirection(visibleDraft)}
+            ?disabled=${!canCompose}
+            aria-autocomplete="list"
+            aria-controls=${ifDefined(slashMenuVisible ? SLASH_MENU_LISTBOX_ID : undefined)}
+            aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
+            aria-describedby=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
+            @keydown=${handleKeyDown}
+            @beforeinput=${handleBeforeInput}
+            @input=${handleInput}
+            @compositionstart=${() => {
+              composerState.composerComposing = true;
+            }}
+            @compositionend=${handleCompositionEnd}
+            @blur=${handleBlur}
+            @paste=${(event: ClipboardEvent) => {
+              if (canCompose) {
+                handleChatAttachmentPaste(event, props);
+              }
+            }}
+            placeholder=${placeholder}
+            rows="1"
+          ></textarea>
+          <span
+            id=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
+            class="agent-chat__sr-only"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            >${activeSlashMenuOptionLabel}</span
+          >
+        </div>
+
+        <div class="agent-chat__composer-footer">
+          <div class="agent-chat__composer-meta">
+            ${contextNotice}
+            ${runStatusIndicator !== nothing
+              ? html`<div class="agent-chat__composer-progress">${runStatusIndicator}</div>`
+              : nothing}
+            ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
+          </div>
           <openclaw-tooltip .content=${t("chat.composer.attachFile")}>
             <button
               type="button"
@@ -1999,80 +2105,26 @@ export function renderChatComposer(props: ChatComposerProps) {
               <span class="agent-chat__control-label">${t("chat.composer.attachFile")}</span>
             </button>
           </openclaw-tooltip>
-
-          ${props.onToggleRealtimeTalk
-            ? html`
-                <openclaw-tooltip
-                  .content=${props.realtimeTalkActive
-                    ? t("chat.composer.stopTalk")
-                    : t("chat.composer.startTalk")}
-                >
-                  <button
-                    class="agent-chat__input-btn ${props.realtimeTalkActive
-                      ? "agent-chat__input-btn--talk"
-                      : ""}"
-                    @click=${props.onToggleRealtimeTalk}
-                    aria-label=${props.realtimeTalkActive
-                      ? t("chat.composer.stopTalk")
-                      : t("chat.composer.startTalk")}
-                    ?disabled=${!canCompose && !props.realtimeTalkActive}
-                  >
-                    ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
-                    <span class="agent-chat__control-label"
-                      >${props.realtimeTalkActive
-                        ? t("chat.composer.stopTalk")
-                        : t("chat.composer.startTalk")}</span
-                    >
-                  </button>
-                </openclaw-tooltip>
-              `
-            : nothing}
-          ${props.onToggleRealtimeTalkOptions
-            ? html`
-                <openclaw-tooltip content="Talk settings">
-                  <button
-                    class="agent-chat__input-btn ${props.realtimeTalkOptionsOpen
-                      ? "agent-chat__input-btn--talk"
-                      : ""}"
-                    @click=${props.onToggleRealtimeTalkOptions}
-                    aria-label="Talk settings"
-                    aria-expanded=${props.realtimeTalkOptionsOpen ? "true" : "false"}
-                    ?disabled=${!canCompose || props.realtimeTalkActive}
-                  >
-                    ${icons.settings}
-                    <span class="agent-chat__control-label">Talk settings</span>
-                  </button>
-                </openclaw-tooltip>
-              `
-            : nothing}
-          ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
-          ${renderChatRunStatusIndicator(composerRunStatus)}
         </div>
-
-        ${composerControls && composerControls !== nothing
-          ? html`<div class="agent-chat__composer-controls">${composerControls}</div>`
-          : nothing}
-        ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
-          compactBusy,
-          compactDisabled: !canCompose || isBusy || showAbortableUi,
-          messages: props.messages,
-          onCompact: props.onCompact,
-        })}
-        ${renderChatRunControls({
-          canAbort: showAbortableUi,
-          connected: canCompose,
-          draft: visibleDraft,
-          hasMessages: props.messages.length > 0,
-          isBusy,
-          sending: props.sending,
-          onAbort: props.onAbort,
-          onExport: () => exportMarkdown(props),
-          onNewSession: props.onNewSession,
-          onSend: handleSend,
-          onStoreDraft: () => {},
-          showSecondary: false,
-        })}
       </div>
+      ${renderChatRunControls({
+        canAbort: showAbortableUi,
+        cameraAction,
+        connected: canCompose,
+        draft: visibleDraft,
+        hasAttachments: Boolean(props.attachments?.length),
+        hasMessages: props.messages.length > 0,
+        isBusy,
+        sending: props.sending,
+        voiceActive: props.realtimeTalkActive,
+        onAbort: props.onAbort,
+        onExport: () => exportMarkdown(props),
+        onNewSession: props.onNewSession,
+        onSend: handleSend,
+        onStoreDraft: () => {},
+        onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
+        showSecondary: false,
+      })}
     </div>
   `;
 }

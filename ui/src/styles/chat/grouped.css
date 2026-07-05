@@ -623,7 +623,7 @@ details.msg-meta:not([open]) .msg-meta__details {
 
 @media (max-width: 400px) {
   .chat-group-messages {
-    max-width: 100%;
+    max-width: 88%;
   }
 
   .chat-avatar,

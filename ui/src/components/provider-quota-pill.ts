@@ -44,7 +44,7 @@ export function renderProviderQuotaPill(props: ProviderQuotaPillProps) {
       aria-label=${`Provider usage: ${title}`}
       data-chat-provider-usage="true"
     >
-      <span class="chat-controls__quota-label">${t("tabs.usage")}</span>
+      <span class="chat-controls__quota-label">${t("chat.usageRemaining")}</span>
       <span class="chat-controls__quota-value">${primary.remaining}%</span>
     </a>
   `;

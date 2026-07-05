@@ -90,7 +90,7 @@ import {
   type ChatInputHistoryKeyInput,
   type ChatInputHistoryKeyResult,
 } from "./input-history.ts";
-import { applyModelCatalogResult, loadModels } from "./models.ts";
+import { applyModelCatalogResult } from "./models.ts";
 import {
   handleAbortChat,
   reconcileChatRunFromCurrentSessionRow,
@@ -169,6 +169,7 @@ export type ChatPageHost = ChatHost &
     chatRunStatus: ChatProps["runStatus"];
     chatNewMessagesBelow: boolean;
     chatManualRefreshInFlight: boolean;
+    chatMetadataRequestVersion: number;
     chatModelsLoading: boolean;
     chatMobileControlsOpen: boolean;
     chatMobileControlsTrigger: HTMLElement | null;
@@ -444,20 +445,6 @@ function scheduleChatMetadataRefresh(callback: () => void) {
   globalThis.setTimeout(callback, 50);
 }
 
-async function refreshChatModels(host: ChatPageHost) {
-  if (!host.client || !host.connected) {
-    host.chatModelsLoading = false;
-    host.chatModelCatalog = [];
-    return;
-  }
-  host.chatModelsLoading = true;
-  try {
-    host.chatModelCatalog = await loadModels(host.client);
-  } finally {
-    host.chatModelsLoading = false;
-  }
-}
-
 export async function refreshChatCommands(host: ChatPageHost) {
   await refreshSlashCommands({
     client: host.client,
@@ -483,17 +470,24 @@ function applyChatMetadataResult(
   return { commands: commandsApplied, models: Boolean(models) };
 }
 
-async function refreshChatMetadata(host: ChatPageHost) {
+export async function refreshChatMetadata(
+  host: ChatPageHost,
+  opts?: { preserveModelCatalogWhenUnavailable?: boolean },
+) {
+  const requestVersion = ++host.chatMetadataRequestVersion;
   if (!host.client || !host.connected) {
     host.chatModelsLoading = false;
     host.chatModelCatalog = [];
     return;
   }
   const client = host.client;
-  const sessionKey = host.sessionKey;
   const agentId = resolveChatAgentId(host);
   if (isGatewayMethodAdvertised(host as unknown as ChatState, "chat.metadata") === false) {
-    await Promise.allSettled([refreshChatModels(host), refreshChatCommands(host)]);
+    host.chatModelsLoading = false;
+    if (!opts?.preserveModelCatalogWhenUnavailable) {
+      host.chatModelCatalog = [];
+    }
+    await Promise.allSettled([refreshChatCommands(host)]);
     return;
   }
 
@@ -506,22 +500,19 @@ async function refreshChatMetadata(host: ChatPageHost) {
     if (
       host.client !== client ||
       !host.connected ||
-      host.sessionKey !== sessionKey ||
+      host.chatMetadataRequestVersion !== requestVersion ||
       resolveChatAgentId(host) !== agentId
     ) {
       return;
     }
     const metadataApplied = applyChatMetadataResult(host, client, agentId, result);
-    if (!metadataApplied.models || !metadataApplied.commands) {
-      await Promise.allSettled([
-        ...(metadataApplied.models ? [] : [refreshChatModels(host)]),
-        ...(metadataApplied.commands ? [] : [refreshChatCommands(host)]),
-      ]);
+    if (!metadataApplied.commands) {
+      await Promise.allSettled([refreshChatCommands(host)]);
     }
   } catch {
-    await Promise.allSettled([refreshChatModels(host), refreshChatCommands(host)]);
+    await Promise.allSettled([refreshChatCommands(host)]);
   } finally {
-    if (host.client === client) {
+    if (host.client === client && host.chatMetadataRequestVersion === requestVersion) {
       host.chatModelsLoading = false;
     }
   }
@@ -639,19 +630,29 @@ export async function refreshChat(
 
 export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
   let resolveStartupMetadata: (result: ChatMetadataApplyResult) => void = () => {};
-  const startupMetadataApplied =
-    opts?.startup && host.client && host.connected
-      ? new Promise<ChatMetadataApplyResult>((resolve) => {
-          resolveStartupMetadata = resolve;
-        })
-      : Promise.resolve({ commands: false, models: false });
+  const ownsStartupMetadata = Boolean(opts?.startup && host.client && host.connected);
+  const startupMetadataRequestVersion = ownsStartupMetadata
+    ? ++host.chatMetadataRequestVersion
+    : null;
+  const startupMetadataApplied = ownsStartupMetadata
+    ? new Promise<ChatMetadataApplyResult>((resolve) => {
+        resolveStartupMetadata = resolve;
+      })
+    : Promise.resolve({ commands: false, models: false });
 
   const refresh = refreshChat(host, {
     ...opts,
     onStartupMetadata: ({ client, agentId, metadata }) => {
-      const applied = metadata
-        ? applyChatMetadataResult(host, client, agentId, metadata)
-        : { commands: false, models: false };
+      const ownsMetadata =
+        startupMetadataRequestVersion !== null &&
+        host.chatMetadataRequestVersion === startupMetadataRequestVersion &&
+        host.client === client &&
+        host.connected &&
+        resolveChatAgentId(host) === agentId;
+      const applied =
+        metadata && ownsMetadata
+          ? applyChatMetadataResult(host, client, agentId, metadata)
+          : { commands: false, models: false };
       resolveStartupMetadata(applied);
     },
   });
@@ -664,13 +665,12 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
     void startupMetadataApplied
       .catch(() => ({ commands: false, models: false }))
       .then((metadataApplied) => {
-        const metadataRefresh =
-          opts?.startup && (metadataApplied.commands || metadataApplied.models)
-            ? metadataApplied.models
-              ? Promise.allSettled([])
-              : Promise.allSettled([refreshChatModels(host)])
-            : Promise.allSettled([refreshChatMetadata(host)]);
-        return Promise.allSettled([refreshChatAvatar(host), metadataRefresh]);
+        return Promise.allSettled([
+          refreshChatAvatar(host),
+          refreshChatMetadata(host, {
+            preserveModelCatalogWhenUnavailable: opts?.startup === true && metadataApplied.models,
+          }),
+        ]);
       })
       .finally(() => host.requestUpdate?.());
   });
@@ -926,6 +926,7 @@ export function createPageState(
     chatAvatarReason: null,
     chatModelSwitchPromises: {} as Record<string, Promise<boolean>>,
     chatModelsLoading: false,
+    chatMetadataRequestVersion: 0,
     chatModelCatalog: [] as ModelCatalogEntry[],
     modelAuthStatusResult: null,
     modelAuthStatusError: null,

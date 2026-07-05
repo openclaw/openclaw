@@ -95,7 +95,7 @@ describeControlUiE2e("Control UI browser Talk", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await page.getByRole("button", { name: "Start Talk" }).click();
+      await page.getByRole("button", { name: "Start voice input" }).click();
 
       const createRequest = await gateway.waitForRequest("talk.client.create");
       expect(createRequest.params).toMatchObject({ sessionKey: "main" });
@@ -112,11 +112,11 @@ describeControlUiE2e("Control UI browser Talk", () => {
         .poll(async () =>
           (await page.locator(".agent-chat__talk-status-text").textContent())?.trim(),
         )
-        .toBe("Talk live");
+        .toBe("Listening...");
 
-      await page.getByRole("button", { name: "Stop Talk" }).click();
+      await page.getByRole("button", { name: "Stop voice input" }).click();
       await expect
-        .poll(() => page.getByRole("button", { name: "Start Talk" }).isVisible())
+        .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
         .toBe(true);
       await expect.poll(() => page.locator(".agent-chat__talk-status-text").count()).toBe(0);
       await expect
@@ -134,7 +134,7 @@ describeControlUiE2e("Control UI browser Talk", () => {
 
       await gateway.deliverLatest({ setupComplete: {} });
       await expect
-        .poll(() => page.getByRole("button", { name: "Start Talk" }).isVisible())
+        .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
         .toBe(true);
     } finally {
       await context.close();

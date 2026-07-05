@@ -23,7 +23,6 @@ export type ChatRealtimeState = {
   realtimeTalkDetail: string | null;
   realtimeTalkTranscript: string | null;
   realtimeTalkConversation: RealtimeTalkConversationEntry[];
-  realtimeTalkOptionsOpen: boolean;
   realtimeTalkOptions: RealtimeTalkOptions;
   realtimeTalkSession: RealtimeTalkSession | null;
   realtimeTalkConversationState: RealtimeTalkConversationState;
@@ -48,7 +47,6 @@ export function createInitialChatRealtimeState() {
     realtimeTalkDetail: null,
     realtimeTalkTranscript: null,
     realtimeTalkConversation: [],
-    realtimeTalkOptionsOpen: false,
     realtimeTalkOptions: createDefaultRealtimeTalkOptions(),
     realtimeTalkSession: null,
     realtimeTalkConversationState: createRealtimeTalkConversationState(),

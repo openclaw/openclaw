@@ -31,11 +31,11 @@ export type RealtimeTalkOptions = {
 };
 
 export type ChatRealtimeTalkOptionsProps = {
-  realtimeTalkOptionsOpen?: boolean;
   realtimeTalkOptions?: RealtimeTalkOptions;
   onRealtimeTalkOptionsChange?: (next: Partial<RealtimeTalkOptions>) => void;
   canOpenRealtimeTalkSettings?: boolean;
   onOpenRealtimeTalkSettings?: () => void;
+  embedded?: boolean;
 };
 
 export type ChatRealtimeTalkConversationProps = {
@@ -80,11 +80,14 @@ function renderNativeTalkSelect(params: {
 export function renderRealtimeTalkOptions(props: ChatRealtimeTalkOptionsProps) {
   const options = props.realtimeTalkOptions;
   const onChange = props.onRealtimeTalkOptionsChange;
-  if (!props.realtimeTalkOptionsOpen || !options || !onChange) {
+  if (!options || !onChange) {
     return nothing;
   }
   return html`
-    <div class="agent-chat__talk-options" aria-label="Talk options">
+    <div
+      class="agent-chat__talk-options ${props.embedded ? "agent-chat__talk-options--settings" : ""}"
+      aria-label=${t("chat.composer.voiceOptions")}
+    >
       <div class="agent-chat__talk-options-primary">
         ${renderNativeTalkSelect({
           label: "Voice",
@@ -136,7 +139,11 @@ export function renderRealtimeTalkConversation(props: ChatRealtimeTalkConversati
     return nothing;
   }
   return html`
-    <div class="agent-chat__voice-turns" role="log" aria-label=${t("chat.composer.talkTranscript")}>
+    <div
+      class="agent-chat__voice-turns"
+      role="log"
+      aria-label=${t("chat.composer.voiceTranscript")}
+    >
       ${repeat(
         entries,
         (entry) => entry.id,
