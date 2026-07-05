@@ -40,23 +40,40 @@ function findProviderAuthStateKey(
 
 // Successful auth clears transient failure/cooldown/disable state while keeping
 // unrelated metadata and updating lastUsed for round-robin ordering.
+// A success on one model must not clear a sibling model's still-active
+// block/cooldown on the same shared-OAuth profile: models on one login can hold
+// independent per-model quota windows (e.g. gpt-5.5 weekly-capped while Spark is
+// healthy), so a Spark success must preserve gpt-5.5's active subscription block
+// instead of un-blocking it and letting it be re-called every turn.
 function resetSuccessfulUsageStats(
   existing: ProfileUsageStats | undefined,
   lastUsed: number,
+  model?: string,
 ): ProfileUsageStats {
+  const now = Date.now();
+  const keepBlock =
+    model !== undefined &&
+    existing?.blockedModel !== undefined &&
+    existing.blockedModel !== model &&
+    (existing.blockedUntil ?? 0) > now;
+  const keepCooldown =
+    model !== undefined &&
+    existing?.cooldownModel !== undefined &&
+    existing.cooldownModel !== model &&
+    (existing.cooldownUntil ?? 0) > now;
   return {
     ...existing,
     errorCount: 0,
-    blockedUntil: undefined,
-    blockedReason: undefined,
-    blockedSource: undefined,
-    blockedModel: undefined,
-    cooldownUntil: undefined,
-    cooldownReason: undefined,
-    cooldownModel: undefined,
+    blockedUntil: keepBlock ? existing?.blockedUntil : undefined,
+    blockedReason: keepBlock ? existing?.blockedReason : undefined,
+    blockedSource: keepBlock ? existing?.blockedSource : undefined,
+    blockedModel: keepBlock ? existing?.blockedModel : undefined,
+    cooldownUntil: keepCooldown ? existing?.cooldownUntil : undefined,
+    cooldownReason: keepCooldown ? existing?.cooldownReason : undefined,
+    cooldownModel: keepCooldown ? existing?.cooldownModel : undefined,
     disabledUntil: undefined,
     disabledReason: undefined,
-    failureCounts: undefined,
+    failureCounts: keepBlock || keepCooldown ? existing?.failureCounts : undefined,
     lastUsed,
   };
 }
@@ -65,9 +82,14 @@ function updateSuccessfulUsageStatsEntry(
   store: AuthProfileStore,
   profileId: string,
   lastUsed: number,
+  model?: string,
 ): void {
   store.usageStats = store.usageStats ?? {};
-  store.usageStats[profileId] = resetSuccessfulUsageStats(store.usageStats[profileId], lastUsed);
+  store.usageStats[profileId] = resetSuccessfulUsageStats(
+    store.usageStats[profileId],
+    lastUsed,
+    model,
+  );
 }
 
 /** Sets or clears explicit auth profile order for a provider. */
@@ -265,8 +287,9 @@ export async function markAuthProfileSuccess(params: {
   provider: string;
   profileId: string;
   agentDir?: string;
+  model?: string;
 }): Promise<void> {
-  const { store, provider, profileId, agentDir } = params;
+  const { store, provider, profileId, agentDir, model } = params;
   const providerKey = resolveProviderIdForAuth(provider);
   const lastUsed = Date.now();
   const updated = await updateAuthProfileStoreWithLock({
@@ -277,7 +300,7 @@ export async function markAuthProfileSuccess(params: {
         return false;
       }
       freshStore.lastGood = { ...freshStore.lastGood, [providerKey]: profileId };
-      updateSuccessfulUsageStatsEntry(freshStore, profileId, lastUsed);
+      updateSuccessfulUsageStatsEntry(freshStore, profileId, lastUsed, model);
       return true;
     },
   });
@@ -291,6 +314,6 @@ export async function markAuthProfileSuccess(params: {
     return;
   }
   store.lastGood = { ...store.lastGood, [providerKey]: profileId };
-  updateSuccessfulUsageStatsEntry(store, profileId, lastUsed);
+  updateSuccessfulUsageStatsEntry(store, profileId, lastUsed, model);
   saveAuthProfileStore(store, agentDir);
 }
