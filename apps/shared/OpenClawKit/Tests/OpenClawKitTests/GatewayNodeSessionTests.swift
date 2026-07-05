@@ -1357,8 +1357,8 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test
-    func `token mismatch does not retry stored device token for untrusted local hosts`() async throws {
+    @Test(.stateDirectoryIsolated)
+    func `token mismatch retries stored device token only for trusted loopback hosts`() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -1398,11 +1398,7 @@ struct GatewayNodeSessionTests {
             ],
         ]
 
-        for rawURL in [
-            "ws://127.attacker.example:18789",
-            "ws://0.0.0.0:18789",
-            "ws://[::]:18789",
-        ] {
+        func retryAuth(for rawURL: String) async throws -> [String: Any] {
             let session = FakeGatewayWebSocketSession(connectError: connectError)
             let gateway = GatewayNodeSession()
             let url = try #require(URL(string: rawURL))
@@ -1428,10 +1424,28 @@ struct GatewayNodeSessionTests {
             }
 
             let retryAuth = try #require(session.latestTask()?.latestConnectAuth())
+            await gateway.disconnect()
+            return retryAuth
+        }
+
+        for rawURL in [
+            "ws://127.attacker.example:18789",
+            "ws://0.0.0.0:18789",
+            "ws://[::]:18789",
+        ] {
+            let retryAuth = try await retryAuth(for: rawURL)
             #expect(retryAuth["token"] as? String == "shared-gateway-token")
             #expect(retryAuth["deviceToken"] == nil)
+        }
 
-            await gateway.disconnect()
+        for rawURL in [
+            "ws://localhost:18789",
+            "ws://127.0.0.2:18789",
+            "ws://[::1]:18789",
+        ] {
+            let retryAuth = try await retryAuth(for: rawURL)
+            #expect(retryAuth["token"] as? String == "shared-gateway-token")
+            #expect(retryAuth["deviceToken"] as? String == "stored-device-token")
         }
     }
 
