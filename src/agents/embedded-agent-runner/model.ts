@@ -1935,7 +1935,7 @@ function buildMissingProviderModelRegistrationHint(params: {
   // at models.providers[] is actively harmful: the config validator rejects the
   // overlay without baseUrl, creating contradictory guidance (#100066).
   if (normalizeProviderId(params.provider) === "openai-codex") {
-    return `Found agents.defaults.models["${agentModelKey}"], but the bundled provider "${params.provider}" has no registered model "${params.modelId}". This usually means the provider has no authenticated profile — run \`openclaw models status\` to check provider auth and re-authenticate if needed. See https://docs.openclaw.ai/concepts/model-providers.`;
+    return `Found agents.defaults.models["${agentModelKey}"], but "${params.provider}" is a legacy alias that has been folded into the openai provider. This provider requires OAuth authentication — run \`openclaw models auth login openai\` to sign in, or run \`openclaw doctor --fix\` to migrate legacy config references. See https://docs.openclaw.ai/concepts/model-providers.`;
   }
   const providerConfig = findNormalizedProviderValue(
     params.cfg?.models?.providers,

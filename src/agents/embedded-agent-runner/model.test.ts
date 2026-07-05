@@ -2825,7 +2825,7 @@ describe("resolveModel", () => {
     });
 
     expect(result.error).toBe(
-      'Unknown model: openai-codex/gpt-5.4. Found agents.defaults.models["openai-codex/gpt-5.4"], but the bundled provider "openai-codex" has no registered model "gpt-5.4". This usually means the provider has no authenticated profile — run `openclaw models status` to check provider auth and re-authenticate if needed. See https://docs.openclaw.ai/concepts/model-providers.',
+      'Unknown model: openai-codex/gpt-5.4. Found agents.defaults.models["openai-codex/gpt-5.4"], but "openai-codex" is a legacy alias that has been folded into the openai provider. This provider requires OAuth authentication — run \`openclaw models auth login openai\` to sign in, or run \`openclaw doctor --fix\` to migrate legacy config references. See https://docs.openclaw.ai/concepts/model-providers.',
     );
   });
 
