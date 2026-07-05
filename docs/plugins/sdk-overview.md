@@ -19,7 +19,7 @@ reference for **what to import** and **what you can register**.
 </Note>
 
 <Tip>
-Looking for a how-to guide instead? Start with [Building plugins](/plugins/building-plugins), use [Channel plugins](/plugins/sdk-channel-plugins) for channel plugins, [Provider plugins](/plugins/sdk-provider-plugins) for provider plugins, [CLI backend plugins](/plugins/cli-backend-plugins) for local AI CLI backends, and [Plugin hooks](/plugins/hooks) for tool or lifecycle hook plugins.
+Looking for a how-to guide instead? Start with [Building plugins](/plugins/building-plugins). Use [Channel plugins](/plugins/sdk-channel-plugins) for channels, [Provider plugins](/plugins/sdk-provider-plugins) for model providers, [CLI backend plugins](/plugins/cli-backend-plugins) for local AI CLI backends, [Agent harness plugins](/plugins/sdk-agent-harness) for native agent executors, and [Plugin hooks](/plugins/hooks) for tool or lifecycle hooks.
 </Tip>
 
 ## Import convention
@@ -88,22 +88,25 @@ methods:
 
 ### Capability registration
 
-| Method                                           | What it registers                     |
-| ------------------------------------------------ | ------------------------------------- |
-| `api.registerProvider(...)`                      | Text inference (LLM)                  |
-| `api.registerAgentHarness(...)`                  | Experimental low-level agent executor |
-| `api.registerCliBackend(...)`                    | Local CLI inference backend           |
-| `api.registerChannel(...)`                       | Messaging channel                     |
-| `api.registerEmbeddingProvider(...)`             | Reusable vector embedding provider    |
-| `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis        |
-| `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription      |
-| `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions        |
-| `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis            |
-| `api.registerImageGenerationProvider(...)`       | Image generation                      |
-| `api.registerMusicGenerationProvider(...)`       | Music generation                      |
-| `api.registerVideoGenerationProvider(...)`       | Video generation                      |
-| `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider           |
-| `api.registerWebSearchProvider(...)`             | Web search                            |
+| Method                                           | What it registers                                                                 |
+| ------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `api.registerProvider(...)`                      | Text inference (LLM)                                                              |
+| `api.registerModelCatalogProvider(...)`          | Model catalog rows for text and media generation                                  |
+| `api.registerAgentHarness(...)`                  | [Experimental](/plugins/sdk-agent-harness) native agent executor (Codex, Copilot) |
+| `api.registerCliBackend(...)`                    | Local CLI inference backend                                                       |
+| `api.registerChannel(...)`                       | Messaging channel                                                                 |
+| `api.registerEmbeddingProvider(...)`             | Reusable vector embedding provider                                                |
+| `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis                                                    |
+| `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription                                                  |
+| `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions                                                    |
+| `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis                                                        |
+| `api.registerTranscriptSourceProvider(...)`      | Live or imported meeting transcript source                                        |
+| `api.registerImageGenerationProvider(...)`       | Image generation                                                                  |
+| `api.registerMusicGenerationProvider(...)`       | Music generation                                                                  |
+| `api.registerVideoGenerationProvider(...)`       | Video generation                                                                  |
+| `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider                                                       |
+| `api.registerWebSearchProvider(...)`             | Web search                                                                        |
+| `api.registerCompactionProvider(...)`            | Pluggable transcript-compaction backend                                           |
 
 Embedding providers registered with `api.registerEmbeddingProvider(...)` must
 also be listed in `contracts.embeddingProviders` in the plugin manifest. This
@@ -161,19 +164,28 @@ guidance remain available to non-Codex prompt surfaces for compatibility.
 
 ### Infrastructure
 
-| Method                                         | What it registers                       |
-| ---------------------------------------------- | --------------------------------------- |
-| `api.registerHook(events, handler, opts?)`     | Event hook                              |
-| `api.registerHttpRoute(params)`                | Gateway HTTP endpoint                   |
-| `api.registerGatewayMethod(name, handler)`     | Gateway RPC method                      |
-| `api.registerGatewayDiscoveryService(service)` | Local Gateway discovery advertiser      |
-| `api.registerCli(registrar, opts?)`            | CLI subcommand                          |
-| `api.registerNodeCliFeature(registrar, opts?)` | Node feature CLI under `openclaw nodes` |
-| `api.registerService(service)`                 | Background service                      |
-| `api.registerInteractiveHandler(registration)` | Interactive handler                     |
-| `api.registerAgentToolResultMiddleware(...)`   | Runtime tool-result middleware          |
-| `api.registerMemoryPromptSupplement(builder)`  | Additive memory-adjacent prompt section |
-| `api.registerMemoryCorpusSupplement(adapter)`  | Additive memory search/read corpus      |
+| Method                                          | What it registers                                            |
+| ----------------------------------------------- | ------------------------------------------------------------ |
+| `api.registerHook(events, handler, opts?)`      | Event hook                                                   |
+| `api.registerHttpRoute(params)`                 | Gateway HTTP endpoint                                        |
+| `api.registerGatewayMethod(name, handler)`      | Gateway RPC method                                           |
+| `api.registerGatewayDiscoveryService(service)`  | Local Gateway discovery advertiser                           |
+| `api.registerCli(registrar, opts?)`             | CLI subcommand                                               |
+| `api.registerNodeCliFeature(registrar, opts?)`  | Node feature CLI under `openclaw nodes`                      |
+| `api.registerService(service)`                  | Background service                                           |
+| `api.registerInteractiveHandler(registration)`  | Interactive handler                                          |
+| `api.registerAgentToolResultMiddleware(...)`    | Runtime tool-result middleware                               |
+| `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section                      |
+| `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus                           |
+| `api.registerHostedMediaResolver(resolver)`     | Resolver for browser-style hosted media URLs                 |
+| `api.registerTextTransforms(transforms)`        | Plugin-owned prompt/message compatibility text rewrites      |
+| `api.registerConfigMigration(migrate)`          | Lightweight config migration run before plugin runtime loads |
+| `api.registerMigrationProvider(provider)`       | Importer for `openclaw migrate`                              |
+| `api.registerAutoEnableProbe(probe)`            | Config probe that can auto-enable this plugin                |
+| `api.registerReload(registration)`              | Restart/hot/noop config-prefix policy for reload handling    |
+| `api.registerNodeHostCommand(command)`          | Command handler exposed to paired nodes                      |
+| `api.registerNodeInvokePolicy(policy)`          | Allowlist/approval policy for node-invoked commands          |
+| `api.registerSecurityAuditCollector(collector)` | Findings collector for `openclaw security audit`             |
 
 ### Host hooks for workflow plugins
 
@@ -468,7 +480,7 @@ cover CLI and Gateway-backed install or update paths.
 
 Within your plugin, use local barrel files for internal imports:
 
-```
+```text
 my-plugin/
   api.ts            # Public exports for external consumers
   runtime-api.ts    # Internal-only runtime exports

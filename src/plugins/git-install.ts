@@ -1,5 +1,6 @@
 /** Parses, clones, verifies, and installs plugin packages from Git specs. */
 import "../infra/fs-safe-defaults.js";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
@@ -241,6 +242,40 @@ function resolveGitInstallRepoDir(params: {
   return path.join(gitRoot, `git-${sha256HexPrefix(redactedSpec, 16)}`, "repo");
 }
 
+async function withGitStagingDir<T>(
+  persistentRepoDir: string | undefined,
+  fn: (tmpDir: string) => Promise<T>,
+): Promise<T> {
+  if (!persistentRepoDir) {
+    return await withTempDir("openclaw-git-plugin-", fn);
+  }
+  const targetParent = path.dirname(persistentRepoDir);
+  try {
+    await fs.mkdir(targetParent, { recursive: true });
+  } catch {
+    return await withTempDir("openclaw-git-plugin-", fn);
+  }
+
+  let callbackStarted = false;
+  try {
+    return await withTempDir(
+      "openclaw-git-plugin-",
+      async (tmpDir) => {
+        callbackStarted = true;
+        return await fn(tmpDir);
+      },
+      { rootDir: targetParent },
+    );
+  } catch (err) {
+    // Workspace creation can fail on read-only mounts. Never retry after the
+    // callback starts, because that could clone or install dependencies twice.
+    if (callbackStarted) {
+      throw err;
+    }
+    return await withTempDir("openclaw-git-plugin-", fn);
+  }
+}
+
 async function replaceManagedGitRepo(params: {
   stagedRepoDir: string;
   persistentRepoDir: string;
@@ -335,7 +370,8 @@ export async function installPluginFromGitSpec(
   const persistentRepoDir = resolveGitInstallRepoDir({ gitDir: params.gitDir, source: parsed });
   const effectiveMode =
     params.mode === "update" && (await pathExists(persistentRepoDir)) ? "update" : "install";
-  return await withTempDir("openclaw-git-plugin-", async (tmpDir) => {
+  const stagingRepoDir = params.dryRun ? undefined : persistentRepoDir;
+  return await withGitStagingDir(stagingRepoDir, async (tmpDir) => {
     const repoDir = path.join(tmpDir, "repo");
     params.logger?.info?.(
       `Cloning ${sanitizeForLog(redactSensitiveUrlLikeString(parsed.label))}...`,

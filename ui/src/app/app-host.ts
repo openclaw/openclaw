@@ -20,10 +20,12 @@ import {
 } from "../components/command-palette.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
+import { copyToClipboard } from "../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import { resolveAgentIdFromSessionKey } from "../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
+import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import {
   applicationContext,
@@ -316,6 +318,11 @@ class OpenClawShell extends LitElement {
     approvalQueue: [],
     approvalBusy: false,
     approvalError: null,
+    devicePairSetupOpen: false,
+    devicePairSetupLoading: false,
+    devicePairSetupError: null,
+    devicePairSetup: null,
+    devicePairPendingCount: 0,
   };
   @query("openclaw-command-palette") private commandPalette?: CommandPalette;
   private commandPaletteTarget?: CommandPaletteTargetDetail;
@@ -645,6 +652,8 @@ class OpenClawShell extends LitElement {
             .sessionKey=${this.activeSessionKey}
             .collapsed=${navCollapsed}
             .connected=${this.gatewayConnected}
+            .canPairDevice=${this.gatewayConnected &&
+            hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null)}
             .navGroupsCollapsed=${this.navGroupsCollapsed}
             .recentSessionsCollapsed=${this.recentSessionsCollapsed}
             .themeMode=${context.theme.mode}
@@ -670,6 +679,7 @@ class OpenClawShell extends LitElement {
               context.navigation.update({
                 recentSessionsCollapsed: !context.navigation.snapshot.recentSessionsCollapsed,
               })}
+            .onPairMobile=${() => void context.overlays.openDevicePairSetup()}
             .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
               this.navigate(routeId, options)}
             .onPreloadRoute=${(routeId: string) =>
@@ -712,6 +722,20 @@ class OpenClawShell extends LitElement {
               context.overlays.decideApproval(decision),
           }}
         ></openclaw-exec-approval>
+        ${renderDevicePairSetup({
+          open: this.overlaySnapshot.devicePairSetupOpen,
+          loading: this.overlaySnapshot.devicePairSetupLoading,
+          error: this.overlaySnapshot.devicePairSetupError,
+          setup: this.overlaySnapshot.devicePairSetup,
+          pendingCount: this.overlaySnapshot.devicePairPendingCount,
+          onRefresh: () => void context.overlays.refreshDevicePairSetup(),
+          onClose: () => context.overlays.closeDevicePairSetup(),
+          onCopy: (setupCode) => void copyToClipboard(setupCode),
+          onManageDevices: () => {
+            context.overlays.closeDevicePairSetup();
+            this.navigate("nodes");
+          },
+        })}
       </div>
     `;
   }
