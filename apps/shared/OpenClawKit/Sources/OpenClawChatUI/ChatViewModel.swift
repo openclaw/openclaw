@@ -12,7 +12,7 @@ public final class OpenClawChatViewModel {
     public static let defaultModelSelectionID = "__default__"
     static let maxAttachmentBytes = 5_000_000
 
-    public private(set) var messages: [OpenClawChatMessage] = []
+    public internal(set) var messages: [OpenClawChatMessage] = []
 
     public var input: String = ""
     public private(set) var thinkingLevel: String
