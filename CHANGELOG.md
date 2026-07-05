@@ -40,6 +40,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **WhatsApp restart recovery:** stop automatic restart loops after logged-out or connection-replaced disconnects until the account reconnects. (#78511) Thanks @openperf.
 - **Control UI terminal tabs:** vertically center the new-session button in the terminal tab strip.
 - **Control UI composer scrollbar:** show the message-field scrollbar only when the draft actually overflows its autosized height.
 - **Control UI terminal cursor:** hide the browser-native contenteditable caret so the integrated terminal shows only its canvas-rendered cursor.

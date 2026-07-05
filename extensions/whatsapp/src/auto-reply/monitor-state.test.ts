@@ -134,59 +134,29 @@ describe("createWebChannelStatusController", () => {
     });
   });
 
-  it("sets terminalDisconnect on markStopped after logged-out healthState", () => {
-    const patches: Record<string, unknown>[] = [];
-    const controller = createWebChannelStatusController((s) => patches.push({ ...s }));
+  it.each([
+    { healthState: "logged-out", statusCode: 401, terminalDisconnect: true },
+    { healthState: "conflict", statusCode: 440, terminalDisconnect: true },
+    { healthState: "reconnecting", statusCode: 408, terminalDisconnect: false },
+  ] as const)(
+    "sets terminalDisconnect=$terminalDisconnect after a $healthState stop",
+    ({ healthState, statusCode, terminalDisconnect }) => {
+      const patches: Record<string, unknown>[] = [];
+      const controller = createWebChannelStatusController((s) => patches.push({ ...s }));
 
-    controller.noteConnected(1000);
-    controller.noteClose({
-      at: 2000,
-      statusCode: 401,
-      error: "logged out",
-      reconnectAttempts: 0,
-      healthState: "logged-out",
-    });
-    controller.markStopped(2100);
+      controller.noteConnected(1000);
+      controller.noteClose({
+        at: 2000,
+        statusCode,
+        error: healthState,
+        reconnectAttempts: healthState === "reconnecting" ? 1 : 0,
+        healthState,
+      });
+      controller.markStopped(2100);
 
-    const last = patches.at(-1)!;
-    expect(last.terminalDisconnect).toBe(true);
-  });
-
-  it("sets terminalDisconnect on markStopped after conflict healthState", () => {
-    const patches: Record<string, unknown>[] = [];
-    const controller = createWebChannelStatusController((s) => patches.push({ ...s }));
-
-    controller.noteConnected(1000);
-    controller.noteClose({
-      at: 2000,
-      statusCode: 440,
-      error: "connection replaced",
-      reconnectAttempts: 0,
-      healthState: "conflict",
-    });
-    controller.markStopped(2100);
-
-    const last = patches.at(-1)!;
-    expect(last.terminalDisconnect).toBe(true);
-  });
-
-  it("does not set terminalDisconnect on markStopped for non-terminal healthState", () => {
-    const patches: Record<string, unknown>[] = [];
-    const controller = createWebChannelStatusController((s) => patches.push({ ...s }));
-
-    controller.noteConnected(1000);
-    controller.noteClose({
-      at: 2000,
-      statusCode: 408,
-      error: "timeout",
-      reconnectAttempts: 1,
-      healthState: "reconnecting",
-    });
-    controller.markStopped(2100);
-
-    const last = patches.at(-1)!;
-    expect(last.terminalDisconnect).toBeFalsy();
-  });
+      expect(patches.at(-1)!.terminalDisconnect).toBe(terminalDisconnect);
+    },
+  );
 
   it("clears terminalDisconnect on noteConnected after a terminal stop", () => {
     const patches: Record<string, unknown>[] = [];

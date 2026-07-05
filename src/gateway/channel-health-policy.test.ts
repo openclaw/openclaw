@@ -185,59 +185,26 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
   });
 
-  it("treats terminal-disconnect channels as unhealthy but distinct from not-running", () => {
-    const evaluation = evaluateChannelHealth(
-      {
-        running: false,
-        enabled: true,
-        configured: true,
-        terminalDisconnect: true,
-      },
-      {
-        channelId: "whatsapp",
-        now: 100_000,
-        channelConnectGraceMs: 10_000,
-        staleEventThresholdMs: 30_000,
-      },
-    );
-    expect(evaluation).toEqual({ healthy: false, reason: "terminal-disconnect" });
-  });
-
-  it("treats stopped channels without terminalDisconnect as not-running", () => {
-    const evaluation = evaluateChannelHealth(
-      {
-        running: false,
-        enabled: true,
-        configured: true,
-        terminalDisconnect: false,
-      },
-      {
-        channelId: "whatsapp",
-        now: 100_000,
-        channelConnectGraceMs: 10_000,
-        staleEventThresholdMs: 30_000,
-      },
-    );
-    expect(evaluation).toEqual({ healthy: false, reason: "not-running" });
-  });
-
-  it("ignores terminalDisconnect when channel is still running", () => {
-    const evaluation = evaluateChannelHealth(
-      {
-        running: true,
-        connected: true,
-        enabled: true,
-        configured: true,
-        terminalDisconnect: true,
-      },
-      {
-        channelId: "whatsapp",
-        now: 100_000,
-        channelConnectGraceMs: 10_000,
-        staleEventThresholdMs: 30_000,
-      },
-    );
-    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  it.each([
+    {
+      name: "distinguishes a stopped terminal channel",
+      snapshot: { running: false, terminalDisconnect: true },
+      expected: { healthy: false, reason: "terminal-disconnect" },
+    },
+    {
+      name: "keeps ordinary stopped channels restartable",
+      snapshot: { running: false, terminalDisconnect: false },
+      expected: { healthy: false, reason: "not-running" },
+    },
+    {
+      name: "ignores stale terminal state while running",
+      snapshot: { running: true, connected: true, terminalDisconnect: true },
+      expected: { healthy: true, reason: "healthy" },
+    },
+  ] as const)("$name", ({ snapshot, expected }) => {
+    expect(
+      evaluateHealth({ enabled: true, configured: true, ...snapshot }, { channelId: "whatsapp" }),
+    ).toEqual(expected);
   });
 });
 
