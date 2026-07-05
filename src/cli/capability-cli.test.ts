@@ -2035,6 +2035,32 @@ describe("capability cli", () => {
     expect(inputImages[0]?.fileName).toBe(path.basename(inputPath));
   });
 
+  it("rejects non-image files for image generate with a clear error", async () => {
+    const inputPath = path.join(os.tmpdir(), `openclaw-image-gen-notimage-${Date.now()}.txt`);
+    await fs.writeFile(inputPath, "this is not an image");
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "image",
+          "generate",
+          "--file",
+          inputPath,
+          "--prompt",
+          "make a cover",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Only image files are supported"),
+    );
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+  });
+
   it("reports the expanded image.edit flags in capability inspect", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,

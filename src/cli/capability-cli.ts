@@ -1004,12 +1004,20 @@ async function runImageGenerate(params: {
   const inputImages =
     params.file && params.file.length > 0
       ? await Promise.all(
-          (await readInputFiles(params.file)).map(async (entry) => ({
-            buffer: entry.buffer,
-            fileName: path.basename(entry.path),
-            mimeType:
-              (await detectMime({ buffer: entry.buffer, filePath: entry.path })) ?? "image/png",
-          })),
+          (await readInputFiles(params.file)).map(async (entry) => {
+            const mimeType =
+              (await detectMime({ buffer: entry.buffer, filePath: entry.path })) ?? "image/png";
+            if (!mimeType.startsWith("image/")) {
+              throw new Error(
+                `Unsupported --file for image ${params.capability}: ${entry.path}. Only image files are supported.`,
+              );
+            }
+            return {
+              buffer: entry.buffer,
+              fileName: path.basename(entry.path),
+              mimeType,
+            };
+          }),
         )
       : undefined;
   const result = await generateImage({
