@@ -30,8 +30,16 @@ final class CrestodianOnboardingChatModel {
     /// Called after every assistant reply (setup may have applied config).
     var onReplyReceived: (() -> Void)?
 
-    private let sessionId = "mac-onboarding-\(UUID().uuidString)"
+    private let sessionId: String
+    /// "onboarding" seeds the first-run setup proposal; nil gets the
+    /// status/repair greeting (used by Settings → Crestodian).
+    private let welcomeVariant: String?
     private var started = false
+
+    init(welcomeVariant: String? = "onboarding", sessionPrefix: String = "mac-onboarding") {
+        self.welcomeVariant = welcomeVariant
+        self.sessionId = "\(sessionPrefix)-\(UUID().uuidString)"
+    }
 
     private struct ChatResult: Decodable {
         let sessionId: String
@@ -67,8 +75,10 @@ final class CrestodianOnboardingChatModel {
         do {
             var params: [String: AnyCodable] = [
                 "sessionId": AnyCodable(self.sessionId),
-                "welcomeVariant": AnyCodable("onboarding"),
             ]
+            if let welcomeVariant = self.welcomeVariant {
+                params["welcomeVariant"] = AnyCodable(welcomeVariant)
+            }
             if let message {
                 params["message"] = AnyCodable(message)
             }

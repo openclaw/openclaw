@@ -3177,6 +3177,94 @@ public struct CrestodianChatResult: Codable, Sendable {
     }
 }
 
+public struct CrestodianSetupDetectParams: Codable, Sendable {}
+
+public struct CrestodianSetupDetectResult: Codable, Sendable {
+    public let candidates: [[String: AnyCodable]]
+    public let workspace: String
+    public let configuredmodel: String?
+    public let setupcomplete: Bool
+
+    public init(
+        candidates: [[String: AnyCodable]],
+        workspace: String,
+        configuredmodel: String?,
+        setupcomplete: Bool)
+    {
+        self.candidates = candidates
+        self.workspace = workspace
+        self.configuredmodel = configuredmodel
+        self.setupcomplete = setupcomplete
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case candidates
+        case workspace
+        case configuredmodel = "configuredModel"
+        case setupcomplete = "setupComplete"
+    }
+}
+
+public struct CrestodianSetupActivateParams: Codable, Sendable {
+    public let kind: AnyCodable
+    public let provider: String?
+    public let apikey: String?
+    public let workspace: String?
+
+    public init(
+        kind: AnyCodable,
+        provider: String?,
+        apikey: String?,
+        workspace: String?)
+    {
+        self.kind = kind
+        self.provider = provider
+        self.apikey = apikey
+        self.workspace = workspace
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case provider
+        case apikey = "apiKey"
+        case workspace
+    }
+}
+
+public struct CrestodianSetupActivateResult: Codable, Sendable {
+    public let ok: Bool
+    public let modelref: String?
+    public let latencyms: Double?
+    public let lines: [String]?
+    public let status: AnyCodable?
+    public let error: String?
+
+    public init(
+        ok: Bool,
+        modelref: String?,
+        latencyms: Double?,
+        lines: [String]?,
+        status: AnyCodable?,
+        error: String?)
+    {
+        self.ok = ok
+        self.modelref = modelref
+        self.latencyms = latencyms
+        self.lines = lines
+        self.status = status
+        self.error = error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case modelref = "modelRef"
+        case latencyms = "latencyMs"
+        case lines
+        case status
+        case error
+    }
+}
+
 public struct WizardStartParams: Codable, Sendable {
     public let mode: AnyCodable?
     public let workspace: String?
@@ -7085,6 +7173,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
     public let alloweddecisions: [String]?
     public let agentid: String?
     public let sessionkey: String?
+    public let approvalreviewerdeviceids: [String]?
     public let turnsourcechannel: String?
     public let turnsourceto: String?
     public let turnsourceaccountid: String?
@@ -7102,6 +7191,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         alloweddecisions: [String]?,
         agentid: String? = nil,
         sessionkey: String?,
+        approvalreviewerdeviceids: [String]?,
         turnsourcechannel: String?,
         turnsourceto: String?,
         turnsourceaccountid: String?,
@@ -7118,6 +7208,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         self.alloweddecisions = alloweddecisions
         self.agentid = agentid
         self.sessionkey = sessionkey
+        self.approvalreviewerdeviceids = approvalreviewerdeviceids
         self.turnsourcechannel = turnsourcechannel
         self.turnsourceto = turnsourceto
         self.turnsourceaccountid = turnsourceaccountid
@@ -7136,6 +7227,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         case alloweddecisions = "allowedDecisions"
         case agentid = "agentId"
         case sessionkey = "sessionKey"
+        case approvalreviewerdeviceids = "approvalReviewerDeviceIds"
         case turnsourcechannel = "turnSourceChannel"
         case turnsourceto = "turnSourceTo"
         case turnsourceaccountid = "turnSourceAccountId"
@@ -7449,6 +7541,7 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
     public let setupcode: String
     public let qrdataurl: String?
     public let gatewayurl: String
+    public let gatewayurls: [String]?
     public let auth: AnyCodable
     public let urlsource: String
 
@@ -7456,12 +7549,14 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         setupcode: String,
         qrdataurl: String?,
         gatewayurl: String,
+        gatewayurls: [String]? = nil,
         auth: AnyCodable,
         urlsource: String)
     {
         self.setupcode = setupcode
         self.qrdataurl = qrdataurl
         self.gatewayurl = gatewayurl
+        self.gatewayurls = gatewayurls
         self.auth = auth
         self.urlsource = urlsource
     }
@@ -7470,6 +7565,7 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         case setupcode = "setupCode"
         case qrdataurl = "qrDataUrl"
         case gatewayurl = "gatewayUrl"
+        case gatewayurls = "gatewayUrls"
         case auth
         case urlsource = "urlSource"
     }
@@ -7986,6 +8082,7 @@ public struct ChatAbortedEvent: Codable, Sendable {
     public let seq: Int
     public let state: String
     public let message: AnyCodable?
+    public let errormessage: String?
     public let stopreason: String?
 
     public init(
@@ -7996,6 +8093,7 @@ public struct ChatAbortedEvent: Codable, Sendable {
         seq: Int,
         state: String,
         message: AnyCodable?,
+        errormessage: String? = nil,
         stopreason: String?)
     {
         self.runid = runid
@@ -8005,6 +8103,7 @@ public struct ChatAbortedEvent: Codable, Sendable {
         self.seq = seq
         self.state = state
         self.message = message
+        self.errormessage = errormessage
         self.stopreason = stopreason
     }
 
@@ -8016,6 +8115,7 @@ public struct ChatAbortedEvent: Codable, Sendable {
         case seq
         case state
         case message
+        case errormessage = "errorMessage"
         case stopreason = "stopReason"
     }
 }

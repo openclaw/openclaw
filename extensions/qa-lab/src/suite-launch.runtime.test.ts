@@ -317,6 +317,92 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
   });
 
+  it("serializes channel-driver isolated flow workers under explicit concurrency", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-crabline-isolated-");
+    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
+    if (!defaultFlowImplementation) {
+      throw new Error("expected default QA flow suite mock implementation");
+    }
+    const isolatedScenarioIds = new Set([
+      "runtime-tool-image-generate",
+      "runtime-inventory-drift-check",
+      "session-memory-ranking",
+    ]);
+    let activeIsolatedWorkers = 0;
+    let maxActiveIsolatedWorkers = 0;
+    runQaFlowSuite.mockImplementation(
+      async (
+        params:
+          | { outputDir?: string; scenarioIds?: string[]; writeEvidenceFile?: boolean }
+          | undefined,
+      ) => {
+        const scenarioIds = params?.scenarioIds ?? [];
+        const isolatedWorker = scenarioIds.some((scenarioId) =>
+          isolatedScenarioIds.has(scenarioId),
+        );
+        if (!isolatedWorker) {
+          return await defaultFlowImplementation(params);
+        }
+        activeIsolatedWorkers += 1;
+        maxActiveIsolatedWorkers = Math.max(maxActiveIsolatedWorkers, activeIsolatedWorkers);
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 1);
+        });
+        try {
+          return await defaultFlowImplementation(params);
+        } finally {
+          activeIsolatedWorkers -= 1;
+        }
+      },
+    );
+
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/crabline-isolated",
+      channelDriverSelection: {
+        capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+        channel: "telegram",
+        channelDriver: "crabline",
+        smokeArtifactPath: "crabline-fake-provider-smoke.json",
+      },
+      concurrency: 8,
+      scenarioIds: [
+        "channel-chat-baseline",
+        "runtime-tool-image-generate",
+        "runtime-inventory-drift-check",
+        "session-memory-ranking",
+        "control-ui-chat-flow-playwright",
+      ],
+    });
+
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "crabline-isolated");
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(4);
+    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow", "shared"),
+        concurrency: 1,
+        scenarioIds: ["channel-chat-baseline"],
+      }),
+    );
+    for (const [index, scenarioId] of [
+      "runtime-tool-image-generate",
+      "runtime-inventory-drift-check",
+      "session-memory-ranking",
+    ].entries()) {
+      expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+        index + 2,
+        expect.objectContaining({
+          outputDir: path.join(outputDir, "flow", `isolated-${index + 1}`),
+          concurrency: 1,
+          scenarioIds: [scenarioId],
+        }),
+      );
+    }
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
+    expect(maxActiveIsolatedWorkers).toBe(1);
+  });
+
   it("respects serial concurrency across unified suite partitions", async () => {
     const repoRoot = await makeTempRepo("qa-suite-serial-");
     let releaseFlow!: () => void;

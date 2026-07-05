@@ -13,6 +13,7 @@ import type {
   TuiEvent,
   TuiModelChoice,
   TuiSessionList,
+  TuiSessionCreateOptions,
 } from "../tui/tui-backend.js";
 import { runTui as defaultRunTui } from "../tui/tui.js";
 import type { CrestodianAssistantPlanner } from "./assistant.js";
@@ -225,6 +226,15 @@ class CrestodianTuiBackend implements TuiBackend {
       message("assistant", formatCrestodianStartupMessage(overview)),
     );
     return { ok: true };
+  }
+
+  async createSession(_opts: TuiSessionCreateOptions) {
+    await this.resetSession();
+    return {
+      ok: true as const,
+      key: CRESTODIAN_SESSION_KEY,
+      entry: { sessionId: "crestodian", updatedAt: Date.now() },
+    };
   }
 
   async getGatewayStatus(): Promise<string> {

@@ -1163,7 +1163,7 @@ describe("scripts/test-projects changed-target routing", () => {
     ]) {
       expect(resolveChangedTestTargetPlan([fixturePath]), fixturePath).toEqual({
         mode: "targets",
-        targets: ["test/scripts/docs-i18n-behavior.test.ts"],
+        targets: ["test/scripts/docs-i18n.test.ts"],
       });
     }
   });

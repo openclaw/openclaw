@@ -1,6 +1,6 @@
 // Control UI tests cover chat responsive behavior.
 import { chromium, type Browser, type Page } from "playwright";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import {
   canRunPlaywrightChromium,
@@ -25,7 +25,7 @@ const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
   ? describe
   : describe.skip;
 
-const pageBrowsers = new WeakMap<Page, Browser>();
+let sharedBrowser: Browser | null = null;
 let realChatServer: ControlUiE2eServer | null = null;
 
 type ControlRect = {
@@ -93,11 +93,18 @@ function activityAlignmentHtml() {
               <button class="chat-activity-group__summary chat-activity-group__summary--error" type="button">
                 <span class="chat-activity-group__icon">${iconSvg()}</span>
                 <span class="chat-activity-group__label">Activity: 2 tools</span>
-                <span class="chat-activity-group__preview">Bash, Gateway</span>
               </button>
               <div class="chat-activity-group__body">
-                <div class="chat-bubble" data-activity-call-bubble>
-                  <div class="chat-text">Bash searched a deliberately long workspace path with enough detail to occupy the activity row and expose mismatched width constraints.</div>
+                <div class="chat-bubble chat-bubble--tool-shell" data-activity-call-row>
+                  <div class="chat-tools-inline">
+                    <div class="chat-tool-msg-collapse">
+                      <button class="chat-tool-msg-summary" type="button">
+                        <span class="chat-tool-msg-summary__icon">${iconSvg()}</span>
+                        <span class="chat-tool-msg-summary__label">Bash</span>
+                        <span class="chat-tool-msg-summary__names">search a deliberately long workspace path without extra card chrome</span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
                 <div class="chat-bubble chat-bubble--tool-shell">
                   <div class="chat-tool-msg-collapse">
@@ -366,24 +373,15 @@ async function openFixture(
 }
 
 async function openBrowserPage(width: number, height: number): Promise<Page> {
-  const browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
-  let page: Page | undefined;
-  try {
-    page = await browser.newPage({ viewport: { width, height } });
-    pageBrowsers.set(page, browser);
-    return page;
-  } catch (error) {
-    await page?.close().catch(() => {});
-    await browser.close().catch(() => {});
-    throw error;
-  }
+  sharedBrowser ??= await chromium.launch({
+    executablePath: chromiumExecutablePath,
+    headless: true,
+  });
+  return await sharedBrowser.newPage({ viewport: { width, height } });
 }
 
 async function closeBrowserPage(page: Page): Promise<void> {
-  const browser = pageBrowsers.get(page);
-  pageBrowsers.delete(page);
   await page.close().catch(() => {});
-  await browser?.close().catch(() => {});
 }
 
 async function getRect(page: Page, selector: string) {
@@ -457,9 +455,19 @@ async function expectNoHorizontalOverflow(page: Page) {
 }
 
 describeBrowserLayout("chat responsive browser layout", () => {
+  beforeAll(async () => {
+    sharedBrowser = await chromium.launch({
+      executablePath: chromiumExecutablePath,
+      headless: true,
+    });
+    realChatServer = await startControlUiE2eServer();
+  });
+
   afterAll(async () => {
     await realChatServer?.close();
     realChatServer = null;
+    await sharedBrowser?.close();
+    sharedBrowser = null;
   });
 
   it.each([
@@ -502,17 +510,26 @@ describeBrowserLayout("chat responsive browser layout", () => {
       );
 
       await expectNoHorizontalOverflow(page);
-      const callBubble = await getRect(page, "[data-activity-call-bubble]");
+      const callRow = await getRect(page, "[data-activity-call-row]");
       const errorSummary = await getRect(page, ".chat-tool-msg-summary--error");
-      expect(Math.abs(callBubble.right - errorSummary.right)).toBeLessThanOrEqual(1);
-      const selectionStyles = await page.evaluate(() => ({
-        activity: getComputedStyle(
-          document.querySelector<HTMLElement>(".chat-activity-group__summary")!,
-        ).userSelect,
-        tool: getComputedStyle(document.querySelector<HTMLElement>(".chat-tool-msg-summary")!)
-          .userSelect,
-      }));
-      expect(selectionStyles).toEqual({ activity: "text", tool: "text" });
+      expect(Math.abs(callRow.right - errorSummary.right)).toBeLessThanOrEqual(1);
+      expect(Math.abs(callRow.height - errorSummary.height)).toBeLessThanOrEqual(1);
+      const styles = await page.evaluate(() => {
+        const call = document.querySelector<HTMLElement>("[data-activity-call-row]")!;
+        return {
+          activity: getComputedStyle(
+            document.querySelector<HTMLElement>(".chat-activity-group__summary")!,
+          ).userSelect,
+          callBackground: getComputedStyle(call).backgroundColor,
+          tool: getComputedStyle(document.querySelector<HTMLElement>(".chat-tool-msg-summary")!)
+            .userSelect,
+        };
+      });
+      expect(styles).toEqual({
+        activity: "text",
+        callBackground: "rgba(0, 0, 0, 0)",
+        tool: "text",
+      });
     } finally {
       await closeBrowserPage(page);
     }
@@ -985,24 +1002,28 @@ describeBrowserLayout("chat responsive browser layout", () => {
     }
   });
 
-  it("scrolls the keyboard-active slash option into view in short landscape", async () => {
-    realChatServer ??= await startControlUiE2eServer();
-    const page = await openBrowserPage(568, 320);
-    await installMockGateway(page, {
-      historyMessages: [
-        {
-          content: [
-            {
-              text: "Short landscape slash command keyboard regression fixture.",
-              type: "text",
-            },
-          ],
-          role: "assistant",
-          timestamp: Date.now(),
-        },
-      ],
-    });
-    try {
+  describe("slash command keyboard navigation", () => {
+    let page: Page;
+
+    beforeAll(async () => {
+      if (!realChatServer) {
+        throw new Error("Expected the Control UI server to be ready");
+      }
+      page = await openBrowserPage(568, 320);
+      await installMockGateway(page, {
+        historyMessages: [
+          {
+            content: [
+              {
+                text: "Short landscape slash command keyboard regression fixture.",
+                type: "text",
+              },
+            ],
+            role: "assistant",
+            timestamp: Date.now(),
+          },
+        ],
+      });
       await page.goto(`${realChatServer.baseUrl}chat`);
       await page
         .getByText("Short landscape slash command keyboard regression fixture.")
@@ -1010,7 +1031,13 @@ describeBrowserLayout("chat responsive browser layout", () => {
       const textarea = page.locator(".agent-chat__composer-combobox > textarea");
       await textarea.fill("/");
       await textarea.focus();
+    });
 
+    afterAll(async () => {
+      await closeBrowserPage(page);
+    });
+
+    it("scrolls the keyboard-active slash option into view in short landscape", async () => {
       const initiallyHidden = await page.evaluate(() => {
         const menu = document.querySelector<HTMLElement>(".slash-menu");
         const options = Array.from(
@@ -1078,9 +1105,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
       expect(result.activeDescendant).toBe(initiallyHidden.id);
       expect(result.scrollTop).toBeGreaterThan(0);
       expect(result.visible).toBe(true);
-    } finally {
-      await closeBrowserPage(page);
-    }
+    });
   });
 
   it("uses the compact mobile grid when the agent filter is not rendered", async () => {

@@ -353,6 +353,8 @@ describe("context notice", () => {
     }
     expect(lowUsage.pct).toBe(23);
     expect(lowUsage.detail).toBe("46k / 200k");
+    expect(lowUsage.input).toBe(757_300);
+    expect(lowUsage.output).toBeNull();
     expect(lowUsage.warning).toBe(false);
     expect(lowUsage.compactRecommended).toBe(false);
     render(renderContextNotice(lowUsageSession, 200_000), container);
@@ -360,7 +362,15 @@ describe("context notice", () => {
     expect(lowNotice).toBeInstanceOf(HTMLElement);
     expect([...lowNotice!.classList]).toEqual(["context-ring"]);
     expect(lowNotice!.textContent?.replace(/\s+/gu, " ").trim()).toBe("23%");
-    expect(lowNotice!.getAttribute("aria-label")).toBe("Session context usage: 46k / 200k (23%)");
+    expect(lowNotice!.getAttribute("aria-label")).toBe("Session context usage: 46k of 200k (23%)");
+    expect(lowNotice!.tagName.toLowerCase()).toBe("summary");
+    const usageDetails = container.querySelector<HTMLDetailsElement>(".context-usage details");
+    expect(usageDetails?.open).toBe(false);
+    lowNotice!.click();
+    expect(usageDetails?.open).toBe(true);
+    expect(
+      container.querySelector(".context-usage__popover")?.textContent?.replace(/\s+/gu, " ").trim(),
+    ).toBe("Context window 46k / 200k · 23% Latest run tokens Input 757.3k Output —");
     const lowFill = lowNotice!.querySelector(".context-ring__fill");
     expect(lowFill?.tagName.toLowerCase()).toBe("circle");
     // 23% of the 40.84 circumference stays hidden via dashoffset.
@@ -384,9 +394,10 @@ describe("context notice", () => {
     expect(notice).toBeInstanceOf(HTMLElement);
     expect(notice!.textContent?.replace(/\s+/gu, " ").trim()).toBe("95%");
     expect([...notice!.classList]).toEqual(["context-ring", "context-ring--warning"]);
-    expect(notice!.getAttribute("aria-label")).toBe("Session context usage: 190k / 200k (95%)");
-    expect(notice!.style.getPropertyValue("--ctx-color")).toBe("rgb(4, 5, 6)");
-    expect(notice!.style.getPropertyValue("--ctx-bg")).toBe("rgba(4, 5, 6, 0.15999999999999998)");
+    expect(notice!.getAttribute("aria-label")).toBe("Session context usage: 190k of 200k (95%)");
+    const usage = container.querySelector<HTMLElement>(".context-usage");
+    expect(usage!.style.getPropertyValue("--ctx-color")).toBe("rgb(4, 5, 6)");
+    expect(usage!.style.getPropertyValue("--ctx-bg")).toBe("rgba(4, 5, 6, 0.15999999999999998)");
 
     const onCompact = vi.fn();
     render(renderContextNotice(session, 200_000, { onCompact }), container);

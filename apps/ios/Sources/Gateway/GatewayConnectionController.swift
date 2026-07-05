@@ -37,6 +37,10 @@ private enum GatewayTLSFingerprintProbeBudget {
     static let tlsHandshakeTimeoutSeconds = 10.0
 }
 
+private enum GatewaySetupRouteProbeBudget {
+    static let tcpConnectTimeoutSeconds = 2.0
+}
+
 private func defaultGatewayTCPReachabilityProbe(
     host: String,
     port: Int,
@@ -213,6 +217,25 @@ final class GatewayConnectionController {
 
     func setDiscoveryDebugLoggingEnabled(_ enabled: Bool) {
         self.discovery.setDebugLoggingEnabled(enabled)
+    }
+
+    func selectReachableSetupLink(_ link: GatewayConnectDeepLink) async -> GatewayConnectDeepLink {
+        let endpoints = link.connectionEndpoints
+        guard endpoints.count > 1 else { return link }
+        // Probe before persisting: a setup code may carry LAN and Tailnet routes,
+        // but only the route reachable from the phone should become its saved endpoint.
+        self.requestLocalNetworkAccess(reason: "setup_route_probe")
+        for (index, endpoint) in endpoints.enumerated() {
+            let reachable = await self.tcpReachabilityProbe(
+                endpoint.host,
+                endpoint.port,
+                GatewaySetupRouteProbeBudget.tcpConnectTimeoutSeconds,
+                "ai.openclaw.gateway.setup-route-\(index)")
+            if reachable {
+                return link.selectingEndpoint(endpoint)
+            }
+        }
+        return link
     }
 
     func requestLocalNetworkAccess(reason: String) {

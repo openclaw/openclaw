@@ -29,6 +29,7 @@ vi.mock("../tool-display.ts", () => ({
 }));
 
 import {
+  formatDistinctCollapsedToolSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolErrorOutput,
@@ -235,6 +236,16 @@ describe("tool-cards", () => {
     expect(formatCollapsedToolSummaryText("  with   Example Deck  ")).toBe("Example Deck");
     expect(formatCollapsedToolSummaryText("Example Deck")).toBe("Example Deck");
     expect(formatCollapsedToolSummaryText("   ")).toBeUndefined();
+  });
+
+  it("omits normalized tool details that repeat the label", () => {
+    expect(formatDistinctCollapsedToolSummaryText("bash", "Bash")).toBeUndefined();
+    expect(
+      formatDistinctCollapsedToolSummaryText("heartbeat_respond", "Heartbeat Respond"),
+    ).toBeUndefined();
+    expect(formatDistinctCollapsedToolSummaryText("run openclaw doctor", "Bash")).toBe(
+      "run openclaw doctor",
+    );
   });
 
   it("keeps collapsed markdown previews bounded after display cleanup", () => {

@@ -930,6 +930,9 @@ export class OpenClawTerminalPanel extends LitElement {
       border-radius: 6px;
       padding: 0;
     }
+    .tp-new {
+      align-self: center;
+    }
     .tp-tab__close:hover,
     .tp-new:hover,
     .tp-icon:hover {

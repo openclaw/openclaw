@@ -27,6 +27,24 @@ export type TuiChatSendResult = {
   status?: string;
 };
 
+export type TuiApprovalDecision = "allow-once" | "allow-always" | "deny";
+
+export type TuiPluginApproval = {
+  id: string;
+  request: {
+    title: string;
+    description?: string | null;
+    pluginId?: string | null;
+    severity?: "info" | "warning" | "critical" | null;
+    toolName?: string | null;
+    allowedDecisions?: readonly TuiApprovalDecision[] | null;
+    agentId?: string | null;
+    sessionKey?: string | null;
+  };
+  createdAtMs: number;
+  expiresAtMs: number;
+};
+
 /** Options for forwarding a goal command to a backend session. */
 export type TuiGoalCommandOptions = {
   sessionKey: string;
@@ -134,6 +152,13 @@ export type TuiSessionMutationResult = {
   };
 };
 
+/** Options for creating a fresh TUI session through the backend lifecycle. */
+export type TuiSessionCreateOptions = {
+  key: string;
+  agentId?: string;
+  parentSessionKey?: string;
+};
+
 /** Minimal backend interface shared by Gateway and embedded local TUI modes. */
 export type TuiBackend = {
   connection: {
@@ -159,6 +184,7 @@ export type TuiBackend = {
   listSessions: (opts?: SessionsListParams) => Promise<TuiSessionList>;
   listAgents: () => Promise<TuiAgentsList>;
   patchSession: (opts: SessionsPatchParams) => Promise<SessionsPatchResult>;
+  createSession: (opts: TuiSessionCreateOptions) => Promise<TuiSessionMutationResult>;
   resetSession: (
     key: string,
     reason?: "new" | "reset",
@@ -167,5 +193,7 @@ export type TuiBackend = {
   getGatewayStatus: () => Promise<unknown>;
   listModels: () => Promise<TuiModelChoice[]>;
   listCommands?: (opts?: CommandsListParams) => Promise<CommandEntry[]>;
+  listPluginApprovals?: () => Promise<unknown>;
+  resolvePluginApproval?: (id: string, decision: TuiApprovalDecision) => Promise<{ ok?: boolean }>;
   runGoalCommand?: (opts: TuiGoalCommandOptions) => Promise<{ text: string }>;
 };

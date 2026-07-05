@@ -201,10 +201,10 @@ export async function updateSessionStoreAfterAgentRun(params: {
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
     const usageForContext = isCliProvider(providerUsed, cfg)
-      ? promptTokens
-        ? undefined
-        : lastCallUsage
-      : usage;
+      ? lastCallUsage
+      : lastCallUsage?.contextUsage
+        ? lastCallUsage
+        : usage;
     const totalTokens = deriveSessionTotalTokens({
       usage: promptTokens ? undefined : usageForContext,
       contextTokens,

@@ -340,10 +340,12 @@ function buildRealtimeInputConfig(
 
 function buildFunctionDeclarations(tools: RealtimeVoiceTool[] | undefined): FunctionDeclaration[] {
   return (tools ?? []).map((tool) => {
+    // Live preview models honor the OpenAPI `parameters` field; the SDK normalizes
+    // our lowercase JSON Schema types before sending the mutually exclusive field.
     const declaration: FunctionDeclaration = {
       name: tool.name,
       description: tool.description,
-      parametersJsonSchema: tool.parameters,
+      parameters: tool.parameters as unknown as FunctionDeclaration["parameters"],
     };
     if (tool.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
       declaration.behavior = "NON_BLOCKING" as Behavior;

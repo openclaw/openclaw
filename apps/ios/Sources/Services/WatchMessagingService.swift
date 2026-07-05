@@ -158,6 +158,13 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
             WatchMessagingPayloadCodec.encodeAppSnapshotPayload(message))
     }
 
+    func sendChatCompletion(
+        _ message: OpenClawWatchChatCompletionMessage) async throws -> WatchNotificationSendResult
+    {
+        try await self.transport.sendPayload(
+            WatchMessagingPayloadCodec.encodeChatCompletionPayload(message))
+    }
+
     private func emitStatusIfChanged(_ snapshot: WatchMessagingStatus) {
         guard snapshot != self.lastEmittedStatus else {
             return

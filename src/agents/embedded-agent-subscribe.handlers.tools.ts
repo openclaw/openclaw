@@ -78,6 +78,10 @@ import {
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentEvent } from "./runtime/index.js";
+import {
+  createToolValidationErrorSummary,
+  summarizeToolValidationError,
+} from "./tool-error-summary.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { readToolResultDetails } from "./tool-result-error.js";
@@ -1201,11 +1205,16 @@ export async function handleToolExecutionEnd(
   if (isToolError) {
     const errorMessage = extractToolErrorMessage(sanitizedResult);
     const errorCode = extractToolErrorCode(sanitizedResult);
+    const validationErrorSummary =
+      evt.executionStarted === false && evt.errorKind === "argument-validation"
+        ? createToolValidationErrorSummary(toolName)
+        : undefined;
     ctx.state.lastToolError = {
       toolName,
       meta,
       ...(errorCode ? { errorCode } : {}),
       error: errorMessage,
+      ...(validationErrorSummary ? { validationErrorSummary } : {}),
       timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
       middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
       mutatingAction: attemptedMutatingAction,
@@ -1229,6 +1238,9 @@ export async function handleToolExecutionEnd(
       ctx.state.lastToolError = undefined;
     }
   }
+  const toolErrorSummary = ctx.state.lastToolError
+    ? summarizeToolValidationError(ctx.state.lastToolError)
+    : undefined;
   if (asyncStarted) {
     ctx.state.hadDeterministicSideEffect = true;
   }
@@ -1341,6 +1353,7 @@ export async function handleToolExecutionEnd(
       meta,
       isError: isToolError,
       result: eventResult,
+      ...(toolErrorSummary ? { toolErrorSummary } : {}),
       ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
   });
@@ -1371,6 +1384,7 @@ export async function handleToolExecutionEnd(
       toolCallId,
       meta,
       isError: isToolError,
+      ...(toolErrorSummary ? { toolErrorSummary } : {}),
       ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
   });

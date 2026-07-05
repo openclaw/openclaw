@@ -246,6 +246,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
           {
             label: "abort-group-prep",
             args: ["--eval", parentScript],
+            abortKillGraceMs: 100,
             timeoutMs: 60_000,
           },
         ]);
@@ -305,6 +306,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         {
           label: "abort-group-drain",
           args: ["--eval", parentScript],
+          abortKillGraceMs: 100,
           timeoutMs: 60_000,
         },
       ]);
@@ -413,7 +415,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       ].join("\n");
       const runnerScript = [
         `import { runNodeStep } from ${JSON.stringify(moduleHref)};`,
-        `await runNodeStep("signal-group-prep", ["--eval", ${JSON.stringify(parentScript)}], 60_000);`,
+        `await runNodeStep("signal-group-prep", ["--eval", ${JSON.stringify(parentScript)}], 60_000, { abortKillGraceMs: 100 });`,
       ].join("\n");
       const runner = spawn(process.execPath, ["--input-type=module", "--eval", runnerScript], {
         stdio: "ignore",

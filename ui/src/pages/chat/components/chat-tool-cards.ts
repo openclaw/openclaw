@@ -7,6 +7,7 @@ import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import {
+  formatDistinctCollapsedToolSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolCardError,
@@ -274,7 +275,7 @@ function renderCollapsedToolSummary(params: {
 }) {
   const { label, icon, name, expanded, isError, onToggleExpanded } = params;
   const displayLabel = formatCollapsedToolSummaryText(label) ?? label;
-  const displayName = formatCollapsedToolSummaryText(name);
+  const displayName = formatDistinctCollapsedToolSummaryText(name, displayLabel);
   return html`
     <button
       class="chat-tool-msg-summary ${isError ? "chat-tool-msg-summary--error" : ""}"
@@ -335,6 +336,7 @@ export function renderToolCard(
   opts: {
     expanded: boolean;
     onToggleExpanded: (id: string) => void;
+    turnSucceeded?: boolean;
     sessionKey?: string;
     agentId?: string;
     onOpenSidebar?: (content: SidebarContent) => void;
@@ -344,7 +346,7 @@ export function renderToolCard(
   },
 ) {
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  const isError = isToolCardError(card);
+  const isError = isToolCardError(card) && opts.turnSucceeded !== true;
   const summary = resolveCollapsedToolSummaryParts({
     card,
     displayLabel: display.label,

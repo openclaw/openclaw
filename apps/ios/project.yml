@@ -317,6 +317,7 @@ targets:
         buildPhase: resources
     dependencies:
       - sdk: AppIntents.framework
+      - sdk: AVFAudio.framework
       - sdk: WatchConnectivity.framework
       - sdk: UserNotifications.framework
     configFiles:
@@ -405,6 +406,8 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: Tests/Logic
+      - path: WatchApp/Sources/WatchVoiceTurnTracker.swift
+        group: WatchApp/Sources
     dependencies:
       - package: OpenClawKit
     settings:

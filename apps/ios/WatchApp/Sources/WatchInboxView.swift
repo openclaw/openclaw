@@ -8,7 +8,7 @@ struct WatchInboxView: View {
     var onRefreshExecApprovalReview: (() -> Void)?
     var onRefreshAppSnapshot: (() -> Void)?
     var onAppCommand: ((WatchAppCommand) -> Void)?
-    var onSendChatMessage: ((String) -> Void)?
+    var onSendChatMessage: ((String) -> String?)?
 
     var body: some View {
         NavigationStack {
@@ -32,7 +32,7 @@ private struct WatchControlSurfaceView: View {
     var onRefreshExecApprovalReview: (() -> Void)?
     var onRefreshAppSnapshot: (() -> Void)?
     var onAppCommand: ((WatchAppCommand) -> Void)?
-    var onSendChatMessage: ((String) -> Void)?
+    var onSendChatMessage: ((String) -> String?)?
     @State private var selectedFace = 0
 
     var body: some View {
@@ -300,6 +300,8 @@ private struct WatchControlSurfaceView: View {
             sendStatusText: self.chatSendStatusText,
             avatarImageSource: self.avatarImageSource,
             avatarText: self.avatarText,
+            completedChatCommandId: self.store.chatCompletion?.commandId,
+            completedChatReplyText: self.store.chatCompletion?.replyText,
             onRefresh: self.onRefreshAppSnapshot,
             onSendMessage: self.onSendChatMessage)
     }
@@ -1006,8 +1008,13 @@ private struct WatchChatTimelineView: View {
     let sendStatusText: String?
     var avatarImageSource: String?
     var avatarText: String?
+    var completedChatCommandId: String?
+    var completedChatReplyText: String?
     var onRefresh: (() -> Void)?
-    var onSendMessage: ((String) -> Void)?
+    var onSendMessage: ((String) -> String?)?
+    @State private var voiceTurnTracker = WatchVoiceTurnTracker()
+    @State private var speechPlayback = WatchSpeechPlayback()
+    @State private var voiceReplyTimeout: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 7) {
@@ -1028,6 +1035,10 @@ private struct WatchChatTimelineView: View {
                         WatchTinyStatus(text: sendStatusText)
                     }
 
+                    if let voiceStatusText = self.voiceStatusText {
+                        WatchTinyStatus(text: voiceStatusText)
+                    }
+
                     WatchSecondaryButton(title: "Refresh") {
                         self.onRefresh?()
                     }
@@ -1041,19 +1052,80 @@ private struct WatchChatTimelineView: View {
 
             WatchChatComposer(
                 onSendMessage: { text in
-                    self.sendMessage(text)
+                    _ = self.sendMessage(text)
+                },
+                onStartVoiceTurn: {
+                    self.startVoiceTurn()
+                },
+                isAwaitingVoiceReply: self.voiceTurnTracker.isAwaitingReply,
+                onCancelVoiceTurn: {
+                    self.cancelVoiceTurn()
+                },
+                isSpeaking: self.speechPlayback.isSpeaking,
+                onStopSpeaking: {
+                    self.speechPlayback.stop()
                 })
                 .padding(.horizontal, 7)
                 .padding(.bottom, 5)
         }
         .background(WatchClawStyle.background.ignoresSafeArea())
         .navigationTitle("Chat")
+        .onChange(of: self.completedChatCommandId) { _, commandId in
+            self.handleCompletedVoiceTurn(commandId: commandId)
+        }
+        .onDisappear {
+            self.cancelVoiceTurn()
+            self.speechPlayback.stop()
+        }
     }
 
-    private func sendMessage(_ text: String) {
+    private func sendMessage(_ text: String) -> String? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        self.onSendMessage?(trimmed)
+        guard !trimmed.isEmpty else { return nil }
+        return self.onSendMessage?(trimmed)
+    }
+
+    private var voiceStatusText: String? {
+        if self.speechPlayback.isSpeaking {
+            return "Speaking reply…"
+        }
+        if self.voiceTurnTracker.isAwaitingReply {
+            return "Waiting for spoken reply…"
+        }
+        return nil
+    }
+
+    private func startVoiceTurn() {
+        WatchNativeTextInput.present(suggestions: []) { text in
+            guard let commandId = self.sendMessage(text) else { return }
+            self.voiceTurnTracker.begin(commandId: commandId)
+            self.scheduleVoiceReplyTimeout()
+        }
+    }
+
+    private func handleCompletedVoiceTurn(commandId: String?) {
+        guard let reply = voiceTurnTracker.takeReply(
+            completedCommandId: commandId,
+            text: completedChatReplyText)
+        else {
+            return
+        }
+        self.voiceReplyTimeout?.cancel()
+        self.speechPlayback.speak(reply)
+    }
+
+    private func cancelVoiceTurn() {
+        self.voiceReplyTimeout?.cancel()
+        self.voiceTurnTracker.cancel()
+    }
+
+    private func scheduleVoiceReplyTimeout() {
+        self.voiceReplyTimeout?.cancel()
+        self.voiceReplyTimeout = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(90))
+            guard !Task.isCancelled else { return }
+            self.voiceTurnTracker.cancel()
+        }
     }
 }
 
@@ -1103,40 +1175,84 @@ private struct WatchMiniUserDot: View {
 
 private struct WatchChatComposer: View {
     let onSendMessage: (String) -> Void
+    let onStartVoiceTurn: () -> Void
+    let isAwaitingVoiceReply: Bool
+    let onCancelVoiceTurn: () -> Void
+    let isSpeaking: Bool
+    let onStopSpeaking: () -> Void
 
     var body: some View {
-        Button {
-            WatchNativeTextInput.present(
-                suggestions: [],
-                onSubmit: self.onSendMessage)
-        } label: {
-            HStack(spacing: 6) {
-                Text("Message OpenClaw")
-                    .font(WatchClawType.body(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                WatchVoiceGlyph()
-                    .frame(width: 18, height: 18)
-                    .padding(5)
-                    .background {
-                        Circle()
-                            .fill(WatchClawStyle.hotGradient)
-                    }
+        HStack(spacing: 6) {
+            Button {
+                WatchNativeTextInput.present(
+                    suggestions: [],
+                    onSubmit: self.onSendMessage)
+            } label: {
+                HStack(spacing: 5) {
+                    Text("Message OpenClaw")
+                        .font(WatchClawType.body(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    Image(systemName: "text.bubble")
+                        .font(WatchClawType.symbol(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 11)
+                .padding(.vertical, 10)
+                .background {
+                    Capsule(style: .continuous)
+                        .fill(Color.white.opacity(0.09))
+                        .overlay {
+                            Capsule(style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.16), lineWidth: 1)
+                        }
+                }
             }
-            .padding(.leading, 12)
-            .padding(.trailing, 5)
-            .padding(.vertical, 5)
-            .background {
-                Capsule(style: .continuous)
-                    .fill(Color.white.opacity(0.09))
-                    .overlay {
-                        Capsule(style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.16), lineWidth: 1)
+            .buttonStyle(.plain)
+            .disabled(self.isAwaitingVoiceReply)
+
+            Button {
+                if self.isSpeaking {
+                    self.onStopSpeaking()
+                } else if self.isAwaitingVoiceReply {
+                    self.onCancelVoiceTurn()
+                } else {
+                    self.onStartVoiceTurn()
+                }
+            } label: {
+                Group {
+                    if self.isSpeaking {
+                        Image(systemName: "speaker.slash.fill")
+                            .font(WatchClawType.symbol(size: 13, weight: .bold))
+                    } else if self.isAwaitingVoiceReply {
+                        Image(systemName: "xmark")
+                            .font(WatchClawType.symbol(size: 13, weight: .bold))
+                    } else {
+                        WatchVoiceGlyph()
                     }
+                }
+                .foregroundStyle(.white)
+                .frame(width: 20, height: 20)
+                .padding(8)
+                .background {
+                    Circle()
+                        .fill(WatchClawStyle.hotGradient)
+                }
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel(self.voiceButtonAccessibilityLabel)
         }
-        .buttonStyle(.plain)
+    }
+
+    private var voiceButtonAccessibilityLabel: String {
+        if self.isSpeaking {
+            return "Stop speaking"
+        }
+        if self.isAwaitingVoiceReply {
+            return "Cancel voice turn"
+        }
+        return "Start voice turn"
     }
 }
 

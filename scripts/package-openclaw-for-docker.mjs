@@ -343,7 +343,7 @@ const PACKAGE_ARTIFACT_BUILD_STEPS = [
   {
     label: "Building OpenClaw package artifacts",
     command: "node",
-    args: ["scripts/build-all.mjs"],
+    args: ["scripts/build-all.mjs", "ciArtifacts"],
   },
 ];
 

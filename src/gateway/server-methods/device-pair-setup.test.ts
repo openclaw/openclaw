@@ -48,7 +48,11 @@ function createOptions(
 
 const okResolution = {
   ok: true as const,
-  payload: { url: "wss://gw.example:8443", bootstrapToken: "boot-123" },
+  payload: {
+    url: "wss://gw.example:8443",
+    urls: ["wss://gw.example:8443", "ws://192.168.1.20:18789"],
+    bootstrapToken: "boot-123",
+  },
   authLabel: "token" as const,
   urlSource: "remote",
 };
@@ -77,6 +81,7 @@ describe("device.pair.setupCode", () => {
       setupCode: "SETUP-CODE-XYZ",
       qrDataUrl: "data:image/png;base64,qr",
       gatewayUrl: "wss://gw.example:8443",
+      gatewayUrls: ["wss://gw.example:8443", "ws://192.168.1.20:18789"],
       auth: "token",
       urlSource: "remote",
     });

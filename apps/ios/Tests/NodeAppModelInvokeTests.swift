@@ -38,7 +38,9 @@ private func makeWatchChatRawMessage(
     role: String,
     text: String?,
     type: String = "text",
-    timestamp: Double) throws -> AnyCodable
+    timestamp: Double,
+    idempotencyKey: String? = nil,
+    stopReason: String? = nil) throws -> AnyCodable
 {
     let message = OpenClawChatMessage(
         role: role,
@@ -50,8 +52,30 @@ private func makeWatchChatRawMessage(
                 fileName: nil,
                 content: nil),
         ],
-        timestamp: timestamp)
+        timestamp: timestamp,
+        idempotencyKey: idempotencyKey,
+        stopReason: stopReason ?? (role == "assistant" ? "stop" : nil))
     let data = try JSONEncoder().encode(message)
+    return try JSONDecoder().decode(AnyCodable.self, from: data)
+}
+
+private func makeProjectedWatchChatRawMessage(
+    role: String,
+    text: String,
+    timestamp: Double,
+    serverId: String,
+    isMessageToolMirror: Bool = false) throws -> AnyCodable
+{
+    var object: [String: Any] = [
+        "role": role,
+        "content": [["type": "text", "text": text]],
+        "timestamp": timestamp,
+        "__openclaw": ["id": serverId],
+    ]
+    if isMessageToolMirror {
+        object["openclawMessageToolMirror"] = ["toolName": "message"]
+    }
+    let data = try JSONSerialization.data(withJSONObject: object)
     return try JSONDecoder().decode(AnyCodable.self, from: data)
 }
 
@@ -82,6 +106,7 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
     var lastSentExecApprovalExpired: OpenClawWatchExecApprovalExpiredMessage?
     var lastSentExecApprovalSnapshot: OpenClawWatchExecApprovalSnapshotMessage?
     var lastSentAppSnapshot: OpenClawWatchAppSnapshotMessage?
+    var lastSentChatCompletion: OpenClawWatchChatCompletionMessage?
     private var statusHandler: (@Sendable (WatchMessagingStatus) -> Void)?
     private var replyHandler: (@Sendable (WatchQuickReplyEvent) -> Void)?
     private var execApprovalResolveHandler: (@Sendable (WatchExecApprovalResolveEvent) -> Void)?
@@ -171,6 +196,16 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         _ message: OpenClawWatchAppSnapshotMessage) async throws -> WatchNotificationSendResult
     {
         self.lastSentAppSnapshot = message
+        if let sendError {
+            throw sendError
+        }
+        return self.nextSendResult
+    }
+
+    func sendChatCompletion(
+        _ message: OpenClawWatchChatCompletionMessage) async throws -> WatchNotificationSendResult
+    {
+        self.lastSentChatCompletion = message
         if let sendError {
             throw sendError
         }
@@ -721,9 +756,11 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
                 sentAtMs: 126,
                 transport: "sendMessage"))
         for _ in 0..<20 {
-            if watchService.lastSentAppSnapshot?.chatItems?.contains(where: { item in
-                item.role == "user" && item.text.contains("Watch says hello")
-            }) == true {
+            if watchService.lastSentChatCompletion?.commandId == "watch-send-chat",
+               watchService.lastSentAppSnapshot?.chatItems?.contains(where: { item in
+                   item.role == "user" && item.text.contains("Watch says hello")
+               }) == true
+            {
                 break
             }
             try? await Task.sleep(nanoseconds: 50_000_000)
@@ -732,6 +769,8 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         #expect(watchService.lastSentAppSnapshot?.chatItems?.contains { item in
             item.role == "user" && item.text.contains("Watch says hello")
         } == true)
+        #expect(watchService.lastSentChatCompletion?.commandId == "watch-send-chat")
+        #expect(watchService.lastSentChatCompletion?.replyText.contains("Watch says hello") == true)
     }
 
     @Test func watchChatPreviewKeepsOlderReadableMessagesAfterInternalEvents() throws {
@@ -753,6 +792,179 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         let items = NodeAppModel._test_makeWatchChatItems(from: rawMessages)
 
         #expect(items.map(\.text) == ["Still worth reading"])
+    }
+
+    @Test func watchChatPreviewReadsResponsesOutputText() throws {
+        let rawMessages = try [
+            makeWatchChatRawMessage(
+                role: "assistant",
+                text: "Responses reply",
+                type: "output_text",
+                timestamp: 1000),
+        ]
+
+        let items = NodeAppModel._test_makeWatchChatItems(from: rawMessages)
+
+        #expect(items.map(\.text) == ["Responses reply"])
+    }
+
+    @Test func watchVoiceReplyMatchesDirectRunInsteadOfNewestAssistant() throws {
+        let rawMessages = try [
+            makeWatchChatRawMessage(
+                role: "assistant",
+                text: "Matching reply",
+                timestamp: 2000,
+                idempotencyKey: "watch-run"),
+            makeWatchChatRawMessage(
+                role: "assistant",
+                text: "Unrelated newer reply",
+                timestamp: 3000,
+                idempotencyKey: "other-run"),
+        ]
+
+        let reply = NodeAppModel._test_watchChatReplyText(
+            from: rawMessages,
+            runId: "watch-run",
+            submittedText: "Question",
+            submittedAtMs: 1000)
+
+        #expect(reply == "Matching reply")
+    }
+
+    @Test func watchVoiceReplyAnchorsQueuedRunAfterPersistedUserTurn() throws {
+        let rawMessages = try [
+            makeWatchChatRawMessage(role: "assistant", text: "Active reply", timestamp: 2000),
+            makeWatchChatRawMessage(
+                role: "user",
+                text: "Watch question",
+                timestamp: 3000,
+                idempotencyKey: "watch-run:user"),
+            makeWatchChatRawMessage(
+                role: "assistant",
+                text: "Still working",
+                timestamp: 3500,
+                stopReason: "toolUse"),
+            makeWatchChatRawMessage(role: "assistant", text: "Queued reply", timestamp: 4000),
+        ]
+
+        let reply = NodeAppModel._test_watchChatReplyText(
+            from: rawMessages,
+            runId: "watch-run",
+            submittedText: "Watch question",
+            submittedAtMs: 2500)
+
+        #expect(reply == "Queued reply")
+    }
+
+    @Test func watchVoiceReplyFindsCollectedQueuedTurn() throws {
+        let rawMessages = try [
+            makeWatchChatRawMessage(role: "assistant", text: "Active reply", timestamp: 2000),
+            makeWatchChatRawMessage(
+                role: "user",
+                text: "[Queued messages]\nWatch question\nAnother request",
+                timestamp: 3100,
+                idempotencyKey: "followup-collect:session:hash"),
+            makeWatchChatRawMessage(role: "assistant", text: "Collected reply", timestamp: 4000),
+        ]
+
+        let reply = NodeAppModel._test_watchChatReplyText(
+            from: rawMessages,
+            runId: "watch-run",
+            submittedText: "Watch question",
+            submittedAtMs: 2500)
+
+        #expect(reply == "Collected reply")
+    }
+
+    @Test func watchVoiceReplyAcceptsTerminalMessageToolMirror() throws {
+        let rawMessages = try [
+            makeWatchChatRawMessage(
+                role: "user",
+                text: "Send the update",
+                timestamp: 3000,
+                idempotencyKey: "watch-run:user"),
+            makeProjectedWatchChatRawMessage(
+                role: "assistant",
+                text: "Update sent",
+                timestamp: 4000,
+                serverId: "tool-result-1",
+                isMessageToolMirror: true),
+        ]
+
+        let reply = NodeAppModel._test_watchChatReplyText(
+            from: rawMessages,
+            runId: "watch-run",
+            submittedText: "Send the update",
+            submittedAtMs: 2500)
+
+        #expect(reply == "Update sent")
+    }
+
+    @Test func watchChatCompletionBoundsReplyText() {
+        let message = OpenClawWatchChatCompletionMessage(
+            commandId: "watch-voice",
+            replyText: String(repeating: "x", count: 5000))
+
+        let payload = WatchMessagingPayloadCodec.encodeChatCompletionPayload(message)
+        let reply = payload["replyText"] as? String
+
+        #expect(reply?.count == WatchMessagingPayloadCodec.completedChatReplyTextLimit)
+        #expect(reply?.hasSuffix("...") == true)
+    }
+
+    @Test func watchChatPreviewDisambiguatesIdenticalFallbackMessages() throws {
+        let rawMessages = try [
+            makeWatchChatRawMessage(role: "assistant", text: "Same", timestamp: 1000),
+            makeWatchChatRawMessage(role: "assistant", text: "Same", timestamp: 1000),
+        ]
+
+        let items = NodeAppModel._test_makeWatchChatItems(from: rawMessages)
+
+        #expect(items.count == 2)
+        #expect(items[0].id != items[1].id)
+    }
+
+    @Test func watchChatPreviewDisambiguatesProjectedRowsSharingServerID() throws {
+        let rawMessages = try [
+            makeProjectedWatchChatRawMessage(
+                role: "toolResult",
+                text: "Update sent",
+                timestamp: 1000,
+                serverId: "shared-result"),
+            makeProjectedWatchChatRawMessage(
+                role: "assistant",
+                text: "Update sent",
+                timestamp: 1000,
+                serverId: "shared-result",
+                isMessageToolMirror: true),
+        ]
+
+        let items = NodeAppModel._test_makeWatchChatItems(from: rawMessages)
+
+        #expect(items.count == 2)
+        #expect(items[0].id != items[1].id)
+    }
+
+    @Test func watchChatPreviewKeepsMessageIDsStableWhenWindowRolls() throws {
+        var rawMessages: [AnyCodable] = []
+        for index in 0..<5 {
+            try rawMessages.append(
+                makeWatchChatRawMessage(
+                    role: "assistant",
+                    text: "Reply \(index)",
+                    timestamp: Double(1000 + index)))
+        }
+
+        let before = NodeAppModel._test_makeWatchChatItems(from: rawMessages)
+        try rawMessages.append(
+            makeWatchChatRawMessage(
+                role: "user",
+                text: "Next question",
+                timestamp: 2000))
+        let after = NodeAppModel._test_makeWatchChatItems(from: rawMessages)
+
+        #expect(before.last?.id == after.dropLast().last?.id)
+        #expect(after.last?.role == "user")
     }
 
     @Test @MainActor func watchAppCommandQueuesChatMessageWhenOperatorOffline() async {
