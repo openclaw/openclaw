@@ -213,6 +213,25 @@ function splitBoundedDiagnosticLines(text: string): string[] {
   return splitDiagnosticLines(text).map(truncateDiagnosticLine);
 }
 
+function collectBoundedDiagnosticLines(text: string): string[] {
+  const normalized = normalizeToLF(text);
+  const lines: string[] = [];
+  let start = 0;
+  while (lines.length < EDIT_MISMATCH_SCAN_LINE_LIMIT) {
+    const end = normalized.indexOf("\n", start);
+    const rawLine = end === -1 ? normalized.slice(start) : normalized.slice(start, end);
+    lines.push(truncateDiagnosticLine(rawLine));
+    if (end === -1) {
+      break;
+    }
+    start = end + 1;
+  }
+  if (lines.length > 1 && lines[lines.length - 1] === "") {
+    lines.pop();
+  }
+  return lines;
+}
+
 function truncateForScore(text: string): string {
   return text.length <= EDIT_MISMATCH_SCORE_TEXT_LIMIT
     ? text
@@ -338,9 +357,7 @@ function findNearestEditCandidates(
     return [];
   }
 
-  const contentLines = splitDiagnosticLines(stripBom(content).text)
-    .slice(0, EDIT_MISMATCH_SCAN_LINE_LIMIT)
-    .map(truncateDiagnosticLine);
+  const contentLines = collectBoundedDiagnosticLines(stripBom(content).text);
   if (contentLines.length === 0) {
     return [];
   }

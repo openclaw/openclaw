@@ -154,6 +154,35 @@ describe("edit tool", () => {
     expect(message).not.toContain(targetTail);
   });
 
+  it("bounds many-line mismatch candidate diagnostics before collecting lines", async () => {
+    const scannedCandidate = "inside-scan-candidate";
+    const unscannedCandidate = "outside-scan-candidate";
+    const filler = Array.from({ length: 999 }, (_, index) => `filler ${index + 1}`);
+    const filePath = await createTempFile(
+      `${filler.join("\n")}\nalpha ${scannedCandidate}\nalpha ${unscannedCandidate}\n`,
+    );
+    const tool = createEditTool(tmpDir);
+
+    let message = "";
+    try {
+      await tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "alpha target-candidate", newText: "replacement" }],
+        },
+        undefined,
+      );
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("Nearest candidate lines:");
+    expect(message).toContain("Candidate 1 (line 1000):");
+    expect(message).toContain(scannedCandidate);
+    expect(message).not.toContain(unscannedCandidate);
+  });
+
   it("omits candidate lines for no-op validation mismatches", async () => {
     const filePath = await createTempFile("present no-op\nnear absent tex\n");
     const tool = createEditTool(tmpDir);
