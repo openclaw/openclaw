@@ -4063,6 +4063,36 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(3);
   });
 
+  it("releases a prompt reacquire that resolves after controller disposal", async () => {
+    const releaseInitial = vi.fn(async () => {});
+    const releaseLate = vi.fn(async () => {});
+    let resolveReacquiredLock!: (lock: { release(): Promise<void> }) => void;
+    const reacquiredLock = new Promise<{ release(): Promise<void> }>((resolve) => {
+      resolveReacquiredLock = resolve;
+    });
+    const acquireSessionWriteLockLocal = vi
+      .fn()
+      .mockResolvedValueOnce({ release: releaseInitial })
+      .mockImplementationOnce(async () => await reacquiredLock);
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions,
+    });
+
+    await controller.releaseForPrompt();
+    const reacquire = controller.reacquireAfterPrompt();
+    await waitUntil(
+      () => acquireSessionWriteLockLocal.mock.calls.length === 2,
+      "expected prompt cleanup to begin reacquiring the session lock",
+    );
+    await controller.dispose();
+    resolveReacquiredLock({ release: releaseLate });
+    await reacquire;
+
+    expect(releaseInitial).toHaveBeenCalledTimes(1);
+    expect(releaseLate).toHaveBeenCalledTimes(1);
+  });
+
   it("takeHeldLockAfterRetainedIdle does not self-deadlock when called from inside active write scope (#95915)", async () => {
     const events: string[] = [];
     const acquireSessionWriteLockLocal = vi
