@@ -6,14 +6,27 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ensureOutputDirectory } from "./output-directories.js";
 
+const directorySymlinkType = process.platform === "win32" ? "junction" : "dir";
+
 const canCreateDirectorySymlinks = (() => {
+  let probeDir: string | undefined;
   try {
-    const tempLink = path.join(os.tmpdir(), `symlink-dir-test-${Math.random().toString(36).substring(2)}`);
-    fsSync.symlinkSync(os.tmpdir(), tempLink, process.platform === "win32" ? "junction" : "dir");
-    fsSync.unlinkSync(tempLink);
+    probeDir = fsSync.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-output-dir-symlink-probe-"),
+    );
+    const targetDir = path.join(probeDir, "target");
+    const linkDir = path.join(probeDir, "link");
+    fsSync.mkdirSync(targetDir);
+    fsSync.symlinkSync(targetDir, linkDir, directorySymlinkType);
     return true;
   } catch {
     return false;
+  } finally {
+    if (probeDir) {
+      try {
+        fsSync.rmSync(probeDir, { recursive: true, force: true });
+      } catch {}
+    }
   }
 })();
 
@@ -56,7 +69,7 @@ describe("ensureOutputDirectory", () => {
         const outsideDir = path.join(tempDir, "outside");
         await fs.mkdir(outsideDir);
         const symlinkDir = path.join(tempDir, "downloads");
-        await fs.symlink(outsideDir, symlinkDir, process.platform === "win32" ? "junction" : "dir");
+        await fs.symlink(outsideDir, symlinkDir, directorySymlinkType);
 
         await expect(ensureOutputDirectory(path.join(symlinkDir, "nested"))).rejects.toThrow(
           /symlink|output directory/i,
