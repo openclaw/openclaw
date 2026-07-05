@@ -196,7 +196,10 @@ describe("doctorShellCompletion", () => {
         expect.arrayContaining(["completion", "--write-state", "--shell", "powershell"]),
         expect.any(Object),
       );
-      const spawnOptions = spawnSyncMock.mock.calls.at(-1)?.[2];
+      const spawnCalls = spawnSyncMock.mock.calls as unknown as Array<
+        [string, string[], { env?: NodeJS.ProcessEnv }]
+      >;
+      const spawnOptions = spawnCalls.at(-1)?.[2];
       expect(spawnOptions?.env?.[COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]).toBe(expectedSkipValue);
     },
   );
