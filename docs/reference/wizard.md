@@ -119,7 +119,7 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
     - Linux (and Windows via WSL2): systemd user unit
       - Onboarding attempts to enable lingering via `loginctl enable-linger <user>` so the Gateway stays up after logout.
       - May prompt for sudo (writes `/var/lib/systemd/linger`); it tries without sudo first.
-    - **Runtime selection:** Node (recommended; required for WhatsApp/Telegram). Bun is **not recommended**.
+    - **Runtime selection:** interactive setup offers **Node** only. WhatsApp and Telegram require Node; Bun can corrupt memory on reconnect, and `openclaw doctor` flags Bun-based Gateway services as incompatible with those channels.
     - If token auth requires a token and `gateway.auth.token` is SecretRef-managed, daemon install validates it but does not persist resolved plaintext token values into supervisor service environment metadata.
     - If token auth requires a token and the configured token SecretRef is unresolved, daemon install is blocked with actionable guidance.
     - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, daemon install is blocked until mode is set explicitly.
@@ -203,17 +203,12 @@ Clients (macOS app, Control UI) can render steps without re-implementing onboard
 
 ## Signal setup (signal-cli)
 
-Onboarding can install `signal-cli` from GitHub releases:
+Onboarding can install `signal-cli` for you:
 
-- Downloads the appropriate release asset.
-- Stores it under `~/.openclaw/tools/signal-cli/<version>/`.
-- Writes `channels.signal.cliPath` to your config.
-
-Notes:
-
-- JVM builds require **Java 21**.
-- Native builds are used when available.
-- Windows uses WSL2; signal-cli install follows the Linux flow inside WSL.
+- Linux x64: downloads the official native build from GitHub releases and stores it under `~/.openclaw/tools/signal-cli/<version>/`.
+- macOS and other platforms without a native release build: installs via Homebrew (`brew install signal-cli`).
+- Windows: auto-install is not supported yet; install `signal-cli` manually and point `channels.signal.cliPath` at it. Inside WSL2 the Linux flow applies.
+- The resolved binary path is written to `channels.signal.cliPath` in your config.
 
 ## What the wizard writes
 
@@ -225,7 +220,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `gateway.*` (mode, bind, auth, tailscale)
 - `session.dmScope` (behavior details: [CLI Setup Reference](/start/wizard-cli-reference#outputs-and-internals))
 - `channels.telegram.botToken`, `channels.discord.token`, `channels.matrix.*`, `channels.signal.*`, `channels.imessage.*`
-- Channel allowlists (Slack/Discord/Matrix/Microsoft Teams) when you opt in during the prompts (names resolve to IDs when possible).
+- Channel DM allowlists when you opt in during the channel prompts. Discord, Matrix, Microsoft Teams, and Slack resolve names to IDs when possible; other channels take IDs directly (for example numeric Telegram sender IDs or WhatsApp phone numbers).
 - `skills.install.nodeManager`
   - `setup --node-manager` accepts `npm`, `pnpm`, or `bun`.
   - Manual config can still use `yarn` by setting `skills.install.nodeManager` directly.

@@ -1,10 +1,11 @@
+import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { redactToolPayloadText } from "../logging/redact.js";
 /**
  * Exec tool display summaries.
  *
  * Turns common shell commands into short redacted labels for tool timelines and transcripts.
  */
-import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { redactToolPayloadText } from "../logging/redact.js";
+import { formatInlineCodeSpan } from "../shared/markdown-code.js";
 import { sliceUtf16Safe } from "../shared/utf16-slice.js";
 import {
   binaryName,
@@ -495,7 +496,7 @@ export function resolveExecDetail(
     compact !== displaySummary &&
     compact !== summary
   ) {
-    return `${displaySummary}${nodeFragment} · \`${compact}\``;
+    return `${displaySummary}${nodeFragment} · ${formatInlineCodeSpan(compact)}`;
   }
 
   return `${displaySummary}${nodeFragment}`;

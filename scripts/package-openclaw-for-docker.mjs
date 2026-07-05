@@ -352,7 +352,7 @@ export async function buildPackageArtifacts(sourceDir, options = {}) {
       env: {
         ...process.env,
         OPENCLAW_BUILD_ALL_NO_PNPM: "1",
-        OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+        OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
       },
       timeoutMs: resolveTimeoutMs(
         "OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS",

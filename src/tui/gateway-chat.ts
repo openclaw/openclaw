@@ -28,6 +28,7 @@ import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-re
 import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { sleep } from "../utils/sleep.js";
 import { VERSION } from "../version.js";
 import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
 import type {
@@ -95,14 +96,16 @@ function resolveStartupRetryDelayMs(err: GatewayClientRequestError): number {
   return Math.min(Math.max(retryAfterMs, 100), STARTUP_CHAT_HISTORY_MAX_RETRY_MS);
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function isLegacyPreserveSideRunsError(err: unknown): boolean {
+  if (!(err instanceof GatewayClientRequestError) || err.gatewayCode !== "INVALID_REQUEST") {
+    return false;
+  }
+  const message = err.message.toLowerCase();
+  return message.includes("invalid chat.abort params") && message.includes("preservesideruns");
 }
 
 export type GatewaySessionList = TuiSessionList;
@@ -216,12 +219,34 @@ export class GatewayChatClient implements TuiBackend {
     return status ? { runId: acceptedRunId, status } : { runId: acceptedRunId };
   }
 
-  async abortChat(opts: { sessionKey: string; agentId?: string; runId: string }) {
-    return await this.client.request<{ ok: boolean; aborted: boolean }>("chat.abort", {
+  async abortChat(opts: { sessionKey: string; agentId?: string; runId?: string }) {
+    const params = {
       sessionKey: opts.sessionKey,
       ...(opts.agentId ? { agentId: opts.agentId } : {}),
-      runId: opts.runId,
-    });
+      ...(opts.runId ? { runId: opts.runId } : {}),
+    };
+    if (opts.runId) {
+      return await this.client.request<{ ok: boolean; aborted: boolean; runIds?: string[] }>(
+        "chat.abort",
+        params,
+      );
+    }
+    try {
+      return await this.client.request<{ ok: boolean; aborted: boolean; runIds?: string[] }>(
+        "chat.abort",
+        { ...params, preserveSideRuns: true },
+      );
+    } catch (err) {
+      // Protocol v4 peers reject unknown fields. Retry the shipped abort shape
+      // so mixed-version TUI stops still work, even without BTW isolation.
+      if (!isLegacyPreserveSideRunsError(err)) {
+        throw err;
+      }
+      return await this.client.request<{ ok: boolean; aborted: boolean; runIds?: string[] }>(
+        "chat.abort",
+        params,
+      );
+    }
   }
 
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {

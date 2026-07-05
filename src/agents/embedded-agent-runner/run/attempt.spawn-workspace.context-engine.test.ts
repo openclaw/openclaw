@@ -12,6 +12,14 @@ import {
   registerMemoryPromptSection,
 } from "../../../plugins/memory-state.js";
 import {
+  addSubagentRunForTests,
+  leasePendingAgentSteeringItems,
+  releasePendingAgentSteeringItems,
+  resetSubagentRegistryForTests,
+} from "../../subagent-registry.js";
+import type { SubagentRunRecord } from "../../subagent-registry.types.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import {
   type AttemptContextEngine,
   buildLoopPromptCacheInfo,
   assembleAttemptContextEngine,
@@ -325,6 +333,70 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const availableTools = assembleParams.availableTools;
     expect(availableTools).toBeInstanceOf(Set);
     expect((availableTools as Set<string>).has("memory_search")).toBe(false);
+  });
+
+  it("keeps pending parent steering queued during commitment-only runs", async () => {
+    const childRunId = "queued-child-run";
+    const frozenResultText = "queued child result for the next normal turn";
+    const endedAt = Date.now() - 1_000;
+    const pendingRun: SubagentRunRecord = {
+      runId: childRunId,
+      childSessionKey: `agent:main:subagent:${childRunId}`,
+      requesterSessionKey: sessionKey,
+      requesterDisplayKey: sessionKey,
+      task: "inspect the parent flow",
+      cleanup: "delete",
+      createdAt: endedAt - 1_000,
+      endedAt,
+      outcome: { status: "ok" },
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: frozenResultText },
+      delivery: {
+        status: "pending",
+        createdAt: endedAt + 1,
+        payload: {
+          requesterSessionKey: sessionKey,
+          requesterDisplayKey: sessionKey,
+          childSessionKey: `agent:main:subagent:${childRunId}`,
+          childRunId,
+          task: "inspect the parent flow",
+          endedAt,
+          outcome: { status: "ok" },
+          expectsCompletionMessage: true,
+          frozenResultText,
+        },
+      },
+    };
+    let submittedPrompt = "";
+    resetSubagentRegistryForTests({ persist: false });
+    addSubagentRunForTests(pendingRun);
+
+    try {
+      await createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey,
+        tempPaths,
+        attemptOverrides: {
+          bootstrapContextRunKind: "commitment-only",
+          trigger: "heartbeat",
+        },
+        sessionPrompt: async (_session, prompt) => {
+          submittedPrompt = prompt;
+        },
+      });
+
+      expect(submittedPrompt).not.toContain(frozenResultText);
+      const leaseId = "next-normal-turn";
+      const retained = leasePendingAgentSteeringItems({
+        requesterSessionKey: sessionKey,
+        leaseId,
+      });
+      expect(retained?.runIds).toEqual([childRunId]);
+      expect(retained?.prompt).toContain(frozenResultText);
+      releasePendingAgentSteeringItems({ runIds: [childRunId], leaseId });
+    } finally {
+      resetSubagentRegistryForTests({ persist: false });
+    }
   });
 
   it("defaults local-model lean embedded runs to Tool Search controls", async () => {
@@ -1860,7 +1932,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
             "visible_reply_contract: message_tool_only",
             "Room context:\n#2001 Alice: lunch at 2?\n#2002 Bob: works",
             "Current event:\n#2003 Bob: hey claw summarize the plan",
-            "Treat this as observed room activity. Decide whether to act.",
+            "Treat this as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way.",
           ].join("\n\n"),
         },
         suppressNextUserMessagePersistence: true,
@@ -2066,6 +2138,86 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(hoisted.preemptiveCompactionCalls.at(-1)).not.toHaveProperty("unwindowedMessages");
   });
 
+  it("skips the generic precheck when the context engine owns compaction", async () => {
+    let sawPrompt = false;
+    const hugeHistory = "large raw history ".repeat(2_000);
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createTestContextEngine({
+        info: {
+          id: "test-context-engine",
+          name: "Test Context Engine",
+          version: "0.0.1",
+          ownsCompaction: true,
+        },
+        assemble: async () => ({
+          messages: [
+            { role: "user", content: "small assembled context", timestamp: 1 },
+          ] as AgentMessage[],
+          estimatedTokens: 8,
+        }),
+      }),
+      sessionKey,
+      tempPaths,
+      sessionMessages: [{ role: "user", content: hugeHistory, timestamp: 1 }] as AgentMessage[],
+      attemptOverrides: {
+        contextTokenBudget: 500,
+      },
+      sessionPrompt: async (session) => {
+        sawPrompt = true;
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(sawPrompt).toBe(true);
+    expect(result.promptError).toBeNull();
+    expect(result.promptErrorSource).toBeNull();
+    expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
+  });
+
+  it("keeps the generic precheck active when owning context engine assembly fails", async () => {
+    const lockEvents = trackSessionWriteLocks();
+    let sawPrompt = false;
+    const hugeHistory = "large raw history ".repeat(2_000);
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createTestContextEngine({
+        info: {
+          id: "test-context-engine",
+          name: "Test Context Engine",
+          version: "0.0.1",
+          ownsCompaction: true,
+        },
+        assemble: async () => {
+          throw new Error("assembly failed");
+        },
+      }),
+      sessionKey,
+      tempPaths,
+      sessionMessages: [{ role: "user", content: hugeHistory, timestamp: 1 }] as AgentMessage[],
+      attemptOverrides: {
+        contextTokenBudget: 500,
+      },
+      sessionPrompt: async (session) => {
+        sawPrompt = true;
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(sawPrompt).toBe(false);
+    expect(result.promptErrorSource).toBe("precheck");
+    expect(result.preflightRecovery?.route).toBe("compact_only");
+    expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
+    expect(hoisted.preemptiveCompactionCalls.at(-1)).not.toHaveProperty("unwindowedMessages");
+    expectInitialLockReleasedBeforePostTurnWrite(lockEvents);
+  });
+
   it("repairs tool-result pairing after context engine assembly", async () => {
     let promptMessages: AgentMessage[] = [];
 
@@ -2137,6 +2289,50 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(sawPrompt).toBe(false);
     expect(result.promptErrorSource).toBe("precheck");
     expect(result.preflightRecovery?.route).toBe("compact_only");
+    expect(hoisted.preemptiveCompactionCalls.at(-1)).toHaveProperty("unwindowedMessages");
+    expectInitialLockReleasedBeforePostTurnWrite(lockEvents);
+  });
+
+  it("keeps the preassembly overflow precheck active for owning context engines", async () => {
+    const lockEvents = trackSessionWriteLocks();
+    let sawPrompt = false;
+    const hugeHistory = "large raw history ".repeat(2_000);
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createTestContextEngine({
+        info: {
+          id: "test-context-engine",
+          name: "Test Context Engine",
+          version: "0.0.1",
+          ownsCompaction: true,
+        },
+        assemble: async () => ({
+          messages: [
+            { role: "user", content: "small assembled context", timestamp: 1 },
+          ] as AgentMessage[],
+          estimatedTokens: 8,
+          promptAuthority: "preassembly_may_overflow",
+        }),
+      }),
+      sessionKey,
+      tempPaths,
+      sessionMessages: [{ role: "user", content: hugeHistory, timestamp: 1 }] as AgentMessage[],
+      attemptOverrides: {
+        contextTokenBudget: 500,
+      },
+      sessionPrompt: async (session) => {
+        sawPrompt = true;
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(sawPrompt).toBe(false);
+    expect(result.promptErrorSource).toBe("precheck");
+    expect(result.preflightRecovery?.route).toBe("compact_only");
+    expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
     expect(hoisted.preemptiveCompactionCalls.at(-1)).toHaveProperty("unwindowedMessages");
     expectInitialLockReleasedBeforePostTurnWrite(lockEvents);
   });
@@ -2283,6 +2479,36 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(afterTurn).not.toHaveBeenCalled();
     expect(runBeforePromptBuild).not.toHaveBeenCalled();
     expect(runLlmInput).not.toHaveBeenCalled();
+  });
+
+  it("flushes the embedded session transcript before afterTurn", async () => {
+    const events: string[] = [];
+    const afterTurn = vi.fn(async () => {
+      events.push("afterTurn");
+    });
+    hoisted.sessionManager.rewriteFile.mockImplementation(() => {
+      events.push("flush");
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createTestContextEngine({ afterTurn }),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        currentInboundEventKind: "room_event",
+        currentInboundContext: { text: "[OpenClaw room event]" },
+        suppressNextUserMessagePersistence: true,
+        transcriptPrompt: "",
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [...session.messages, doneMessage];
+      },
+    });
+
+    const afterTurnIndex = events.indexOf("afterTurn");
+    expect(afterTurn).toHaveBeenCalledTimes(1);
+    expect(afterTurnIndex).not.toBe(-1);
+    expect(events.slice(0, afterTurnIndex)).toContain("flush");
   });
 
   it("forwards sessionKey to bootstrap, assemble, and afterTurn", async () => {
@@ -2935,5 +3161,96 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     expect(afterTurn).toHaveBeenCalledTimes(1);
     expect(sumToolResultTextChars(afterTurnMessages)).toBeGreaterThan(4_000);
     expect(JSON.stringify(afterTurnMessages)).not.toContain("truncated");
+  });
+
+  it("routes aggregate prompt-history truncation to compact-then-truncate before prompt submission", async () => {
+    let sawPrompt = false;
+    const sessionMessages: AgentMessage[] = [{ role: "user", content: "seed", timestamp: 1 }];
+    for (let index = 0; index < 5; index += 1) {
+      sessionMessages.push({
+        ...makeAgentAssistantMessage({
+          content: [{ type: "toolCall", id: `aggregate_${index}`, name: "read", arguments: {} }],
+          timestamp: 2 + index * 2,
+        }),
+      });
+      sessionMessages.push({
+        role: "toolResult",
+        toolCallId: `aggregate_${index}`,
+        toolName: "read",
+        content: [{ type: "text", text: `${index}: ${"aggregate output ".repeat(900)}` }],
+        isError: false,
+        timestamp: 3 + index * 2,
+      } as AgentMessage);
+    }
+    sessionMessages.push(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "old turn done" }],
+        timestamp: 20,
+      }),
+    );
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionMessages,
+      attemptOverrides: {
+        contextTokenBudget: 1_000,
+      },
+      sessionPrompt: async (session) => {
+        sawPrompt = true;
+        session.messages = [...session.messages, doneMessage];
+      },
+    });
+
+    expect(sawPrompt).toBe(false);
+    expect(result.promptErrorSource).toBe("precheck");
+    expect(result.preflightRecovery).toEqual({ route: "compact_then_truncate" });
+    expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
+  });
+
+  it("routes protected trailing aggregate pressure to compact-then-truncate", async () => {
+    let sawPrompt = false;
+    const sessionMessages: AgentMessage[] = [
+      { role: "user", content: "seed", timestamp: 1 },
+      makeAgentAssistantMessage({
+        content: Array.from({ length: 5 }, (_, index) => ({
+          type: "toolCall",
+          id: `fresh_${index}`,
+          name: "read",
+          arguments: {},
+        })),
+        timestamp: 2,
+      }),
+    ];
+    for (let index = 0; index < 5; index += 1) {
+      sessionMessages.push({
+        role: "toolResult",
+        toolCallId: `fresh_${index}`,
+        toolName: "read",
+        content: [{ type: "text", text: `${index}: ${"fresh output ".repeat(90)}` }],
+        isError: false,
+        timestamp: 3 + index,
+      } as AgentMessage);
+    }
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionMessages,
+      attemptOverrides: {
+        contextTokenBudget: 1_000,
+      },
+      sessionPrompt: async (session) => {
+        sawPrompt = true;
+        session.messages = [...session.messages, doneMessage];
+      },
+    });
+
+    expect(sawPrompt).toBe(false);
+    expect(result.promptErrorSource).toBe("precheck");
+    expect(result.preflightRecovery).toEqual({ route: "compact_then_truncate" });
+    expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
   });
 });

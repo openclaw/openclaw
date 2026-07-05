@@ -32,6 +32,30 @@ class ConnectionManager(
   private val manualTls: () -> Boolean,
 ) {
   companion object {
+    internal val legacyOperatorScopes: List<String> =
+      listOf(
+        "operator.approvals",
+        "operator.read",
+        "operator.write",
+      )
+
+    internal val nativeClientOperatorScopes: List<String> =
+      listOf(
+        "operator.approvals",
+        "operator.read",
+        "operator.talk.secrets",
+        "operator.write",
+      )
+
+    internal fun operatorScopesForStoredDeviceToken(storedScopes: List<String>): List<String> {
+      val normalized =
+        storedScopes
+          .map { it.trim() }
+          .filter { it.isNotEmpty() }
+          .distinct()
+      return normalized.ifEmpty { legacyOperatorScopes }
+    }
+
     /**
      * Decide whether a discovered/manual endpoint must use pinned TLS or can stay local cleartext.
      */
@@ -187,15 +211,12 @@ class ConnectionManager(
     )
 
   /** Connect options for the Android operator session that drives approvals and UI actions. */
-  fun buildOperatorConnectOptions(): GatewayConnectOptions =
+  fun buildOperatorConnectOptions(
+    scopes: List<String> = nativeClientOperatorScopes,
+  ): GatewayConnectOptions =
     GatewayConnectOptions(
       role = "operator",
-      scopes =
-        listOf(
-          "operator.approvals",
-          "operator.read",
-          "operator.write",
-        ),
+      scopes = scopes,
       caps = emptyList(),
       commands = emptyList(),
       permissions = emptyMap(),

@@ -5,6 +5,7 @@
  * redaction/headers, and request/response correlation over WebSocket.
  */
 import { parseBrowserHttpUrl, redactCdpUrl } from "openclaw/plugin-sdk/browser-config";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
@@ -113,6 +114,14 @@ export type CdpSendFn = (
   sessionId?: string,
 ) => Promise<unknown>;
 
+function decodeUrlUserInfo(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 function rawCdpMessageToString(data: WebSocket.RawData): string {
   if (typeof data === "string") {
     return data;
@@ -141,7 +150,9 @@ export function getHeadersWithAuth(url: string, headers: Record<string, string> 
       return mergedHeaders;
     }
     if (parsed.username || parsed.password) {
-      const auth = Buffer.from(`${parsed.username}:${parsed.password}`).toString("base64");
+      const username = decodeUrlUserInfo(parsed.username);
+      const password = decodeUrlUserInfo(parsed.password);
+      const auth = Buffer.from(`${username}:${password}`).toString("base64");
       return { ...mergedHeaders, Authorization: `Basic ${auth}` };
     }
   } catch {
@@ -412,12 +423,6 @@ type CdpSocketOptions = {
   handshakeRetryDelayMs?: number;
   handshakeMaxRetryDelayMs?: number;
 };
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
 
 function normalizeRetryCount(value: number | undefined, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {

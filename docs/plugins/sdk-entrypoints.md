@@ -84,6 +84,8 @@ export default defineToolPlugin({
   schema and the generated manifest still includes `configSchema`.
 - `execute` returns a plain string or JSON-serializable value. The helper wraps
   it as a text tool result with `details`.
+- For custom tool results, `openclaw/plugin-sdk/tool-results` exports
+  `textResult` and `jsonResult`.
 - Tool names are static. `openclaw plugins build` derives `contracts.tools`
   from the declared tools, so authors do not duplicate names by hand.
 - Runtime loading stays strict. Installed plugins still need

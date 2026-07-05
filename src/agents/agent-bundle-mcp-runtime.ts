@@ -45,6 +45,7 @@ type BundleMcpSession = {
   requestTimeoutMs: number;
   supportsParallelToolCalls: boolean;
   connected: boolean;
+  disconnectReason?: string;
   retiring: boolean;
   catalogUseCount: number;
   sharedAcrossCatalogGenerations: boolean;
@@ -423,7 +424,9 @@ async function disposeSession(session: BundleMcpSession) {
 }
 
 function createCatalogFingerprint(servers: Record<string, unknown>): string {
-  return crypto.createHash("sha1").update(JSON.stringify(servers)).digest("hex");
+  // Session MCP fingerprints only invalidate in-memory runtime catalogs.
+  // Algorithm changes can cause one cache miss, but no persisted state migration.
+  return crypto.createHash("sha256").update(JSON.stringify(servers)).digest("hex");
 }
 
 function loadSessionMcpConfig(params: {
@@ -540,6 +543,17 @@ export function createSessionMcpRuntime(params: {
       throw createDisposedError(params.sessionId);
     }
   };
+  const requireConnectedSession = (serverName: string): BundleMcpSession => {
+    const session = sessions.get(serverName);
+    if (!session || !session.connected) {
+      throw new Error(
+        session?.disconnectReason
+          ? `bundle-mcp server "${serverName}" is disconnected: ${session.disconnectReason}`
+          : `bundle-mcp server "${serverName}" is not connected`,
+      );
+    }
+    return session;
+  };
   const ensureSessionConnected = async (
     session: BundleMcpSession,
     connectionTimeoutMs: number,
@@ -638,6 +652,18 @@ export function createSessionMcpRuntime(params: {
               failIfDisposed();
 
               let session = sessions.get(serverName);
+              while (
+                session &&
+                !session.retiring &&
+                !session.connected &&
+                !session.connectPromise
+              ) {
+                // A closed SDK client cannot reconnect cleanly on the same transport.
+                await retireSessionIfCurrent(serverName, session);
+                // Retirement yields while closing. Preserve any replacement that a
+                // newer catalog generation installed during that await.
+                session = sessions.get(serverName);
+              }
               if (session?.retiring) {
                 session = undefined;
               }
@@ -668,7 +694,7 @@ export function createSessionMcpRuntime(params: {
                     },
                   },
                 );
-                session = {
+                const createdSession: BundleMcpSession = {
                   serverName,
                   client,
                   transport: resolved.transport,
@@ -681,6 +707,14 @@ export function createSessionMcpRuntime(params: {
                   sharedAcrossCatalogGenerations: false,
                   detachStderr: resolved.detachStderr,
                 };
+                // The SDK exposes lifecycle hooks as callback properties. A close is
+                // terminal for this client/transport pair.
+                // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Client is not an EventTarget.
+                client.onclose = () => {
+                  createdSession.connected = false;
+                  createdSession.disconnectReason = "mcp transport closed";
+                };
+                session = createdSession;
                 sessions.set(serverName, session);
               }
 
@@ -691,11 +725,9 @@ export function createSessionMcpRuntime(params: {
                 session.sharedAcrossCatalogGenerations = true;
               }
               session.catalogUseCount += 1;
-              let connectedForCatalog = false;
               try {
                 failIfDisposed();
                 await ensureSessionConnected(session, resolved.connectionTimeoutMs);
-                connectedForCatalog = true;
                 failIfDisposed();
                 const capabilities = summarizeServerCapabilities(
                   session.client.getServerCapabilities(),
@@ -780,9 +812,9 @@ export function createSessionMcpRuntime(params: {
                 ];
                 const sharedWithNewerGeneration =
                   session.sharedAcrossCatalogGenerations || session.catalogUseCount > 1;
-                if (!connectedForCatalog && !session.connected) {
-                  // Timed-out connects can still leave the SDK client bound to a
-                  // transport. Delete before async close so future catalogs start fresh.
+                if (!session.connected) {
+                  // A close is terminal for every catalog generation sharing this
+                  // session. The identity guard preserves any newer replacement.
                   await retireSessionIfCurrent(serverName, session);
                 } else if (!reusedSession && !sharedWithNewerGeneration) {
                   // Catalog invalidation can overlap generations; an older failed
@@ -892,10 +924,7 @@ export function createSessionMcpRuntime(params: {
     async callTool(serverName, toolName, input) {
       failIfDisposed();
       await getCatalog();
-      const session = sessions.get(serverName);
-      if (!session) {
-        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
-      }
+      const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(
         serverName,
         async () =>
@@ -912,10 +941,7 @@ export function createSessionMcpRuntime(params: {
     async listResources(serverName) {
       failIfDisposed();
       await getCatalog();
-      const session = sessions.get(serverName);
-      if (!session) {
-        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
-      }
+      const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(serverName, async () =>
         listAllResources(session.client, session.requestTimeoutMs),
       );
@@ -923,10 +949,7 @@ export function createSessionMcpRuntime(params: {
     async readResource(serverName, uri) {
       failIfDisposed();
       await getCatalog();
-      const session = sessions.get(serverName);
-      if (!session) {
-        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
-      }
+      const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(
         serverName,
         async () =>
@@ -936,10 +959,7 @@ export function createSessionMcpRuntime(params: {
     async listPrompts(serverName) {
       failIfDisposed();
       await getCatalog();
-      const session = sessions.get(serverName);
-      if (!session) {
-        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
-      }
+      const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(serverName, async () =>
         listAllPrompts(session.client, session.requestTimeoutMs),
       );
@@ -947,10 +967,7 @@ export function createSessionMcpRuntime(params: {
     async getPrompt(serverName, name, args) {
       failIfDisposed();
       await getCatalog();
-      const session = sessions.get(serverName);
-      if (!session) {
-        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
-      }
+      const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(
         serverName,
         async () =>

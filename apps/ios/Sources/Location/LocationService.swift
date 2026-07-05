@@ -1,6 +1,7 @@
 import CoreLocation
 import Foundation
 import OpenClawKit
+import UIKit
 
 @MainActor
 final class LocationService: NSObject, CLLocationManagerDelegate, LocationServiceCommon {
@@ -10,8 +11,10 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
     }
 
     private let manager = CLLocationManager()
+    private var authWaitID: UUID?
     private var authContinuation: CheckedContinuation<CLAuthorizationStatus, Never>?
     private var locationContinuation: CheckedContinuation<CLLocation, Swift.Error>?
+    private var authorizationChangeHandler: (@MainActor @Sendable (CLAuthorizationStatus) -> Void)?
     private var significantLocationCallback: (@Sendable (CLLocation) -> Void)?
     private var isMonitoringSignificantChanges = false
 
@@ -71,8 +74,34 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
 
     private func awaitAuthorizationChange() async -> CLAuthorizationStatus {
         await withCheckedContinuation { cont in
+            let waitID = UUID()
+            self.authWaitID = waitID
             self.authContinuation = cont
+            Task { @MainActor in
+                let clock = ContinuousClock()
+                let noPromptDeadline = clock.now.advanced(by: .milliseconds(1500))
+                var observedPrompt = UIApplication.shared.applicationState != .active
+                // A slow system prompt must not trigger the no-callback fallback. Once iOS makes
+                // the app inactive, wait until the user dismisses the prompt and the app returns.
+                while self.authWaitID == waitID, self.authContinuation != nil {
+                    try? await Task.sleep(for: .milliseconds(100))
+                    let applicationIsActive = UIApplication.shared.applicationState == .active
+                    if !applicationIsActive {
+                        observedPrompt = true
+                        continue
+                    }
+                    guard observedPrompt || clock.now >= noPromptDeadline else { continue }
+                    self.finishAuthorizationWait(waitID: waitID, status: self.manager.authorizationStatus)
+                }
+            }
         }
+    }
+
+    private func finishAuthorizationWait(waitID: UUID, status: CLAuthorizationStatus) {
+        guard self.authWaitID == waitID, let cont = self.authContinuation else { return }
+        self.authWaitID = nil
+        self.authContinuation = nil
+        cont.resume(returning: status)
     }
 
     private func withTimeout<T: Sendable>(
@@ -89,13 +118,28 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
         self.manager.startMonitoringSignificantLocationChanges()
     }
 
+    func setBackgroundLocationUpdatesEnabled(_ enabled: Bool) {
+        self.manager.allowsBackgroundLocationUpdates = enabled
+    }
+
+    func setAuthorizationChangeHandler(
+        _ handler: @escaping @MainActor @Sendable (CLAuthorizationStatus) -> Void)
+    {
+        self.authorizationChangeHandler = handler
+    }
+
+    func stopMonitoringSignificantLocationChanges() {
+        self.significantLocationCallback = nil
+        self.isMonitoringSignificantChanges = false
+        self.manager.stopMonitoringSignificantLocationChanges()
+    }
+
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
         Task { @MainActor in
-            if let cont = self.authContinuation {
-                self.authContinuation = nil
-                cont.resume(returning: status)
-            }
+            self.authorizationChangeHandler?(status)
+            guard let waitID = self.authWaitID else { return }
+            self.finishAuthorizationWait(waitID: waitID, status: status)
         }
     }
 

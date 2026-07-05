@@ -161,21 +161,6 @@ function withTinyGitRepo(files: Record<string, string>, test: (cwd: string) => v
   }
 }
 
-function commitTinyGitRepo(cwd: string): void {
-  const commit = spawnSync("git", ["commit", "-m", "initial"], {
-    cwd,
-    env: {
-      ...process.env,
-      GIT_AUTHOR_EMAIL: "test@example.com",
-      GIT_AUTHOR_NAME: "OpenClaw Test",
-      GIT_COMMITTER_EMAIL: "test@example.com",
-      GIT_COMMITTER_NAME: "OpenClaw Test",
-    },
-    stdio: "ignore",
-  });
-  expect(commit.status).toBe(0);
-}
-
 function withTinyFileTree(files: Record<string, string>, test: (cwd: string) => void): void {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-projects-"));
   try {
@@ -605,7 +590,7 @@ describe("scripts/test-projects changed-target routing", () => {
         ],
       ],
       [
-        "scripts/e2e/crestodian-first-run-docker-client.ts",
+        "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
         [
           "test/scripts/docker-e2e-crestodian.test.ts",
           "src/cli/run-main.test.ts",
@@ -951,7 +936,7 @@ describe("scripts/test-projects changed-target routing", () => {
         ],
       ],
       [
-        "scripts/e2e/openai-image-auth-docker-client.ts",
+        "test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts",
         [
           "test/scripts/openai-image-auth-docker-client.test.ts",
           "extensions/openai/image-generation-provider.test.ts",
@@ -1468,6 +1453,10 @@ describe("scripts/test-projects changed-target routing", () => {
       ["scripts/make_appcast.sh", ["test/scripts/make-appcast.test.ts"]],
       ["scripts/package-mac-app.sh", ["test/scripts/package-mac-app.test.ts"]],
       ["scripts/package-mac-dist.sh", ["test/scripts/package-mac-dist.test.ts"]],
+      [
+        "scripts/lib/swift-toolchain.sh",
+        ["test/scripts/package-mac-app.test.ts", "test/scripts/package-mac-dist.test.ts"],
+      ],
       ["scripts/e2e/bun-global-install-smoke.sh", ["test/scripts/test-install-sh-docker.test.ts"]],
       [
         "scripts/sparkle-build.ts",
@@ -1772,10 +1761,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/android-version.ts",
         ["test/scripts/android-version.test.ts", "test/scripts/android-pin-version.test.ts"],
       ],
-      [
-        "scripts/lib/ios-version.ts",
-        ["test/scripts/ios-version.test.ts", "test/scripts/ios-pin-version.test.ts"],
-      ],
+      ["scripts/lib/ios-version.ts", ["test/scripts/ios-version.test.ts"]],
       [
         ".github/images/live-media-runner/Dockerfile",
         ["test/scripts/package-acceptance-workflow.test.ts"],
@@ -1966,6 +1952,10 @@ describe("scripts/test-projects changed-target routing", () => {
         ],
       ],
       [
+        "scripts/lib/swift-toolchain.sh",
+        ["test/scripts/package-mac-app.test.ts", "test/scripts/package-mac-dist.test.ts"],
+      ],
+      [
         "scripts/lib/npm-publish-plan.mjs",
         [
           "test/npm-publish-plan.test.ts",
@@ -2009,22 +1999,10 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/plugin-npm-release.ts",
         ["test/plugin-npm-release.test.ts", "test/plugin-clawhub-release.test.ts"],
       ],
-      [
-        "scripts/plugin-clawhub-release-check.ts",
-        ["test/scripts/release-wrapper-scripts.test.ts"],
-      ],
-      [
-        "scripts/plugin-clawhub-release-plan.ts",
-        ["test/scripts/release-wrapper-scripts.test.ts"],
-      ],
-      [
-        "scripts/plugin-npm-release-check.ts",
-        ["test/scripts/release-wrapper-scripts.test.ts"],
-      ],
-      [
-        "scripts/plugin-npm-release-plan.ts",
-        ["test/scripts/release-wrapper-scripts.test.ts"],
-      ],
+      ["scripts/plugin-clawhub-release-check.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
+      ["scripts/plugin-clawhub-release-plan.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
+      ["scripts/plugin-npm-release-check.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
+      ["scripts/plugin-npm-release-plan.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
       [
         "scripts/plugin-release-pretag-pack-check.ts",
         ["test/scripts/plugin-release-pretag-pack-check.test.ts"],
@@ -2445,15 +2423,16 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes MCP and cron Docker E2E script targets instead of skipping changed tests", () => {
     const targets = [
       "scripts/e2e/mcp-channels-docker.sh",
-      "scripts/e2e/mcp-channels-docker-client.ts",
+      "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts",
+      "test/e2e/qa-lab/runtime/mcp-channels.fixture.ts",
+      "test/e2e/qa-lab/runtime/mcp-client-temp-state.fixture.ts",
       "scripts/e2e/mcp-channels-seed.ts",
       "scripts/e2e/docker-openai-seed.ts",
-      "scripts/e2e/mcp-client-temp-state.ts",
       "scripts/e2e/mcp-code-mode-gateway-docker.sh",
       "scripts/e2e/mcp-code-mode-gateway-live-docker.sh",
       "scripts/e2e/mcp-code-mode-gateway-seed.ts",
       "scripts/e2e/agent-bundle-mcp-tools-docker.sh",
-      "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts",
+      "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts",
       "scripts/mcp-code-mode-gateway-e2e.ts",
       "scripts/e2e/cron-cli-docker.sh",
       "scripts/e2e/cron-mcp-cleanup-docker.sh",
@@ -2469,13 +2448,13 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/docker-e2e-observability.test.ts",
         "test/scripts/docker-e2e-plan.test.ts",
         "test/scripts/plugin-prerelease-test-plan.test.ts",
+        "test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts",
+        "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
         "test/scripts/docker-e2e-seeds.test.ts",
-        "test/scripts/mcp-channels-harness.test.ts",
         "test/scripts/mcp-code-mode-gateway-client.test.ts",
         "test/scripts/session-log-mentions.test.ts",
         "src/agents/agent-bundle-mcp-runtime.test.ts",
         "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
-        "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
         "src/gateway/server.cron.test.ts",
         "src/gateway/server-methods/agent.test.ts",
         "src/cron/isolated-agent/run.fast-mode.test.ts",
@@ -2487,7 +2466,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes OpenAI image auth Docker E2E script targets instead of skipping changed tests", () => {
     const targets = [
       "scripts/e2e/openai-image-auth-docker.sh",
-      "scripts/e2e/openai-image-auth-docker-client.ts",
+      "test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts",
     ];
 
     expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
@@ -2529,7 +2508,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes Crestodian Docker E2E script targets instead of skipping changed tests", () => {
     const targets = [
       "scripts/e2e/crestodian-first-run-docker.sh",
-      "scripts/e2e/crestodian-first-run-docker-client.ts",
+      "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
       "scripts/e2e/crestodian-first-run-spec.json",
       "scripts/e2e/crestodian-planner-docker.sh",
       "scripts/e2e/crestodian-planner-docker-client.mjs",
@@ -3191,36 +3170,7 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.ui.config.ts",
         forwardedArgs: [],
-        includePatterns: ["ui/src/ui/control-ui-chunking.test.ts"],
-        watchMode: false,
-      },
-    ]);
-  });
-
-  it("routes unit ui test targets to the unit ui lane", () => {
-    expect(buildVitestRunPlans(["ui/src/ui/chat/grouped-render.test.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.unit-ui.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["ui/src/ui/chat/grouped-render.test.ts"],
-        watchMode: false,
-      },
-    ]);
-
-    expect(buildVitestRunPlans(["ui/src/ui/views/chat.test.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.unit-ui.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["ui/src/ui/views/chat.test.ts"],
-        watchMode: false,
-      },
-    ]);
-
-    expect(buildVitestRunPlans(["ui/src/ui/views/dreaming.test.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.unit-ui.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["ui/src/ui/views/dreaming.test.ts"],
+        includePatterns: ["ui/src/app/control-ui-chunking.test.ts"],
         watchMode: false,
       },
     ]);
@@ -3249,11 +3199,11 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("routes control ui e2e tests to the ui e2e lane", () => {
-    expect(buildVitestRunPlans(["ui/src/ui/e2e/chat-flow.e2e.test.ts"])).toEqual([
+    expect(buildVitestRunPlans(["ui/src/e2e/chat-flow.e2e.test.ts"])).toEqual([
       {
         config: "test/vitest/vitest.ui-e2e.config.ts",
         forwardedArgs: [],
-        includePatterns: ["ui/src/ui/e2e/chat-flow.e2e.test.ts"],
+        includePatterns: ["ui/src/e2e/chat-flow.e2e.test.ts"],
         watchMode: false,
       },
     ]);
@@ -3267,31 +3217,16 @@ describe("scripts/test-projects changed-target routing", () => {
       },
     ]);
 
-    expect(buildVitestRunPlans(["ui/src/ui/e2e"])).toEqual([
+    expect(buildVitestRunPlans(["ui/src/e2e"])).toEqual([
       {
         config: "test/vitest/vitest.ui-e2e.config.ts",
         forwardedArgs: [],
-        includePatterns: ["ui/src/ui/e2e/**/*.test.ts"],
+        includePatterns: ["ui/src/e2e/**/*.test.ts"],
         watchMode: false,
       },
     ]);
 
-    expect(buildVitestArgs(["ui/src/ui/e2e"])).toContain("--configLoader");
-  });
-
-  it("routes changed unit ui tests to the unit ui lane", () => {
-    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "ui/src/ui/chat/grouped-render.test.ts",
-    ]);
-
-    expect(plans).toEqual([
-      {
-        config: "test/vitest/vitest.unit-ui.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["ui/src/ui/chat/grouped-render.test.ts"],
-        watchMode: false,
-      },
-    ]);
+    expect(buildVitestArgs(["ui/src/e2e"])).toContain("--configLoader");
   });
 
   it("routes auto-reply route source files to route regression tests", () => {
@@ -4205,7 +4140,6 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.unit-fast-fake-timers.config.ts",
       "test/vitest/vitest.unit-src.config.ts",
       "test/vitest/vitest.unit-security.config.ts",
-      "test/vitest/vitest.unit-ui.config.ts",
       "test/vitest/vitest.unit-support.config.ts",
       "test/vitest/vitest.boundary.config.ts",
       "test/vitest/vitest.tooling.config.ts",

@@ -903,7 +903,7 @@ async function verifyCodexSubagentProbe(params: {
       error?: string;
       method: string;
       status: "error" | "ok";
-      timeoutMs?: number;
+      timeoutMs?: number | null;
     }> = [];
     subagentSpawnTesting.setDepsForTest({
       resolveContextEngine: async () => noOpContextEngine,

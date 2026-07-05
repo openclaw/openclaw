@@ -14,6 +14,7 @@ import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   defineChannelMessageAdapter,
   createRuntimeOutboundDelegates,
+  createAccountStatusSink,
   type ChannelMessageSendResult,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -182,7 +183,18 @@ const feishuMessageAdapter = defineChannelMessageAdapter({
       if (!sendText) {
         throw new Error("Feishu text sending is not available.");
       }
-      return toFeishuMessageSendResult(await sendText(ctx), "text");
+      const { onDeliveryResult, ...outboundCtx } = ctx;
+      const result = await sendText({
+        ...outboundCtx,
+        ...(onDeliveryResult
+          ? {
+              onDeliveryResult: async (progress) => {
+                await onDeliveryResult(toFeishuMessageSendResult(progress, "text"));
+              },
+            }
+          : {}),
+      });
+      return toFeishuMessageSendResult(result, "text");
     },
     media: async (ctx) => {
       const runtime = await loadFeishuChannelRuntime();
@@ -190,7 +202,18 @@ const feishuMessageAdapter = defineChannelMessageAdapter({
       if (!sendMedia) {
         throw new Error("Feishu media sending is not available.");
       }
-      return toFeishuMessageSendResult(await sendMedia(ctx), "media");
+      const { onDeliveryResult, ...outboundCtx } = ctx;
+      const result = await sendMedia({
+        ...outboundCtx,
+        ...(onDeliveryResult
+          ? {
+              onDeliveryResult: async (progress) => {
+                await onDeliveryResult(toFeishuMessageSendResult(progress, "media"));
+              },
+            }
+          : {}),
+      });
+      return toFeishuMessageSendResult(result, "media");
     },
   },
 });
@@ -1318,6 +1341,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           ctx.log?.info(
             `starting feishu[${ctx.accountId}] (mode: ${account.config?.connectionMode ?? "websocket"})`,
           );
+          // Publish Feishu connected state and event recency through the
+          // shared channel status sink.
+          const statusSink = createAccountStatusSink({
+            accountId: ctx.accountId,
+            setStatus: ctx.setStatus,
+          });
           return monitorFeishuProvider({
             config: ctx.cfg,
             runtime: ctx.runtime,
@@ -1326,6 +1355,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             channelRuntime: ctx.channelRuntime as PluginRuntime["channel"] | undefined,
             abortSignal: ctx.abortSignal,
             accountId: ctx.accountId,
+            statusSink,
           });
         },
       },

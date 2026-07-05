@@ -1,14 +1,29 @@
 // OpenAI-compatible auth tests cover API key and base URL normalization.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../../test-utils/env.js";
 import type { Context, Model } from "../types.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
 import { streamOpenAIResponses } from "./openai-responses.js";
 
+const mocks = vi.hoisted(() => ({
+  fetchWithSsrFGuard: vi.fn(),
+}));
+
+vi.mock("../../infra/net/fetch-guard.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/net/fetch-guard.js")>(
+    "../../infra/net/fetch-guard.js",
+  );
+  return {
+    ...actual,
+    fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
+  };
+});
+
 const originalEnv = captureEnv(["OPENAI_API_KEY"]);
 
 afterEach(() => {
   originalEnv.restore();
+  mocks.fetchWithSsrFGuard.mockReset();
 });
 
 const context = {
@@ -51,6 +66,33 @@ describe("OpenAI-compatible provider credentials", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe("No API key for provider: custom-openai-compatible");
+  });
+
+  it("sends explicit API keys as bearer auth for generic chat-completions providers", async () => {
+    let capturedHeaders: Headers | undefined;
+    mocks.fetchWithSsrFGuard.mockImplementationOnce(async (params: { init?: RequestInit }) => {
+      capturedHeaders = new Headers(params.init?.headers);
+      return {
+        response: new Response(
+          [
+            'data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":0,"model":"custom-model","choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":null}]}',
+            'data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":0,"model":"custom-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}',
+            "data: [DONE]",
+            "",
+          ].join("\n\n"),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+        release: async () => undefined,
+      };
+    });
+
+    const stream = streamOpenAICompletions(createBaseModel("openai-completions"), context, {
+      apiKey: "sk-third-party",
+    });
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(capturedHeaders?.get("authorization")).toBe("Bearer sk-third-party");
   });
 
   it("does not replay Responses item ids for direct store-disabled requests", async () => {

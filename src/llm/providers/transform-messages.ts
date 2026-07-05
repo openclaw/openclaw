@@ -117,13 +117,13 @@ export function transformMessages<TApi extends Api>(
           assistantMsg.api === model.api &&
           assistantMsg.model === model.id);
 
-      // Assistant content is typed as a block array, but transcript replay can
-      // hand us a raw string (JSONL passthrough). Normalize it to an equivalent
-      // single text block before transforming, matching the string->text block
-      // handling already used in anthropic-payload-policy.ts.
-      const contentBlocks = Array.isArray(assistantMsg.content)
-        ? assistantMsg.content
-        : [{ type: "text" as const, text: assistantMsg.content as unknown as string }];
+      // Public plugin-sdk/llm exports transformMessages; keep accepting legacy
+      // assistant strings from external provider adapters even though session
+      // JSONL replay normalizes them at ingest.
+      const contentBlocks =
+        typeof assistantMsg.content === "string"
+          ? [{ type: "text" as const, text: assistantMsg.content }]
+          : assistantMsg.content;
 
       const transformedContent = contentBlocks.flatMap((block) => {
         if (block.type === "thinking") {

@@ -118,6 +118,28 @@ keys.
 - Applies to auto-reply agent runs across all inbound channels that use the gateway reply pipeline (WhatsApp web, Telegram, Slack, Discord, Signal, iMessage, webchat, etc.).
 - Default lane (`main`) is process-wide for inbound + main heartbeats; set `agents.defaults.maxConcurrent` to allow multiple sessions in parallel.
 - Additional lanes may exist (e.g. `cron`, `cron-nested`, `nested`, `subagent`) so background jobs can run in parallel without blocking inbound replies. Isolated cron agent turns hold a `cron` slot while their inner agent execution uses `cron-nested`; both use `cron.maxConcurrentRuns`. Shared non-cron `nested` flows keep their own lane behavior. These detached runs are tracked as [background tasks](/automation/tasks).
+
+## Queued-turn cancellation
+
+When Gateway admits a prompt into the followup/collect queue (for example a TUI
+or webchat `chat.send` while another turn is active), it keeps a **Gateway-owned
+cancel identity** for that client `runId` until the queued content runs or is
+dropped. The identity follows content folded into an overflow summary.
+
+- `chat.abort` with a specific `runId` cancels that turn while it is still queued,
+  if the requester is authorized (same ownership rules as active runs).
+- `chat.abort` for a session without `runId` cancels **authorized queued turns
+  first**, then aborts authorized active runs. That order prevents queue drain
+  from promoting work into a half-stopped session.
+- Clearing the entire session queue without per-requester checks is not the stop
+  path for multi-owner sessions.
+- Queued waits are not projected as active agent runs for `sessions.list` and do
+  not own active-run timeout semantics; only the active phase does.
+
+Clients (including the TUI) forward mid-run prompts and let Gateway apply the
+queue mode. Esc/`/stop` uses a session-scoped abort so lost local handles cannot
+leave a still-queued prompt running.
+
 - Per-session lanes guarantee that only one agent run touches a given session at a time.
 - No external dependencies or background worker threads; pure TypeScript + promises.
 

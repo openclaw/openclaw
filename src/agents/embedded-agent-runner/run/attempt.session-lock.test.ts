@@ -16,6 +16,7 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../../../config/sessions/transcript.js";
+import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../../shared/transcript-only-openclaw-assistant.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
   SessionWriteLockStaleError,
@@ -60,6 +61,18 @@ async function createTempSessionFile(): Promise<string> {
   const sessionFile = path.join(dir, "session.jsonl");
   await fs.writeFile(sessionFile, '{"type":"session"}\n', "utf8");
   return sessionFile;
+}
+
+async function waitUntil(predicate: () => boolean, message: string): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error(message);
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 1);
+    });
+  }
 }
 
 function cloneBigIntStatWith(
@@ -2590,7 +2603,7 @@ describe("embedded attempt session lock lifecycle", () => {
           message: {
             role: "assistant",
             content: [{ type: "text", text: "first-turn delivery" }],
-            api: "openai-responses",
+            api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
             provider: "openclaw",
             model: "delivery-mirror",
             usage: {
@@ -3976,15 +3989,16 @@ describe("embedded attempt session lock lifecycle", () => {
       .finally(() => {
         takeoverSettled = true;
       });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await waitUntil(
+      () => controller.hasSessionTakeover(),
+      "expected takeover detection while active retained writer was still running",
+    );
 
     expect(takeoverSettled).toBe(false);
     expect(releaseRetained).not.toHaveBeenCalled();
 
     releaseActiveWrite();
-    await expect(activeWrite).resolves.toBeUndefined();
+    await expect(activeWrite).rejects.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
     await expect(takeoverWrite).resolves.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
 
     expect(releaseRetained).toHaveBeenCalledTimes(1);

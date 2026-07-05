@@ -30,7 +30,7 @@ type ProviderPolicyDefaultsOptions = {
 
 const defaultWarnState: WarnState = { warned: false };
 
-const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
+export const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   // Anthropic (shared model runtime catalog uses "latest" ids without date suffix)
   opus: "anthropic/claude-opus-4-8",
   sonnet: "anthropic/claude-sonnet-4-6",
