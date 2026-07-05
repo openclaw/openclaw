@@ -681,6 +681,7 @@ describe("abort detection", () => {
       childSessionKey: childKey,
       reason: "killed",
       runId: "slow-child-run",
+      suppressTaskDelivery: true,
     });
     expect(getFollowupQueueDepth(sessionKey)).toBe(0);
     expectSessionLaneCleared(sessionKey);
@@ -1259,6 +1260,43 @@ describe("abort detection", () => {
     expect(result.stoppedSubagents).toBe(2);
     expectSessionLaneCleared(depth1Key);
     expectSessionLaneCleared(depth2Key);
+  });
+
+  it("stops a subagent that is paused after yielding", () => {
+    subagentRegistryMocks.listSubagentRunsForRequester.mockClear();
+    subagentRegistryMocks.markSubagentRunTerminated.mockClear();
+    const sessionKey = "telegram:yield-parent";
+    const childKey = "agent:main:subagent:yield-child";
+    const now = Date.now();
+    subagentRegistryMocks.listSubagentRunsForRequester
+      .mockReturnValueOnce([
+        {
+          runId: "run-yield-child",
+          childSessionKey: childKey,
+          requesterSessionKey: sessionKey,
+          requesterDisplayKey: sessionKey,
+          task: "paused worker",
+          cleanup: "keep",
+          createdAt: now - 1_000,
+          endedAt: now - 500,
+          pauseReason: "sessions_yield",
+        },
+      ])
+      .mockReturnValueOnce([]);
+
+    const result = stopSubagentsForRequester({
+      cfg: {} as OpenClawConfig,
+      requesterSessionKey: sessionKey,
+    });
+
+    expect(result).toEqual({ stopped: 1 });
+    expectSessionLaneCleared(childKey);
+    expect(subagentRegistryMocks.markSubagentRunTerminated).toHaveBeenCalledWith({
+      runId: "run-yield-child",
+      childSessionKey: childKey,
+      reason: "killed",
+      suppressTaskDelivery: true,
+    });
   });
 
   it("cascade stop traverses ended depth-1 parents to stop active depth-2 children", async () => {

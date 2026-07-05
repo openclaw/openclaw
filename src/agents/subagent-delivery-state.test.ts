@@ -23,6 +23,49 @@ function baseRun(overrides: Partial<LegacySubagentRunRecord> = {}): LegacySubage
 }
 
 describe("normalizeSubagentRunState", () => {
+  it("normalizes durable task ownership and generation metadata", () => {
+    const entry = normalizeSubagentRunState(
+      baseRun({ taskRunId: "  run-task-owner  ", generation: 2 }),
+    );
+    const malformed = normalizeSubagentRunState(
+      baseRun({ taskRunId: "   ", generation: Number.NaN }),
+    );
+
+    expect(entry).toMatchObject({ taskRunId: "run-task-owner", generation: 2 });
+    expect(malformed.taskRunId).toBeUndefined();
+    expect(malformed.generation).toBeUndefined();
+  });
+
+  it("preserves valid killed reconciliation ownership metadata", () => {
+    const entry = normalizeSubagentRunState(
+      baseRun({
+        suppressCompletionDelivery: true,
+        killReconciliation: {
+          killedAt: 200,
+          suppressTaskDelivery: true,
+          supersededAt: 300,
+        },
+      }),
+    );
+
+    expect(entry.killReconciliation).toEqual({
+      killedAt: 200,
+      suppressTaskDelivery: true,
+      supersededAt: 300,
+    });
+    expect(entry.suppressCompletionDelivery).toBe(true);
+  });
+
+  it("drops malformed killed reconciliation metadata", () => {
+    const entry = normalizeSubagentRunState(
+      baseRun({
+        killReconciliation: { killedAt: Number.NaN },
+      }),
+    );
+
+    expect(entry.killReconciliation).toBeUndefined();
+  });
+
   it("migrates legacy pending delivery fields into nested completion and delivery state", () => {
     // Restored runs may still carry flat pendingFinalDelivery fields from older
     // builds; normalization must preserve retry payloads before stripping them.
