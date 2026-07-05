@@ -435,7 +435,31 @@ export function createChannelIngressQueue<
         }
         const dup = rowToEnqueueResult<TPayload, TMetadata, TCompletedMetadata>(row);
         if (dup === null) {
-          throw new Error(`Corrupt channel ingress event ${queueName}/${eventId}`);
+          executeSqliteQuerySync(
+            tx.db,
+            kysely
+              .updateTable("channel_ingress_events")
+              .set({
+                status: "failed",
+                failed_at: updatedAt,
+                failed_reason: "corrupt_payload",
+                updated_at: updatedAt,
+              })
+              .where("queue_name", "=", queueName)
+              .where("event_id", "=", eventId),
+          );
+          return {
+            kind: "failed",
+            duplicate: true,
+            record: {
+              id: row.event_id,
+              channelId: row.channel_id,
+              accountId: row.account_id,
+              queueName: row.queue_name,
+              failedAt: updatedAt,
+              reason: "corrupt_payload",
+            },
+          };
         }
         return dup;
       },
@@ -726,13 +750,46 @@ export function createChannelIngressQueue<
     const current = recoverOptions?.now ?? now();
     const staleMs = Math.max(0, Math.floor(recoverOptions?.staleMs ?? 0));
     const cutoff = current - staleMs;
-    const staleClaims = (await listClaims()).filter((claimed) => claimed.claim.claimedAt <= cutoff);
+    const database = openStateDatabase(options.stateDir);
+    const claimedRows = executeSqliteQuerySync(
+      database.db,
+      getChannelIngressKysely(database.db)
+        .selectFrom("channel_ingress_events")
+        .selectAll()
+        .where("queue_name", "=", queueName)
+        .where("status", "=", "claimed")
+        .where("claimed_at", "<=", cutoff),
+    ).rows;
     let recovered = 0;
-    for (const staleClaim of staleClaims) {
-      if (recoverOptions?.shouldRecover && !(await recoverOptions.shouldRecover(staleClaim))) {
+    for (const row of claimedRows) {
+      const claim = claimedRecord<TPayload, TMetadata>(row);
+      if (claim === null) {
+        await runOpenClawStateWriteTransaction(
+          (tx) => {
+            executeSqliteQuerySync(
+              tx.db,
+              getChannelIngressKysely(tx.db)
+                .updateTable("channel_ingress_events")
+                .set({
+                  status: "failed",
+                  failed_at: current,
+                  failed_reason: "corrupt_payload",
+                  updated_at: current,
+                })
+                .where("queue_name", "=", queueName)
+                .where("event_id", "=", row.event_id)
+                .where("status", "=", "claimed"),
+            );
+          },
+          { path: database.path },
+        );
+        recovered += 1;
         continue;
       }
-      if (await releaseClaimIfStillStale(staleClaim, { cutoff, releasedAt: current })) {
+      if (recoverOptions?.shouldRecover && !(await recoverOptions.shouldRecover(claim))) {
+        continue;
+      }
+      if (await releaseClaimIfStillStale(claim, { cutoff, releasedAt: current })) {
         recovered += 1;
       }
     }

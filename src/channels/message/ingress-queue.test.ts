@@ -777,5 +777,80 @@ describe("channel ingress queue", () => {
         expect(pending[0].payload).toBeNull();
       });
     });
+
+    it("tombstones a corrupt pending row on duplicate enqueue", async () => {
+      await withTempState(async (stateDir) => {
+        const queue = createChannelIngressQueue<{ text: string }>({
+          channelId: "test",
+          accountId: "account",
+          stateDir,
+        });
+
+        insertCorruptRow(stateDir, '["test","account"]', "dup-bad", {
+          payload_json: "{corrupt",
+        });
+
+        const result = await queue.enqueue("dup-bad", { text: "late" });
+        expect(result.kind).toBe("failed");
+        if (result.kind === "failed") {
+          expect(result.duplicate).toBe(true);
+          expect(result.record.reason).toBe("corrupt_payload");
+        }
+
+        // Verify the corrupt row was actually tombstoned in the DB.
+        const { db } = openOpenClawStateDatabase({
+          env: createStateDirEnv(stateDir),
+        });
+        const row = executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
+            .selectFrom("channel_ingress_events")
+            .select(["status", "failed_reason"])
+            .where("queue_name", "=", '["test","account"]')
+            .where("event_id", "=", "dup-bad"),
+        ).rows[0];
+        expect(row?.status).toBe("failed");
+        expect(row?.failed_reason).toBe("corrupt_payload");
+      });
+    });
+
+    it("tombstones corrupt claimed rows during stale recovery", async () => {
+      await withTempState(async (stateDir) => {
+        const queue = createChannelIngressQueue<{ text: string }>({
+          channelId: "test",
+          accountId: "account",
+          stateDir,
+        });
+
+        const oldTime = 10;
+        insertCorruptRow(stateDir, '["test","account"]', "stale-bad", {
+          payload_json: "{corrupt",
+          status: "claimed",
+          claim_token: "tok-1",
+          claim_owner: "worker",
+          claimed_at: oldTime,
+        });
+
+        const recovered = await queue.recoverStaleClaims({
+          staleMs: Date.now() - oldTime,
+        });
+        expect(recovered).toBe(1);
+
+        // The corrupt claimed row should now be tombstoned as failed.
+        const { db } = openOpenClawStateDatabase({
+          env: createStateDirEnv(stateDir),
+        });
+        const row = executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
+            .selectFrom("channel_ingress_events")
+            .select(["status", "failed_reason"])
+            .where("queue_name", "=", '["test","account"]')
+            .where("event_id", "=", "stale-bad"),
+        ).rows[0];
+        expect(row?.status).toBe("failed");
+        expect(row?.failed_reason).toBe("corrupt_payload");
+      });
+    });
   });
 });
