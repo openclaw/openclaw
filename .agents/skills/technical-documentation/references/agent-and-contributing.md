@@ -141,5 +141,5 @@ When these rules conflict:
 1. Preserve contributor and reader task success first.
 2. Preserve instruction clarity and unambiguous boundaries second.
 3. Preserve long-term maintainability and context-efficiency third.
-4. Add extra agent optimization only if it does not reduce human clarity or there is explict need.
+4. Add extra agent optimization only if it does not reduce human clarity or there is explicit need.
 5. Use your judgement as the expert.
