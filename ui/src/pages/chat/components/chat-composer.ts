@@ -18,7 +18,7 @@ import {
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
 import type { ChatSideResult } from "../../../lib/chat/side-result.ts";
-import { formatCompactTokenCount } from "../../../lib/format.ts";
+import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../../lib/session-goal.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import {
@@ -1224,6 +1224,7 @@ export function getContextNoticeViewModel(
   limit: number;
   input: number | null;
   output: number | null;
+  cost: number | null;
   model: string | null;
   detail: string;
   color: string;
@@ -1245,11 +1246,18 @@ export function getContextNoticeViewModel(
   // Session rows expose the latest run snapshot; totalTokens is the separate context snapshot.
   const input = Number.isFinite(session?.inputTokens) ? (session?.inputTokens ?? null) : null;
   const output = Number.isFinite(session?.outputTokens) ? (session?.outputTokens ?? null) : null;
+  const cost =
+    typeof session?.estimatedCostUsd === "number" &&
+    Number.isFinite(session.estimatedCostUsd) &&
+    session.estimatedCostUsd >= 0
+      ? session.estimatedCostUsd
+      : null;
   const usage = {
     used,
     limit,
     input,
     output,
+    cost,
     model: session?.model?.trim() || null,
   };
   if (!warning) {
@@ -1362,6 +1370,14 @@ export function renderContextNotice(
               <dt>${t("usage.breakdown.output")}</dt>
               <dd>${formatStat(model.output)}</dd>
             </div>
+            ${model.cost === null
+              ? nothing
+              : html`
+                  <div>
+                    <dt>${t("chat.composer.contextUsage.estimatedCost")}</dt>
+                    <dd>${formatCost(model.cost)}</dd>
+                  </div>
+                `}
           </dl>
           ${model.model
             ? html`

@@ -1467,6 +1467,7 @@ export const nl: TranslationMap = {
         summary: "Contextgebruik van sessie: {used} van {limit} ({pct}%)",
         contextWindow: "Contextvenster",
         latestRunTokens: "Tokens van laatste run",
+        estimatedCost: "Geschatte kosten",
       },
       dismissTalkError: "Talk-fout sluiten",
       startTalk: "Start Talk",

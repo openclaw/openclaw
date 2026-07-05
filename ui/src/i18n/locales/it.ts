@@ -1470,6 +1470,7 @@ export const it: TranslationMap = {
         summary: "Uso del contesto della sessione: {used} di {limit} ({pct}%)",
         contextWindow: "Finestra di contesto",
         latestRunTokens: "Token dell'ultima esecuzione",
+        estimatedCost: "Costo stim.",
       },
       dismissTalkError: "Ignora errore Talk",
       startTalk: "Start Talk",

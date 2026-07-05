@@ -1453,6 +1453,7 @@ export const vi: TranslationMap = {
         summary: "Mức sử dụng ngữ cảnh phiên: {used} trên {limit} ({pct}%)",
         contextWindow: "Cửa sổ ngữ cảnh",
         latestRunTokens: "Token của lần chạy gần nhất",
+        estimatedCost: "Chi phí ước tính",
       },
       dismissTalkError: "Bỏ qua lỗi Talk",
       startTalk: "Start Talk",

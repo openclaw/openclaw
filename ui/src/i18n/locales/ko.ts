@@ -1452,6 +1452,7 @@ export const ko: TranslationMap = {
         summary: "세션 컨텍스트 사용량: {limit} 중 {used} ({pct}%)",
         contextWindow: "컨텍스트 창",
         latestRunTokens: "최근 실행 토큰",
+        estimatedCost: "예상 비용",
       },
       dismissTalkError: "Talk 오류 닫기",
       startTalk: "Start Talk",

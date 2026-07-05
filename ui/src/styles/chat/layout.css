@@ -257,7 +257,7 @@ openclaw-chat-page {
 
 .context-usage__stats {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
   gap: 8px;
   margin: 10px 0 0;
 }

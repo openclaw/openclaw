@@ -1463,6 +1463,7 @@ export const fa: TranslationMap = {
         summary: "استفاده از زمینهٔ جلسه: {used} از {limit} ({pct}٪)",
         contextWindow: "پنجرهٔ زمینه",
         latestRunTokens: "توکن‌های آخرین اجرا",
+        estimatedCost: "هزینهٔ تخمینی",
       },
       dismissTalkError: "نادیده گرفتن خطای Talk",
       startTalk: "Start Talk",

@@ -1429,6 +1429,7 @@ export const th: TranslationMap = {
         summary: "การใช้บริบทของเซสชัน: {used} จาก {limit} ({pct}%)",
         contextWindow: "หน้าต่างบริบท",
         latestRunTokens: "โทเค็นของการรันล่าสุด",
+        estimatedCost: "ค่าใช้จ่ายโดยประมาณ",
       },
       dismissTalkError: "ปิดข้อผิดพลาด Talk",
       startTalk: "Start Talk",

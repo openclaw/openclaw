@@ -1447,6 +1447,7 @@ export const hi: TranslationMap = {
         summary: "सत्र संदर्भ उपयोग: {limit} में से {used} ({pct}%)",
         contextWindow: "संदर्भ विंडो",
         latestRunTokens: "नवीनतम रन टोकन",
+        estimatedCost: "अनुमानित लागत",
       },
       dismissTalkError: "Talk त्रुटि खारिज करें",
       startTalk: "Talk शुरू करें",

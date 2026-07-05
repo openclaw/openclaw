@@ -264,6 +264,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           sessions: [
             {
               contextTokens: 200_000,
+              estimatedCostUsd: 0.023456,
               inputTokens: 757_300,
               key: "main",
               kind: "direct",
@@ -289,6 +290,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await expect.poll(() => popover.textContent()).toContain("46k / 200k · 23%");
       await expect.poll(() => popover.textContent()).toContain("757.3k");
       await expect.poll(() => popover.textContent()).toContain("42.3k");
+      await expect.poll(() => popover.textContent()).toContain("Est. cost");
+      await expect.poll(() => popover.textContent()).toContain("$0.023");
       await expect.poll(() => popover.textContent()).toContain("gpt-5.5");
 
       await page.keyboard.press("Escape");
