@@ -6,9 +6,16 @@ import {
 } from "./provider-self-hosted-setup.js";
 import type { ProviderAuthMethodNonInteractiveContext } from "./types.js";
 
-const { fetchWithSsrFGuardMock, upsertAuthProfileWithLock } = vi.hoisted(() => ({
+const { fetchWithSsrFGuardMock, upsertAuthProfileWithLock, mockedLogger } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
   upsertAuthProfileWithLock: vi.fn(async () => null),
+  mockedLogger: {
+    info: vi.fn<(msg: string) => void>(),
+    warn: vi.fn<(msg: string) => void>(),
+    error: vi.fn<(msg: string) => void>(),
+    debug: vi.fn<(msg: string) => void>(),
+    child: vi.fn(() => mockedLogger),
+  },
 }));
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
@@ -17,6 +24,10 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 
 vi.mock("../agents/auth-profiles/upsert-with-lock.js", () => ({
   upsertAuthProfileWithLock,
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => mockedLogger,
 }));
 
 beforeEach(() => {
@@ -655,5 +666,9 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
 
     // Malformed JSON is caught and a warning is logged; discovery returns an empty list.
     expect(models).toEqual([]);
+    expect(mockedLogger.warn).toHaveBeenCalledTimes(1);
+    expect(mockedLogger.warn).toHaveBeenLastCalledWith(
+      expect.stringContaining("malformed-test discovery response is not valid JSON"),
+    );
   });
 });
