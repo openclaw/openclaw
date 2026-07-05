@@ -41,6 +41,7 @@ export function resolveFollowupDeliveryPayloads(params: {
   originatingReplyToMode?: ReplyToMode;
   originatingTo?: string;
   originatingThreadId?: string | number;
+  reasoningPayloadsEnabled?: boolean;
   sentMediaUrls?: string[];
   sentTargets?: MessagingToolSend[];
   sentTexts?: string[];
@@ -68,8 +69,11 @@ export function resolveFollowupDeliveryPayloads(params: {
         ...(accountId ? { accountId } : {}),
       }
     : undefined;
+  const deliverablePayloads = params.payloads.filter(
+    (payload) => !(payload.isReasoning === true && params.reasoningPayloadsEnabled !== true),
+  );
   const sanitizedPayloads: ReplyPayload[] = [];
-  for (const payload of params.payloads) {
+  for (const payload of deliverablePayloads) {
     const text = payload.text;
     if (!text || !text.includes("HEARTBEAT_OK")) {
       sanitizedPayloads.push(payload);

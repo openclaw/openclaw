@@ -4,6 +4,7 @@ import {
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import {
+  getReplyPayloadTtsSupplement,
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceOrFallback,
   sendTextMediaPayload,
@@ -92,14 +93,49 @@ export async function sendDiscordOutboundPayload(params: {
   const sendContext = await createDiscordPayloadSendContext(ctx);
 
   if (payload.audioAsVoice && mediaUrls.length > 0) {
-    let lastResult = await sendContext.withRetry(
-      async () =>
-        await sendContext.sendVoice(sendContext.target, mediaUrls[0], {
-          ...resolveDiscordDeliveryOptions(ctx, sendContext),
-        }),
-    );
-    await ctx.onDeliveryResult?.(attachChannelToResult("discord", lastResult));
-    if (payload.text?.trim()) {
+    const voiceReplyTo = sendContext.resolveReplyTo();
+    let deliveredVoice = false;
+    let lastResult: Awaited<ReturnType<DiscordPayloadSendContext["send"]>>;
+    try {
+      lastResult = await sendContext.withRetry(
+        async () =>
+          await sendContext.sendVoice(sendContext.target, mediaUrls[0], {
+            ...resolveDiscordDeliveryOptions(ctx, sendContext),
+            replyTo: voiceReplyTo,
+            replyToFirstChunkOnly: sendContext.replyToFirstChunkOnly,
+          }),
+      );
+      deliveredVoice = true;
+    } catch (err) {
+      const supplement = getReplyPayloadTtsSupplement(payload);
+      const visibleFallbackText = payload.text?.trim() ? payload.text : undefined;
+      const hiddenFallbackText = supplement?.visibleTextAlreadyDelivered
+        ? undefined
+        : supplement?.spokenText;
+      const fallbackText = visibleFallbackText ?? hiddenFallbackText;
+      if (!fallbackText) {
+        if (supplement?.visibleTextAlreadyDelivered) {
+          lastResult = createDiscordUnknownPayloadResult(sendContext.target);
+        } else {
+          throw err;
+        }
+      } else {
+        lastResult = await sendContext.withRetry(
+          async () =>
+            await sendContext.send(sendContext.target, fallbackText, {
+              verbose: false,
+              ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
+              replyTo: voiceReplyTo,
+              replyToFirstChunkOnly: sendContext.replyToFirstChunkOnly,
+              onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
+            }),
+        );
+      }
+    }
+    if (deliveredVoice) {
+      await ctx.onDeliveryResult?.(attachChannelToResult("discord", lastResult));
+    }
+    if (deliveredVoice && payload.text?.trim()) {
       lastResult = await sendContext.withRetry(
         async () =>
           await sendContext.send(sendContext.target, payload.text, {

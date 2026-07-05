@@ -834,7 +834,7 @@ describe("test-projects args", () => {
   it("routes unit ui targets to the unit ui config", () => {
     expect(buildVitestRunPlans(["ui/src/ui/views/channels.test.ts"])).toEqual([
       {
-        config: "test/vitest/vitest.unit-ui.config.ts",
+        config: "test/vitest/vitest.ui.config.ts",
         forwardedArgs: [],
         includePatterns: ["ui/src/ui/views/channels.test.ts"],
         watchMode: false,
@@ -859,6 +859,8 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.unit-fast.config.ts",
         forwardedArgs: [],
         includePatterns: [
+          "src/agents/command/attempt-execution.shared.test.ts",
+          "src/auto-reply/reply/session-entry-persistence.test.ts",
           "src/crestodian/operations.test.ts",
           "src/install-sh-version.test.ts",
           "src/proxy-capture/store.sqlite.test.ts",
@@ -890,6 +892,7 @@ describe("test-projects args", () => {
         includePatterns: [
           "src/scripts/docs-link-audit.test.ts",
           "src/scripts/sync-plugin-versions.test.ts",
+          "test/e2e/qa-lab/runtime/gateway-mcp-real-transports.test.ts",
           "test/helpers/temp-dir.test.ts",
           "test/scripts/android-pin-version.test.ts",
           "test/scripts/bench-cli-startup.test.ts",
@@ -902,6 +905,7 @@ describe("test-projects args", () => {
           "test/scripts/control-ui-i18n.test.ts",
           "test/scripts/docs-list.test.ts",
           "test/scripts/doctor-install-switch-wrapper.test.ts",
+          "test/scripts/e2e-shell-tempfiles.test.ts",
           "test/scripts/e2e-text-file-utils.test.ts",
           "test/scripts/fixture-common.test.ts",
           "test/scripts/fixture-plugin-commands.test.ts",
@@ -937,7 +941,9 @@ describe("test-projects args", () => {
           "src/gateway/hooks-mapping.test.ts",
           "src/gateway/server-methods/chat.abort-persistence.test.ts",
           "src/gateway/server.agent.gateway-server-agent-b.test.ts",
+          "src/gateway/server.chat.gateway-server-chat-b.test.ts",
           "src/gateway/server.sessions.permissions-hooks.test.ts",
+          "src/gateway/terminal/launch.test.ts",
         ],
         watchMode: false,
       },
@@ -966,6 +972,17 @@ describe("test-projects args", () => {
         watchMode: false,
       },
       {
+        config: "test/vitest/vitest.auto-reply.config.ts",
+        forwardedArgs: [],
+        includePatterns: [
+          "src/auto-reply/reply/get-reply-native-slash-fast-path.test.ts",
+          "src/auto-reply/reply/get-reply.auto-fallback.test.ts",
+          "src/auto-reply/reply/reply-turn-admission.test.ts",
+          "src/auto-reply/reply/session-updates.test.ts",
+        ],
+        watchMode: false,
+      },
+      {
         config: "test/vitest/vitest.agents.config.ts",
         forwardedArgs: [],
         includePatterns: [
@@ -978,6 +995,12 @@ describe("test-projects args", () => {
           "src/agents/sessions/tools/find.fd.test.ts",
           "src/agents/sessions/tools/read.test.ts",
         ],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.plugins.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/plugins/git-install.test.ts"],
         watchMode: false,
       },
       {

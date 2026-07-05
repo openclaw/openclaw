@@ -1,6 +1,6 @@
 // Implements TUI slash command handlers and backend action dispatch.
 import { randomUUID } from "node:crypto";
-import type { Component, SelectItem, TUI } from "@earendil-works/pi-tui";
+import type { Component, OverlayHandle, SelectItem, TUI } from "@earendil-works/pi-tui";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { modelKey } from "../agents/model-ref-shared.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
@@ -18,7 +18,7 @@ import {
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { helpText, parseCommand } from "./commands.js";
+import { helpText, isSharedTextCommand, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
 import {
   createFilterableSelectList,
@@ -52,8 +52,8 @@ type CommandHandlerContext = {
   opts: TuiOptions;
   state: TuiStateAccess;
   deliverDefault: boolean;
-  openOverlay: (component: Component) => void;
-  closeOverlay: () => void;
+  openOverlay: (component: Component) => OverlayHandle;
+  closeOverlay: (handle?: OverlayHandle) => void;
   refreshSessionInfo: () => Promise<void>;
   loadHistory: () => Promise<void>;
   setSession: (key: string) => Promise<void>;
@@ -147,14 +147,18 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     requestExit,
   } = context;
 
+  const addUnsupportedLocalCommand = (name: string) => {
+    chatLog.addSystem(`/${name} is not available in local embedded mode; message not sent`);
+  };
+
   const setAgent = async (id: string) => {
     state.currentAgentId = normalizeAgentId(id);
     await setSession("");
     chatLog.addSystem(`agent set to ${state.currentAgentId}; use /crestodian to return`);
   };
 
-  const closeOverlayAndRender = () => {
-    closeOverlay();
+  const closeOverlayAndRender = (handle: OverlayHandle) => {
+    closeOverlay(handle);
     tui.requestRender();
   };
 
@@ -176,11 +180,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     selector.onSelect = (item) => {
       void (async () => {
         await onSelect(item.value);
-        closeOverlayAndRender();
+        closeOverlayAndRender(overlayHandle);
       })();
     };
-    selector.onCancel = closeOverlayAndRender;
-    openOverlay(selector as Component);
+    selector.onCancel = () => closeOverlayAndRender(overlayHandle);
+    const overlayHandle: OverlayHandle = openOverlay(selector as Component);
     tui.requestRender();
   };
 
@@ -342,11 +346,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         tui.requestRender();
       },
       () => {
-        closeOverlay();
+        closeOverlay(overlayHandle);
         tui.requestRender();
       },
     );
-    openOverlay(settings);
+    const overlayHandle: OverlayHandle = openOverlay(settings);
     tui.requestRender();
   };
 
@@ -435,7 +439,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await openAgentSelector();
         break;
       case "context":
-        if (!args) {
+        if (opts.local) {
+          addUnsupportedLocalCommand(name);
+        } else if (!args) {
           openContextModeSelector();
         } else {
           await sendMessage(raw);
@@ -460,6 +466,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           }
         } else {
           await sendMessage(raw);
+        }
+        break;
+      case "btw":
+        if (args) {
+          await sendMessage(raw);
+        } else {
+          chatLog.addSystem("Usage: /btw [side question]");
         }
         break;
       case "crestodian":
@@ -735,11 +748,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await abortActive();
         break;
       case "stop":
-        if (hasTrackedAbortTarget()) {
-          await abortActive({ preferActive: true });
-          break;
-        }
-        await sendMessage(raw);
+        // Queued client runs can terminalize before the followup executes, so
+        // local run ids are not a complete stop target inventory.
+        await abortActive({ preferActive: true });
         break;
       case "settings":
         openSettings();
@@ -748,9 +759,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "quit":
         requestExit();
         break;
-      default:
+      default: {
+        if (opts.local && isSharedTextCommand(raw)) {
+          addUnsupportedLocalCommand(name);
+          break;
+        }
         await sendMessage(raw);
         break;
+      }
     }
     tui.requestRender();
   };
@@ -771,18 +787,15 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       state.activeChatRunId || state.pendingChatRunId || state.pendingOptimisticUserMessage,
     );
     if (
-      hasTrackedAbortTarget() &&
-      (isSlashStopCommand(text) || (busy && isChatStopCommandText(text)))
+      isSlashStopCommand(text) ||
+      (hasTrackedAbortTarget() && busy && isChatStopCommandText(text))
     ) {
       await abortActive({ preferActive: true });
       return;
     }
-    if (
-      !isBtw &&
-      (state.pendingChatRunId ||
-        state.pendingOptimisticUserMessage ||
-        (opts.local !== true && state.activeChatRunId))
-    ) {
+    // The Gateway owns queue policy. TUI only serializes pending RPC admission;
+    // an already-active run must not suppress steer/followup/collect/interrupt.
+    if (!isBtw && (state.pendingOptimisticUserMessage || state.pendingChatRunId)) {
       addBlockedChatSubmitNotice(chatLog);
       tui.requestRender();
       return;
@@ -900,7 +913,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (isBtw) {
         forgetLocalBtwRunId?.(runId);
       }
-      if (!isBtw && state.activeChatRunId) {
+      if (!isBtw && state.activeChatRunId && state.activeChatRunId === runId) {
         forgetLocalRunId?.(state.activeChatRunId);
       }
       if (!isBtw) {
@@ -909,7 +922,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (!isBtw) {
         state.pendingOptimisticUserMessage = false;
         state.pendingChatRunId = null;
-        state.activeChatRunId = null;
+        // Only clear the failed send's ownership. A queued run may have
+        // terminalized or handed ownership off while the RPC was pending.
+        if (state.activeChatRunId === runId) {
+          state.activeChatRunId = null;
+        }
         if (state.pendingSubmitDraft?.runId === runId) {
           state.pendingSubmitDraft = null;
         }

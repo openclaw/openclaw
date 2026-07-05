@@ -6,12 +6,14 @@
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { truncateErrorDetail } from "./provider-http-errors.js";
+import type { ContextUsage } from "./usage.js";
 
 type TransportUsage = {
   input: number;
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  contextUsage?: ContextUsage;
   totalTokens: number;
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
 };

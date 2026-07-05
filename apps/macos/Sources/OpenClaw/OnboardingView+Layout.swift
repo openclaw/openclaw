@@ -4,7 +4,7 @@ import SwiftUI
 extension OnboardingView {
     var body: some View {
         VStack(spacing: 0) {
-            GlowingOpenClawIcon(size: 130, glowIntensity: 0.28)
+            GlowingOpenClawIcon(size: 130)
                 .offset(y: 10)
                 .frame(height: 145)
 
@@ -51,15 +51,10 @@ extension OnboardingView {
             guard installed else { return }
             self.updateMonitoring(for: self.activePageIndex)
         }
-        .onChange(of: onboardingWizard.isComplete) { _, newValue in
-            guard newValue, self.activePageIndex == self.wizardPageIndex else { return }
-            self.handleNext()
-        }
         .onDisappear {
             self.onboardingVisible = false
             self.stopPermissionMonitoring()
             self.stopDiscovery()
-            Task { await self.onboardingWizard.cancelIfRunning() }
         }
         .task {
             await self.refreshPerms()
@@ -91,8 +86,8 @@ extension OnboardingView {
 
     var navigationBar: some View {
         let connectionLockIndex = pageOrder.firstIndex(of: connectionPageIndex)
-        let wizardLockIndex = wizardPageOrderIndex
         let cliLockIndex = pageOrder.firstIndex(of: cliPageIndex)
+        let crestodianLockIndex = pageOrder.firstIndex(of: crestodianPageIndex)
         return HStack(spacing: 20) {
             ZStack(alignment: .leading) {
                 Button(action: {}, label: {
@@ -124,8 +119,14 @@ extension OnboardingView {
                     let isConnectionLocked = self.isConnectionSelectionBlocking &&
                         index > (connectionLockIndex ?? 0)
                     let isCLILocked = cliLockIndex != nil && !self.cliInstalled && index > (cliLockIndex ?? 0)
-                    let isWizardLocked = wizardLockIndex != nil && !self.onboardingWizard
-                        .isComplete && index > (wizardLockIndex ?? 0)
+                    // Dots must honor the same setup gate as Next: no jumping
+                    // past the Crestodian page before setup authored the config.
+                    let isCrestodianLocked = crestodianLockIndex != nil &&
+                        self.state.connectionMode == .local &&
+                        !self.crestodianSetupComplete &&
+                        index > (crestodianLockIndex ?? 0)
+                    let isLocked = isInstallLocked || isConnectionLocked || isCLILocked ||
+                        isCrestodianLocked
                     Button {
                         withAnimation { self.currentPage = index }
                     } label: {
@@ -134,8 +135,8 @@ extension OnboardingView {
                             .frame(width: 8, height: 8)
                     }
                     .buttonStyle(.plain)
-                    .disabled(isInstallLocked || isConnectionLocked || isCLILocked || isWizardLocked)
-                    .opacity(isInstallLocked || isConnectionLocked || isCLILocked || isWizardLocked ? 0.3 : 1)
+                    .disabled(isLocked)
+                    .opacity(isLocked ? 0.3 : 1)
                 }
             }
 

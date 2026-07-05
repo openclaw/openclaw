@@ -1,5 +1,4 @@
 // WebSocket message handler validates frames, dispatches gateway RPCs, manages pairing, and reports responses.
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
@@ -42,6 +41,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../../config/io.js";
 import { resolveStateDir } from "../../../config/paths.js";
+import { sha256HexPrefix } from "../../../infra/crypto-digest.js";
 import {
   getBoundDeviceBootstrapProfile,
   getDeviceBootstrapTokenProfile,
@@ -200,7 +200,7 @@ function hashGatewaySecurityId(value: string | undefined): string | undefined {
   if (!normalized) {
     return undefined;
   }
-  return `sha256:${createHash("sha256").update(normalized).digest("hex").slice(0, 12)}`;
+  return `sha256:${sha256HexPrefix(normalized, 12)}`;
 }
 
 function emitGatewayAuthSecurityEvent(params: {

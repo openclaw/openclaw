@@ -1230,5 +1230,157 @@
   {
     "source": "Docs map",
     "target": "文档地图"
+  },
+  {
+    "source": "Additional provider variants",
+    "target": "其他提供商变体"
+  },
+  {
+    "source": "Agent config reference",
+    "target": "Agent 配置参考"
+  },
+  {
+    "source": "Background process",
+    "target": "后台进程"
+  },
+  {
+    "source": "Channel outbound API",
+    "target": "渠道出站 API"
+  },
+  {
+    "source": "Channel routing",
+    "target": "渠道路由"
+  },
+  {
+    "source": "Channels Overview",
+    "target": "渠道概览"
+  },
+  {
+    "source": "Compaction",
+    "target": "压缩"
+  },
+  {
+    "source": "Debugging (--dev)",
+    "target": "调试（--dev）"
+  },
+  {
+    "source": "Devices",
+    "target": "设备"
+  },
+  {
+    "source": "Gateway CLI",
+    "target": "Gateway CLI"
+  },
+  {
+    "source": "Gateway configuration",
+    "target": "Gateway 配置"
+  },
+  {
+    "source": "Gmail Pub/Sub integration",
+    "target": "Gmail Pub/Sub 集成"
+  },
+  {
+    "source": "Group chats",
+    "target": "群聊"
+  },
+  {
+    "source": "Hooks",
+    "target": "Hooks"
+  },
+  {
+    "source": "Incident response",
+    "target": "事件响应"
+  },
+  {
+    "source": "Logging overview",
+    "target": "日志概览"
+  },
+  {
+    "source": "Menu bar",
+    "target": "菜单栏"
+  },
+  {
+    "source": "Message Presentation",
+    "target": "消息呈现"
+  },
+  {
+    "source": "Models CLI reference",
+    "target": "模型 CLI 参考"
+  },
+  {
+    "source": "Network proxy",
+    "target": "网络代理"
+  },
+  {
+    "source": "Nodes CLI",
+    "target": "节点 CLI"
+  },
+  {
+    "source": "Nodes overview",
+    "target": "节点概览"
+  },
+  {
+    "source": "NovitaAI",
+    "target": "NovitaAI"
+  },
+  {
+    "source": "Onboard",
+    "target": "引导设置"
+  },
+  {
+    "source": "Operator scopes",
+    "target": "操作员权限范围"
+  },
+  {
+    "source": "Scheduled tasks vs heartbeat",
+    "target": "定时任务与心跳对比"
+  },
+  {
+    "source": "Scheduled tasks: Troubleshooting",
+    "target": "定时任务：故障排查"
+  },
+  {
+    "source": "Session config",
+    "target": "会话配置"
+  },
+  {
+    "source": "Signal reactions",
+    "target": "Signal 表情回应"
+  },
+  {
+    "source": "Task Flow",
+    "target": "Task Flow"
+  },
+  {
+    "source": "Telegram reaction notifications",
+    "target": "Telegram 表情回应通知"
+  },
+  {
+    "source": "Threat model",
+    "target": "威胁模型"
+  },
+  {
+    "source": "Timezones",
+    "target": "时区"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "故障排查"
+  },
+  {
+    "source": "Webhooks",
+    "target": "Webhooks"
+  },
+  {
+    "source": "WhatsApp reaction level",
+    "target": "WhatsApp 表情回应级别"
+  },
+  {
+    "source": "Zalo (official Bot/webhook channel)",
+    "target": "Zalo（官方 Bot/webhook 渠道）"
+  },
+  {
+    "source": "Zalo personal channel config",
+    "target": "Zalo 个人渠道配置"
   }
 ]

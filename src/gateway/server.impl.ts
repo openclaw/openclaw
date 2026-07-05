@@ -823,9 +823,15 @@ export async function startGatewayServer(
       log,
     }),
   );
+  const { createTerminalLaunchPolicy } = await import("./terminal/launch.js");
+  const terminalLaunchPolicy = createTerminalLaunchPolicy(cfgAtStart);
 
   const wizardRunner = opts.wizardRunner ?? runDefaultSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
+  const crestodianSessions = new Map<
+    string,
+    import("./server-methods/crestodian.js").CrestodianChatSession
+  >();
 
   const deps = createDefaultDeps();
   let runtimeState: GatewayServerLiveState | null = null;
@@ -894,6 +900,7 @@ export async function startGatewayServer(
     addChatRun,
     removeChatRun,
     chatAbortControllers,
+    chatQueuedTurns,
     toolEventRecipients,
   } = await startupTrace.measure("runtime.state", () =>
     createGatewayRuntimeState({
@@ -910,6 +917,7 @@ export async function startGatewayServer(
       strictTransportSecurityHeader,
       resolvedAuth,
       rateLimiter: authRateLimiter,
+      isTerminalEnabled: terminalLaunchPolicy.isEnabled,
       gatewayTls,
       getResolvedAuth,
       hooksConfig: () => runtimeState?.hooksConfig ?? initialHooksConfig,
@@ -940,6 +948,18 @@ export async function startGatewayServer(
     broadcastVoiceWakeChanged,
     hasTalkNodeConnected,
   } = createGatewayNodeSessionRuntime({ broadcast });
+  const { TerminalSessionManager, DEFAULT_TERMINAL_DETACH_SECONDS } =
+    await import("./terminal/session-manager.js");
+  // One PTY store per gateway. Emits each session's bytes only to the owning
+  // connection so terminals stay private to the operator that opened them.
+  // Startup config is enough here: gateway.terminal.* changes restart the
+  // gateway (config-reload-plan), so the grace period never drifts at runtime.
+  const terminalSessions = new TerminalSessionManager({
+    emit: (connId, event, payload) => broadcastToConnIds(event, payload, new Set([connId])),
+    detachGraceMs:
+      (cfgAtStart.gateway?.terminal?.detachedSessionTimeoutSeconds ??
+        DEFAULT_TERMINAL_DETACH_SECONDS) * 1000,
+  });
   applyGatewayLaneConcurrency(cfgAtStart);
 
   runtimeState = createGatewayServerLiveState({
@@ -1050,6 +1070,7 @@ export async function startGatewayServer(
       lifecycleUnsub: runtimeState.lifecycleUnsub,
       chatRunState,
       chatAbortControllers,
+      chatQueuedTurns,
       restartRecoveryCandidates,
       removeChatRun,
       agentRunSeq,
@@ -1122,6 +1143,7 @@ export async function startGatewayServer(
           logHealth,
           dedupe,
           chatAbortControllers,
+          chatQueuedTurns,
           restartRecoveryCandidates,
           chatRunState,
           chatRunBuffers,
@@ -1418,6 +1440,8 @@ export async function startGatewayServer(
           deps,
           runtimeState,
           getRuntimeConfig,
+          resolveTerminalLaunchPolicy: terminalLaunchPolicy.resolve,
+          isTerminalEnabled: terminalLaunchPolicy.isEnabled,
           execApprovalManager,
           pluginApprovalManager,
           loadGatewayModelCatalog,
@@ -1446,8 +1470,10 @@ export async function startGatewayServer(
             });
           },
           nodeRegistry,
+          terminalSessions,
           agentRunSeq,
           chatAbortControllers,
+          chatQueuedTurns,
           chatAbortedRuns: chatRunState.abortedRuns,
           chatRunBuffers: chatRunState.buffers,
           chatDeltaSentAt: chatRunState.deltaSentAt,
@@ -1470,6 +1496,7 @@ export async function startGatewayServer(
           registerToolEventRecipient: toolEventRecipients.add,
           dedupe,
           wizardSessions,
+          crestodianSessions,
           findRunningWizard,
           purgeWizardSession,
           getRuntimeSnapshot,
@@ -1749,6 +1776,13 @@ export async function startGatewayServer(
       onCronRestart: () => {
         gatewayCronStartHandled = true;
       },
+      reconcileTerminalSessions: (plan, nextConfig) => {
+        terminalLaunchPolicy.prepareConfig(nextConfig, { restartPending: plan.restartGateway });
+        terminalSessions.closeDisallowedAgents(
+          (agentId) => terminalLaunchPolicy.resolve(agentId).ok,
+        );
+      },
+      commitTerminalConfig: terminalLaunchPolicy.commitConfig,
       channelManager,
       activateRuntimeSecrets,
       resolveSharedGatewaySessionGenerationForConfig,
@@ -1812,6 +1846,8 @@ export async function startGatewayServer(
     close: async (optsLocal) => {
       try {
         markClosePreludeStarted();
+        // Kill any live operator shells before the socket layer tears down.
+        terminalSessions.disposeAll();
         await stopRegisteredGatewayLifetimeSidecars();
         await stopRegisteredPostReadySidecars();
         // Run gateway_stop plugin hook before shutdown
