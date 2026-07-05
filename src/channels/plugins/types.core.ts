@@ -458,6 +458,8 @@ export type ChannelThreadingContext = {
   To?: string;
   ChatType?: string;
   CurrentMessageId?: string | number;
+  /** Effective channel reply mode prepared for this turn. */
+  ReplyToMode?: MsgContext["ReplyToMode"];
   ReplyToId?: string;
   ReplyToIdFull?: string;
   ThreadLabel?: string;

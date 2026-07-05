@@ -1400,6 +1400,7 @@ export async function prepareSlackMessage(params: {
       }),
     },
   }) satisfies FinalizedMsgContext;
+  ctxPayload.ReplyToMode = replyToMode;
 
   if (isRoomish && !shouldRequireMention) {
     channelHistory.record({

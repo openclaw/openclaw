@@ -1812,6 +1812,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
     assertPrepared(prepared);
     expect(prepared.replyToMode).toBe("off");
+    expect(prepared.ctxPayload.ReplyToMode).toBe("off");
     expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
   });
 
@@ -3478,6 +3479,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
     assertPrepared(prepared);
     expect(prepared.replyToMode).toBe("off");
+    expect(prepared.ctxPayload.ReplyToMode).toBe("off");
     expect(prepared.ctxPayload.WasMentioned).toBe(true);
     expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
     expect(prepared.ctxPayload.SessionKey).toBe("agent:main:slack:channel:c0ahzfcas1k");
