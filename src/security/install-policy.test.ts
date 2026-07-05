@@ -1,8 +1,20 @@
 // Covers install-policy checks for packages and plugin installs.
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const spawnMock = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawn: (...args: Parameters<typeof actual.spawn>) =>
+      spawnMock(...args) ?? actual.spawn(...args),
+  };
+});
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   killPidIfAlive,
@@ -673,4 +685,76 @@ describe("runInstallPolicy", () => {
       );
     },
   );
+});
+
+describe("runPolicyCommand stream error handling", () => {
+  function createFakeChild(): ChildProcess {
+    const child = new EventEmitter() as EventEmitter & ChildProcess;
+    child.stdout = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stdout"]>;
+    child.stderr = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stderr"]>;
+    child.stdin = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stdin"]>;
+    child.stdin.write = vi.fn(() => true) as NonNullable<ChildProcess["stdin"]>["write"];
+    child.stdin.end = vi.fn() as NonNullable<ChildProcess["stdin"]>["end"];
+    Object.defineProperties(child, {
+      pid: { configurable: true, enumerable: true, get: () => 1234 },
+      killed: { configurable: true, enumerable: true, get: () => false },
+    });
+    child.kill = vi.fn(() => true) as ChildProcess["kill"];
+    return child;
+  }
+
+  beforeEach(() => {
+    spawnMock.mockReset();
+  });
+
+  it("swallows stdout and stderr stream errors without rejecting", { timeout: 5_000 }, async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-policy-stream-"));
+    tempDirs.push(dir);
+    const policyScriptPath = path.join(dir, "policy.cjs");
+    await fs.writeFile(policyScriptPath, "module.exports = {};", "utf8");
+    await fs.chmod(policyScriptPath, 0o700);
+
+    spawnMock.mockImplementation(() => {
+      const child = createFakeChild();
+      const response = Buffer.from(JSON.stringify({ protocolVersion: 1, decision: "allow" }));
+      // Emit stream errors and response after listeners are attached in runPolicyCommand.
+      queueMicrotask(() => {
+        child.stdout?.emit("error", new Error("stdout read failed"));
+        child.stdout?.emit("data", response);
+        child.stderr?.emit("error", new Error("stderr read failed"));
+        child.emit("close", 0, null);
+      });
+      return child;
+    });
+
+    await expect(
+      runInstallPolicy({
+        config: {
+          security: {
+            installPolicy: {
+              enabled: true,
+              exec: {
+                source: "exec",
+                command: policyScriptPath,
+                args: [],
+                allowInsecurePath: true,
+                timeoutMs: 5_000,
+                noOutputTimeoutMs: 5_000,
+                maxOutputBytes: 16 * 1024,
+              },
+            },
+          },
+        },
+        request: {
+          targetType: "skill",
+          targetName: "weather",
+          sourcePath: dir,
+          sourcePathKind: "directory",
+          source: { kind: "clawhub", authority: "openclaw", mutable: false, network: true },
+          origin: { type: "clawhub" },
+          request: { kind: "skill-install", mode: "install" },
+        },
+      }),
+    ).resolves.toEqual({});
+  });
 });
