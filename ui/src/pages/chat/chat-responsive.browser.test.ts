@@ -187,6 +187,7 @@ function composerControlsHtml() {
               <button class="chat-controls__inline-select-option chat-controls__combined-model-option">gpt-5.5</button>
               <button class="chat-controls__inline-select-option chat-controls__combined-model-option">claude-sonnet-4-6</button>
             </div>
+            <div class="chat-controls__reasoning-panel">Reasoning</div>
           </div>
         </details>
       </div>
@@ -810,15 +811,20 @@ describeBrowserLayout("chat responsive browser layout", () => {
   it.each([
     [320, 568],
     [375, 812],
+    [667, 375],
+    [768, 500],
   ] as const)(
-    "keeps the composer model menu inside the phone viewport at %sx%s",
+    "keeps the composer model menu inside the mobile viewport at %sx%s",
     async (width, height) => {
       const page = await openFixture(width, height);
       try {
         await page.locator('[data-chat-composer-model="true"]').click();
         const menu = await getBoundingBox(page, ".chat-controls__inline-select-menu--combined");
+        const reasoning = await getBoundingBox(page, ".chat-controls__reasoning-panel");
         expect(menu.x).toBeGreaterThanOrEqual(0);
         expect(menu.x + menu.width).toBeLessThanOrEqual(width + 1);
+        expect(reasoning.x).toBeGreaterThanOrEqual(0);
+        expect(reasoning.x + reasoning.width).toBeLessThanOrEqual(width + 1);
       } finally {
         await closeBrowserPage(page);
       }
