@@ -28,10 +28,14 @@ import {
   extractThinkingCached,
   formatReasoningMarkdown,
 } from "../../../lib/chat/message-extract.ts";
-import { isToolResultMessage, normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
+import {
+  isStandaloneToolMessageForDisplay,
+  normalizeMessage,
+} from "../../../lib/chat/message-normalizer.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import {
   extractToolCardsCached,
+  formatDistinctCollapsedToolSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolCardError,
@@ -648,24 +652,6 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   if (normalizedRole === "tool" && group.messages.length > 1) {
     const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key));
     const toolCount = cards.length || group.messages.length;
-    const toolLabels = [
-      ...new Set(
-        cards.map(
-          (card) =>
-            resolveToolDisplay({
-              name: card.name,
-              args: card.args,
-              detailMode: "explain",
-            }).label,
-        ),
-      ),
-    ];
-    const preview =
-      toolLabels.length === 0
-        ? "Tool output"
-        : toolLabels.length <= 3
-          ? toolLabels.join(", ")
-          : `${toolLabels.slice(0, 2).join(", ")} +${toolLabels.length - 2} more`;
     const hasError = cards.some(isToolCardError) && group.turnSucceeded !== true;
     const activityDisclosureId = `activity:${group.key}`;
     const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? hasError;
@@ -694,7 +680,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               type="button"
               aria-expanded=${String(activityExpanded)}
               aria-label=${hasError
-                ? `Activity: ${toolCount} tool${toolCount === 1 ? "" : "s"}, includes errors. ${preview}`
+                ? `Activity: ${toolCount} tool${toolCount === 1 ? "" : "s"}, includes errors.`
                 : nothing}
               @click=${(event: MouseEvent) => {
                 if (shouldToggleSelectableDisclosure(event)) {
@@ -706,7 +692,6 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               <span class="chat-activity-group__label"
                 >Activity: ${toolCount} tool${toolCount === 1 ? "" : "s"}</span
               >
-              <span class="chat-activity-group__preview">${preview}</span>
               <span
                 class="collapse-chevron ${activityExpanded ? "" : "collapse-chevron--collapsed"}"
                 aria-hidden="true"
@@ -1678,6 +1663,7 @@ function renderInlineToolCards(
     onOpenSidebar?: (content: SidebarContent) => void;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string) => void;
+    turnSucceeded?: boolean;
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
@@ -1688,6 +1674,7 @@ function renderInlineToolCards(
       ${toolCards.map((card, index) =>
         renderToolCard(card, {
           expanded: opts.isToolExpanded?.(`${opts.messageKey}:toolcard:${index}`) ?? false,
+          turnSucceeded: opts.turnSucceeded,
           onToggleExpanded: opts.onToggleToolExpanded
             ? () => opts.onToggleToolExpanded?.(`${opts.messageKey}:toolcard:${index}`)
             : () => undefined,
@@ -1817,13 +1804,11 @@ function renderGroupedMessage(
 ) {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "unknown";
-  const normalizedRole = normalizeRoleForGrouping(role);
-  const isToolResult =
-    isToolResultMessage(message) ||
-    role.toLowerCase() === "toolresult" ||
-    role.toLowerCase() === "tool_result" ||
-    typeof m.toolCallId === "string" ||
-    typeof m.tool_call_id === "string";
+  const sourceRole = normalizeRoleForGrouping(role);
+  const normalizedMessage = normalizeMessage(message);
+  const normalizedRole = normalizeRoleForGrouping(normalizedMessage.role);
+  const isToolShell = normalizedRole === "tool";
+  const isStandaloneToolMessage = isStandaloneToolMessageForDisplay(message);
 
   const toolCards = (opts.showToolCalls ?? true) ? extractToolCardsCached(message, messageKey) : [];
   const hasToolCards = toolCards.length > 0;
@@ -1839,7 +1824,6 @@ function renderGroupedMessage(
   const pairingQrExpiryNotices = extractPairingQrExpiryNotices(message);
   const hasPairingQrExpiryNotices = pairingQrExpiryNotices.length > 0;
 
-  const normalizedMessage = normalizeMessage(message);
   const extractedText = normalizedMessage.content
     .reduce<string[]>((lines, item) => {
       if (item.type === "text" && typeof item.text === "string") {
@@ -1884,11 +1868,10 @@ function renderGroupedMessage(
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
 
-  const isToolMessage = normalizedRole === "tool" || isToolResult;
-  const reserveActionSpace = hasActions && !isToolMessage;
+  const reserveActionSpace = hasActions && !isToolShell;
   const bubbleClasses = [
     "chat-bubble",
-    isToolMessage ? "chat-bubble--tool-shell" : "",
+    isToolShell ? "chat-bubble--tool-shell" : "",
     hasActions ? "has-copy" : "",
     reserveActionSpace ? "chat-bubble--has-actions" : "",
     opts.isStreaming ? "streaming" : "",
@@ -1940,9 +1923,7 @@ function renderGroupedMessage(
       : toolNames.length <= 3
         ? toolNames.join(", ")
         : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
-  const toolSummaryLabel = formatCollapsedToolSummaryText(toolSummaryLabelRaw);
-  const toolPreview =
-    markdown && !toolSummaryLabel ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
+  const toolPreview = markdown ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
   const toolMessageLabelRaw = toolMessageHasError
     ? "Tool error"
     : singleToolDisplayDetail && !markdown && !hasImages
@@ -1952,7 +1933,23 @@ function renderGroupedMessage(
         : "Tool output";
   const toolMessageLabel =
     formatCollapsedToolSummaryText(toolMessageLabelRaw) ?? toolMessageLabelRaw;
+  const toolSummaryLabel = formatDistinctCollapsedToolSummaryText(
+    toolSummaryLabelRaw,
+    toolMessageLabel,
+  );
   const toolMessageIcon = singleToolDisplay ? renderChatIcon(singleToolDisplay.icon) : icons.zap;
+  const assistantViewContent =
+    sourceRole === "assistant" && assistantViewBlocks.length > 0
+      ? html`${assistantViewBlocks.map(
+          (block) => html`${renderToolPreview(block.preview, "chat_message", {
+            onOpenSidebar,
+            rawText: block.rawText ?? null,
+            canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
+            embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+          })}
+          ${block.rawText ? renderRawOutputToggle(block.rawText) : nothing}`,
+        )}`
+      : nothing;
 
   const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
 
@@ -1975,7 +1972,7 @@ function renderGroupedMessage(
             ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
           </div>`
         : nothing}
-      ${isToolMessage
+      ${isStandaloneToolMessage
         ? html`
             <div
               class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${toolMessageExpanded
@@ -2015,6 +2012,7 @@ function renderGroupedMessage(
                         opts.onRequestUpdate,
                         opts.onAssistantAttachmentLoaded,
                       )}
+                      ${assistantViewContent}
                       ${reasoningMarkdown
                         ? html`<div class="chat-thinking">
                             ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
@@ -2053,6 +2051,7 @@ function renderGroupedMessage(
                               onOpenSidebar,
                               isToolExpanded: opts.isToolExpanded,
                               onToggleToolExpanded: opts.onToggleToolExpanded,
+                              turnSucceeded: opts.turnSucceeded,
                               canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                               embedSandboxMode: opts.embedSandboxMode ?? "scripts",
                               allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
@@ -2079,17 +2078,7 @@ function renderGroupedMessage(
                   ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
                 </div>`
               : nothing}
-            ${normalizedRole === "assistant" && assistantViewBlocks.length > 0
-              ? html`${assistantViewBlocks.map(
-                  (block) => html`${renderToolPreview(block.preview, "chat_message", {
-                    onOpenSidebar,
-                    rawText: block.rawText ?? null,
-                    canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-                    embedSandboxMode: opts.embedSandboxMode ?? "scripts",
-                  })}
-                  ${block.rawText ? renderRawOutputToggle(block.rawText) : nothing}`,
-                )}`
-              : nothing}
+            ${assistantViewContent}
             ${jsonResult
               ? html`<details class="chat-json-collapse">
                   <summary class="chat-json-summary">
@@ -2109,6 +2098,7 @@ function renderGroupedMessage(
                   onOpenSidebar,
                   isToolExpanded: opts.isToolExpanded,
                   onToggleToolExpanded: opts.onToggleToolExpanded,
+                  turnSucceeded: opts.turnSucceeded,
                   canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                   embedSandboxMode: opts.embedSandboxMode ?? "scripts",
                   allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,

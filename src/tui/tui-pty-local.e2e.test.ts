@@ -28,6 +28,17 @@ const LOCAL_OUTPUT_TIMEOUT_MS = 120_000;
 const LOCAL_EXIT_TIMEOUT_MS = 4_000;
 const LOCAL_TEST_TIMEOUT_MS = 150_000;
 
+async function waitForOutputAfter(run: PtyRun, needle: string, offset: number) {
+  await waitFor({
+    timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+    read: () => (run.output().slice(offset).includes(needle) ? true : null),
+    onTimeout: () =>
+      new Error(
+        `timed out waiting for ${JSON.stringify(needle)} after offset ${offset}\n${run.output()}`,
+      ),
+  });
+}
+
 async function readRequestBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
@@ -414,9 +425,66 @@ describe("TUI PTY real backends", () => {
         expect(request?.body.model).toBe("gpt-5.5");
         await fixture.run.waitForOutput("LOCAL_PTY_RESPONSE");
 
+        // Text deltas arrive before the terminal lifecycle event. Wait for the
+        // finished run to become idle so /new exercises session creation.
+        const responseOffset = fixture.run.output().lastIndexOf("LOCAL_PTY_RESPONSE");
+        await waitForOutputAfter(fixture.run, "| idle", responseOffset);
+
+        await fixture.run.write("/new\r", { delay: false });
+        await fixture.run.waitForOutput("new session: agent:main:tui-");
+        await fixture.run.write("send after local new\r");
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 2 ? true : null),
+          onTimeout: () =>
+            new Error(`post-/new prompt did not reach the model\n${fixture.run.output()}`),
+        });
+        expect(JSON.stringify(fixture.mockModel.requests()[1]?.body)).toContain(
+          "send after local new",
+        );
+
         await fixture.run.write("/exit\r", { delay: false });
         const exit = await fixture.run.waitForExit();
         expect(exit.exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "creates and adopts a fresh session through the real Gateway backend",
+    async () => {
+      const fixture = await startGatewayModeTui({
+        queueMode: "followup",
+        firstResponseDelayMs: 0,
+      });
+      try {
+        await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write("seed gateway session\r");
+        await fixture.run.waitForOutput("FIRST_RUN_ACTIVE");
+
+        const responseOffset = fixture.run.output().lastIndexOf("FIRST_RUN_ACTIVE");
+        await waitForOutputAfter(fixture.run, "| idle", responseOffset);
+
+        await fixture.run.write("/new\r", { delay: false });
+        await fixture.run.waitForOutput("new session: agent:main:tui-");
+        await fixture.run.write("send after gateway new\r");
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 2 ? true : null),
+          onTimeout: () =>
+            new Error(
+              `post-/new Gateway prompt did not reach the model\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
+            ),
+        });
+        const freshRequest = JSON.stringify(fixture.mockModel.requests()[1]?.body);
+        expect(freshRequest).toContain("send after gateway new");
+        expect(freshRequest).not.toContain("seed gateway session");
+
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
       } finally {
         await fixture.cleanup();
       }

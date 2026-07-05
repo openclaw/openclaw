@@ -21,6 +21,7 @@ const updateSessionGoalStatusMock = vi.fn();
 const ensureRuntimePluginsLoadedMock = vi.fn();
 const ensureContextWindowCacheLoadedMock = vi.fn(async () => undefined);
 const runSessionStartupMigrationMock = vi.fn<() => Promise<void>>(async () => undefined);
+const createGatewaySessionMock = vi.fn();
 const listSessionsFromStoreAsyncMock = vi.fn(
   async (_options?: unknown): Promise<{ sessions: unknown[] }> => ({ sessions: [] }),
 );
@@ -206,6 +207,10 @@ vi.mock("../gateway/server-model-catalog.js", () => ({
   loadGatewayModelCatalog: (params?: unknown) => loadGatewayModelCatalogMock(params),
 }));
 
+vi.mock("../gateway/session-create-service.js", () => ({
+  createGatewaySession: (...args: unknown[]) => createGatewaySessionMock(...args),
+}));
+
 vi.mock("../gateway/session-reset-service.js", () => ({
   performGatewaySessionReset: () => ({ ok: true, key: "agent:main:main", entry: {} }),
 }));
@@ -287,6 +292,13 @@ describe("EmbeddedTuiBackend", () => {
     ensureContextWindowCacheLoadedMock.mockResolvedValue(undefined);
     runSessionStartupMigrationMock.mockReset();
     runSessionStartupMigrationMock.mockResolvedValue(undefined);
+    createGatewaySessionMock.mockReset();
+    createGatewaySessionMock.mockResolvedValue({
+      ok: true,
+      key: "agent:main:tui-created",
+      entry: { sessionId: "created-session" },
+      resetExisting: false,
+    });
     listSessionsFromStoreAsyncMock.mockReset();
     listSessionsFromStoreAsyncMock.mockResolvedValue({ sessions: [] });
     loadCombinedSessionStoreForGatewayMock.mockReset();
@@ -342,6 +354,34 @@ describe("EmbeddedTuiBackend", () => {
     setEmbeddedMode(false);
     defaultRuntime.log = originalRuntimeLog;
     defaultRuntime.error = originalRuntimeError;
+  });
+
+  it("creates TUI sessions through the shared gateway lifecycle", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    const result = await backend.createSession({
+      key: "tui-created",
+      agentId: "main",
+      parentSessionKey: "agent:main:main",
+    });
+
+    expect(createGatewaySessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: {},
+        key: "tui-created",
+        agentId: "main",
+        parentSessionKey: "agent:main:main",
+        emitCommandHooks: true,
+        commandSource: "tui:embedded",
+        loadGatewayModelCatalog: expect.any(Function),
+      }),
+    );
+    expect(result).toEqual({
+      ok: true,
+      key: "agent:main:tui-created",
+      entry: { sessionId: "created-session" },
+    });
   });
 
   it("bridges assistant and lifecycle events into chat events", async () => {

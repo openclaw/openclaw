@@ -620,6 +620,12 @@ export async function attachWebInboxToSocket(
         ? (result as { message?: proto.IMessage }).message
         : undefined;
     rememberBaileysMessage(remoteJid, messageId, message);
+    // Baileys derives the participant for fromMe quotes from its own userJid.
+    // Retain only the facts needed to avoid the cache-miss fromMe=false fallback.
+    cacheInboundMessageMeta(options.accountId, remoteJid, messageId, {
+      fromMe: true,
+      body: extractText(message ?? undefined),
+    });
   };
   const trackLateAcceptedSend = (jid: string, promise: Promise<WAMessage | undefined>) => {
     // The local send has failed terminally, but Baileys may still deliver it.
