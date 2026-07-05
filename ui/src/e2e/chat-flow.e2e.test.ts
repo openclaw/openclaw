@@ -902,7 +902,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await gateway.emitChatFinal({ runId, text: "History race stayed visible." });
       await page.getByText("History race stayed visible.").waitFor({ timeout: 10_000 });
       await page.locator(".agent-chat__composer-combobox textarea").fill("/");
-      await gateway.waitForRequest("commands.list");
+      expect(await gateway.getRequests("commands.list")).toHaveLength(0);
       expect(await gateway.getRequests("agents.list")).toHaveLength(0);
     } finally {
       await closeBrowserContext(context);
