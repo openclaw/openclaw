@@ -2351,6 +2351,19 @@ describe("chat slash menu accessibility", () => {
     expect(onSend).toHaveBeenCalledTimes(1);
   });
 
+  it("sends exact stop commands instead of selecting the slash menu", () => {
+    const onDraftChange = vi.fn();
+    const onRequestUpdate = vi.fn();
+    const onSend = vi.fn();
+    const container = renderChatView({ onDraftChange, onRequestUpdate, onSend });
+
+    inputDraft(container, "/stop");
+    keydownComposer(container, "Enter");
+
+    expect(onDraftChange).toHaveBeenCalledWith("/stop");
+    expect(onSend).toHaveBeenCalledWith("/stop");
+  });
+
   it("commits local draft input on blur", () => {
     const onDraftChange = vi.fn();
     const container = renderChatView({ onDraftChange });

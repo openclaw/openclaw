@@ -716,7 +716,7 @@ export class ChatPage extends LitElement {
         state.chatAttachments = next;
         state.requestUpdate?.();
       },
-      onSend: () => void state.handleSendChat(),
+      onSend: (messageOverride) => void state.handleSendChat(messageOverride),
       onCompact: () => void state.handleSendChat("/compact"),
       onOpenSessionCheckpoints: () => {
         const search = new URLSearchParams({ session: state.sessionKey });
