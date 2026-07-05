@@ -303,7 +303,7 @@ describe("Slack live QA runtime helpers", () => {
             content: [
               {
                 type: "toolResult",
-                text: "SLACK_QA_CODEX_EXEC_APPROVAL_ABC123",
+                content: "SLACK_QA_CODEX_EXEC_APPROVAL_ABC123",
               },
             ],
           },

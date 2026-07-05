@@ -1708,6 +1708,20 @@ function readAgentWaitStatus(result: unknown) {
   return typeof status === "string" && status.trim() ? status : "unknown";
 }
 
+function extractCodexToolResultText(message: Record<string, unknown>) {
+  const content = Array.isArray(message.content) ? message.content : [];
+  return content
+    .flatMap((block) => {
+      const record = asPlainRecord(block);
+      if (record.type !== "toolResult") {
+        return [];
+      }
+      const text = typeof record.content === "string" ? record.content.trim() : "";
+      return text ? [text] : [];
+    })
+    .join("\n");
+}
+
 function assertCodexApprovalTranscriptSucceeded(
   messages: unknown,
   run: SlackQaCodexApprovalScenarioRun,
@@ -1726,7 +1740,7 @@ function assertCodexApprovalTranscriptSucceeded(
     if (message.role !== "toolResult" || message.isError === true) {
       return false;
     }
-    return extractGatewayMessageText(message)
+    return extractCodexToolResultText(message)
       .split(/\r?\n/u)
       .some((line) => line.trim() === run.token);
   });
