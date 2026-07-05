@@ -1750,7 +1750,7 @@ function buildVisibleReplyInstruction(
     ? flattenCodexDynamicToolFunctions(dynamicTools).some((tool) => tool.name.trim() === "message")
     : params.disableMessageTool !== true;
   if (params.sourceReplyDeliveryMode === "message_tool_only" && messageToolAvailable) {
-    return "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. Do not repeat that visible content in your final answer.";
+    return "Visible replies to the current source conversation are not automatically delivered for this run. Complete any required tool work before sending a reply to the current source conversation. Any `message(action=send)` call that targets the current source conversation, whether by implicit route or an explicit source route, should be used only when you are ready to finish the turn with the final user-visible source-channel output. Explicit non-source/out-of-band `message(action=send)` calls to other conversations remain ordinary tool work; after those sends, continue the task and finish with one final current-source reply if needed. Do not send progress/status updates to the current source conversation if more tool work is needed afterward. Do not repeat that visible content in your final answer.";
   }
   if (messageToolAvailable) {
     return "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation. Use `message` only for explicit out-of-band sends, media/file sends, or sends to a different target.";

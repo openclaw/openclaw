@@ -1111,11 +1111,21 @@ describe("runCodexAppServerAttempt", () => {
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.sourceReplyDeliveryMode = "message_tool_only";
 
-    expect(
-      testing.buildDeveloperInstructions(params, {
-        dynamicTools: [createMessageDynamicTool("Message test tool")],
-      }),
-    ).toContain("Visible source replies are not automatically delivered for this run.");
+    const messageToolOnlyInstructions = testing.buildDeveloperInstructions(params, {
+      dynamicTools: [createMessageDynamicTool("Message test tool")],
+    });
+    expect(messageToolOnlyInstructions).toContain(
+      "Visible replies to the current source conversation are not automatically delivered for this run.",
+    );
+    expect(messageToolOnlyInstructions).toContain(
+      "Any `message(action=send)` call that targets the current source conversation, whether by implicit route or an explicit source route",
+    );
+    expect(messageToolOnlyInstructions).toContain(
+      "Explicit non-source/out-of-band `message(action=send)` calls to other conversations remain ordinary tool work",
+    );
+    expect(messageToolOnlyInstructions).toContain(
+      "Do not send progress/status updates to the current source conversation if more tool work is needed afterward.",
+    );
 
     const withoutMessageToolInstructions = testing.buildDeveloperInstructions(params, {
       dynamicTools: [],
