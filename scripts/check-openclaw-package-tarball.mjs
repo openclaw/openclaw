@@ -364,6 +364,10 @@ function collectUnsafeExtractedDistTreeErrors() {
       }
       if (entry.isDirectory()) {
         visit(entryPath, entryLabel);
+        continue;
+      }
+      if (!entry.isFile()) {
+        treeErrors.push(`unsafe extracted dist entry: ${entryLabel}`);
       }
     }
   };

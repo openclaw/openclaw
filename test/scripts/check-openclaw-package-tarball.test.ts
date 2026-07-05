@@ -528,7 +528,7 @@ describe("check-openclaw-package-tarball", () => {
 
           expect(result.error).toBeUndefined();
           expect(result.status).not.toBe(0);
-          expect(result.stderr).toContain(`unsafe package metadata tar entry ${relativePath}`);
+          expect(result.stderr).toContain(`unsafe extracted dist entry: package/${relativePath}`);
         },
         "2026.5.21",
         { packageFifos: [relativePath] },
@@ -725,6 +725,28 @@ describe("check-openclaw-package-tarball", () => {
       },
     );
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects FIFO dist entries before synchronous reads",
+    () => {
+      withTarball(
+        ["dist/block.js"],
+        {},
+        (tarball) => {
+          const result = spawnSync("node", [CHECK_SCRIPT, tarball], {
+            encoding: "utf8",
+            timeout: 5_000,
+          });
+
+          expect(result.error).toBeUndefined();
+          expect(result.status).not.toBe(0);
+          expect(result.stderr).toContain("unsafe extracted dist entry: package/dist/block.js");
+        },
+        "2026.5.21",
+        { packageFifos: ["dist/block.js"] },
+      );
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "rejects content inventory reads through symlinked dist parents",
