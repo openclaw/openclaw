@@ -362,6 +362,11 @@ const activeRecallCache = new Map<string, CachedActiveRecallResult>();
 type CircuitBreakerEntry = {
   consecutiveTimeouts: number;
   lastTimeoutAt: number;
+  // Timestamp of an in-flight half-open probe allowed through after a cooldown.
+  // Undefined while fully open (skipping) or closed. Retained across the cooldown
+  // so a probe timeout re-opens the breaker immediately instead of restarting the
+  // maxTimeouts count from zero.
+  halfOpenProbeAt?: number;
 };
 
 const timeoutCircuitBreaker = new Map<string, CircuitBreakerEntry>();
@@ -375,9 +380,26 @@ function isCircuitBreakerOpen(key: string, maxTimeouts: number, cooldownMs: numb
   if (!entry || entry.consecutiveTimeouts < maxTimeouts) {
     return false;
   }
-  if (Date.now() - entry.lastTimeoutAt >= cooldownMs) {
-    // Cooldown expired — reset and allow one attempt through.
-    timeoutCircuitBreaker.delete(key);
+  const now = Date.now();
+  // A half-open probe is already outstanding: keep skipping until it resolves.
+  // Self-heal if the probe was lost (e.g. aborted without recording a timeout or
+  // success) by letting another probe through once a full cooldown has elapsed.
+  if (entry.halfOpenProbeAt !== undefined) {
+    if (now - entry.halfOpenProbeAt < cooldownMs) {
+      return true;
+    }
+    entry.halfOpenProbeAt = now;
+    return false;
+  }
+  if (now - entry.lastTimeoutAt >= cooldownMs) {
+    // Cooldown expired — allow a single half-open probe through, but keep the
+    // tripped record. A probe timeout re-opens the breaker immediately (see
+    // recordCircuitBreakerTimeout); a successful recall clears it via
+    // resetCircuitBreaker. Previously the record was deleted here, so at normal
+    // turn cadence (turns spaced further apart than the cooldown) the
+    // consecutive-timeout count never accumulated back to maxTimeouts and the
+    // breaker never re-engaged — every turn paid the full recall timeout (#100167).
+    entry.halfOpenProbeAt = now;
     return false;
   }
   return true;
@@ -388,6 +410,9 @@ function recordCircuitBreakerTimeout(key: string): void {
   if (entry) {
     entry.consecutiveTimeouts++;
     entry.lastTimeoutAt = Date.now();
+    // The half-open probe (if any) timed out: return to fully open so the next
+    // turns within the cooldown are skipped instead of probing again.
+    entry.halfOpenProbeAt = undefined;
   } else {
     timeoutCircuitBreaker.set(key, { consecutiveTimeouts: 1, lastTimeoutAt: Date.now() });
   }
@@ -3761,6 +3786,8 @@ const testing = {
   getCachedResult,
   hasUsableMemoryResultInSessionRecord,
   isCircuitBreakerOpen,
+  recordCircuitBreakerTimeout,
+  resetCircuitBreaker,
   isMissingRegisteredMemoryToolsError,
   normalizePluginConfig,
   readActiveMemorySearchDebug,
