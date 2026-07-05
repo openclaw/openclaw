@@ -165,7 +165,7 @@ function mockRemoteMarketplaceCloneWithOutsideSymlink(params: {
     await fs.mkdir(path.dirname(path.join(repoDir as string, params.symlinkPath)), {
       recursive: true,
     });
-    await fs.symlink(outsideDir, path.join(repoDir as string, params.symlinkPath));
+    await fs.symlink(outsideDir, path.join(repoDir as string, params.symlinkPath), directorySymlinkType);
     return { code: 0, stdout: "", stderr: "", killed: false };
   });
 }
