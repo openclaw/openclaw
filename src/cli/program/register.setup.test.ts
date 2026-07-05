@@ -91,6 +91,15 @@ describe("registerSetupCommand", () => {
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
+  it("forwards the classic wizard escape hatch", async () => {
+    await runCli(["setup", "--classic"]);
+
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
+    expect(lastWizardOptions()?.classic).toBe(true);
+    expect(mocks.runCrestodian).not.toHaveBeenCalled();
+    expect(setupCommandMock).not.toHaveBeenCalled();
+  });
+
   it("runs setup wizard command when wizard-only flags are passed explicitly", async () => {
     await runCli(["setup", "--mode", "remote", "--non-interactive", "--accept-risk"]);
 

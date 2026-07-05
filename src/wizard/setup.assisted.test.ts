@@ -309,6 +309,7 @@ describe("agent-assisted setup handoff", () => {
     expect(hasExplicitFullWizardIntent({ mode: "remote" })).toBe(true);
     expect(hasExplicitFullWizardIntent({ authChoice: "skip" })).toBe(true);
     expect(hasExplicitFullWizardIntent({ reset: true })).toBe(true);
+    expect(hasExplicitFullWizardIntent({ classic: true })).toBe(true);
   });
 
   it("checks the effective default agent model and auth scope", async () => {

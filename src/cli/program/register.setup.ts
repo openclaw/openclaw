@@ -59,6 +59,7 @@ export function registerSetupCommand(program: Command): void {
     )
     .option("--wizard", "Run interactive onboarding", false)
     .option("--modern", "Use the conversational setup/repair assistant", false)
+    .option("--classic", "Use the classic multi-step setup wizard", false)
     .option(
       "--baseline",
       "Create baseline config/workspace/session folders without onboarding",
@@ -139,6 +140,7 @@ export function registerSetupCommand(program: Command): void {
             workspace: opts.workspace as string | undefined,
             nonInteractive: Boolean(opts.nonInteractive),
             acceptRisk: Boolean(opts.acceptRisk),
+            classic: Boolean(opts.classic),
             flow: (opts.flow ?? (opts.wizard ? "advanced" : undefined)) as
               | "quickstart"
               | "advanced"
