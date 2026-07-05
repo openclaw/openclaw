@@ -16,7 +16,7 @@ OpenClaw Codex app-server harness and model provider plugin with a Codex-managed
 
 ## Surface
 
-providers: codex; contracts: mediaUnderstandingProviders, migrationProviders, webSearchProviders
+providers: codex; contracts: mediaUnderstandingProviders, migrationProviders, tools, webSearchProviders
 
 ## Related docs
 

@@ -350,6 +350,7 @@ describe("whatsapp inbound dispatch", () => {
       msg: makeMsg({
         admission: groupAdmission("123@g.us"),
         event: { timestamp: 1737158400000 },
+        groupMention: { wasMentioned: false, requireMention: false },
         platform: {
           senderName: "Alice",
           senderJid: "alice@s.whatsapp.net",
@@ -378,6 +379,8 @@ describe("whatsapp inbound dispatch", () => {
       SenderE164: "+15550002222",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "123@g.us",
+      WasMentioned: false,
+      GroupRequireMention: false,
     });
   });
 
@@ -743,8 +746,13 @@ describe("whatsapp inbound dispatch", () => {
       expectedReplyToId: "trigger-message",
     },
     {
-      name: "blocks durable fallback without a final payload reply target",
+      name: "quotes the current user follow-up without falling back to the quoted bot message",
       payload: { text: "final payload" },
+      expectedReplyToId: "trigger-message",
+    },
+    {
+      name: "preserves explicit null reply targets",
+      payload: { text: "final payload", replyToId: null },
       expectedReplyToId: null,
     },
   ] satisfies Array<{

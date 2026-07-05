@@ -209,9 +209,9 @@ async function writeMainSessionStore(options?: SessionStoreEntryOptions) {
 function expectMainPatchBroadcast(
   result: Awaited<ReturnType<typeof invokeSessionsPatch>>,
   expected: Record<string, unknown>,
-) {
+): Record<string, unknown> {
   expectFields(result.responsePayload, { ok: true, key: "agent:main:main" });
-  expectChangedBroadcast(result.broadcastToConnIds, {
+  return expectChangedBroadcast(result.broadcastToConnIds, {
     sessionKey: "agent:main:main",
     reason: "patch",
     ...expected,
@@ -685,7 +685,31 @@ test("sessions.changed mutation events include live session setting metadata", a
     verboseLevel: "on",
   });
 
-  expectMainPatchBroadcast(result, sessionSettings);
+  expectMainPatchBroadcast(result, {
+    ...sessionSettings,
+    // An explicit session override resolves to the same effective mode and the
+    // sessions.changed builder carries the row-built channel-aware value.
+    effectiveResponseUsage: "full",
+  });
+});
+
+test("sessions.changed mutation events carry the resolved effectiveResponseUsage when the session has no override", async () => {
+  // No explicit responseUsage and no configured default → the row builder resolves
+  // effectiveResponseUsage to "off". The event must carry that resolved value, not
+  // the absent raw responseUsage, so a UI consumer's effective display stays fresh.
+  await writeMainSessionStore({ verboseLevel: "on" });
+
+  const result = await invokeSessionsPatch({
+    key: "main",
+    verboseLevel: "on",
+  });
+
+  const payload = expectMainPatchBroadcast(result, {
+    effectiveResponseUsage: "off",
+  });
+  // Raw responseUsage is genuinely absent (no override), proving the event does not
+  // merely echo the raw field.
+  expect(payload.responseUsage).toBeUndefined();
 });
 
 test("sessions.changed mutation events include sendPolicy metadata", async () => {
@@ -700,6 +724,72 @@ test("sessions.changed mutation events include sendPolicy metadata", async () =>
 
   expectMainPatchBroadcast(result, {
     sendPolicy: "deny",
+  });
+});
+
+test("sessions.changed mutation events include session management metadata", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "discord:group:dev": sessionStoreEntry("sess-dev", { pinnedAt: 10 }),
+    },
+  });
+
+  const archived = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    archived: true,
+  });
+  expectChangedBroadcast(archived.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    archived: true,
+    archivedAt: expect.any(Number),
+    pinned: false,
+    pinnedAt: null,
+  });
+
+  const restored = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    archived: false,
+  });
+  expectChangedBroadcast(restored.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    archived: false,
+    archivedAt: null,
+  });
+
+  const pinned = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    pinned: true,
+  });
+  expectChangedBroadcast(pinned.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    pinned: true,
+    pinnedAt: expect.any(Number),
+  });
+
+  const unpinned = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    pinned: false,
+  });
+  expectChangedBroadcast(unpinned.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    pinned: false,
+    pinnedAt: null,
+  });
+});
+
+test("sessions.changed mutation events clear label-derived display names", async () => {
+  await writeMainSessionStore({ label: "Dev" });
+
+  const result = await invokeSessionsPatch({ key: "main", label: null });
+
+  expectMainPatchBroadcast(result, {
+    label: null,
+    displayName: null,
   });
 });
 

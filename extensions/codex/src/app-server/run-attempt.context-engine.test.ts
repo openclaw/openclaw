@@ -1824,54 +1824,71 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await run;
   });
 
-  it("calls afterTurn with the mirrored transcript and runs turn maintenance", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const afterTurn = vi.fn(
-      async (_params: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]) => undefined,
-    );
-    const maintain = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
-    const contextEngine = createContextEngine({ afterTurn, maintain, bootstrap: undefined });
-    const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
-    params.contextEngine = contextEngine;
-    params.contextTokenBudget = 111;
-    params.requestedModelId = "gpt-5.4-codex-primary";
-    params.fallbackReason = "provider_unavailable";
-    params.degradedReason = "context_overflow";
+  it.each([
+    {
+      name: "commitment-only",
+      trigger: "heartbeat",
+      bootstrapContextRunKind: "commitment-only",
+    },
+    {
+      name: "Gateway-routed heartbeat",
+      trigger: "user",
+      bootstrapContextRunKind: "heartbeat",
+    },
+  ] as const)(
+    "keeps $name turns heartbeat-classified through afterTurn maintenance",
+    async (testCase) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const afterTurn = vi.fn(
+        async (_params: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]) => undefined,
+      );
+      const maintain = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
+      const contextEngine = createContextEngine({ afterTurn, maintain, bootstrap: undefined });
+      const harness = createStartedThreadHarness();
+      const params = createParams(sessionFile, workspaceDir);
+      params.contextEngine = contextEngine;
+      params.trigger = testCase.trigger;
+      params.bootstrapContextRunKind = testCase.bootstrapContextRunKind;
+      params.contextTokenBudget = 111;
+      params.requestedModelId = "gpt-5.4-codex-primary";
+      params.fallbackReason = "provider_unavailable";
+      params.degradedReason = "context_overflow";
 
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await harness.completeTurn();
-    await run;
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      await harness.completeTurn();
+      await run;
 
-    expect(afterTurn).toHaveBeenCalledTimes(1);
-    const afterTurnCall = requireFirstCallArg(afterTurn, "afterTurn") as Parameters<
-      NonNullable<ContextEngine["afterTurn"]>
-    >[0];
-    expect(afterTurnCall.sessionId).toBe("session-1");
-    expect(afterTurnCall.sessionKey).toBe("agent:main:session-1");
-    expect(afterTurnCall.prePromptMessageCount).toBe(0);
-    expect(afterTurnCall.tokenBudget).toBe(111);
-    expect(afterTurnCall.runtimeSettings).toMatchObject({
-      runtime: { mode: "degraded" },
-      model: {
-        requested: "gpt-5.4-codex-primary",
-        resolved: "gpt-5.4-codex",
-      },
-      diagnostics: {
-        fallbackReason: "provider_unavailable",
-        degradedReason: "context_overflow",
-      },
-    });
-    expect(afterTurnCall.messages.some((message) => message.role === "user")).toBe(true);
-    expect(afterTurnCall.messages.some((message) => message.role === "assistant")).toBe(true);
-    expect(maintain).toHaveBeenCalledTimes(1);
-    const maintainCall = requireFirstCallArg(maintain, "maintain") as Parameters<
-      NonNullable<ContextEngine["maintain"]>
-    >[0];
-    expect(maintainCall.runtimeSettings).toBe(afterTurnCall.runtimeSettings);
-  });
+      expect(afterTurn).toHaveBeenCalledTimes(1);
+      const afterTurnCall = requireFirstCallArg(afterTurn, "afterTurn") as Parameters<
+        NonNullable<ContextEngine["afterTurn"]>
+      >[0];
+      expect(afterTurnCall.sessionId).toBe("session-1");
+      expect(afterTurnCall.sessionKey).toBe("agent:main:session-1");
+      expect(afterTurnCall.prePromptMessageCount).toBe(0);
+      expect(afterTurnCall.tokenBudget).toBe(111);
+      expect(afterTurnCall.isHeartbeat).toBe(true);
+      expect(afterTurnCall.runtimeSettings).toMatchObject({
+        runtime: { mode: "degraded" },
+        model: {
+          requested: "gpt-5.4-codex-primary",
+          resolved: "gpt-5.4-codex",
+        },
+        diagnostics: {
+          fallbackReason: "provider_unavailable",
+          degradedReason: "context_overflow",
+        },
+      });
+      expect(afterTurnCall.messages.some((message) => message.role === "user")).toBe(true);
+      expect(afterTurnCall.messages.some((message) => message.role === "assistant")).toBe(true);
+      expect(maintain).toHaveBeenCalledTimes(1);
+      const maintainCall = requireFirstCallArg(maintain, "maintain") as Parameters<
+        NonNullable<ContextEngine["maintain"]>
+      >[0];
+      expect(maintainCall.runtimeSettings).toBe(afterTurnCall.runtimeSettings);
+    },
+  );
 
   it("reloads mirrored history after bootstrap mutates the session transcript", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");

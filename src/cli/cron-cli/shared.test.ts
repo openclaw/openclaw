@@ -121,6 +121,25 @@ describe("printCronList", () => {
     expectLogsToInclude(logs, "(stagger 5m)");
   });
 
+  it("shows on-exit schedules in list and show output", () => {
+    const job = createBaseJob({
+      id: "on-exit-job",
+      name: "Watch build",
+      schedule: { kind: "on-exit", command: "pnpm build", cwd: "/repo" },
+      sessionTarget: "main",
+      state: {},
+      payload: { kind: "systemEvent", text: "done" },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    expectLogsToInclude(list.logs, "on-exit pnpm build @ /repo");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expectLogsToInclude(show.logs, "schedule: on-exit pnpm build @ /repo");
+  });
+
   it("shows dash for unset agentId instead of default", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const job = createBaseJob({
@@ -328,6 +347,8 @@ describe("parseDurationMs", () => {
 
   it("rejects non-positive and malformed durations", () => {
     expect(parseDurationMs("0s")).toBeNull();
+    expect(parseDurationMs("0.5ms")).toBeNull();
+    expect(parseDurationMs("0.001ms")).toBeNull();
     expect(parseDurationMs("-5s")).toBeNull();
     expect(parseDurationMs("abc")).toBeNull();
     expect(parseDurationMs("")).toBeNull();

@@ -504,6 +504,10 @@ const SLACK_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCover
   scenarios: SLACK_QA_SCENARIOS,
 });
 
+export function listSlackQaScenarioCatalog() {
+  return SLACK_QA_SCENARIOS.map((scenario) => ({ id: scenario.id }));
+}
+
 function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof SLACK_QA_ENV_KEYS)[number]) {
   const value = env[key]?.trim();
   if (!value) {
@@ -2037,6 +2041,7 @@ export async function runSlackQaLive(params: {
     generatedAt: finishedAt,
     primaryModel,
     providerMode,
+    repoRoot,
     transportId: "slack",
   });
   await fs.writeFile(

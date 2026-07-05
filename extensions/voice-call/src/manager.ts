@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { VoiceCallConfig } from "./config.js";
+import type { VoiceCallConfig, VoiceCallCoreSessionConfig } from "./config.js";
 import type { CallManagerContext, StreamSessionIssuer } from "./manager/context.js";
-import { processEvent as processManagerEvent } from "./manager/events.js";
+import { processEvent as processManagerEvent, type ProcessEventResult } from "./manager/events.js";
 import { getCallByProviderCallId as getCallByProviderCallIdFromMaps } from "./manager/lookup.js";
 import {
   continueCall as continueCallWithContext,
@@ -15,6 +15,7 @@ import {
   sendDtmf as sendDtmfWithContext,
   speak as speakWithContext,
   speakInitialMessage as speakInitialMessageWithContext,
+  type SpeakOptions,
 } from "./manager/outbound.js";
 import {
   getCallHistoryFromStore,
@@ -82,6 +83,7 @@ export class CallManager {
   private rejectedProviderCallIds = new Set<string>();
   private provider: VoiceCallProvider | null = null;
   private config: VoiceCallConfig;
+  private coreSession: VoiceCallCoreSessionConfig | undefined;
   private storePath: string;
   private webhookUrl: string | null = null;
   private activeTurnCalls = new Set<CallId>();
@@ -103,8 +105,13 @@ export class CallManager {
    */
   streamSessionIssuer: StreamSessionIssuer | undefined;
 
-  constructor(config: VoiceCallConfig, storePath?: string) {
+  constructor(
+    config: VoiceCallConfig,
+    storePath?: string,
+    coreSession?: VoiceCallCoreSessionConfig,
+  ) {
     this.config = config;
+    this.coreSession = coreSession;
     this.storePath = resolveDefaultStoreBase(config, storePath);
   }
 
@@ -310,8 +317,12 @@ export class CallManager {
   /**
    * Speak to user in an active call.
    */
-  async speak(callId: CallId, text: string): Promise<{ success: boolean; error?: string }> {
-    return speakWithContext(this.getContext(), callId, text);
+  async speak(
+    callId: CallId,
+    text: string,
+    options?: SpeakOptions,
+  ): Promise<{ success: boolean; error?: string }> {
+    return speakWithContext(this.getContext(), callId, text, options);
   }
 
   /**
@@ -353,6 +364,7 @@ export class CallManager {
       rejectedProviderCallIds: this.rejectedProviderCallIds,
       provider: this.provider,
       config: this.config,
+      coreSession: this.coreSession,
       storePath: this.storePath,
       webhookUrl: this.webhookUrl,
       activeTurnCalls: this.activeTurnCalls,
@@ -369,8 +381,8 @@ export class CallManager {
   /**
    * Process a webhook event.
    */
-  processEvent(event: NormalizedEvent): void {
-    processManagerEvent(this.getContext(), event);
+  processEvent(event: NormalizedEvent): ProcessEventResult {
+    return processManagerEvent(this.getContext(), event);
   }
 
   private shouldDeferConversationInitialMessageUntilStreamConnect(): boolean {

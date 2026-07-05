@@ -7,6 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { Page } from "playwright-core";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { ACT_MAX_VIEWPORT_DIMENSION } from "./act-policy.js";
@@ -76,7 +77,7 @@ async function collectSnapshotUrls(page: Page): Promise<SnapshotUrlEntry[]> {
           (anchor.textContent || anchor.getAttribute("aria-label") || "")
             .replace(/\s+/g, " ")
             .trim()
-            .slice(0, 120) || href;
+            .slice(0, 121) || href;
         seen.add(href);
         out.push({ text, url: href });
         if (out.length >= 100) {
@@ -86,7 +87,12 @@ async function collectSnapshotUrls(page: Page): Promise<SnapshotUrlEntry[]> {
       return out;
     })
     .catch(() => []);
-  return Array.isArray(urls) ? urls : [];
+  return Array.isArray(urls)
+    ? urls.map((entry) => {
+        entry.text = truncateUtf16Safe(entry.text, 120) || entry.url;
+        return entry;
+      })
+    : [];
 }
 
 function buildStoredAriaRefs(
@@ -104,7 +110,12 @@ function buildStoredAriaRefs(
     const key = `${role}:${name ?? ""}`;
     const nth = counts.get(key) ?? 0;
     counts.set(key, nth + 1);
-    refsByKey.set(key, [...(refsByKey.get(key) ?? []), node.ref]);
+    const refsForKey = refsByKey.get(key);
+    if (refsForKey) {
+      refsForKey.push(node.ref);
+    } else {
+      refsByKey.set(key, [node.ref]);
+    }
     refs[node.ref] = {
       role,
       ...(name ? { name } : {}),

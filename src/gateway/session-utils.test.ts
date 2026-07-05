@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -100,6 +100,25 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 }
 
 describe("gateway session utils", () => {
+  beforeAll(() => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    listSessionsFromStore({
+      cfg: createModelDefaultsConfig({ primary: "anthropic/claude-sonnet-4.6" }),
+      storePath: "",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: 1,
+          modelProvider: "anthropic",
+          model: "claude-sonnet-4.6",
+        },
+      },
+      opts: {},
+    });
+    resetConfigRuntimeState();
+    resetPluginRuntimeStateForTest();
+  });
+
   afterEach(() => {
     resetConfigRuntimeState();
     resetPluginRuntimeStateForTest();
@@ -170,6 +189,29 @@ describe("gateway session utils", () => {
     expect(listed.limitApplied).toBe(3);
     expect(listed.nextOffset).toBe(3);
     expect(listed.hasMore).toBe(true);
+  });
+
+  test("session lists separate archived rows and sort pinned sessions first", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const store = {
+      recent: { sessionId: "recent", updatedAt: 30 },
+      pinned: { sessionId: "pinned", updatedAt: 10, pinnedAt: 40 },
+      archived: { sessionId: "archived", updatedAt: 20, archivedAt: 50 },
+    } satisfies Record<string, SessionEntry>;
+
+    const active = listSessionsFromStore({ cfg, storePath: "", store, opts: {} });
+    expect(active.sessions.map((session) => session.key)).toEqual(["pinned", "recent"]);
+    expect(active.sessions[0]).toMatchObject({ pinned: true, pinnedAt: 40, archived: false });
+
+    const archived = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { archived: true },
+    });
+    expect(archived.sessions).toMatchObject([
+      { key: "archived", archived: true, archivedAt: 50, pinned: false },
+    ]);
   });
 
   test("session lists page from an offset after filtering and sorting", () => {
@@ -380,6 +422,8 @@ describe("gateway session utils", () => {
       storePath: "",
       store: {},
       key: "agent:main:main",
+      lightweightListRow: true,
+      skipTranscriptUsageFallback: true,
       entry: {
         sessionId: "session-1",
         updatedAt: 1,
@@ -807,6 +851,86 @@ describe("gateway session utils", () => {
       entry,
     });
     expect(row.displayName).toBe("Alice");
+  });
+
+  test("buildGatewaySessionRow projects effectiveResponseUsage from a bare config default", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      messages: { responseUsage: "tokens" },
+    } as OpenClawConfig;
+    const entry = { sessionId: "s1", updatedAt: 1 } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:main": entry },
+      key: "agent:main:main",
+      entry,
+    });
+    // Session has no explicit override → inherits the configured default.
+    expect(row.responseUsage).toBeUndefined();
+    expect(row.effectiveResponseUsage).toBe("tokens");
+  });
+
+  test("buildGatewaySessionRow effectiveResponseUsage respects a per-channel responseUsage map", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      messages: {
+        responseUsage: { default: "off", discord: "full", telegram: "tokens" },
+      },
+    } as OpenClawConfig;
+    const discordEntry = { sessionId: "d1", updatedAt: 1, channel: "discord" } as SessionEntry;
+    const discordRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:discord:direct:1": discordEntry },
+      key: "agent:main:discord:direct:1",
+      entry: discordEntry,
+    });
+    expect(discordRow.effectiveResponseUsage).toBe("full");
+
+    const telegramEntry = { sessionId: "t1", updatedAt: 1, channel: "telegram" } as SessionEntry;
+    const telegramRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:telegram:direct:1": telegramEntry },
+      key: "agent:main:telegram:direct:1",
+      entry: telegramEntry,
+    });
+    expect(telegramRow.effectiveResponseUsage).toBe("tokens");
+
+    // A channel with no entry falls back to the config "default" (off).
+    const slackEntry = { sessionId: "x1", updatedAt: 1, channel: "slack" } as SessionEntry;
+    const slackRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:slack:direct:1": slackEntry },
+      key: "agent:main:slack:direct:1",
+      entry: slackEntry,
+    });
+    expect(slackRow.effectiveResponseUsage).toBe("off");
+  });
+
+  test("buildGatewaySessionRow effectiveResponseUsage keeps an explicit session off over a channel default", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      messages: { responseUsage: { default: "full", discord: "full" } },
+    } as OpenClawConfig;
+    const entry = {
+      sessionId: "d1",
+      updatedAt: 1,
+      channel: "discord",
+      responseUsage: "off",
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:discord:direct:1": entry },
+      key: "agent:main:discord:direct:1",
+      entry,
+    });
+    // Explicit off persists and wins over the per-channel default.
+    expect(row.responseUsage).toBe("off");
+    expect(row.effectiveResponseUsage).toBe("off");
   });
 
   test("resolveSessionStoreKey maps main aliases to default agent main", () => {
@@ -2429,6 +2553,34 @@ describe("deriveSessionTitle", () => {
       subject: "Actual Subject",
     } as SessionEntry;
     expect(deriveSessionTitle(entry)).toBe("Actual Subject");
+  });
+
+  test.each([
+    {
+      name: "uses a label before the first user message",
+      fields: { label: "Label via /name" },
+      firstUserMessage: "Hello, what can you do?",
+      expected: "Label via /name",
+    },
+    {
+      name: "prefers an explicit label over display and group metadata",
+      fields: {
+        displayName: "Display Name",
+        subject: "Group Subject",
+        label: "Label via /name",
+      },
+      firstUserMessage: undefined,
+      expected: "Label via /name",
+    },
+    {
+      name: "ignores a blank label",
+      fields: { label: "   " },
+      firstUserMessage: "Hello!",
+      expected: "Hello!",
+    },
+  ])("$name", ({ fields, firstUserMessage, expected }) => {
+    const entry = { sessionId: "abc123", updatedAt: Date.now(), ...fields } as SessionEntry;
+    expect(deriveSessionTitle(entry, firstUserMessage)).toBe(expected);
   });
 });
 

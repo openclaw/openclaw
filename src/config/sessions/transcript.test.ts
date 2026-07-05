@@ -6,6 +6,8 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../shared/transcript-only-openclaw-assistant.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { updateSessionStoreEntry } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
@@ -122,7 +124,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-config-store-"));
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
-      process.env.OPENCLAW_STATE_DIR = path.join(tempDir, "default-state");
+      setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempDir, "default-state"));
       const sessionsDir = path.join(tempDir, "configured", "sessions");
       fs.mkdirSync(sessionsDir, { recursive: true });
       const storePath = path.join(sessionsDir, "sessions.json");
@@ -158,9 +160,9 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       );
     } finally {
       if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
+        deleteTestEnvValue("OPENCLAW_STATE_DIR");
       } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        setTestEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
       }
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -171,7 +173,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
     try {
-      process.env.OPENCLAW_STATE_DIR = path.join(tempDir, "default-state");
+      setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempDir, "default-state"));
       const storeTemplate = path.join(tempDir, "agents", "{agentId}", "sessions", "sessions.json");
       const sessionsDir = path.join(tempDir, "agents", "worker", "sessions");
       fs.mkdirSync(sessionsDir, { recursive: true });
@@ -219,9 +221,9 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     } finally {
       emitSpy.mockRestore();
       if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
+        deleteTestEnvValue("OPENCLAW_STATE_DIR");
       } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        setTestEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
       }
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -512,6 +514,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const message = event.message as
       | {
           role?: string;
+          api?: string;
           provider?: string;
           model?: string;
           content?: unknown;
@@ -521,6 +524,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(event?.sessionKey).toBe(sessionKey);
     expect(event?.messageId).toBeTypeOf("string");
     expect(message?.role).toBe("assistant");
+    expect(message?.api).toBe(OPENCLAW_TRANSCRIPT_ARTIFACT_API);
     expect(message?.provider).toBe("openclaw");
     expect(message?.model).toBe("delivery-mirror");
     expect(message?.content).toEqual([{ type: "text", text: "Hello from delivery mirror!" }]);
@@ -981,6 +985,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(lines.length).toBe(4);
 
       const messageLine = JSON.parse(lines[3]);
+      expect(messageLine.message.api).toBe(OPENCLAW_TRANSCRIPT_ARTIFACT_API);
       expect(messageLine.message.provider).toBe("openclaw");
       expect(messageLine.message.model).toBe("delivery-mirror");
       expect(messageLine.message.content[0].text).toBe("Repeated answer");
@@ -1022,6 +1027,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const linesAfterMirror = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
     expect(linesAfterMirror).toHaveLength(3);
     const mirrorLine = JSON.parse(linesAfterMirror[2]);
+    expect(mirrorLine.message.api).toBe(OPENCLAW_TRANSCRIPT_ARTIFACT_API);
     expect(mirrorLine.message.model).toBe("delivery-mirror");
 
     await appendSessionTranscriptMessage({
@@ -1351,6 +1357,57 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       code: "session-rebound",
     });
     expect(fs.existsSync(replacementSessionFile)).toBe(false);
+  });
+
+  it("rejects a concurrent lifecycle owner change without a session id rotation", async () => {
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId,
+          lifecycleRevision: "original-revision",
+          chatType: "direct",
+          channel: "discord",
+        },
+      }),
+      "utf-8",
+    );
+    let releaseOwnerChange = () => {};
+    const ownerChangeGate = new Promise<void>((resolve) => {
+      releaseOwnerChange = resolve;
+    });
+    let markOwnerChangeStarted = () => {};
+    const ownerChangeStarted = new Promise<void>((resolve) => {
+      markOwnerChangeStarted = resolve;
+    });
+    const ownerChange = updateSessionStoreEntry({
+      storePath: fixture.storePath(),
+      sessionKey,
+      update: async () => {
+        markOwnerChangeStarted();
+        await ownerChangeGate;
+        return { lifecycleRevision: "replacement-revision" };
+      },
+    });
+    await ownerChangeStarted;
+
+    const append = appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      expectedSessionId: sessionId,
+      expectedLifecycleRevision: "original-revision",
+      storePath: fixture.storePath(),
+      message: createExactAssistantMessage({ text: "late output" }),
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    releaseOwnerChange();
+
+    await ownerChange;
+    await expect(append).resolves.toMatchObject({
+      ok: false,
+      code: "session-rebound",
+    });
   });
 
   it("dedupes concurrent exact assistant appends by idempotency key", async () => {

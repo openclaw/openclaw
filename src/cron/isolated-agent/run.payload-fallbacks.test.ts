@@ -108,9 +108,12 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
       provider: "anthropic",
       model: "claude-opus-4-6",
     });
-    runCliAgentMock.mockResolvedValue({
-      payloads: [{ text: "fallback ok" }],
-      meta: { agentMeta: {} },
+    runCliAgentMock.mockImplementation(async (request) => {
+      request.userTurnTranscriptRecorder?.markBlocked();
+      return {
+        payloads: [{ text: "fallback ok" }],
+        meta: { agentMeta: {} },
+      };
     });
     runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
       const firstResult = await run(provider, model);
@@ -151,6 +154,14 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
       ["claude-cli", "claude-opus-4-6"],
       ["claude-cli", "claude-sonnet-4-6"],
     ]);
+    const firstCliRequest = runCliAgentMock.mock.calls[0]?.[0];
+    const secondCliRequest = runCliAgentMock.mock.calls[1]?.[0];
+    expect(firstCliRequest?.userTurnTranscriptRecorder).toBeDefined();
+    expect(secondCliRequest?.userTurnTranscriptRecorder).toBe(
+      firstCliRequest?.userTurnTranscriptRecorder,
+    );
+    expect(firstCliRequest?.suppressNextUserMessagePersistence).toBe(false);
+    expect(secondCliRequest?.suppressNextUserMessagePersistence).toBe(true);
   });
 
   it("forwards subagent fallbacks into the embedded runner for internal failover decisions", async () => {

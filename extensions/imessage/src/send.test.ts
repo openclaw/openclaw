@@ -963,19 +963,13 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("does not use the local default chat.db path for custom cliPath wrappers", async () => {
+    vi.useFakeTimers({ now: 1_000 });
     vi.stubEnv("HOME", "/Users/me");
     const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
     const runCliJson = vi.fn();
     const resolveSentMessageGuidImpl = vi.fn(async () => null);
     const approvalText = createApprovalText("approval-remote");
-    const nowSpy = vi.spyOn(Date, "now");
-    nowSpy
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(6_001);
-
-    await expect(
+    const rejection = expect(
       sendMessageIMessage("chat_id:42", approvalText, {
         config: {
           channels: {
@@ -994,6 +988,8 @@ describe("sendMessageIMessage receipts", () => {
         resolveSentMessageGuidImpl,
       }),
     ).rejects.toThrow("imsg rpc timeout (send)");
+    await vi.runAllTimersAsync();
+    await rejection;
 
     expect(runCliJson).not.toHaveBeenCalled();
     expect(resolveSentMessageGuidImpl).toHaveBeenCalledWith({
@@ -1005,6 +1001,7 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("does not use the local default chat.db path for auto-detected ssh wrappers", async () => {
+    vi.useFakeTimers({ now: 1_000 });
     vi.stubEnv("HOME", "/Users/me");
     const wrapperDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-wrapper-"));
     const wrapperPath = path.join(wrapperDir, "imsg");
@@ -1013,15 +1010,8 @@ describe("sendMessageIMessage receipts", () => {
     const runCliJson = vi.fn();
     const resolveSentMessageGuidImpl = vi.fn(async () => null);
     const approvalText = createApprovalText("approval-ssh-wrapper");
-    const nowSpy = vi.spyOn(Date, "now");
-    nowSpy
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(6_001);
-
     try {
-      await expect(
+      const rejection = expect(
         sendMessageIMessage("chat_id:42", approvalText, {
           config: IMESSAGE_TEST_CFG,
           client,
@@ -1030,6 +1020,8 @@ describe("sendMessageIMessage receipts", () => {
           resolveSentMessageGuidImpl,
         }),
       ).rejects.toThrow("imsg rpc timeout (send)");
+      await vi.runAllTimersAsync();
+      await rejection;
     } finally {
       fs.rmSync(wrapperDir, { recursive: true, force: true });
     }
@@ -1063,17 +1055,11 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("throws the rpc timeout without resending when sent-row recovery misses", async () => {
+    vi.useFakeTimers({ now: 1_000 });
     const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
     const runCliJson = vi.fn();
     const resolveSentMessageGuidImpl = vi.fn(async () => null);
-    const nowSpy = vi.spyOn(Date, "now");
-    nowSpy
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(6_001);
-
-    await expect(
+    const rejection = expect(
       sendMessageIMessage("chat_id:42", "hello", {
         config: IMESSAGE_TEST_CFG,
         createClient: async () => client,
@@ -1082,23 +1068,19 @@ describe("sendMessageIMessage receipts", () => {
         resolveSentMessageGuidImpl,
       }),
     ).rejects.toThrow("imsg rpc timeout (send)");
+    await vi.runAllTimersAsync();
+    await rejection;
 
     expect(getClientMocks(client).stop).toHaveBeenCalledTimes(1);
     expect(runCliJson).not.toHaveBeenCalled();
   });
 
   it("does not stop caller-owned rpc clients after sent-row recovery misses", async () => {
+    vi.useFakeTimers({ now: 1_000 });
     const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
     const runCliJson = vi.fn();
     const resolveSentMessageGuidImpl = vi.fn(async () => null);
-    const nowSpy = vi.spyOn(Date, "now");
-    nowSpy
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(6_001);
-
-    await expect(
+    const rejection = expect(
       sendMessageIMessage("chat_id:42", "hello", {
         config: IMESSAGE_TEST_CFG,
         client,
@@ -1107,6 +1089,8 @@ describe("sendMessageIMessage receipts", () => {
         resolveSentMessageGuidImpl,
       }),
     ).rejects.toThrow("imsg rpc timeout (send)");
+    await vi.runAllTimersAsync();
+    await rejection;
 
     expect(runCliJson).not.toHaveBeenCalled();
     expect(getClientMocks(client).stop).not.toHaveBeenCalled();
@@ -1130,18 +1114,12 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("throws the rpc timeout without resending when approval GUID recovery misses", async () => {
+    vi.useFakeTimers({ now: 1_000 });
     const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
     const runCliJson = vi.fn();
     const resolveSentMessageGuidImpl = vi.fn(async () => null);
     const approvalText = createApprovalText();
-    const nowSpy = vi.spyOn(Date, "now");
-    nowSpy
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(6_001);
-
-    await expect(
+    const rejection = expect(
       sendMessageIMessage("chat_id:42", approvalText, {
         config: IMESSAGE_TEST_CFG,
         client,
@@ -1150,6 +1128,8 @@ describe("sendMessageIMessage receipts", () => {
         resolveSentMessageGuidImpl,
       }),
     ).rejects.toThrow("imsg rpc timeout (send)");
+    await vi.runAllTimersAsync();
+    await rejection;
 
     expect(runCliJson).not.toHaveBeenCalled();
     expect(resolveSentMessageGuidImpl).toHaveBeenCalled();

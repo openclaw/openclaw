@@ -55,7 +55,7 @@ import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagent-run-liveness.js";
-import { listThinkingLevelOptions } from "../auto-reply/thinking.js";
+import { listThinkingLevelOptions, resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import {
@@ -242,6 +242,11 @@ export function deriveSessionTitle(
 ): string | undefined {
   if (!entry) {
     return undefined;
+  }
+
+  const label = normalizeOptionalString(entry.label);
+  if (label) {
+    return label;
   }
 
   if (normalizeOptionalString(entry.displayName)) {
@@ -1021,6 +1026,7 @@ export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; 
     store,
     entry: freshestMatch?.entry,
     canonicalKey: target.canonicalKey,
+    storeKeys: target.storeKeys,
     legacyKey,
   };
 }
@@ -2151,6 +2157,7 @@ export function buildGatewaySessionRow(params: {
     subagentControlScope: entry?.subagentControlScope,
     kind: classifySessionKey(key, entry),
     label: entry?.label,
+    category: entry?.category,
     displayName,
     derivedTitle,
     lastMessagePreview,
@@ -2161,6 +2168,10 @@ export function buildGatewaySessionRow(params: {
     chatType: entry?.chatType,
     origin,
     updatedAt,
+    archived: entry?.archivedAt !== undefined,
+    archivedAt: entry?.archivedAt,
+    pinned: entry?.pinnedAt !== undefined,
+    pinnedAt: entry?.pinnedAt,
     sessionId: entry?.sessionId,
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
@@ -2192,6 +2203,11 @@ export function buildGatewaySessionRow(params: {
     parentSessionKey: subagentOwner || entry?.parentSessionKey,
     childSessions,
     responseUsage: entry?.responseUsage,
+    effectiveResponseUsage: resolveEffectiveResponseUsage(
+      entry?.responseUsage,
+      cfg.messages?.responseUsage,
+      channel,
+    ),
     modelProvider: rowModelProvider,
     model: rowModel,
     agentRuntime,
@@ -2414,7 +2430,12 @@ type SessionEntrySelection = {
   hasMore: boolean;
 };
 
-function compareSessionEntryPairsByUpdatedAt(a: SessionEntryPair, b: SessionEntryPair): number {
+function compareSessionEntryPairs(a: SessionEntryPair, b: SessionEntryPair): number {
+  const aPinnedAt = a[1]?.pinnedAt ?? 0;
+  const bPinnedAt = b[1]?.pinnedAt ?? 0;
+  if (aPinnedAt !== bPinnedAt) {
+    return bPinnedAt - aPinnedAt;
+  }
   return (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0);
 }
 
@@ -2450,7 +2471,7 @@ function selectNewestLimitedEntries(
   const selected: SessionEntryPair[] = [];
   for (const entry of entries) {
     const insertAt = selected.findIndex(
-      (candidate) => compareSessionEntryPairsByUpdatedAt(entry, candidate) < 0,
+      (candidate) => compareSessionEntryPairs(entry, candidate) < 0,
     );
     if (insertAt >= 0) {
       selected.splice(insertAt, 0, entry);
@@ -2471,7 +2492,7 @@ function sortAndLimitSessionEntries(
   if (limit !== undefined && limit <= SESSIONS_LIST_TOP_N_LIMIT) {
     return selectNewestLimitedEntries(entries, limit);
   }
-  const sorted = entries.toSorted(compareSessionEntryPairsByUpdatedAt);
+  const sorted = entries.toSorted(compareSessionEntryPairs);
   return limit === undefined ? sorted : sorted.slice(0, limit);
 }
 
@@ -2553,6 +2574,10 @@ function filterSessionEntries(params: {
         shouldKeepStoreOnlyChildLink(entry, now) &&
         (entry?.spawnedBy === spawnedBy || entry?.parentSessionKey === spawnedBy)
       );
+    })
+    .filter(([, entry]) => {
+      const archived = entry?.archivedAt !== undefined;
+      return opts.archived === true ? archived : !archived;
     })
     .filter(([, entry]) => {
       if (!label) {

@@ -17,6 +17,7 @@ const REGISTERED_EVENT_TYPES = [
   "tool.execution_complete",
   "session.plan_changed",
   "exit_plan_mode.requested",
+  "exit_plan_mode.completed",
   "subagent.started",
   "subagent.completed",
   "subagent.failed",
@@ -147,6 +148,50 @@ describe("attachEventBridge", () => {
     );
 
     expect(bridge.snapshot().assistantTexts).toEqual(["hello"]);
+  });
+
+  it("ignores child assistant and usage events but keeps child tool side effects", async () => {
+    const session = createFakeSession();
+    const onAssistantDelta = vi.fn();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+      onAssistantDelta,
+    });
+
+    session.emit("assistant.message_delta", {
+      ...makeEvent("assistant.message_delta", { deltaContent: "child", messageId: "child-msg" }),
+      agentId: "child-1",
+    } as SessionEvent);
+    session.emit(
+      "assistant.message_delta",
+      makeEvent("assistant.message_delta", { deltaContent: "root", messageId: "root-msg" }),
+    );
+    session.emit("tool.execution_start", {
+      ...makeEvent("tool.execution_start", { toolCallId: "child-call", toolName: "write" }),
+      agentId: "child-1",
+    } as SessionEvent);
+    session.emit("tool.execution_complete", {
+      ...makeEvent("tool.execution_complete", {
+        result: { content: "child write" },
+        success: true,
+        toolCallId: "child-call",
+      }),
+      agentId: "child-1",
+    } as SessionEvent);
+    session.emit("assistant.usage", {
+      ...makeEvent("assistant.usage", { inputTokens: 99, outputTokens: 99 }),
+      agentId: "child-1",
+    } as SessionEvent);
+
+    expect(bridge.snapshot().assistantTexts).toEqual(["root"]);
+    expect(bridge.snapshot().startedCount).toBe(0);
+    expect(bridge.snapshot().toolMetas).toEqual([
+      { toolName: "write" },
+      { meta: "child write", toolName: "write" },
+    ]);
+    await bridge.awaitDeltaChain();
+    expect(onAssistantDelta).toHaveBeenCalledTimes(1);
   });
 
   it("interleaved messageIds produce two ordered assistantTexts entries", () => {
@@ -483,10 +528,18 @@ describe("attachEventBridge", () => {
         summary: "Plan ready",
       }),
     );
+    session.emit(
+      "exit_plan_mode.completed",
+      makeEvent("exit_plan_mode.completed", {
+        approved: true,
+        requestId: "request-1",
+        selectedAction: "approve",
+      }),
+    );
 
     await bridge.awaitAgentEventChain();
 
-    expect(onAgentEvent).toHaveBeenCalledTimes(2);
+    expect(onAgentEvent).toHaveBeenCalledTimes(3);
     expect(onAgentEvent).toHaveBeenNthCalledWith(1, {
       stream: "plan",
       data: {
@@ -507,6 +560,17 @@ describe("attachEventBridge", () => {
         actions: ["approve", "edit"],
         requestId: "request-1",
         recommendedAction: "approve",
+      },
+    });
+    expect(onAgentEvent).toHaveBeenNthCalledWith(3, {
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan decision",
+        source: "copilot-sdk",
+        requestId: "request-1",
+        approved: true,
+        selectedAction: "approve",
       },
     });
   });

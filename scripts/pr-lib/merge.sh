@@ -225,7 +225,7 @@ merge_run() {
   }
 
   if ! gh pr merge "$pr" \
-    --rebase \
+    --squash \
     --match-head-commit "$PREP_HEAD_SHA" \
     >.local/merge-output.log 2>&1
   then
@@ -290,7 +290,7 @@ merge_run() {
   for attempt in 1 2 3; do
     if comment_output=$(
       {
-        echo "Merged via rebase."
+        echo "Merged via squash."
         echo
         echo "- Prepared head SHA: [$PREP_HEAD_SHA]($prep_sha_url)"
         echo "- Landed commit: [$landed_sha]($landed_sha_url)"

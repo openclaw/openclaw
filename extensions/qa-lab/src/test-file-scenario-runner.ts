@@ -96,6 +96,8 @@ type QaTestFileRunnerDefinition = {
 const DEFAULT_QA_TEST_FILE_COMMAND_TIMEOUT_MS = 30 * 60_000;
 const QA_TEST_FILE_COMMAND_TIMEOUT_KILL_GRACE_MS = 2_000;
 const QA_TEST_FILE_COMMAND_TIMEOUT_FORCE_SETTLE_MS = 500;
+let qaTestFileCommandTimeoutKillGraceMs = QA_TEST_FILE_COMMAND_TIMEOUT_KILL_GRACE_MS;
+let qaTestFileCommandTimeoutForceSettleMs = QA_TEST_FILE_COMMAND_TIMEOUT_FORCE_SETTLE_MS;
 const QA_TEST_FILE_COMMAND_PARENT_SIGNALS = ["SIGINT", "SIGTERM"] as const;
 
 export function isQaTestFileScenario(
@@ -121,7 +123,7 @@ function playwrightSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] 
   return [
     {
       command: process.execPath,
-      args: ["scripts/ensure-playwright-chromium.mjs"],
+      args: ["scripts/ensure-playwright-chromium.mjs", "--skip-ffmpeg"],
     },
     {
       command: process.execPath,
@@ -345,8 +347,8 @@ function runQaScenarioCommand(
             signal: result.signal,
             ...(failureMessage ? { failureMessage } : {}),
           });
-        }, QA_TEST_FILE_COMMAND_TIMEOUT_FORCE_SETTLE_MS);
-      }, QA_TEST_FILE_COMMAND_TIMEOUT_KILL_GRACE_MS);
+        }, qaTestFileCommandTimeoutForceSettleMs);
+      }, qaTestFileCommandTimeoutKillGraceMs);
     };
     timeoutTimer =
       timeoutMs === undefined
@@ -430,7 +432,9 @@ async function runScenarioCommandSteps(params: {
     logChunks.push(`$ ${formatCommand(step)}\n`);
     try {
       const timeoutMs =
-        params.scenario.execution.kind === "script" ? params.commandTimeoutMs : undefined;
+        params.scenario.execution.kind === "script"
+          ? (params.scenario.execution.timeoutMs ?? params.commandTimeoutMs)
+          : undefined;
       const result = await params.runCommand({
         command: step.command,
         args: step.args,
@@ -555,6 +559,7 @@ function buildTestFileEvidence(params: {
   kind: QaTestFileExecutionKind;
   primaryModel: string;
   providerMode: QaProviderMode;
+  repoRoot: string;
   results: readonly QaTestFileScenarioResult[];
   evidenceMode?: QaScorecardEvidenceMode;
   env?: NodeJS.ProcessEnv;
@@ -581,6 +586,7 @@ function buildTestFileEvidence(params: {
             generatedAt: params.generatedAt,
             primaryModel: params.primaryModel,
             providerMode: params.providerMode,
+            repoRoot: params.repoRoot,
             targets: fallbackResults.map((result) => buildScenarioEvidenceTarget(result.scenario)),
             results: fallbackResults.map((result) => ({
               id: result.scenario.id,
@@ -616,6 +622,7 @@ function buildTestFileEvidence(params: {
     generatedAt: params.generatedAt,
     primaryModel: params.primaryModel,
     providerMode: params.providerMode,
+    repoRoot: params.repoRoot,
     targets: params.results.map((result) => buildScenarioEvidenceTarget(result.scenario)),
     results: params.results.map((result) => ({
       id: result.scenario.id,
@@ -802,6 +809,7 @@ export async function runQaTestFileScenarios(
     kind,
     primaryModel: params.primaryModel,
     providerMode: params.providerMode,
+    repoRoot: params.repoRoot,
     results,
   });
   const paths = await writeTestFileEvidenceFile({
@@ -820,4 +828,12 @@ export async function runQaTestFileScenarios(
 
 export const qaTestFileScenarioRunnerTesting = {
   killQaScenarioWindowsProcessTree,
+  resetTimeoutCleanupTimings() {
+    qaTestFileCommandTimeoutKillGraceMs = QA_TEST_FILE_COMMAND_TIMEOUT_KILL_GRACE_MS;
+    qaTestFileCommandTimeoutForceSettleMs = QA_TEST_FILE_COMMAND_TIMEOUT_FORCE_SETTLE_MS;
+  },
+  setTimeoutCleanupTimings(params: { forceSettleMs: number; killGraceMs: number }) {
+    qaTestFileCommandTimeoutKillGraceMs = params.killGraceMs;
+    qaTestFileCommandTimeoutForceSettleMs = params.forceSettleMs;
+  },
 };

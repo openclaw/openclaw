@@ -27,6 +27,8 @@ function managedCommandPath(root: string, platform: NodeJS.Platform): string {
   return pathApi.join(root, "node_modules", ".bin", platform === "win32" ? "codex.cmd" : "codex");
 }
 
+const MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND = "/Applications/Codex.app/Contents/Resources/codex";
+
 describe("managed Codex app-server binary", () => {
   it("leaves explicit command overrides unchanged", async () => {
     const explicitOptions = startOptions("config");
@@ -41,10 +43,14 @@ describe("managed Codex app-server binary", () => {
     expect(pathExists).not.toHaveBeenCalled();
   });
 
-  it("resolves the plugin-local bundled Codex binary", async () => {
+  it("prefers the macOS desktop app bundle when it exists", async () => {
     const pluginRoot = path.join("/tmp", "openclaw", "extensions", "codex");
     const paths = resolveManagedCodexAppServerPaths({ platform: "darwin", pluginRoot });
-    const pathExists = vi.fn(async (filePath: string) => filePath === paths.commandPath);
+    const pluginLocalCommand = managedCommandPath(pluginRoot, "darwin");
+    const pathExists = vi.fn(
+      async (filePath: string) =>
+        filePath === MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND || filePath === pluginLocalCommand,
+    );
 
     await expect(
       resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
@@ -54,10 +60,31 @@ describe("managed Codex app-server binary", () => {
       }),
     ).resolves.toEqual({
       ...startOptions("managed"),
-      command: paths.commandPath,
+      command: MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND,
+      commandSource: "resolved-managed",
+      managedFallbackCommandPaths: [pluginLocalCommand],
+    });
+    expect(paths.commandPath).toBe(MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND);
+    expect(paths.candidateCommandPaths).toContain(pluginLocalCommand);
+  });
+
+  it("falls back to the plugin-local bundled Codex binary on macOS", async () => {
+    const pluginRoot = path.join("/tmp", "openclaw", "extensions", "codex");
+    const pluginLocalCommand = managedCommandPath(pluginRoot, "darwin");
+    const pathExists = vi.fn(async (filePath: string) => filePath === pluginLocalCommand);
+
+    await expect(
+      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
+        platform: "darwin",
+        pluginRoot,
+        pathExists,
+      }),
+    ).resolves.toEqual({
+      ...startOptions("managed"),
+      command: pluginLocalCommand,
       commandSource: "resolved-managed",
     });
-    expect(paths.commandPath).toBe(managedCommandPath(pluginRoot, "darwin"));
+    expect(pathExists).toHaveBeenCalledWith(MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND, "darwin");
   });
 
   it("resolves Windows Codex command shims", () => {

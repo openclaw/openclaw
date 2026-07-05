@@ -315,7 +315,9 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
           "--out",
           out,
           "--timeout-ms",
-          "1000",
+          "200",
+          "--attempt-timeout-ms",
+          "100",
         ],
         5_000,
         { OPENCLAW_UPGRADE_SURVIVOR_PROBE_MAX_BODY_BYTES: "64" },
@@ -325,7 +327,7 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain(`${baseUrl}/healthz probe body exceeded 64 bytes`);
       expect(fs.existsSync(out)).toBe(false);
-      expect(Date.now() - startedAt).toBeLessThan(3_500);
+      expect(Date.now() - startedAt).toBeLessThan(750);
     } finally {
       server.close();
     }

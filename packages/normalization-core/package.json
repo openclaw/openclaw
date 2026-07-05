@@ -14,6 +14,16 @@
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
+    "./boolean-coercion": {
+      "types": "./dist/boolean-coercion.d.mts",
+      "import": "./dist/boolean-coercion.mjs",
+      "default": "./dist/boolean-coercion.mjs"
+    },
+    "./error-coercion": {
+      "types": "./dist/error-coercion.d.mts",
+      "import": "./dist/error-coercion.mjs",
+      "default": "./dist/error-coercion.mjs"
+    },
     "./number-coercion": {
       "types": "./dist/number-coercion.d.mts",
       "import": "./dist/number-coercion.mjs",
@@ -33,9 +43,14 @@
       "types": "./dist/string-normalization.d.mts",
       "import": "./dist/string-normalization.mjs",
       "default": "./dist/string-normalization.mjs"
+    },
+    "./utf16-slice": {
+      "types": "./dist/utf16-slice.d.mts",
+      "import": "./dist/utf16-slice.mjs",
+      "default": "./dist/utf16-slice.mjs"
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/number-coercion.ts src/record-coerce.ts src/string-coerce.ts src/string-normalization.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/boolean-coercion.ts src/error-coercion.ts src/number-coercion.ts src/record-coerce.ts src/string-coerce.ts src/string-normalization.ts src/utf16-slice.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   }
 }

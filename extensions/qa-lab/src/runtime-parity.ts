@@ -120,6 +120,7 @@ type RuntimeParityTranscriptRecord = {
 };
 
 type RuntimeParityMockRequestSnapshot = {
+  prompt?: string;
   allInputText?: string;
   plannedToolName?: string;
   plannedToolArgs?: unknown;
@@ -759,14 +760,22 @@ function resolveRuntimeParityToolCalls(params: {
 function filterMockRequestsForParentPrompt(
   requests: RuntimeParityMockRequestSnapshot[],
   parentPrompt: string,
+  parentPrompts: readonly string[] = [parentPrompt],
 ) {
-  const normalizedParentPrompt = normalizeTextForParity(parentPrompt);
-  if (!normalizedParentPrompt) {
+  const normalizedParentPrompts = parentPrompts
+    .map(normalizeTextForParity)
+    .filter((prompt) => prompt.length > 0);
+  if (normalizedParentPrompts.length === 0) {
     return requests;
   }
-  const matching = requests.filter((request) =>
-    normalizeTextForParity(request.allInputText ?? "").includes(normalizedParentPrompt),
-  );
+  const matching = requests.filter((request) => {
+    const normalizedPrompt = normalizeTextForParity(request.prompt ?? "");
+    if (normalizedPrompt) {
+      return normalizedParentPrompts.some((prompt) => normalizedPrompt.includes(prompt));
+    }
+    const normalizedHistory = normalizeTextForParity(request.allInputText ?? "");
+    return normalizedParentPrompts.some((prompt) => normalizedHistory.includes(prompt));
+  });
   return matching.length > 0 ? matching : requests;
 }
 
@@ -966,6 +975,7 @@ async function loadRuntimeParityTranscripts(params: {
 async function loadRuntimeParityMockToolCalls(
   mockBaseUrl: string | undefined,
   parentPrompt: string,
+  parentPrompts: readonly string[] = [parentPrompt],
 ): Promise<RuntimeParityToolCall[] | null> {
   const normalizedBaseUrl = mockBaseUrl?.trim().replace(/\/+$/u, "");
   if (!normalizedBaseUrl) {
@@ -991,6 +1001,7 @@ async function loadRuntimeParityMockToolCalls(
     }
     const requests = payload.filter(isMessageRecord).map(
       (entry): RuntimeParityMockRequestSnapshot => ({
+        prompt: readNonEmptyString(entry.prompt),
         allInputText: readNonEmptyString(entry.allInputText),
         plannedToolName: readNonEmptyString(entry.plannedToolName),
         plannedToolArgs: entry.plannedToolArgs ?? null,
@@ -998,7 +1009,7 @@ async function loadRuntimeParityMockToolCalls(
       }),
     );
     return resolveToolCallOrderFromMockRequests(
-      filterMockRequestsForParentPrompt(requests, parentPrompt),
+      filterMockRequestsForParentPrompt(requests, parentPrompt, parentPrompts),
     );
   } catch {
     return null;
@@ -1015,12 +1026,16 @@ export async function captureRuntimeParityCell(
   });
   const transcriptRecords = buildTranscriptRecords(transcriptBytes);
   const transcriptToolCalls = resolveToolCallOrder(transcriptRecords);
-  const parentPrompt =
-    transcriptRecords
-      .filter((record) => record.role === "user" && !isToolResultLikeMessage(record.message))
-      .map((record) => extractAssistantText(record.message))
-      .find(Boolean) ?? "";
-  const mockToolCalls = await loadRuntimeParityMockToolCalls(params.mockBaseUrl, parentPrompt);
+  const parentPrompts = transcriptRecords
+    .filter((record) => record.role === "user")
+    .map((record) => extractAssistantText(record.message))
+    .filter((prompt) => prompt.length > 0);
+  const parentPrompt = parentPrompts[0] ?? "";
+  const mockToolCalls = await loadRuntimeParityMockToolCalls(
+    params.mockBaseUrl,
+    parentPrompt,
+    parentPrompts,
+  );
   const gatewayLogs = params.gateway.logs?.();
   const sentinelFindings = [
     ...scanGatewayLogSentinels(gatewayLogs),
