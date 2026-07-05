@@ -11,7 +11,6 @@ import { formatRelativeTimestamp, formatList } from "../../lib/format.ts";
 import type { DeviceTokenSummary, PairedDevice, PendingDevice } from "../../lib/nodes/index.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { renderExecApprovals, resolveExecApprovalsState } from "./view-exec-approvals.ts";
-import { renderDevicePairSetup } from "./view-pairing.ts";
 import { resolveConfigAgents, resolveNodeTargets, type NodeTargetOption } from "./view-shared.ts";
 export type { NodesProps } from "./view.types.ts";
 import type { NodesProps } from "./view.types.ts";
@@ -20,8 +19,7 @@ export function renderNodes(props: NodesProps) {
   const bindingState = resolveBindingsState(props);
   const approvalsState = resolveExecApprovalsState(props);
   return html`
-    ${renderDevicePairSetup(props)} ${renderExecApprovals(approvalsState)}
-    ${renderBindings(bindingState)} ${renderDevices(props)}
+    ${renderExecApprovals(approvalsState)} ${renderBindings(bindingState)} ${renderDevices(props)}
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
@@ -61,7 +59,7 @@ function renderDevices(props: NodesProps) {
           <button
             class="btn primary"
             title=${props.canPairDevice ? "" : t("nodes.pairing.adminRequired")}
-            ?disabled=${!props.canPairDevice || props.devicePairSetupLoading}
+            ?disabled=${!props.canPairDevice}
             @click=${props.onDevicePairSetupOpen}
           >
             ${icons.smartphone} ${t("nodes.pairing.button")}

@@ -12,11 +12,11 @@ Use this when you want an OpenClaw agent to appear as a ClickClack bot user. Cli
 
 ## Quick setup
 
-Create a bot token in ClickClack:
+Create a bot token on the ClickClack server:
 
 ```bash
 clickclack admin bot create \
-  --workspace <workspace_id_or_slug> \
+  --workspace <workspace_id> \
   --name "OpenClaw" \
   --handle openclaw \
   --scopes bot:write \
@@ -29,24 +29,13 @@ Configure OpenClaw:
 
 ```json5
 {
-  plugins: {
-    entries: {
-      clickclack: {
-        llm: {
-          allowAgentIdOverride: true,
-        },
-      },
-    },
-  },
   channels: {
     clickclack: {
       enabled: true,
-      baseUrl: "https://app.clickclack.chat",
+      baseUrl: "https://clickclack.example.com",
       token: { source: "env", provider: "default", id: "CLICKCLACK_BOT_TOKEN" },
       workspace: "default",
       defaultTo: "channel:general",
-      agentId: "clickclack-bot",
-      replyMode: "model",
     },
   },
 }
@@ -58,6 +47,24 @@ Then run:
 export CLICKCLACK_BOT_TOKEN="ccb_..."
 openclaw gateway
 ```
+
+An account counts as configured only when `baseUrl`, `token`, and `workspace` are all set. `workspace` accepts a workspace id (`wsp_...`), slug, or name; the gateway resolves it to the id at startup.
+
+### Account config keys
+
+| Key                     | Default             | Notes                                                                                   |
+| ----------------------- | ------------------- | --------------------------------------------------------------------------------------- |
+| `baseUrl`               | none (required)     | ClickClack server URL.                                                                  |
+| `token`                 | none (required)     | Plain string or secret ref (`source: "env" \| "file" \| "exec"`).                       |
+| `workspace`             | none (required)     | Workspace id, slug, or name.                                                            |
+| `replyMode`             | `"agent"`           | `"agent"` runs the full agent pipeline; `"model"` sends short direct model completions. |
+| `defaultTo`             | `"channel:general"` | Target used when an outbound path gives no target.                                      |
+| `allowFrom`             | `["*"]`             | User-id allowlist for inbound DMs and channel messages.                                 |
+| `botUserId`             | auto-detected       | Resolved from the bot token identity at startup.                                        |
+| `agentId`               | route default       | Pin this account's inbound messages to one agent.                                       |
+| `toolsAllow`            | none                | Tool allowlist for agent replies from this account.                                     |
+| `model`, `systemPrompt` | none                | Used by `replyMode: "model"` completions.                                               |
+| `reconnectMs`           | `1500`              | Realtime reconnect delay (100 to 60000).                                                |
 
 If `plugins.allow` is a non-empty restrictive list, explicitly selecting
 ClickClack in channel setup or running `openclaw plugins enable clickclack`
@@ -73,6 +80,41 @@ Each account opens its own ClickClack realtime connection and uses its own bot t
 
 ```json5
 {
+  channels: {
+    clickclack: {
+      enabled: true,
+      baseUrl: "https://clickclack.example.com",
+      defaultAccount: "service",
+      accounts: {
+        service: {
+          token: { source: "env", provider: "default", id: "CLICKCLACK_SERVICE_BOT_TOKEN" },
+          workspace: "default",
+          defaultTo: "channel:general",
+          agentId: "service-bot",
+        },
+        support: {
+          token: { source: "env", provider: "default", id: "CLICKCLACK_SUPPORT_BOT_TOKEN" },
+          workspace: "default",
+          defaultTo: "dm:usr_...",
+          agentId: "support-bot",
+        },
+      },
+    },
+  },
+}
+```
+
+## Reply modes
+
+- `replyMode: "agent"` (default) dispatches inbound messages through the normal agent pipeline, including session recording and tool policy.
+- `replyMode: "model"` skips the agent pipeline and uses the plugin runtime's `llm.complete` for short direct bot replies (optionally shaped by `model` and `systemPrompt`).
+
+Model mode runs completions against the resolved bot agent id, which requires
+the explicit `plugins.entries.clickclack.llm.allowAgentIdOverride: true` trust
+bit:
+
+```json5
+{
   plugins: {
     entries: {
       clickclack: {
@@ -82,43 +124,19 @@ Each account opens its own ClickClack realtime connection and uses its own bot t
       },
     },
   },
-  channels: {
-    clickclack: {
-      enabled: true,
-      baseUrl: "https://app.clickclack.chat",
-      defaultAccount: "service",
-      accounts: {
-        service: {
-          token: { source: "env", provider: "default", id: "CLICKCLACK_SERVICE_BOT_TOKEN" },
-          workspace: "default",
-          defaultTo: "channel:general",
-          agentId: "service-bot",
-          replyMode: "model",
-        },
-        peter: {
-          token: { source: "env", provider: "default", id: "CLICKCLACK_PETER_BOT_TOKEN" },
-          workspace: "default",
-          defaultTo: "dm:usr_...",
-          agentId: "peter-bot",
-          replyMode: "model",
-        },
-      },
-    },
-  },
 }
 ```
 
-`replyMode: "model"` uses `api.runtime.llm.complete` directly for short bot replies.
-When an account sets `agentId`, OpenClaw requires the explicit
-`plugins.entries.clickclack.llm.allowAgentIdOverride` trust bit so the plugin
-can run completions for that bot agent. Keep it off if you only use the default
-agent route.
+Keep the trust bit off if you only use the default `agent` reply mode; it is
+not needed there.
 
 ## Targets
 
 - `channel:<name-or-id>` sends to a workspace channel. Bare targets default to `channel:`.
 - `dm:<user_id>` creates or reuses a direct conversation with that user.
-- `thread:<message_id>` replies in an existing thread.
+- `thread:<message_id>` replies in the thread rooted at that message.
+
+Explicit outbound targets may also carry the `clickclack:` or `cc:` provider prefix.
 
 Examples:
 
@@ -140,7 +158,7 @@ OpenClaw only needs `bot:write` for normal agent chat.
 
 ## Troubleshooting
 
-- `ClickClack is not configured`: set `channels.clickclack.token` or `CLICKCLACK_BOT_TOKEN`.
-- `workspace not found`: set `workspace` to the workspace id or slug returned by ClickClack.
-- No inbound replies: confirm the token has realtime read access and the bot is not replying to its own messages.
+- `ClickClack is not configured for account "<id>"`: set `baseUrl`, `token` (for example via `CLICKCLACK_BOT_TOKEN`), and `workspace` for that account.
+- `ClickClack workspace not found: <value>`: set `workspace` to the workspace id, slug, or name returned by ClickClack.
+- No inbound replies: confirm the token has realtime read access and note that the bot ignores its own messages and messages from other bots.
 - Channel sends fail: verify the bot is a member of the workspace and has `bot:write`.

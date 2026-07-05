@@ -996,6 +996,12 @@ describe("test-projects args", () => {
         watchMode: false,
       },
       {
+        config: "test/vitest/vitest.plugins.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/plugins/git-install.test.ts"],
+        watchMode: false,
+      },
+      {
         config: "test/vitest/vitest.e2e.config.ts",
         forwardedArgs: [
           "test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts",

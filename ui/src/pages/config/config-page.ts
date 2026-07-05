@@ -5,6 +5,7 @@ import type { FastMode } from "../../api/types.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
   loadSettings,
   normalizeTextScale,
@@ -686,6 +687,10 @@ export class ConfigPage extends LitElement {
           config: { activeSection: "auth", activeSubsection: null },
         };
       },
+      canPairDevice:
+        runtimeConfig.state.connected &&
+        hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+      onPairMobile: () => void this.context.overlays.openDevicePairSetup(),
       onBrowserEnabledToggle: (enabled) => runtimeConfig.patchForm(["browser", "enabled"], enabled),
       onToolProfileChange: (profile) => runtimeConfig.patchForm(["tools", "profile"], profile),
       assistantAvatar: appConfig.assistantIdentity.avatar,
