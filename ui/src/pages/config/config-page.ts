@@ -1,9 +1,15 @@
 import { consume } from "@lit/context";
 import { html, LitElement, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
+import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { FastMode } from "../../api/types.ts";
 import type { RouteId } from "../../app-route-paths.ts";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationGatewaySnapshot,
+} from "../../app/context.ts";
 import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
@@ -16,6 +22,7 @@ import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { renderMcp } from "./mcp.ts";
 import { getPresetById } from "./presets.ts";
 import {
@@ -98,6 +105,15 @@ const KNOWN_CHANNELS = [
 ] as const;
 
 const BASE_RADII = { sm: 6, md: 10, lg: 14, xl: 20, full: 9999, default: 10 };
+const SYSTEM_INFO_POLL_INTERVAL_MS = 10_000;
+
+function isUnknownSystemInfoMethodError(error: unknown): boolean {
+  return (
+    error instanceof GatewayRequestError &&
+    error.gatewayCode === "INVALID_REQUEST" &&
+    error.message.includes("unknown method: system.info")
+  );
+}
 
 function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
   switch (pageId) {
@@ -271,6 +287,8 @@ export class ConfigPage extends LitElement {
 
   @state() private settings = loadSettings();
   @state() private settingsMode: "quick" | "advanced" = "quick";
+  @state() private systemInfo: SystemInfoResult | null = null;
+  @state() private systemInfoUnavailable = false;
   @state() private formModes: Record<ConfigPageId, ConfigFormMode> = {
     config: "form",
     communications: "form",
@@ -306,6 +324,11 @@ export class ConfigPage extends LitElement {
   @state() private customThemeImportFocusToken = 0;
   private customThemeImportSelectOnSuccess = false;
   private readonly configViewState: ConfigViewState = createConfigViewState();
+  private systemInfoClient: GatewayBrowserClient | null = null;
+  private systemInfoConnected = false;
+  private systemInfoLoading = false;
+  private systemInfoRequestId = 0;
+  private systemInfoPollInterval: ReturnType<typeof globalThis.setInterval> | null = null;
   private stops: Array<() => void> = [];
 
   override createRenderRoot() {
@@ -324,12 +347,16 @@ export class ConfigPage extends LitElement {
       this.context.runtimeConfig.subscribe(() => this.requestUpdate()),
       this.context.overlays.subscribe(() => this.requestUpdate()),
       this.context.config.subscribe(() => this.requestUpdate()),
-      this.context.gateway.subscribe(() => this.requestUpdate()),
+      this.context.gateway.subscribe((snapshot) => {
+        this.handleSystemInfoGatewaySnapshot(snapshot);
+        this.requestUpdate();
+      }),
       this.context.webPush.subscribe(() => this.requestUpdate()),
       this.context.theme.subscribe(() => {
         this.settings = loadSettings();
       }),
     ];
+    this.handleSystemInfoGatewaySnapshot(this.context.gateway.snapshot);
     const config = this.context.runtimeConfig.state;
     if (!config.configSnapshot && !config.configLoading) {
       void this.context.runtimeConfig
@@ -341,11 +368,127 @@ export class ConfigPage extends LitElement {
   }
 
   override disconnectedCallback() {
+    this.stopSystemInfoPolling();
+    this.invalidateSystemInfoRequest();
+    this.systemInfoClient = null;
+    this.systemInfoConnected = false;
     for (const stop of this.stops) {
       stop();
     }
     this.stops = [];
     super.disconnectedCallback();
+  }
+
+  override updated(changed: Map<PropertyKey, unknown>) {
+    const pageChanged = changed.has("pageId") && changed.get("pageId") !== undefined;
+    const modeChanged = changed.has("settingsMode") && changed.get("settingsMode") !== undefined;
+    if (pageChanged || modeChanged) {
+      this.invalidateSystemInfoRequest();
+    }
+    this.syncSystemInfoPolling();
+  }
+
+  private isSystemInfoVisible(): boolean {
+    return this.pageId === "config" && this.settingsMode === "quick";
+  }
+
+  private handleSystemInfoGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
+    const clientChanged = snapshot.client !== this.systemInfoClient;
+    const becameConnected = snapshot.connected && !this.systemInfoConnected;
+    this.systemInfoClient = snapshot.client;
+    this.systemInfoConnected = snapshot.connected;
+    if (clientChanged) {
+      this.invalidateSystemInfoRequest();
+      this.systemInfo = null;
+      this.systemInfoUnavailable = false;
+    } else if (!snapshot.connected) {
+      this.invalidateSystemInfoRequest();
+    } else if (becameConnected) {
+      this.systemInfoUnavailable = false;
+    }
+    this.syncSystemInfoPolling();
+  }
+
+  private syncSystemInfoPolling() {
+    const gateway = this.context.gateway.snapshot;
+    const shouldPoll =
+      this.isConnected &&
+      this.isSystemInfoVisible() &&
+      !this.systemInfoUnavailable &&
+      gateway.connected &&
+      gateway.client != null;
+    if (!shouldPoll) {
+      this.stopSystemInfoPolling();
+      return;
+    }
+    if (this.systemInfoPollInterval !== null) {
+      return;
+    }
+    void this.loadSystemInfo();
+    this.systemInfoPollInterval = globalThis.setInterval(() => {
+      void this.loadSystemInfo();
+    }, SYSTEM_INFO_POLL_INTERVAL_MS);
+  }
+
+  private stopSystemInfoPolling() {
+    if (this.systemInfoPollInterval === null) {
+      return;
+    }
+    globalThis.clearInterval(this.systemInfoPollInterval);
+    this.systemInfoPollInterval = null;
+  }
+
+  private invalidateSystemInfoRequest() {
+    this.systemInfoRequestId += 1;
+    this.systemInfoLoading = false;
+  }
+
+  private isCurrentSystemInfoRequest(requestId: number, client: GatewayBrowserClient): boolean {
+    const gateway = this.context.gateway.snapshot;
+    return (
+      this.isConnected &&
+      this.isSystemInfoVisible() &&
+      requestId === this.systemInfoRequestId &&
+      gateway.connected &&
+      gateway.client === client
+    );
+  }
+
+  private async loadSystemInfo() {
+    const gateway = this.context.gateway.snapshot;
+    const client = gateway.client;
+    if (
+      !gateway.connected ||
+      !client ||
+      !this.isSystemInfoVisible() ||
+      this.systemInfoUnavailable ||
+      this.systemInfoLoading
+    ) {
+      return;
+    }
+
+    const requestId = ++this.systemInfoRequestId;
+    this.systemInfoLoading = true;
+    try {
+      const response = await client.request("system.info", {});
+      if (!this.isCurrentSystemInfoRequest(requestId, client)) {
+        return;
+      }
+      this.systemInfo = response as SystemInfoResult;
+    } catch (error) {
+      if (!this.isCurrentSystemInfoRequest(requestId, client)) {
+        return;
+      }
+      if (isMissingOperatorReadScopeError(error) || isUnknownSystemInfoMethodError(error)) {
+        this.systemInfo = null;
+        this.systemInfoUnavailable = true;
+        this.stopSystemInfoPolling();
+      }
+    } finally {
+      if (this.isCurrentSystemInfoRequest(requestId, client)) {
+        this.systemInfoLoading = false;
+      }
+    }
   }
 
   private navigate(routeId: RouteId) {
@@ -634,6 +777,8 @@ export class ConfigPage extends LitElement {
         mcpServerCount: mcpServerCount(configObject),
       },
       security: extractQuickSettingsSecurity(configObject),
+      systemInfo: this.systemInfo,
+      systemInfoUnavailable: this.systemInfoUnavailable,
       theme: this.settings.theme,
       themeMode: this.settings.themeMode,
       hasCustomTheme: Boolean(this.settings.customTheme),

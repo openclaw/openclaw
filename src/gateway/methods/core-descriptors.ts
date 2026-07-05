@@ -201,6 +201,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "gateway.restart.preflight", scope: "operator.read" },
   { name: "gateway.restart.request", scope: "operator.admin", controlPlaneWrite: true },
   { name: "system-presence", scope: "operator.read" },
+  { name: "system.info", scope: "operator.read" },
   { name: "system-event", scope: "operator.admin" },
   { name: "message.action", scope: "operator.write" },
   { name: "send", scope: "operator.write" },

@@ -241,6 +241,10 @@ import {
   EnvironmentsStatusResultSchema,
   type EnvironmentStatus,
   EnvironmentStatusSchema,
+  type SystemInfoParams,
+  SystemInfoParamsSchema,
+  type SystemInfoResult,
+  SystemInfoResultSchema,
   type ErrorShape,
   ErrorShapeSchema,
   type EventFrame,
@@ -658,6 +662,8 @@ export const validateEnvironmentsListParams = lazyCompile<EnvironmentsListParams
 export const validateEnvironmentsStatusParams = lazyCompile<EnvironmentsStatusParams>(
   EnvironmentsStatusParamsSchema,
 );
+export const validateSystemInfoParams = lazyCompile<SystemInfoParams>(SystemInfoParamsSchema);
+export const validateSystemInfoResult = lazyCompile<SystemInfoResult>(SystemInfoResultSchema);
 export const validateNodePendingAckParams = lazyCompile<NodePendingAckParams>(
   NodePendingAckParamsSchema,
 );
@@ -1079,6 +1085,8 @@ export {
   EnvironmentsListResultSchema,
   EnvironmentsStatusParamsSchema,
   EnvironmentsStatusResultSchema,
+  SystemInfoParamsSchema,
+  SystemInfoResultSchema,
   StateVersionSchema,
   AgentEventSchema,
   MessageActionParamsSchema,
@@ -1464,6 +1472,8 @@ export type {
   EnvironmentsListResult,
   EnvironmentsStatusParams,
   EnvironmentsStatusResult,
+  SystemInfoParams,
+  SystemInfoResult,
   NodePairRejectParams,
   NodePairRemoveParams,
   NodePairVerifyParams,

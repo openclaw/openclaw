@@ -357,7 +357,7 @@ surfaces:
             description: '`health` and `status` RPCs.'
           - name: Identity and presence APIs
             coverageIds: [gateway.identity-and-presence-apis]
-            description: '`gateway.identity.get`, `system-presence`, `system-event`, and heartbeat RPCs.'
+            description: '`gateway.identity.get`, `system.info`, `system-presence`, `system-event`, and heartbeat RPCs.'
           - name: Model APIs
             coverageIds: [gateway.model-apis]
             description: '`models.list` RPCs.'
