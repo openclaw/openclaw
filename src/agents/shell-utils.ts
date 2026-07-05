@@ -261,13 +261,37 @@ export function detectRuntimeShell(): string | undefined {
   return undefined;
 }
 
+// Strip ANSI CSI (ESC [ ... final) and OSC (ESC ] ... ST) sequences from
+// Strip ANSI CSI (ESC [ ... final) and OSC (ESC ] ... ST) sequences from
+// terminal output. This is kept local to shell-utils to avoid adding a build-time
+// dependency on a non-entry utility module (src/agents/utils/ansi.ts) that the
+// root dist graph does not expose as a stable entry, while keeping the same
+// regex contract used by the session/bash executor paths.
+const ANSI_CSI_PATTERN = "\\x1b\\[[\\x20-\\x3f]*[\\x40-\\x7e]";
+const ANSI_OSC_PATTERN = "\\x1b\\][^\\x07\\x1b]*(?:\\x1b\\\\|\\x07)";
+const ANSI_SEQUENCE_REGEX = new RegExp(`${ANSI_OSC_PATTERN}|${ANSI_CSI_PATTERN}`, "g");
+
+function stripAnsi(input: string): string {
+  return input.replace(ANSI_SEQUENCE_REGEX, "");
+}
+
 export function sanitizeBinaryOutput(text: string): string {
   const scrubbed = text.replace(/[\p{Format}\p{Surrogate}]/gu, "");
   if (!scrubbed) {
     return scrubbed;
   }
+  // Strip ANSI/OSC sequences first so cursor/SGR/color codes do not become
+  // literal \x1b[...] noise in the rendered transcript. The remaining C0
+  // controls are still escaped so the user can see that terminal bytes were
+  // present without raw bytes polluting output or triggering a MIME fallback.
+  // stripAnsi is kept local (see top of file) to avoid a build-time dependency
+  // on a non-entry utility module in the root dist graph.
+  const stripped = stripAnsi(scrubbed);
+  if (!stripped) {
+    return stripped;
+  }
   const chunks: string[] = [];
-  for (const char of scrubbed) {
+  for (const char of stripped) {
     const code = char.codePointAt(0);
     if (code == null) {
       continue;
@@ -277,6 +301,7 @@ export function sanitizeBinaryOutput(text: string): string {
       continue;
     }
     if (code < 0x20) {
+      chunks.push(`\\x${code.toString(16).padStart(2, "0")}`);
       continue;
     }
     chunks.push(char);
