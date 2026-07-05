@@ -8,22 +8,26 @@ on:
       - ".github/workflows/plugin-npm-release.yml"
       - "extensions/**"
       - "package.json"
+      - "release/extended-stable-plugin-support.json"
       - "scripts/lib/plugin-npm-package-manifest.mjs"
+      - "scripts/lib/extended-stable-plugin-support.ts"
       - "scripts/lib/plugin-npm-release.ts"
       - "scripts/plugin-npm-publish.sh"
       - "scripts/plugin-npm-release-check.ts"
       - "scripts/plugin-npm-release-plan.ts"
+      - "scripts/plugin-npm-publication-result.ts"
       - "scripts/verify-plugin-npm-published-runtime.mjs"
   workflow_dispatch:
     inputs:
       publish_scope:
-        description: Publish the selected plugins or all publishable plugins from the ref
+        description: Publish selected, all publishable, or the fixed extended-stable plugin set
         required: true
         default: selected
         type: choice
         options:
           - selected
           - all-publishable
+          - extended-stable
       ref:
         description: Commit SHA on main, a release branch, or the matching Tideclaw alpha branch to publish from
         required: true
@@ -55,6 +59,7 @@ jobs:
       has_candidates: ${{ steps.plan.outputs.has_candidates }}
       candidate_count: ${{ steps.plan.outputs.candidate_count }}
       matrix: ${{ steps.plan.outputs.matrix }}
+      extended_stable: ${{ steps.plan.outputs.extended_stable }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -73,6 +78,39 @@ jobs:
         id: ref
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: Bind extended-stable source to provenance SHA
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_scope == 'extended-stable'
+        env:
+          PROVENANCE_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ steps.ref.outputs.sha }}
+        run: |
+          if [[ "${SOURCE_SHA}" != "${PROVENANCE_SHA}" ]]; then
+            echo "Extended-stable plugin source ${SOURCE_SHA} must equal the workflow provenance SHA ${PROVENANCE_SHA}." >&2
+            echo "Dispatch this workflow on the exact release ref instead of publishing a different ref input." >&2
+            exit 1
+          fi
+
+      - name: Validate extended-stable release line
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_scope == 'extended-stable'
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/extended-stable/([0-9]{4})\.([1-9][0-9]*)\.33$ ]]; then
+            echo "Extended-stable plugin publication must run from extended-stable/YYYY.M.33." >&2
+            exit 1
+          fi
+          branch_year="${BASH_REMATCH[1]}"
+          branch_month="${BASH_REMATCH[2]}"
+          root_version="$(node -p "require('./package.json').version")"
+          ROOT_VERSION="${root_version}" node --import tsx --input-type=module -e \
+            'import { assertExtendedStableReleaseVersion } from "./scripts/lib/extended-stable-plugin-acceptance.ts"; assertExtendedStableReleaseVersion(process.env.ROOT_VERSION ?? "");'
+          IFS=. read -r root_year root_month _ <<< "${root_version}"
+          if [[ "${root_year}" != "${branch_year}" || "${root_month}" != "${branch_month}" ]]; then
+            echo "Extended-stable plugin package month ${root_version} does not match ${WORKFLOW_REF}." >&2
+            exit 1
+          fi
+
       - name: Validate ref is on a trusted publish branch
         env:
           WORKFLOW_REF: ${{ github.ref }}
@@ -80,7 +118,8 @@ jobs:
           set -euo pipefail
           git fetch --no-tags origin \
             +refs/heads/main:refs/remotes/origin/main \
-            '+refs/heads/release/*:refs/remotes/origin/release/*'
+            '+refs/heads/release/*:refs/remotes/origin/release/*' \
+            '+refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*'
           if git merge-base --is-ancestor HEAD origin/main; then
             exit 0
           fi
@@ -89,6 +128,12 @@ jobs:
               exit 0
             fi
           done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
+          if [[ "${WORKFLOW_REF}" =~ ^refs/heads/extended-stable/[0-9]{4}\.[1-9][0-9]*\.33$ ]]; then
+            extended_stable_branch="${WORKFLOW_REF#refs/heads/}"
+            if git merge-base --is-ancestor HEAD "refs/remotes/origin/${extended_stable_branch}"; then
+              exit 0
+            fi
+          fi
           if [[ "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
             alpha_branch="${WORKFLOW_REF#refs/heads/}"
             git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
@@ -96,7 +141,7 @@ jobs:
               exit 0
             fi
           fi
-          echo "Plugin npm publishes must target a commit reachable from main, release/*, or the matching Tideclaw alpha branch." >&2
+          echo "Plugin npm publishes must target a commit reachable from main, release/*, extended-stable/YYYY.M.33, or the matching Tideclaw alpha branch." >&2
           exit 1
 
       - name: Validate publishable plugin metadata
@@ -143,21 +188,28 @@ jobs:
 
           cat .local/plugin-npm-release-plan.json
 
-          candidate_count="$(jq -r '.candidates | length' .local/plugin-npm-release-plan.json)"
+          matrix_selector='.candidates'
+          extended_stable="false"
+          if [[ "${PUBLISH_SCOPE}" == "extended-stable" ]]; then
+            matrix_selector='.all'
+            extended_stable="true"
+          fi
+          candidate_count="$(jq -r "${matrix_selector} | length" .local/plugin-npm-release-plan.json)"
           has_candidates="false"
           if [[ "${candidate_count}" != "0" ]]; then
             has_candidates="true"
           fi
-          matrix_json="$(jq -c '.candidates' .local/plugin-npm-release-plan.json)"
+          matrix_json="$(jq -c "${matrix_selector}" .local/plugin-npm-release-plan.json)"
 
           {
             echo "candidate_count=${candidate_count}"
             echo "has_candidates=${has_candidates}"
             echo "matrix=${matrix_json}"
+            echo "extended_stable=${extended_stable}"
           } >> "$GITHUB_OUTPUT"
 
           echo "Plugin release candidates:"
-          jq -r '.candidates[]? | "- \(.packageName)@\(.version) [\(.publishTag)] from \(.packageDir)"' .local/plugin-npm-release-plan.json
+          jq -r "${matrix_selector}[]? | \"- \\(.packageName)@\\(.version) [\\(.publishTag)] from \\(.packageDir)\"" .local/plugin-npm-release-plan.json
 
           echo "Already published / skipped:"
           jq -r '.skippedPublished[]? | "- \(.packageName)@\(.version)"' .local/plugin-npm-release-plan.json
@@ -237,10 +289,26 @@ jobs:
           install-bun: "false"
 
       - name: Preview publish command
-        run: bash scripts/plugin-npm-publish.sh --dry-run "${{ matrix.plugin.packageDir }}"
+        env:
+          CANDIDATE_TAG: ${{ matrix.plugin.candidateTag }}
+          PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
+        run: |
+          args=(--dry-run)
+          if [[ -n "${CANDIDATE_TAG}" ]]; then
+            args+=(--candidate-tag "${CANDIDATE_TAG}")
+          fi
+          bash scripts/plugin-npm-publish.sh "${args[@]}" "${PACKAGE_DIR}"
 
       - name: Preview npm pack contents
-        run: bash scripts/plugin-npm-publish.sh --pack-dry-run "${{ matrix.plugin.packageDir }}"
+        env:
+          CANDIDATE_TAG: ${{ matrix.plugin.candidateTag }}
+          PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
+        run: |
+          args=(--pack-dry-run)
+          if [[ -n "${CANDIDATE_TAG}" ]]; then
+            args+=(--candidate-tag "${CANDIDATE_TAG}")
+          fi
+          bash scripts/plugin-npm-publish.sh "${args[@]}" "${PACKAGE_DIR}"
 
   publish_plugins_npm:
     needs: [preview_plugins_npm, preview_plugin_pack, validate_release_publish_approval]
@@ -272,27 +340,221 @@ jobs:
       - name: Check npm package version
         id: npm_package_version
         env:
+          CANDIDATE_TAG: ${{ matrix.plugin.candidateTag }}
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
         run: |
           set -euo pipefail
-          if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
+          if [[ -z "${CANDIDATE_TAG}" ]]; then
+            if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
+              echo "${PACKAGE_NAME}@${PACKAGE_VERSION} is already published on npm."
+              echo "already_published=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "already_published=false" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+          query_error="$(mktemp)"
+          trap 'rm -f "${query_error}"' EXIT
+          set +e
+          published_version="$(npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version --json 2>"${query_error}")"
+          query_status=$?
+          set -e
+          if [[ "${query_status}" == "0" ]]; then
+            if [[ "$(jq -r '.' <<<"${published_version}")" != "${PACKAGE_VERSION}" ]]; then
+              echo "npm returned an unexpected exact version for ${PACKAGE_NAME}@${PACKAGE_VERSION}." >&2
+              exit 1
+            fi
             echo "${PACKAGE_NAME}@${PACKAGE_VERSION} is already published on npm."
             echo "already_published=true" >> "$GITHUB_OUTPUT"
-          else
+          elif grep -Eq 'E404|404 Not Found|is not in this registry' "${query_error}"; then
+            echo "${PACKAGE_NAME}@${PACKAGE_VERSION} is authoritatively absent from npm."
             echo "already_published=false" >> "$GITHUB_OUTPUT"
+          else
+            cat "${query_error}" >&2
+            echo "Could not authoritatively query ${PACKAGE_NAME}@${PACKAGE_VERSION}; refusing publication." >&2
+            exit 1
           fi
 
-      - name: Publish
-        if: steps.npm_package_version.outputs.already_published != 'true'
+      - name: Publish regular plugin release
+        if: steps.npm_package_version.outputs.already_published != 'true' && matrix.plugin.candidateTag == ''
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           OPENCLAW_NPM_PUBLISH_AUTH_MODE: trusted-publisher
         run: bash scripts/plugin-npm-publish.sh --publish "${{ matrix.plugin.packageDir }}"
 
+      - name: Publish extended-stable candidate
+        if: steps.npm_package_version.outputs.already_published != 'true' && matrix.plugin.candidateTag != ''
+        env:
+          OPENCLAW_NPM_PUBLISH_AUTH_MODE: trusted-publisher
+        run: >-
+          bash scripts/plugin-npm-publish.sh --publish
+          --candidate-tag "${{ matrix.plugin.candidateTag }}"
+          "${{ matrix.plugin.packageDir }}"
+
+      - name: Verify extended-stable candidate tag
+        if: matrix.plugin.candidateTag != ''
+        env:
+          ALREADY_PUBLISHED: ${{ steps.npm_package_version.outputs.already_published }}
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+          CANDIDATE_TAG: ${{ matrix.plugin.candidateTag }}
+        run: |
+          set -euo pipefail
+          authoritative_read=false
+          for attempt in {1..12}; do
+            query_error="$(mktemp)"
+            set +e
+            tags_json="$(npm view "${PACKAGE_NAME}" dist-tags --json 2>"${query_error}")"
+            query_status=$?
+            set -e
+            if [[ "${query_status}" != "0" ]]; then
+              cat "${query_error}" >&2
+              rm -f "${query_error}"
+              sleep 5
+              continue
+            fi
+            rm -f "${query_error}"
+            authoritative_read=true
+            resolved="$(jq -r --arg tag "${CANDIDATE_TAG}" '.[$tag] // empty' <<<"${tags_json:-{}}")"
+            if [[ "${resolved}" == "${PACKAGE_VERSION}" ]]; then
+              exit 0
+            fi
+            if [[ -n "${resolved}" ]]; then
+              echo "${PACKAGE_NAME} candidate tag ${CANDIDATE_TAG} points to ${resolved}, expected ${PACKAGE_VERSION}." >&2
+              exit 1
+            fi
+            sleep 5
+          done
+          if [[ "${authoritative_read}" != "true" ]]; then
+            echo "Could not authoritatively read npm dist-tags for ${PACKAGE_NAME}; refusing reconciliation." >&2
+            exit 1
+          fi
+          if [[ "${ALREADY_PUBLISHED}" == "true" ]]; then
+            echo "${PACKAGE_NAME}@${PACKAGE_VERSION} is immutable and already published, but ${CANDIDATE_TAG} is absent." >&2
+            echo "The public workflow has no dist-tag credential and will not republish or retag it; use the protected selector owner for separately approved recovery." >&2
+            exit 1
+          fi
+          echo "${PACKAGE_NAME} candidate tag ${CANDIDATE_TAG} did not resolve to ${PACKAGE_VERSION}." >&2
+          exit 1
+
       - name: Verify published runtime
         env:
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
         run: node scripts/verify-plugin-npm-published-runtime.mjs "${PACKAGE_NAME}@${PACKAGE_VERSION}"
+
+      - name: Verify extended-stable npm provenance
+        if: matrix.plugin.candidateTag != ''
+        env:
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+        run: |
+          set -euo pipefail
+          provenance_predicate="$(npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" dist.attestations.provenance.predicateType)"
+          if [[ "${provenance_predicate}" != "https://slsa.dev/provenance/v1" ]]; then
+            echo "npm provenance metadata is missing for ${PACKAGE_NAME}@${PACKAGE_VERSION}." >&2
+            exit 1
+          fi
+          verification_dir="$(mktemp -d)"
+          trap 'rm -rf "${verification_dir}"' EXIT
+          (
+            cd "${verification_dir}"
+            npm init -y >/dev/null
+            npm install --ignore-scripts "${PACKAGE_NAME}@${PACKAGE_VERSION}"
+            npm audit signatures
+          )
+
+      - name: Write extended-stable publication record
+        if: matrix.plugin.candidateTag != ''
+        env:
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+          CANDIDATE_TAG: ${{ matrix.plugin.candidateTag }}
+          SOURCE_SHA: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+        run: |
+          set -euo pipefail
+          npm_integrity="$(npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" dist.integrity)"
+          if [[ "${npm_integrity}" != sha512-* ]]; then
+            echo "npm integrity missing for ${PACKAGE_NAME}@${PACKAGE_VERSION}." >&2
+            exit 1
+          fi
+          mkdir -p .local/plugin-publication-result
+          jq -n \
+            --arg packageName "${PACKAGE_NAME}" \
+            --arg version "${PACKAGE_VERSION}" \
+            --arg npmIntegrity "${npm_integrity}" \
+            --arg candidateTag "${CANDIDATE_TAG}" \
+            --arg sourceSha "${SOURCE_SHA}" \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg workflowPath ".github/workflows/plugin-npm-release.yml" \
+            --arg workflowRef "${GITHUB_REF}" \
+            --arg workflowSha "${GITHUB_WORKFLOW_SHA}" \
+            --arg runId "${GITHUB_RUN_ID}" \
+            --arg runAttempt "${GITHUB_RUN_ATTEMPT}" \
+            '{packageName:$packageName,version:$version,npmIntegrity:$npmIntegrity,candidateTag:$candidateTag,provenanceVerified:true,sourceSha:$sourceSha,repository:$repository,workflowPath:$workflowPath,workflowRef:$workflowRef,workflowSha:$workflowSha,runId:$runId,runAttempt:$runAttempt}' \
+            > ".local/plugin-publication-result/${{ matrix.plugin.extensionId }}.json"
+
+      - name: Upload extended-stable publication record
+        if: matrix.plugin.candidateTag != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: extended-stable-plugin-publication-record-${{ github.run_attempt }}-${{ matrix.plugin.extensionId }}
+          path: .local/plugin-publication-result/${{ matrix.plugin.extensionId }}.json
+          if-no-files-found: error
+          retention-days: 14
+
+  aggregate_extended_stable_publication:
+    needs: [preview_plugins_npm, publish_plugins_npm]
+    if: github.event_name == 'workflow_dispatch' && needs.preview_plugins_npm.outputs.extended_stable == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Download publication records
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: extended-stable-plugin-publication-record-${{ github.run_attempt }}-*
+          path: .local/plugin-publication-records
+          merge-multiple: true
+
+      - name: Close aggregate publication result
+        env:
+          SOURCE_SHA: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+        run: |
+          set -euo pipefail
+          mkdir -p .local/plugin-publication-aggregate
+          node --import tsx scripts/plugin-npm-publication-result.ts \
+            --results-dir .local/plugin-publication-records \
+            --output .local/plugin-publication-aggregate/extended-stable-plugin-publication.json \
+            --source-sha "${SOURCE_SHA}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --workflow-path ".github/workflows/plugin-npm-release.yml" \
+            --workflow-ref "${GITHUB_REF}" \
+            --workflow-sha "${GITHUB_WORKFLOW_SHA}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --run-attempt "${GITHUB_RUN_ATTEMPT}"
+          cat .local/plugin-publication-aggregate/extended-stable-plugin-publication.json
+
+      - name: Upload aggregate publication result
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: extended-stable-plugin-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .local/plugin-publication-aggregate/extended-stable-plugin-publication.json
+          if-no-files-found: error
+          retention-days: 90

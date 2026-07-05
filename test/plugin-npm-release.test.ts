@@ -6,11 +6,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { collectClawHubPublishablePluginPackages } from "../scripts/lib/plugin-clawhub-release.ts";
 import {
   collectChangedExtensionIdsFromPaths,
+  collectExtendedStablePublishablePluginPackages,
   collectPluginReleaseDependencyFreshnessErrors,
   collectPluginReleaseVersionFloorErrors,
   collectPublishablePluginPackages,
   collectPublishablePluginPackageErrors,
   OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+  deriveExtendedStablePluginCandidateTag,
   parsePluginReleaseArgs,
   parsePluginReleaseSelection,
   parsePluginReleaseSelectionMode,
@@ -44,11 +46,12 @@ describe("parsePluginReleaseSelectionMode", () => {
   it("accepts the supported explicit selection modes", () => {
     expect(parsePluginReleaseSelectionMode("selected")).toBe("selected");
     expect(parsePluginReleaseSelectionMode("all-publishable")).toBe("all-publishable");
+    expect(parsePluginReleaseSelectionMode("extended-stable")).toBe("extended-stable");
   });
 
   it("rejects unsupported selection modes", () => {
     expect(() => parsePluginReleaseSelectionMode("all")).toThrowError(
-      'Unknown selection mode: all. Expected "selected" or "all-publishable".',
+      'Unknown selection mode: all. Expected "selected", "all-publishable", or "extended-stable".',
     );
   });
 });
@@ -105,6 +108,47 @@ describe("parsePluginReleaseArgs", () => {
       selection: [],
       pluginsFlagProvided: false,
     });
+  });
+
+  it("rejects package overrides for the policy-derived extended-stable set", () => {
+    expect(() =>
+      parsePluginReleaseArgs([
+        "--selection-mode",
+        "extended-stable",
+        "--plugins",
+        "@openclaw/slack",
+      ]),
+    ).toThrowError(
+      "`--selection-mode extended-stable` derives its package set from policy and must not be combined with `--plugins`.",
+    );
+  });
+});
+
+describe("extended-stable plugin publication", () => {
+  it("derives the closed covered package set and immutable candidate tags", () => {
+    const rootVersion = (JSON.parse(readFileSync("package.json", "utf8")) as { version: string })
+      .version;
+    const plugins = collectExtendedStablePublishablePluginPackages();
+
+    expect(plugins.map((plugin) => plugin.packageName)).toEqual([
+      "@openclaw/codex",
+      "@openclaw/discord",
+      "@openclaw/slack",
+    ]);
+    expect(plugins.map((plugin) => plugin.version)).toEqual([
+      rootVersion,
+      rootVersion,
+      rootVersion,
+    ]);
+    expect(plugins.map((plugin) => plugin.candidateTag)).toEqual(
+      plugins.map((plugin) =>
+        deriveExtendedStablePluginCandidateTag({
+          pluginId: plugin.extensionId,
+          version: rootVersion,
+        }),
+      ),
+    );
+    expect(plugins.every((plugin) => plugin.publishTag === plugin.candidateTag)).toBe(true);
   });
 });
 

@@ -142,12 +142,13 @@ gh workflow run full-release-validation.yml --ref main -f ref=<branch-or-sha>
 
 The monthly npm-only extended-stable path is the exception: dispatch both `OpenClaw NPM
 Release` preflight and `Full Release Validation` from the exact
-`extended-stable/YYYY.M.33` branch, preserve their run IDs, and pass both IDs to the
-direct npm publish run. See [Monthly npm-only extended-stable
+`extended-stable/YYYY.M.33` branch, preserve their run IDs, and pass both IDs to
+`OpenClaw Release Publish` with `plugin_publish_scope=extended-stable`. See [Monthly npm-only extended-stable
 publication](/reference/RELEASING#monthly-npm-only-extended-stable-publication) for
-the commands, exact identity requirements, registry readback, and selector
-repair procedure. This path does not dispatch plugin, macOS, Windows, GitHub
-Release, private dist-tag, or other platform publication.
+the commands, exact identity requirements, candidate verification, and
+protected-selector handoff. This path publishes only core plus the covered
+Codex, Discord, and Slack npm candidates; it skips ClawHub, macOS, Windows,
+GitHub Release, and other platform publication.
 
 ## Runners
 

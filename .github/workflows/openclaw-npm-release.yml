@@ -578,6 +578,7 @@ jobs:
           install-bun: "false"
 
       - name: Ensure version is not already published
+        if: ${{ inputs.npm_dist_tag != 'extended-stable' }}
         run: |
           set -euo pipefail
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
@@ -792,13 +793,66 @@ jobs:
           NPM_WORKFLOW_REF: ${{ github.ref }}
         run: node scripts/openclaw-npm-extended-stable-release.mjs validate-request
 
-      - name: Capture previous extended-stable selector
-        id: previous_extended_stable
+      - name: Reconcile existing extended-stable candidate
+        id: extended_stable_candidate_state
         if: ${{ inputs.npm_dist_tag == 'extended-stable' }}
-        run: node scripts/openclaw-npm-extended-stable-release.mjs capture-selector
+        env:
+          EXPECTED_VERSION: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          release_version="${EXPECTED_VERSION#v}"
+          candidate_tag="$(EXPECTED_VERSION="${release_version}" node -e 'import("./scripts/openclaw-npm-extended-stable-release.mjs").then((module) => process.stdout.write(module.extendedStableCandidateTag(process.env.EXPECTED_VERSION)))')"
+          exact_version=""
+          candidate_version=""
+          for attempt in {1..12}; do
+            exact_error="$(mktemp)"
+            tags_error="$(mktemp)"
+            set +e
+            exact_json="$(npm view "openclaw@${release_version}" version --json 2>"${exact_error}")"
+            exact_status=$?
+            tags_json="$(npm view openclaw dist-tags --json 2>"${tags_error}")"
+            tags_status=$?
+            set -e
+            if [[ "${exact_status}" == "0" ]]; then
+              exact_version="$(jq -r '.' <<<"${exact_json}")"
+            elif grep -Eq 'E404|404 Not Found|is not in this registry' "${exact_error}"; then
+              exact_version="absent"
+            else
+              exact_version="query_failed"
+            fi
+            if [[ "${tags_status}" == "0" ]]; then
+              candidate_version="$(jq -r --arg tag "${candidate_tag}" '.[$tag] // "absent"' <<<"${tags_json}")"
+            else
+              candidate_version="query_failed"
+            fi
+            rm -f "${exact_error}" "${tags_error}"
+            if [[ "${exact_version}" != "query_failed" && "${candidate_version}" != "query_failed" ]]; then
+              break
+            fi
+            if [[ "${attempt}" != "12" ]]; then
+              sleep 5
+            fi
+          done
+          if [[ "${exact_version}" == "query_failed" || "${candidate_version}" == "query_failed" ]]; then
+            echo "Could not authoritatively query existing extended-stable candidate state." >&2
+            exit 1
+          fi
+          if [[ "${exact_version}" == "absent" && "${candidate_version}" == "absent" ]]; then
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "${exact_version}" == "${release_version}" && "${candidate_version}" == "${release_version}" ]]; then
+            echo "openclaw@${release_version} and ${candidate_tag} already exist; reusing immutable publication."
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Existing extended-stable publication is not safely reusable (exact=${exact_version}, candidate=${candidate_version})." >&2
+          echo "The public OIDC workflow cannot repair dist-tags; use the protected private selector recovery path." >&2
+          exit 1
 
       - name: Publish
         id: publish
+        if: ${{ inputs.npm_dist_tag != 'extended-stable' || steps.extended_stable_candidate_state.outputs.already_published != 'true' }}
         env:
           BYPASS_EXTENDED_STABLE_GUARD: ${{ inputs.bypass_extended_stable_guard }}
           OPENCLAW_PREPACK_PREPARED: "1"
@@ -828,12 +882,31 @@ jobs:
           publish_if_missing "@openclaw/ai" "$(find preflight-tarball -type f -name 'openclaw-ai-*.tgz' -print | head -n 1)"
           bash scripts/openclaw-npm-publish.sh --publish "${publish_target}"
 
-      - name: Verify extended-stable registry readback
-        id: extended_stable_readback
+      - name: Verify extended-stable candidate readback
+        id: extended_stable_candidate_readback
         if: ${{ success() && inputs.npm_dist_tag == 'extended-stable' }}
         env:
           EXPECTED_VERSION: ${{ inputs.tag }}
-        run: node scripts/openclaw-npm-extended-stable-release.mjs verify-readback
+        run: node scripts/openclaw-npm-extended-stable-release.mjs verify-candidate-readback
+
+      - name: Write extended-stable core publication result
+        if: ${{ success() && inputs.npm_dist_tag == 'extended-stable' }}
+        env:
+          EXPECTED_VERSION: ${{ inputs.tag }}
+          PACKAGE_INTEGRITY: ${{ steps.extended_stable_candidate_readback.outputs.integrity }}
+        run: |
+          set -euo pipefail
+          SOURCE_SHA="$(git rev-parse HEAD)" \
+            node scripts/openclaw-npm-extended-stable-release.mjs write-publication-result \
+            > extended-stable-core-publication.json
+
+      - name: Upload extended-stable core publication result
+        if: ${{ success() && inputs.npm_dist_tag == 'extended-stable' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: extended-stable-core-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: extended-stable-core-publication.json
+          if-no-files-found: error
 
       - name: Summarize extended-stable npm publication
         if: ${{ always() && inputs.npm_dist_tag == 'extended-stable' }}
@@ -846,12 +919,12 @@ jobs:
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           TARBALL_NAME: ${{ steps.preflight_provenance.outputs.tarball_name }}
           TARBALL_SHA256: ${{ steps.preflight_provenance.outputs.tarball_sha256 }}
-          SELECTOR_CAPTURE_OUTCOME: ${{ steps.previous_extended_stable.outcome }}
-          PREVIOUS_EXTENDED_STABLE: ${{ steps.previous_extended_stable.outputs.previous }}
           PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
-          EXACT_READBACK: ${{ steps.extended_stable_readback.outputs.exact_version }}
-          SELECTOR_READBACK: ${{ steps.extended_stable_readback.outputs.extended_stable_selector }}
-          READBACK_OUTCOME: ${{ steps.extended_stable_readback.outcome }}
+          CANDIDATE_TAG: ${{ steps.extended_stable_candidate_readback.outputs.candidate_tag }}
+          EXACT_READBACK: ${{ steps.extended_stable_candidate_readback.outputs.exact_version }}
+          CANDIDATE_READBACK: ${{ steps.extended_stable_candidate_readback.outputs.candidate_version }}
+          PACKAGE_INTEGRITY: ${{ steps.extended_stable_candidate_readback.outputs.integrity }}
+          READBACK_OUTCOME: ${{ steps.extended_stable_candidate_readback.outcome }}
         run: |
           set -euo pipefail
           release_version="${RELEASE_TAG#v}"
@@ -866,15 +939,11 @@ jobs:
             echo "- Full Release Validation run: ${FULL_RELEASE_VALIDATION_RUN_ID}"
             echo "- Tarball: ${TARBALL_NAME:-unavailable}"
             echo "- Tarball SHA-256: ${TARBALL_SHA256:-unavailable}"
-            echo "- Previous openclaw@extended-stable: ${PREVIOUS_EXTENDED_STABLE:-unavailable}"
             echo "- npm publish outcome: ${PUBLISH_OUTCOME}"
             echo "- Exact-version readback: ${EXACT_READBACK:-unavailable}"
-            echo "- Extended-stable selector readback: ${SELECTOR_READBACK:-unavailable}"
-            echo "- Registry readback outcome: ${READBACK_OUTCOME}"
-            if [[ "$SELECTOR_CAPTURE_OUTCOME" != "success" ]]; then
-              echo "- Selector capture failed; npm publish did not run and no repair is required because npm was unchanged."
-            else
-              repair_command="$(EXPECTED_VERSION="$RELEASE_TAG" node scripts/openclaw-npm-extended-stable-release.mjs repair-command)"
-              echo "- Repair command: \`${repair_command}\`"
-            fi
+            echo "- Candidate tag: ${CANDIDATE_TAG:-unavailable}"
+            echo "- Candidate readback: ${CANDIDATE_READBACK:-unavailable}"
+            echo "- Package integrity: ${PACKAGE_INTEGRITY:-unavailable}"
+            echo "- Candidate readback outcome: ${READBACK_OUTCOME}"
+            echo "- Shared openclaw@extended-stable selector: unchanged (promoted by the private release orchestrator)"
           } >> "$GITHUB_STEP_SUMMARY"

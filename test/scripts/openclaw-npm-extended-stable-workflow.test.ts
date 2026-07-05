@@ -115,18 +115,36 @@ describe("minimal npm extended-stable workflow", () => {
     expect(raw).toContain("openclaw-npm-extended-stable-release.mjs verify-manifest");
   });
 
-  it("captures selector fail closed, publishes extended-stable, retries, and summarizes", () => {
+  it("publishes to a candidate tag, emits a verified result, and leaves promotion private", () => {
     const parsed = workflow();
     const publish = parsed.jobs?.publish_openclaw_npm;
-    const capture = step(publish, "Capture previous extended-stable selector");
-    const readback = step(publish, "Verify extended-stable registry readback");
+    const reconcile = step(publish, "Reconcile existing extended-stable candidate");
+    const alreadyPublished = step(publish, "Ensure version is not already published");
+    const readback = step(publish, "Verify extended-stable candidate readback");
+    const writeResult = step(publish, "Write extended-stable core publication result");
+    const uploadResult = step(publish, "Upload extended-stable core publication result");
     const summary = step(publish, "Summarize extended-stable npm publication");
-    expect(capture.run).toContain("openclaw-npm-extended-stable-release.mjs capture-selector");
-    expect(step(publish, "Publish").run).toContain("openclaw-npm-publish.sh");
-    expect(readback.run).toContain("openclaw-npm-extended-stable-release.mjs verify-readback");
+    expect(reconcile.run).toContain("already_published=true");
+    expect(reconcile.run).toContain("Could not authoritatively query");
+    expect(reconcile.run).toContain("public OIDC workflow cannot repair dist-tags");
+    expect(alreadyPublished.if).toBe("${{ inputs.npm_dist_tag != 'extended-stable' }}");
+    const publishStep = step(publish, "Publish");
+    expect(publishStep.run).toContain("openclaw-npm-publish.sh");
+    expect(publishStep.if).toContain("already_published != 'true'");
+    expect(readback.run).toContain(
+      "openclaw-npm-extended-stable-release.mjs verify-candidate-readback",
+    );
+    expect(writeResult.run).toContain(
+      "openclaw-npm-extended-stable-release.mjs write-publication-result",
+    );
+    expect(uploadResult).toMatchObject({
+      if: "${{ success() && inputs.npm_dist_tag == 'extended-stable' }}",
+    });
     expect(summary.if).toContain("always()");
-    expect(summary.run).toContain("openclaw-npm-extended-stable-release.mjs repair-command");
-    expect(summary.run).toContain('EXPECTED_VERSION="$RELEASE_TAG"');
+    expect(summary.run).toContain("Shared openclaw@extended-stable selector: unchanged");
+    expect(publish?.steps?.map((candidate) => candidate.name)).not.toContain(
+      "Capture previous extended-stable selector",
+    );
     expect(publish?.environment).toBe("npm-release");
   });
 

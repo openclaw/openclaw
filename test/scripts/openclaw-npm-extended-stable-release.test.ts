@@ -1,15 +1,15 @@
 import { spawnSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import {
-  capturePriorExtendedStableSelector,
-  extendedStableSelectorRepairCommand,
+  buildExtendedStableCorePublicationResult,
+  extendedStableCandidateTag,
   parseExtendedStableGuardBypass,
-  parsePriorExtendedStableSelector,
   validateFullReleaseValidationManifest,
   validateNpmPublishBoundary,
   validateExtendedStableNpmReleaseRequest,
   validateExtendedStableRunIdentity,
-  verifyExtendedStableRegistryReadback,
+  verifyExtendedStableCandidateReadback,
+  verifyExtendedStableCorePublicationResult,
 } from "../../scripts/openclaw-npm-extended-stable-release.mjs";
 
 const sha = "a".repeat(40);
@@ -72,7 +72,7 @@ describe("npm extended-stable publication boundary", () => {
       },
     );
     expect(result.status).toBe(0);
-    expect(result.stdout).toBe("stable\nextended-stable\n");
+    expect(result.stdout).toBe("stable\nextended-stable-candidate-2026-6-33\n");
     expect(result.stderr).toBe("");
   });
 
@@ -130,6 +130,94 @@ describe("npm extended-stable publication boundary", () => {
     );
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(error);
+  });
+});
+
+describe("extended-stable candidate publication", () => {
+  it("derives a unique candidate tag from an exact final release version", () => {
+    expect(extendedStableCandidateTag("v2026.6.33")).toBe("extended-stable-candidate-2026-6-33");
+    expect(() => extendedStableCandidateTag("2026.6.33-beta.1")).toThrow(/exact final YYYY\.M\.P/u);
+  });
+
+  it("accepts candidate exact-version, selector, and integrity convergence", async () => {
+    let attempt = 0;
+    const sleep = vi.fn(async () => {});
+    const result = await verifyExtendedStableCandidateReadback({
+      expectedVersion: "2026.6.33",
+      query: async (target: string, field: string) => {
+        if (target === "openclaw@2026.6.33" && field === "version") {
+          attempt += 1;
+          return { status: 0, stdout: "2026.6.33\n" };
+        }
+        if (field === "dist.integrity") {
+          return { status: 0, stdout: "sha512-proof\n" };
+        }
+        return { status: 0, stdout: attempt >= 2 ? "2026.6.33\n" : "2026.6.32\n" };
+      },
+      sleep,
+    });
+    expect(result).toEqual({
+      exactVersion: "2026.6.33",
+      candidateVersion: "2026.6.33",
+      candidateTag: "extended-stable-candidate-2026-6-33",
+      integrity: "sha512-proof",
+      attemptsUsed: 2,
+    });
+    expect(sleep).toHaveBeenCalledOnce();
+    expect(sleep).toHaveBeenCalledWith(10_000);
+  });
+
+  it("writes a closed core publication result for the private orchestrator", () => {
+    const result = buildExtendedStableCorePublicationResult({
+      version: "2026.6.33",
+      integrity: "sha512-proof",
+      repository: "openclaw/openclaw",
+      sourceSha: sha,
+      workflowRef: "refs/heads/extended-stable/2026.6.33",
+      runId: 123,
+      runAttempt: 2,
+    });
+    expect(result).toEqual({
+      schemaVersion: 1,
+      package: {
+        name: "openclaw",
+        version: "2026.6.33",
+        integrity: "sha512-proof",
+        candidateTag: "extended-stable-candidate-2026-6-33",
+      },
+      source: { repository: "openclaw/openclaw", sha },
+      workflow: {
+        repository: "openclaw/openclaw",
+        path: ".github/workflows/openclaw-npm-release.yml",
+        ref: "refs/heads/extended-stable/2026.6.33",
+        runId: 123,
+        runAttempt: 2,
+      },
+      conclusion: "succeeded",
+    });
+    expect(
+      verifyExtendedStableCorePublicationResult(result, {
+        version: "v2026.6.33",
+        repository: "openclaw/openclaw",
+        sourceSha: sha,
+        workflowRef: "refs/heads/extended-stable/2026.6.33",
+        runId: 123,
+        runAttempt: 2,
+      }),
+    ).toBe(result);
+    expect(() =>
+      verifyExtendedStableCorePublicationResult(
+        { ...result, unexpected: true },
+        {
+          version: "2026.6.33",
+          repository: "openclaw/openclaw",
+          sourceSha: sha,
+          workflowRef: "refs/heads/extended-stable/2026.6.33",
+          runId: 123,
+          runAttempt: 2,
+        },
+      ),
+    ).toThrow(/unexpected field set/u);
   });
 });
 
@@ -333,73 +421,4 @@ describe("Full Validation manifest identity", () => {
       }),
     ).toThrow();
   });
-});
-
-describe("extended-stable selector capture", () => {
-  it("distinguishes bootstrap absence from an existing selector", () => {
-    expect(parsePriorExtendedStableSelector('{"latest":"2026.7.1"}')).toBe("absent");
-    expect(parsePriorExtendedStableSelector('{"extended-stable":"2026.6.33"}')).toBe("2026.6.33");
-  });
-
-  it.each(["not json", "null", "[]", '"2026.6.33"'])("rejects invalid result %s", (value) => {
-    expect(() => parsePriorExtendedStableSelector(value)).toThrow();
-  });
-
-  it("rejects command failure rather than treating it as bootstrap", () => {
-    expect(() =>
-      capturePriorExtendedStableSelector({ query: () => ({ status: 1, stdout: "" }) }),
-    ).toThrow(/query failed/u);
-  });
-});
-
-describe("extended-stable registry readback", () => {
-  it("accepts eventual convergence and sleeps 10 seconds between attempts", async () => {
-    let attempt = 0;
-    const sleep = vi.fn(async () => {});
-    const result = await verifyExtendedStableRegistryReadback({
-      expectedVersion: "2026.6.33",
-      query: async (target: string) => {
-        if (target === "openclaw@2026.6.33") {
-          attempt += 1;
-        }
-        return { status: 0, stdout: attempt >= 2 ? "2026.6.33\n" : "2026.6.32\n" };
-      },
-      sleep,
-    });
-    expect(result).toEqual({
-      exactVersion: "2026.6.33",
-      extendedStableSelector: "2026.6.33",
-      attemptsUsed: 2,
-    });
-    expect(sleep).toHaveBeenCalledOnce();
-    expect(sleep).toHaveBeenCalledWith(10_000);
-  });
-
-  it("exhausts exactly 12 dual-query attempts on mismatch or failure", async () => {
-    const query = vi.fn(async () => ({ status: 1, stdout: "" }));
-    const sleep = vi.fn(async () => {});
-    await expect(
-      verifyExtendedStableRegistryReadback({ expectedVersion: "2026.6.33", query, sleep }),
-    ).rejects.toThrow(/after 12 attempts/u);
-    expect(query).toHaveBeenCalledTimes(24);
-    expect(sleep).toHaveBeenCalledTimes(11);
-    expect(sleep.mock.calls.every(([delay]) => delay === 10_000)).toBe(true);
-  });
-});
-
-describe("extended-stable selector repair", () => {
-  it("points the selector at the expected published version", () => {
-    expect(extendedStableSelectorRepairCommand("v2026.6.33")).toBe(
-      "npm dist-tag add openclaw@2026.6.33 extended-stable",
-    );
-  });
-
-  it.each([undefined, "absent", "2026.6.33-beta.1", "2026.6.33-1"])(
-    "rejects an invalid expected version: %s",
-    (expectedVersion) => {
-      expect(() => extendedStableSelectorRepairCommand(expectedVersion)).toThrow(
-        "Extended-stable selector repair requires an exact final YYYY.M.P version.",
-      );
-    },
-  );
 });

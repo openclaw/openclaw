@@ -69,6 +69,21 @@ export function validateNpmPublishBoundary(
   return parsed;
 }
 
+export function extendedStableCandidateTag(packageVersion) {
+  const parsed = parseReleaseVersion(packageVersion.replace(/^v/u, ""));
+  if (parsed === null || parsed.channel !== "stable" || parsed.correctionNumber !== undefined) {
+    throw new Error("Extended-stable candidate tags require an exact final YYYY.M.P version.");
+  }
+  return `extended-stable-candidate-${parsed.year}-${parsed.month}-${parsed.patch}`;
+}
+
+export function resolveNpmPublishTag(packageVersion, requestedTag, options = {}) {
+  validateNpmPublishBoundary(packageVersion, requestedTag, options);
+  return requestedTag === "extended-stable"
+    ? extendedStableCandidateTag(packageVersion)
+    : requestedTag;
+}
+
 export function validateExtendedStableNpmReleaseRequest(request) {
   const bypassExtendedStableGuard = request.bypassExtendedStableGuard ?? false;
   requireExtendedStableBypassTag(request.npmDistTag, bypassExtendedStableGuard);
@@ -209,70 +224,145 @@ export function validateFullReleaseValidationManifest({
   return manifest;
 }
 
-export function parsePriorExtendedStableSelector(stdout) {
-  let tags;
-  try {
-    tags = JSON.parse(stdout);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`npm dist-tags query returned invalid JSON: ${message}`, {
-      cause: error,
-    });
-  }
-  if (tags === null || typeof tags !== "object" || Array.isArray(tags)) {
-    throw new Error("npm dist-tags query did not return a JSON object.");
-  }
-  if (!Object.hasOwn(tags, "extended-stable")) {
-    return "absent";
-  }
-  if (typeof tags["extended-stable"] !== "string" || tags["extended-stable"].trim() === "") {
-    throw new Error("npm extended-stable dist-tag was not a non-empty version string.");
-  }
-  return tags["extended-stable"];
-}
-
-export function capturePriorExtendedStableSelector({ query }) {
-  const result = query();
-  if (result.status !== 0) {
-    throw new Error(`npm dist-tags query failed with exit code ${result.status ?? "unknown"}.`);
-  }
-  return parsePriorExtendedStableSelector(result.stdout);
-}
-
-export async function verifyExtendedStableRegistryReadback({
+export async function verifyExtendedStableCandidateReadback({
   expectedVersion,
+  packageName = "openclaw",
   query,
   sleep,
   attempts = 12,
   delayMs = 10_000,
 }) {
+  const candidateTag = extendedStableCandidateTag(expectedVersion);
   let exactVersion = "missing";
-  let extendedStableSelector = "missing";
+  let candidateVersion = "missing";
+  let integrity = "missing";
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const exactResult = await query(`openclaw@${expectedVersion}`);
-    const extendedStableResult = await query("openclaw@extended-stable");
+    const [exactResult, candidateResult, integrityResult] = await Promise.all([
+      query(`${packageName}@${expectedVersion}`, "version"),
+      query(`${packageName}@${candidateTag}`, "version"),
+      query(`${packageName}@${expectedVersion}`, "dist.integrity"),
+    ]);
     exactVersion = exactResult.status === 0 ? exactResult.stdout.trim() : "missing";
-    extendedStableSelector =
-      extendedStableResult.status === 0 ? extendedStableResult.stdout.trim() : "missing";
-    if (exactVersion === expectedVersion && extendedStableSelector === expectedVersion) {
-      return { exactVersion, extendedStableSelector, attemptsUsed: attempt };
+    candidateVersion = candidateResult.status === 0 ? candidateResult.stdout.trim() : "missing";
+    integrity = integrityResult.status === 0 ? integrityResult.stdout.trim() : "missing";
+    if (
+      exactVersion === expectedVersion &&
+      candidateVersion === expectedVersion &&
+      integrity.startsWith("sha512-")
+    ) {
+      return { exactVersion, candidateVersion, candidateTag, integrity, attemptsUsed: attempt };
     }
     if (attempt < attempts) {
       await sleep(delayMs);
     }
   }
   throw new Error(
-    `npm registry did not converge to openclaw@${expectedVersion} and openclaw@extended-stable=${expectedVersion} after ${attempts} attempts (exact=${exactVersion}, extended-stable=${extendedStableSelector}).`,
+    `npm registry did not converge to ${packageName}@${expectedVersion} under ${candidateTag} after ${attempts} attempts (exact=${exactVersion}, candidate=${candidateVersion}, integrity=${integrity}).`,
   );
 }
 
-export function extendedStableSelectorRepairCommand(expectedVersion) {
-  const normalizedVersion = (expectedVersion ?? "").replace(/^v/u, "");
-  const parsed = parseReleaseVersion(normalizedVersion);
-  if (parsed === null || parsed.channel !== "stable" || parsed.correctionNumber !== undefined) {
-    throw new Error("Extended-stable selector repair requires an exact final YYYY.M.P version.");
+export function buildExtendedStableCorePublicationResult(input) {
+  const candidateTag = extendedStableCandidateTag(input.version);
+  const result = {
+    schemaVersion: 1,
+    package: {
+      name: "openclaw",
+      version: input.version,
+      integrity: input.integrity,
+      candidateTag,
+    },
+    source: {
+      repository: input.repository,
+      sha: input.sourceSha,
+    },
+    workflow: {
+      repository: input.repository,
+      path: ".github/workflows/openclaw-npm-release.yml",
+      ref: input.workflowRef,
+      runId: input.runId,
+      runAttempt: input.runAttempt,
+    },
+    conclusion: "succeeded",
+  };
+  if (!/^[0-9a-f]{40}$/u.test(result.source.sha)) {
+    throw new Error("Core publication source SHA must be 40 lowercase hex characters.");
   }
-  return `npm dist-tag add openclaw@${parsed.version} extended-stable`;
+  if (!result.package.integrity.startsWith("sha512-")) {
+    throw new Error("Core publication integrity must be an npm sha512 integrity.");
+  }
+  if (!result.workflow.ref.startsWith("refs/heads/")) {
+    throw new Error("Core publication workflow ref must be a branch ref.");
+  }
+  if (!Number.isSafeInteger(result.workflow.runId) || result.workflow.runId <= 0) {
+    throw new Error("Core publication run id must be a positive integer.");
+  }
+  if (!Number.isSafeInteger(result.workflow.runAttempt) || result.workflow.runAttempt <= 0) {
+    throw new Error("Core publication run attempt must be a positive integer.");
+  }
+  return result;
+}
+
+function assertClosedObject(value, expectedKeys, label) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be a JSON object.`);
+  }
+  const actualKeys = Object.keys(value).toSorted((left, right) => left.localeCompare(right));
+  const sortedExpectedKeys = [...expectedKeys].toSorted((left, right) => left.localeCompare(right));
+  if (JSON.stringify(actualKeys) !== JSON.stringify(sortedExpectedKeys)) {
+    throw new Error(`${label} has an unexpected field set.`);
+  }
+}
+
+export function verifyExtendedStableCorePublicationResult(value, expected) {
+  assertClosedObject(
+    value,
+    ["schemaVersion", "package", "source", "workflow", "conclusion"],
+    "Core publication result",
+  );
+  assertClosedObject(
+    value.package,
+    ["name", "version", "integrity", "candidateTag"],
+    "Core publication result package",
+  );
+  assertClosedObject(value.source, ["repository", "sha"], "Core publication result source");
+  assertClosedObject(
+    value.workflow,
+    ["repository", "path", "ref", "runId", "runAttempt"],
+    "Core publication result workflow",
+  );
+  const normalizedVersion = (expected.version ?? "").replace(/^v/u, "");
+  const checks = [
+    ["schemaVersion", value.schemaVersion, 1],
+    ["package.name", value.package.name, "openclaw"],
+    ["package.version", value.package.version, normalizedVersion],
+    [
+      "package.candidateTag",
+      value.package.candidateTag,
+      extendedStableCandidateTag(normalizedVersion),
+    ],
+    ["source.repository", value.source.repository, expected.repository],
+    ["source.sha", value.source.sha, expected.sourceSha],
+    ["workflow.repository", value.workflow.repository, expected.repository],
+    ["workflow.path", value.workflow.path, ".github/workflows/openclaw-npm-release.yml"],
+    ["workflow.ref", value.workflow.ref, expected.workflowRef],
+    ["workflow.runId", value.workflow.runId, expected.runId],
+    ["workflow.runAttempt", value.workflow.runAttempt, expected.runAttempt],
+    ["conclusion", value.conclusion, "succeeded"],
+  ];
+  for (const [label, actual, wanted] of checks) {
+    if (actual !== wanted) {
+      throw new Error(
+        `Core publication result ${label} mismatch: expected ${String(wanted)}, got ${String(actual)}.`,
+      );
+    }
+  }
+  if (
+    typeof value.package.integrity !== "string" ||
+    !value.package.integrity.startsWith("sha512-")
+  ) {
+    throw new Error("Core publication result package.integrity must be an npm sha512 integrity.");
+  }
+  return value;
 }
 
 function git(args) {
@@ -405,11 +495,16 @@ async function main() {
     const bypassExtendedStableGuard = parseExtendedStableGuardBypass(
       process.env.BYPASS_EXTENDED_STABLE_GUARD ?? "",
     );
-    const parsed = validateNpmPublishBoundary(process.env.PACKAGE_VERSION ?? "", npmDistTag, {
+    const packageVersion = process.env.PACKAGE_VERSION ?? "";
+    const parsed = validateNpmPublishBoundary(packageVersion, npmDistTag, {
       bypassExtendedStableGuard,
     });
     console.log(parsed.channel);
-    console.log(npmDistTag);
+    console.log(
+      resolveNpmPublishTag(packageVersion, npmDistTag, {
+        bypassExtendedStableGuard,
+      }),
+    );
     return;
   }
   if (command === "verify-run") {
@@ -434,19 +529,12 @@ async function main() {
     });
     return;
   }
-  if (command === "capture-selector") {
-    const previous = capturePriorExtendedStableSelector({
-      query: () =>
-        spawnSync("npm", ["view", "openclaw", "dist-tags", "--json"], { encoding: "utf8" }),
-    });
-    appendOutput({ previous });
-    return;
-  }
-  if (command === "verify-readback") {
+  if (command === "verify-candidate-readback") {
     const expectedVersion = (process.env.EXPECTED_VERSION ?? "").replace(/^v/u, "");
-    const result = await verifyExtendedStableRegistryReadback({
+    const result = await verifyExtendedStableCandidateReadback({
       expectedVersion,
-      query: (target) => spawnSync("npm", ["view", target, "version"], { encoding: "utf8" }),
+      packageName: process.env.NPM_PACKAGE_NAME ?? "openclaw",
+      query: (target, field) => spawnSync("npm", ["view", target, field], { encoding: "utf8" }),
       sleep: (delayMs) =>
         new Promise((resolve) => {
           setTimeout(resolve, delayMs);
@@ -454,12 +542,40 @@ async function main() {
     });
     appendOutput({
       exact_version: result.exactVersion,
-      extended_stable_selector: result.extendedStableSelector,
+      candidate_version: result.candidateVersion,
+      candidate_tag: result.candidateTag,
+      integrity: result.integrity,
     });
     return;
   }
-  if (command === "repair-command") {
-    console.log(extendedStableSelectorRepairCommand(process.env.EXPECTED_VERSION));
+  if (command === "write-publication-result") {
+    const result = buildExtendedStableCorePublicationResult({
+      version: (process.env.EXPECTED_VERSION ?? "").replace(/^v/u, ""),
+      integrity: process.env.PACKAGE_INTEGRITY ?? "",
+      repository: process.env.GITHUB_REPOSITORY ?? "",
+      sourceSha: process.env.SOURCE_SHA ?? process.env.GITHUB_SHA ?? "",
+      workflowRef: process.env.GITHUB_REF ?? "",
+      runId: Number(process.env.GITHUB_RUN_ID),
+      runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+    });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+  if (command === "verify-publication-result") {
+    const resultPath = process.env.CORE_PUBLICATION_RESULT_FILE ?? "";
+    if (!resultPath) {
+      throw new Error("CORE_PUBLICATION_RESULT_FILE is required.");
+    }
+    const result = JSON.parse(readFileSync(resultPath, "utf8"));
+    verifyExtendedStableCorePublicationResult(result, {
+      version: process.env.EXPECTED_VERSION ?? "",
+      repository: process.env.EXPECTED_REPOSITORY ?? process.env.GITHUB_REPOSITORY ?? "",
+      sourceSha: process.env.EXPECTED_SOURCE_SHA ?? "",
+      workflowRef: process.env.EXPECTED_WORKFLOW_REF ?? "",
+      runId: Number(process.env.EXPECTED_RUN_ID),
+      runAttempt: Number(process.env.EXPECTED_RUN_ATTEMPT),
+    });
+    console.log(`Verified core publication result for openclaw@${result.package.version}.`);
     return;
   }
   throw new Error(`Unknown extended-stable npm release command: ${command ?? "<missing>"}.`);

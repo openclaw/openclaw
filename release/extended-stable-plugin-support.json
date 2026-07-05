@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "plugins": [
+    {
+      "pluginId": "codex",
+      "packageName": "@openclaw/codex",
+      "packageDir": "extensions/codex",
+      "acceptanceProfile": "codex-provider-v1"
+    },
+    {
+      "pluginId": "discord",
+      "packageName": "@openclaw/discord",
+      "packageDir": "extensions/discord",
+      "acceptanceProfile": "discord-channel-v1"
+    },
+    {
+      "pluginId": "slack",
+      "packageName": "@openclaw/slack",
+      "packageDir": "extensions/slack",
+      "acceptanceProfile": "slack-channel-v1"
+    }
+  ]
+}
