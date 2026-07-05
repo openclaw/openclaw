@@ -365,7 +365,7 @@ describe("SessionHistorySseState", () => {
     expect(state.snapshot().messages).toHaveLength(1);
   });
 
-  test("requests refresh when inline TTS supplement merges into an existing assistant message", () => {
+  test("requests refresh and restamps seq when inline TTS merges into an assistant message", () => {
     const visibleText = "Here is the answer.";
     const textSha256 = createHash("sha256").update(visibleText).digest("hex");
     const state = newState([assistantTextMessage(visibleText, 2)]);
@@ -406,7 +406,9 @@ describe("SessionHistorySseState", () => {
             },
           },
         ],
-        __openclaw: { seq: 2 },
+        // The visible row now depends on the later supplement, so reconnect
+        // cursors must not skip the attachment after delivering seq 2.
+        __openclaw: { seq: 3 },
       },
     ]);
   });
