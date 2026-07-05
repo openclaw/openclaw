@@ -761,35 +761,33 @@ test("sessions.compact maxLines releases queued post-compaction delegates after 
 
 test("sessions.compact skips post-compaction lifecycle when no delegates exist", async () => {
   const { dir } = await createSessionStoreDir();
-  const noDelegateLines = buildSessionTranscriptLines("sess-post-compaction-empty", 120);
-  await fs.writeFile(
-    path.join(dir, "sess-post-compaction-empty.jsonl"),
-    `${noDelegateLines.join("\n")}\n`,
-    "utf-8",
-  );
+  const transcriptPath = path.join(dir, "sess-post-compaction-empty.jsonl");
+  const originalLines = buildSessionTranscriptLines("sess-post-compaction-empty", 120);
+  await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
   await writeSessionStore({ entries: { main: sessionStoreEntry("sess-post-compaction-empty") } });
-  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce({
-    ok: true,
-    compacted: true,
-    result: {
-      summary: "summary",
-      firstKeptEntryId: "entry-1",
-      tokensBefore: 120,
-      tokensAfter: 80,
-    },
-  });
 
   const beforeEvents = peekSystemEvents("agent:main:main").length;
 
   const { ws } = await openClient();
-  const compacted = await rpcReq<{ ok: true; key: string; compacted: boolean }>(
+  const compacted = await rpcReq<{ ok: true; key: string; compacted: boolean; kept?: number }>(
     ws,
     "sessions.compact",
-    { key: "main" },
+    { key: "main", maxLines: 50 },
   );
 
   expectMainCompactionResult(compacted, true);
-  expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledTimes(1);
+  expect(compacted.payload?.kept).toBe(50);
+  const trimmed = (await fs.readFile(transcriptPath, "utf-8")).trim().split("\n");
+  expect(trimmed).toHaveLength(50);
+  expect(JSON.parse(trimmed[0] ?? "{}")).toMatchObject({
+    type: "session",
+    id: "sess-post-compaction-empty",
+  });
+  expect(JSON.parse(trimmed[1] ?? "{}")).toMatchObject({ id: "entry-70", parentId: null });
+  expect(JSON.parse(trimmed.at(-1) ?? "{}")).toMatchObject({
+    id: "entry-118",
+    message: { content: "line-118" },
+  });
   expect(stagedPostCompactionDelegateCount("agent:main:main")).toBe(0);
   expect(peekSystemEvents("agent:main:main").slice(beforeEvents)).not.toContainEqual(
     expect.stringContaining("[system:post-compaction]"),
