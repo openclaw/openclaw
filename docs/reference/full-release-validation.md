@@ -190,8 +190,8 @@ underlying QA runtime parity lane is advisory. Tideclaw alpha runs may still
 treat non-package-safety release-check lanes as advisory. When
 `live_suite_filter` explicitly requests a gated QA live lane such as Discord,
 WhatsApp, or Slack, the matching `OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED` repo
-variable must be enabled; otherwise input capture fails instead of silently
-skipping the lane. Rerun `rerun_group=qa`, `qa-parity`, or `qa-live` when you
+variable must be enabled; otherwise input capture fails instead of silently skipping the lane.
+Rerun `rerun_group=qa`, `qa-parity`, or `qa-live` when you
 need fresh QA evidence.
 
 ## Evidence to keep
