@@ -4941,6 +4941,21 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(requireRecord(routed.payload, "fallback payload")).toMatchObject({ isError: true });
   });
 
+  it("routes the fallback for a whitespace-only assistant payload", async () => {
+    await runMessagingCase({
+      agentResult: { payloads: [{ text: " \t\n " }] },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    const routed = requireMockCallArg(routeReplyMock, 0);
+    expect(requireRecord(routed.payload, "fallback payload")).toMatchObject({ isError: true });
+  });
+
   it("routes the fallback after a hidden compaction retry", async () => {
     await runMessagingCase({
       agentResult: { payloads: [] },
