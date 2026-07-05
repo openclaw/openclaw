@@ -116,6 +116,14 @@ export type ConfigSchemaResponse = SchemaType<"ConfigSchemaResponse">;
 export type ConfigSchemaLookupResult = SchemaType<"ConfigSchemaLookupResult">;
 export type UpdateStatusParams = SchemaType<"UpdateStatusParams">;
 
+/** Crestodian chat payloads exchanged by clients and the gateway. */
+export type CrestodianChatParams = SchemaType<"CrestodianChatParams">;
+export type CrestodianChatResult = SchemaType<"CrestodianChatResult">;
+export type CrestodianSetupDetectParams = SchemaType<"CrestodianSetupDetectParams">;
+export type CrestodianSetupDetectResult = SchemaType<"CrestodianSetupDetectResult">;
+export type CrestodianSetupActivateParams = SchemaType<"CrestodianSetupActivateParams">;
+export type CrestodianSetupActivateResult = SchemaType<"CrestodianSetupActivateResult">;
+
 /** Wizard setup flow payloads exchanged by CLI, UI, and gateway. */
 export type WizardStartParams = SchemaType<"WizardStartParams">;
 export type WizardNextParams = SchemaType<"WizardNextParams">;

@@ -101,6 +101,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val chatCommands by viewModel.chatCommands.collectAsState()
   val chatDraft by viewModel.chatDraft.collectAsState()
   val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
+  val outboxItems by viewModel.chatOutboxItems.collectAsState()
 
   LaunchedEffect(Unit) {
     val loadSessionKey = resolveInitialChatLoadSessionKey(sessionKey, mainSessionKey)
@@ -182,6 +183,14 @@ fun ChatSheetContent(viewModel: MainViewModel) {
       streamingAssistantText = streamingAssistantText,
       healthOk = healthOk,
       modifier = Modifier.weight(1f, fill = true),
+      outboxItems =
+        outboxItemsForSession(
+          items = outboxItems,
+          sessionKey = sessionKey,
+          mainSessionKey = mainSessionKey,
+        ),
+      onRetryOutbox = viewModel::retryChatOutboxCommand,
+      onDeleteOutbox = viewModel::deleteChatOutboxCommand,
     )
 
     Row(modifier = Modifier.fillMaxWidth().imePadding()) {
@@ -212,8 +221,14 @@ fun ChatSheetContent(viewModel: MainViewModel) {
                 base64 = att.base64,
               )
             }
-          viewModel.sendChat(message = text, thinking = thinkingLevel, attachments = outgoing)
+          val pendingAttachments = attachments.toList()
           attachments.clear()
+          val accepted = viewModel.sendChatAwaitAcceptance(message = text, thinking = thinkingLevel, attachments = outgoing)
+          if (!accepted && attachments.isEmpty()) {
+            // Refused sends must not silently drop selected attachments either.
+            attachments.addAll(pendingAttachments)
+          }
+          accepted
         },
       )
     }

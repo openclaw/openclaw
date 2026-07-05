@@ -112,6 +112,12 @@ function readParamRaw(params: Record<string, unknown>, key: string): unknown {
   return readSnakeCaseParamRaw(params, key);
 }
 
+// Models may emit blank defaults for optional numeric fields. Treat them as
+// absent while still rejecting nonblank invalid input.
+function isBlankParamValue(raw: unknown): boolean {
+  return typeof raw === "string" && raw.trim() === "";
+}
+
 export function readStringParam(
   params: Record<string, unknown>,
   key: string,
@@ -244,8 +250,11 @@ export function readPositiveIntegerParam(
     positiveInteger: true,
     strict: true,
   });
-  if (value === undefined && readParamRaw(params, key) != null) {
-    throw new ToolInputError(options.message ?? `${key} must be a positive integer`);
+  if (value === undefined) {
+    const raw = readParamRaw(params, key);
+    if (raw != null && !isBlankParamValue(raw)) {
+      throw new ToolInputError(options.message ?? `${key} must be a positive integer`);
+    }
   }
   if (value !== undefined && options.max !== undefined && value > options.max) {
     throw new ToolInputError(options.message ?? `${key} must be a positive integer`);
@@ -265,8 +274,11 @@ export function readNonNegativeIntegerParam(
     nonNegativeInteger: true,
     strict: true,
   });
-  if (value === undefined && readParamRaw(params, key) != null) {
-    throw new ToolInputError(options.message ?? `${key} must be a non-negative integer`);
+  if (value === undefined) {
+    const raw = readParamRaw(params, key);
+    if (raw != null && !isBlankParamValue(raw)) {
+      throw new ToolInputError(options.message ?? `${key} must be a non-negative integer`);
+    }
   }
   if (value !== undefined && options.max !== undefined && value > options.max) {
     throw new ToolInputError(options.message ?? `${key} must be a non-negative integer`);
@@ -289,7 +301,8 @@ export function readFiniteNumberParam(
     strict: true,
   });
   if (value === undefined) {
-    if (readParamRaw(params, key) != null) {
+    const raw = readParamRaw(params, key);
+    if (raw != null && !isBlankParamValue(raw)) {
       throw new ToolInputError(options.message ?? `${key} must be a finite number`);
     }
     return undefined;

@@ -54,6 +54,7 @@ import {
 import { clearPendingQueueItemsForRun, removeQueuedMessage } from "./chat-queue.ts";
 import {
   attachChatRealtimeActions,
+  createDefaultRealtimeTalkOptions,
   createInitialChatRealtimeState,
   resetChatRealtimeConversation,
   type ChatRealtimeState,
@@ -346,6 +347,7 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
   state.chatAvatarReason = null;
   state.realtimeTalkTranscript = null;
   resetChatRealtimeConversation(state);
+  state.realtimeTalkOptions = createDefaultRealtimeTalkOptions();
   state.chatQueue = restoreChatQueueForSession(state, sessionKey);
   restoreChatComposerState(state);
   state.resetChatInputHistoryNavigation();
@@ -1162,7 +1164,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   }
 
   readonly requestUpdate = () => {
-    this.composerPersistence.persistQueueIfChanged();
+    this.composerPersistence.persistChangedState();
     this.captureRenderLifecycleChanges();
     this.host.requestUpdate();
   };

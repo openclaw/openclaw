@@ -1,15 +1,19 @@
 import { consume } from "@lit/context";
 import { LitElement, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { ModelAuthStatusResult, SessionsListResult } from "../api/types.ts";
+import { keyed } from "lit/directives/keyed.js";
+import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../api/gateway.ts";
+import type { SessionsListResult } from "../api/types.ts";
 import {
   cancelRoutePreload,
+  DEFAULT_SIDEBAR_PINNED_ROUTES,
   isSettingsNavigationRoute,
   navigationIconForRoute,
   scheduleRoutePreload,
   type NavigationRouteId,
-  SIDEBAR_SECTIONS,
+  SIDEBAR_NAV_ROUTES,
+  type SidebarNavRoute,
+  sidebarMoreRoutes,
   titleForRoute,
 } from "../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
@@ -26,6 +30,7 @@ import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
+import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
   compareSessionRowsByUpdatedAt,
@@ -43,9 +48,8 @@ import {
   resolvePreferredSessionForAgent,
   resolveSessionAgentFilterOptions,
 } from "../lib/sessions/session-options.ts";
-import { icons } from "./icons.ts";
-
-type ProviderQuotaPillRenderer = typeof import("./provider-quota-pill.ts").renderProviderQuotaPill;
+import { pluginTabKey, pluginTabSearch } from "../pages/plugin/route.ts";
+import { icons, type IconName } from "./icons.ts";
 
 type SidebarRecentSession = {
   key: string;
@@ -77,16 +81,19 @@ export class AppSidebar extends LitElement {
 
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
+  @property({ attribute: false }) activePluginTabId = "";
   @property({ attribute: false }) enabledRouteIds?: readonly NavigationRouteId[];
   @property({ attribute: false }) collapsed = false;
   @property({ attribute: false }) connected = false;
   @property({ attribute: false }) canPairDevice = false;
   @property({ attribute: false }) sessionKey = "";
-  @property({ attribute: false }) navGroupsCollapsed: Record<string, boolean> = {};
+  @property({ attribute: false }) sidebarPinnedRoutes: readonly SidebarNavRoute[] =
+    DEFAULT_SIDEBAR_PINNED_ROUTES;
+  @property({ attribute: false }) sidebarMoreExpanded = false;
   @property({ attribute: false }) recentSessionsCollapsed = false;
   @property({ attribute: false }) themeMode: ThemeMode = "system";
-  @property({ attribute: false }) onToggleCollapsed?: () => void;
-  @property({ attribute: false }) onToggleGroup?: (label: string) => void;
+  @property({ attribute: false }) onToggleMore?: () => void;
+  @property({ attribute: false }) onUpdatePinnedRoutes?: (routes: SidebarNavRoute[]) => void;
   @property({ attribute: false }) onToggleRecentSessions?: () => void;
   @property({ attribute: false }) onPairMobile?: () => void;
   @property({ attribute: false })
@@ -95,18 +102,18 @@ export class AppSidebar extends LitElement {
 
   @consume({ context: applicationContext, subscribe: false })
   private context?: ApplicationContext<RouteId>;
+  @state() private customizeMenuPosition: { x: number; y: number } | null = null;
   @state() private sessionsResult: SessionsListResult | null = null;
   @state() private sessionsAgentId: string | null = null;
   @state() private sessionsLoading = false;
-  @state() private modelAuthStatusResult: ModelAuthStatusResult | null = null;
-  @state() private providerQuotaPillRenderer: ProviderQuotaPillRenderer | null = null;
 
   private stopSessionsSubscription: (() => void) | undefined;
   private stopAgentsSubscription: (() => void) | undefined;
   private stopAgentSelectionSubscription: (() => void) | undefined;
   private stopGatewaySubscription: (() => void) | undefined;
+  private customizeMenuTrigger: HTMLElement | null = null;
   private sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
-  private modelAuthClient: GatewayBrowserClient | null = null;
+  private gatewayClient: GatewayBrowserClient | null = null;
   private readonly routePreloadTimers = new Map<
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
@@ -119,6 +126,7 @@ export class AppSidebar extends LitElement {
   }
 
   override disconnectedCallback() {
+    this.closeCustomizeMenu();
     this.stopSessionsSubscription?.();
     this.stopSessionsSubscription = undefined;
     this.stopAgentsSubscription?.();
@@ -127,7 +135,7 @@ export class AppSidebar extends LitElement {
     this.stopAgentSelectionSubscription = undefined;
     this.stopGatewaySubscription?.();
     this.stopGatewaySubscription = undefined;
-    this.modelAuthClient = null;
+    this.gatewayClient = null;
     for (const timer of this.routePreloadTimers.values()) {
       globalThis.clearTimeout(timer);
     }
@@ -146,7 +154,7 @@ export class AppSidebar extends LitElement {
     ) {
       return;
     }
-    this.updateModelAuthStatus(context.gateway.snapshot);
+    this.updateGatewayClient(context.gateway.snapshot);
     this.updateSessions(context.sessions.state);
     this.stopSessionsSubscription = context.sessions.subscribe((snapshot) => {
       this.updateSessions(snapshot);
@@ -158,7 +166,7 @@ export class AppSidebar extends LitElement {
       this.requestUpdate();
     });
     this.stopGatewaySubscription = context.gateway.subscribe((snapshot) => {
-      this.updateModelAuthStatus(snapshot);
+      this.updateGatewayClient(snapshot);
       this.requestUpdate();
     });
   }
@@ -180,44 +188,16 @@ export class AppSidebar extends LitElement {
     }
   };
 
-  private updateModelAuthStatus(snapshot: {
+  private updateGatewayClient(snapshot: {
     client: GatewayBrowserClient | null;
     connected: boolean;
   }) {
     const client = snapshot.connected ? snapshot.client : null;
-    if (client === this.modelAuthClient) {
+    if (client === this.gatewayClient) {
       return;
     }
     this.sessionRowsByAgent = {};
-    this.modelAuthClient = client;
-    this.modelAuthStatusResult = null;
-    if (!client) {
-      return;
-    }
-    void import("../lib/model-auth.ts")
-      .then(async ({ isMonitoredAuthProvider, loadModelAuthStatus }) => {
-        const result = await loadModelAuthStatus(client);
-        if (this.modelAuthClient !== client) {
-          return;
-        }
-        this.modelAuthStatusResult = result;
-        const hasQuota = result.providers.some(
-          (provider) =>
-            isMonitoredAuthProvider(provider) && Boolean(provider.usage?.windows?.length),
-        );
-        if (!hasQuota || this.providerQuotaPillRenderer) {
-          return;
-        }
-        const { renderProviderQuotaPill } = await import("./provider-quota-pill.ts");
-        if (this.modelAuthClient === client) {
-          this.providerQuotaPillRenderer = renderProviderQuotaPill;
-        }
-      })
-      .catch(() => {
-        if (this.modelAuthClient === client) {
-          this.modelAuthStatusResult = null;
-        }
-      });
+    this.gatewayClient = client;
   }
 
   private getRouteSessionKey(): string {
@@ -377,6 +357,115 @@ export class AppSidebar extends LitElement {
     return this.enabledRouteIds?.includes(routeId) ?? true;
   }
 
+  private readonly openCustomizeMenuFromContext = (event: MouseEvent) => {
+    if (this.collapsed) {
+      return;
+    }
+    event.preventDefault();
+    this.openCustomizeMenu(event.clientX, event.clientY);
+  };
+
+  private openCustomizeMenu(x: number, y: number, trigger: HTMLElement | null = null) {
+    // Clamp so the fixed-position menu never overflows the viewport.
+    const menuWidth = 240;
+    const menuMaxHeight = 420;
+    this.customizeMenuTrigger = trigger;
+    this.customizeMenuPosition = {
+      x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
+      y: Math.max(8, Math.min(y, window.innerHeight - menuMaxHeight - 8)),
+    };
+    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.addEventListener("keydown", this.handleDocumentKeydown, true);
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLElement>(".sidebar-customize-menu__item")?.focus();
+    });
+  }
+
+  private closeCustomizeMenu(options: { restoreFocus?: boolean } = {}) {
+    const trigger = this.customizeMenuTrigger;
+    this.customizeMenuTrigger = null;
+    this.customizeMenuPosition = null;
+    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
+    if (options.restoreFocus) {
+      trigger?.focus();
+    }
+  }
+
+  private readonly handleDocumentPointerDown = (event: PointerEvent) => {
+    const menu = this.querySelector(".sidebar-customize-menu");
+    if (menu && event.composedPath().includes(menu)) {
+      return;
+    }
+    this.closeCustomizeMenu();
+  };
+
+  private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      this.closeCustomizeMenu({ restoreFocus: true });
+    }
+  };
+
+  private togglePinnedRoute(routeId: SidebarNavRoute) {
+    const pinned = this.sidebarPinnedRoutes;
+    const next = pinned.includes(routeId)
+      ? pinned.filter((route) => route !== routeId)
+      : [...pinned, routeId];
+    this.onUpdatePinnedRoutes?.(next);
+  }
+
+  private renderCustomizeMenu() {
+    const position = this.customizeMenuPosition;
+    if (!position) {
+      return nothing;
+    }
+    return html`
+      <div
+        class="sidebar-customize-menu"
+        role="menu"
+        aria-label=${t("nav.customize")}
+        style="left: ${position.x}px; top: ${position.y}px;"
+      >
+        <div class="sidebar-customize-menu__title">${t("nav.customize")}</div>
+        ${SIDEBAR_NAV_ROUTES.filter((routeId) => this.isRouteEnabled(routeId)).map((routeId) => {
+          const pinned = this.sidebarPinnedRoutes.includes(routeId);
+          return html`
+            <button
+              type="button"
+              class="sidebar-customize-menu__item"
+              role="menuitemcheckbox"
+              aria-checked=${String(pinned)}
+              @click=${() => this.togglePinnedRoute(routeId)}
+            >
+              <span class="sidebar-customize-menu__check" aria-hidden="true">
+                ${pinned ? icons.check : nothing}
+              </span>
+              <span class="nav-item__icon" aria-hidden="true"
+                >${icons[navigationIconForRoute(routeId)]}</span
+              >
+              <span class="sidebar-customize-menu__text">${titleForRoute(routeId)}</span>
+            </button>
+          `;
+        })}
+        <div class="sidebar-customize-menu__separator" role="separator"></div>
+        <button
+          type="button"
+          class="sidebar-customize-menu__item"
+          role="menuitem"
+          @click=${() => {
+            this.onUpdatePinnedRoutes?.([...DEFAULT_SIDEBAR_PINNED_ROUTES]);
+            this.closeCustomizeMenu({ restoreFocus: true });
+          }}
+        >
+          <span class="sidebar-customize-menu__check" aria-hidden="true"></span>
+          <span class="nav-item__icon" aria-hidden="true">${icons.refresh}</span>
+          <span class="sidebar-customize-menu__text">${t("nav.customizeReset")}</span>
+        </button>
+      </div>
+    `;
+  }
+
   private renderRoute(routeId: NavigationRouteId) {
     const active =
       routeId === "config"
@@ -436,6 +525,41 @@ export class AppSidebar extends LitElement {
       : link;
   }
 
+  /** Dynamic plugin tabs stay in More; only stable static route ids can be persisted as pins. */
+  private pluginTabs(): GatewayControlUiPluginTab[] {
+    const tabs = this.context?.gateway.snapshot.hello?.controlUiTabs ?? [];
+    return ["chat", "control", "agent", "settings"].flatMap((group) =>
+      tabs.filter((tab) => (tab.group ?? "control") === group),
+    );
+  }
+
+  private renderPluginTab(tab: GatewayControlUiPluginTab) {
+    const ref = { pluginId: tab.pluginId, id: tab.id };
+    const search = pluginTabSearch(ref);
+    const href = `${pathForRoute("plugin", this.basePath)}${search}`;
+    const active = this.activeRouteId === "plugin" && this.activePluginTabId === pluginTabKey(ref);
+    const iconName = tab.icon && Object.hasOwn(icons, tab.icon) ? (tab.icon as IconName) : "puzzle";
+    const link = html`
+      <a
+        href=${href}
+        class="nav-item ${active ? "nav-item--active" : ""}"
+        @click=${(event: MouseEvent) => {
+          if (!shouldHandleNavigationClick(event)) {
+            return;
+          }
+          event.preventDefault();
+          this.onNavigate?.("plugin", { search });
+        }}
+      >
+        <span class="nav-item__icon" aria-hidden="true">${icons[iconName]}</span>
+        ${!this.collapsed ? html`<span class="nav-item__text">${tab.label}</span>` : nothing}
+      </a>
+    `;
+    return this.collapsed
+      ? html`<openclaw-tooltip .content=${tab.label}>${link}</openclaw-tooltip>`
+      : link;
+  }
+
   private renderRecentSession(session: SidebarRecentSession) {
     const context = this.context;
     const archiveAllowed = canArchiveSessionRow(
@@ -454,8 +578,13 @@ export class AppSidebar extends LitElement {
     ]
       .filter(Boolean)
       .join(" ");
-    return html`
-      <div class=${rowClass} data-session-key=${session.key}>
+    const row = html`
+      <div
+        class=${rowClass}
+        data-session-key=${session.key}
+        @mouseenter=${(event: MouseEvent) => startHoverMarquee(event.currentTarget as HTMLElement)}
+        @mouseleave=${(event: MouseEvent) => stopHoverMarquee(event.currentTarget as HTMLElement)}
+      >
         <a
           href=${session.href}
           class="sidebar-recent-session__link"
@@ -468,7 +597,7 @@ export class AppSidebar extends LitElement {
             this.selectSession(session.key);
           }}
         >
-          <span class="sidebar-recent-session__name">${session.label}</span>
+          <span class="sidebar-recent-session__name hover-marquee">${session.label}</span>
         </a>
         <span class="sidebar-recent-session__aside session-row-aside">
           <span class="session-row-trail">
@@ -512,6 +641,9 @@ export class AppSidebar extends LitElement {
         </span>
       </div>
     `;
+    // Hover marquee state mutates the row DOM. Keying prevents that state from
+    // leaking when Lit reuses this slot for another session after navigation.
+    return keyed(session.key, row);
   }
 
   private renderSessions() {
@@ -652,6 +784,42 @@ export class AppSidebar extends LitElement {
     `;
   }
 
+  private renderMoreSection() {
+    if (this.collapsed) {
+      return nothing;
+    }
+    const moreRoutes = sidebarMoreRoutes(this.sidebarPinnedRoutes);
+    const expanded = this.sidebarMoreExpanded;
+    return html`
+      <section class="nav-section nav-section--more ${expanded ? "" : "nav-section--collapsed"}">
+        <button
+          class="nav-section__label"
+          @click=${() => this.onToggleMore?.()}
+          aria-expanded=${String(expanded)}
+        >
+          <span class="nav-section__label-text">${t("nav.more")}</span>
+          <span class="nav-section__chevron"> ${icons.chevronDown} </span>
+        </button>
+        <div class="nav-section__items">
+          ${moreRoutes.map((routeId) => this.renderRoute(routeId))}
+          ${this.pluginTabs().map((tab) => this.renderPluginTab(tab))}
+          <button
+            type="button"
+            class="nav-item nav-item--action"
+            @click=${(event: MouseEvent) => {
+              const trigger = event.currentTarget as HTMLElement;
+              const rect = trigger.getBoundingClientRect();
+              this.openCustomizeMenu(rect.left, rect.bottom + 4, trigger);
+            }}
+          >
+            <span class="nav-item__icon" aria-hidden="true">${icons.penLine}</span>
+            <span class="nav-item__text">${t("nav.customize")}</span>
+          </button>
+        </div>
+      </section>
+    `;
+  }
+
   private renderChatFallback() {
     return html`
       <a
@@ -678,78 +846,38 @@ export class AppSidebar extends LitElement {
     const gatewayStatus = t("chat.gatewayStatus", {
       status: this.connected ? t("common.online") : t("common.offline"),
     });
-    const quotaPill = this.collapsed
-      ? ""
-      : (this.providerQuotaPillRenderer?.({
-          basePath: this.basePath,
-          modelAuthStatusResult: this.modelAuthStatusResult,
-        }) ?? "");
     return html`
       <aside class="sidebar ${this.collapsed ? "sidebar--collapsed" : ""}">
         <div class="sidebar-shell">
           <div class="sidebar-shell__header">
             <div class="sidebar-brand">
+              <img
+                class="sidebar-brand__logo"
+                src="${controlUiPublicAssetPath("favicon.svg", this.basePath)}"
+                alt="OpenClaw"
+              />
               ${this.collapsed
                 ? nothing
                 : html`
-                    <img
-                      class="sidebar-brand__logo"
-                      src="${controlUiPublicAssetPath("favicon.svg", this.basePath)}"
-                      alt="OpenClaw"
-                    />
                     <span class="sidebar-brand__copy">
                       <span class="sidebar-brand__title">OpenClaw</span>
                     </span>
                   `}
             </div>
-            <openclaw-tooltip .content=${this.collapsed ? t("nav.expand") : t("nav.collapse")}>
-              <button
-                type="button"
-                class="nav-collapse-toggle"
-                @click=${() => this.onToggleCollapsed?.()}
-                aria-label=${this.collapsed ? t("nav.expand") : t("nav.collapse")}
-              >
-                <span class="nav-collapse-toggle__icon" aria-hidden="true"
-                  >${this.collapsed ? icons.panelLeftOpen : icons.panelLeftClose}</span
-                >
-              </button>
-            </openclaw-tooltip>
           </div>
           <div class="sidebar-shell__body">
             ${this.renderSessions()}
-            <nav class="sidebar-nav">
-              ${SIDEBAR_SECTIONS.filter((group) => this.collapsed || group.label !== "chat").map(
-                (group) => {
-                  const isGroupCollapsed = this.navGroupsCollapsed[group.label] ?? false;
-                  const showItems = this.collapsed || !isGroupCollapsed;
-                  return html`
-                    <section class="nav-section ${!showItems ? "nav-section--collapsed" : ""}">
-                      ${!this.collapsed
-                        ? html`
-                            <button
-                              class="nav-section__label"
-                              @click=${() => this.onToggleGroup?.(group.label)}
-                              aria-expanded=${showItems}
-                            >
-                              <span class="nav-section__label-text"
-                                >${t(`nav.${group.label}`)}</span
-                              >
-                              <span class="nav-section__chevron"> ${icons.chevronDown} </span>
-                            </button>
-                          `
-                        : nothing}
-                      <div class="nav-section__items">
-                        ${group.routes.map((routeId) => this.renderRoute(routeId))}
-                      </div>
-                    </section>
-                  `;
-                },
-              )}
+            <nav class="sidebar-nav" @contextmenu=${this.openCustomizeMenuFromContext}>
+              ${this.collapsed ? this.renderRoute("chat") : nothing}
+              <div class="nav-section__items">
+                ${this.sidebarPinnedRoutes.map((routeId) => this.renderRoute(routeId))}
+              </div>
+              ${this.renderMoreSection()}
             </nav>
           </div>
           <div class="sidebar-shell__footer">
             <div class="sidebar-utility-group">
-              ${quotaPill ? html`<div class="sidebar-quota">${quotaPill}</div>` : nothing}
+              ${this.renderRoute("config")}
               ${this.collapsed
                 ? html`
                     <openclaw-tooltip
@@ -817,6 +945,7 @@ export class AppSidebar extends LitElement {
             </div>
           </div>
         </div>
+        ${this.renderCustomizeMenu()}
       </aside>
     `;
   }

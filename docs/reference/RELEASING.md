@@ -34,7 +34,7 @@ Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `al
 - `latest` continues to follow the current regular/daily npm line; `beta` is the current beta install target
 - `extended-stable` means the supported trailing-month npm package, beginning at patch `33`; patch `34` and later are maintenance releases on that monthly line
 - Regular final and regular correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later
-- The dedicated monthly extended-stable path publishes only the core npm package. It does not publish plugins, macOS or Windows artifacts, a GitHub Release, private-repository dist-tags, Docker images, mobile artifacts, or website downloads.
+- The dedicated monthly extended-stable path publishes the core npm package and every npm-publishable official plugin at the same exact version. It does not publish plugins to ClawHub or publish macOS or Windows artifacts, a GitHub Release, private-repository dist-tags, Docker images, mobile artifacts, or website downloads.
 - Every regular final release ships the npm package, macOS app, and signed Windows Hub installers together. Beta releases normally validate and publish the npm/package path first, with native app build/sign/notarize/promote reserved for regular final unless explicitly requested.
 
 ## Release cadence
@@ -55,8 +55,15 @@ already contain a strictly later calendar month's final version below patch
 `33`; maintenance patches stay eligible after `main` advances by more than one
 month.
 
-Run the npm preflight and Full Release Validation from the exact
-extended-stable branch, then save both run IDs:
+On the exact extended-stable branch, bump the root package to `YYYY.M.P`, run
+`pnpm release:prep`, and verify every publishable extension package has the
+same version. Commit and push all generated changes, create and push the
+immutable `vYYYY.M.P` tag at that commit, and record the resulting full SHA.
+The workflows consume this prepared tree; they do not bump or synchronize
+versions for you.
+
+Run the npm preflight and Full Release Validation from that exact prepared
+branch tip, then save both run IDs:
 
 ```bash
 gh workflow run openclaw-npm-release.yml \
@@ -75,8 +82,31 @@ gh workflow run full-release-validation.yml \
 separate from the npm `extended-stable` dist-tag and is intentionally
 unchanged.
 
-After both runs succeed and the npm release environment is ready, promote the
-exact preflight tarball. Patch `P` must be `33` or greater:
+After both runs succeed, publish every npm-publishable official plugin from the
+same exact branch tip. Patch `P` must be `33` or greater. Pass the full release
+SHA as `ref`, wait for the complete matrix and registry readback, then save the
+successful Plugin NPM Release run ID:
+
+```bash
+RELEASE_SHA="$(git rev-parse HEAD)"
+gh workflow run plugin-npm-release.yml \
+  --ref extended-stable/YYYY.M.33 \
+  -f publish_scope=all-publishable \
+  -f ref="$RELEASE_SHA" \
+  -f npm_dist_tag=extended-stable
+```
+
+The workflow uses the regular prepared `all-publishable` package inventory,
+including packages whose source did not change. It verifies every exact package
+and every plugin `extended-stable` tag before succeeding. If a partial run
+fails, rerun the same command: already-published packages are reused, missing
+or stale plugin tags are reconciled under the npm release environment, and the
+final readback still covers the complete package set.
+
+After the plugin workflow succeeds and the npm release environment is ready,
+publish the exact core preflight tarball. Core publication verifies that the
+referenced plugin run is `completed/success` on the same canonical branch and
+exact source SHA:
 
 ```bash
 gh workflow run openclaw-npm-release.yml \
@@ -85,7 +115,8 @@ gh workflow run openclaw-npm-release.yml \
   -f preflight_only=false \
   -f npm_dist_tag=extended-stable \
   -f preflight_run_id=<npm-preflight-run-id> \
-  -f full_release_validation_run_id=<full-validation-run-id>
+  -f full_release_validation_run_id=<full-validation-run-id> \
+  -f plugin_npm_run_id=<plugin-npm-run-id>
 ```
 
 For a fork or non-production rehearsal that intentionally cannot satisfy the
@@ -98,9 +129,9 @@ branch-tip/tag/checkout equality, final-tag syntax, package/tag version
 equality, referenced run and manifest identity, tarball provenance,
 environment approval, registry readback, or selector repair evidence.
 
-The publish workflow verifies the referenced run identities, the prepared
-tarball digest, and both npm registry selectors. Independently confirm the
-result after the workflow succeeds:
+The publish workflow verifies the referenced preflight, validation, and plugin
+run identities, the prepared tarball digest, and the core registry selectors.
+Independently confirm the result after the workflow succeeds:
 
 ```bash
 npm view openclaw@YYYY.M.P version --userconfig "$(mktemp)"
@@ -113,6 +144,11 @@ single `npm dist-tag add openclaw@YYYY.M.P extended-stable` repair command
 printed in the failed workflow's always-run summary, then repeat both
 independent readbacks. Rollback to the prior selector is a separate operator
 decision, not the readback repair path.
+
+Public support documentation initially designates Slack, Discord, and Codex as
+covered extended-stable plugin surfaces. That list is a support statement, not
+a release-code allowlist: every npm-publishable official plugin follows the
+same exact-version publication path.
 
 The regular checklist below continues to own beta, `latest`, GitHub Release,
 plugins, macOS, Windows, and other platform publication. Do not run those
@@ -162,7 +198,7 @@ A legacy fallback correction tag may reuse base-package evidence only when the c
 - Run `pnpm check:architecture` before release preflight so the broader import cycle and architecture boundary checks are green outside the faster local gate.
 - Run `pnpm build && pnpm ui:build` before `pnpm release:check` so the expected `dist/*` release artifacts and Control UI bundle exist for the pack validation step.
 - Run `pnpm release:prep` after the root version bump and before tagging. It runs every deterministic release generator that commonly drifts after a version/config/API change: plugin versions, npm shrinkwraps, plugin inventory, base config schema, bundled channel config metadata, config docs baseline, plugin SDK exports, and plugin SDK API baseline. `pnpm release:check` re-runs those guards in check mode (plus a plugin SDK surface budget check) and reports every generated drift failure in one pass before running package release checks.
-- Plugin version sync updates official plugin package versions and existing `openclaw.compat.pluginApi` floors to the OpenClaw release version by default. Treat that field as the plugin SDK/runtime API floor, not just a copy of the package version: for plugin-only releases that intentionally remain compatible with older OpenClaw hosts, keep the floor at the oldest supported host API and document that choice in the plugin release proof.
+- Plugin version sync updates the publishable `@openclaw/ai` runtime package, official plugin package versions, and existing `openclaw.compat.pluginApi` floors to the OpenClaw release version by default. Treat that field as the plugin SDK/runtime API floor, not just a copy of the package version: for plugin-only releases that intentionally remain compatible with older OpenClaw hosts, keep the floor at the oldest supported host API and document that choice in the plugin release proof.
 - Run the manual `Full Release Validation` workflow before release approval to kick off all pre-release test boxes from one entrypoint. It accepts a branch, tag, or full commit SHA, dispatches manual `CI`, and dispatches `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS package checks, QA Lab parity, Matrix, and Telegram lanes. Stable and full runs always include exhaustive live/E2E and Docker release-path soak; `run_release_soak=true` is retained for an explicit beta soak. Package Acceptance provides the canonical package Telegram E2E during candidate validation, avoiding a second concurrent live poller.
 
   Provide `release_package_spec` after publishing a beta to reuse the shipped npm package across release checks, Package Acceptance, and package Telegram E2E without rebuilding the release tarball. Provide `npm_telegram_package_spec` only when Telegram should use a different published package from the rest of release validation. Provide `package_acceptance_package_spec` when Package Acceptance should use a different published package from the release package spec. Provide `evidence_package_spec` when the release evidence report should prove that validation matches a published npm package without forcing Telegram E2E.
@@ -461,8 +497,20 @@ Use the lower-level `Plugin NPM Release` and `Plugin ClawHub Release` workflows 
 - `preflight_run_id`: existing successful preflight run id, required on the real publish path so the workflow reuses the prepared tarball instead of rebuilding it
 - `full_release_validation_run_id`: successful `Full Release Validation` run id for this tag/SHA, required for real publish. Beta publishes may proceed on preflight alone with a warning, but stable/`latest` promotion still requires it.
 - `release_publish_run_id`: approved `OpenClaw Release Publish` run id; required when this workflow is dispatched by that parent (bot-actor real-publish calls)
+- `plugin_npm_run_id`: successful exact-head `Plugin NPM Release` run id; required for a real `extended-stable` core publish
 - `npm_dist_tag`: npm target tag for the publish path; accepts `alpha`, `beta`, `latest`, or `extended-stable` and defaults to `beta`. Final patch `33` and later must use `extended-stable`; by default, `extended-stable` rejects earlier patches, and it always rejects non-final tags.
 - `bypass_extended_stable_guard`: testing-only boolean, default `false`; with `npm_dist_tag=extended-stable`, bypasses monthly extended-stable eligibility while preserving release identity, artifact, approval, and readback checks.
+
+`Plugin NPM Release` accepts `npm_dist_tag=default` for existing release
+behavior or `npm_dist_tag=extended-stable` for the guarded monthly path. The
+extended-stable option requires `publish_scope=all-publishable`, an empty
+`plugins` input, a final patch at or above `33`, and the canonical
+`extended-stable/YYYY.M.33` branch at its exact tip. It never moves plugin
+`latest` or `beta`. New package versions receive `extended-stable` atomically
+through OIDC trusted publication (`npm publish --tag extended-stable`); this
+source workflow does not use token-authenticated `npm dist-tag add`. Retries
+skip exact versions already present in npm, then fail closed unless complete
+readback confirms that every exact package and `extended-stable` tag converged.
 
 `OpenClaw Release Publish` accepts these operator-controlled inputs:
 

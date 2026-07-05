@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeStateDirDotEnv } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { collectPreservedExistingServiceEnvVars } from "./daemon-install-helpers.js";
@@ -170,7 +170,92 @@ function mockNodeGatewayPlanFixture(
   });
 }
 
+async function buildPluginConfigExecSecretRefPlan(home: string) {
+  mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
+  const pluginRoot = path.join(home, "acme-secrets");
+  createSecurePluginRoot(pluginRoot);
+  writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
+  mocks.loadPluginManifestRegistry.mockReturnValue({
+    diagnostics: [],
+    plugins: [
+      {
+        id: "acme-secrets",
+        origin: "global",
+        rootDir: pluginRoot,
+        secretProviderIntegrations: {
+          "secret-store": {
+            source: "exec",
+            command: "${node}",
+            args: ["./secret-ref-resolver.js"],
+            passEnv: ["ACME_SECRETS_TOKEN"],
+          },
+        },
+      },
+    ],
+  });
+  mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+    diagnostics: [],
+    plugins: [
+      {
+        id: "acme-plugin",
+        origin: "global",
+        configContracts: {
+          secretInputs: {
+            paths: [{ path: "apiKey", expected: "string" }],
+          },
+        },
+      },
+    ],
+  });
+
+  return await buildGatewayInstallPlan({
+    env: { HOME: home, ACME_SECRETS_TOKEN: "secret-token" },
+    port: 3000,
+    runtime: "node",
+    config: {
+      plugins: {
+        enabled: true,
+        entries: {
+          "acme-plugin": {
+            enabled: true,
+            config: {
+              apiKey: {
+                source: "exec",
+                provider: "team-secrets",
+                id: "providers/acme-plugin/apiKey",
+              },
+            },
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          "team-secrets": {
+            source: "exec",
+            pluginIntegration: {
+              pluginId: "acme-secrets",
+              integrationId: "secret-store",
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
 describe("buildGatewayInstallPlan", () => {
+  beforeAll(async () => {
+    const { resolveConfigSecretTargetByPath } = await import("../secrets/target-registry.js");
+    resolveConfigSecretTargetByPath(["channels", "discord", "token"]);
+    const warmHome = fs.mkdtempSync(path.join(os.tmpdir(), "oc-plan-plugin-warm-"));
+    try {
+      await buildPluginConfigExecSecretRefPlan(warmHome);
+    } finally {
+      fs.rmSync(warmHome, { recursive: true, force: true });
+    }
+    vi.clearAllMocks();
+  });
+
   // Prevent tests from reading the developer's real ~/.openclaw/.env when
   // passing `env: {}` (which falls back to os.homedir for state-dir resolution).
   let isolatedHome: string;
@@ -410,6 +495,7 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
       "CUSTOM_VAR,GOOGLE_API_KEY,SAFE_KEY",
     );
+    expect(mocks.loadPluginManifestRegistryForPluginRegistry).not.toHaveBeenCalled();
   });
 
   it("renders config env SecretRefs as file-backed managed values on Linux", async () => {
@@ -608,82 +694,7 @@ describe("buildGatewayInstallPlan", () => {
   });
 
   it("includes passEnv values for plugin config exec SecretRefs", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
-      },
-    });
-    const pluginRoot = path.join(isolatedHome, "acme-secrets");
-    createSecurePluginRoot(pluginRoot);
-    writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      diagnostics: [],
-      plugins: [
-        {
-          id: "acme-secrets",
-          origin: "global",
-          rootDir: pluginRoot,
-          secretProviderIntegrations: {
-            "secret-store": {
-              source: "exec",
-              command: "${node}",
-              args: ["./secret-ref-resolver.js"],
-              passEnv: ["ACME_SECRETS_TOKEN"],
-            },
-          },
-        },
-      ],
-    });
-    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
-      diagnostics: [],
-      plugins: [
-        {
-          id: "acme-plugin",
-          origin: "global",
-          configContracts: {
-            secretInputs: {
-              paths: [{ path: "apiKey", expected: "string" }],
-            },
-          },
-        },
-      ],
-    });
-
-    const plan = await buildGatewayInstallPlan({
-      env: isolatedPlanEnv({
-        ACME_SECRETS_TOKEN: "secret-token",
-      }),
-      port: 3000,
-      runtime: "node",
-      config: {
-        plugins: {
-          enabled: true,
-          entries: {
-            "acme-plugin": {
-              enabled: true,
-              config: {
-                apiKey: {
-                  source: "exec",
-                  provider: "team-secrets",
-                  id: "providers/acme-plugin/apiKey",
-                },
-              },
-            },
-          },
-        },
-        secrets: {
-          providers: {
-            "team-secrets": {
-              source: "exec",
-              pluginIntegration: {
-                pluginId: "acme-secrets",
-                integrationId: "secret-store",
-              },
-            },
-          },
-        },
-      },
-    });
+    const plan = await buildPluginConfigExecSecretRefPlan(isolatedHome);
 
     expect(plan.environment.ACME_SECRETS_TOKEN).toBe("secret-token");
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
@@ -1435,7 +1446,8 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       },
     });
 
-    const home = "/home/testuser";
+    // Avoid macOS /home autofs lookups while exercising the same user-tool paths.
+    const home = "/Users/testuser";
     const plan = await buildGatewayInstallPlan({
       env: { HOME: tmpDir },
       port: 3000,

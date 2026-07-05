@@ -41,6 +41,43 @@ describe("prepareCliBundleMcpConfig", () => {
     await prepared.cleanup?.();
   });
 
+  it("serves only the exclusive config, ignoring user and plugin servers", async () => {
+    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-exclusive-",
+    );
+    const userConfig = path.join(workspaceDir, "user-mcp.json");
+    await fs.writeFile(
+      userConfig,
+      `${JSON.stringify({ mcpServers: { user: { command: "node", args: ["user.mjs"] } } })}\n`,
+      "utf-8",
+    );
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: {
+        command: "node",
+        args: ["./fake-claude.mjs", "--mcp-config", "user-mcp.json"],
+      },
+      workspaceDir,
+      config: { plugins: { enabled: false } },
+      exclusiveConfig: {
+        mcpServers: { openclaw: { command: "node", args: ["crestodian.mjs"] } },
+      },
+    });
+
+    expect(prepared.backend.args).toContain("--strict-mcp-config");
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
+      mcpServers?: Record<string, { args?: string[] }>;
+    };
+    expect(Object.keys(raw.mcpServers ?? {})).toEqual(["openclaw"]);
+    expect(raw.mcpServers?.openclaw?.args).toEqual(["crestodian.mjs"]);
+    expect(prepared.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
+
+    await prepared.cleanup?.();
+  });
+
   it("injects a merged --mcp-config overlay for bundle-MCP-enabled backends", async () => {
     const prepared = await prepareBundleProbeCliConfig();
 

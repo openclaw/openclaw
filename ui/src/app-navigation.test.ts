@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   SETTINGS_NAVIGATION_ROUTES,
-  SIDEBAR_SECTIONS,
+  SIDEBAR_NAV_ROUTES,
   navigationIconForRoute,
   subtitleForRoute,
   titleForRoute,
@@ -15,13 +15,11 @@ import {
   routeIdFromPath,
   type RouteId,
 } from "./app-routes.ts";
+import { pluginTabKey, pluginTabRefFromSearch, pluginTabSearch } from "./pages/plugin/route.ts";
 
-/** All route identifiers derived from visible groups plus routed settings slices. */
+/** All route identifiers derived from sidebar nav routes plus routed settings slices. */
 const ALL_ROUTES: RouteId[] = Array.from(
-  new Set<RouteId>([
-    ...(SIDEBAR_SECTIONS.flatMap((group) => group.routes) as RouteId[]),
-    ...SETTINGS_NAVIGATION_ROUTES,
-  ]),
+  new Set<RouteId>(["chat", ...SIDEBAR_NAV_ROUTES, ...SETTINGS_NAVIGATION_ROUTES]),
 );
 
 const leadingSlashNormalizerCases = [
@@ -244,20 +242,34 @@ describe("inferBasePathFromPathname", () => {
   });
 });
 
-describe("SIDEBAR_SECTIONS", () => {
-  it("contains all expected groups", () => {
-    expect(SIDEBAR_SECTIONS.map((g) => g.label)).toEqual(["chat", "control", "agent", "settings"]);
+describe("plugin tabs route", () => {
+  it("round-trips the shared /plugin route", () => {
+    expect(pathForRoute("plugin", "")).toBe("/plugin");
+    expect(routeIdFromPath("/plugin", "")).toBe("plugin");
+    // The tab id travels in the search, not the pathname.
+    expect(routeIdFromPath("/plugin/logbook", "")).toBeNull();
   });
 
+  it("round-trips a namespaced tab reference through the search", () => {
+    const ref = { pluginId: "logbook", id: "logbook" };
+    expect(pluginTabRefFromSearch(pluginTabSearch(ref))).toEqual(ref);
+    expect(pluginTabKey(ref)).toBe("logbook/logbook");
+    // Distinct plugins with the same local tab id stay distinct.
+    expect(pluginTabKey({ pluginId: "other", id: "logbook" })).not.toBe(pluginTabKey(ref));
+  });
+
+  it("stays out of the customizable static sidebar routes", () => {
+    expect(SIDEBAR_NAV_ROUTES).not.toContain("plugin");
+  });
+});
+
+describe("SIDEBAR_NAV_ROUTES", () => {
   it("all routes are unique", () => {
-    const allRoutes = SIDEBAR_SECTIONS.flatMap((g) => g.routes);
-    const uniqueRoutes = new Set(allRoutes);
-    expect(uniqueRoutes.size).toBe(allRoutes.length);
+    expect(new Set(SIDEBAR_NAV_ROUTES).size).toBe(SIDEBAR_NAV_ROUTES.length);
   });
 
-  it("keeps detailed settings slices routed but out of the root sidebar", () => {
-    const settings = SIDEBAR_SECTIONS.find((group) => group.label === "settings");
-    expect(settings?.routes).toEqual(["config"]);
+  it("keeps detailed settings slices routed but out of the customizable sidebar", () => {
+    expect(SIDEBAR_NAV_ROUTES).not.toContain("config");
     expect(SETTINGS_NAVIGATION_ROUTES).toEqual([
       "config",
       "channels",

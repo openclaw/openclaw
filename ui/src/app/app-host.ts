@@ -12,6 +12,7 @@ import "../components/login-gate.ts";
 import "../components/terminal/terminal-panel.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
+import type { SidebarNavRoute } from "../app-navigation.ts";
 import { APP_ROUTE_IDS, isRouteId, pathForRoute, type RouteId } from "../app-routes.ts";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
@@ -26,6 +27,7 @@ import { searchForSession } from "../lib/sessions/index.ts";
 import { resolveAgentIdFromSessionKey } from "../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
+import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import {
   applicationContext,
@@ -302,7 +304,8 @@ class OpenClawShell extends LitElement {
   private context?: ApplicationContext<RouteId>;
 
   @state() private navCollapsed = false;
-  @state() private navGroupsCollapsed: Record<string, boolean> = {};
+  @state() private sidebarPinnedRoutes: readonly SidebarNavRoute[] = [];
+  @state() private sidebarMoreExpanded = false;
   @state() private recentSessionsCollapsed = false;
   @state() private navDrawerOpen = false;
   @state() private gatewayConnected = false;
@@ -594,7 +597,8 @@ class OpenClawShell extends LitElement {
     snapshot: ApplicationRuntime["context"]["navigation"]["snapshot"],
   ) => {
     this.navCollapsed = snapshot.navCollapsed;
-    this.navGroupsCollapsed = snapshot.navGroupsCollapsed;
+    this.sidebarPinnedRoutes = snapshot.sidebarPinnedRoutes;
+    this.sidebarMoreExpanded = snapshot.sidebarMoreExpanded;
     this.recentSessionsCollapsed = snapshot.recentSessionsCollapsed;
   };
 
@@ -605,7 +609,14 @@ class OpenClawShell extends LitElement {
       return nothing;
     }
     const activeRoute = this.routeState.routeId ?? "chat";
+    // Plugin tabs share one route; the search picks the active item.
+    const activePluginTabId =
+      activeRoute === "plugin"
+        ? pluginTabKey(pluginTabRefFromSearch(this.routeState.location?.search ?? ""))
+        : "";
     const navDrawerOpen = this.navDrawerOpen && !this.onboarding;
+    // Drawer navigation always opens expanded; the desktop collapse preference
+    // stays persisted for when the viewport returns to the desktop layout.
     const navCollapsed = this.navCollapsed && !navDrawerOpen;
     return html`
       <openclaw-command-palette
@@ -637,6 +648,11 @@ class OpenClawShell extends LitElement {
           .themeMode=${context.theme.mode}
           .onboarding=${this.onboarding}
           .onOpenPalette=${this.openPalette}
+          .navCollapsed=${navCollapsed}
+          .onToggleSidebar=${() =>
+            context.navigation.update({
+              navCollapsed: !navCollapsed,
+            })}
           .terminalAvailable=${this.terminalAvailable}
           .onToggleTerminal=${() =>
             window.dispatchEvent(new CustomEvent("openclaw:terminal-toggle"))}
@@ -648,33 +664,23 @@ class OpenClawShell extends LitElement {
           <openclaw-app-sidebar
             .basePath=${context.basePath}
             .activeRouteId=${activeRoute}
+            .activePluginTabId=${activePluginTabId}
             .enabledRouteIds=${APP_ROUTE_IDS}
             .sessionKey=${this.activeSessionKey}
             .collapsed=${navCollapsed}
             .connected=${this.gatewayConnected}
             .canPairDevice=${this.gatewayConnected &&
             hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null)}
-            .navGroupsCollapsed=${this.navGroupsCollapsed}
+            .sidebarPinnedRoutes=${this.sidebarPinnedRoutes}
+            .sidebarMoreExpanded=${this.sidebarMoreExpanded}
             .recentSessionsCollapsed=${this.recentSessionsCollapsed}
             .themeMode=${context.theme.mode}
-            .onToggleCollapsed=${() => {
-              if (navDrawerOpen) {
-                this.closeNavDrawer({ restoreFocus: true });
-                return;
-              }
+            .onToggleMore=${() =>
               context.navigation.update({
-                navCollapsed: !navCollapsed,
-              });
-            }}
-            .onToggleGroup=${(label: string) => {
-              const current = context.navigation.snapshot.navGroupsCollapsed[label] ?? false;
-              context.navigation.update({
-                navGroupsCollapsed: {
-                  ...context.navigation.snapshot.navGroupsCollapsed,
-                  [label]: !current,
-                },
-              });
-            }}
+                sidebarMoreExpanded: !context.navigation.snapshot.sidebarMoreExpanded,
+              })}
+            .onUpdatePinnedRoutes=${(routes: SidebarNavRoute[]) =>
+              context.navigation.update({ sidebarPinnedRoutes: routes })}
             .onToggleRecentSessions=${() =>
               context.navigation.update({
                 recentSessionsCollapsed: !context.navigation.snapshot.recentSessionsCollapsed,

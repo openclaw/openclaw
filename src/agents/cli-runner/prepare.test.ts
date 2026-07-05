@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,7 +33,6 @@ import { resetContextWindowCacheForTest } from "../context.js";
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-generation-task-status.js";
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../system-prompt-cache-boundary.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../video-generation-task-status.js";
 import {
   prepareCliRunContext,
@@ -2959,6 +2959,65 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       );
 
       expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("serves only the crestodian MCP server for ring-zero runs", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const getActiveMcpLoopbackRuntime = vi.fn(() => undefined);
+      setCliRunnerPrepareTestDeps({ getActiveMcpLoopbackRuntime });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            pluginId: "anthropic",
+            bundleMcp: true,
+            bundleMcpMode: "claude-config-file",
+            config: {
+              command: "claude",
+              args: ["--print"],
+              output: "jsonl",
+              jsonlDialect: "claude-stream-json",
+              input: "stdin",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-crestodian-mcp",
+        config: createCliBackendConfig(),
+        crestodianTool: { surface: "cli" },
+      });
+
+      // Ring-zero runs never touch the loopback surface (no message tools).
+      expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
+      expect(context.mcpDeliveryCapture).toBeUndefined();
+      const args = context.preparedBackend.backend.args ?? [];
+      expect(args).toContain("--strict-mcp-config");
+      const mcpConfigPath = args[args.indexOf("--mcp-config") + 1];
+      const raw = JSON.parse(fs.readFileSync(mcpConfigPath, "utf-8")) as {
+        mcpServers?: Record<string, { env?: Record<string, string> }>;
+      };
+      expect(Object.keys(raw.mcpServers ?? {})).toEqual(["openclaw"]);
+      expect(raw.mcpServers?.openclaw?.env).toMatchObject({
+        OPENCLAW_TOOLS_MCP_TOOLS: "crestodian",
+        OPENCLAW_TOOLS_MCP_CRESTODIAN_SURFACE: "cli",
+      });
+
+      await context.preparedBackend.cleanup?.();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

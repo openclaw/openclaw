@@ -8,7 +8,58 @@ import {
   resolveSlackAccount,
   resolveSlackAccountAllowFrom,
   resolveSlackAccountDmPolicy,
+  resolveSlackOperationToken,
 } from "./accounts.js";
+
+describe("resolveSlackOperationToken", () => {
+  it.each([
+    {
+      name: "prefers the user token for reads",
+      userTokenReadOnly: true,
+      operation: "read" as const,
+      expected: "xoxp-user",
+    },
+    {
+      name: "prefers the bot token for writes when user writes are enabled",
+      userTokenReadOnly: false,
+      operation: "write" as const,
+      expected: "xoxb-bot",
+    },
+    {
+      name: "uses the user token for writes only when explicitly enabled",
+      userTokenReadOnly: false,
+      operation: "write" as const,
+      hasBotToken: false,
+      expected: "xoxp-user",
+    },
+    {
+      name: "does not use the user token for writes by default",
+      userTokenReadOnly: true,
+      operation: "write" as const,
+      hasBotToken: false,
+      expected: undefined,
+    },
+  ])("$name", ({ userTokenReadOnly, operation, hasBotToken = true, expected }) => {
+    const account = resolveSlackAccount({
+      cfg: {
+        channels: {
+          slack: {
+            accounts: {
+              work: {
+                ...(hasBotToken ? { botToken: "xoxb-bot" } : {}),
+                userToken: "xoxp-user",
+                userTokenReadOnly,
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "work",
+    });
+
+    expect(resolveSlackOperationToken(account, operation)).toBe(expected);
+  });
+});
 
 describe("resolveSlackAccount allowFrom precedence", () => {
   it("uses configured defaultAccount when accountId is omitted", () => {

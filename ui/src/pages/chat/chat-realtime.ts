@@ -1,6 +1,5 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { RealtimeTalkOptions } from "./components/chat-realtime-controls.ts";
-import type { RealtimeTalkCatalogProvider } from "./realtime-talk-catalog.ts";
 import {
   createRealtimeTalkConversationState,
   updateRealtimeTalkConversation,
@@ -25,7 +24,6 @@ export type ChatRealtimeState = {
   realtimeTalkTranscript: string | null;
   realtimeTalkConversation: RealtimeTalkConversationEntry[];
   realtimeTalkOptionsOpen: boolean;
-  realtimeTalkCatalogProviders: RealtimeTalkCatalogProvider[] | null;
   realtimeTalkOptions: RealtimeTalkOptions;
   realtimeTalkSession: RealtimeTalkSession | null;
   realtimeTalkConversationState: RealtimeTalkConversationState;
@@ -33,8 +31,15 @@ export type ChatRealtimeState = {
   updateRealtimeTalkOptions: (next: Partial<RealtimeTalkOptions>) => void;
   resetRealtimeTalkConversation: () => void;
   toggleRealtimeTalk: () => Promise<void>;
-  fetchRealtimeTalkCatalog: () => Promise<void>;
 };
+
+export function createDefaultRealtimeTalkOptions(): RealtimeTalkOptions {
+  return {
+    model: "",
+    voice: "",
+    vadThreshold: "",
+  };
+}
 
 export function createInitialChatRealtimeState() {
   return {
@@ -44,17 +49,7 @@ export function createInitialChatRealtimeState() {
     realtimeTalkTranscript: null,
     realtimeTalkConversation: [],
     realtimeTalkOptionsOpen: false,
-    realtimeTalkCatalogProviders: null,
-    realtimeTalkOptions: {
-      provider: "",
-      model: "",
-      voice: "",
-      transport: "",
-      vadThreshold: "",
-      silenceDurationMs: "",
-      prefixPaddingMs: "",
-      reasoningEffort: "",
-    },
+    realtimeTalkOptions: createDefaultRealtimeTalkOptions(),
     realtimeTalkSession: null,
     realtimeTalkConversationState: createRealtimeTalkConversationState(),
   };
@@ -86,16 +81,6 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
     state.realtimeTalkOptions = { ...state.realtimeTalkOptions, ...next };
     state.requestUpdate();
   };
-  state.fetchRealtimeTalkCatalog = async () => {
-    if (!state.client || !state.connected) {
-      return;
-    }
-    const result = await state.client.request<{
-      realtime?: { providers?: RealtimeTalkCatalogProvider[] };
-    }>("talk.catalog", {});
-    state.realtimeTalkCatalogProviders = result.realtime?.providers ?? [];
-    state.requestUpdate();
-  };
   state.toggleRealtimeTalk = async () => {
     if (state.realtimeTalkSession) {
       state.realtimeTalkSession.stop();
@@ -115,14 +100,9 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
     }
     const options = state.realtimeTalkOptions;
     const launchOptions: RealtimeTalkLaunchOptions = {
-      provider: options.provider.trim() || undefined,
       model: options.model.trim() || undefined,
       voice: options.voice.trim() || undefined,
-      transport: (options.transport.trim() || undefined) as RealtimeTalkLaunchOptions["transport"],
       vadThreshold: Number(options.vadThreshold) || undefined,
-      silenceDurationMs: Number(options.silenceDurationMs) || undefined,
-      prefixPaddingMs: Number(options.prefixPaddingMs) || undefined,
-      reasoningEffort: options.reasoningEffort.trim() || undefined,
     };
     state.realtimeTalkActive = true;
     state.realtimeTalkStatus = "connecting";

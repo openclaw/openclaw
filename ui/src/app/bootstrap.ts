@@ -169,7 +169,8 @@ function createApplicationNavigationPreferences(
   let settings = initialSettings;
   let snapshot: ApplicationNavigationPreferencesSnapshot = {
     navCollapsed: settings.navCollapsed,
-    navGroupsCollapsed: settings.navGroupsCollapsed,
+    sidebarPinnedRoutes: settings.sidebarPinnedRoutes,
+    sidebarMoreExpanded: settings.sidebarMoreExpanded,
     recentSessionsCollapsed: settings.recentSessionsCollapsed ?? false,
   };
   const listeners = new Set<(next: ApplicationNavigationPreferencesSnapshot) => void>();
@@ -183,13 +184,15 @@ function createApplicationNavigationPreferences(
       if (
         nextSnapshot.navCollapsed === snapshot.navCollapsed &&
         nextSnapshot.recentSessionsCollapsed === snapshot.recentSessionsCollapsed &&
-        nextSnapshot.navGroupsCollapsed === snapshot.navGroupsCollapsed
+        nextSnapshot.sidebarPinnedRoutes === snapshot.sidebarPinnedRoutes &&
+        nextSnapshot.sidebarMoreExpanded === snapshot.sidebarMoreExpanded
       ) {
         return;
       }
       settings = patchSettings({
         navCollapsed: nextSnapshot.navCollapsed,
-        navGroupsCollapsed: nextSnapshot.navGroupsCollapsed,
+        sidebarPinnedRoutes: [...nextSnapshot.sidebarPinnedRoutes],
+        sidebarMoreExpanded: nextSnapshot.sidebarMoreExpanded,
         recentSessionsCollapsed: nextSnapshot.recentSessionsCollapsed,
       });
       snapshot = nextSnapshot;

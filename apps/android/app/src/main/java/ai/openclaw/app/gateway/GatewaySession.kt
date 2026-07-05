@@ -1015,6 +1015,8 @@ class GatewaySession(
           try {
             onInvoke?.invoke(InvokeRequest(id, nodeId, command, params, timeoutMs))
               ?: InvokeResult.error("UNAVAILABLE", "invoke handler missing")
+          } catch (err: CancellationException) {
+            throw err
           } catch (err: Throwable) {
             invokeErrorFromThrowable(err)
           }
