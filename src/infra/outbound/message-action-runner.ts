@@ -51,6 +51,7 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../utils/message-channel.js";
+import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
@@ -526,12 +527,7 @@ function collectMessageAttachmentMediaHints(value: unknown): string[] {
 }
 
 function hasExplicitSingularTargetParam(params: Record<string, unknown>): boolean {
-  for (const key of ["target", "to", "channelId"]) {
-    if (normalizeOptionalString(params[key])) {
-      return true;
-    }
-  }
-  return false;
+  return readTrimmedStringAlias(params, ["target", "to", "channelId"]) !== undefined;
 }
 
 function hasExplicitTargetParam(params: Record<string, unknown>): boolean {

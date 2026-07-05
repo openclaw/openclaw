@@ -1,23 +1,50 @@
+import {
+  ANTHROPIC_OMITTED_REASONING_TEXT,
+  ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
+  CLAUDE_FABLE_5_FALLBACK_MODEL_COST,
+  applyAnthropicFallbackBoundary,
+  buildAnthropicServerSideFallbacks,
+  applyAnthropicRefusal,
+  findActiveAnthropicToolTurnAssistantIndex,
+  omitFoundryBearerCredentialHeaders,
+  projectAnthropicTools,
+  reconcileAnthropicToolChoice,
+  requiresClaudeAdaptiveThinking,
+  resolveClaudeNativeThinkingLevelMap,
+  resolveOriginalAnthropicToolName,
+  readAnthropicFallbackBoundary,
+  supportsClaudeAdaptiveThinking,
+  supportsClaudeNativeMaxEffort,
+  supportsClaudeNativeXhighEffort,
+  usesClaudeFable5MessagesContract,
+  usesFoundryBearerAuth,
+  type AnthropicOptions,
+  type AnthropicProjectedToolChoice,
+  type AnthropicThinkingDisplay,
+  type AnthropicToolProjection,
+} from "@openclaw/ai/internal/anthropic";
+import {
+  calculateCost,
+  clampThinkingLevel,
+  createDeferredEventBuffer,
+  getEnvApiKey,
+  notifyLlmRequestActivity,
+  parseStreamingJson,
+} from "@openclaw/ai/internal/runtime";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultBlockText,
+  extractToolResultText,
+} from "@openclaw/ai/internal/shared";
 /**
  * Native Anthropic Messages streaming transport.
  * Converts OpenClaw contexts/tools into Anthropic payloads, streams SSE events
  * back into runtime output blocks, and applies provider request policy.
  */
-import { readResponseTextSnippet } from "@openclaw/media-core/read-response-with-limit";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { toErrorObject } from "../infra/errors.js";
-import { getEnvApiKey } from "../llm/env-api-keys.js";
-import { calculateCost, clampThinkingLevel } from "../llm/model-utils.js";
-import {
-  ANTHROPIC_OMITTED_REASONING_TEXT,
-  findActiveAnthropicToolTurnAssistantIndex,
-} from "../llm/providers/anthropic-thinking-replay.js";
-import type { AnthropicOptions, AnthropicThinkingDisplay } from "../llm/providers/anthropic.js";
-import {
-  describeToolResultMediaPlaceholder,
-  extractToolResultBlockText,
-  extractToolResultText,
-} from "../llm/providers/tool-result-text.js";
+import { readResponseTextSnippet } from "../infra/http-body.js";
 import type {
   AssistantMessageDiagnostic,
   Context,
@@ -25,34 +52,12 @@ import type {
   SimpleStreamOptions,
   ThinkingLevel,
 } from "../llm/types.js";
-import { parseStreamingJson } from "../llm/utils/json-parse.js";
-import {
-  omitFoundryBearerCredentialHeaders,
-  usesFoundryBearerAuth,
-} from "../shared/anthropic-auth-headers.js";
-import {
-  resolveClaudeNativeThinkingLevelMap,
-  requiresClaudeAdaptiveThinking,
-  supportsClaudeAdaptiveThinking,
-  supportsClaudeNativeMaxEffort,
-  supportsClaudeNativeXhighEffort,
-  usesClaudeFable5MessagesContract,
-} from "../shared/anthropic-model-contract.js";
-import { applyAnthropicRefusal } from "../shared/anthropic-refusal.js";
+import "../llm/ai-transport-host.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
-import { createDeferredEventBuffer } from "../shared/deferred-event-buffer.js";
-import { notifyLlmRequestActivity } from "../shared/llm-request-activity.js";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
-import {
-  projectAnthropicTools,
-  reconcileAnthropicToolChoice,
-  resolveOriginalAnthropicToolName,
-  type AnthropicProjectedToolChoice,
-  type AnthropicToolProjection,
-} from "./anthropic-tool-projection.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
@@ -276,6 +281,15 @@ function isDirectAnthropicModel(model: Pick<AnthropicTransportModel, "provider" 
 
 function isKimiAnthropicProvider(provider: string | undefined): boolean {
   return /^kimi(?:-|$)/.test(normalizeLowercaseStringOrEmpty(provider ?? ""));
+}
+
+/**
+ * Server-side refusal fallback is a first-party Claude API beta: proxies and
+ * Bedrock/Vertex/Foundry reject the `fallbacks` param, and OAuth (Claude Code
+ * identity) requests are excluded until the beta is verified there.
+ */
+function useAnthropicServerSideFallback(model: AnthropicTransportModel): boolean {
+  return usesClaudeFable5MessagesContract(model) && isDirectAnthropicModel(model);
 }
 
 function supportsReasoningContentReplay(
@@ -645,12 +659,10 @@ function createAbortError(signal: AbortSignal): Error {
   if (reason instanceof Error) {
     return reason;
   }
-  const error =
-    reason === undefined
-      ? new Error("Request was aborted")
-      : new Error("Request was aborted", { cause: reason });
-  error.name = "AbortError";
-  return error;
+  return createNamedAbortError(
+    "Request was aborted",
+    reason === undefined ? undefined : { cause: reason },
+  );
 }
 
 function readAnthropicSseChunk(
@@ -914,6 +926,9 @@ function createAnthropicTransportClient(params: {
       isOAuthToken: true,
     };
   }
+  if (useAnthropicServerSideFallback(model)) {
+    betaFeatures.push(ANTHROPIC_SERVER_SIDE_FALLBACK_BETA);
+  }
   const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: false });
   return {
     client: createAnthropicMessagesClient({
@@ -972,6 +987,12 @@ function buildAnthropicParams(
     max_tokens: maxTokens,
     stream: true,
   };
+  // Fable safety classifiers can decline benign-adjacent work; server-side
+  // fallback re-serves the same call on claude-opus-4-8 instead of failing
+  // the turn. Requires the matching beta header from the transport client.
+  if (!isOAuthToken && useAnthropicServerSideFallback(model)) {
+    params.fallbacks = buildAnthropicServerSideFallbacks();
+  }
   if (isOAuthToken) {
     params.system = [
       {
@@ -1137,6 +1158,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           )
         : undefined;
       const eventSink = refusalBuffer ?? stream;
+      // Fallback-served turns bill at the serving model's rates; a boundary
+      // swaps this to the fallback model's cost table.
+      let costModel = model;
       try {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
         if (!apiKey) {
@@ -1307,7 +1331,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               output.usage.output +
               output.usage.cacheRead +
               output.usage.cacheWrite;
-            calculateCost(model, output.usage);
+            calculateCost(costModel, output.usage);
             // Defer start until after message_start so that pre-stream SSE errors
             // (e.g. invalid thinking signatures) arrive before any non-error event
             // is yielded, keeping yieldedOutput=false in pumpStreamWithRecovery
@@ -1322,6 +1346,56 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           if (event.type === "content_block_start") {
             const contentBlock = event.content_block as Record<string, unknown> | undefined;
             const index = typeof event.index === "number" ? event.index : -1;
+            const fallbackBoundary = refusalBuffer
+              ? readAnthropicFallbackBoundary(contentBlock)
+              : null;
+            if (fallbackBoundary) {
+              // Server-side fallback boundary: pre-boundary thinking/tool
+              // blocks must not replay or execute, and the buffered preview
+              // events reference them, so rebuild the deferred timeline from
+              // the surviving text prefix the fallback model continued from.
+              refusalBuffer?.discard();
+              pendingTextEnds.length = 0;
+              blockIndexes.clear();
+              applyAnthropicFallbackBoundary({
+                output,
+                boundary: fallbackBoundary,
+                provider: model.provider,
+              });
+              // Cost intentionally mirrors top-level usage (serving attempt at
+              // serving-model rates). A mid-stream decline's billed partial is
+              // only in usage.iterations and is not folded in here.
+              costModel = { ...model, cost: CLAUDE_FABLE_5_FALLBACK_MODEL_COST };
+              calculateCost(costModel, output.usage);
+              eventSink.push({ type: "start", partial: output as never });
+              for (let i = 0; i < output.content.length; i += 1) {
+                const block = output.content[i];
+                if (block.type !== "text") {
+                  continue;
+                }
+                delete block.index;
+                eventSink.push({
+                  type: "text_start",
+                  contentIndex: i,
+                  partial: output as never,
+                });
+                if (block.text) {
+                  eventSink.push({
+                    type: "text_delta",
+                    contentIndex: i,
+                    delta: block.text,
+                    partial: output as never,
+                  });
+                }
+                pendingTextEnds.push({
+                  type: "text_end",
+                  contentIndex: i,
+                  content: block.text,
+                  partial: output as never,
+                });
+              }
+              continue;
+            }
             if (contentBlock?.type === "text") {
               const text =
                 typeof contentBlock.text === "string"
@@ -1607,7 +1681,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               output.usage.output +
               output.usage.cacheRead +
               output.usage.cacheWrite;
-            calculateCost(model, output.usage);
+            calculateCost(costModel, output.usage);
             // Gate on the turn CONTAINING a tool call, not the provider's stop_reason
             // label: Bedrock/Vertex-proxied routes (e.g. pioneer) report "end_turn" on
             // tool-using turns. No-op for direct Anthropic (already "toolUse" here).

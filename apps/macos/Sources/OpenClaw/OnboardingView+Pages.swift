@@ -13,12 +13,12 @@ extension OnboardingView {
             self.welcomePage()
         case 1:
             self.connectionPage()
+        case 2:
+            self.cliPage()
         case 3:
-            self.wizardPage()
+            self.crestodianSetupPage()
         case 5:
             self.permissionsPage()
-        case 6:
-            self.cliPage()
         case 8:
             self.onboardingChatPage()
         case 9:
@@ -30,53 +30,56 @@ extension OnboardingView {
 
     func welcomePage() -> some View {
         self.onboardingPage {
-            VStack(spacing: 22) {
+            VStack(spacing: 18) {
                 Text("Welcome to OpenClaw")
                     .font(.largeTitle.weight(.semibold))
-                Text("OpenClaw is a powerful personal AI assistant that can connect to WhatsApp or Telegram.")
+                Text(
+                    "OpenClaw is your personal AI assistant. It can answer questions, work with files and apps, " +
+                        "and connect to services like WhatsApp and Telegram through a Gateway you control.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                    .lineLimit(2)
                     .frame(maxWidth: 560)
                     .fixedSize(horizontal: false, vertical: true)
 
-                self.onboardingCard(spacing: 10, padding: 14) {
-                    HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(Color(nsColor: .systemOrange))
-                            .frame(width: 22)
-                            .padding(.top, 1)
-
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Security notice")
-                                .font(.headline)
-                            Text(
-                                "The connected AI agent (e.g. Claude) can trigger powerful actions on your Mac, " +
-                                    "including running commands, reading/writing files, and capturing screenshots — " +
-                                    "depending on the permissions you grant.\n\n" +
-                                    "Only enable OpenClaw if you understand the risks and trust the prompts and " +
-                                    "integrations you use.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
+                self.onboardingCard(spacing: 14, padding: 16) {
+                    self.featureRow(
+                        title: "Ask, create, and automate",
+                        subtitle: "Give your assistant tasks and let it help across your Mac.",
+                        systemImage: "sparkles")
+                    self.featureRow(
+                        title: "Connect the tools you use",
+                        subtitle: "Bring conversations and services together in one assistant.",
+                        systemImage: "point.3.connected.trianglepath.dotted")
+                    self.featureRow(
+                        title: "Stay in control",
+                        subtitle: "Choose where the Gateway runs and which permissions OpenClaw receives.",
+                        systemImage: "hand.raised.fill")
                 }
                 .frame(maxWidth: 520)
+
+                Label {
+                    Text(
+                        "OpenClaw can take actions using the permissions and services you enable. " +
+                            "Review prompts and only connect tools you trust.")
+                } icon: {
+                    Image(systemName: "info.circle")
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: 500, alignment: .leading)
             }
-            .padding(.top, 16)
+            .padding(.top, 8)
         }
     }
 
     func connectionPage() -> some View {
         self.onboardingPage {
-            Text("Choose your Gateway")
+            Text("Where should OpenClaw run?")
                 .font(.largeTitle.weight(.semibold))
             Text(
-                "OpenClaw uses a single Gateway that stays running. Pick this Mac, " +
-                    "connect to a discovered gateway nearby, or configure later.")
+                "For the simplest setup, run the Gateway on this Mac. " +
+                    "OpenClaw installs it and keeps it running for you.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -89,7 +92,7 @@ extension OnboardingView {
                     self.connectionChoiceButton(
                         title: "This Mac",
                         subtitle: self.localGatewaySubtitle,
-                        selected: self.state.connectionMode == .local)
+                        selected: self.selectedConnectionMode == .local)
                     {
                         self.selectLocalGateway()
                     }
@@ -106,7 +109,7 @@ extension OnboardingView {
                     self.connectionChoiceButton(
                         title: "Configure later",
                         subtitle: "Don’t start the Gateway yet.",
-                        selected: self.state.connectionMode == .unconfigured)
+                        selected: self.selectedConnectionMode == .unconfigured)
                     {
                         self.selectUnconfiguredGateway()
                     }
@@ -135,7 +138,7 @@ extension OnboardingView {
 
     private var localGatewaySubtitle: String {
         guard let probe = self.localGatewayProbe else {
-            return "Gateway starts automatically on this Mac."
+            return "Recommended — installs and starts automatically."
         }
         let base = probe.expected
             ? "Existing gateway detected"
@@ -590,18 +593,28 @@ extension OnboardingView {
     }
 
     func permissionsPage() -> some View {
-        self.onboardingPage {
-            Text("Grant permissions")
-                .font(.largeTitle.weight(.semibold))
-            Text("These macOS permissions let OpenClaw automate apps and capture context on this Mac.")
+        // Fixed layout (no ScrollView): sorted by importance and sized so all
+        // permissions stay visible at once — no scrollbars during onboarding.
+        VStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Text("Grant permissions")
+                    .font(.largeTitle.weight(.semibold))
+                if self.isRequesting {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+            Text(
+                "These macOS permissions let OpenClaw automate apps and capture context on this Mac. " +
+                    "Status updates automatically.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 520)
                 .fixedSize(horizontal: false, vertical: true)
 
-            self.onboardingCard(spacing: 8, padding: 12) {
-                ForEach(Capability.allCases, id: \.self) { cap in
+            self.onboardingCard(spacing: 4, padding: 12) {
+                ForEach(Capability.importanceOrdered, id: \.self) { cap in
                     PermissionRow(
                         capability: cap,
                         status: self.permissionMonitor.status[cap] ?? false,
@@ -610,31 +623,17 @@ extension OnboardingView {
                         Task { await self.request(cap) }
                     }
                 }
-
-                HStack(spacing: 12) {
-                    Button {
-                        Task { await self.refreshPerms() }
-                    } label: {
-                        Label("Refresh", systemImage: "arrow.clockwise")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .help("Refresh status")
-                    if self.isRequesting {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
-                }
-                .padding(.top, 4)
             }
         }
+        .padding(.horizontal, 28)
+        .frame(width: self.pageWidth, height: self.contentHeight, alignment: .top)
     }
 
     func cliPage() -> some View {
         self.onboardingPage {
-            Text("Install the CLI")
+            Text("Setting up OpenClaw")
                 .font(.largeTitle.weight(.semibold))
-            Text("Required for local mode: installs `openclaw` so launchd can run the gateway.")
+            Text("OpenClaw is installing the local Gateway and its managed runtime.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -642,33 +641,36 @@ extension OnboardingView {
                 .fixedSize(horizontal: false, vertical: true)
 
             self.onboardingCard(spacing: 10) {
-                HStack(spacing: 12) {
-                    Button {
-                        Task { await self.installCLI() }
-                    } label: {
-                        let title = self.cliInstalled ? "Reinstall CLI" : "Install CLI"
-                        ZStack {
-                            Text(title)
-                                .opacity(self.installingCLI ? 0 : 1)
-                            if self.installingCLI {
-                                ProgressView()
-                                    .controlSize(.mini)
-                            }
+                if !self.cliStatusKnown {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Checking existing setup…")
+                            .font(.headline)
+                    }
+                } else if self.installingCLI {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Installing the Gateway…")
+                            .font(.headline)
+                    }
+                } else if self.cliInstalled, let loc = self.cliInstallLocation {
+                    Label("Gateway installed", systemImage: "checkmark.circle.fill")
+                        .font(.headline)
+                        .foregroundStyle(.green)
+                    Text(loc)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                } else {
+                    HStack {
+                        Button("Retry setup", action: self.startCLIInstall)
+                            .buttonStyle(.borderedProminent)
+                        Button("Check again") {
+                            Task { await self.refreshCLIStatus() }
                         }
-                        .frame(minWidth: 120)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(self.installingCLI)
-
-                    Button(self.copied ? "Copied" : "Copy install command") {
-                        self.copyToPasteboard(self.devLinkCommand)
-                    }
-                    .disabled(self.installingCLI)
-
-                    if self.cliInstalled, let loc = self.cliInstallLocation {
-                        Label("Installed at \(loc)", systemImage: "checkmark.circle.fill")
-                            .font(.footnote)
-                            .foregroundStyle(.green)
+                        .buttonStyle(.bordered)
                     }
                 }
 
@@ -676,15 +678,11 @@ extension OnboardingView {
                     Text(cliStatus)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                } else if !self.cliInstalled, self.cliInstallLocation == nil {
-                    Text(
-                        """
-                        Installs a user-space Node 22.19+ runtime and the CLI (no Homebrew).
-                        Rerun anytime to reinstall or update.
-                        """)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
                 }
+
+                Text("Uses a private user-space install. No Terminal, administrator access, or Homebrew required.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -785,7 +783,8 @@ extension OnboardingView {
                 .font(.largeTitle.weight(.semibold))
             Text(
                 "This is a dedicated onboarding chat. Your agent will introduce itself, " +
-                    "learn who you are, and help you connect WhatsApp or Telegram if you want.")
+                    "learn who you are, and help you connect Discord, Slack, Telegram, WhatsApp, " +
+                    "or another channel if you want.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -831,7 +830,7 @@ extension OnboardingView {
                     subtitle: "Click the OpenClaw menu bar icon for quick chat and status.",
                     systemImage: "bubble.left.and.bubble.right")
                 self.featureActionRow(
-                    title: "Connect WhatsApp or Telegram",
+                    title: "Connect Discord, Slack, Telegram, WhatsApp, …",
                     subtitle: "Open Settings → Channels to link channels and monitor status.",
                     systemImage: "link",
                     buttonTitle: "Open Settings → Channels")

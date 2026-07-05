@@ -534,6 +534,7 @@ function getLastDispatchCtx():
       ChatType?: string;
       CommandBody?: string;
       From?: string;
+      GroupRequireMention?: boolean;
       MediaTranscribedIndexes?: number[];
       MessageSid?: string;
       MessageSidFull?: string;
@@ -557,6 +558,7 @@ function getLastDispatchCtx():
           ChatType?: string;
           CommandBody?: string;
           From?: string;
+          GroupRequireMention?: boolean;
           MediaTranscribedIndexes?: number[];
           MessageSid?: string;
           MessageSidFull?: string;
@@ -1733,6 +1735,7 @@ describe("processDiscordMessage session routing", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(guildHistories.get("c1")).toEqual([]);
+    expect(getLastDispatchCtx()?.GroupRequireMention).toBe(false);
   });
 
   it("clears Discord room event history after a queued core send succeeds", async () => {

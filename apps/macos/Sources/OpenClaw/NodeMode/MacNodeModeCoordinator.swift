@@ -42,6 +42,34 @@ struct MacNodeGatewayTLSSessionCache {
 @MainActor
 final class MacNodeModeCoordinator {
     static let shared = MacNodeModeCoordinator()
+    static var nodeIdentityProfile: GatewayDeviceIdentityProfile {
+        self.resolveNodeIdentityProfile(
+            defaults: .standard,
+            isExistingInstallation: AppStateStore.shared.onboardingSeen)
+    }
+
+    static func prepareNodeIdentityProfile(isExistingInstallation: Bool) {
+        _ = self.resolveNodeIdentityProfile(
+            defaults: .standard,
+            isExistingInstallation: isExistingInstallation)
+    }
+
+    static func resolveNodeIdentityProfile(
+        defaults: UserDefaults,
+        isExistingInstallation: Bool) -> GatewayDeviceIdentityProfile
+    {
+        if let rawValue = defaults.string(forKey: macNodeIdentityProfileKey),
+           let stored = GatewayDeviceIdentityProfile(rawValue: rawValue),
+           stored == .primary || stored == .node
+        {
+            return stored
+        }
+        // Released builds used the primary identity for the Mac node. Persist the
+        // install-era choice before onboarding can change connection state.
+        let selected: GatewayDeviceIdentityProfile = isExistingInstallation ? .primary : .node
+        defaults.set(selected.rawValue, forKey: macNodeIdentityProfileKey)
+        return selected
+    }
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "mac-node")
     private var task: Task<Void, Never>?
@@ -120,7 +148,8 @@ final class MacNodeModeCoordinator {
                     permissions: permissions,
                     clientId: "openclaw-macos",
                     clientMode: "node",
-                    clientDisplayName: InstanceIdentity.displayName)
+                    clientDisplayName: InstanceIdentity.displayName,
+                    deviceIdentityProfile: Self.nodeIdentityProfile)
                 let sessionBox = self.buildSessionBox(
                     url: config.url,
                     connectionMode: AppStateStore.shared.connectionMode)

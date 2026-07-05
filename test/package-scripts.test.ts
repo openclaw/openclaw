@@ -131,6 +131,17 @@ describe("package scripts", () => {
     );
   });
 
+  it("restores plugin SDK root alias before strict smoke export checks", () => {
+    const script = readPackageJson().scripts["build:plugin-sdk:strict-smoke"];
+    const tsdownIndex = script.indexOf("node scripts/tsdown-build.mjs");
+    const copyRootAliasIndex = script.indexOf("node scripts/copy-plugin-sdk-root-alias.mjs");
+    const checkExportsIndex = script.indexOf("node scripts/check-plugin-sdk-exports.mjs");
+
+    expect(tsdownIndex).toBeGreaterThanOrEqual(0);
+    expect(copyRootAliasIndex).toBeGreaterThan(tsdownIndex);
+    expect(copyRootAliasIndex).toBeLessThan(checkExportsIndex);
+  });
+
   it("uses the shipped package launcher for npm start", () => {
     expect(readPackageJson().scripts.start).toBe("node openclaw.mjs");
   });

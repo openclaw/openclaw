@@ -15,7 +15,7 @@ struct GatewayQuickSetupSheet: View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Connect to a Gateway?")
-                    .font(.title2.bold())
+                    .font(OpenClawType.title2)
 
                 if let gatewayProblem = self.appModel.lastGatewayProblem {
                     GatewayProblemBanner(
@@ -46,7 +46,6 @@ struct GatewayQuickSetupSheet: View {
                             await MainActor.run {
                                 self.connecting = false
                                 self.connectError = err
-                                // If we kicked off a connect, leave the sheet up so the user can see status evolve.
                             }
                         }
                     } label: {
@@ -55,19 +54,21 @@ struct GatewayQuickSetupSheet: View {
                                 HStack(spacing: 8) {
                                     ProgressView().progressViewStyle(.circular)
                                     Text("Connecting…")
+                                        .font(OpenClawType.headline)
                                 }
                             } else {
                                 Text("Connect")
+                                    .font(OpenClawType.headline)
                             }
                         }
-                        .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .font(OpenClawType.headline)
+                    .openClawPrimaryButton()
                     .disabled(self.connecting)
 
                     if let connectError {
                         Text(connectError)
-                            .font(.footnote)
+                            .font(OpenClawType.footnote)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                     }
@@ -76,31 +77,40 @@ struct GatewayQuickSetupSheet: View {
                         self.dismiss()
                     } label: {
                         Text("Not now")
-                            .frame(maxWidth: .infinity)
+                            .font(OpenClawType.headline)
                     }
-                    .buttonStyle(.bordered)
+                    .font(OpenClawType.headline)
+                    .openClawSecondaryButton()
                     .disabled(self.connecting)
 
                     self.fullRowToggle("Don’t show this again", isOn: self.$quickSetupDismissed)
                         .padding(.top, 4)
                 } else {
                     Text("No gateways found yet. Make sure your gateway is running and Bonjour discovery is enabled.")
+                        .font(OpenClawType.subhead)
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer()
             }
+            .font(OpenClawType.body)
             .padding()
             .navigationTitle("Quick Setup")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("Quick Setup")
+                        .font(OpenClawType.headline)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         self.quickSetupDismissed = true
                         self.dismiss()
                     } label: {
                         Text("Close")
+                            .font(OpenClawType.subheadSemiBold)
                     }
+                    .font(OpenClawType.subheadSemiBold)
                 }
             }
         }
@@ -122,20 +132,25 @@ struct GatewayQuickSetupSheet: View {
     }
 
     private func fullRowToggle(_ title: LocalizedStringKey, isOn: Binding<Bool>) -> some View {
-        Toggle(title, isOn: isOn)
-            .contentShape(Rectangle())
-            .overlay {
-                // Keep Toggle semantics for accessibility while making the full visual row tappable.
-                Button {
-                    isOn.wrappedValue.toggle()
-                } label: {
-                    Rectangle()
-                        .fill(.clear)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityHidden(true)
+        Toggle(isOn: isOn) {
+            Text(title)
+                .font(OpenClawType.subhead)
+        }
+        .font(OpenClawType.subhead)
+        .contentShape(Rectangle())
+        .overlay {
+            // Keep Toggle semantics for accessibility while making the full visual row tappable.
+            Button {
+                isOn.wrappedValue.toggle()
+            } label: {
+                Rectangle()
+                    .fill(.clear)
+                    .contentShape(Rectangle())
             }
+            .font(OpenClawType.subhead)
+            .buttonStyle(.plain)
+            .accessibilityHidden(true)
+        }
     }
 
     private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String? {
@@ -173,21 +188,25 @@ private struct GatewayQuickSetupCandidatePanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(verbatim: self.name)
-                .font(.system(.headline, design: .monospaced))
+                .font(OpenClawType.monoHeadline)
                 .foregroundStyle(.primary)
             Text(verbatim: self.debugID)
-                .font(.system(.footnote, design: .monospaced))
+                .font(OpenClawType.monoFootnote)
                 .foregroundStyle(.secondary)
 
             VStack(alignment: .leading, spacing: 2) {
                 // Use verbatim strings so Bonjour-provided values can't be interpreted as
                 // localized format strings (which can crash with Objective-C exceptions).
                 Text(verbatim: "Discovery: \(self.discoveryStatusText)")
+                    .font(OpenClawType.monoFootnote)
                 Text(verbatim: "Status: \(self.gatewayDisplayStatusText)")
+                    .font(OpenClawType.monoFootnote)
                 Text(verbatim: "Node: \(self.nodeStatusText)")
+                    .font(OpenClawType.monoFootnote)
                 Text(verbatim: "Operator: \(self.operatorStatusText)")
+                    .font(OpenClawType.monoFootnote)
             }
-            .font(.system(.footnote, design: .monospaced))
+            .font(OpenClawType.monoFootnote)
             .foregroundStyle(.secondary)
         }
         .frame(maxWidth: Self.readableMonospaceWidth, alignment: .leading)
@@ -195,7 +214,7 @@ private struct GatewayQuickSetupCandidatePanel: View {
         .padding(.horizontal, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .textSelection(.enabled)
-        .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .background(OpenClawBrand.obsidian)
+        .clipShape(RoundedRectangle(cornerRadius: OpenClawRadius.lg))
     }
 }

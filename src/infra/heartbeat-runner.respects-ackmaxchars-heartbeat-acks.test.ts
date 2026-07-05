@@ -116,6 +116,7 @@ describe("runHeartbeatOnce ack handling", () => {
           mediaAccess: {},
           mediaLocalRoots: undefined,
           mediaReadFile: undefined,
+          onDeliveryResult: expect.any(Function),
           replyToIdSource: undefined,
           replyToMode: undefined,
           silent: undefined,

@@ -59,6 +59,10 @@ final class OnboardingController {
         self.window = nil
     }
 
+    func setWindowCloseEnabled(_ enabled: Bool) {
+        self.window?.standardWindowButton(.closeButton)?.isEnabled = enabled
+    }
+
     func restart() {
         self.close()
         self.show()
@@ -74,6 +78,8 @@ struct OnboardingView: View {
     @State var monitoringPermissions = false
     @State var monitoringDiscovery = false
     @State var cliInstalled = false
+    @State var cliStatusKnown = false
+    @State var onboardingVisible = false
     @State var cliInstallLocation: String?
     @State var workspacePath: String = ""
     @State var workspaceStatus: String?
@@ -88,9 +94,11 @@ struct OnboardingView: View {
     @State var gatewayDiscovery: GatewayDiscoveryModel
     @State var onboardingChatModel: OpenClawChatViewModel
     @State var onboardingSkillsModel = SkillsSettingsModel()
-    @State var onboardingWizard = OnboardingWizardModel()
+    @State var crestodianChat = CrestodianOnboardingChatModel()
+    @State var crestodianSetupComplete = false
     @State var didLoadOnboardingSkills = false
     @State var localGatewayProbe: LocalGatewayProbe?
+    @State var defaultsToLocalGateway: Bool
     @Bindable var state: AppState
     var permissionMonitor: PermissionMonitor
 
@@ -98,25 +106,30 @@ struct OnboardingView: View {
     static let windowHeight: CGFloat = 752 // ~+10% to fit full onboarding content
 
     let pageWidth: CGFloat = Self.windowWidth
-    let contentHeight: CGFloat = 460
+    // Sized so the permissions page fits all capabilities without scrolling:
+    // 145 (icon header) + 535 + ~60 (nav bar) stays inside windowHeight 752.
+    let contentHeight: CGFloat = 535
     let connectionPageIndex = 1
-    let wizardPageIndex = 3
+    let cliPageIndex = 2
+    let crestodianPageIndex = 3
     let onboardingChatPageIndex = 8
 
     let permissionsPageIndex = 5
     static func pageOrder(
         for mode: AppState.ConnectionMode,
-        showOnboardingChat: Bool) -> [Int]
+        showOnboardingChat: Bool,
+        requiresCLIInstall: Bool) -> [Int]
     {
         switch mode {
         case .remote:
             // Remote setup doesn't need local gateway/CLI/workspace setup pages,
             // and WhatsApp/Telegram setup is optional.
-            showOnboardingChat ? [0, 1, 5, 8, 9] : [0, 1, 5, 9]
+            return showOnboardingChat ? [0, 1, 5, 8, 9] : [0, 1, 5, 9]
         case .unconfigured:
-            showOnboardingChat ? [0, 1, 8, 9] : [0, 1, 9]
+            return showOnboardingChat ? [0, 1, 8, 9] : [0, 1, 9]
         case .local:
-            showOnboardingChat ? [0, 1, 3, 5, 8, 9] : [0, 1, 3, 5, 9]
+            let setupPages = requiresCLIInstall ? [0, 1, 2, 3, 5] : [0, 1, 3, 5]
+            return showOnboardingChat ? setupPages + [8, 9] : setupPages + [9]
         }
     }
 
@@ -124,8 +137,22 @@ struct OnboardingView: View {
         self.state.connectionMode == .local && self.needsBootstrap
     }
 
+    var selectedConnectionMode: AppState.ConnectionMode {
+        if self.isConnectionSelectionBlocking {
+            return .local
+        }
+        return self.state.connectionMode
+    }
+
+    var isConnectionSelectionBlocking: Bool {
+        self.defaultsToLocalGateway && self.state.connectionMode == .unconfigured
+    }
+
     var pageOrder: [Int] {
-        Self.pageOrder(for: self.state.connectionMode, showOnboardingChat: self.showOnboardingChat)
+        Self.pageOrder(
+            for: self.state.connectionMode,
+            showOnboardingChat: self.showOnboardingChat,
+            requiresCLIInstall: self.state.connectionMode == .local && !self.cliInstalled)
     }
 
     var pageCount: Int {
@@ -140,21 +167,22 @@ struct OnboardingView: View {
         self.currentPage == self.pageCount - 1 ? "Finish" : "Next"
     }
 
-    var wizardPageOrderIndex: Int? {
-        self.pageOrder.firstIndex(of: self.wizardPageIndex)
+    var isCLIBlocking: Bool {
+        self.activePageIndex == self.cliPageIndex && !self.cliInstalled
     }
 
-    var isWizardBlocking: Bool {
-        self.activePageIndex == self.wizardPageIndex && !self.onboardingWizard.isComplete
+    /// Local onboarding must not finish with nothing configured: the Crestodian
+    /// page blocks Next until setup authored the config (the conversation's
+    /// "yes"), mirroring the old wizard-completion gate. "Configure later" on
+    /// the connection page remains the explicit skip path.
+    var isCrestodianBlocking: Bool {
+        self.activePageIndex == self.crestodianPageIndex &&
+            self.state.connectionMode == .local &&
+            !self.crestodianSetupComplete
     }
 
     var canAdvance: Bool {
-        !self.isWizardBlocking
-    }
-
-    var devLinkCommand: String {
-        let version = GatewayEnvironment.expectedGatewayVersionString() ?? "latest"
-        return "npm install -g openclaw@\(version)"
+        !self.isCLIBlocking && !self.isCrestodianBlocking
     }
 
     struct LocalGatewayProbe: Equatable {
@@ -173,6 +201,8 @@ struct OnboardingView: View {
     {
         self.state = state
         self.permissionMonitor = permissionMonitor
+        self._defaultsToLocalGateway = State(
+            initialValue: !state.onboardingSeen && state.connectionMode == .unconfigured)
         self._gatewayDiscovery = State(initialValue: discoveryModel)
         self._onboardingChatModel = State(
             initialValue: OpenClawChatViewModel(

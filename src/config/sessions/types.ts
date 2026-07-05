@@ -43,6 +43,13 @@ export type {
   SessionAcpMeta,
 };
 
+export type CliSessionReseedReceipt = {
+  version: 1;
+  promptHash: string;
+  localSessionId: string;
+  userTurnDisposition: "persisted" | "omitted";
+};
+
 export type CliSessionBinding = {
   sessionId: string;
   /** Trust an explicitly attached CLI session even when auth, prompt, or MCP fingerprints drift. */
@@ -56,6 +63,8 @@ export type CliSessionBinding = {
   cwdHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
+  /** Identifies one synthetic history prompt and the trusted local handling of its user turn. */
+  reseedReceipt?: CliSessionReseedReceipt;
 };
 
 export type SessionCompactionCheckpointReason =
@@ -238,6 +247,17 @@ export type SessionEntry = {
   pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
   sessionId: string;
   updatedAt: number;
+  /** Opaque owner revision used to reject stale lifecycle mutations. */
+  lifecycleRevision?: string;
+  // archivedAt/pinnedAt mirror the Codex thread-management shape (state DB
+  // threads.archived_at: the boolean is always derived from the timestamp and
+  // stamped server-side). Codex serializes camelCase but in epoch SECONDS;
+  // these are epoch MS like every other session timestamp — convert at the
+  // codex plugin seam when exchanging thread metadata.
+  /** Timestamp (ms) when the session was archived from active session lists. */
+  archivedAt?: number;
+  /** Timestamp (ms) when the session was pinned for quick access. */
+  pinnedAt?: number;
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;

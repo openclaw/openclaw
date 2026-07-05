@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveLsofCommandSync } from "../infra/ports-lsof.js";
+import { parseWindowsNetstatListeners } from "../infra/ports-netstat.js";
 import { probePortUsage } from "../infra/ports-probe.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { resolvePositiveTimerTimeoutMs, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
@@ -163,25 +164,18 @@ export function parseLsofOutput(output: string): PortProcess[] {
 export function listPortListeners(port: number): PortProcess[] {
   if (process.platform === "win32") {
     try {
-      const out = execFileSync(getWindowsSystem32ExePath("netstat.exe"), ["-ano", "-p", "TCP"], {
+      const out = execFileSync(getWindowsSystem32ExePath("netstat.exe"), ["-ano"], {
         encoding: "utf-8",
       });
-      const lines = out.split(/\r?\n/).filter(Boolean);
+      const listeners = parseWindowsNetstatListeners(out, port);
+      const seenPids = new Set<number>();
       const results: PortProcess[] = [];
-      for (const line of lines) {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length >= 5 && parts[3] === "LISTENING") {
-          const localAddress = parts[1];
-          const addressPort = localAddress.split(":").pop();
-          if (addressPort === String(port)) {
-            const pid = Number.parseInt(parts[4], 10);
-            if (!Number.isNaN(pid) && pid > 0) {
-              if (!results.some((p) => p.pid === pid)) {
-                results.push({ pid });
-              }
-            }
-          }
+      for (const listener of listeners) {
+        if (seenPids.has(listener.pid)) {
+          continue;
         }
+        seenPids.add(listener.pid);
+        results.push({ pid: listener.pid });
       }
       return results;
     } catch (err: unknown) {

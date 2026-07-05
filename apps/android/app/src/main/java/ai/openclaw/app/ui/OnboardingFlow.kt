@@ -17,6 +17,7 @@ import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.design.OpenClawMascot
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -46,7 +47,6 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -118,7 +118,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -523,7 +522,13 @@ fun OnboardingFlow(
           passwordInput = password,
         )
       if (plan == null) {
-        setupError = "Setup code was not accepted. Generate a fresh code with openclaw qr."
+        val endpointError =
+          decodeGatewaySetupCode(trimmed)
+            ?.let { parseGatewayEndpointResult(it.url).error }
+        setupError =
+          endpointError?.let {
+            gatewayEndpointValidationMessage(it, GatewayEndpointInputSource.SETUP_CODE)
+          } ?: "Setup code was not accepted. Generate a fresh code with openclaw qr."
         return
       }
       connectGateway(plan = plan, inputSource = inputSource)
@@ -536,10 +541,11 @@ fun OnboardingFlow(
       val scanned = resolveScannedSetupCodeResult(rawValue)
       if (scanned.setupCode == null) {
         val message =
-          if (scanned.error == GatewayEndpointValidationError.INSECURE_REMOTE_URL) {
-            gatewayEndpointValidationMessage(GatewayEndpointValidationError.INSECURE_REMOTE_URL, GatewayEndpointInputSource.QR_SCAN)
-          } else {
-            "That QR code is not an OpenClaw setup QR. Generate a fresh code with openclaw qr, then try again."
+          when (scanned.error) {
+            GatewayEndpointValidationError.INSECURE_REMOTE_URL,
+            GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED ->
+              gatewayEndpointValidationMessage(scanned.error, GatewayEndpointInputSource.QR_SCAN)
+            else -> "That QR code is not an OpenClaw setup QR. Generate a fresh code with openclaw qr, then try again."
           }
         showSetupScanError(message)
         return
@@ -569,7 +575,12 @@ fun OnboardingFlow(
           passwordInput = password,
         )
       if (plan == null) {
-        setupError = "Enter a valid Gateway URL and any required auth details."
+        val endpointError =
+          composeGatewayManualUrl(manualHost, manualPort, manualTls)
+            ?.let(::parseGatewayEndpointResult)
+            ?.error
+            ?: GatewayEndpointValidationError.INVALID_URL
+        setupError = gatewayEndpointValidationMessage(endpointError, GatewayEndpointInputSource.MANUAL)
         return
       }
       connectGateway(plan = plan, inputSource = OnboardingGatewayInputSource.Manual)
@@ -879,7 +890,7 @@ private fun WelcomeLogo() {
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
     Box(modifier = Modifier.fillMaxSize().padding(12.dp), contentAlignment = Alignment.Center) {
-      Image(painter = painterResource(id = R.drawable.openclaw_logo), contentDescription = "OpenClaw logo", modifier = Modifier.fillMaxSize())
+      OpenClawMascot(contentDescription = "OpenClaw logo", modifier = Modifier.fillMaxSize())
     }
   }
 }

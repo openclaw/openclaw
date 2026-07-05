@@ -73,6 +73,28 @@ describe("resolveCopilotProvider", () => {
     expect(supportsCopilotByokProviderShape({ baseUrl: "https://proxy.example/v1" })).toBe(true);
   });
 
+  it("maps OpenAI Chat Completions BYOK bearer auth with the provider-local model id", () => {
+    const result = resolveCopilotProvider({
+      model: {
+        provider: "tencent-tokenplan",
+        api: "openai-completions",
+        id: "hy3",
+        baseUrl: "https://tokenplan.example/v1",
+        authHeader: true,
+      },
+      resolvedApiKey: "secret-key",
+    });
+
+    expect(result.provider).toMatchObject({
+      type: "openai",
+      wireApi: "completions",
+      baseUrl: "https://tokenplan.example/v1",
+      modelId: "hy3",
+      wireModel: "hy3",
+      bearerToken: "secret-key",
+    });
+  });
+
   it("changes the BYOK compatibility fingerprint when token limits change", () => {
     const base = {
       provider: "custom-proxy",

@@ -899,7 +899,7 @@ describe("tui session actions", () => {
     expect(addSystem).not.toHaveBeenCalled();
   });
 
-  it("aborts the in-flight runId when only pendingChatRunId is set", async () => {
+  it("uses session-scoped abort when only pendingChatRunId is set", async () => {
     const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: true });
     const addSystem = vi.fn();
     const setActivityStatus = vi.fn();
@@ -932,7 +932,6 @@ describe("tui session actions", () => {
 
     expect(abortChat).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
-      runId: "run-pending",
     });
     expect(addSystem).not.toHaveBeenCalledWith("no active run");
     expect(state.pendingChatRunId).toBeNull();
@@ -991,6 +990,73 @@ describe("tui session actions", () => {
     expect(dropPendingUser).not.toHaveBeenCalled();
   });
 
+  it("drops terminalized queued rows returned by session abort", async () => {
+    const abortChat = vi.fn().mockResolvedValue({
+      ok: true,
+      aborted: true,
+      runIds: ["run-active", "run-queued-terminal"],
+    });
+    const dropPendingUser = vi.fn();
+    const state = createBaseState({
+      activeChatRunId: "run-active",
+      pendingChatRunId: null,
+      pendingSubmitDraft: null,
+    });
+
+    const { abortActive } = createTestSessionActions({
+      client: { listSessions: vi.fn(), abortChat } as unknown as TuiBackend,
+      chatLog: {
+        addSystem: vi.fn(),
+        clearAll: vi.fn(),
+        dropPendingUser,
+      } as unknown as import("./components/chat-log.js").ChatLog,
+      state,
+    });
+
+    await abortActive();
+
+    expect(dropPendingUser).toHaveBeenCalledTimes(1);
+    expect(dropPendingUser).toHaveBeenCalledWith("run-queued-terminal");
+  });
+
+  it("drops a queued row that terminalizes while session abort is pending", async () => {
+    let resolveAbort:
+      | ((value: { ok: boolean; aborted: boolean; runIds: string[] }) => void)
+      | undefined;
+    const abortChat = vi.fn().mockImplementation(
+      () =>
+        new Promise<{ ok: boolean; aborted: boolean; runIds: string[] }>((resolve) => {
+          resolveAbort = resolve;
+        }),
+    );
+    const dropPendingUser = vi.fn();
+    const state = createBaseState({
+      activeChatRunId: "run-active",
+      pendingChatRunId: "run-queued",
+      pendingOptimisticUserMessage: true,
+      pendingSubmitDraft: { runId: "run-queued", text: "queued" },
+    });
+    const { abortActive } = createTestSessionActions({
+      client: { listSessions: vi.fn(), abortChat } as unknown as TuiBackend,
+      chatLog: {
+        addSystem: vi.fn(),
+        clearAll: vi.fn(),
+        dropPendingUser,
+      } as unknown as import("./components/chat-log.js").ChatLog,
+      state,
+    });
+
+    const pendingAbort = abortActive();
+    await vi.waitFor(() => expect(abortChat).toHaveBeenCalledOnce());
+    state.pendingChatRunId = null;
+    state.pendingSubmitDraft = null;
+    resolveAbort?.({ ok: true, aborted: true, runIds: ["run-active", "run-queued"] });
+    await pendingAbort;
+
+    expect(dropPendingUser).toHaveBeenCalledTimes(1);
+    expect(dropPendingUser).toHaveBeenCalledWith("run-queued");
+  });
+
   it("passes the selected agent when aborting selected global runs", async () => {
     const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: true });
     const state = createBaseState({
@@ -1009,15 +1075,16 @@ describe("tui session actions", () => {
     expect(abortChat).toHaveBeenCalledWith({
       sessionKey: "global",
       agentId: "work",
-      runId: "run-work-global",
     });
   });
 
   it("coalesces repeated no-active-run abort notices", async () => {
+    const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: false });
     const addSystem = vi.fn();
     const requestRender = vi.fn();
 
     const { abortActive } = createTestSessionActions({
+      client: { listSessions: vi.fn(), abortChat } as unknown as TuiBackend,
       chatLog: {
         addSystem,
         clearAll: vi.fn(),
@@ -1031,6 +1098,33 @@ describe("tui session actions", () => {
       coalesceConsecutive: true,
     });
     expect(requestRender).toHaveBeenCalledOnce();
+  });
+
+  it("preserves pending UI state when session abort finds no backend run", async () => {
+    const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: false });
+    const dropPendingUser = vi.fn();
+    const state = createBaseState({
+      pendingChatRunId: "run-pending",
+      pendingOptimisticUserMessage: true,
+      pendingSubmitDraft: { runId: "run-pending", text: "hello" },
+    });
+
+    const { abortActive } = createTestSessionActions({
+      client: { listSessions: vi.fn(), abortChat } as unknown as TuiBackend,
+      chatLog: {
+        addSystem: vi.fn(),
+        clearAll: vi.fn(),
+        dropPendingUser,
+      } as unknown as import("./components/chat-log.js").ChatLog,
+      state,
+    });
+
+    await abortActive();
+
+    expect(state.pendingChatRunId).toBe("run-pending");
+    expect(state.pendingOptimisticUserMessage).toBe(true);
+    expect(state.pendingSubmitDraft).toEqual({ runId: "run-pending", text: "hello" });
+    expect(dropPendingUser).not.toHaveBeenCalled();
   });
 
   it("does not abort local post-turn maintenance while finishing context", async () => {
@@ -1082,9 +1176,9 @@ describe("tui session actions", () => {
 
     await abortActive({ preferActive: true });
 
+    // Session-scoped abort: Gateway cancels authorized queued turns first, then active.
     expect(abortChat).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
-      runId: "run-finishing",
     });
     expect(setActivityStatus).toHaveBeenCalledWith("aborted");
   });
@@ -1110,7 +1204,6 @@ describe("tui session actions", () => {
 
     expect(abortChat).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
-      runId: "run-queued",
     });
     expect(state.pendingChatRunId).toBeNull();
     expect(state.pendingOptimisticUserMessage).toBe(false);
@@ -1137,7 +1230,6 @@ describe("tui session actions", () => {
 
     expect(abortChat).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
-      runId: "run-queued",
     });
     expect(state.pendingChatRunId).toBeNull();
     expect(setActivityStatus).toHaveBeenCalledWith("aborted");
@@ -1161,13 +1253,10 @@ describe("tui session actions", () => {
 
     await abortActive({ preferActive: true });
 
-    expect(abortChat).toHaveBeenNthCalledWith(1, {
+    // One session abort covers queued + active with Gateway-owned cancel order.
+    expect(abortChat).toHaveBeenCalledTimes(1);
+    expect(abortChat).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
-      runId: "run-queued",
-    });
-    expect(abortChat).toHaveBeenNthCalledWith(2, {
-      sessionKey: "agent:main:main",
-      runId: "run-active",
     });
     expect(state.pendingChatRunId).toBeNull();
     expect(setActivityStatus).toHaveBeenCalledWith("aborted");
