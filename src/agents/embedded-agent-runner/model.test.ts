@@ -2860,10 +2860,7 @@ describe("resolveModel", () => {
       agents: {
         defaults: {
           models: {
-            "openai-codex/gpt-5.4": {
-              contextWindow: 1_050_000,
-              maxOutputTokens: 128_000,
-            },
+            "openai-codex/gpt-5.4": {},
           },
         },
       },
