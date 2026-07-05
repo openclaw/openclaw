@@ -423,6 +423,7 @@ export type AgentRunLoopResult =
       fallbackAttempts: RuntimeFallbackAttempt[];
       didLogHeartbeatStrip: boolean;
       autoCompactionCount: number;
+      didDeliverCompactionNotice: boolean;
       /** Payload keys sent directly (not via pipeline) during tool flush. */
       directlySentBlockKeys?: Set<string>;
       /** Payloads successfully sent directly during tool flush. */
@@ -1800,13 +1801,17 @@ async function runAgentTurnWithFallbackInternal(
   };
   const currentMessageId = params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
   const notifyUserAboutCompaction = shouldNotifyUserAboutCompaction(runtimeConfig);
+  let didDeliverCompactionNotice = false;
   const deliverCompactionNoticePayload = async (noticePayload: ReplyPayload, label: string) => {
+    const deliver = params.opts?.onBlockReply ?? params.onCompactionNoticePayload;
+    if (!deliver) {
+      return;
+    }
     try {
-      if (params.opts?.onBlockReply) {
-        await params.opts.onBlockReply(noticePayload);
-        return;
-      }
-      await params.onCompactionNoticePayload?.(noticePayload);
+      await deliver(noticePayload);
+      // Empty-reply recovery must only treat a notice as visible after its
+      // delivery callback resolves; failed or unwired notices remain invisible.
+      didDeliverCompactionNotice = true;
     } catch (err) {
       // Non-critical notice delivery failure should not bubble out of the
       // fire-and-forget event handler.
@@ -3552,6 +3557,7 @@ async function runAgentTurnWithFallbackInternal(
     fallbackAttempts,
     didLogHeartbeatStrip,
     autoCompactionCount,
+    didDeliverCompactionNotice,
     directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
     directlySentBlockPayloads: directlySentBlockPayloads.filter(
       (payload): payload is ReplyPayload => payload !== undefined,

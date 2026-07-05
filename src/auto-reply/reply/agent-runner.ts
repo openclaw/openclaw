@@ -1737,6 +1737,7 @@ export async function runReplyAgent(params: {
       fallbackModel,
       fallbackExhausted,
       fallbackAttempts,
+      didDeliverCompactionNotice,
       directlySentBlockKeys,
       directlySentBlockPayloads,
       terminalFailurePayload,
@@ -1948,6 +1949,7 @@ export async function runReplyAgent(params: {
       hasCommittedSourceReplyDeliveryEvidence(runResult);
     const successfulSideEffectDelivery =
       didSendDirectCompactionNoticePayload ||
+      didDeliverCompactionNotice ||
       successfulSourceReplyDelivery ||
       committedMessagingToolSourceReplyDelivery ||
       hasVisibleOutboundDeliveryEvidence(runResult) ||

@@ -362,7 +362,14 @@ describe("runReplyAgent auto-compaction token update", () => {
     return { typing, sessionCtx, resolvedQueue, followupRun };
   }
 
-  async function runEmptyDirectReply(agentResult: Record<string, unknown>) {
+  async function runEmptyDirectReply(
+    agentResult: Record<string, unknown>,
+    options?: {
+      agentEvents?: Array<{ stream: string; data: Record<string, unknown> }>;
+      config?: OpenClawConfig;
+      onBlockReply?: (payload: unknown) => Promise<void> | void;
+    },
+  ) {
     const sessionKey = "main";
     const sessionEntry = {
       sessionId: "session",
@@ -373,22 +380,31 @@ describe("runReplyAgent auto-compaction token update", () => {
       requireRecord(agentResult.meta, "agent result meta").agentMeta,
       "agent result agent meta",
     );
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [],
-      ...agentResult,
-      meta: {
-        agentMeta: {
-          provider: "anthropic",
-          model: "claude",
-          ...agentMeta,
+    runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
+      const onAgentEvent = requireRecord(params, "embedded agent params").onAgentEvent;
+      if (typeof onAgentEvent === "function") {
+        for (const event of options?.agentEvents ?? []) {
+          await onAgentEvent(event);
+        }
+      }
+      return {
+        payloads: [],
+        ...agentResult,
+        meta: {
+          agentMeta: {
+            provider: "anthropic",
+            model: "claude",
+            ...agentMeta,
+          },
+          finalAssistantVisibleText: "",
         },
-        finalAssistantVisibleText: "",
-      },
+      };
     });
 
     const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
       storePath: "",
       sessionEntry,
+      config: options?.config,
     });
     return runReplyAgent({
       commandBody: "hello",
@@ -399,6 +415,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       shouldFollowup: false,
       isActive: false,
       isStreaming: false,
+      opts: options?.onBlockReply ? { onBlockReply: options.onBlockReply } : undefined,
       typing,
       sessionCtx,
       sessionEntry,
@@ -575,6 +592,42 @@ describe("runReplyAgent auto-compaction token update", () => {
         meta: { agentMeta: {} },
       }),
     ).toBeUndefined();
+  });
+
+  it("keeps empty direct replies silent after delivering runtime compaction notices", async () => {
+    const onBlockReply = vi.fn();
+    const result = await runEmptyDirectReply(
+      { meta: { agentMeta: {} } },
+      {
+        agentEvents: [
+          { stream: "compaction", data: { phase: "start" } },
+          { stream: "compaction", data: { phase: "end", completed: true } },
+        ],
+        config: {
+          agents: { defaults: { compaction: { notifyUser: true } } },
+        },
+        onBlockReply,
+      },
+    );
+
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
+    expect(result).toBeUndefined();
+  });
+
+  it("surfaces empty direct replies when runtime compaction notice delivery fails", async () => {
+    const result = await runEmptyDirectReply(
+      { meta: { agentMeta: {} } },
+      {
+        agentEvents: [{ stream: "compaction", data: { phase: "start" } }],
+        config: {
+          agents: { defaults: { compaction: { notifyUser: true } } },
+        },
+        onBlockReply: vi.fn().mockRejectedValue(new Error("delivery failed")),
+      },
+    );
+
+    const payload = expectRecordFields(result, { isError: true }, "empty interactive fallback");
+    expect(payload.text).toContain("did not produce a visible reply");
   });
 
   it("starts queued followup drain only after clearing the active reply operation", async () => {
