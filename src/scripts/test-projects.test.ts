@@ -865,6 +865,7 @@ describe("test-projects args", () => {
           "src/install-sh-version.test.ts",
           "src/proxy-capture/store.sqlite.test.ts",
           "test/scripts/android-version.test.ts",
+          "test/scripts/e2e-shell-tempfiles.test.ts",
           "test/scripts/resolve-openclaw-ref.test.ts",
         ],
         watchMode: false,
