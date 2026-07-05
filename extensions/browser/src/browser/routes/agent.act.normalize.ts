@@ -50,10 +50,12 @@ function countBatchActions(actions: BrowserActRequest[]): number {
 export function canonicalizeActTargetIds(
   action: BrowserActRequest,
   tab: { targetId: string; suggestedTargetId?: string; tabId?: string; label?: string },
+  tabs = [tab],
   batched = false,
 ): string | null {
   if (action.targetId) {
-    if (!resolveTargetIdFromTabs(action.targetId, [tab]).ok) {
+    const resolved = resolveTargetIdFromTabs(action.targetId, batched ? tabs : [tab]);
+    if (!resolved.ok || resolved.targetId !== tab.targetId) {
       return batched
         ? "batched action targetId must match request targetId"
         : "action targetId must match request targetId";
@@ -63,7 +65,7 @@ export function canonicalizeActTargetIds(
   }
   if (action.kind === "batch") {
     for (const subAction of action.actions) {
-      const error = canonicalizeActTargetIds(subAction, tab, true);
+      const error = canonicalizeActTargetIds(subAction, tab, tabs, true);
       if (error) {
         return error;
       }

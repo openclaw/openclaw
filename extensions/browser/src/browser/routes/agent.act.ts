@@ -436,7 +436,14 @@ export function registerBrowserAgentActRoutes(
               ...extra,
             });
           };
-          const targetIdError = canonicalizeActTargetIds(action, tab);
+          // Nested batch aliases can differ from the request alias, so prefixes
+          // must stay unique across the full tab set before canonicalization.
+          const actionTabs =
+            action.kind === "batch" && !isExistingSession ? await profileCtx.listTabs() : [tab];
+          if (!actionTabs.some((candidate) => candidate.targetId === tab.targetId)) {
+            actionTabs.unshift(tab);
+          }
+          const targetIdError = canonicalizeActTargetIds(action, tab, actionTabs);
           if (targetIdError) {
             return jsonActError(res, 403, ACT_ERROR_CODES.targetIdMismatch, targetIdError);
           }

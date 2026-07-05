@@ -24,7 +24,7 @@ describe("canonicalizeActTargetIds", () => {
         { kind: "batch", actions: [{ kind: "resize", width: 2, height: 2, targetId: "Inbox" }] },
       ],
     } satisfies Parameters<typeof canonicalizeActTargetIds>[0];
-    expect(canonicalizeActTargetIds(action, tab)).toBeNull();
+    expect(canonicalizeActTargetIds(action, tab, [tab])).toBeNull();
     expect(action.targetId).toBe(canonical);
     const [first, nested] = action.actions;
     expect(first?.targetId).toBe(canonical);
@@ -48,6 +48,16 @@ describe("canonicalizeActTargetIds", () => {
       canonicalizeActTargetIds(
         { kind: "batch", actions: [{ kind: "click", ref: "1", targetId: "zzzz9999" }] },
         tab,
+      ),
+    ).toBe("batched action targetId must match request targetId");
+  });
+
+  it("rejects a batched targetId prefix that is ambiguous across tabs", () => {
+    expect(
+      canonicalizeActTargetIds(
+        { kind: "batch", actions: [{ kind: "click", ref: "1", targetId: "abcd" }] },
+        tab,
+        [tab, { targetId: "abcd9999" }],
       ),
     ).toBe("batched action targetId must match request targetId");
   });
