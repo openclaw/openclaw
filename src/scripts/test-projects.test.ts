@@ -891,6 +891,7 @@ describe("test-projects args", () => {
         forwardedArgs: [],
         includePatterns: [
           "src/scripts/docs-link-audit.test.ts",
+          "src/scripts/extended-stable-plugin-support.test.ts",
           "src/scripts/sync-plugin-versions.test.ts",
           "test/helpers/temp-dir.test.ts",
           "test/scripts/android-pin-version.test.ts",
