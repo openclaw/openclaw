@@ -798,7 +798,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(completedEvent.contextOverflowDetected).toBe(true);
   });
 
-  it("uses the model reference window for overflow classification", async () => {
+  it("uses the effective context budget for overflow classification", async () => {
     const assistant = {
       role: "assistant",
       content: [],
@@ -834,7 +834,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
 
     const completedEvent = getEvent(events, 1);
     expect(completedEvent.type).toBe("model.call.completed");
-    expect(completedEvent.contextOverflowDetected).toBe(false);
+    expect(completedEvent.contextOverflowDetected).toBe(true);
   });
 
   it("captures per-call usage from terminal error events", async () => {
