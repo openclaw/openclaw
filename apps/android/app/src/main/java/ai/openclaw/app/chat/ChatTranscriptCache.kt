@@ -38,19 +38,29 @@ internal const val MAX_CACHED_MESSAGES_PER_SESSION = 200
  * Live `chat.history` / `sessions.list` responses always replace cached data wholesale.
  */
 interface ChatTranscriptCache {
-  suspend fun loadSessions(): List<ChatSessionEntry>
+  suspend fun loadSessions(gatewayId: String): List<ChatSessionEntry>
 
-  suspend fun loadTranscript(sessionKey: String): List<ChatMessage>
+  suspend fun loadTranscript(
+    gatewayId: String,
+    sessionKey: String,
+  ): List<ChatMessage>
 
-  suspend fun saveSessions(sessions: List<ChatSessionEntry>)
+  suspend fun saveSessions(
+    gatewayId: String,
+    sessions: List<ChatSessionEntry>,
+  )
 
   suspend fun saveTranscript(
+    gatewayId: String,
     sessionKey: String,
     messages: List<ChatMessage>,
   )
 
   /** Removes one session and its transcript, so gateway-side deletes also purge offline copies. */
-  suspend fun deleteSession(sessionKey: String)
+  suspend fun deleteSession(
+    gatewayId: String,
+    sessionKey: String,
+  )
 
   /** Purges every cached row for all gateways; used when pairing/auth state is reset. */
   suspend fun clearAll()
@@ -167,25 +177,19 @@ internal abstract class ChatCacheDatabase : RoomDatabase() {
 }
 
 /**
- * Room-backed [ChatTranscriptCache] scoped to a stable gateway identity.
- *
- * [gatewayId] is resolved per call so transcripts never leak across gateways: a null/blank
- * identity (no paired or manual gateway) disables both reads and writes.
+ * Room-backed [ChatTranscriptCache]. Callers bind every operation to the gateway scope captured
+ * before their suspend point, so a connection switch cannot re-scope an old response.
  */
 class RoomChatTranscriptCache internal constructor(
   private val database: ChatCacheDatabase,
-  private val gatewayId: () -> String?,
 ) : ChatTranscriptCache {
-  constructor(
-    context: Context,
-    gatewayId: () -> String?,
-  ) : this(database = ChatCacheDatabase.open(context), gatewayId = gatewayId)
+  constructor(context: Context) : this(database = ChatCacheDatabase.open(context))
 
   private val json = Json
   private val textPartsSerializer = ListSerializer(String.serializer())
 
-  override suspend fun loadSessions(): List<ChatSessionEntry> {
-    val gateway = scopedGatewayId() ?: return emptyList()
+  override suspend fun loadSessions(gatewayId: String): List<ChatSessionEntry> {
+    val gateway = scopedGatewayId(gatewayId) ?: return emptyList()
     return database.dao().sessions(gateway).map { row ->
       ChatSessionEntry(
         key = row.sessionKey,
@@ -195,8 +199,11 @@ class RoomChatTranscriptCache internal constructor(
     }
   }
 
-  override suspend fun loadTranscript(sessionKey: String): List<ChatMessage> {
-    val gateway = scopedGatewayId() ?: return emptyList()
+  override suspend fun loadTranscript(
+    gatewayId: String,
+    sessionKey: String,
+  ): List<ChatMessage> {
+    val gateway = scopedGatewayId(gatewayId) ?: return emptyList()
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return emptyList()
     return database.dao().messages(gateway, key).map { row ->
       ChatMessage(
@@ -209,8 +216,11 @@ class RoomChatTranscriptCache internal constructor(
     }
   }
 
-  override suspend fun saveSessions(sessions: List<ChatSessionEntry>) {
-    val gateway = scopedGatewayId() ?: return
+  override suspend fun saveSessions(
+    gatewayId: String,
+    sessions: List<ChatSessionEntry>,
+  ) {
+    val gateway = scopedGatewayId(gatewayId) ?: return
     val rows =
       sessions.take(MAX_CACHED_SESSIONS).mapIndexed { index, session ->
         CachedSessionEntity(
@@ -230,10 +240,11 @@ class RoomChatTranscriptCache internal constructor(
   }
 
   override suspend fun saveTranscript(
+    gatewayId: String,
     sessionKey: String,
     messages: List<ChatMessage>,
   ) {
-    val gateway = scopedGatewayId() ?: return
+    val gateway = scopedGatewayId(gatewayId) ?: return
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return
     // Text rows only: attachment/binary parts are dropped, and messages without any text are skipped.
     val rows =
@@ -282,8 +293,11 @@ class RoomChatTranscriptCache internal constructor(
     }
   }
 
-  override suspend fun deleteSession(sessionKey: String) {
-    val gateway = scopedGatewayId() ?: return
+  override suspend fun deleteSession(
+    gatewayId: String,
+    sessionKey: String,
+  ) {
+    val gateway = scopedGatewayId(gatewayId) ?: return
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return
     val dao = database.dao()
     database.withTransaction {
@@ -292,7 +306,7 @@ class RoomChatTranscriptCache internal constructor(
     }
   }
 
-  private fun scopedGatewayId(): String? = gatewayId()?.trim()?.takeIf { it.isNotEmpty() }
+  private fun scopedGatewayId(gatewayId: String): String? = gatewayId.trim().takeIf { it.isNotEmpty() }
 
   private fun decodeTextParts(encoded: String): List<String> = runCatching { json.decodeFromString(textPartsSerializer, encoded) }.getOrDefault(emptyList())
 }

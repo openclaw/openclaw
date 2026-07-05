@@ -13,31 +13,42 @@ import org.junit.Test
 
 class ChatControllerTranscriptCacheTest {
   private val json = Json { ignoreUnknownKeys = true }
+  private val gatewayScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
 
   private class FakeTranscriptCache : ChatTranscriptCache {
-    val transcripts = mutableMapOf<String, List<ChatMessage>>()
+    val transcripts = mutableMapOf<Pair<String, String>, List<ChatMessage>>()
     var sessions: List<ChatSessionEntry> = emptyList()
-    val savedTranscripts = mutableListOf<Pair<String, List<ChatMessage>>>()
-    val savedSessions = mutableListOf<List<ChatSessionEntry>>()
-    val deletedSessions = mutableListOf<String>()
+    val savedTranscripts = mutableListOf<Triple<String, String, List<ChatMessage>>>()
+    val savedSessions = mutableListOf<Pair<String, List<ChatSessionEntry>>>()
+    val deletedSessions = mutableListOf<Pair<String, String>>()
 
-    override suspend fun loadSessions(): List<ChatSessionEntry> = sessions
+    override suspend fun loadSessions(gatewayId: String): List<ChatSessionEntry> = sessions
 
-    override suspend fun loadTranscript(sessionKey: String): List<ChatMessage> = transcripts[sessionKey].orEmpty()
+    override suspend fun loadTranscript(
+      gatewayId: String,
+      sessionKey: String,
+    ): List<ChatMessage> = transcripts[gatewayId to sessionKey].orEmpty()
 
-    override suspend fun saveSessions(sessions: List<ChatSessionEntry>) {
-      savedSessions += sessions
+    override suspend fun saveSessions(
+      gatewayId: String,
+      sessions: List<ChatSessionEntry>,
+    ) {
+      savedSessions += gatewayId to sessions
     }
 
     override suspend fun saveTranscript(
+      gatewayId: String,
       sessionKey: String,
       messages: List<ChatMessage>,
     ) {
-      savedTranscripts += sessionKey to messages
+      savedTranscripts += Triple(gatewayId, sessionKey, messages)
     }
 
-    override suspend fun deleteSession(sessionKey: String) {
-      deletedSessions += sessionKey
+    override suspend fun deleteSession(
+      gatewayId: String,
+      sessionKey: String,
+    ) {
+      deletedSessions += gatewayId to sessionKey
     }
 
     override suspend fun clearAll() {
@@ -63,7 +74,7 @@ class ChatControllerTranscriptCacheTest {
   fun offlineColdOpenShowsCachedTranscriptAndSessionsAndKeepsSendBlocked() =
     runTest {
       val cache = FakeTranscriptCache()
-      cache.transcripts["main"] = listOf(cachedMessage("cached hello"), cachedMessage("cached reply"))
+      cache.transcripts["gateway-a" to "main"] = listOf(cachedMessage("cached hello"), cachedMessage("cached reply"))
       cache.sessions = listOf(ChatSessionEntry(key = "main", updatedAtMs = 5, displayName = "Main"))
       val controller =
         ChatController(
@@ -71,6 +82,7 @@ class ChatControllerTranscriptCacheTest {
           json = json,
           requestGateway = { _, _ -> throw IllegalStateException("offline") },
           transcriptCache = cache,
+          cacheScope = { gatewayScope },
         )
 
       controller.load("main")
@@ -95,7 +107,7 @@ class ChatControllerTranscriptCacheTest {
   fun cachedTranscriptEmitsFirstThenLiveHistoryReplacesWholesale() =
     runTest {
       val cache = FakeTranscriptCache()
-      cache.transcripts["main"] =
+      cache.transcripts["gateway-a" to "main"] =
         listOf(
           cachedMessage("cached hello", role = "user", timestampMs = 10),
           cachedMessage("stale line", role = "assistant", timestampMs = 11),
@@ -123,6 +135,7 @@ class ChatControllerTranscriptCacheTest {
             }
           },
           transcriptCache = cache,
+          cacheScope = { gatewayScope },
         )
 
       controller.load("main")
@@ -155,10 +168,11 @@ class ChatControllerTranscriptCacheTest {
       assertEquals(cachedFirstMessageId, liveFirstMessageId)
       // Live history is written through to the cache.
       val savedTranscript = cache.savedTranscripts.last()
-      assertEquals("main", savedTranscript.first)
+      assertEquals("gateway-a", savedTranscript.first)
+      assertEquals("main", savedTranscript.second)
       assertEquals(
         listOf("cached hello", "fresh reply"),
-        savedTranscript.second.map { it.content.single().text },
+        savedTranscript.third.map { it.content.single().text },
       )
     }
 
@@ -167,13 +181,14 @@ class ChatControllerTranscriptCacheTest {
   fun switchSessionOfflineShowsCachedTranscriptForThatSession() =
     runTest {
       val cache = FakeTranscriptCache()
-      cache.transcripts["agent:other:main"] = listOf(cachedMessage("other session text"))
+      cache.transcripts["gateway-a" to "agent:other:main"] = listOf(cachedMessage("other session text"))
       val controller =
         ChatController(
           scope = this,
           json = json,
           requestGateway = { _, _ -> throw IllegalStateException("offline") },
           transcriptCache = cache,
+          cacheScope = { gatewayScope },
         )
       controller.load("main")
       advanceUntilIdle()
@@ -200,6 +215,7 @@ class ChatControllerTranscriptCacheTest {
           json = json,
           requestGateway = { _, _ -> "{}" },
           transcriptCache = cache,
+          cacheScope = { gatewayScope },
         )
 
       controller.handleGatewayEvent(
@@ -208,7 +224,7 @@ class ChatControllerTranscriptCacheTest {
       )
       advanceUntilIdle()
 
-      assertEquals(listOf("agent:old:main"), cache.deletedSessions)
+      assertEquals(listOf("gateway-a" to "agent:old:main"), cache.deletedSessions)
     }
 
   @Test
@@ -228,12 +244,89 @@ class ChatControllerTranscriptCacheTest {
             }
           },
           transcriptCache = cache,
+          cacheScope = { gatewayScope },
         )
 
       controller.load("main")
       advanceUntilIdle()
 
-      assertEquals(listOf("main"), cache.savedSessions.last().map { it.key })
+      assertEquals("gateway-a", cache.savedSessions.last().first)
+      assertEquals(
+        listOf("main"),
+        cache.savedSessions
+          .last()
+          .second
+          .map { it.key },
+      )
       assertEquals(listOf("main"), controller.sessions.value.map { it.key })
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun oldGatewayHistoryResponseIsNeitherAppliedNorCachedAfterScopeChange() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      val historyGate = CompletableDeferred<Unit>()
+      var currentScope = gatewayScope
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            if (method == "chat.history") {
+              historyGate.await()
+              """{"sessionId":"old","messages":[{"role":"assistant","content":"old gateway"}]}"""
+            } else {
+              "{}"
+            }
+          },
+          transcriptCache = cache,
+          cacheScope = { currentScope },
+        )
+
+      controller.load("main")
+      runCurrent()
+      assertTrue(controller.historyLoading.value)
+      currentScope = ChatCacheScope(gatewayId = "gateway-b", connectionGeneration = 2)
+      controller.onGatewayScopeChanging()
+      assertFalse(controller.historyLoading.value)
+      historyGate.complete(Unit)
+      advanceUntilIdle()
+
+      assertTrue(controller.messages.value.isEmpty())
+      assertTrue(cache.savedTranscripts.isEmpty())
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun oldGatewaySessionListIsNeitherAppliedNorCachedAfterScopeChange() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      val sessionsGate = CompletableDeferred<Unit>()
+      var currentScope = gatewayScope
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            if (method == "sessions.list") {
+              sessionsGate.await()
+              """{"sessions":[{"key":"old-gateway-session"}]}"""
+            } else {
+              "{}"
+            }
+          },
+          transcriptCache = cache,
+          cacheScope = { currentScope },
+        )
+
+      controller.refreshSessions()
+      runCurrent()
+      currentScope = ChatCacheScope(gatewayId = "gateway-b", connectionGeneration = 2)
+      sessionsGate.complete(Unit)
+      advanceUntilIdle()
+
+      assertTrue(controller.sessions.value.isEmpty())
+      assertTrue(cache.savedSessions.isEmpty())
     }
 }

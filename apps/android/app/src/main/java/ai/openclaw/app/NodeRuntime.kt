@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatMessage
@@ -662,6 +663,8 @@ class NodeRuntime(
         _gatewayUpdateAvailable.value = hello.updateAvailable
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
         syncMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
+        // Every successful connection refreshes history, including reconnects whose main key did not change.
+        chat.refresh()
         refreshGatewayControlPage()
         updateStatus {
           operatorConnectionProblem = null
@@ -838,10 +841,7 @@ class NodeRuntime(
   }
 
   private val chatTranscriptCache: RoomChatTranscriptCache =
-    RoomChatTranscriptCache(
-      context = appContext,
-      gatewayId = ::chatCacheGatewayId,
-    )
+    RoomChatTranscriptCache(context = appContext)
 
   private val chat: ChatController =
     ChatController(
@@ -849,6 +849,7 @@ class NodeRuntime(
       session = operatorSession,
       json = json,
       transcriptCache = chatTranscriptCache,
+      cacheScope = ::chatCacheScope,
     ).also {
       it.applyMainSessionKey(_mainSessionKey.value)
     }
@@ -867,6 +868,11 @@ class NodeRuntime(
     }
     return lastDiscoveredStableId.value.trim().takeIf { it.isNotEmpty() }
   }
+
+  private fun chatCacheScope(): ChatCacheScope? =
+    chatCacheGatewayId()?.let { gatewayId ->
+      ChatCacheScope(gatewayId = gatewayId, connectionGeneration = connectAttemptSeq.get())
+    }
 
   private val voiceReplySpeakerLazy: Lazy<TalkModeManager> =
     lazy {
@@ -1955,6 +1961,7 @@ class NodeRuntime(
     notificationOutbox.clear()
     invalidateNodeCapabilityApprovalState()
     val connectAttemptId = connectAttemptSeq.incrementAndGet()
+    chat.onGatewayScopeChanging()
     _pendingGatewayTrust.value = null
     val tls = connectionManager.resolveTlsParams(endpoint)
     if (tls?.required == true) {
@@ -2140,6 +2147,7 @@ class NodeRuntime(
   fun disconnect() {
     notificationOutbox.clear()
     connectAttemptSeq.incrementAndGet()
+    chat.onGatewayScopeChanging()
     stopActiveVoiceSession()
     connectedEndpoint = null
     _gatewayControlPage.value = null
