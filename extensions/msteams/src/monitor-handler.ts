@@ -297,8 +297,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
           const exactSessionKey = baseSessionKey;
 
           // Import listSessionEntries dynamically to avoid circular dependencies
-          const { listSessionEntries } =
-            await import("openclaw/plugin-sdk/session-store-runtime.js");
+          const { listSessionEntries } = await import("openclaw/plugin-sdk/session-store-runtime");
 
           for (const { sessionKey, entry } of listSessionEntries({ storePath })) {
             // Match either exact key or keys with additional qualifiers (like thread IDs)
@@ -403,7 +402,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         const sessionKeyPrefix = `${baseSessionKey}:`;
         const exactSessionKey = baseSessionKey;
 
-        const { listSessionEntries } = await import("openclaw/plugin-sdk/session-store-runtime.js");
+        const { listSessionEntries } = await import("openclaw/plugin-sdk/session-store-runtime");
 
         for (const { sessionKey, entry } of listSessionEntries({ storePath })) {
           if (sessionKey === exactSessionKey || sessionKey.startsWith(sessionKeyPrefix)) {
