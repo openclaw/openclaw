@@ -1,5 +1,5 @@
 // Qqbot tests cover channel gateway status truth on disconnect.
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { qqbotPlugin } from "./channel.js";
 import type { ResolvedQQBotAccount } from "./types.js";
