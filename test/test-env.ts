@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import { deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
 
@@ -169,6 +170,11 @@ function resolveRestoreEntries(): RestoreEntry[] {
     { key: "XDG_CACHE_HOME", value: process.env.XDG_CACHE_HOME },
     { key: "OPENCLAW_STATE_DIR", value: process.env.OPENCLAW_STATE_DIR },
     { key: "OPENCLAW_CONFIG_PATH", value: process.env.OPENCLAW_CONFIG_PATH },
+    { key: "OPENCLAW_BUNDLED_PLUGINS_DIR", value: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR },
+    {
+      key: "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
+      value: process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR,
+    },
     { key: "OPENCLAW_GATEWAY_PORT", value: process.env.OPENCLAW_GATEWAY_PORT },
     { key: "OPENCLAW_BRIDGE_ENABLED", value: process.env.OPENCLAW_BRIDGE_ENABLED },
     { key: "OPENCLAW_BRIDGE_HOST", value: process.env.OPENCLAW_BRIDGE_HOST },
@@ -206,6 +212,16 @@ function createIsolatedTestHome(restore: RestoreEntry[]): {
   // Prefer deriving state dir from HOME so nested tests that change HOME also isolate correctly.
   deleteTestEnvValue("OPENCLAW_STATE_DIR");
   deleteTestEnvValue("OPENCLAW_AGENT_DIR");
+  // Deterministic bundled-plugin discovery: built checkouts prefer dist/extensions,
+  // which excludes externalized official plugins (e.g. qwen) whose manifests drive
+  // endpoint classification. Pin discovery to the source tree so tests behave like
+  // CI (no dist) regardless of local build state. Discovery tests manage this env
+  // themselves per case.
+  setTestEnvValue("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
+  setTestEnvValue(
+    "OPENCLAW_BUNDLED_PLUGINS_DIR",
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "extensions"),
+  );
   // Prefer test-controlled ports over developer overrides (avoid port collisions across tests/workers).
   deleteTestEnvValue("OPENCLAW_GATEWAY_PORT");
   deleteTestEnvValue("OPENCLAW_BRIDGE_ENABLED");
