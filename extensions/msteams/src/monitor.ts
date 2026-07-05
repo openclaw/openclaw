@@ -716,12 +716,27 @@ function buildActivityHandler(): MSTeamsActivityHandler {
           await h(context, noop);
         }
       } else if (activityType === "conversationUpdate") {
-        // Handle both membersAdded and membersRemoved within conversationUpdate
-        for (const h of membersAddedHandlers) {
-          await h(context, noop);
+        // Check which members array is populated to determine the event type
+        const activity = ctx as {
+          activity?: { membersAdded?: unknown[]; membersRemoved?: unknown[] };
+        };
+        const hasMembersAdded =
+          Array.isArray(activity.activity?.membersAdded) &&
+          activity.activity.membersAdded.length > 0;
+        const hasMembersRemoved =
+          Array.isArray(activity.activity?.membersRemoved) &&
+          activity.activity.membersRemoved.length > 0;
+
+        // Only call the appropriate handlers based on which members array is populated
+        if (hasMembersAdded) {
+          for (const h of membersAddedHandlers) {
+            await h(context, noop);
+          }
         }
-        for (const h of membersRemovedHandlers) {
-          await h(context, noop);
+        if (hasMembersRemoved) {
+          for (const h of membersRemovedHandlers) {
+            await h(context, noop);
+          }
         }
       } else if (activityType === "installationUpdate") {
         for (const h of installationUpdateHandlers) {
