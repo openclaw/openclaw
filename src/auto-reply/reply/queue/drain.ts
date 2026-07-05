@@ -243,6 +243,7 @@ type FollowupRuntimeMetadata = Pick<
   | "queueAbortSignal"
   | "deliveryCorrelations"
   | "queuedLifecycle"
+  | "onFollowupAdmissionWaitChange"
 >;
 
 function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
@@ -478,6 +479,11 @@ function collectRuntimeMetadata(
 ): FollowupRuntimeMetadata {
   const currentTurnSource = items.find(hasCurrentTurnRuntimeMetadata);
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
+  const admissionWaitCallbacks = new Set(
+    items.flatMap((item) =>
+      item.onFollowupAdmissionWaitChange ? [item.onFollowupAdmissionWaitChange] : [],
+    ),
+  );
   return {
     currentInboundEventKind: currentTurnSource?.currentInboundEventKind,
     currentInboundAudio: currentTurnSource?.currentInboundAudio,
@@ -486,6 +492,14 @@ function collectRuntimeMetadata(
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
     queuedLifecycle: items.length === 1 ? items[0]?.queuedLifecycle : undefined,
+    onFollowupAdmissionWaitChange:
+      admissionWaitCallbacks.size > 0
+        ? (waiting) => {
+            for (const callback of admissionWaitCallbacks) {
+              callback(waiting);
+            }
+          }
+        : undefined,
   };
 }
 
@@ -797,6 +811,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     originatingChatType: source.originatingChatType,
     abortSignal: source.abortSignal,
     queuedLifecycle: source.queuedLifecycle,
+    onFollowupAdmissionWaitChange: source.onFollowupAdmissionWaitChange,
     ...(source.currentInboundEventKind === "room_event"
       ? { currentInboundEventKind: "room_event" }
       : {}),
@@ -856,6 +871,8 @@ async function runSyntheticOverflowSummary(params: {
     run: params.source.run,
     enqueuedAt: Date.now(),
     abortSignal: params.abortSignal,
+    onFollowupAdmissionWaitChange: collectRuntimeMetadata(params.sources)
+      .onFollowupAdmissionWaitChange,
     ...(params.onAdmitted
       ? {
           queuedLifecycle: {
