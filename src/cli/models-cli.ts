@@ -25,6 +25,9 @@ const loadModelsImageFallbacksCommands = createModuleLoader(
   () => import("../commands/models/image-fallbacks.js"),
 );
 const loadModelsAuthCommands = createModuleLoader(() => import("../commands/models/auth.js"));
+const loadModelsAuthRemoveCommands = createModuleLoader(
+  () => import("../commands/models/auth-remove.js"),
+);
 const loadModelsAuthOrderCommands = createModuleLoader(
   () => import("../commands/models/auth-order.js"),
 );
@@ -324,6 +327,34 @@ export function registerModelsCli(program: Command) {
           {
             provider: opts.provider as string | undefined,
             agent,
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  auth
+    .command("remove [profileId]")
+    .description("Remove saved auth profiles")
+    .option("--provider <id>", "Provider id for --all removal or profile validation")
+    .option("--all", "Remove all saved profiles for --provider", false)
+    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option("--dry-run", "Preview profiles that would be removed without writing", false)
+    .option("--yes", "Skip confirmation prompt", false)
+    .option("--json", "Output JSON", false)
+    .action(async (profileId: string | undefined, opts, command) => {
+      await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
+        const agent = resolveModelAgentOption(command, opts);
+        const { modelsAuthRemoveCommand } = await loadModelsAuthRemoveCommands();
+        await modelsAuthRemoveCommand(
+          {
+            profileId,
+            provider: opts.provider as string | undefined,
+            all: Boolean(opts.all),
+            agent,
+            dryRun: Boolean(opts.dryRun),
+            yes: Boolean(opts.yes),
             json: Boolean(opts.json),
           },
           defaultRuntime,

@@ -168,6 +168,8 @@ openclaw models fallbacks list
 ```bash
 openclaw models auth add
 openclaw models auth list [--provider <id>] [--json]
+openclaw models auth remove <profileId> [--yes]
+openclaw models auth remove --provider <id> --all [--yes]
 openclaw models auth login --provider <id>
 openclaw models auth login --provider openai --profile-id openai:work
 openclaw models auth paste-api-key --provider <id>
@@ -183,11 +185,19 @@ provider you choose.
 printing token, API-key, or OAuth secret material. Use `--provider <id>` to
 filter to one provider, such as `openai`, and `--json` for scripting.
 
+`models auth remove <profileId>` removes one saved profile from the selected
+agent store and prunes matching order, last-good, and usage state. Use
+`--dry-run` to preview the target without writing. To remove every saved profile
+for a provider, pass both `--provider <id>` and `--all`; `--provider` alone only
+lists the matching candidates in the error message. Profiles inherited from the
+default agent remain owned by that default agent store; remove them with
+`--agent <default-agent-id>` instead of from the inheriting agent.
+
 `models auth login` runs a provider plugin's auth flow (OAuth/API key). Use
 `openclaw plugins list` to see which providers are installed.
 Use `openclaw models auth --agent <id> <subcommand>` to write auth results to a
 specific configured agent store. The parent `--agent` flag is honored by
-`add`, `list`, `login`, `paste-api-key`, `setup-token`, `paste-token`, and
+`add`, `list`, `remove`, `login`, `paste-api-key`, `setup-token`, `paste-token`, and
 `login-github-copilot`.
 
 For OpenAI models, `--provider openai` defaults to ChatGPT/Codex account login.
@@ -202,6 +212,7 @@ openclaw models auth login --provider openai --set-default
 openclaw models auth login --provider openai --method api-key
 openclaw models auth paste-api-key --provider openai
 openclaw models auth list --provider openai
+openclaw models auth remove openai:user@example.com --yes
 ```
 
 Notes:

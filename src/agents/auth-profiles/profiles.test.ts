@@ -16,6 +16,7 @@ import { loadPersistedAuthProfileStore } from "./persisted.js";
 import {
   clearLastGoodProfileWithLock,
   promoteAuthProfileInOrder,
+  removeAuthProfilesWithLock,
   upsertAuthProfileWithLock,
 } from "./profiles.js";
 import {
@@ -599,6 +600,55 @@ describe("promoteAuthProfileInOrder", () => {
       });
 
       expect(loadAuthProfileStoreForRuntime(agentDir).lastGood?.["openai"]).toBe(goodProfileId);
+    });
+  });
+
+  it("removes selected profiles and prunes auth state references", async () => {
+    await withAuthProfileTestState("openclaw-auth-remove-profile-", async ({ agentDir }) => {
+      fs.mkdirSync(agentDir, { recursive: true });
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "openai:remove": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-remove",
+            },
+            "openai:keep": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-keep",
+            },
+            "anthropic:keep": {
+              type: "token",
+              provider: "anthropic",
+              token: "anthropic-token",
+            },
+          },
+          order: { openai: ["openai:remove", "openai:keep"] },
+          lastGood: { openai: "openai:remove", anthropic: "anthropic:keep" },
+          usageStats: {
+            "openai:remove": { errorCount: 2 },
+            "openai:keep": { errorCount: 1 },
+          },
+        },
+        agentDir,
+      );
+
+      await removeAuthProfilesWithLock({
+        agentDir,
+        profileIds: ["openai:remove"],
+      });
+
+      const updated = loadAuthProfileStoreForRuntime(agentDir);
+      expect(updated.profiles["openai:remove"]).toBeUndefined();
+      expect(updated.profiles["openai:keep"]).toBeDefined();
+      expect(updated.order?.["openai"]).toEqual(["openai:keep"]);
+      expect(updated.lastGood?.["openai"]).toBeUndefined();
+      expect(updated.lastGood?.["anthropic"]).toBe("anthropic:keep");
+      expect(updated.usageStats?.["openai:remove"]).toBeUndefined();
+      expect(updated.usageStats?.["openai:keep"]?.errorCount).toBe(1);
     });
   });
 });
