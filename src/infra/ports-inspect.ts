@@ -321,7 +321,7 @@ function parseSsListeners(output: string, port: number): PortListener[] {
       continue;
     }
     const parts = line.split(/\s+/);
-    const localAddress = parts.find((part) => part.includes(`:${port}`));
+    const localAddress = parts.find((part) => parseTcpEndpoint(part)?.port === port);
     if (!localAddress) {
       continue;
     }
