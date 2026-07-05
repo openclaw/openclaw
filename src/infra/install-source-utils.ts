@@ -135,16 +135,7 @@ export type NpmIntegrityDrift = {
   actualIntegrity: string;
 };
 
-/**
- * Runs a callback in a private temp directory and removes it afterward.
- *
- * By default the temp directory is created under `os.tmpdir()`. Callers that
- * later move the staged result into a persistent location with an atomic
- * `rename()` should pass `rootDir` pointing at (a directory on) the same
- * filesystem as that destination. Otherwise the rename can fail with `EXDEV`
- * ("cross-device link not permitted") when `/tmp` and the destination live on
- * different mounts — common in containers with bind-mounted state dirs.
- */
+/** Runs a callback in a private temp directory and removes it afterward. */
 export async function withTempDir<T>(
   prefix: string,
   fn: (tmpDir: string) => Promise<T>,

@@ -242,21 +242,37 @@ function resolveGitInstallRepoDir(params: {
   return path.join(gitRoot, `git-${sha256HexPrefix(redactedSpec, 16)}`, "repo");
 }
 
-/**
- * Chooses a staging root for the transient clone. Prefers the managed git root
- * (the parent of `git-<hash>/repo`) so the final atomic rename into the
- * persistent repo stays on the same filesystem — otherwise a `/tmp` vs
- * `~/.openclaw` mount split surfaces as EXDEV on rename (#99885). Falls back to
- * the OS temp dir if the managed root cannot be prepared, preserving the prior
- * behavior instead of failing the install outright.
- */
-async function resolveGitStagingRoot(persistentRepoDir: string): Promise<string | undefined> {
-  const managedRoot = path.dirname(path.dirname(persistentRepoDir));
+async function withGitStagingDir<T>(
+  persistentRepoDir: string | undefined,
+  fn: (tmpDir: string) => Promise<T>,
+): Promise<T> {
+  if (!persistentRepoDir) {
+    return await withTempDir("openclaw-git-plugin-", fn);
+  }
+  const targetParent = path.dirname(persistentRepoDir);
   try {
-    await fs.mkdir(managedRoot, { recursive: true });
-    return managedRoot;
+    await fs.mkdir(targetParent, { recursive: true });
   } catch {
-    return undefined;
+    return await withTempDir("openclaw-git-plugin-", fn);
+  }
+
+  let callbackStarted = false;
+  try {
+    return await withTempDir(
+      "openclaw-git-plugin-",
+      async (tmpDir) => {
+        callbackStarted = true;
+        return await fn(tmpDir);
+      },
+      { rootDir: targetParent },
+    );
+  } catch (err) {
+    // Workspace creation can fail on read-only mounts. Never retry after the
+    // callback starts, because that could clone or install dependencies twice.
+    if (callbackStarted) {
+      throw err;
+    }
+    return await withTempDir("openclaw-git-plugin-", fn);
   }
 }
 
@@ -354,162 +370,154 @@ export async function installPluginFromGitSpec(
   const persistentRepoDir = resolveGitInstallRepoDir({ gitDir: params.gitDir, source: parsed });
   const effectiveMode =
     params.mode === "update" && (await pathExists(persistentRepoDir)) ? "update" : "install";
-  // Stage the clone under the managed git root (parent of `git-<hash>/repo`) so
-  // that the final atomic rename into `persistentRepoDir` stays on the same
-  // filesystem. Using `os.tmpdir()` here breaks in containers where `/tmp` and
-  // `~/.openclaw` are separate mounts, surfacing as EXDEV on rename (#99885).
-  const stagingRoot = await resolveGitStagingRoot(persistentRepoDir);
-  return await withTempDir(
-    "openclaw-git-plugin-",
-    async (tmpDir) => {
-      const repoDir = path.join(tmpDir, "repo");
-      params.logger?.info?.(
-        `Cloning ${sanitizeForLog(redactSensitiveUrlLikeString(parsed.label))}...`,
-      );
-      const cloneArgs = parsed.ref
-        ? ["git", "clone", parsed.url, repoDir]
-        : ["git", "clone", "--depth", "1", parsed.url, repoDir];
-      const clone = await runGitCommand({
-        argv: cloneArgs,
-        action: "clone",
-        source: parsed,
-        timeoutMs: params.timeoutMs,
-      });
-      if (!clone.ok) {
-        return clone;
-      }
+  const stagingRepoDir = params.dryRun ? undefined : persistentRepoDir;
+  return await withGitStagingDir(stagingRepoDir, async (tmpDir) => {
+    const repoDir = path.join(tmpDir, "repo");
+    params.logger?.info?.(
+      `Cloning ${sanitizeForLog(redactSensitiveUrlLikeString(parsed.label))}...`,
+    );
+    const cloneArgs = parsed.ref
+      ? ["git", "clone", parsed.url, repoDir]
+      : ["git", "clone", "--depth", "1", parsed.url, repoDir];
+    const clone = await runGitCommand({
+      argv: cloneArgs,
+      action: "clone",
+      source: parsed,
+      timeoutMs: params.timeoutMs,
+    });
+    if (!clone.ok) {
+      return clone;
+    }
 
-      if (parsed.ref) {
-        const checkout = await runGitCommand({
-          argv: ["git", "switch", "--detach", "--", parsed.ref],
-          action: `checkout ${parsed.ref}`,
-          source: parsed,
-          cwd: repoDir,
-          timeoutMs: params.timeoutMs,
-        });
-        if (!checkout.ok) {
-          return checkout;
-        }
-      }
-
-      const rev = await runGitCommand({
-        argv: ["git", "rev-parse", "HEAD"],
-        action: "resolve commit for",
+    if (parsed.ref) {
+      const checkout = await runGitCommand({
+        argv: ["git", "switch", "--detach", "--", parsed.ref],
+        action: `checkout ${parsed.ref}`,
         source: parsed,
         cwd: repoDir,
         timeoutMs: params.timeoutMs,
       });
-      if (!rev.ok) {
-        return rev;
+      if (!checkout.ok) {
+        return checkout;
       }
+    }
 
-      const installPolicyRequest = {
-        kind: "plugin-git" as const,
-        requestedSpecifier: parsed.input,
-        source: {
-          kind: "git" as const,
-          authority: "third-party" as const,
-          mutable: !isImmutableGitCommitRef(parsed.ref),
-          network: true,
-        },
-      };
-      const preflight = await preflightPluginGitInstallPolicy({
-        config: params.config,
-        logger: params.logger ?? {},
+    const rev = await runGitCommand({
+      argv: ["git", "rev-parse", "HEAD"],
+      action: "resolve commit for",
+      source: parsed,
+      cwd: repoDir,
+      timeoutMs: params.timeoutMs,
+    });
+    if (!rev.ok) {
+      return rev;
+    }
+
+    const installPolicyRequest = {
+      kind: "plugin-git" as const,
+      requestedSpecifier: parsed.input,
+      source: {
+        kind: "git" as const,
+        authority: "third-party" as const,
+        mutable: !isImmutableGitCommitRef(parsed.ref),
+        network: true,
+      },
+    };
+    const preflight = await preflightPluginGitInstallPolicy({
+      config: params.config,
+      logger: params.logger ?? {},
+      mode: effectiveMode,
+      pluginId: params.expectedPluginId ?? parsed.label,
+      requestedSpecifier: parsed.input,
+      source: installPolicyRequest.source,
+      sourcePath: repoDir,
+    });
+    if (preflight?.blocked) {
+      const reason =
+        preflight.blocked.code === "security_scan_failed"
+          ? "security_scan_failed"
+          : "security_scan_blocked";
+      emitPluginAuditSecurityEvent({
+        outcome: pluginAuditOutcomeForReason(reason),
+        reason,
+        pluginId: params.expectedPluginId,
         mode: effectiveMode,
-        pluginId: params.expectedPluginId ?? parsed.label,
-        requestedSpecifier: parsed.input,
-        source: installPolicyRequest.source,
-        sourcePath: repoDir,
+        sourceFamily: "git",
       });
-      if (preflight?.blocked) {
-        const reason =
-          preflight.blocked.code === "security_scan_failed"
-            ? "security_scan_failed"
-            : "security_scan_blocked";
-        emitPluginAuditSecurityEvent({
-          outcome: pluginAuditOutcomeForReason(reason),
-          reason,
-          pluginId: params.expectedPluginId,
-          mode: effectiveMode,
-          sourceFamily: "git",
-        });
-        return buildBlockedGitInstallResult({ blocked: preflight.blocked });
-      }
+      return buildBlockedGitInstallResult({ blocked: preflight.blocked });
+    }
 
-      if (!params.dryRun) {
-        params.logger?.info?.("Installing plugin dependencies with npm…");
-        const install = await runCommandWithTimeout(
-          [
-            "npm",
-            ...createSafeNpmInstallArgs({
-              omitDev: true,
-              loglevel: "error",
-              noAudit: true,
-              noFund: true,
-            }),
-          ],
-          {
-            cwd: repoDir,
-            timeoutMs: Math.max(params.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS, 300_000),
-            env: createSafeNpmInstallEnv(process.env, {
-              npmConfigCwd: repoDir,
-              packageLock: true,
-              quiet: true,
-            }),
-          },
-        );
-        if (install.code !== 0) {
-          return {
-            ok: false,
-            error: `npm install failed: ${install.stderr.trim() || install.stdout.trim()}`,
-          };
-        }
-      }
-
-      const result = await installPluginFromInstalledPackageDir({
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-        config: params.config,
-        packageDir: repoDir,
-        dryRun: params.dryRun,
-        expectedPluginId: params.expectedPluginId,
-        logger: params.logger,
-        mode: effectiveMode,
-        emitSuccessSecurityEvent: false,
-        installPolicyRequest,
-      });
-      if (!result.ok) {
-        return result;
-      }
-      if (!params.dryRun) {
-        const replaceResult = await replaceManagedGitRepo({
-          stagedRepoDir: repoDir,
-          persistentRepoDir,
-        });
-        if (!replaceResult.ok) {
-          return replaceResult;
-        }
-        emitPluginInstallSecurityEvent({
-          pluginId: result.pluginId,
-          mode: effectiveMode,
-          sourceFamily: "git",
-          extensionCount: result.extensions.length,
-          hasVersion: Boolean(result.version),
-          trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-        });
-      }
-
-      return {
-        ...result,
-        targetDir: params.dryRun ? result.targetDir : persistentRepoDir,
-        git: {
-          url: parsed.url,
-          ref: parsed.ref,
-          commit: normalizeOptionalString(rev.stdout),
-          resolvedAt: new Date().toISOString(),
+    if (!params.dryRun) {
+      params.logger?.info?.("Installing plugin dependencies with npm…");
+      const install = await runCommandWithTimeout(
+        [
+          "npm",
+          ...createSafeNpmInstallArgs({
+            omitDev: true,
+            loglevel: "error",
+            noAudit: true,
+            noFund: true,
+          }),
+        ],
+        {
+          cwd: repoDir,
+          timeoutMs: Math.max(params.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS, 300_000),
+          env: createSafeNpmInstallEnv(process.env, {
+            npmConfigCwd: repoDir,
+            packageLock: true,
+            quiet: true,
+          }),
         },
-      };
-    },
-    stagingRoot ? { rootDir: stagingRoot } : undefined,
-  );
+      );
+      if (install.code !== 0) {
+        return {
+          ok: false,
+          error: `npm install failed: ${install.stderr.trim() || install.stdout.trim()}`,
+        };
+      }
+    }
+
+    const result = await installPluginFromInstalledPackageDir({
+      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+      config: params.config,
+      packageDir: repoDir,
+      dryRun: params.dryRun,
+      expectedPluginId: params.expectedPluginId,
+      logger: params.logger,
+      mode: effectiveMode,
+      emitSuccessSecurityEvent: false,
+      installPolicyRequest,
+    });
+    if (!result.ok) {
+      return result;
+    }
+    if (!params.dryRun) {
+      const replaceResult = await replaceManagedGitRepo({
+        stagedRepoDir: repoDir,
+        persistentRepoDir,
+      });
+      if (!replaceResult.ok) {
+        return replaceResult;
+      }
+      emitPluginInstallSecurityEvent({
+        pluginId: result.pluginId,
+        mode: effectiveMode,
+        sourceFamily: "git",
+        extensionCount: result.extensions.length,
+        hasVersion: Boolean(result.version),
+        trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+      });
+    }
+
+    return {
+      ...result,
+      targetDir: params.dryRun ? result.targetDir : persistentRepoDir,
+      git: {
+        url: parsed.url,
+        ref: parsed.ref,
+        commit: normalizeOptionalString(rev.stdout),
+        resolvedAt: new Date().toISOString(),
+      },
+    };
+  });
 }

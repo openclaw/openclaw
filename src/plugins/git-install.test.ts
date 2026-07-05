@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DiagnosticSecurityEvent } from "../infra/diagnostic-events.js";
 
 const runCommandWithTimeoutMock = vi.fn();
@@ -145,6 +146,7 @@ describe("isImmutableGitCommitRef", () => {
 
 describe("installPluginFromGitSpec", () => {
   const tempDirs: string[] = [];
+  const trackedTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   beforeEach(async () => {
     runCommandWithTimeoutMock.mockReset();
@@ -486,8 +488,8 @@ describe("installPluginFromGitSpec", () => {
     }
   });
 
-  it("stages the clone under the managed git dir so replacement never crosses filesystems (#99885)", async () => {
-    const gitDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-install-stage-"));
+  it("stages the clone beside the managed repo so replacement stays on one filesystem (#99885)", async () => {
+    const gitDir = trackedTempDirs.make("openclaw-git-install-stage-");
     try {
       runCommandWithTimeoutMock
         .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
@@ -515,15 +517,94 @@ describe("installPluginFromGitSpec", () => {
         throw new Error(result.error);
       }
 
-      // The clone destination must live under the resolved managed git dir, not
-      // os.tmpdir(). Staging elsewhere makes the final atomic rename into the
-      // persistent repo cross filesystems and fail with EXDEV in containers.
       const cloneArgv = commandArgvAt(0);
       const cloneDest = cloneArgv[cloneArgv.length - 1];
-      const resolvedGitDir = path.resolve(gitDir);
-      expect(path.resolve(cloneDest).startsWith(resolvedGitDir)).toBe(true);
+      const persistentRepoDir = expectedGitRepoDir({
+        gitDir,
+        normalizedSpec: "git:https://github.com/acme/demo.git",
+      });
+      const cloneParent = await fs.realpath(path.dirname(path.dirname(path.resolve(cloneDest))));
+      const targetParent = await fs.realpath(path.dirname(persistentRepoDir));
+      expect(cloneParent).toBe(targetParent);
     } finally {
       await fs.rm(gitDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to OS temp when target workspace creation fails", async () => {
+    const gitDir = trackedTempDirs.make("openclaw-git-install-stage-fallback-");
+    runCommandWithTimeoutMock
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+    installPluginFromInstalledPackageDirMock.mockImplementation(
+      async (params: { packageDir: string }) => {
+        await fs.mkdir(params.packageDir, { recursive: true });
+        return {
+          ok: true,
+          pluginId: "demo",
+          targetDir: params.packageDir,
+          version: "1.2.3",
+          extensions: ["index.js"],
+        };
+      },
+    );
+    const mkdtempSpy = vi
+      .spyOn(fs, "mkdtemp")
+      .mockRejectedValueOnce(Object.assign(new Error("read-only filesystem"), { code: "EROFS" }));
+
+    try {
+      const result = await installPluginFromGitSpec({
+        spec: "git:github.com/acme/demo",
+        gitDir,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(mkdtempSpy).toHaveBeenCalledTimes(2);
+      const targetPrefix = mkdtempSpy.mock.calls[0]?.[0];
+      const fallbackPrefix = mkdtempSpy.mock.calls[1]?.[0];
+      const persistentRepoDir = expectedGitRepoDir({
+        gitDir,
+        normalizedSpec: "git:https://github.com/acme/demo.git",
+      });
+      expect(path.dirname(targetPrefix)).toBe(await fs.realpath(path.dirname(persistentRepoDir)));
+      expect(path.dirname(fallbackPrefix)).toBe(await fs.realpath(os.tmpdir()));
+      expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(3);
+    } finally {
+      mkdtempSpy.mockRestore();
+    }
+  });
+
+  it("keeps dry-run clone staging out of managed state", async () => {
+    const caseDir = trackedTempDirs.make("openclaw-git-dry-run-stage-");
+    const gitDir = path.join(caseDir, "git");
+    try {
+      runCommandWithTimeoutMock
+        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+        .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" });
+      installPluginFromInstalledPackageDirMock.mockImplementation(
+        async (params: { packageDir: string }) => ({
+          ok: true,
+          pluginId: "demo",
+          targetDir: params.packageDir,
+          version: "1.2.3",
+          extensions: ["index.js"],
+        }),
+      );
+
+      const result = await installPluginFromGitSpec({
+        spec: "git:github.com/acme/demo",
+        gitDir,
+        dryRun: true,
+      });
+
+      expect(result.ok).toBe(true);
+      const cloneArgv = commandArgvAt(0);
+      const cloneDest = path.resolve(cloneArgv[cloneArgv.length - 1]);
+      expect(path.relative(gitDir, cloneDest).split(path.sep)[0]).toBe("..");
+      await expect(fs.access(gitDir)).rejects.toThrow();
+    } finally {
+      await fs.rm(caseDir, { recursive: true, force: true });
     }
   });
 
