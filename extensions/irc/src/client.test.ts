@@ -1,7 +1,48 @@
 // Irc tests cover client plugin behavior.
+import net from "node:net";
 import { describe, expect, it } from "vitest";
-import { startLoopbackIrcServer, type LoopbackIrcServer } from "../test-support.js";
 import { buildFallbackNick, buildIrcNickServCommands, connectIrcClient } from "./client.js";
+
+type LoopbackIrcServer = {
+  port: number;
+  lines: string[];
+  close(): Promise<void>;
+};
+
+async function startLoopbackIrcServer(): Promise<LoopbackIrcServer> {
+  const lines: string[] = [];
+  const sockets = new Set<net.Socket>();
+  const server = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.setEncoding("utf8");
+    let buffer = "";
+    socket.on("data", (chunk: string) => {
+      buffer += chunk;
+      let idx = buffer.indexOf("\n");
+      while (idx !== -1) {
+        const line = buffer.slice(0, idx).replace(/\r$/, "");
+        buffer = buffer.slice(idx + 1);
+        idx = buffer.indexOf("\n");
+        lines.push(line);
+        if (line.startsWith("USER ")) socket.write(":server 001 bot :welcome\r\n");
+      }
+    });
+    socket.on("close", () => sockets.delete(socket));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected loopback IRC server to bind a TCP port");
+  }
+  return {
+    port: address.port,
+    lines,
+    close: async () => {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
 
 describe("irc client nickserv", () => {
   it("builds IDENTIFY command when password is set", () => {
@@ -179,6 +220,18 @@ describe("irc client privmsg byte-limit chunking", () => {
       const text = "漢".repeat(10);
       const bodies = await collectPrivmsgBodies(server, text, 2);
       expect(bodies.map((body) => body.length)).toEqual([2, 2, 2, 2, 2]);
+      expect(bodies.join("")).toBe(text);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps one astral code point whole when the legacy character cap is one UTF-16 unit", async () => {
+    const server = await startLoopbackIrcServer();
+    try {
+      const text = "\u{1F600}".repeat(10);
+      const bodies = await collectPrivmsgBodies(server, text, 1);
+      expect(bodies.map((body) => body.length)).toEqual(Array(10).fill(2));
       expect(bodies.join("")).toBe(text);
     } finally {
       await server.close();
