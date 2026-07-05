@@ -451,18 +451,18 @@ describe("buildInboundUserContextPrefix", () => {
       ChatType: "group",
       OriginatingChannel: "signal",
       SourceActor: {
-        id: "signal:+15550001",
-        peerId: "signal:uuid-1",
-        displayName: "Alice",
+        id: "signal:participant-redacted",
+        peerId: "signal:peer-redacted",
+        displayName: "Participant Redacted",
         role: "participant",
         context: "signal",
       },
     } as TemplateContext);
 
     expect(parseConversationInfoPayload(text)).toMatchObject({
-      source_actor_id: "signal:+15550001",
-      source_actor_peer_id: "signal:uuid-1",
-      source_actor_display_name: "Alice",
+      source_actor_id: "signal:participant-redacted",
+      source_actor_peer_id: "signal:peer-redacted",
+      source_actor_display_name: "Participant Redacted",
       source_actor_role: "participant",
       source_actor_context: "signal",
     });

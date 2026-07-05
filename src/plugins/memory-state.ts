@@ -7,6 +7,11 @@ import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
 
 const log = createSubsystemLogger("plugins/memory-state");
 
+/**
+ * Optional current-turn attribution metadata passed to memory consumers.
+ * Older runtimes and non-channel calls may omit it; consumers must treat it as
+ * best-effort guidance for attribution, not as authorization or persistence policy.
+ */
 export type MemorySourceActorContext = {
   id: string;
   peerId?: string;

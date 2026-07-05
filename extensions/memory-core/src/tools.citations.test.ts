@@ -397,11 +397,11 @@ describe("memory tools", () => {
     const search = vi.fn(async () => [
       {
         corpus: "wiki",
-        path: "entities/alice.md",
-        title: "Alice",
+        path: "entities/participant-redacted.md",
+        title: "Participant Redacted",
         kind: "entity",
         score: 4,
-        snippet: "Alice wiki entry",
+        snippet: "Participant wiki entry",
       },
     ]);
     registerMemoryCorpusSupplement("memory-wiki", {
@@ -410,19 +410,46 @@ describe("memory tools", () => {
     });
 
     const sourceActor = {
-      id: "signal:+15550001",
-      peerId: "signal:uuid-1",
-      displayName: "Alice",
+      id: "signal:participant-redacted",
+      peerId: "signal:peer-redacted",
+      displayName: "Participant Redacted",
       role: "participant",
       context: "signal",
-    };
+    } as const;
     const tool = createMemorySearchToolOrThrow({ sourceActor });
-    await tool.execute("call_wiki_actor", { query: "alice", corpus: "wiki" });
+    await tool.execute("call_wiki_actor", { query: "participant", corpus: "wiki" });
 
     expect(search).toHaveBeenCalledWith(
       expect.objectContaining({
-        query: "alice",
+        query: "participant",
         sourceActor,
+      }),
+    );
+  });
+
+  it("keeps corpus supplement searches compatible without source actor context", async () => {
+    const search = vi.fn(async () => [
+      {
+        corpus: "wiki",
+        path: "entities/shared-topic.md",
+        title: "Shared Topic",
+        kind: "entity",
+        score: 4,
+        snippet: "Shared topic wiki entry",
+      },
+    ]);
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search,
+      get: async () => null,
+    });
+
+    const tool = createMemorySearchToolOrThrow();
+    await tool.execute("call_wiki_no_actor", { query: "shared topic", corpus: "wiki" });
+
+    expect(search).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: "shared topic",
+        sourceActor: undefined,
       }),
     );
   });
@@ -770,10 +797,10 @@ describe("memory tools", () => {
     });
     const get = vi.fn(async () => ({
       corpus: "wiki",
-      path: "entities/alice.md",
-      title: "Alice",
+      path: "entities/participant-redacted.md",
+      title: "Participant Redacted",
       kind: "entity",
-      content: "Alice wiki entry",
+      content: "Participant wiki entry",
       fromLine: 1,
       lineCount: 1,
     }));
@@ -783,21 +810,21 @@ describe("memory tools", () => {
     });
 
     const sourceActor = {
-      id: "signal:+15550001",
-      peerId: "signal:uuid-1",
-      displayName: "Alice",
+      id: "signal:participant-redacted",
+      peerId: "signal:peer-redacted",
+      displayName: "Participant Redacted",
       role: "participant",
       context: "signal",
-    };
+    } as const;
     const tool = createMemoryGetToolOrThrow(createDefaultMemoryToolConfig(), { sourceActor });
     await tool.execute("call_get_actor", {
-      path: "entities/alice.md",
+      path: "entities/participant-redacted.md",
       corpus: "all",
     });
 
     expect(get).toHaveBeenCalledWith(
       expect.objectContaining({
-        lookup: "entities/alice.md",
+        lookup: "entities/participant-redacted.md",
         sourceActor,
       }),
     );
