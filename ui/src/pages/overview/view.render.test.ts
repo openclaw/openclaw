@@ -22,7 +22,7 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 220,
-      sidebarPinnedRoutes: ["overview", "workboard", "agents"],
+      sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
       borderRadius: 50,
       locale: "en",

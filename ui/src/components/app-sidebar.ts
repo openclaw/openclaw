@@ -672,6 +672,8 @@ export class AppSidebar extends LitElement {
     `;
     // Codex-style session sections: pinned rows split out above the chat list,
     // active session leads its section, tiny non-interactive labels.
+    // recentSessions is capped by resolveSessionNavigation, but its comparator
+    // sorts pinnedAt first, so pinned rows always survive the cap.
     const allRows = [...(activeSession ? [activeSession] : []), ...recentSessions];
     const pinnedRows = allRows.filter((session) => session.pinned);
     const chatRows = allRows.filter((session) => !session.pinned);
