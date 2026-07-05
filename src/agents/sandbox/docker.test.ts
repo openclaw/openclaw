@@ -21,6 +21,7 @@ const spawnState = vi.hoisted(() => ({
   calls: [] as SpawnCall[],
   imageExists: true,
   inspectError: "",
+  emitStreamError: false,
 }));
 
 function createMockDockerChild(): MockDockerChild {
@@ -54,6 +55,10 @@ function spawnDockerProcess(command: string, args: string[]) {
   }
 
   queueMicrotask(() => {
+    if (spawnState.emitStreamError) {
+      child.stdout.emit("error", new Error("stdout read failed"));
+      child.stderr.emit("error", new Error("stderr read failed"));
+    }
     if (stderr) {
       child.stderr.emit("data", Buffer.from(stderr));
     }
@@ -73,11 +78,12 @@ async function createChildProcessMock() {
 vi.mock("node:child_process", async () => createChildProcessMock());
 
 let ensureDockerImage: typeof import("./docker.js").ensureDockerImage;
+let execDockerRaw: typeof import("./docker.js").execDockerRaw;
 
 async function loadFreshDockerModuleForTest() {
   vi.resetModules();
   vi.doMock("node:child_process", async () => createChildProcessMock());
-  ({ ensureDockerImage } = await import("./docker.js"));
+  ({ ensureDockerImage, execDockerRaw } = await import("./docker.js"));
 }
 
 describe("ensureDockerImage", () => {
@@ -85,6 +91,7 @@ describe("ensureDockerImage", () => {
     spawnState.calls.length = 0;
     spawnState.imageExists = true;
     spawnState.inspectError = "";
+    spawnState.emitStreamError = false;
     await loadFreshDockerModuleForTest();
   });
 
@@ -137,5 +144,25 @@ describe("ensureDockerImage", () => {
         args: ["image", "inspect", DEFAULT_SANDBOX_IMAGE],
       },
     ]);
+  });
+});
+
+describe("execDockerRaw", () => {
+  beforeEach(async () => {
+    spawnState.calls.length = 0;
+    spawnState.imageExists = true;
+    spawnState.inspectError = "";
+    spawnState.emitStreamError = false;
+    await loadFreshDockerModuleForTest();
+  });
+
+  it("swallows stdout and stderr stream errors without rejecting", async () => {
+    spawnState.emitStreamError = true;
+
+    await expect(execDockerRaw(["image", "inspect", DEFAULT_SANDBOX_IMAGE])).resolves.toEqual(
+      expect.objectContaining({
+        code: 0,
+      }),
+    );
   });
 });
