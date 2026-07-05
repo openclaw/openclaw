@@ -58,15 +58,15 @@ function formatDuration(ms: number): string {
   if (secs < 60) {
     return `${secs} second${secs === 1 ? "" : "s"}`;
   }
-  const mins = Math.round(secs / 60);
+  const mins = Math.round(ms / 60_000);
   if (mins < 60) {
     return `${mins} minute${mins === 1 ? "" : "s"}`;
   }
-  const hours = Math.round(mins / 60);
+  const hours = Math.round(ms / 3_600_000);
   if (hours < 24) {
     return `${hours} hour${hours === 1 ? "" : "s"}`;
   }
-  const days = Math.round(hours / 24);
+  const days = Math.round(ms / 86_400_000);
   return `${days} day${days === 1 ? "" : "s"}`;
 }
 

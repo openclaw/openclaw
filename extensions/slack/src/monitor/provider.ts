@@ -69,9 +69,11 @@ import {
   type SlackBoltResolvedExports,
 } from "./provider-support.js";
 import {
+  formatSlackSocketModeSharedConnectionWarning,
   formatUnknownError,
   getSocketEmitter,
   isNonRecoverableSlackAuthError,
+  registerSlackSocketModeConnectionDiagnostics,
   SLACK_SOCKET_RECONNECT_POLICY,
   waitForSlackSocketDisconnect,
 } from "./reconnect-policy.js";
@@ -334,6 +336,15 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         }
       : null;
   let unregisterHttpHandler: (() => void) | null = null;
+  const unregisterSocketModeConnectionDiagnostics =
+    slackMode === "socket"
+      ? registerSlackSocketModeConnectionDiagnostics({
+          app,
+          onSharedConnection: (activeConnections) => {
+            runtime.log?.(warn(formatSlackSocketModeSharedConnectionWarning(activeConnections)));
+          },
+        })
+      : () => {};
 
   let botUserId = "";
   let botId = "";
@@ -707,6 +718,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       setSlackDefaultSendIdentity(account.accountId, undefined);
     }
     opts.abortSignal?.removeEventListener("abort", stopOnAbort);
+    unregisterSocketModeConnectionDiagnostics();
     unregisterHttpHandler?.();
     await gracefulStop();
   }

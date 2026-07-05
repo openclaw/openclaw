@@ -1,4 +1,5 @@
 /** Tests CLI JSON/JSONL output parsing, streamed deltas, and error extraction. */
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   createCliJsonlStreamingParser,
@@ -7,6 +8,7 @@ import {
   parseCliJsonl,
   parseCliOutput,
   supportsCliJsonlToolEvents,
+  type CliThinkingProgress,
   type CliToolResultDelta,
   type CliToolUseStartDelta,
 } from "./cli-output.js";
@@ -1286,7 +1288,7 @@ describe("createCliJsonlStreamingParser", () => {
           event: {
             type: "content_block_delta",
             index: 1,
-            delta: { type: "input_json_delta", partial_json: "{\"file_path\":\"x\"}" },
+            delta: { type: "input_json_delta", partial_json: '{"file_path":"x"}' },
           },
         }),
         JSON.stringify({
@@ -1319,6 +1321,127 @@ describe("createCliJsonlStreamingParser", () => {
     expect(thinking).toEqual([
       { text: "A", delta: "A", isReasoningSnapshot: true },
       { text: "AB", delta: "B", isReasoningSnapshot: true },
+    ]);
+  });
+
+  it("streams indexless thinking deltas from content block framing", () => {
+    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+      onThinkingDelta: (delta) => thinking.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "message_start",
+            message: { id: "msg-1" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            content_block: { type: "thinking" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "thinking_delta", thinking: "A" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop" },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            content_block: { type: "tool_use", id: "tool-1", name: "Read" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "input_json_delta", partial_json: '{"file_path":"x"}' },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop" },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            content_block: { type: "thinking" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "thinking_delta", thinking: "B" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop" },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-1",
+            content: [{ type: "text", text: "Answer." }],
+          },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(thinking).toEqual([
+      { text: "A", delta: "A", isReasoningSnapshot: true },
+      { text: "AB", delta: "B", isReasoningSnapshot: true },
+    ]);
+  });
+
+  it("emits token progress for Claude CLI 2.1 empty thinking deltas", () => {
+    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
+    const progress: CliThinkingProgress[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+      onThinkingDelta: (delta) => thinking.push(delta),
+      onThinkingProgress: (payload) => progress.push(payload),
+    });
+
+    parser.push(readFileSync("test/fixtures/cli/claude-2.1-thinking-progress.jsonl", "utf8"));
+    parser.finish();
+
+    expect(thinking).toEqual([]);
+    expect(progress).toEqual([
+      { progressTokens: 50 },
+      { progressTokens: 200 },
+      { progressTokens: 300 },
     ]);
   });
 
@@ -1410,7 +1533,7 @@ describe("createCliJsonlStreamingParser", () => {
     ]);
   });
 
-  it("ignores thinking deltas without a numeric content-block index", () => {
+  it("ignores indexless thinking deltas without content block framing", () => {
     const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
     const parser = createCliJsonlStreamingParser({
       backend: {

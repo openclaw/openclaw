@@ -1466,7 +1466,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it.each([
     ["embedded", { assistantMessageIndex: 7 }],
-    ["CLI", { assistantTranscriptOwned: true }],
+    ["runtime-owned", { assistantTranscriptOwned: true }],
   ])("does not mirror %s finals with a runtime transcript owner", async (_name, metadata) => {
     setNoAbort();
     const dispatcher = createDispatcher();

@@ -41,6 +41,10 @@ Both transports are production-ready and reach feature parity for messaging, sla
 **Pick HTTP Request URLs** when running multiple Gateway replicas behind a load balancer, when outbound WSS is blocked but inbound HTTPS is allowed, or when you already terminate Slack webhooks at a reverse proxy.
 </Note>
 
+<Warning>
+  Slack can maintain multiple Socket Mode connections for one app and may deliver each payload to any connection. Separate OpenClaw gateways that share a Slack app therefore need equivalent routing and authorization configuration. Otherwise, use a separate Slack app per gateway, a single relay ingress, or HTTP Request URLs behind a load balancer. See [Using Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode#using-multiple-connections).
+</Warning>
+
 ### Relay mode
 
 Relay mode separates Slack ingress from the OpenClaw gateway. A trusted router owns the
@@ -1032,6 +1036,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 
     - `requireMention`
     - `ignoreOtherMentions`
+    - `replyToMode` (`off|first|all|batched`; overrides account/chat-type reply mode for this channel)
     - `users` (allowlist)
     - `allowBots`
     - `skills`
@@ -1064,6 +1069,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 
 Reply threading controls:
 
+- `channels.slack.channels.<id>.replyToMode`: per-channel override for Slack channel/private-channel messages
 - `channels.slack.replyToMode`: `off|first|all|batched` (default `off`)
 - `channels.slack.replyToModeByChatType`: per `direct|group|channel`
 - legacy fallback for direct chats: `channels.slack.dm.replyToMode`
@@ -1075,7 +1081,7 @@ Manual reply tags are supported:
 
 For explicit Slack thread replies from the `message` tool, set `replyBroadcast: true` with `action: "send"` and `threadId` or `replyTo` to ask Slack to also broadcast the thread reply to the parent channel. This maps to Slack's `chat.postMessage` `reply_broadcast` flag and is only supported for text or Block Kit sends, not media uploads.
 
-When a `message` tool call runs inside a Slack thread and targets the same channel, OpenClaw normally inherits the current Slack thread according to `replyToMode`. Set `topLevel: true` on `action: "send"` or `action: "upload-file"` to force a new parent-channel message instead. `threadId: null` is accepted as the same top-level opt-out.
+When a `message` tool call runs inside a Slack thread and targets the same channel, OpenClaw normally inherits the current Slack thread according to the effective account, chat-type, or per-channel `replyToMode`. Automatic replies and same-channel `send` or `upload-file` calls use the same per-channel override. Set `topLevel: true` on `action: "send"` or `action: "upload-file"` to force a new parent-channel message instead. `threadId: null` is accepted as the same top-level opt-out.
 
 <Note>
 `replyToMode="off"` disables outbound Slack reply threading, including explicit `[[reply_to_*]]` tags. It does not flatten inbound Slack thread sessions: messages already posted inside a Slack thread still route to the `:thread:<threadTs>` session. This differs from Telegram, where explicit tags are still honored in `"off"` mode. Slack threads hide messages from the channel while Telegram replies stay visible inline.

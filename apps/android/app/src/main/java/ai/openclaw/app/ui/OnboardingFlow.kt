@@ -17,6 +17,7 @@ import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.design.OpenClawMascot
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -46,7 +47,6 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -118,7 +118,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -891,7 +890,7 @@ private fun WelcomeLogo() {
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
     Box(modifier = Modifier.fillMaxSize().padding(12.dp), contentAlignment = Alignment.Center) {
-      Image(painter = painterResource(id = R.drawable.openclaw_logo), contentDescription = "OpenClaw logo", modifier = Modifier.fillMaxSize())
+      OpenClawMascot(contentDescription = "OpenClaw logo", modifier = Modifier.fillMaxSize())
     }
   }
 }
