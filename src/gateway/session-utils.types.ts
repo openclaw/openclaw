@@ -1,5 +1,6 @@
 // Shared Gateway session projection types.
 // Keeps server methods and Control UI payloads aligned.
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../channels/chat-type.js";
 import type {
   SessionCompactionCheckpoint,
@@ -7,6 +8,7 @@ import type {
   SessionGoal,
 } from "../config/sessions/types.js";
 import type { PluginSessionExtensionProjection } from "../plugins/host-hooks.js";
+import type { FastModeSource } from "../shared/fast-mode.js";
 import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
@@ -58,6 +60,10 @@ export type GatewaySessionRow = {
   chatType?: ChatType;
   origin?: SessionEntry["origin"];
   updatedAt: number | null;
+  archived?: boolean;
+  archivedAt?: number;
+  pinned?: boolean;
+  pinnedAt?: number;
   sessionId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
@@ -65,7 +71,10 @@ export type GatewaySessionRow = {
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
-  fastMode?: boolean;
+  fastMode?: FastMode;
+  effectiveFastMode?: FastMode;
+  effectiveFastModeSource?: FastModeSource;
+  fastAutoOnSeconds?: number;
   verboseLevel?: string;
   traceLevel?: string;
   reasoningLevel?: string;
@@ -87,6 +96,8 @@ export type GatewaySessionRow = {
   parentSessionKey?: string;
   childSessions?: string[];
   responseUsage?: "on" | "off" | "tokens" | "full";
+  /** Resolved effective usage mode (session override → channel config → default → off). Populated by surfaces that have config access; absent from the raw session store row. */
+  effectiveResponseUsage?: "on" | "off" | "tokens" | "full";
   modelProvider?: string;
   model?: string;
   agentRuntime?: GatewayAgentRuntime;

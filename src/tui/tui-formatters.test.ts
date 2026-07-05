@@ -376,6 +376,23 @@ describe("sanitizeRenderableText", () => {
     expectTokenWidthUnderLimit(input);
   });
 
+  it("preserves long CJK prose without inserting display spaces", () => {
+    const input =
+      "特蕾莎修女是一个极端投入极有宗教信念愿意亲身服务底层苦难者的人但她不是现代公共卫生意义上的慈善改革者";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+    expect(sanitized).not.toContain("苦难 者");
+  });
+
+  it("preserves mixed long CJK prose without inserting display spaces", () => {
+    const input =
+      "MotherTeresa更像是宗教慈悲的象征而不是现代慈善治理的典范她值得尊重的地方是真实走进极端苦难";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
   it("preserves long filesystem paths verbatim for copy safety", () => {
     const input =
       "/Users/jasonshawn/PerfectXiao/a_very_long_directory_name_designed_specifically_to_test_the_line_wrapping_issue/file.txt";

@@ -109,6 +109,37 @@ describe("isSilentReplyText", () => {
   it("returns false for token embedded in text", () => {
     expect(isSilentReplyText("Please NO_REPLY to this")).toBe(false);
   });
+
+  it.each([
+    ".NO_REPLY",
+    "*NO_REPLY",
+    "...NO_REPLY",
+    "NO_REPLY.",
+    "NO_REPLY*",
+    "NO_REPLY...",
+    "*NO_REPLY*",
+    '"NO_REPLY"',
+    ".NO_REPLY.",
+    " .NO_REPLY ",
+    " NO_REPLY. ",
+    " *NO_REPLY* ",
+  ])("returns true for punctuation-wrapped token-only text: %j (#98166)", (text) => {
+    expect(isSilentReplyText(text)).toBe(true);
+  });
+
+  it.each(["the sentinel is NO_REPLY, fyi", "💬NO_REPLY", "NO_REPLY👍"])(
+    "keeps substantive punctuation or symbols: %j",
+    (text) => {
+      expect(isSilentReplyText(text)).toBe(false);
+    },
+  );
+
+  it("preserves exact custom-token matches with punctuation-edged tokens", () => {
+    // Custom tokens whose first/last character is punctuation must still match
+    expect(isSilentReplyText("*SILENT*", "*SILENT*")).toBe(true);
+    expect(isSilentReplyText("#QUIET#", "#QUIET#")).toBe(true);
+    expect(isSilentReplyText("^^MUTE^^", "^^MUTE^^")).toBe(true);
+  });
 });
 
 describe("isSilentReplyPayloadText", () => {
@@ -126,6 +157,13 @@ describe("isSilentReplyPayloadText", () => {
       ),
     ).toBe(true);
     expect(isSilentReplyPayloadText("<think>I will stay quiet here.NO_REPLY")).toBe(true);
+  });
+
+  it.each([
+    ["closed", "<mm:think>internal reasoning</mm:think>\nNO_REPLY"],
+    ["open", "<mm:think>internal reasoning\nNO_REPLY"],
+  ])("returns true for %s MiniMax reasoning followed by NO_REPLY", (_kind, text) => {
+    expect(isSilentReplyPayloadText(text)).toBe(true);
   });
 
   it("keeps substantive replies that also contain a trailing NO_REPLY token", () => {

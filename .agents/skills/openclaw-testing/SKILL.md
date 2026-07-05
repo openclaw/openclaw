@@ -28,7 +28,8 @@ Prove the touched surface first. Do not reflexively run the whole suite.
      For maintainer heavy `pnpm` gates, that is usually delegated Blacksmith
      Testbox through Crabbox, e.g. `node scripts/crabbox-wrapper.mjs run
 --provider blacksmith-testbox ... -- env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 corepack pnpm check:changed`. For direct AWS
-     Crabbox proof, omit `--provider` and let `.crabbox.yaml` choose AWS.
+     Crabbox proof, pass `--provider aws`; omitting `--provider` follows the
+     `.crabbox.yaml` default (Blacksmith Testbox).
    - workflow-only: `git diff --check`, workflow syntax/lint (`actionlint` when available)
    - docs-only: `pnpm docs:list`, docs formatter/lint only if docs tooling changed or requested
 2. Reproduce narrowly before fixing.
@@ -86,6 +87,36 @@ node scripts/run-vitest.mjs <path-or-filter>
 
 That keeps the test scoped without giving pnpm a chance to run dependency
 status checks or install reconciliation in a linked worktree.
+
+## Plugin Package And Live Proof
+
+When validating an external or official plugin package, prove the package shape
+and trust shape separately. Do not use raw archive/path installs to prove the
+managed dependency path, and do not treat `npm-pack:` as proof of catalog-linked
+official trust.
+
+- For local release-candidate proof, pack the plugin and install it with
+  `openclaw plugins install npm-pack:<path.tgz> --force`. This uses the managed
+  per-plugin npm project and is the closest local substitute for the registry
+  artifact's dependency behavior.
+- If the behavior depends on bundled-plugin or trusted official plugin status,
+  add a second proof through a catalog-backed official install or a published
+  package path that records official trust. Local `npm-pack:` proof alone is
+  not sufficient for privileged helpers or trusted-official scope handling.
+- Treat missing runtime imports as package-manifest bugs first. Runtime code
+  must depend on packages declared in the plugin package `dependencies` or
+  `optionalDependencies`; do not make a final proof depend on manually running
+  `npm install` inside `~/.openclaw/npm/projects/...`.
+- If the plugin ships `npm-shrinkwrap.json`, regenerate or check it after
+  moving dependencies between dev and runtime sections.
+- Inspect the packed tarball when dependency ownership or generated `dist/`
+  matters: verify `package/package.json`, the expected runtime files, and any
+  package-local shrinkwrap before installing it on a live host.
+- After installing the package, restart the Gateway when the touched surface is
+  plugin registration, runtime dependency loading, privileged helpers, provider
+  routing, or generated dist.
+- For live provider or channel probes, add only temporary config needed for the
+  proof, then remove it and verify the cleanup state before closeout.
 
 ## Command Semantics
 

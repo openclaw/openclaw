@@ -2,6 +2,7 @@
 import { execFile, type ExecFileOptions } from "node:child_process";
 import { promisify } from "node:util";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { toErrorObject } from "../infra/errors.js";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import {
   MEDIA_FFMPEG_MAX_BUFFER_BYTES,
@@ -64,7 +65,7 @@ export async function runFfprobe(args: string[], options?: MediaExecOptions): Pr
     let stdinWriteError: Error | undefined;
     const proc = execFile(requireSystemBin("ffprobe"), args, execOptions, (err, stdout) => {
       if (err) {
-        reject(toLintErrorObject(err, "Non-Error rejection"));
+        reject(toErrorObject(err, "Non-Error rejection"));
         return;
       }
       if (stdinWriteError && !isBrokenPipeError(stdinWriteError)) {
@@ -117,18 +118,4 @@ export function parseFfprobeCodecAndSampleRate(stdout: string): {
     codec,
     sampleRateHz: parseFfprobeSampleRateHz(sampleRateRaw),
   };
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

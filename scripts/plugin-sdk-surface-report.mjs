@@ -14,7 +14,46 @@ import {
 } from "./lib/plugin-sdk-entries.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const checkOnly = process.argv.includes("--check");
+function usage() {
+  return `Usage: node scripts/plugin-sdk-surface-report.mjs [--check]
+
+Reports plugin SDK export surface metadata.
+
+Options:
+  --check     Fail when SDK surface budgets are exceeded.
+  -h, --help  Show this help.
+`;
+}
+
+function parseArgs(argv) {
+  const args = { check: false, help: false };
+  for (const arg of argv) {
+    if (arg === "--check") {
+      args.check = true;
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") {
+      args.help = true;
+      continue;
+    }
+    throw new Error(`Unknown plugin SDK surface report option: ${arg}`);
+  }
+  return args;
+}
+
+let cliArgs;
+try {
+  cliArgs = parseArgs(process.argv.slice(2));
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
+if (cliArgs.help) {
+  process.stdout.write(usage());
+  process.exit(0);
+}
+
+const checkOnly = cliArgs.check;
 const publicEntrypointSet = new Set(publicPluginSdkEntrypoints);
 const localOnlyEntrypointSet = new Set(privateLocalOnlyPluginSdkEntrypoints);
 const deprecatedPublicEntrypointSet = new Set(deprecatedPublicPluginSdkEntrypoints);
@@ -37,21 +76,147 @@ function readBudgetEnv(name, fallback) {
   return parsed;
 }
 
+function readEntrypointBudgetEnv(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined) {
+    return fallback;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`${name} must be a JSON object of entrypoint integer budgets`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${name} must be a JSON object of entrypoint integer budgets`);
+  }
+
+  const overrides = {};
+  for (const [entrypoint, value] of Object.entries(parsed)) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error(`${name}.${entrypoint} must be a safe non-negative integer`);
+    }
+    overrides[entrypoint] = value;
+  }
+  return Object.freeze({ ...fallback, ...overrides });
+}
+
+const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
+  core: 2,
+  health: 1,
+  lmstudio: 1,
+  "provider-setup": 1,
+  "self-hosted-provider-setup": 14,
+  routing: 1,
+  runtime: 3,
+  "runtime-logger": 3,
+  "runtime-secret-resolution": 5,
+  "setup-adapter-runtime": 1,
+  "channel-streaming": 48,
+  "approval-reply-runtime": 1,
+  "config-runtime": 123,
+  "config-contracts": 1,
+  "config-types": 421,
+  "config-schema": 3,
+  "reply-dedupe": 1,
+  "inbound-reply-dispatch": 33,
+  "channel-reply-pipeline": 12,
+  "channel-reply-options-runtime": 2,
+  "channel-runtime": 144,
+  "interactive-runtime": 13,
+  "outbound-send-deps": 4,
+  "outbound-runtime": 16,
+  "file-access-runtime": 2,
+  "infra-runtime": 585,
+  "ssrf-policy": 1,
+  "ssrf-runtime": 1,
+  "media-runtime": 2,
+  "text-runtime": 191,
+  "agent-runtime": 7,
+  "plugin-runtime": 13,
+  "channel-secret-runtime": 23,
+  "secret-file-runtime": 1,
+  "security-runtime": 7,
+  "agent-harness": 7,
+  "agent-harness-runtime": 11,
+  types: 6,
+  "agent-config-primitives": 2,
+  "command-auth": 81,
+  compat: 152,
+  "direct-dm": 9,
+  "direct-dm-access": 5,
+  discord: 48,
+  mattermost: 7,
+  matrix: 1,
+  "channel-config-schema-legacy": 22,
+  "channel-actions": 2,
+  "channel-envelope": 3,
+  "channel-inbound": 21,
+  "channel-inbound-roots": 1,
+  "channel-logging": 4,
+  "channel-location": 4,
+  "channel-mention-gating": 7,
+  "channel-lifecycle": 23,
+  "channel-ingress": 8,
+  "channel-message": 229,
+  "channel-message-runtime": 226,
+  "channel-pairing-paths": 1,
+  "channel-policy": 8,
+  "channel-route": 5,
+  "session-store-runtime": 1,
+  "session-transcript-runtime": 2,
+  "group-access": 13,
+  "media-generation-runtime-shared": 3,
+  "music-generation-core": 20,
+  "reply-history": 8,
+  "messaging-targets": 12,
+  "memory-core": 45,
+  "memory-core-engine-runtime": 15,
+  "memory-core-host-multimodal": 3,
+  "memory-core-host-query": 2,
+  "memory-core-host-events": 12,
+  "memory-core-host-status": 1,
+  "memory-core-host-runtime-core": 1,
+  "memory-host-core": 1,
+  "memory-host-files": 7,
+  "memory-host-status": 72,
+  "provider-auth": 20,
+  "provider-oauth-runtime": 2,
+  "provider-auth-login": 3,
+  "provider-model-shared": 29,
+  "provider-stream-family": 40,
+  "provider-stream-shared": 29,
+  "provider-stream": 40,
+  "provider-web-search": 1,
+  "provider-zai-endpoint": 3,
+  "telegram-account": 3,
+  "telegram-command-config": 7,
+  "webhook-ingress": 2,
+  "webhook-path": 2,
+  zalouser: 5,
+  zod: 282,
+});
+
 let budgets;
+let publicDeprecatedExportsByEntrypointBudget;
 try {
   budgets = {
-    publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 308),
-    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 9920),
-    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5031),
+    publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 324),
+    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10429),
+    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5240),
     publicDeprecatedExports: readBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3143,
+      3261,
     ),
     publicWildcardReexports: readBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      215,
+      212,
     ),
   };
+  publicDeprecatedExportsByEntrypointBudget = readEntrypointBudgetEnv(
+    "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT",
+    defaultPublicDeprecatedExportsByEntrypointBudget,
+  );
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
@@ -77,9 +242,25 @@ function hasDeprecatedTag(symbol) {
   return symbol.getJsDocTags().some((tag) => tag.name === "deprecated");
 }
 
+const generatedLlmCoreValidatorExports = new Set(["validateToolArguments", "validateToolCall"]);
+
+function isGeneratedLlmCoreValidatorDeclaration(exportName, declaration) {
+  if (!generatedLlmCoreValidatorExports.has(exportName)) {
+    return false;
+  }
+  const relative = path.relative(repoRoot, declaration.getSourceFile().fileName);
+  const relativePath = relative.split(path.sep).join(path.posix.sep);
+  // Build artifacts can make agent-core's package-name validator reexports look
+  // newly callable. Keep this source report independent of generated dist state.
+  return relativePath.includes("llm-core/dist/validation.d.");
+}
+
 function isCallableExport(checker, symbol, sourceFile) {
   const target = unwrapAlias(checker, symbol);
   const declaration = target.valueDeclaration ?? target.declarations?.[0] ?? sourceFile;
+  if (isGeneratedLlmCoreValidatorDeclaration(symbol.getName(), declaration)) {
+    return false;
+  }
   const type = checker.getTypeOfSymbolAtLocation(target, declaration);
   return checker.getSignaturesOfType(type, ts.SignatureKind.Call).length > 0;
 }
@@ -101,27 +282,29 @@ function countWildcardReexports(entrypoints) {
   return { count, matches };
 }
 
+// All three inventories overlap. Reuse one module graph so reporting subsets
+// does not triple TypeScript compiler time and heap usage.
+const exportStatsProgram = ts.createProgram(pluginSdkEntrypoints.map(entrypointPath), {
+  allowJs: false,
+  declaration: true,
+  emitDeclarationOnly: true,
+  module: ts.ModuleKind.ESNext,
+  moduleResolution: ts.ModuleResolutionKind.Bundler,
+  noEmit: true,
+  skipLibCheck: true,
+  strict: false,
+  target: ts.ScriptTarget.ES2022,
+  types: [],
+});
+const exportStatsChecker = exportStatsProgram.getTypeChecker();
+
 function collectExportStats(entrypoints) {
-  const files = entrypoints.map(entrypointPath);
-  const program = ts.createProgram(files, {
-    allowJs: false,
-    declaration: true,
-    emitDeclarationOnly: true,
-    module: ts.ModuleKind.ESNext,
-    moduleResolution: ts.ModuleResolutionKind.Bundler,
-    noEmit: true,
-    skipLibCheck: true,
-    strict: false,
-    target: ts.ScriptTarget.ES2022,
-    types: [],
-  });
-  const checker = program.getTypeChecker();
   const byEntrypoint = new Map();
   const uniqueNames = new Set();
   const uniqueCallableNames = new Set();
 
   for (const entrypoint of entrypoints) {
-    const sourceFile = program.getSourceFile(entrypointPath(entrypoint));
+    const sourceFile = exportStatsProgram.getSourceFile(entrypointPath(entrypoint));
     if (!sourceFile) {
       byEntrypoint.set(entrypoint, {
         exports: 0,
@@ -131,8 +314,8 @@ function collectExportStats(entrypoints) {
       });
       continue;
     }
-    const moduleSymbol = checker.getSymbolAtLocation(sourceFile);
-    const symbols = moduleSymbol ? checker.getExportsOfModule(moduleSymbol) : [];
+    const moduleSymbol = exportStatsChecker.getSymbolAtLocation(sourceFile);
+    const symbols = moduleSymbol ? exportStatsChecker.getExportsOfModule(moduleSymbol) : [];
     let callableExports = 0;
     let deprecatedExports = 0;
     let deprecatedCallableExports = 0;
@@ -140,11 +323,11 @@ function collectExportStats(entrypoints) {
     for (const symbol of symbols) {
       const exportName = `${entrypoint}:${symbol.getName()}`;
       uniqueNames.add(exportName);
-      const callable = isCallableExport(checker, symbol, sourceFile);
+      const callable = isCallableExport(exportStatsChecker, symbol, sourceFile);
       const deprecated =
         deprecatedEntrypoint ||
         hasDeprecatedTag(symbol) ||
-        hasDeprecatedTag(unwrapAlias(checker, symbol));
+        hasDeprecatedTag(unwrapAlias(exportStatsChecker, symbol));
       if (callable) {
         callableExports += 1;
         uniqueCallableNames.add(exportName);
@@ -192,6 +375,19 @@ function formatStats(label, stats) {
     `  deprecated callable exports: ${stats.deprecatedCallableExports}`,
     `  unique entrypoint-qualified exports: ${stats.uniqueExports}`,
   ].join("\n");
+}
+
+function collectDeprecatedEntrypointBudgetFailures(byEntrypoint) {
+  const failures = [];
+  for (const [entrypoint, stats] of byEntrypoint) {
+    const budget = publicDeprecatedExportsByEntrypointBudget[entrypoint] ?? 0;
+    if (stats.deprecatedExports > budget) {
+      failures.push(
+        `public deprecated exports in ${entrypoint} ${stats.deprecatedExports} > ${budget}`,
+      );
+    }
+  }
+  return failures;
 }
 
 const allStats = collectExportStats(pluginSdkEntrypoints);
@@ -246,6 +442,7 @@ if (publicStats.totals.deprecatedExports > budgets.publicDeprecatedExports) {
     `public deprecated exports ${publicStats.totals.deprecatedExports} > ${budgets.publicDeprecatedExports}`,
   );
 }
+failures.push(...collectDeprecatedEntrypointBudgetFailures(publicStats.byEntrypoint));
 if (publicWildcards.count > budgets.publicWildcardReexports) {
   failures.push(
     `public wildcard reexports ${publicWildcards.count} > ${budgets.publicWildcardReexports}`,

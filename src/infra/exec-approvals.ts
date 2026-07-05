@@ -1,5 +1,5 @@
 // Manages exec approval policy, allowlist entries, and host targeting.
-import crypto from "node:crypto";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -10,13 +10,26 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
-import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
-import { analyzeShellCommand, type ExecCommandSegment } from "./exec-approvals-analysis.js";
+import { sha256Hex, sha256HexPrefix } from "./crypto-digest.js";
+import {
+  type AllowAlwaysPattern,
+  resolveAllowAlwaysPatternEntries,
+} from "./exec-approvals-allowlist.js";
+import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
-import { isShellWrapperInvocation } from "./exec-wrapper-resolution.js";
+import type { ExecAuthorizationPlan } from "./exec-authorization-plan.js";
+import {
+  extractBindableShellWrapperInlineCommand,
+  isShellWrapperInvocation,
+} from "./exec-wrapper-resolution.js";
 import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
 import { expandHomePrefix, resolveHomeRelativePath, resolveRequiredHomeDir } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
+import {
+  hasPosixInteractiveStartupBeforeInlineCommand,
+  hasPosixLoginStartupBeforeInlineCommand,
+  POSIX_INLINE_COMMAND_FLAGS,
+} from "./shell-inline-command.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
 export type { ExecAllowlistEntry } from "./exec-approvals.types.js";
@@ -208,6 +221,7 @@ export type ExecApprovalRequestPayload = {
   warningText?: string | null;
   commandAnalysis?: CommandExplanationSummary | null;
   commandSpans?: ExecApprovalCommandSpan[];
+  unavailableDecisions?: readonly ExecApprovalUnavailableDecision[];
   allowedDecisions?: readonly ExecApprovalDecision[];
   agentId?: string | null;
   resolvedPath?: string | null;
@@ -289,10 +303,7 @@ const EXEC_APPROVALS_FILE = "exec-approvals.json";
 const EXEC_APPROVALS_SOCKET = "exec-approvals.sock";
 
 function hashExecApprovalsRaw(raw: string | null): string {
-  return crypto
-    .createHash("sha256")
-    .update(raw ?? "")
-    .digest("hex");
+  return sha256Hex(raw ?? "");
 }
 
 function resolveExecApprovalsStateDir(env: NodeJS.ProcessEnv = process.env): {
@@ -783,7 +794,7 @@ export function mergeExecApprovalsSocketDefaults(params: {
 }
 
 function generateToken(): string {
-  return crypto.randomBytes(24).toString("base64url");
+  return randomBytes(24).toString("base64url");
 }
 
 export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
@@ -1271,10 +1282,13 @@ function isReadOnlySecurityAuditSuppressionInspection(argv: string[]): boolean {
   );
 }
 
-function removeParsedSegmentText(command: string, segments: Array<{ raw?: string }>): string {
+function removeParsedSegmentText(
+  command: string,
+  segments: Array<{ argv?: string[]; raw?: string }>,
+): string {
   let remaining = command;
   for (const segment of segments) {
-    const raw = segment.raw?.trim();
+    const raw = (segment.raw ?? segment.argv?.join(" "))?.trim();
     if (!raw) {
       continue;
     }
@@ -1301,28 +1315,8 @@ export function commandRequiresSecurityAuditSuppressionApproval(params: {
     }
   }
   if (sawSegmentMention) {
-    const rawAnalysis = analyzeShellCommand({
-      command: params.command,
-      cwd: params.cwd,
-      env: params.env,
-      platform: process.platform,
-    });
-    if (!rawAnalysis.ok) {
-      return textMentionsSecurityAuditSuppressions(params.command);
-    }
-    for (const segment of rawAnalysis.segments) {
-      if (
-        textMentionsSecurityAuditSuppressions(`${segment.raw} ${segment.argv.join(" ")}`) &&
-        !isReadOnlySecurityAuditSuppressionInspection(segment.argv)
-      ) {
-        return true;
-      }
-    }
-    if (
-      textMentionsSecurityAuditSuppressions(
-        removeParsedSegmentText(params.command, rawAnalysis.segments),
-      )
-    ) {
+    const unparsedText = removeParsedSegmentText(params.command, params.segments);
+    if (textMentionsSecurityAuditSuppressions(unparsedText)) {
       return true;
     }
     return false;
@@ -1348,14 +1342,15 @@ export function hasDurableExecApproval(params: {
   );
 }
 
+// Digest input is the trimmed command text only. Shipped approvals files
+// already hold `=command:` entries in this format; changing the input
+// silently orphans every persisted exact-command grant.
 function buildDurableCommandApprovalPattern(commandText: string): string {
-  const digest = crypto.createHash("sha256").update(commandText).digest("hex").slice(0, 16);
-  return `=command:${digest}`;
+  return `=command:${sha256HexPrefix(commandText, 16)}`;
 }
 
 function buildNodeCommandApprovalPattern(commandText: string): string {
-  const digest = crypto.createHash("sha256").update(commandText).digest("hex").slice(0, 16);
-  return `=node-command:${digest}`;
+  return `=node-command:${sha256HexPrefix(commandText, 16)}`;
 }
 
 export function hasNodeCommandAllowAlwaysMarker(params: {
@@ -1372,7 +1367,7 @@ export function hasNodeCommandAllowAlwaysMarker(params: {
   );
 }
 
-function hasExactCommandDurableExecApproval(params: {
+export function hasExactCommandDurableExecApproval(params: {
   allowlist?: readonly ExecAllowlistEntry[];
   commandText?: string | null;
 }): boolean {
@@ -1616,6 +1611,154 @@ export function persistAllowAlwaysPatterns(params: {
   return patterns;
 }
 
+export type AllowAlwaysPersistenceReason =
+  | "no-reusable-pattern"
+  | "prompt-only"
+  | "runtime-payload"
+  | "unplanned";
+
+export type AllowAlwaysPersistenceDecision =
+  | { kind: "patterns"; patterns: readonly AllowAlwaysPattern[]; commandText?: string }
+  | { kind: "exact-command"; commandText: string }
+  | { kind: "one-shot"; reasons: AllowAlwaysPersistenceReason[] };
+
+function hasRuntimeShellPayload(argv: readonly string[]): boolean {
+  const inlineCommand = extractBindableShellWrapperInlineCommand([...argv]);
+  return Boolean(
+    inlineCommand &&
+    (/(?:\$[A-Za-z0-9_@*?#$!-]|\$\{|`|\$\()/u.test(inlineCommand) ||
+      hasPosixInteractiveStartupBeforeInlineCommand(argv, POSIX_INLINE_COMMAND_FLAGS) ||
+      hasPosixLoginStartupBeforeInlineCommand(argv, POSIX_INLINE_COMMAND_FLAGS)),
+  );
+}
+
+function resolvePlanPersistenceState(plan: ExecAuthorizationPlan | undefined): {
+  reusablePatternsAllowed: boolean;
+  reasons: AllowAlwaysPersistenceReason[];
+} {
+  if (!plan) {
+    return { reusablePatternsAllowed: true, reasons: [] };
+  }
+  if (!plan.ok) {
+    return { reusablePatternsAllowed: false, reasons: ["unplanned"] };
+  }
+  const reasons = new Set<AllowAlwaysPersistenceReason>();
+  let reusablePatternsAllowed = true;
+  const candidates = plan.groups.flatMap((group) => group.candidates);
+  for (const candidate of candidates) {
+    if (candidate.trustMode === "prompt-only") {
+      reasons.add("prompt-only");
+    }
+    if (candidate.trustMode === "exact-command") {
+      // Durable `=command:` entries are command-text-only and cannot bind
+      // cwd, env, or PATH, so planner exact-command candidates stay one-shot.
+      reasons.add("no-reusable-pattern");
+    }
+    if (candidate.trustMode === "executable" && !candidate.allowAlways) {
+      reasons.add("no-reusable-pattern");
+    }
+    reusablePatternsAllowed = reusablePatternsAllowed && candidate.allowAlways;
+    if (hasRuntimeShellPayload(candidate.sourceSegment.argv)) {
+      reasons.add("runtime-payload");
+    }
+    if (
+      candidate.transport.kind === "shell-wrapper" &&
+      hasRuntimeShellPayload(candidate.transport.wrapperArgv)
+    ) {
+      reasons.add("runtime-payload");
+    }
+  }
+  return {
+    reusablePatternsAllowed,
+    reasons: [...reasons],
+  };
+}
+
+export function resolveAllowAlwaysPersistenceDecision(params: {
+  segments: ExecCommandSegment[];
+  commandText?: string | null;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  platform?: string | null;
+  strictInlineEval?: boolean;
+  authorizationPlan?: ExecAuthorizationPlan;
+  runtimePayload?: boolean;
+  preparedCoverage?: ReturnType<typeof resolveAllowAlwaysPatternCoverage> | null;
+}): AllowAlwaysPersistenceDecision {
+  const planPersistence = resolvePlanPersistenceState(params.authorizationPlan);
+  const reasons = new Set<AllowAlwaysPersistenceReason>(planPersistence.reasons);
+  if (params.runtimePayload === true) {
+    reasons.add("runtime-payload");
+  }
+  const commandText = params.commandText?.trim();
+  const hardReasons = [...reasons].filter((reason) => reason !== "no-reusable-pattern");
+  if (hardReasons.length > 0) {
+    return { kind: "one-shot", reasons: hardReasons };
+  }
+
+  if (params.preparedCoverage?.complete === true && params.preparedCoverage.patterns.length > 0) {
+    return {
+      kind: "patterns",
+      patterns: params.preparedCoverage.patterns,
+      ...(commandText ? { commandText } : {}),
+    };
+  }
+
+  if (planPersistence.reusablePatternsAllowed) {
+    const coverage = resolveAllowAlwaysPatternCoverage({
+      segments: params.segments,
+      cwd: params.cwd,
+      env: params.env,
+      platform: params.platform,
+      strictInlineEval: params.strictInlineEval,
+    });
+    if (coverage.patterns.length > 0) {
+      return {
+        kind: "patterns",
+        patterns: coverage.patterns,
+        ...(commandText && coverage.complete ? { commandText } : {}),
+      };
+    }
+  }
+
+  reasons.add("no-reusable-pattern");
+  return { kind: "one-shot", reasons: [...reasons] };
+}
+
+export function persistAllowAlwaysDecision(params: {
+  approvals: ExecApprovalsFile;
+  agentId: string | undefined;
+  decision: AllowAlwaysPersistenceDecision;
+}): void {
+  if (params.decision.kind === "one-shot") {
+    return;
+  }
+  if (params.decision.kind === "exact-command") {
+    addDurableCommandApproval(params.approvals, params.agentId, params.decision.commandText);
+    return;
+  }
+  for (const pattern of params.decision.patterns) {
+    if (!pattern.pattern) {
+      continue;
+    }
+    addAllowlistEntry(params.approvals, params.agentId, pattern.pattern, {
+      argPattern: pattern.argPattern,
+      source: "allow-always",
+    });
+  }
+  const normalizedCommand = params.decision.commandText?.trim();
+  if (normalizedCommand) {
+    addAllowlistEntry(
+      params.approvals,
+      params.agentId,
+      buildNodeCommandApprovalPattern(normalizedCommand),
+      {
+        source: "allow-always",
+      },
+    );
+  }
+}
+
 export function minSecurity(a: ExecSecurity, b: ExecSecurity): ExecSecurity {
   const order: Record<ExecSecurity, number> = { deny: 0, allowlist: 1, full: 2 };
   return order[a] <= order[b] ? a : b;
@@ -1632,28 +1775,76 @@ export const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "allow-always",
   "deny",
 ] as const satisfies readonly ExecApprovalDecision[];
+export const OPTIONAL_EXEC_APPROVAL_DECISIONS = [
+  "allow-always",
+] as const satisfies readonly ExecApprovalDecision[];
+export type ExecApprovalUnavailableDecision = (typeof OPTIONAL_EXEC_APPROVAL_DECISIONS)[number];
+
+const OPTIONAL_EXEC_APPROVAL_DECISION_SET: ReadonlySet<string> = new Set(
+  OPTIONAL_EXEC_APPROVAL_DECISIONS,
+);
+
+function isOptionalExecApprovalDecision(
+  decision: string,
+): decision is ExecApprovalUnavailableDecision {
+  return OPTIONAL_EXEC_APPROVAL_DECISION_SET.has(decision);
+}
+
+function collectExecApprovalUnavailableDecisionSet(
+  decisions?: readonly string[] | readonly ExecApprovalUnavailableDecision[] | null,
+): ReadonlySet<ExecApprovalUnavailableDecision> {
+  const unavailable = new Set<ExecApprovalUnavailableDecision>();
+  if (!Array.isArray(decisions)) {
+    return unavailable;
+  }
+  for (const decision of decisions) {
+    if (isOptionalExecApprovalDecision(decision)) {
+      unavailable.add(decision);
+    }
+  }
+  return unavailable;
+}
+
+export function normalizeExecApprovalUnavailableDecisions(
+  decisions?: readonly string[] | readonly ExecApprovalUnavailableDecision[] | null,
+): readonly ExecApprovalUnavailableDecision[] {
+  const unavailable = collectExecApprovalUnavailableDecisionSet(decisions);
+  return OPTIONAL_EXEC_APPROVAL_DECISIONS.filter((decision) => unavailable.has(decision));
+}
 
 export function resolveExecApprovalAllowedDecisions(params?: {
   ask?: string | null;
+  allowAlwaysPersistence?: AllowAlwaysPersistenceDecision | null;
 }): readonly ExecApprovalDecision[] {
   const ask = normalizeExecAsk(params?.ask);
-  if (ask === "always") {
+  if (ask === "always" || params?.allowAlwaysPersistence?.kind === "one-shot") {
     return ["allow-once", "deny"];
   }
   return DEFAULT_EXEC_APPROVAL_DECISIONS;
 }
 
+export function resolveExecApprovalUnavailableDecisions(params?: {
+  ask?: string | null;
+  allowAlwaysPersistence?: AllowAlwaysPersistenceDecision | null;
+}): readonly ExecApprovalUnavailableDecision[] {
+  const allowed = new Set(resolveExecApprovalAllowedDecisions(params));
+  return OPTIONAL_EXEC_APPROVAL_DECISIONS.filter((decision) => !allowed.has(decision));
+}
+
 export function resolveExecApprovalRequestAllowedDecisions(params?: {
   ask?: string | null;
-  allowedDecisions?: readonly ExecApprovalDecision[] | readonly string[] | null;
+  unavailableDecisions?: readonly ExecApprovalUnavailableDecision[] | readonly string[] | null;
 }): readonly ExecApprovalDecision[] {
-  const explicit = Array.isArray(params?.allowedDecisions)
-    ? params.allowedDecisions.filter(
-        (decision): decision is ExecApprovalDecision =>
-          decision === "allow-once" || decision === "allow-always" || decision === "deny",
-      )
-    : [];
-  return explicit.length > 0 ? explicit : resolveExecApprovalAllowedDecisions({ ask: params?.ask });
+  const policyDecisions = resolveExecApprovalAllowedDecisions({ ask: params?.ask });
+  const unavailableDecisions = collectExecApprovalUnavailableDecisionSet(
+    params?.unavailableDecisions,
+  );
+  if (unavailableDecisions.size === 0) {
+    return policyDecisions;
+  }
+  return policyDecisions.filter(
+    (decision) => !isOptionalExecApprovalDecision(decision) || !unavailableDecisions.has(decision),
+  );
 }
 
 export function isExecApprovalDecisionAllowed(params: {

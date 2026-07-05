@@ -130,7 +130,7 @@ function isMentionOnlyResidualText(text: string, wasMentioned: boolean | undefin
 }
 
 /** Result of attempting to handle an inbound message as an inline action. */
-export type InlineActionResult =
+type InlineActionResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
   | {
       kind: "continue";
@@ -178,6 +178,8 @@ export async function handleInlineActions(params: {
   agentId: string;
   agentDir?: string;
   sessionEntry?: SessionEntry;
+  initialSessionEntry?: SessionEntry;
+  allowCreateSessionEntry?: boolean;
   previousSessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;
@@ -220,6 +222,8 @@ export async function handleInlineActions(params: {
     agentId,
     agentDir,
     sessionEntry,
+    initialSessionEntry,
+    allowCreateSessionEntry,
     previousSessionEntry,
     sessionStore,
     sessionKey,
@@ -516,6 +520,8 @@ export async function handleInlineActions(params: {
         failures: elevatedFailures,
       },
       sessionEntry: targetSessionEntry,
+      initialSessionEntry,
+      allowCreateSessionEntry,
       previousSessionEntry,
       sessionStore,
       sessionKey,

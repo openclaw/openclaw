@@ -680,83 +680,6 @@ struct GeneralSettings: View {
         case .missingNode, .missingGateway, .incompatible, .error: .orange
         }
     }
-
-    private var healthCard: some View {
-        let snapshot = self.healthStore.snapshot
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(self.healthStore.state.tint)
-                    .frame(width: 10, height: 10)
-                Text(self.healthStore.summaryLine)
-                    .font(.callout.weight(.semibold))
-            }
-
-            if let snap = snapshot {
-                let linkId = snap.channelOrder?.first(where: {
-                    if let summary = snap.channels[$0] { return summary.linked != nil }
-                    return false
-                }) ?? snap.channels.keys.first(where: {
-                    if let summary = snap.channels[$0] { return summary.linked != nil }
-                    return false
-                })
-                let linkLabel =
-                    linkId.flatMap { snap.channelLabels?[$0] } ??
-                    linkId?.capitalized ??
-                    "Link channel"
-                let linkAge = linkId.flatMap { snap.channels[$0]?.authAgeMs }
-                Text("\(linkLabel) auth age: \(healthAgeString(linkAge))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text("Session store: \(snap.sessions.path) (\(snap.sessions.count) entries)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if let recent = snap.sessions.recent.first {
-                    let lastActivity = recent.updatedAt != nil
-                        ? relativeAge(from: Date(timeIntervalSince1970: (recent.updatedAt ?? 0) / 1000))
-                        : "unknown"
-                    Text("Last activity: \(recent.key) \(lastActivity)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Text("Last check: \(relativeAge(from: self.healthStore.lastSuccess))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if let error = self.healthStore.lastError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            } else {
-                Text("Health check pending…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack(spacing: 12) {
-                Button {
-                    Task { await self.healthStore.refresh(onDemand: true) }
-                } label: {
-                    if self.healthStore.isRefreshing {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Label("Run Health Check", systemImage: "arrow.clockwise")
-                    }
-                }
-                .disabled(self.healthStore.isRefreshing)
-
-                Divider().frame(height: 18)
-
-                Button {
-                    self.revealLogs()
-                } label: {
-                    Label("Reveal Logs", systemImage: "doc.text.magnifyingglass")
-                }
-            }
-        }
-        .padding(12)
-        .background(Color.gray.opacity(0.08))
-        .cornerRadius(10)
-    }
 }
 
 private enum RemoteStatus: Equatable {
@@ -837,11 +760,6 @@ extension GeneralSettings {
         MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID)
         GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: self.state)
     }
-}
-
-private func healthAgeString(_ ms: Double?) -> String {
-    guard let ms else { return "unknown" }
-    return msToAge(ms)
 }
 
 #if DEBUG

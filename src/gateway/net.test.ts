@@ -3,11 +3,11 @@
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
   __resetContainerCacheForTest,
   defaultGatewayBindMode,
   isContainerEnvironment,
-  isLocalInterfaceAddress,
   isLocalishHost,
   isLoopbackHost,
   isPrivateOrLoopbackAddress,
@@ -25,22 +25,12 @@ import {
 const flyMachineEnvKeys = ["FLY_MACHINE_ID", "FLY_APP_NAME"] as const;
 
 function clearFlyMachineEnvForTest(): () => void {
-  const previousEnv = new Map<(typeof flyMachineEnvKeys)[number], string | undefined>();
+  const envSnapshot = captureEnv([...flyMachineEnvKeys]);
   for (const key of flyMachineEnvKeys) {
-    previousEnv.set(key, process.env[key]);
-    delete process.env[key];
+    deleteTestEnvValue(key);
   }
 
-  return () => {
-    for (const key of flyMachineEnvKeys) {
-      const value = previousEnv.get(key);
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  };
+  return () => envSnapshot.restore();
 }
 
 function useClearedFlyMachineEnv() {
@@ -242,7 +232,7 @@ describe("isTrustedProxyAddress", () => {
   });
 });
 
-describe("isLocalInterfaceAddress", () => {
+describe("resolveLocalInterfaceAddressMatch", () => {
   const snapshot = makeNetworkInterfacesSnapshot({
     lo: [
       { address: "127.0.0.1", family: "IPv4", internal: true },
@@ -260,11 +250,7 @@ describe("isLocalInterfaceAddress", () => {
     { input: "10.42.0.60", expected: false },
     { input: undefined, expected: false },
   ] as const)("returns $expected for $input", ({ input, expected }) => {
-    expect(isLocalInterfaceAddress(input, snapshot)).toBe(expected);
-  });
-
-  it("returns false when interface discovery is unavailable", () => {
-    expect(isLocalInterfaceAddress("10.42.0.59", undefined)).toBe(false);
+    expect(resolveLocalInterfaceAddressMatch(input, snapshot)).toBe(expected);
   });
 
   it("reports an indeterminate match when interface discovery is unavailable", () => {
@@ -592,8 +578,8 @@ describe("isContainerEnvironment", () => {
     });
     vi.spyOn(fs, "readFileSync").mockReturnValue("10:cpuset:/\n9:perf_event:/\n8:memory:/\n0::/\n");
 
-    process.env.FLY_MACHINE_ID = "3d8d5459a03038";
-    process.env.FLY_APP_NAME = "openclaw-test";
+    setTestEnvValue("FLY_MACHINE_ID", "3d8d5459a03038");
+    setTestEnvValue("FLY_APP_NAME", "openclaw-test");
     expect(isContainerEnvironment()).toBe(true);
   });
 

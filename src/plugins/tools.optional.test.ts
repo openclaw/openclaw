@@ -372,6 +372,7 @@ function createXaiToolManifest() {
     },
     toolMetadata: {
       x_search: {
+        replaySafe: true,
         authSignals: [{ provider: "xai" }],
         configSignals: [
           {
@@ -952,15 +953,16 @@ describe("resolvePluginTools optional tools", () => {
       },
     });
 
-    ensureStandalonePluginToolRegistryLoaded({
+    const runtimeRegistry = ensureStandalonePluginToolRegistryLoaded({
       context: createContext() as never,
       toolAllowlist: ["optional_tool"],
     });
-    const tools = resolvePluginTools(
-      createResolveToolsParams({
+    const tools = resolvePluginTools({
+      ...createResolveToolsParams({
         toolAllowlist: ["optional_tool"],
       }),
-    );
+      runtimeRegistry,
+    });
 
     expectResolvedToolNames(tools, ["optional_tool"]);
     expectLoaderSelectedOnlyPluginIds(["optional-demo"]);
@@ -1269,6 +1271,7 @@ describe("resolvePluginTools optional tools", () => {
     });
 
     expectResolvedToolNames(tools, ["x_search"]);
+    expect(getPluginToolMeta(tools[0])?.replaySafe).toBe(true);
     expect(factory).toHaveBeenCalledTimes(1);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
@@ -2144,6 +2147,62 @@ describe("resolvePluginTools optional tools", () => {
     expect(factory).toHaveBeenCalledTimes(2);
   });
 
+  it("retains cold-loaded plugin tools for cached descriptor execution after active registry replacement", async () => {
+    const factory = vi.fn(() => makeTool("cached_lifecycle_tool"));
+    const gatewayRegistry = setRegistry([
+      {
+        pluginId: "cache-lifecycle-test",
+        optional: false,
+        source: "/tmp/cache-lifecycle-test.js",
+        names: ["cached_lifecycle_tool"],
+        factory,
+      },
+    ]);
+    const first = resolvePluginTools(
+      createResolveToolsParams({
+        toolAllowlist: ["cached_lifecycle_tool"],
+        allowGatewaySubagentBinding: true,
+      }),
+    );
+    const [tool] = resolvePluginTools(
+      createResolveToolsParams({
+        toolAllowlist: ["cached_lifecycle_tool"],
+        allowGatewaySubagentBinding: true,
+      }),
+    );
+    expectResolvedToolNames(first, ["cached_lifecycle_tool"]);
+    expect(tool?.name).toBe("cached_lifecycle_tool");
+    expect(factory).toHaveBeenCalledTimes(1);
+
+    const unrelatedEntry: MockRegistryToolEntry = {
+      pluginId: "unrelated-live",
+      optional: false,
+      source: "/tmp/unrelated-live.js",
+      names: ["unrelated_live_tool"],
+      factory: () => makeTool("unrelated_live_tool"),
+    };
+    const replacementRegistry = createToolRegistry([unrelatedEntry]);
+    replacementRegistry.plugins.push({ id: "cache-lifecycle-test", status: "loaded" });
+    setActivePluginRegistry?.(replacementRegistry as never, "provider-runtime", "default", "/tmp");
+    resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
+    loadOpenClawPluginsMock.mockReset();
+    loadOpenClawPluginsMock
+      .mockReturnValueOnce(gatewayRegistry)
+      .mockReturnValue(createToolRegistry([]));
+
+    await expect(tool?.execute("call-1", {}, undefined)).resolves.toEqual({
+      content: [{ type: "text", text: "ok" }],
+    });
+    await expect(tool?.execute("call-2", {}, undefined)).resolves.toEqual({
+      content: [{ type: "text", text: "ok" }],
+    });
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
+    expect(getActivePluginRegistry?.()).toBe(replacementRegistry);
+    expect(getActivePluginRegistry?.()?.tools.map((entry) => entry.pluginId)).toContain(
+      "unrelated-live",
+    );
+  });
+
   it("does not reuse cached plugin tool descriptors across sandbox context changes", () => {
     const factory = vi.fn((rawCtx: unknown) => {
       const ctx = rawCtx as { sandboxed?: boolean };
@@ -2547,20 +2606,29 @@ describe("resolvePluginTools optional tools", () => {
       diagnostics: [],
     };
     setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable", "/tmp");
-    pinActivePluginChannelRegistry({
+    const channelRegistry = {
       plugins: [{ id: "memory-core", status: "loaded" }],
       tools: [],
       diagnostics: [],
-    } as never);
+    } as never;
+    pinActivePluginChannelRegistry(channelRegistry);
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
 
-    const tools = resolvePluginTools(
-      createResolveToolsParams({
+    const runtimeRegistry = ensureStandalonePluginToolRegistryLoaded({
+      context: { ...createContext(), config },
+      toolAllowlist: ["memory_search", "memory_get"],
+      allowGatewaySubagentBinding: true,
+    });
+    expect(runtimeRegistry).toBe(activeRegistry);
+
+    const tools = resolvePluginTools({
+      ...createResolveToolsParams({
         context: { ...createContext(), config },
         toolAllowlist: ["memory_search", "memory_get"],
         allowGatewaySubagentBinding: true,
       }),
-    );
+      runtimeRegistry,
+    });
 
     expectResolvedToolNames(tools, ["memory_search", "memory_get"]);
     expect(memorySearchFactory).toHaveBeenCalledTimes(1);

@@ -1,3 +1,4 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Defines the TUI backend contract and backend event shapes.
 import type {
   CommandEntry,
@@ -19,6 +20,11 @@ export type ChatSendOptions = {
   deliver?: boolean;
   timeoutMs?: number;
   runId?: string;
+};
+
+export type TuiChatSendResult = {
+  runId: string;
+  status?: string;
 };
 
 /** Options for forwarding a goal command to a backend session. */
@@ -62,6 +68,7 @@ export type TuiSessionList = {
       | "inputTokens"
       | "outputTokens"
       | "totalTokens"
+      | "totalTokensFresh"
       | "goal"
       | "modelProvider"
       | "displayName"
@@ -69,7 +76,7 @@ export type TuiSessionList = {
       key: string;
       sessionId?: string;
       updatedAt?: number | null;
-      fastMode?: boolean;
+      fastMode?: FastMode;
       sendPolicy?: string;
       responseUsage?: ResponseUsageMode;
       label?: string;
@@ -140,12 +147,14 @@ export type TuiBackend = {
   onGap?: (info: { expected: number; received: number }) => void;
   start: () => void;
   stop: () => void | Promise<void>;
-  sendChat: (opts: ChatSendOptions) => Promise<{ runId: string }>;
+  subscribeSessionEvents?: () => Promise<unknown>;
+  sendChat: (opts: ChatSendOptions) => Promise<TuiChatSendResult>;
+  /** runId optional: omit for session-scoped abort (queued turns then active). */
   abortChat: (opts: {
     sessionKey: string;
     agentId?: string;
-    runId: string;
-  }) => Promise<{ ok: boolean; aborted: boolean }>;
+    runId?: string;
+  }) => Promise<{ ok: boolean; aborted: boolean; runIds?: string[] }>;
   loadHistory: (opts: { sessionKey: string; agentId?: string; limit?: number }) => Promise<unknown>;
   listSessions: (opts?: SessionsListParams) => Promise<TuiSessionList>;
   listAgents: () => Promise<TuiAgentsList>;

@@ -134,6 +134,41 @@ describe("user turn transcript persistence", () => {
       expect(buildPersistedUserTurnMediaInputsFromFields(undefined)).toEqual([]);
       expect(buildPersistedUserTurnMediaInputsFromFields({})).toEqual([]);
     });
+
+    it("preserves index alignment when an earlier attachment lacks a content type", () => {
+      // Writer pads missing types with "" to keep MediaPaths/MediaTypes index-aligned.
+      // The reader must NOT compact those "" holes away before indexing or a later
+      // attachment's type lands on the wrong attachment.
+      const result = buildPersistedUserTurnMediaInputsFromFields({
+        MediaPaths: ["/media/a.bin", "/media/b.png"],
+        MediaTypes: ["", "image/png"],
+      });
+      expect(result).toHaveLength(2);
+      const [first, second] = result;
+      // a.bin has no explicit type in the "" hole. Its contentType must NOT be
+      // "image/png" — that belongs to b.png at index 1.
+      expect(first).toMatchObject({ path: "/media/a.bin" });
+      expect(first?.contentType).not.toBe("image/png");
+      // b.png at index 1 must keep its own type correctly aligned.
+      expect(second).toEqual({ path: "/media/b.png", contentType: "image/png" });
+    });
+
+    it("preserves index alignment when an earlier attachment lacks a url", () => {
+      // Same misalignment risk for MediaUrls: a "" hole for a path-only attachment
+      // must not shift a later attachment's URL to the wrong index.
+      expect(
+        buildPersistedUserTurnMediaInputsFromFields({
+          MediaPaths: ["/media/local.bin", ""],
+          MediaUrls: ["", "https://example.test/remote.png"],
+          MediaTypes: ["application/octet-stream", "image/png"],
+        }),
+      ).toEqual([
+        // local.bin has a path but no url (the "" was a placeholder, not a real url).
+        { path: "/media/local.bin", contentType: "application/octet-stream" },
+        // remote.png has no path (the "" was a placeholder) but does have a url.
+        { url: "https://example.test/remote.png", contentType: "image/png" },
+      ]);
+    });
   });
 
   describe("mergePreparedUserTurnMessageForRuntime", () => {
@@ -183,6 +218,31 @@ describe("user turn transcript persistence", () => {
           preparedMessage: recorder.message,
         }),
       ).toBe(blocked);
+    });
+
+    it("preserves runtime multimodal content while merging prepared metadata", () => {
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "canonical image caption", timestamp: 123 },
+        target: { transcriptPath: "/tmp/session.jsonl" },
+      });
+      const runtimeContent = [
+        { type: "text", text: "canonical image caption" },
+        { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+      ];
+
+      expect(
+        mergePreparedUserTurnMessageForRuntime({
+          runtimeMessage: castAgentMessage({
+            role: "user",
+            content: runtimeContent,
+          }),
+          preparedMessage: recorder.message,
+        }),
+      ).toMatchObject({
+        role: "user",
+        content: runtimeContent,
+        timestamp: 123,
+      });
     });
 
     it("does not apply prepared user metadata to assistant messages", () => {
@@ -237,6 +297,7 @@ describe("user turn transcript persistence", () => {
           text: "What is in this image?",
           media: [{ path: "/tmp/image.png", contentType: "image/png" }],
           timestamp: 123,
+          senderIsOwner: true,
           provenance,
         },
         updateMode: "none",
@@ -252,6 +313,7 @@ describe("user turn transcript persistence", () => {
           role: "user",
           content: "What is in this image?",
           MediaPath: "/tmp/image.png",
+          __openclaw: { senderIsOwner: true },
           provenance,
           MediaType: "image/png",
         }),
@@ -363,6 +425,7 @@ describe("user turn transcript persistence", () => {
         input: {
           text: "secret prompt",
           idempotencyKey: "chat-run-1:user",
+          senderIsOwner: true,
           provenance,
         },
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
@@ -372,6 +435,7 @@ describe("user turn transcript persistence", () => {
         input: {
           text: "secret prompt",
           idempotencyKey: "chat-run-1:user",
+          senderIsOwner: true,
           provenance,
         },
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
@@ -382,6 +446,7 @@ describe("user turn transcript persistence", () => {
           role: "user",
           content: "[redacted by hook]",
           idempotencyKey: "chat-run-1:user",
+          __openclaw: { senderIsOwner: true },
           provenance,
         }),
       ]);
@@ -458,6 +523,45 @@ describe("user turn transcript persistence", () => {
           role: "user",
           content: "hello from fallback",
           idempotencyKey: "chat-run-1:user",
+        }),
+      ]);
+    });
+
+    it("notifies once after fallback user-turn persistence", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-notify-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+      const persistedMessages: unknown[] = [];
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "#35676 Keśava: No wtf",
+          timestamp: 123,
+          idempotencyKey: "chat-run-ambient:user",
+        },
+        target: {
+          transcriptPath,
+          sessionId: "session-1",
+          sessionKey: "main",
+          cwd: dir,
+        },
+        updateMode: "none",
+        onMessagePersisted: (message) => {
+          persistedMessages.push(message);
+        },
+      });
+
+      await recorder.persistFallback();
+      await recorder.persistFallback();
+
+      expect(persistedMessages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "#35676 Keśava: No wtf",
+        }),
+      ]);
+      expect(readTranscriptMessages(transcriptPath)).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "#35676 Keśava: No wtf",
         }),
       ]);
     });

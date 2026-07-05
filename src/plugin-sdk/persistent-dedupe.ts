@@ -1,8 +1,8 @@
 // Persistent dedupe helpers give plugins bounded replay protection across process restarts.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import { resolveNonNegativeIntegerOption } from "../../packages/normalization-core/src/number-coercion.js";
 import { createDedupeCache } from "../infra/dedupe.js";
-import { resolveNonNegativeIntegerOption } from "../infra/numeric-options.js";
 import {
   createCorePluginStateSyncKeyedStore,
   createPluginStateSyncKeyedStore,
@@ -326,7 +326,12 @@ function parseLegacyDedupeData(raw: string): {
   data: Record<string, number>;
   invalidCount: number;
 } {
-  const parsed = JSON.parse(raw) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    return { data: {}, invalidCount: 0 };
+  }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return { data: {}, invalidCount: 0 };
   }

@@ -4,13 +4,13 @@ import { fetchWithSsrFGuard, type MSTeamsConfig } from "../runtime-api.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import { createMSTeamsHttpError } from "./http-error.js";
+import { responseWithRelease } from "./response-with-release.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
 import { resolveDelegatedAccessToken, resolveMSTeamsCredentials } from "./token.js";
 import { buildUserAgent } from "./user-agent.js";
 
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
-const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
 export type GraphUser = {
   id?: string;
@@ -66,6 +66,7 @@ async function requestGraph(params: {
     },
     auditContext: "msteams.graph",
   });
+  let releaseInFinally = true;
   try {
     if (!response.ok) {
       throw await createMSTeamsHttpError(
@@ -73,14 +74,12 @@ async function requestGraph(params: {
         `${params.errorPrefix ?? "Graph"} ${params.path} failed`,
       );
     }
-    const body = NULL_BODY_STATUSES.has(response.status) ? null : await response.arrayBuffer();
-    return new Response(body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: new Headers(response.headers),
-    });
+    releaseInFinally = false;
+    return responseWithRelease(response, release);
   } finally {
-    await release();
+    if (releaseInFinally) {
+      await release();
+    }
   }
 }
 

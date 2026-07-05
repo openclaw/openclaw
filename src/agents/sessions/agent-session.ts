@@ -32,6 +32,7 @@ import type {
   TextContent,
 } from "../../llm/types.js";
 import { isContextOverflow } from "../../llm/utils/overflow.js";
+import { isRetryableAssistantError } from "../../llm/utils/retry.js";
 import type {
   Agent,
   AgentEvent,
@@ -120,6 +121,30 @@ function normalizeBranchSummaryResult(
     return { aborted: true, error: result.error.message };
   }
   return { error: result.error.message };
+}
+
+function hasPersistedAssistantContent(content: unknown): boolean {
+  return (typeof content === "string" || Array.isArray(content)) && content.length > 0;
+}
+
+function extractPersistedAssistantText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  let text = "";
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const candidate = block as { type?: unknown; text?: unknown };
+    if (candidate.type === "text" && typeof candidate.text === "string") {
+      text += candidate.text;
+    }
+  }
+  return text;
 }
 
 // ============================================================================
@@ -332,6 +357,7 @@ export class AgentSession {
 
   // Branch summarization state
   private branchSummaryAbortController: AbortController | undefined = undefined;
+  private extensionModifiedToolResultIds = new Set<string>();
 
   // Retry state
   private retryAbortController: AbortController | undefined = undefined;
@@ -515,6 +541,7 @@ export class AgentSession {
       if (!hookResult) {
         return undefined;
       }
+      this.extensionModifiedToolResultIds.add(toolCall.id);
 
       return {
         content: hookResult.content,
@@ -579,7 +606,7 @@ export class AgentSession {
     }
 
     // Emit to extensions first
-    await this.emitExtensionEvent(event);
+    const messageChangedByExtension = await this.emitExtensionEvent(event);
 
     // Notify all listeners
     this.emit(
@@ -605,7 +632,13 @@ export class AgentSession {
         event.message.role === "toolResult"
       ) {
         // Regular LLM message - persist as SessionMessageEntry
-        this.sessionManager.appendMessage(event.message);
+        const toolResultChangedByExtension =
+          event.message.role === "toolResult" &&
+          this.extensionModifiedToolResultIds.delete(event.message.toolCallId);
+        this.sessionManager.appendMessage(event.message, {
+          invalidateSerializedPrefixCache:
+            messageChangedByExtension || toolResultChangedByExtension,
+        });
       }
       // Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
@@ -689,7 +722,7 @@ export class AgentSession {
   }
 
   /** Emit extension events based on agent events */
-  private async emitExtensionEvent(event: AgentEvent): Promise<void> {
+  private async emitExtensionEvent(event: AgentEvent): Promise<boolean> {
     if (event.type === "agent_start") {
       this.turnIndex = 0;
       await this.currentExtensionRunner.emit({ type: "agent_start" });
@@ -732,6 +765,7 @@ export class AgentSession {
       const replacement = await this.currentExtensionRunner.emitMessageEnd(extensionEvent);
       if (replacement) {
         this.replaceMessageInPlace(event.message, replacement);
+        return true;
       }
     } else if (event.type === "tool_execution_start") {
       const extensionEvent: ToolExecutionStartEvent = {
@@ -760,6 +794,7 @@ export class AgentSession {
       };
       await this.currentExtensionRunner.emit(extensionEvent);
     }
+    return false;
   }
 
   /**
@@ -2575,11 +2610,7 @@ export class AgentSession {
       return false;
     }
 
-    const err = message.errorMessage;
-    // Match: overloaded_error, provider returned error, rate limit, 429, 500, 502, 503, 504, service unavailable, network/connection errors (including connection lost), WebSocket transport closes/errors, fetch failed, premature stream endings, HTTP/2 closed before response, terminated, retry delay exceeded
-    return /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|stream ended before message_stop|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i.test(
-      err,
-    );
+    return isRetryableAssistantError(message);
   }
 
   /**
@@ -3203,9 +3234,8 @@ export class AgentSession {
         if (m.role !== "assistant") {
           return false;
         }
-        const msg = m;
-        // Skip aborted messages with no content
-        if (msg.stopReason === "aborted" && msg.content.length === 0) {
+        const content = (m as { content?: unknown }).content;
+        if (m.stopReason === "aborted" && !hasPersistedAssistantContent(content)) {
           return false;
         }
         return true;
@@ -3215,14 +3245,8 @@ export class AgentSession {
       return undefined;
     }
 
-    let text = "";
-    for (const content of (lastAssistant as AssistantMessage).content) {
-      if (content.type === "text") {
-        text += content.text;
-      }
-    }
-
-    return text.trim() || undefined;
+    const content = (lastAssistant as { content?: unknown }).content;
+    return extractPersistedAssistantText(content).trim() || undefined;
   }
 
   // =========================================================================

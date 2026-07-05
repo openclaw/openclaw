@@ -42,6 +42,7 @@ export function createReadinessChecker(deps: {
   startedAt: number;
   getStartupPending?: () => boolean;
   getStartupPendingReason?: () => string | undefined;
+  getGatewayDraining?: () => boolean;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   shouldSkipChannelReadiness?: () => boolean;
   cacheTtlMs?: number;
@@ -58,6 +59,12 @@ export function createReadinessChecker(deps: {
       const reason = deps.getStartupPendingReason?.() ?? "startup-sidecars";
       return withEventLoopHealth(
         { ready: false, failing: [reason], uptimeMs },
+        deps.getEventLoopHealth,
+      );
+    }
+    if (deps.getGatewayDraining?.()) {
+      return withEventLoopHealth(
+        { ready: false, failing: ["gateway-draining"], uptimeMs },
         deps.getEventLoopHealth,
       );
     }

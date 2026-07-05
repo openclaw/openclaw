@@ -1,6 +1,5 @@
 // Skill upload store persists uploaded skill archives before installation.
-import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -10,16 +9,17 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { resolveStateDir } from "../../config/paths.js";
 import { DEFAULT_MAX_ARCHIVE_BYTES_ZIP } from "../../infra/archive.js";
+import { sha256File, sha256Hex } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createAsyncLock, readDurableJsonFile, writeJsonAtomic } from "../../infra/json-files.js";
 import { validateRequestedSkillSlug } from "./archive-install.js";
 
 /** Time window in which uploaded skill archive chunks may be committed. */
-export const SKILL_UPLOAD_TTL_MS = 60 * 60 * 1000;
-export const MAX_SKILL_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024;
-export const MAX_SKILL_UPLOAD_BASE64_LENGTH = Math.ceil(MAX_SKILL_UPLOAD_CHUNK_BYTES / 3) * 4;
+const SKILL_UPLOAD_TTL_MS = 60 * 60 * 1000;
+const MAX_SKILL_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024;
+const MAX_SKILL_UPLOAD_BASE64_LENGTH = Math.ceil(MAX_SKILL_UPLOAD_CHUNK_BYTES / 3) * 4;
 export const MAX_ACTIVE_SKILL_UPLOADS = 32;
-export const SKILL_UPLOAD_IDEMPOTENCY_KEY_MAX_LENGTH = 2048;
+const SKILL_UPLOAD_IDEMPOTENCY_KEY_MAX_LENGTH = 2048;
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/i;
 const UPLOAD_ID_PATTERN =
@@ -34,7 +34,7 @@ export class SkillUploadRequestError extends Error {
   }
 }
 
-export type SkillUploadRecord = {
+type SkillUploadRecord = {
   version: 1;
   kind: "skill-archive";
   uploadId: string;
@@ -162,7 +162,7 @@ function validateIdempotencyKey(value: string | undefined): string | undefined {
 }
 
 function hashText(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
+  return sha256Hex(value);
 }
 
 function resolveUploadsRoot(rootDir?: string): string {
@@ -224,14 +224,6 @@ async function assertNotExpired(
   if (validNow === undefined) {
     throw new SkillUploadRequestError("upload has expired");
   }
-}
-
-async function computeFileSha256(filePath: string): Promise<string> {
-  const digest = createHash("sha256");
-  for await (const chunk of createReadStream(filePath)) {
-    digest.update(chunk);
-  }
-  return digest.digest("hex");
 }
 
 async function readRecord(rootDir: string, uploadId: string): Promise<SkillUploadRecord> {
@@ -421,7 +413,13 @@ export function createSkillUploadStore(options?: {
                 if (record) {
                   await removeRecordFiles(rootDir, record);
                 } else {
+                  // Mirror removeRecordFiles for the corrupt/missing-metadata branch.
+                  // The idempotency pointer still references this now-deleted upload,
+                  // so drop it too. Otherwise, if the active-upload cap throws below
+                  // before the pointer is rewritten, it strands an orphan idempotency
+                  // file pointing at a ghost uploadId.
                   await removeUploadDir(rootDir, existingUploadId);
+                  await fs.rm(resolveIdempotencyPath(rootDir, keyHash), { force: true });
                 }
                 return null;
               },
@@ -558,7 +556,7 @@ export function createSkillUploadStore(options?: {
         if (record.sha256 && requestedSha && record.sha256 !== requestedSha) {
           throw new SkillUploadRequestError("upload sha256 does not match begin sha256");
         }
-        const actualSha256 = await computeFileSha256(record.archivePath);
+        const actualSha256 = await sha256File(record.archivePath);
         const expectedSha = requestedSha ?? record.sha256;
         if (expectedSha && expectedSha !== actualSha256) {
           throw new SkillUploadRequestError("upload sha256 mismatch");

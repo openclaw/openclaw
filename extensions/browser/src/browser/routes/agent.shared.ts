@@ -108,7 +108,7 @@ export async function requirePwAi(
     [
       `Playwright is not available in this gateway build; '${feature}' is unsupported.`,
       "Reinstall or update OpenClaw so the core browser runtime dependency is present, then restart the gateway. In Docker, also install Chromium with the bundled playwright-core CLI.",
-      "Docs: /tools/browser#playwright-requirement",
+      "Docs: /tools/browser-control#playwright-requirement",
     ].join("\n"),
   );
   return null;
@@ -147,7 +147,10 @@ export async function withRouteTabContext<T>(
     return undefined;
   }
   try {
-    const tab = await profileCtx.ensureTabAvailable(params.targetId);
+    // Agent routes can address local-managed tabs through Playwright when per-tab WS discovery lags.
+    const tab = await profileCtx.ensureTabAvailable(params.targetId, {
+      allowPlaywrightFallback: true,
+    });
     if (params.enforceCurrentUrlAllowed) {
       await assertBrowserNavigationResultAllowed({
         url: tab.url,

@@ -33,7 +33,7 @@ import { log } from "../logger.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-export type PromptBuildHookRunner = {
+type PromptBuildHookRunner = {
   hasHooks: (
     hookName:
       | "agent_turn_prepare"
@@ -108,19 +108,28 @@ export async function resolvePromptBuildHookResult(params: {
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
   beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+  bootstrapContextRunKind?: EmbeddedRunAttemptParams["bootstrapContextRunKind"];
 }): Promise<PluginHookBeforePromptBuildResult> {
   const runId = params.hookCtx.runId;
   const cachedInjections = runId ? promptBuildDrainCache.get(runId) : undefined;
-  const queuedContext = cachedInjections
+  const commitmentOnly = params.bootstrapContextRunKind === "commitment-only";
+  // Commitment fan-out must leave global queued context intact for the next
+  // normal turn and must not inherit heartbeat-wide prompt policy.
+  const queuedContext = commitmentOnly
     ? {
-        queuedInjections: cachedInjections,
-        ...buildPluginAgentTurnPrepareContext({ queuedInjections: cachedInjections }),
+        queuedInjections: [],
+        ...buildPluginAgentTurnPrepareContext({ queuedInjections: [] }),
       }
-    : await drainPluginNextTurnInjectionContext({
-        cfg: params.config,
-        sessionKey: params.hookCtx.sessionKey,
-      });
-  if (runId && !cachedInjections) {
+    : cachedInjections
+      ? {
+          queuedInjections: cachedInjections,
+          ...buildPluginAgentTurnPrepareContext({ queuedInjections: cachedInjections }),
+        }
+      : await drainPluginNextTurnInjectionContext({
+          cfg: params.config,
+          sessionKey: params.hookCtx.sessionKey,
+        });
+  if (runId && !commitmentOnly && !cachedInjections) {
     rememberDrainedInjections(runId, queuedContext.queuedInjections);
   }
   // Hook ordering mirrors the prompt assembly boundary: queued injections first,
@@ -143,6 +152,7 @@ export async function resolvePromptBuildHookResult(params: {
       : undefined;
   const heartbeatContribution =
     params.hookCtx.trigger === "heartbeat" &&
+    !commitmentOnly &&
     params.hookRunner?.runHeartbeatPromptContribution &&
     params.hookRunner.hasHooks("heartbeat_prompt_contribution")
       ? await params.hookRunner
@@ -236,9 +246,11 @@ export function shouldInjectHeartbeatPrompt(params: {
   defaultAgentId?: string;
   isDefaultAgent: boolean;
   trigger?: EmbeddedRunAttemptParams["trigger"];
+  bootstrapContextRunKind?: EmbeddedRunAttemptParams["bootstrapContextRunKind"];
 }): boolean {
   return (
     params.isDefaultAgent &&
+    params.bootstrapContextRunKind !== "commitment-only" &&
     shouldInjectHeartbeatPromptForTrigger(params.trigger) &&
     Boolean(
       resolveHeartbeatPromptForSystemPrompt({
@@ -257,7 +269,7 @@ export function shouldWarnOnOrphanedUserRepair(
   return trigger === "user" || trigger === "manual";
 }
 
-export type PromptSubmissionSkipReason = "blank_user_prompt" | "empty_prompt_history_images";
+type PromptSubmissionSkipReason = "blank_user_prompt" | "empty_prompt_history_images";
 
 /**
  * Distinguishes a truly empty prompt/history from a blank follow-up in a visible

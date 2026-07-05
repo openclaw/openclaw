@@ -326,17 +326,6 @@ function expectCliBindingsCleared(
   expect(nextEntry?.cliSessionIds).toBeUndefined();
 }
 
-function expectClaudeCliBinding(
-  nextEntry: SessionEntryWithCliBindings | undefined,
-  cliSessionId: string,
-) {
-  expect(nextEntry?.claudeCliSessionId).toBe(cliSessionId);
-  expect(nextEntry?.cliSessionBindings).toEqual({
-    "claude-cli": { sessionId: cliSessionId },
-  });
-  expect(nextEntry?.cliSessionIds).toEqual({ "claude-cli": cliSessionId });
-}
-
 test("sessions.reset emits internal command hook with reason", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
@@ -767,25 +756,38 @@ test("sessions.reset clears cli session bindings for parent-linked non-subagent 
 
 test("sessions.reset preserves cli session bindings for spawned subagents (Tak Hoffman's fa56682b3ced contract)", async () => {
   const { dir } = await createSessionStoreDir();
+  const reseedPromptHash = "a".repeat(64);
   const childTranscript = await writeMessageTranscript({
     dir,
     sessionId: "sess-spawned-child",
     content: "hello from spawned child",
     messageId: "m-child",
   });
+  const childEntry = cliBoundSessionEntry(
+    "sess-spawned-child",
+    childTranscript,
+    "claude-cli-child-session",
+    {
+      parentSessionKey: "agent:main:main",
+      spawnedBy: "agent:main:main",
+      subagentRole: "orchestrator",
+    },
+  );
+  childEntry.cliSessionBindings = {
+    "claude-cli": {
+      sessionId: "claude-cli-child-session",
+      reseedReceipt: {
+        version: 1,
+        promptHash: reseedPromptHash,
+        localSessionId: "sess-spawned-child",
+        userTurnDisposition: "omitted",
+      },
+    },
+  };
 
   await writeSessionStore({
     entries: {
-      "subagent:child": cliBoundSessionEntry(
-        "sess-spawned-child",
-        childTranscript,
-        "claude-cli-child-session",
-        {
-          parentSessionKey: "agent:main:main",
-          spawnedBy: "agent:main:main",
-          subagentRole: "orchestrator",
-        },
-      ),
+      "subagent:child": childEntry,
     },
   });
 
@@ -795,5 +797,19 @@ test("sessions.reset preserves cli session bindings for spawned subagents (Tak H
   const nextEntry = store["agent:main:subagent:child"];
   expect(nextEntry).toBeDefined();
   expect(nextEntry?.sessionId).not.toBe("sess-spawned-child");
-  expectClaudeCliBinding(nextEntry, "claude-cli-child-session");
+  expect(nextEntry?.claudeCliSessionId).toBe("claude-cli-child-session");
+  expect(nextEntry?.cliSessionIds).toEqual({
+    "claude-cli": "claude-cli-child-session",
+  });
+  expect(nextEntry?.cliSessionBindings).toEqual({
+    "claude-cli": {
+      sessionId: "claude-cli-child-session",
+      reseedReceipt: {
+        version: 1,
+        promptHash: reseedPromptHash,
+        localSessionId: nextEntry?.sessionId,
+        userTurnDisposition: "omitted",
+      },
+    },
+  });
 });

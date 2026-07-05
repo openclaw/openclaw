@@ -92,6 +92,30 @@ struct GatewayConnectionTests {
         #expect(session.snapshotMakeCount() == 1)
     }
 
+    @Test func `request can disable retries for non idempotent mutations`() async throws {
+        let session = GatewayTestWebSocketSession(
+            taskFactory: {
+                GatewayTestWebSocketTask(sendHook: { _, _, sendIndex in
+                    if sendIndex > 0 {
+                        throw URLError(.timedOut)
+                    }
+                })
+            })
+        let (conn, _) = try self.makeConnection(session: session)
+
+        do {
+            _ = try await conn.request(
+                method: "sessions.compact",
+                params: nil,
+                timeoutMs: 10,
+                retryTransportFailures: false)
+            Issue.record("expected sessions.compact transport failure")
+        } catch {}
+
+        #expect(session.snapshotMakeCount() == 1)
+        #expect(session.latestTask()?.snapshotSendCount() == 2)
+    }
+
     @Test func `subscribe replays latest snapshot`() async throws {
         let session = self.makeSession()
         let (conn, _) = try self.makeConnection(session: session)

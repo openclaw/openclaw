@@ -422,6 +422,30 @@ describe("crestodian.rescue", () => {
 });
 
 describe("diagnostics.otel.captureContent", () => {
+  it("accepts supported OTEL log exporters and rejects unknown values", () => {
+    for (const logsExporter of ["otlp", "stdout", "both"]) {
+      const result = OpenClawSchema.safeParse({
+        diagnostics: {
+          otel: {
+            logs: true,
+            logsExporter,
+          },
+        },
+      });
+      expect(result.success).toBe(true);
+    }
+
+    const invalid = OpenClawSchema.safeParse({
+      diagnostics: {
+        otel: {
+          logs: true,
+          logsExporter: "stderr",
+        },
+      },
+    });
+    expect(invalid.success).toBe(false);
+  });
+
   it("accepts boolean and granular OTEL content capture config", () => {
     for (const captureContent of [
       true,
@@ -800,12 +824,28 @@ describe("gateway.remote.transport", () => {
         remote: {
           remotePort: 18789,
           sshTarget: "user@example.test",
+          sshHostKeyPolicy: "openssh",
           transport: "ssh",
           url: "ws://127.0.0.1:18789",
         },
       },
     });
     expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid macOS SSH host-key policy", () => {
+    const res = validateConfigObject({
+      gateway: {
+        remote: {
+          sshHostKeyPolicy: "accept-new",
+          transport: "ssh",
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.remote.sshHostKeyPolicy");
+    }
   });
 
   it("rejects invalid macOS SSH remote port", () => {

@@ -1,6 +1,7 @@
 // Camera payload validation and artifact writers for node media commands.
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { toErrorObject } from "../infra/errors.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
@@ -36,6 +37,12 @@ export type CameraClipPayload = {
   durationMs: number;
   hasAudio: boolean;
 };
+
+async function cancelIgnoredResponseBody(response: Response | undefined): Promise<void> {
+  if (response?.bodyUsed !== true) {
+    await response?.body?.cancel().catch(() => undefined);
+  }
+}
 
 /** Validate and normalize an unknown camera still-image payload. */
 export function parseCameraSnapPayload(value: unknown): CameraSnapPayload {
@@ -119,17 +126,20 @@ export async function writeUrlToFile(
       policy,
     });
     release = guarded.release;
+    const res = guarded.response;
     const finalUrl = new URL(guarded.finalUrl);
     if (finalUrl.protocol !== "https:") {
+      await cancelIgnoredResponseBody(res);
       throw new Error(`writeUrlToFile: redirect resolved to non-https URL ${guarded.finalUrl}`);
     }
     if (normalizeHostname(finalUrl.hostname) !== expectedHost) {
+      await cancelIgnoredResponseBody(res);
       throw new Error(
         `writeUrlToFile: redirect host ${finalUrl.hostname} must match node host ${opts.expectedHost}`,
       );
     }
-    const res = guarded.response;
     if (!res.ok) {
+      await cancelIgnoredResponseBody(res);
       throw new Error(`failed to download ${url}: ${res.status} ${res.statusText}`);
     }
 
@@ -140,6 +150,7 @@ export async function writeUrlToFile(
       Number.isFinite(contentLength) &&
       contentLength > MAX_CAMERA_URL_DOWNLOAD_BYTES
     ) {
+      await cancelIgnoredResponseBody(res);
       throw new Error(
         `writeUrlToFile: content-length ${contentLength} exceeds max ${MAX_CAMERA_URL_DOWNLOAD_BYTES}`,
       );
@@ -147,13 +158,14 @@ export async function writeUrlToFile(
 
     const body = res.body;
     if (!body) {
+      await cancelIgnoredResponseBody(res);
       throw new Error(`failed to download ${url}: empty response body`);
     }
 
     const fileHandle = await fs.open(filePath, "w");
     let thrown: unknown;
+    const reader = body.getReader();
     try {
-      const reader = body.getReader();
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
@@ -164,6 +176,7 @@ export async function writeUrlToFile(
         }
         bytes += value.byteLength;
         if (bytes > MAX_CAMERA_URL_DOWNLOAD_BYTES) {
+          await reader.cancel().catch(() => undefined);
           throw new Error(
             `writeUrlToFile: downloaded ${bytes} bytes, exceeds max ${MAX_CAMERA_URL_DOWNLOAD_BYTES}`,
           );
@@ -172,13 +185,15 @@ export async function writeUrlToFile(
       }
     } catch (err) {
       thrown = err;
+      await reader.cancel().catch(() => undefined);
     } finally {
+      reader.releaseLock();
       await fileHandle.close();
     }
 
     if (thrown) {
       await fs.unlink(filePath).catch(() => {});
-      throw toLintErrorObject(thrown, "Non-Error thrown");
+      throw toErrorObject(thrown, "Non-Error thrown");
     }
   } finally {
     await release();
@@ -262,18 +277,4 @@ export async function writeCameraClipPayloadToFile(params: {
     invalidPayloadMessage: "invalid camera.clip payload",
   });
   return filePath;
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

@@ -27,6 +27,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
@@ -36,7 +37,12 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveTelegramAccount, type ResolvedTelegramAccount } from "./accounts.js";
+import {
+  mergeTelegramAccountConfig,
+  resolveDefaultTelegramAccountId,
+  resolveTelegramAccount,
+  type ResolvedTelegramAccount,
+} from "./accounts.js";
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
 import { telegramApprovalCapability } from "./approval-native.js";
@@ -71,6 +77,7 @@ import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import { resolveTelegramStartupProbeTimeoutMs } from "./request-timeouts.js";
 import { getTelegramRuntime } from "./runtime.js";
 import { telegramSecurityAdapter } from "./security.js";
+import { loadTelegramSendModule } from "./send-runtime.js";
 import {
   resolveTelegramSessionConversation,
   resolveTelegramSessionTarget,
@@ -97,20 +104,10 @@ import { resolveTelegramToken } from "./token.js";
 import { parseTelegramTopicConversation } from "./topic-conversation.js";
 
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
-type TelegramUpdateOffsetRuntime = typeof import("../update-offset-runtime-api.js");
 
-let telegramSendModulePromise: Promise<typeof import("./send.js")> | undefined;
-let telegramUpdateOffsetRuntimePromise: Promise<TelegramUpdateOffsetRuntime> | undefined;
-
-async function loadTelegramSendModule() {
-  telegramSendModulePromise ??= import("./send.js");
-  return await telegramSendModulePromise;
-}
-
-async function loadTelegramUpdateOffsetRuntime() {
-  telegramUpdateOffsetRuntimePromise ??= import("../update-offset-runtime-api.js");
-  return await telegramUpdateOffsetRuntimePromise;
-}
+const loadTelegramUpdateOffsetRuntime = createLazyRuntimeModule(
+  () => import("../update-offset-runtime-api.js"),
+);
 
 function resolveTelegramProbe() {
   return (
@@ -289,6 +286,10 @@ const telegramMessageActions: ChannelMessageActionAdapter = {
     getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.extractToolSend?.(ctx) ??
     telegramMessageActionsImpl.extractToolSend?.(ctx) ??
     null,
+  isToolDeliveryAction: (ctx) =>
+    getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.isToolDeliveryAction?.(ctx) ??
+    telegramMessageActionsImpl.isToolDeliveryAction?.(ctx) ??
+    false,
   handleAction: async (ctx) => {
     const runtimeHandleAction =
       getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.handleAction;
@@ -779,7 +780,12 @@ export const telegramPlugin = createChatChannelPlugin({
           cfg,
           accountId: accountId ?? undefined,
         });
-        return inlineButtonsScope === "off" ? ["richText"] : ["inlineButtons", "richText"];
+        const capabilities = inlineButtonsScope === "off" ? [] : ["inlineButtons"];
+        const selectedAccountId = accountId ?? resolveDefaultTelegramAccountId(cfg);
+        if (mergeTelegramAccountConfig(cfg, selectedAccountId).richMessages === true) {
+          capabilities.push("richText");
+        }
+        return capabilities;
       },
       reactionGuidance: ({ cfg, accountId }) => {
         const level = resolveTelegramReactionLevel({
@@ -790,6 +796,7 @@ export const telegramPlugin = createChatChannelPlugin({
       },
     },
     messaging: {
+      defaultMarkdownTableMode: "block",
       targetPrefixes: ["telegram", "tg"],
       normalizeTarget: normalizeTelegramMessagingTarget,
       resolveInboundConversation: ({ to, conversationId, threadId }) =>
@@ -823,6 +830,7 @@ export const telegramPlugin = createChatChannelPlugin({
       targetResolver: {
         looksLikeId: looksLikeTelegramTargetId,
         hint: "<chatId>",
+        reservedLiterals: ["current", "self", "this", "me"],
       },
     },
     resolver: {

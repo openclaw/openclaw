@@ -1,16 +1,17 @@
 // Wizard session helpers track onboarding session ids and state.
 import { randomUUID } from "node:crypto";
+import { createDeferred, type Deferred } from "../shared/deferred.js";
 import { WizardCancelledError, type WizardProgress, type WizardPrompter } from "./prompts.js";
 
 // WizardSession exposes interactive setup as a step/answer protocol for remote
 // clients while reusing the same WizardPrompter contract as the local CLI.
-export type WizardStepOption = {
+type WizardStepOption = {
   value: unknown;
   label: string;
   hint?: string;
 };
 
-export type WizardStep = {
+type WizardStep = {
   id: string;
   type: "note" | "select" | "text" | "confirm" | "multiselect" | "progress" | "action";
   title?: string;
@@ -23,30 +24,14 @@ export type WizardStep = {
   executor?: "gateway" | "client";
 };
 
-export type WizardSessionStatus = "running" | "done" | "cancelled" | "error";
+type WizardSessionStatus = "running" | "done" | "cancelled" | "error";
 
-export type WizardNextResult = {
+type WizardNextResult = {
   done: boolean;
   step?: WizardStep;
   status: WizardSessionStatus;
   error?: string;
 };
-
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (err: unknown) => void;
-};
-
-function createDeferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (err: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
 
 class WizardSessionPrompter implements WizardPrompter {
   constructor(private session: WizardSession) {}
@@ -145,7 +130,7 @@ class WizardSessionPrompter implements WizardPrompter {
     return value;
   }
 
-  async confirm(params: { message: string; initialValue?: boolean }): Promise<boolean> {
+  async confirm(params: Parameters<WizardPrompter["confirm"]>[0]): Promise<boolean> {
     const res = await this.prompt({
       type: "confirm",
       message: params.message,

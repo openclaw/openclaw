@@ -24,9 +24,6 @@ export {
 export { bundledThemes, bundledThemesInfo } from "shiki/themes";
 import { bundledThemes } from "shiki/themes";
 
-export type BundledLanguage = keyof typeof bundledLanguages;
-export type BundledTheme = keyof typeof bundledThemes;
-
 export const createHighlighter = createBundledHighlighter({
   langs: bundledLanguages,
   themes: bundledThemes,

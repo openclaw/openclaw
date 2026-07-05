@@ -1,6 +1,9 @@
 /** Resolves plugin ids that should load during Gateway startup. */
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
-import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
+import {
+  buildModelCatalogMergeKey,
+  parseModelCatalogRef,
+} from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -27,6 +30,7 @@ import { normalizePluginsConfigWithResolver } from "./config-normalization-share
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { resolveConfiguredGenericEmbeddingProviderId } from "./embedding-provider-config.js";
+import { listRegisteredEmbeddingProviders } from "./embedding-providers.js";
 import {
   collectConfiguredSpeechProviderIds,
   normalizeConfiguredSpeechProviderIdForStartup,
@@ -50,6 +54,7 @@ import {
 } from "./plugin-registry-contributions.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
 import { normalizePluginIdScope } from "./plugin-scope.js";
+import type { PluginRegistry } from "./registry-types.js";
 
 export type GatewayStartupPluginPlan = {
   channelPluginIds: readonly string[];
@@ -113,15 +118,85 @@ function isGatewayStartupMemoryPlugin(plugin: InstalledPluginIndexRecord): boole
   return plugin.startup.memory;
 }
 
-function resolveGatewayStartupDreamingPluginIds(config: OpenClawConfig): Set<string> {
+function resolveGatewayStartupDreamingEngineId(config: OpenClawConfig): string | undefined {
   const dreamingConfig = resolveMemoryDreamingConfig({
     pluginConfig: resolveMemoryDreamingPluginConfig(config),
     cfg: config,
   });
   if (!dreamingConfig.enabled) {
+    return undefined;
+  }
+  if (!resolveGatewayStartupDreamingSelectedPluginId(config)) {
+    return undefined;
+  }
+  return DEFAULT_MEMORY_DREAMING_PLUGIN_ID;
+}
+
+function resolveGatewayStartupDreamingSelectedPluginId(config: OpenClawConfig): string | undefined {
+  const selectedPluginId = normalizeOptionalLowercaseString(resolveMemoryDreamingPluginId(config));
+  return selectedPluginId && selectedPluginId !== DEFAULT_MEMORY_DREAMING_PLUGIN_ID
+    ? selectedPluginId
+    : undefined;
+}
+
+function blocksPluginStartup(params: {
+  pluginId: string;
+  pluginsConfig: NormalizedPluginsConfig;
+  activationSourcePlugins: NormalizedPluginsConfig;
+}): boolean {
+  return (
+    params.pluginsConfig.deny.includes(params.pluginId) ||
+    params.activationSourcePlugins.deny.includes(params.pluginId) ||
+    params.pluginsConfig.entries[params.pluginId]?.enabled === false ||
+    params.activationSourcePlugins.entries[params.pluginId]?.enabled === false
+  );
+}
+
+function resolveAuthorizedGatewayStartupDreamingPluginIds(params: {
+  config: OpenClawConfig;
+  pluginsConfig: NormalizedPluginsConfig;
+  activationSource: {
+    plugins: NormalizedPluginsConfig;
+    rootConfig?: OpenClawConfig;
+  };
+  activationSourcePlugins: NormalizedPluginsConfig;
+  selectedMemoryPluginId?: string;
+  index: { plugins: readonly InstalledPluginIndexRecord[] };
+  platform?: NodeJS.Platform;
+}): Set<string> {
+  const engineId = resolveGatewayStartupDreamingEngineId(params.config);
+  const dreamingSelectedPluginId = resolveGatewayStartupDreamingSelectedPluginId(params.config);
+  if (!engineId || !params.pluginsConfig.enabled || !params.activationSourcePlugins.enabled) {
     return new Set();
   }
-  return new Set([DEFAULT_MEMORY_DREAMING_PLUGIN_ID, resolveMemoryDreamingPluginId(config)]);
+  if (
+    !params.selectedMemoryPluginId ||
+    params.selectedMemoryPluginId !== dreamingSelectedPluginId ||
+    params.selectedMemoryPluginId === engineId ||
+    blocksPluginStartup({
+      pluginId: engineId,
+      pluginsConfig: params.pluginsConfig,
+      activationSourcePlugins: params.activationSourcePlugins,
+    })
+  ) {
+    return new Set();
+  }
+  const selectedPlugin = params.index.plugins.find(
+    (plugin) => plugin.pluginId === params.selectedMemoryPluginId,
+  );
+  const sidecarPlugin = params.index.plugins.find((plugin) => plugin.pluginId === engineId);
+  if (!selectedPlugin?.startup.memory || !sidecarPlugin?.startup.memory) {
+    return new Set();
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: selectedPlugin.pluginId,
+    origin: selectedPlugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(selectedPlugin, params.platform),
+    activationSource: params.activationSource,
+  });
+  return activationState.enabled ? new Set([engineId]) : new Set();
 }
 
 function resolveMemorySlotStartupPluginId(params: {
@@ -334,19 +409,9 @@ function listModelProviderRefs(value: unknown): string[] {
 
 function listModelProviderRefParts(value: unknown): Array<{ providerId: string; modelId: string }> {
   return listModelProviderRefs(value)
-    .map((ref) => {
-      const slashIndex = ref.indexOf("/");
-      if (slashIndex <= 0 || slashIndex >= ref.length - 1) {
-        return undefined;
-      }
-      return {
-        providerId: normalizeProviderId(ref.slice(0, slashIndex)),
-        modelId: ref.slice(slashIndex + 1).trim(),
-      };
-    })
-    .filter((entry): entry is { providerId: string; modelId: string } =>
-      Boolean(entry?.providerId && entry.modelId),
-    );
+    .map(parseModelCatalogRef)
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .map(({ provider, modelId }) => ({ providerId: provider, modelId }));
 }
 
 function collectModelProviderIds(value: unknown): ReadonlySet<string> {
@@ -405,6 +470,7 @@ function collectConfiguredAgentModelProviderIds(
 
   const defaults = config.agents?.defaults;
   addModelProviderRefs(defaults?.model);
+  addModelProviderRefs(defaults?.utilityModel);
   addModelMapProviderIds(defaults?.models);
 
   const agents = Array.isArray(config.agents?.list) ? config.agents.list : [];
@@ -413,6 +479,7 @@ function collectConfiguredAgentModelProviderIds(
       continue;
     }
     addModelProviderRefs(agent.model);
+    addModelProviderRefs(agent.utilityModel);
     addModelMapProviderIds(agent.models);
   }
 
@@ -684,6 +751,24 @@ export function collectUnregisteredConfiguredMemoryEmbeddingProviders(params: {
     );
 }
 
+// Registered embedding provider ids the loaded runtime can actually serve: the live
+// registry's memory + general embedding providers plus the global/core embedding
+// registry. Shared by gateway boot (the startup "configured but unregistered" warning)
+// and the `/status plugins` drift line so both agree on what counts as "registered" and
+// never diverge. The `{ provider: entry.adapter }` wrap makes the core registry entries
+// match the registration shape so the id projection stays uniform across all three sources.
+export function collectRegisteredEmbeddingProviderIds(
+  registry: Partial<Pick<PluginRegistry, "embeddingProviders" | "memoryEmbeddingProviders">>,
+): Set<string> {
+  return new Set(
+    [
+      ...(registry.memoryEmbeddingProviders ?? []),
+      ...(registry.embeddingProviders ?? []),
+      ...listRegisteredEmbeddingProviders().map((entry) => ({ provider: entry.adapter })),
+    ].map((entry) => entry.provider.id),
+  );
+}
+
 function addPluginConfigEntryIds(
   target: Set<string>,
   plugins: ReturnType<typeof normalizePluginsConfigForInstalledIndex>,
@@ -913,12 +998,28 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
   addPluginConfigEntryIds(scope, pluginsConfig);
   addPluginConfigEntryIds(scope, activationSourcePlugins);
 
+  const memorySlotStartupPluginId = resolveMemorySlotStartupPluginId({
+    activationSourceConfig,
+    activationSourcePlugins,
+    normalizePluginId: lookup.normalizePluginId,
+  });
   addConfiguredSlotPluginIds(scope, {
     activationSourceConfig,
     activationSourcePlugins,
     lookup,
   });
-  for (const pluginId of resolveGatewayStartupDreamingPluginIds(params.config)) {
+  for (const pluginId of resolveAuthorizedGatewayStartupDreamingPluginIds({
+    config: params.config,
+    pluginsConfig,
+    activationSource: {
+      plugins: activationSourcePlugins,
+      rootConfig: activationSourceConfig,
+    },
+    activationSourcePlugins,
+    selectedMemoryPluginId: memorySlotStartupPluginId,
+    index: params.index,
+    platform: params.platform,
+  })) {
     scope.add(pluginId);
   }
   if (!lookup.hasCompleteConfigPathActivationMetadata()) {
@@ -1893,11 +1994,13 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     rootConfig: activationSourceConfig,
   };
   const manifestLookup = createManifestRegistryLookup(params.manifestRegistry);
+  const explicitlyDisabledChannelIds = new Set(
+    listExplicitlyDisabledChannelIdsForConfig(params.config),
+  );
   const configuredDeferredChannelPluginIds: string[] = [];
   const requiredAgentHarnessRuntimes = new Set(
     collectConfiguredAgentHarnessRuntimes(activationSourceConfig),
   );
-  const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
   const configuredSpeechProviderIds = collectConfiguredSpeechProviderIds(activationSourceConfig);
   const configuredWebSearchProviderIds =
     collectConfiguredWebSearchProviderIds(activationSourceConfig);
@@ -1918,6 +2021,15 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     activationSourcePlugins,
     normalizePluginId,
   });
+  const startupDreamingPluginIds = resolveAuthorizedGatewayStartupDreamingPluginIds({
+    config: params.config,
+    pluginsConfig,
+    activationSource,
+    activationSourcePlugins,
+    selectedMemoryPluginId: memorySlotStartupPluginId,
+    index: params.index,
+    platform: params.platform,
+  });
   const contextEngineSlotStartupPluginId = resolveContextEngineSlotStartupPluginId({
     activationSourceConfig,
     activationSourcePlugins,
@@ -1926,12 +2038,29 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const pluginIds: string[] = [];
   for (const plugin of params.index.plugins) {
     const manifest = findManifestPlugin(manifestLookup, plugin.pluginId);
+    const hasEnabledManifestChannel =
+      manifest?.channels?.some((channelId) => {
+        const normalizedChannelId = normalizeOptionalLowercaseString(channelId);
+        return normalizedChannelId ? !explicitlyDisabledChannelIds.has(normalizedChannelId) : false;
+      }) ?? false;
+    // Non-bundled plugin that explicitly declares channels and is enabled
+    // in plugins.entries must be treated as a configured startup channel
+    // even when the channel itself is not listed in config.channels.
+    // Published install flows configure channels via plugins.entries, and
+    // the channel config may only have {enabled: true} which does not
+    // produce a `configuredChannelIds` entry.
+    const hasExplicitlyEnabledNonBundledChannel =
+      plugin.origin !== "bundled" &&
+      hasEnabledManifestChannel &&
+      pluginsConfig.entries[plugin.pluginId]?.enabled === true &&
+      !pluginsConfig.deny.includes(plugin.pluginId);
     if (
       hasConfiguredStartupChannel({
         plugin,
         manifestLookup,
         configuredChannelIds,
-      })
+      }) ||
+      hasExplicitlyEnabledNonBundledChannel
     ) {
       const canStartConfiguredChannel = canStartConfiguredChannelPlugin({
         plugin,
@@ -2094,6 +2223,10 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
         contextEngineSlotStartupPluginId,
       })
     ) {
+      continue;
+    }
+    if (startupDreamingPluginIds.has(plugin.pluginId)) {
+      pluginIds.push(plugin.pluginId);
       continue;
     }
     const activationState = resolveEffectivePluginActivationState({

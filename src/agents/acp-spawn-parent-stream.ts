@@ -431,6 +431,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   let disposed = false;
   let pendingText = "";
   let pendingProgressKind: string | undefined;
+  let replaceableAssistantSnapshot: string | undefined;
   const itemProgressTextById = new Map<string, string>();
   let lastProgressAt = Date.now();
   let stallNotified = false;
@@ -509,6 +510,15 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
     scheduleFlush();
+  };
+
+  const flushReplaceableAssistantSnapshot = () => {
+    const snapshot = replaceableAssistantSnapshot;
+    replaceableAssistantSnapshot = undefined;
+    if (!snapshot?.trim()) {
+      return;
+    }
+    appendVisibleProgress(snapshot, "assistant:replaceable");
   };
 
   const appendItemProgressSnapshot = (snapshot: { itemId: string; text: string }) => {
@@ -605,10 +615,27 @@ export function startAcpSpawnParentStreamRelay(params: {
       const assistantPhase = normalizeAssistantPhase(
         (data as { phase?: unknown } | undefined)?.phase,
       );
-      const deltaCandidate =
-        (data as { delta?: unknown } | undefined)?.delta ??
-        (data as { text?: unknown } | undefined)?.text;
-      const delta = typeof deltaCandidate === "string" ? deltaCandidate : undefined;
+      const textCandidate = (data as { text?: unknown } | undefined)?.text;
+      const deltaCandidate = (data as { delta?: unknown } | undefined)?.delta;
+      const snapshot =
+        typeof textCandidate === "string"
+          ? textCandidate
+          : typeof deltaCandidate === "string"
+            ? deltaCandidate
+            : undefined;
+      if ((data as { replaceable?: unknown } | undefined)?.replaceable === true) {
+        if (snapshot?.trim()) {
+          replaceableAssistantSnapshot = snapshot;
+          lastProgressAt = Date.now();
+          logEvent("assistant_replaceable_snapshot", {
+            text: snapshot,
+            ...(assistantPhase ? { phase: assistantPhase } : {}),
+          });
+        }
+        return;
+      }
+
+      const delta = typeof deltaCandidate === "string" ? deltaCandidate : snapshot;
       if (!delta || !delta.trim()) {
         return;
       }
@@ -622,6 +649,7 @@ export function startAcpSpawnParentStreamRelay(params: {
         return;
       }
 
+      replaceableAssistantSnapshot = undefined;
       appendVisibleProgress(delta, `assistant:${assistantPhase ?? "unknown"}`);
       return;
     }
@@ -697,6 +725,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     const phase = normalizeOptionalString((event.data as { phase?: unknown } | undefined)?.phase);
     logEvent("lifecycle", { phase: phase ?? "unknown", data: event.data });
     if (phase === "end") {
+      flushReplaceableAssistantSnapshot();
       flushPending();
       const startedAt = asFiniteNumber(
         (event.data as { startedAt?: unknown } | undefined)?.startedAt,
@@ -719,6 +748,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     }
 
     if (phase === "error") {
+      flushReplaceableAssistantSnapshot();
       flushPending();
       const errorText = normalizeOptionalString(
         (event.data as { error?: unknown } | undefined)?.error,

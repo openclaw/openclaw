@@ -1,6 +1,7 @@
 // Failover policy tests cover the embedded run decision table for retry,
 // profile rotation, fallback model escalation, and user-visible errors.
 import { describe, expect, it } from "vitest";
+import { classifyAssistantFailoverReason } from "../../embedded-agent-helpers.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./failover-policy.js";
 
 describe("resolveRunFailoverDecision", () => {
@@ -19,12 +20,39 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("escalates retry-limit for model_not_found when fallback is configured", () => {
+    // model_not_found should trigger fallback to configured alternatives
+    // when the primary model is decommissioned by the provider.
+    expect(
+      resolveRunFailoverDecision({
+        stage: "retry_limit",
+        fallbackConfigured: true,
+        failoverReason: "model_not_found",
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "model_not_found",
+    });
+  });
+
   it("keeps retry-limit as a local error for non-escalating reasons", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "retry_limit",
         fallbackConfigured: true,
         failoverReason: "timeout",
+      }),
+    ).toEqual({
+      action: "return_error_payload",
+    });
+  });
+
+  it("returns error payload for model_not_found when no fallback is configured", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "retry_limit",
+        fallbackConfigured: false,
+        failoverReason: "model_not_found",
       }),
     ).toEqual({
       action: "return_error_payload",
@@ -262,6 +290,48 @@ describe("resolveRunFailoverDecision", () => {
       }),
     ).toEqual({
       action: "continue_normal",
+    });
+  });
+
+  it("falls back for opencode-go provider-owned stalled stream errors after rotation is exhausted", () => {
+    const assistantError = {
+      role: "assistant" as const,
+      api: "openai-completions" as const,
+      provider: "opencode-go",
+      model: "deepseek-v4-flash",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "error" as const,
+      errorMessage: "opencode-go stream timed out after provider-owned SSE boundary stalled",
+      content: [],
+      timestamp: 0,
+    };
+    const failoverReason = classifyAssistantFailoverReason(assistantError);
+
+    expect(failoverReason).toBe("timeout");
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: failoverReason !== null,
+        failoverReason,
+        timedOut: false,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "timeout",
     });
   });
 
@@ -530,6 +600,44 @@ describe("resolveRunFailoverDecision", () => {
         failoverFailure: true,
         failoverReason: "timeout",
         harnessOwnsTransport: true,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "timeout",
+    });
+  });
+
+  it("falls back on fallback-safe harness-owned prompt timeouts", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "timeout",
+        harnessOwnsTransport: true,
+        promptTimeoutFallbackSafe: true,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "timeout",
+    });
+  });
+
+  it("surfaces fallback-safe harness-owned prompt timeouts when no fallback is configured", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: false,
+        failoverFailure: true,
+        failoverReason: "timeout",
+        harnessOwnsTransport: true,
+        promptTimeoutFallbackSafe: true,
         profileRotated: true,
       }),
     ).toEqual({

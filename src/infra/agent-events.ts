@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { createAbortError } from "./abort-signal.js";
 
 /** Stream name for agent events delivered to gateway listeners and plugin host hooks. */
 export type AgentEventStream =
@@ -50,17 +51,10 @@ export type AgentItemEventData = {
   progressText?: string;
   /** Preserve item telemetry while letting channel progress render a sibling tool event instead. */
   suppressChannelProgress?: boolean;
+  /** Preserve activity telemetry without rendering this internal item in channel progress. */
+  hideFromChannelProgress?: boolean;
   approvalId?: string;
   approvalSlug?: string;
-};
-
-/** Plan update payload emitted when an agent publishes or revises its task list. */
-export type AgentPlanEventData = {
-  phase: "update";
-  title: string;
-  explanation?: string;
-  steps?: string[];
-  source?: string;
 };
 
 /** Approval event phase for request/resolution transitions. */
@@ -203,9 +197,7 @@ export function assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration: st
   if (lifecycleGeneration === getAgentEventState().lifecycleGeneration) {
     return;
   }
-  const error = new Error("Agent run belongs to a stale gateway lifecycle");
-  error.name = "AbortError";
-  throw error;
+  throw createAbortError("Agent run belongs to a stale gateway lifecycle");
 }
 
 /** Captures immutable lifecycle ownership for one admitted execution. */
@@ -490,20 +482,6 @@ export function emitAgentItemEvent(params: {
   emitAgentEvent({
     runId: params.runId,
     stream: "item",
-    data: params.data as unknown as Record<string, unknown>,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
-}
-
-/** Emits a plan update event on the shared agent event bus. */
-export function emitAgentPlanEvent(params: {
-  runId: string;
-  data: AgentPlanEventData;
-  sessionKey?: string;
-}) {
-  emitAgentEvent({
-    runId: params.runId,
-    stream: "plan",
     data: params.data as unknown as Record<string, unknown>,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
   });

@@ -15,6 +15,7 @@ import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runt
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import { SqliteBackedMatrixSyncStore } from "./src/matrix/client/file-sync-store.js";
+import { openMatrixStorageMetaStoreOptions } from "./src/matrix/client/storage.js";
 import {
   readMatrixIdbSnapshotJson,
   readMatrixLegacyCryptoMigrationState,
@@ -110,6 +111,54 @@ describe("matrix doctor contract state migrations", () => {
     expect(store.hasSavedSyncFromCleanShutdown()).toBe(true);
     await expect(store.getSavedSyncToken()).resolves.toBe("legacy-token");
     expect(fs.existsSync(path.join(storageRootDir, "bot-storage.json"))).toBe(false);
+  });
+
+  it("migrates Matrix storage metadata JSON to SQLite plugin state", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-doctor-"));
+    tempDirs.push(stateDir);
+    const storageRootDir = path.join(
+      stateDir,
+      "matrix",
+      "accounts",
+      "default",
+      "matrix.example.org__bot",
+      "token-hash",
+    );
+    fs.mkdirSync(storageRootDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(storageRootDir, "storage-meta.json"),
+      JSON.stringify({
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accountId: "default",
+        accessTokenHash: "token-hash",
+        deviceId: "DEVICE",
+        currentTokenStateClaimed: true,
+      }),
+    );
+
+    const migration = migrationById("matrix-storage-meta-json-to-plugin-state");
+    await expect(migration.detectLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
+      preview: [`Matrix storage metadata JSON can migrate to SQLite: ${storageRootDir}`],
+    });
+
+    await expect(migration.migrateLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
+      changes: [
+        `Migrated Matrix storage metadata JSON to SQLite for ${storageRootDir}`,
+        `Archived Matrix storage metadata legacy source -> ${path.join(storageRootDir, "storage-meta.json")}.migrated`,
+      ],
+      warnings: [],
+    });
+
+    const store = createPluginStateKeyedStoreForTests<Record<string, unknown>>(
+      "matrix",
+      openMatrixStorageMetaStoreOptions(storageRootDir),
+    );
+    await expect(store.lookup("current")).resolves.toMatchObject({
+      deviceId: "DEVICE",
+      currentTokenStateClaimed: true,
+    });
+    expect(fs.existsSync(path.join(storageRootDir, "storage-meta.json"))).toBe(false);
   });
 
   it("does not archive the legacy flat sync cache into an unread SQLite root", async () => {

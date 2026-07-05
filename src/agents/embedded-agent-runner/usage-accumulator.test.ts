@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import {
   createUsageAccumulator,
   mergeUsageIntoAccumulator,
-  resolveLastCallUsage,
   toLastCallUsage,
   toNormalizedUsage,
 } from "./usage-accumulator.js";
@@ -164,88 +163,4 @@ describe("usage-accumulator", () => {
     });
   });
 
-  describe("resolveLastCallUsage", () => {
-    it("prefers raw assistant usage when present", () => {
-      // Raw assistant usage is the provider's final-call truth; the accumulator
-      // is only a fallback when that snapshot is absent or unusable.
-      const acc = createUsageAccumulator();
-      mergeUsageIntoAccumulator(acc, {
-        input: 150,
-        output: 40,
-        cacheRead: 84_000,
-        cacheWrite: 0,
-        total: 84_190,
-      });
-
-      expect(
-        resolveLastCallUsage(
-          {
-            inputTokens: 99,
-            outputTokens: 12,
-            completion_tokens_details: { reasoning_tokens: 8 },
-            cache_read_input_tokens: 456,
-            cache_creation_input_tokens: 3,
-            totalTokens: 570,
-          },
-          acc,
-        ),
-      ).toEqual({
-        input: 99,
-        output: 12,
-        reasoningTokens: 8,
-        cacheRead: 456,
-        cacheWrite: 3,
-        total: 570,
-      });
-    });
-
-    it("falls back to the accumulator when assistant usage is missing", () => {
-      const acc = createAccumulatorWithUsage(FINAL_USAGE);
-
-      expect(resolveLastCallUsage(undefined, acc)).toEqual({
-        input: 150,
-        output: 40,
-        reasoningTokens: 7,
-        cacheRead: 84_000,
-        cacheWrite: undefined,
-        total: 84_190,
-      });
-    });
-
-    it("falls back when assistant usage exists but is unusable", () => {
-      const acc = createAccumulatorWithUsage(FINAL_USAGE);
-
-      expect(resolveLastCallUsage({ responseId: "abc" } as never, acc)).toEqual({
-        input: 150,
-        output: 40,
-        reasoningTokens: 7,
-        cacheRead: 84_000,
-        cacheWrite: undefined,
-        total: 84_190,
-      });
-    });
-
-    it("keeps an explicit zero-usage raw snapshot instead of falling back", () => {
-      const acc = createAccumulatorWithUsage(FINAL_USAGE);
-
-      expect(
-        resolveLastCallUsage(
-          {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            total: 0,
-          },
-          acc,
-        ),
-      ).toEqual({
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      });
-    });
-  });
 });

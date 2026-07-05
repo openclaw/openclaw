@@ -15,11 +15,12 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { normalizeProviderResolvedModelWithPlugin } from "../../plugins/provider-runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ModelListAuthIndex } from "./list.auth-index.js";
+import { isLocalBaseUrl } from "./list.local-url.js";
 import type { ListRowModel } from "./list.model-row.js";
 import { toModelRow } from "./list.model-row.js";
 import type { ConfiguredEntry, ModelRow } from "./list.types.js";
 import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
-import { isLocalBaseUrl, modelKey } from "./shared.js";
+import { modelKey } from "./shared.js";
 
 type ConfiguredByKey = Map<string, ConfiguredEntry>;
 type ModelCatalogModule = typeof import("../../agents/model-catalog.js");
@@ -126,6 +127,7 @@ function shouldSuppressListModel(params: {
     return shouldSuppressBuiltInModelFromManifest({
       provider: params.model.provider,
       id: params.model.id,
+      baseUrl: params.model.baseUrl,
       config: params.context.cfg,
     });
   }

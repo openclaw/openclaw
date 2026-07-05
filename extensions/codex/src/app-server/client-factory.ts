@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 /**
  * Lazy factories for shared and leased Codex app-server clients.
  */
@@ -18,34 +19,11 @@ export type CodexAppServerClientFactory = (
   options?: {
     onStartedClient?: (client: CodexAppServerClient) => void;
     abandonSignal?: AbortSignal;
+    timeoutMs?: number;
   },
 ) => Promise<CodexAppServerClient>;
 
-let sharedClientModulePromise: Promise<typeof import("./shared-client.js")> | null = null;
-
-const loadSharedClientModule = async () => {
-  sharedClientModulePromise ??= import("./shared-client.js");
-  return await sharedClientModulePromise;
-};
-
-/** Returns the process-shared app-server client for normal attempt reuse. */
-export const defaultCodexAppServerClientFactory: CodexAppServerClientFactory = (
-  startOptions,
-  authProfileId,
-  agentDir,
-  config,
-  options,
-) =>
-  loadSharedClientModule().then(({ getSharedCodexAppServerClient }) =>
-    getSharedCodexAppServerClient({
-      startOptions,
-      authProfileId,
-      agentDir,
-      config,
-      onStartedClient: options?.onStartedClient,
-      abandonSignal: options?.abandonSignal,
-    }),
-  );
+const loadSharedClientModule = createLazyRuntimeModule(() => import("./shared-client.js"));
 
 /** Returns a leased shared client so startup can release ownership explicitly. */
 export const defaultLeasedCodexAppServerClientFactory: CodexAppServerClientFactory = (
@@ -63,5 +41,6 @@ export const defaultLeasedCodexAppServerClientFactory: CodexAppServerClientFacto
       config,
       onStartedClient: options?.onStartedClient,
       abandonSignal: options?.abandonSignal,
+      timeoutMs: options?.timeoutMs,
     }),
   );

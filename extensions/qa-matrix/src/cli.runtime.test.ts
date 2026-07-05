@@ -1,5 +1,5 @@
 // Qa Matrix tests cover cli plugin behavior.
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -63,6 +63,7 @@ describe("matrix qa cli runtime", () => {
       reportPath: "/tmp/matrix-report.md",
       summaryPath: "/tmp/matrix-summary.json",
       observedEventsPath: "/tmp/matrix-events.json",
+      routeStateManifestPath: "/tmp/matrix-route-state.json",
     });
     const originalStdoutWrite = process.stdout["write"];
     process.stdout.write = (() => true) as typeof process.stdout.write;
@@ -104,6 +105,7 @@ describe("matrix qa cli runtime", () => {
       reportPath: "/tmp/matrix-report.md",
       summaryPath: "/tmp/matrix-summary.json",
       observedEventsPath: "/tmp/matrix-events.json",
+      routeStateManifestPath: "/tmp/matrix-route-state.json",
     });
     const originalStdoutWrite = process.stdout["write"];
     process.stdout.write = vi.fn(() => true) as unknown as typeof process.stdout.write;
@@ -122,6 +124,28 @@ describe("matrix qa cli runtime", () => {
     expect(runMatrixQaLive).toHaveBeenCalledOnce();
     await expectPathMissing(outputPath);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects output dirs that traverse repo-local symlinks",
+    async () => {
+      const repoRoot = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-cli-"));
+      const externalOutputRoot = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-external-"));
+      tmpDirs.push(repoRoot, externalOutputRoot);
+      await mkdir(path.join(repoRoot, ".artifacts"), { recursive: true });
+      await symlink(externalOutputRoot, path.join(repoRoot, ".artifacts", "qa-e2e"));
+
+      await expect(
+        runQaMatrixCommand({
+          repoRoot,
+          outputDir: ".artifacts/qa-e2e/matrix",
+          providerMode: "mock-openai",
+          credentialSource: "env",
+        }),
+      ).rejects.toThrow("Matrix QA output dir must not traverse symlinks.");
+
+      expect(runMatrixQaLive).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves the Matrix QA failure when output log cleanup also fails", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-cli-"));

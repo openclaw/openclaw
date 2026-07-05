@@ -7,18 +7,27 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
   createPrefixedOutputWriter,
   isArtifactSetFresh,
   parseMode,
+  resolveBoundaryEntryShimRequiredOutputs,
   resolveBoundaryRootShimsTimeoutMs,
   runNodeStep,
   runNodeSteps,
   runNodeStepsInParallel,
+  signalNodeStep,
 } from "../../scripts/prepare-extension-package-boundary-artifacts.mjs";
+import { makeTempDir } from "../helpers/temp-dir.js";
 
 const tempRoots = new Set<string>();
+
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
+}
 
 function createMockPipe() {
   const pipe = new EventEmitter() as EventEmitter & {
@@ -35,11 +44,19 @@ afterEach(() => {
   tempRoots.clear();
 });
 
-async function waitForFile(filePath: string, timeoutMs: number) {
+async function waitForFile(filePath: string, timeoutMs: number): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (fs.existsSync(filePath)) {
-      return;
+    try {
+      // writeFileSync is not atomic for concurrent readers: the path can exist
+      // before the payload is flushed. Wait for non-empty content, or pid
+      // parsing races into NaN under parallel-suite load.
+      const content = fs.readFileSync(filePath, "utf8").trim();
+      if (content) {
+        return content;
+      }
+    } catch {
+      // Not created yet.
     }
     await delay(25);
   }
@@ -121,6 +138,75 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     expect(Date.now() - startedAt).toBeLessThan(abortBudgetMs);
   }, 45_000);
 
+  it("signals Windows node step process trees with taskkill", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    signalNodeStep(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+
+    signalNodeStep(child, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("force-kills Windows node step process trees when graceful taskkill fails", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    signalNodeStep(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
   it.runIf(process.platform !== "win32")(
     "force-kills aborted sibling step process groups",
     async () => {
@@ -141,12 +227,21 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         "setInterval(() => {}, 1000);",
       ].join("\n");
 
+      // Fail the sibling only once the descendant reported its pid so the
+      // group abort cannot race the descendant's boot under suite load.
+      const failWhenDescendantReady = [
+        "const fs = require('node:fs');",
+        "setInterval(() => {",
+        `  try { if (fs.readFileSync(${JSON.stringify(descendantPidPath)}, 'utf8').trim()) { process.exit(2); } } catch {}`,
+        "}, 25);",
+      ].join("\n");
+
       try {
         const command = runNodeStepsInParallel([
           {
             label: "delayed-fail",
-            args: ["--eval", "setTimeout(() => process.exit(2), 150)"],
-            timeoutMs: 5_000,
+            args: ["--eval", failWhenDescendantReady],
+            timeoutMs: 30_000,
           },
           {
             label: "abort-group-prep",
@@ -157,8 +252,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         const expectedFailure = expect(command).rejects.toThrow(
           "delayed-fail failed with exit code 2",
         );
-        await waitForFile(descendantPidPath, 1_000);
-        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        descendantPid = Number.parseInt(await waitForFile(descendantPidPath, 10_000), 10);
 
         await expectedFailure;
         await waitForDead(descendantPid, 2_000);
@@ -167,6 +261,57 @@ describe("prepare-extension-package-boundary-artifacts", () => {
           process.kill(descendantPid, "SIGKILL");
         }
       }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "lets aborted sibling descendants drain during kill grace",
+    async () => {
+      const rootDir = makeTempDir(tempRoots, "openclaw-boundary-abort-drain-");
+      const readyPath = path.join(rootDir, "descendant.ready");
+      const drainedPath = path.join(rootDir, "descendant.drained");
+      const descendantScript = [
+        "const fs = require('node:fs');",
+        "process.on('SIGTERM', () => {",
+        "  setTimeout(() => {",
+        `    fs.writeFileSync(${JSON.stringify(drainedPath)}, 'drained');`,
+        "    process.exit(0);",
+        "  }, 50);",
+        "});",
+        `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        `spawn(process.execPath, ["--eval", ${JSON.stringify(descendantScript)}], { stdio: "ignore" });`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+
+      // Fail the sibling only once the descendant installed its SIGTERM trap
+      // (signalled via readyPath) so the group abort cannot race its boot.
+      const failWhenDescendantReady = [
+        "const fs = require('node:fs');",
+        "setInterval(() => {",
+        `  try { if (fs.readFileSync(${JSON.stringify(readyPath)}, 'utf8').trim()) { process.exit(2); } } catch {}`,
+        "}, 25);",
+      ].join("\n");
+      const command = runNodeStepsInParallel([
+        {
+          label: "delayed-fail",
+          args: ["--eval", failWhenDescendantReady],
+          timeoutMs: 30_000,
+        },
+        {
+          label: "abort-group-drain",
+          args: ["--eval", parentScript],
+          timeoutMs: 60_000,
+        },
+      ]);
+
+      await waitForFile(readyPath, 10_000);
+      await expect(command).rejects.toThrow("delayed-fail failed with exit code 2");
+      expect(await waitForFile(drainedPath, 10_000)).toBe("drained");
     },
   );
 
@@ -197,6 +342,16 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     expect(signals).toEqual(["SIGKILL"]);
   });
 
+  it("clamps oversized prep step timers before scheduling", async () => {
+    await expect(
+      runNodeStep(
+        "slow-success",
+        ["--eval", "setTimeout(() => process.exit(0), 25);"],
+        MAX_TIMER_TIMEOUT_MS + 1,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
   it.runIf(process.platform !== "win32")("kills timed-out prep step process groups", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-timeout-group-"));
     tempRoots.add(rootDir);
@@ -215,12 +370,14 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     ].join("\n");
 
     try {
-      const command = runNodeStep("hung-group-prep", ["--eval", parentScript], 750);
+      // The timeout clock starts at spawn, so it must leave room for two Node
+      // boots (parent + descendant) under parallel-suite load; otherwise the
+      // group is killed before the descendant ever writes its pid.
+      const command = runNodeStep("hung-group-prep", ["--eval", parentScript], 5_000);
       const expectedFailure = expect(command).rejects.toThrow(
-        "hung-group-prep timed out after 750ms",
+        "hung-group-prep timed out after 5000ms",
       );
-      await waitForFile(descendantPidPath, 500);
-      descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+      descendantPid = Number.parseInt(await waitForFile(descendantPidPath, 4_000), 10);
 
       await expectedFailure;
       await waitForDead(descendantPid, 2_000);
@@ -264,9 +421,8 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       runnerPid = runner.pid ?? 0;
 
       try {
-        await waitForFile(descendantPidPath, 2_000);
-        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
-        const runnerExit = waitForProcessExit(runner, 2_000);
+        descendantPid = Number.parseInt(await waitForFile(descendantPidPath, 10_000), 10);
+        const runnerExit = waitForProcessExit(runner, 10_000);
         runner.kill("SIGTERM");
 
         expect(await runnerExit).toEqual({ code: 143, signal: null });
@@ -358,6 +514,67 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         outputPaths: ["dist/demo.tsbuildinfo"],
       }),
     ).toBe(false);
+  });
+
+  it("requires generated entry-shim outputs in addition to the freshness stamp", () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-entry-shims-"));
+    tempRoots.add(rootDir);
+    const inputPath = path.join(rootDir, "scripts", "write-plugin-sdk-entry-dts.ts");
+    const stampPath = path.join(rootDir, "dist", "plugin-sdk", ".boundary-entry-shims.stamp");
+    const rootDtsPath = path.join(rootDir, "dist", "plugin-sdk", "index.d.ts");
+    const packageDtsPath = path.join(
+      rootDir,
+      "packages",
+      "plugin-sdk",
+      "dist",
+      "src",
+      "plugin-sdk",
+      "index.d.ts",
+    );
+
+    fs.mkdirSync(path.dirname(inputPath), { recursive: true });
+    fs.mkdirSync(path.dirname(stampPath), { recursive: true });
+    fs.mkdirSync(path.dirname(rootDtsPath), { recursive: true });
+    fs.mkdirSync(path.dirname(packageDtsPath), { recursive: true });
+    fs.writeFileSync(inputPath, "export {};\n", "utf8");
+    fs.writeFileSync(stampPath, "ok\n", "utf8");
+    fs.writeFileSync(rootDtsPath, "export {};\n", "utf8");
+    fs.writeFileSync(packageDtsPath, "export {};\n", "utf8");
+
+    fs.utimesSync(inputPath, new Date(1_000), new Date(1_000));
+    fs.utimesSync(stampPath, new Date(2_000), new Date(2_000));
+    fs.utimesSync(rootDtsPath, new Date(2_000), new Date(2_000));
+    fs.utimesSync(packageDtsPath, new Date(2_000), new Date(2_000));
+
+    expect(
+      isArtifactSetFresh({
+        rootDir,
+        inputPaths: ["scripts/write-plugin-sdk-entry-dts.ts"],
+        outputPaths: [
+          "dist/plugin-sdk/.boundary-entry-shims.stamp",
+          "dist/plugin-sdk/index.d.ts",
+          "packages/plugin-sdk/dist/src/plugin-sdk/index.d.ts",
+        ],
+      }),
+    ).toBe(true);
+
+    fs.rmSync(packageDtsPath);
+
+    expect(
+      isArtifactSetFresh({
+        rootDir,
+        inputPaths: ["scripts/write-plugin-sdk-entry-dts.ts"],
+        outputPaths: [
+          "dist/plugin-sdk/.boundary-entry-shims.stamp",
+          "dist/plugin-sdk/index.d.ts",
+          "packages/plugin-sdk/dist/src/plugin-sdk/index.d.ts",
+        ],
+      }),
+    ).toBe(false);
+    expect(resolveBoundaryEntryShimRequiredOutputs({})).toContain("dist/plugin-sdk/index.d.ts");
+    expect(resolveBoundaryEntryShimRequiredOutputs({})).toContain(
+      "packages/plugin-sdk/dist/src/plugin-sdk/index.d.ts",
+    );
   });
 
   it("parses prep mode and rejects unknown values", () => {

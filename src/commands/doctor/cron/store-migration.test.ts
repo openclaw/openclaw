@@ -1,7 +1,8 @@
 // Cron store migration tests cover doctor migration of persisted cron stores.
 import { describe, expect, it } from "vitest";
-import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "../../../cron/stagger.js";
 import { normalizeStoredCronJobs } from "./store-migration.js";
+
+const DEFAULT_TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;
 
 function makeLegacyJob(overrides: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -189,6 +190,8 @@ describe("normalizeStoredCronJobs", () => {
 
     expect(result.issues.legacyAgentTurnCommandPayload).toBeUndefined();
     expect(result.issues.unresolvedAgentTurnShellToolPrompt).toBe(1);
+    expect(result.unresolvedAgentTurnCommandPromptJobs).toEqual(["Legacy job"]);
+    expect(result.unresolvedAgentTurnShellToolPromptJobs).toEqual([]);
     const payload = job.payload as Record<string, unknown>;
     expect(payload.kind).toBe("agentTurn");
     expect(payload.message).toContain(command);

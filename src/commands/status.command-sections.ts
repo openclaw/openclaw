@@ -25,7 +25,6 @@ type AgentStatusLike = {
 
 type SummaryLike = Pick<StatusSummary, "tasks" | "taskAudit" | "heartbeat" | "sessions">;
 type MemoryLike = MemoryStatusSnapshot | null;
-type MemoryPluginLike = MemoryPluginStatus;
 type SessionsRecentLike = SessionStatus;
 type EventLoopHealthLike = NonNullable<HealthSummary["eventLoop"]>;
 
@@ -151,7 +150,7 @@ export function buildStatusLastHeartbeatValue(params: {
 export function buildStatusMemoryValue(
   params: {
     memory: MemoryLike;
-    memoryPlugin: MemoryPluginLike;
+    memoryPlugin: MemoryPluginStatus;
     ok: (value: string) => string;
     warn: (value: string) => string;
     muted: (value: string) => string;
@@ -396,7 +395,7 @@ export function buildStatusModelSelectionLines(params: {
       `  Configured default: ${configured}`,
       `  Session selected: ${selected}`,
       `  Reason: ${sess.modelSelectionReason ?? "session override"}`,
-      `  Clear with: /model ${configured} or /reset`,
+      "  Clear with: /model default",
       "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
     );
   }

@@ -31,17 +31,20 @@ import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
 import {
   formatWikiLink,
+  isUnmanagedRawSourceSummary,
   parseWikiMarkdown,
   renderWikiMarkdown,
-  toWikiPageSummary,
+  scanWikiPageSummary,
   type WikiClaim,
   type WikiClaimEvidence,
+  type WikiPageFrontmatterError,
   type WikiPageKind,
   type WikiPageSummary,
   type WikiRelationship,
   WIKI_RELATED_END_MARKER,
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
+import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const COMPILE_PAGE_GROUPS: Array<{ kind: WikiPageKind; dir: string; heading: string }> = [
@@ -64,6 +67,7 @@ type DashboardPageDefinition = {
   buildBody: (params: {
     config: ResolvedMemoryWikiConfig;
     pages: WikiPageSummary[];
+    managedImportedSourcePagePaths: Set<string>;
     now: Date;
     sourceRelativeTo: string;
   }) => string;
@@ -206,9 +210,19 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
     id: "report.stale-pages",
     title: "Stale Pages",
     relativePath: "reports/stale-pages.md",
-    buildBody: ({ config, pages, now, sourceRelativeTo }) => {
+    buildBody: ({ config, managedImportedSourcePagePaths, pages, now, sourceRelativeTo }) => {
       const matches = pages
-        .filter((page) => page.kind !== "report")
+        .filter(
+          (page) =>
+            page.kind !== "report" &&
+            // concept/synthesis are intentionally durable references
+            page.kind !== "concept" &&
+            page.kind !== "synthesis" &&
+            !(
+              isUnmanagedRawSourceSummary(page) &&
+              !managedImportedSourcePagePaths.has(page.relativePath)
+            ),
+        )
         .flatMap((page) => {
           const freshness = assessPageFreshness(page, now);
           if (freshness.level === "fresh") {
@@ -339,6 +353,7 @@ export type CompileMemoryWikiResult = {
   vaultRoot: string;
   pageCounts: Record<WikiPageKind, number>;
   pages: WikiPageSummary[];
+  frontmatterErrors: WikiPageFrontmatterError[];
   claimCount: number;
   updatedFiles: string[];
 };
@@ -351,15 +366,23 @@ export type RefreshMemoryWikiIndexesResult = {
 
 async function collectMarkdownFiles(rootDir: string, relativeDir: string): Promise<string[]> {
   const dirPath = path.join(rootDir, relativeDir);
-  const entries = await fs.readdir(dirPath, { withFileTypes: true }).catch(() => []);
+  const entries = await fs
+    .readdir(dirPath, { withFileTypes: true, recursive: true })
+    .catch(() => []);
   return entries
     .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-    .map((entry) => path.join(relativeDir, entry.name))
+    .map((entry) => {
+      const absPath = path.join(entry.parentPath ?? dirPath, entry.name);
+      return path.relative(rootDir, absPath).split(path.sep).join("/");
+    })
     .filter((relativePath) => path.basename(relativePath) !== "index.md")
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-async function readPageSummaries(rootDir: string): Promise<WikiPageSummary[]> {
+async function readPageSummaries(rootDir: string): Promise<{
+  pages: WikiPageSummary[];
+  frontmatterErrors: WikiPageFrontmatterError[];
+}> {
   const filePaths = (
     await Promise.all(COMPILE_PAGE_GROUPS.map((group) => collectMarkdownFiles(rootDir, group.dir)))
   ).flat();
@@ -371,7 +394,7 @@ async function readPageSummaries(rootDir: string): Promise<WikiPageSummary[]> {
         () => fs.readFile(absolutePath, "utf8"),
         `read wiki page ${absolutePath}`,
       );
-      return toWikiPageSummary({ absolutePath, relativePath, raw });
+      return scanWikiPageSummary({ absolutePath, relativePath, raw });
     }),
     limit: READ_PAGE_SUMMARIES_CONCURRENCY,
     errorMode: "stop",
@@ -380,9 +403,14 @@ async function readPageSummaries(rootDir: string): Promise<WikiPageSummary[]> {
     throw readResult.firstError;
   }
 
-  return readResult.results
-    .flatMap((page) => (page ? [page] : []))
-    .toSorted((left, right) => left.title.localeCompare(right.title));
+  return {
+    pages: readResult.results
+      .flatMap((result) => (result.status === "valid" ? [result.page] : []))
+      .toSorted((left, right) => left.title.localeCompare(right.title)),
+    frontmatterErrors: readResult.results.flatMap((result) =>
+      result.status === "invalid-frontmatter" ? [result.error] : [],
+    ),
+  };
 }
 
 function buildPageCounts(pages: WikiPageSummary[]): Record<WikiPageKind, number> {
@@ -892,6 +920,9 @@ async function writeManagedMarkdownFile(params: {
 }): Promise<boolean> {
   const root = await fsRoot(params.rootDir);
   const original = await root.readText(params.relativePath).catch(() => `# ${params.title}\n`);
+  // Generated indexes bypass page discovery. Parse existing content here so
+  // managed-block updates cannot rewrite malformed frontmatter.
+  parseWikiMarkdown(original);
   const updated = replaceManagedMarkdownBlock({
     original,
     heading: "## Generated",
@@ -911,6 +942,7 @@ async function writeDashboardPage(params: {
   config: ResolvedMemoryWikiConfig;
   rootDir: string;
   definition: DashboardPageDefinition;
+  managedImportedSourcePagePaths: Set<string>;
   pages: WikiPageSummary[];
   now: Date;
 }): Promise<boolean> {
@@ -936,6 +968,7 @@ async function writeDashboardPage(params: {
     endMarker: `<!-- openclaw:wiki:${path.basename(params.definition.relativePath, ".md")}:end -->`,
     body: params.definition.buildBody({
       config: params.config,
+      managedImportedSourcePagePaths: params.managedImportedSourcePagePaths,
       pages: params.pages,
       now: params.now,
       sourceRelativeTo: params.definition.relativePath,
@@ -986,6 +1019,7 @@ async function writeDashboardPage(params: {
 
 async function refreshDashboardPages(params: {
   config: ResolvedMemoryWikiConfig;
+  managedImportedSourcePagePaths: Set<string>;
   rootDir: string;
   pages: WikiPageSummary[];
 }): Promise<string[]> {
@@ -1000,6 +1034,7 @@ async function refreshDashboardPages(params: {
         config: params.config,
         rootDir: params.rootDir,
         definition,
+        managedImportedSourcePagePaths: params.managedImportedSourcePagePaths,
         pages: params.pages,
         now,
       })
@@ -1354,15 +1389,27 @@ export async function compileMemoryWikiVault(
 ): Promise<CompileMemoryWikiResult> {
   await initializeMemoryWikiVault(config);
   const rootDir = config.vault.path;
-  let pages = await readPageSummaries(rootDir);
+  const sourceSyncState = await readMemoryWikiSourceSyncState(rootDir);
+  const managedImportedSourcePagePaths = new Set(
+    Object.values(sourceSyncState.entries).map((entry) => entry.pagePath.split(path.sep).join("/")),
+  );
+  let scan = await readPageSummaries(rootDir);
+  let pages = scan.pages;
   const updatedFiles = await refreshPageRelatedBlocks({ config, pages });
   if (updatedFiles.length > 0) {
-    pages = await readPageSummaries(rootDir);
+    scan = await readPageSummaries(rootDir);
+    pages = scan.pages;
   }
-  const dashboardUpdatedFiles = await refreshDashboardPages({ config, rootDir, pages });
+  const dashboardUpdatedFiles = await refreshDashboardPages({
+    config,
+    managedImportedSourcePagePaths,
+    rootDir,
+    pages,
+  });
   updatedFiles.push(...dashboardUpdatedFiles);
   if (dashboardUpdatedFiles.length > 0) {
-    pages = await readPageSummaries(rootDir);
+    scan = await readPageSummaries(rootDir);
+    pages = scan.pages;
   }
   const counts = buildPageCounts(pages);
   const digestUpdatedFiles = await writeAgentDigestArtifacts({
@@ -1418,6 +1465,7 @@ export async function compileMemoryWikiVault(
     vaultRoot: rootDir,
     pageCounts: counts,
     pages,
+    frontmatterErrors: scan.frontmatterErrors,
     claimCount: pages.reduce((total, page) => total + page.claims.length, 0),
     updatedFiles,
   };

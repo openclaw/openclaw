@@ -18,9 +18,31 @@ import {
   tempDir,
 } from "./run-attempt-test-harness.js";
 import { testing } from "./run-attempt.js";
-import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
+import {
+  readCodexAppServerBinding,
+  writeCodexAppServerBinding as writeRawCodexAppServerBinding,
+} from "./session-binding.js";
 
 setupRunAttemptTestHooks();
+
+const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
+  "features.standalone_web_search": false,
+  web_search: "disabled",
+});
+
+function writeCodexAppServerBinding(
+  ...args: Parameters<typeof writeRawCodexAppServerBinding>
+) {
+  const [sessionFile, binding, lookup] = args;
+  return writeRawCodexAppServerBinding(
+    sessionFile,
+    {
+      webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
+      ...binding,
+    },
+    lookup,
+  );
+}
 
 describe("runCodexAppServerAttempt native hook relay", () => {
   it("registers native hook relay config for an enabled Codex turn and cleans it up", async () => {
@@ -609,6 +631,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       cwd: workspaceDir,
       model: "gpt-5.4-codex",
       modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
       nativeHookRelayGeneration: "generation-from-failed-resume",
     });
     const harness = createStartedThreadHarness(async (method) => {

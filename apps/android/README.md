@@ -1,8 +1,8 @@
 ## OpenClaw Android App
 
-Status: **extremely alpha**. The app is actively being rebuilt from the ground up.
+OpenClaw Android is the officially released Google Play app. It connects to an OpenClaw Gateway as a companion node for chat, voice, approvals, screen, and device-aware automation.
 
-### Rebuild Checklist
+### Current App Surface
 
 - [x] New 4-step onboarding flow
 - [x] Connect tab with `Setup Code` + `Manual` modes
@@ -18,7 +18,6 @@ Status: **extremely alpha**. The app is actively being rebuilt from the ground u
 - [x] Authenticated background presence beacons
 - [x] Voice tab full functionality
 - [x] Screen tab full functionality
-- [ ] Full end-to-end QA and release hardening
 
 ## Open in Android Studio
 
@@ -32,7 +31,7 @@ cd apps/android
 ./gradlew :app:installPlayDebug
 ./gradlew :app:testPlayDebugUnitTest
 cd ../..
-bun run android:bundle:release
+pnpm android:release:archive
 ```
 
 Third-party debug flavor:
@@ -44,10 +43,59 @@ cd apps/android
 ./gradlew :app:testThirdPartyDebugUnitTest
 ```
 
-`bun run android:bundle:release` auto-bumps Android `versionName`/`versionCode` in `apps/android/app/build.gradle.kts`, then builds two signed release bundles:
+Android release archives use the pinned version in `apps/android/version.json`. Update it with:
 
-- Play build: `apps/android/build/release-bundles/openclaw-<version>-play-release.aab`
-- Third-party build: `apps/android/build/release-bundles/openclaw-<version>-third-party-release.aab`
+```bash
+pnpm android:version
+pnpm android:version:check
+pnpm android:version:pin -- --from-gateway
+pnpm android:version:pin -- --version 2026.6.5 --version-code 2026060501
+```
+
+Release-owner signing sync:
+
+```bash
+pnpm android:release:signing:plan
+MATCH_PASSWORD=<signing repo password> pnpm android:release:signing:sync:pull
+MATCH_PASSWORD=<signing repo password> pnpm android:release:signing:check
+```
+
+The signing sync pulls encrypted Android upload-key assets from the shared `apps-signing` repo and materializes decrypted files under `apps/android/build/release-signing/`.
+
+Generate raw Google Play screenshots:
+
+```bash
+pnpm android:screenshots
+```
+
+To make screenshot capture own emulator startup, pass a named AVD:
+
+```bash
+ANDROID_SCREENSHOT_AVD=OpenClaw_QA_API35 pnpm android:screenshots
+```
+
+The screenshot script uses one connected ADB device when available. If none is
+connected and `ANDROID_SCREENSHOT_AVD` is set, it boots that emulator
+headlessly, waits for Android to finish booting, disables animations, captures
+the screenshots, then shuts down the emulator it started.
+
+`pnpm android:release:archive` builds signed release artifacts into `apps/android/build/release-artifacts/` and writes `.sha256` checksum files:
+
+- Play build: `openclaw-<version>-play-release.aab`
+- Third-party build: `openclaw-<version>-third-party-release.apk`
+
+`pnpm android:bundle:release` is an alias for the same Fastlane archive lane.
+
+`pnpm android:release:archive` is for local archive validation only. It is not a
+fallback upload path after `pnpm android:release:upload` fails.
+
+Agent-driven Google Play uploads must use `pnpm android:release:upload` as the
+only release path. If that command fails, stop and fix the failing screenshot,
+metadata, signing, validation, archive, or upload step before trying again. Do
+not upload archived artifacts through direct Fastlane lanes, Gradle artifacts,
+Google Play API commands, or Play Console mutation commands.
+
+See `apps/android/VERSIONING.md` and `apps/android/fastlane/SETUP.md` for the release workflow.
 
 Flavor-specific direct Gradle tasks:
 
@@ -76,7 +124,7 @@ Direct Gradle tasks:
 cd apps/android
 ./gradlew :app:ktlintCheck :benchmark:ktlintCheck
 ./gradlew :app:ktlintFormat :benchmark:ktlintFormat
-./gradlew :app:lintDebug
+./gradlew :app:lintPlayDebug :app:lintThirdPartyDebug
 ```
 
 `gradlew` auto-detects the Android SDK at `~/Library/Android/sdk` (macOS default) if `ANDROID_SDK_ROOT` / `ANDROID_HOME` are unset.
@@ -294,5 +342,4 @@ Common failure quick-fixes:
 
 ## Contributions
 
-This Android app is currently being rebuilt.
 Maintainer: @obviyus. For issues/questions/contributions, please open an issue or reach out on Discord.

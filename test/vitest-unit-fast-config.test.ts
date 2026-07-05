@@ -132,7 +132,6 @@ describe("unit-fast vitest lane", () => {
     expect(testConfig.include).toContain("src/security/audit-gateway-tools-http.test.ts");
     expect(testConfig.include).toContain("src/security/audit-plugin-readonly-scope.test.ts");
     expect(testConfig.include).toContain("src/security/audit-loopback-logging.test.ts");
-    expect(testConfig.include).toContain("src/ui-app-settings.agents-files-refresh.test.ts");
     expect(testConfig.include).toContain("src/video-generation/provider-registry.test.ts");
     expect(testConfig.include).toContain("src/plugin-sdk/provider-entry.test.ts");
     expect(testConfig.include).toContain("src/security/dangerous-config-flags.test.ts");
@@ -157,6 +156,8 @@ describe("unit-fast vitest lane", () => {
     expect(isUnitFastTestFile("src/plugin-sdk/temp-path.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/agents/sandbox.resolveSandboxContext.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/crestodian/assistant.test.ts")).toBe(false);
+    expect(isUnitFastTestFile("src/flows/channel-setup.test.ts")).toBe(false);
+    expect(isUnitFastTestFile("src/flows/doctor-health-contributions.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/plugins/install.npm-spec.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/secrets/runtime.test.ts")).toBe(false);
     expect(resolveUnitFastTestIncludePattern("src/plugin-sdk/temp-path.ts")).toBeNull();

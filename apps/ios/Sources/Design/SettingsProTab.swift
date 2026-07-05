@@ -6,8 +6,6 @@ struct SettingsProTab: View {
     @Environment(VoiceWakeManager.self) var voiceWake
     @Environment(GatewayConnectionController.self) var gatewayController
     @Environment(\.scenePhase) var scenePhase
-    @AppStorage(AppAppearancePreference.storageKey) var appearancePreferenceRaw: String =
-        AppAppearancePreference.system.rawValue
     @AppStorage("node.displayName") var displayName: String = "iOS Node"
     @AppStorage("node.instanceId") var instanceId: String = UUID().uuidString
     @AppStorage("camera.enabled") var cameraEnabled: Bool = true
@@ -46,15 +44,21 @@ struct SettingsProTab: View {
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
     @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
     @State var defaultShareInstruction = ""
-    @State var showGatewayProblemDetails = false
     @State var showQRScanner = false
     @State var scannerError: String?
     @State var showResetOnboardingAlert = false
     @State var suppressCredentialPersist = false
     @State var locationStatusText: String?
+    @State var locationPermissionSummary = LocationPermissionSummary(
+        desiredMode: .off,
+        locationServicesEnabled: true,
+        authorizationStatus: .notDetermined,
+        accuracyAuthorization: .fullAccuracy)
+    @State var locationPermissionRefreshID = 0
     @State var previousLocationModeRaw: String = OpenClawLocationMode.off.rawValue
-    @State var notificationStatusText = "Checking"
-    @State var notificationActionText = "Request Access"
+    @State var notificationStatus: SettingsNotificationStatus = .checking
+    @State var isRequestingNotificationAuthorization = false
+    @State var showNotificationRelayDisclosure = false
     @State var diagnosticsLastRunText = "Not run"
     @State var diagnosticsIssueCount: Int?
     @State var showTalkIssueDetails = false
@@ -62,15 +66,24 @@ struct SettingsProTab: View {
     let initialRoute: SettingsRoute?
     let directRoute: SettingsRoute?
     let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let ownsNavigationStack: Bool
+    let navigateToRoute: ((SettingsRoute) -> Void)?
+    let onRouteChange: ((SettingsRoute?) -> Void)?
 
     init(
         initialRoute: SettingsRoute? = nil,
         directRoute: SettingsRoute? = nil,
-        headerLeadingAction: OpenClawSidebarHeaderAction? = nil)
+        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        ownsNavigationStack: Bool = true,
+        navigateToRoute: ((SettingsRoute) -> Void)? = nil,
+        onRouteChange: ((SettingsRoute?) -> Void)? = nil)
     {
         self.initialRoute = initialRoute
         self.directRoute = directRoute
         self.headerLeadingAction = headerLeadingAction
+        self.ownsNavigationStack = ownsNavigationStack
+        self.navigateToRoute = navigateToRoute
+        self.onRouteChange = onRouteChange
     }
 
     var body: some View {
@@ -84,28 +97,35 @@ struct SettingsProTab: View {
         if let directRoute {
             self.destination(for: directRoute)
         } else {
-            self.settingsNavigationStack
+            if self.ownsNavigationStack {
+                self.settingsNavigationStack
+            } else {
+                self.settingsNavigationContent
+            }
         }
     }
 
     private var settingsNavigationStack: some View {
         NavigationStack(path: self.$navigationPath) {
-            ZStack {
-                OpenClawProBackground()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        self.settingsHeader
-                        self.appearanceSection
-                        self.gatewaySection
-                        self.settingsListSection
-                    }
-                    .padding(.top, 18)
-                    .padding(.bottom, 18)
+            self.settingsNavigationContent
+        }
+    }
+
+    private var settingsNavigationContent: some View {
+        List {
+            self.gatewaySection
+            self.settingsListSection
+        }
+        .font(OpenClawType.body)
+        .navigationTitle("Settings")
+        .navigationDestination(for: SettingsRoute.self) { route in
+            self.destination(for: route)
+        }
+        .toolbar {
+            if let headerLeadingAction {
+                ToolbarItem(placement: .topBarLeading) {
+                    OpenClawSidebarRevealButton(action: headerLeadingAction)
                 }
-            }
-            .navigationBarHidden(true)
-            .navigationDestination(for: SettingsRoute.self) { route in
-                self.destination(for: route)
             }
         }
     }
@@ -118,6 +138,7 @@ struct SettingsProTab: View {
                 self.refreshNotificationSettings()
                 self.applyPendingGatewaySetupLinkIfNeeded()
                 self.applyInitialRouteIfNeeded()
+                self.notifyRouteChange()
             }
             .onChange(of: self.scenePhase) { _, phase in
                 if phase == .active {
@@ -154,20 +175,18 @@ struct SettingsProTab: View {
             .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
                 self.applyPendingGatewaySetupLinkIfNeeded()
             }
+            .onChange(of: self.onboardingRequestID) { _, _ in
+                // Root-owned resets leave Settings mounted behind onboarding.
+                // Reload cleared credentials before the view can persist stale state.
+                self.syncAfterOnboardingReset()
+            }
+            .onChange(of: self.navigationPath) { _, _ in
+                self.notifyRouteChange()
+            }
     }
 
     private func settingsModalPresentation(_ content: some View) -> some View {
         content
-            .sheet(isPresented: self.$showGatewayProblemDetails) {
-                if let gatewayProblem = self.appModel.lastGatewayProblem {
-                    GatewayProblemDetailsSheet(
-                        problem: gatewayProblem,
-                        primaryActionTitle: self.gatewayProblemPrimaryActionTitle(gatewayProblem),
-                        onPrimaryAction: {
-                            Task { await self.handleGatewayProblemPrimaryAction(gatewayProblem) }
-                        })
-                }
-            }
             .sheet(isPresented: self.$showTalkIssueDetails) {
                 if let issue = self.appModel.talkMode.gatewayTalkCurrentFallbackIssue {
                     TalkRuntimeIssueDetailsSheet(issue: issue)
@@ -193,20 +212,39 @@ struct SettingsProTab: View {
                         .ignoresSafeArea()
                         .navigationTitle("Scan QR Code")
                         .navigationBarTitleDisplayMode(.inline)
+                        .font(OpenClawType.body)
                         .toolbar {
                             ToolbarItem(placement: .topBarLeading) {
-                                Button("Cancel") { self.showQRScanner = false }
+                                Button {
+                                    self.showQRScanner = false
+                                } label: {
+                                    Text("Cancel")
+                                        .font(OpenClawType.subheadSemiBold)
+                                }
+                                .font(OpenClawType.subheadSemiBold)
                             }
                         }
                 }
             }
+            .sheet(isPresented: self.$showNotificationRelayDisclosure) {
+                HostedPushRelayDisclosureSheet(
+                    message: self.notificationRelayDisclosureMessage,
+                    onContinue: self.requestNotificationAuthorizationFromSettings)
+            }
             .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
-                Button("Reset", role: .destructive) {
+                Button(role: .destructive) {
                     self.resetOnboarding()
+                } label: {
+                    Text("Reset")
+                        .font(OpenClawType.subheadSemiBold)
                 }
-                Button("Cancel", role: .cancel) {}
+                Button(role: .cancel) {} label: {
+                    Text("Cancel")
+                        .font(OpenClawType.subheadSemiBold)
+                }
             } message: {
                 Text("This disconnects, clears saved gateway credentials, and reopens onboarding.")
+                    .font(OpenClawType.subhead)
             }
             .alert(
                 "QR Scanner Unavailable",
@@ -214,10 +252,25 @@ struct SettingsProTab: View {
                     get: { self.scannerError != nil },
                     set: { if !$0 { self.scannerError = nil } }))
             {
-                Button("OK", role: .cancel) {}
+                Button(role: .cancel) {} label: {
+                    Text("OK")
+                        .font(OpenClawType.subheadSemiBold)
+                }
             } message: {
                 Text(self.scannerError ?? "")
+                    .font(OpenClawType.subhead)
             }
+    }
+
+    func openNotificationsRouteFromApprovals() {
+        guard self.directRoute == nil else { return }
+        if !self.ownsNavigationStack, let navigateToRoute {
+            navigateToRoute(.notifications)
+            return
+        }
+        // Push, don't replace: Back from Notifications must return to the
+        // Approvals screen the user came from, not reset to the Settings root.
+        self.navigationPath.append(.notifications)
     }
 
     private func applyInitialRouteIfNeeded() {
@@ -225,5 +278,61 @@ struct SettingsProTab: View {
         guard let initialRoute else { return }
         guard self.navigationPath != [initialRoute] else { return }
         self.navigationPath = [initialRoute]
+    }
+
+    private func notifyRouteChange() {
+        if let directRoute {
+            self.onRouteChange?(directRoute)
+            return
+        }
+        self.onRouteChange?(self.navigationPath.last)
+    }
+}
+
+struct HostedPushRelayDisclosureSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let message: String
+    let onContinue: () -> Void
+
+    var body: some View {
+        VStack(spacing: 18) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Image(systemName: "network")
+                        .font(OpenClawType.title2SemiBold)
+                        .foregroundStyle(OpenClawBrand.accentForeground)
+                    Text("Enable OpenClaw Hosted Push Relay?")
+                        .font(OpenClawType.title3SemiBold)
+                    Text(self.message)
+                        .font(OpenClawType.body)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .font(OpenClawType.body)
+            }
+            VStack(spacing: 10) {
+                Button {
+                    self.dismiss()
+                    self.onContinue()
+                } label: {
+                    Text("Continue")
+                        .font(OpenClawType.subheadSemiBold)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                Button(role: .cancel) {
+                    self.dismiss()
+                } label: {
+                    Text("Not Now")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                .buttonStyle(.bordered)
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .tint(OpenClawBrand.accent)
+        .padding(24)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
     }
 }

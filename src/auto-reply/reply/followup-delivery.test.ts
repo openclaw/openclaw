@@ -11,6 +11,31 @@ vi.mock("../../channels/plugins/index.js", () => ({
 const baseConfig = {} as OpenClawConfig;
 
 describe("resolveFollowupDeliveryPayloads", () => {
+  it("drops a durable reasoning payload when reasoningPayloadsEnabled is not set", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [
+          { text: "internal reasoning", isReasoning: true },
+          { text: "final answer" },
+        ],
+      }),
+    ).toEqual([{ text: "final answer" }]);
+  });
+
+  it("keeps a durable reasoning payload when reasoningPayloadsEnabled is true", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [
+          { text: "internal reasoning", isReasoning: true },
+          { text: "final answer" },
+        ],
+        reasoningPayloadsEnabled: true,
+      }),
+    ).toEqual([{ text: "internal reasoning", isReasoning: true }, { text: "final answer" }]);
+  });
+
   it("drops heartbeat ack payloads without media", () => {
     expect(
       resolveFollowupDeliveryPayloads({
@@ -42,6 +67,30 @@ describe("resolveFollowupDeliveryPayloads", () => {
 
     expect(getReplyPayloadMetadata(resolved ?? {})).toEqual({
       assistantTranscriptOwned: true,
+      replyDelivery: {
+        replyToMode: "all",
+      },
+    });
+  });
+
+  it("uses the captured reply policy instead of reloading changed config", () => {
+    const [resolved] = resolveFollowupDeliveryPayloads({
+      cfg: {
+        channels: {
+          slack: {
+            replyToMode: "all",
+          },
+        },
+      } as OpenClawConfig,
+      payloads: [{ text: "queued reply" }],
+      originatingChannel: "slack",
+      originatingChatType: "channel",
+      originatingReplyToMode: "off",
+    });
+
+    expect(getReplyPayloadMetadata(resolved ?? {})?.replyDelivery).toEqual({
+      chatType: "channel",
+      replyToMode: "off",
     });
   });
 
@@ -110,6 +159,72 @@ describe("resolveFollowupDeliveryPayloads", () => {
         ],
       }),
     ).toEqual([{ text: "discord-only text" }]);
+  });
+
+  it("does not dedupe same-channel text sent to a different routed thread", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: "thread reply" }],
+        messageProvider: "slack",
+        originatingTo: "channel:C1",
+        originatingThreadId: "222.000",
+        sentTexts: ["thread reply"],
+        sentTargets: [
+          {
+            tool: "slack",
+            provider: "slack",
+            to: "channel:C1",
+            threadId: "111.000",
+            text: "thread reply",
+          },
+        ],
+      }),
+    ).toEqual([{ text: "thread reply" }]);
+  });
+
+  it("dedupes same-channel text sent to the same routed thread", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: "thread reply" }],
+        messageProvider: "slack",
+        originatingTo: "channel:C1",
+        originatingThreadId: "111.000",
+        sentTexts: ["thread reply"],
+        sentTargets: [
+          {
+            tool: "slack",
+            provider: "slack",
+            to: "channel:C1",
+            threadId: "111.000",
+            text: "thread reply",
+          },
+        ],
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("dedupes a Slack DM tool send recorded through its routable target", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: "thread reply" }],
+        messageProvider: "slack",
+        originatingTo: "user:U123",
+        originatingThreadId: "171.222",
+        sentTexts: ["thread reply"],
+        sentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "user:U123",
+            threadId: "171.222",
+            text: "thread reply",
+          },
+        ],
+      }),
+    ).toStrictEqual([]);
   });
 
   it("falls back to global text dedupe for legacy multi-target messaging telemetry", () => {

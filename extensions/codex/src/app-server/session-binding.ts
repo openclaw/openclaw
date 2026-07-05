@@ -12,6 +12,7 @@ import {
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { type FileLockOptions, withFileLock } from "openclaw/plugin-sdk/file-lock";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   normalizeCodexServiceTier,
@@ -40,7 +41,7 @@ const CODEX_APP_SERVER_BINDING_LOCK_OPTIONS: FileLockOptions = {
   },
   stale: CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS * 2,
 };
-const bindingMutationQueues = new Map<string, Promise<void>>();
+const bindingMutationQueue = new KeyedAsyncQueue();
 const bindingMutationContext = new AsyncLocalStorage<Set<string>>();
 
 type ProviderAuthAliasLookupParams = Parameters<typeof resolveProviderIdForAuth>[1];
@@ -56,7 +57,7 @@ export type CodexAppServerAuthProfileLookup = {
 
 /** Durable sidecar binding connecting an OpenClaw session file to a Codex thread. */
 export type CodexAppServerThreadBinding = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   threadId: string;
   sessionFile: string;
   cwd: string;
@@ -66,11 +67,15 @@ export type CodexAppServerThreadBinding = {
   approvalPolicy?: CodexAppServerApprovalPolicy;
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
+  networkProxyProfileName?: string;
+  networkProxyConfigFingerprint?: string;
   dynamicToolsFingerprint?: string;
   dynamicToolsContainDeferred?: boolean;
+  webSearchThreadConfigFingerprint?: string;
   userMcpServersFingerprint?: string;
   mcpServersFingerprint?: string;
   nativeHookRelayGeneration?: string;
+  appServerRuntimeFingerprint?: string;
   pluginAppsFingerprint?: string;
   pluginAppsInputFingerprint?: string;
   pluginAppPolicyContext?: PluginAppPolicyContext;
@@ -114,30 +119,13 @@ export async function withCodexAppServerBindingLock<T>(
   // The SDK file lock is process-reentrant, so pair it with a local queue.
   // Nested writes from the same guarded mutation can proceed, but unrelated
   // same-process tasks cannot slip between compare/clear/start.
-  const previous = bindingMutationQueues.get(bindingPath) ?? Promise.resolve();
-  let releaseCurrent!: () => void;
-  const current = new Promise<void>((resolve) => {
-    releaseCurrent = resolve;
-  });
-  const queued = previous.then(
-    () => current,
-    () => current,
-  );
-  bindingMutationQueues.set(bindingPath, queued);
-  await previous.catch(() => undefined);
-
   const nestedOwnedBindings = new Set(ownedBindings);
   nestedOwnedBindings.add(bindingPath);
-  try {
-    return await bindingMutationContext.run(nestedOwnedBindings, () =>
+  return await bindingMutationQueue.enqueue(bindingPath, () =>
+    bindingMutationContext.run(nestedOwnedBindings, () =>
       withFileLock(bindingPath, CODEX_APP_SERVER_BINDING_LOCK_OPTIONS, run),
-    );
-  } finally {
-    releaseCurrent();
-    if (bindingMutationQueues.get(bindingPath) === queued) {
-      bindingMutationQueues.delete(bindingPath);
-    }
-  }
+    ),
+  );
 }
 
 /** Reads and normalizes a Codex app-server binding sidecar, returning undefined on stale data. */
@@ -157,14 +145,16 @@ export async function readCodexAppServerBinding(
     return undefined;
   }
   try {
-    const parsed = JSON.parse(raw) as Partial<CodexAppServerThreadBinding>;
-    if (parsed.schemaVersion !== 1 || typeof parsed.threadId !== "string") {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const schemaVersion =
+      parsed.schemaVersion === 1 || parsed.schemaVersion === 2 ? parsed.schemaVersion : undefined;
+    if (schemaVersion === undefined || typeof parsed.threadId !== "string") {
       return undefined;
     }
     const authProfileId =
       typeof parsed.authProfileId === "string" ? parsed.authProfileId : undefined;
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       threadId: parsed.threadId,
       sessionFile,
       cwd: typeof parsed.cwd === "string" ? parsed.cwd : "",
@@ -178,6 +168,14 @@ export async function readCodexAppServerBinding(
       approvalPolicy: readApprovalPolicy(parsed.approvalPolicy),
       sandbox: readSandboxMode(parsed.sandbox),
       serviceTier: readServiceTier(parsed.serviceTier),
+      networkProxyProfileName:
+        typeof parsed.networkProxyProfileName === "string"
+          ? parsed.networkProxyProfileName
+          : undefined,
+      networkProxyConfigFingerprint:
+        typeof parsed.networkProxyConfigFingerprint === "string"
+          ? parsed.networkProxyConfigFingerprint
+          : undefined,
       dynamicToolsFingerprint:
         typeof parsed.dynamicToolsFingerprint === "string"
           ? parsed.dynamicToolsFingerprint
@@ -185,6 +183,10 @@ export async function readCodexAppServerBinding(
       dynamicToolsContainDeferred:
         typeof parsed.dynamicToolsContainDeferred === "boolean"
           ? parsed.dynamicToolsContainDeferred
+          : undefined,
+      webSearchThreadConfigFingerprint:
+        typeof parsed.webSearchThreadConfigFingerprint === "string"
+          ? parsed.webSearchThreadConfigFingerprint
           : undefined,
       userMcpServersFingerprint:
         typeof parsed.userMcpServersFingerprint === "string"
@@ -197,13 +199,21 @@ export async function readCodexAppServerBinding(
         parsed.nativeHookRelayGeneration.trim()
           ? parsed.nativeHookRelayGeneration
           : undefined,
+      appServerRuntimeFingerprint:
+        typeof parsed.appServerRuntimeFingerprint === "string" &&
+        parsed.appServerRuntimeFingerprint.trim()
+          ? parsed.appServerRuntimeFingerprint
+          : undefined,
       pluginAppsFingerprint:
         typeof parsed.pluginAppsFingerprint === "string" ? parsed.pluginAppsFingerprint : undefined,
       pluginAppsInputFingerprint:
         typeof parsed.pluginAppsInputFingerprint === "string"
           ? parsed.pluginAppsInputFingerprint
           : undefined,
-      pluginAppPolicyContext: readPluginAppPolicyContext(parsed.pluginAppPolicyContext),
+      pluginAppPolicyContext: readPluginAppPolicyContext(
+        parsed.pluginAppPolicyContext,
+        schemaVersion,
+      ),
       contextEngine: readContextEngineBinding(parsed.contextEngine),
       environmentSelectionFingerprint:
         typeof parsed.environmentSelectionFingerprint === "string"
@@ -232,7 +242,7 @@ export async function writeCodexAppServerBinding(
   await withCodexAppServerBindingLock(sessionFile, async () => {
     const now = new Date().toISOString();
     const payload: CodexAppServerThreadBinding = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       sessionFile,
       threadId: binding.threadId,
       cwd: binding.cwd,
@@ -246,11 +256,15 @@ export async function writeCodexAppServerBinding(
       approvalPolicy: binding.approvalPolicy,
       sandbox: binding.sandbox,
       serviceTier: binding.serviceTier,
+      networkProxyProfileName: binding.networkProxyProfileName,
+      networkProxyConfigFingerprint: binding.networkProxyConfigFingerprint,
       dynamicToolsFingerprint: binding.dynamicToolsFingerprint,
       dynamicToolsContainDeferred: binding.dynamicToolsContainDeferred,
+      webSearchThreadConfigFingerprint: binding.webSearchThreadConfigFingerprint,
       userMcpServersFingerprint: binding.userMcpServersFingerprint,
       mcpServersFingerprint: binding.mcpServersFingerprint,
       nativeHookRelayGeneration: binding.nativeHookRelayGeneration,
+      appServerRuntimeFingerprint: binding.appServerRuntimeFingerprint,
       pluginAppsFingerprint: binding.pluginAppsFingerprint,
       pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
       pluginAppPolicyContext: binding.pluginAppPolicyContext,
@@ -309,7 +323,10 @@ function readContextEngineProjectionBinding(
   };
 }
 
-function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | undefined {
+function readPluginAppPolicyContext(
+  value: unknown,
+  bindingSchemaVersion: 1 | 2,
+): PluginAppPolicyContext | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
@@ -327,12 +344,17 @@ function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | un
       return undefined;
     }
     const entry = rawEntry as Record<string, unknown>;
+    const destructiveApprovalMode = readDestructiveApprovalMode(
+      entry.destructiveApprovalMode,
+      bindingSchemaVersion,
+    );
     if (
       "appId" in entry ||
       typeof entry.configKey !== "string" ||
       entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME ||
       typeof entry.pluginName !== "string" ||
       typeof entry.allowDestructiveActions !== "boolean" ||
+      destructiveApprovalMode === "invalid" ||
       !Array.isArray(entry.mcpServerNames) ||
       entry.mcpServerNames.some((serverName) => typeof serverName !== "string")
     ) {
@@ -343,6 +365,7 @@ function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | un
       marketplaceName: entry.marketplaceName,
       pluginName: entry.pluginName,
       allowDestructiveActions: entry.allowDestructiveActions,
+      ...(destructiveApprovalMode ? { destructiveApprovalMode } : {}),
       mcpServerNames: entry.mcpServerNames,
     };
   }
@@ -364,6 +387,31 @@ function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | un
     apps: parsedApps,
     pluginAppIds: parsedPluginAppIds,
   };
+}
+
+function readDestructiveApprovalMode(
+  value: unknown,
+  bindingSchemaVersion: 1 | 2,
+): PluginAppPolicyContext["apps"][string]["destructiveApprovalMode"] | undefined | "invalid" {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === "deny") {
+    return "deny";
+  }
+  if (value === "allow") {
+    return "allow";
+  }
+  if (value === "auto") {
+    return bindingSchemaVersion === 1 ? "allow" : "auto";
+  }
+  if (value === "ask" && bindingSchemaVersion === 2) {
+    return "ask";
+  }
+  if (value === "on-request" && bindingSchemaVersion === 1) {
+    return "auto";
+  }
+  return "invalid";
 }
 
 /** Removes the Codex app-server binding sidecar if present. */

@@ -174,7 +174,16 @@ export function resolveEmbeddedAgentStreamFn(params: {
 
   if (
     isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn) ||
-    hasResolvedRuntimeApiKey(params.resolvedApiKey)
+    hasResolvedRuntimeApiKey(params.resolvedApiKey) ||
+    // Proxied anthropic-messages providers (provider !== "anthropic", e.g. pioneer)
+    // must use the boundary-aware managed transport even without a resolved runtime
+    // key — it is the only place a tool-using turn's narration gets tagged
+    // phase:commentary; the base SDK stream never tags it, so proxied anthropic
+    // providers silently lost their narration lane. Scoped to non-"anthropic"
+    // providers so direct-anthropic edge cases (thinking-replay repair without a
+    // resolved key) are unchanged; the wrap below injects the resolved key
+    // (fallback options.apiKey), preserving x-api-key auth.
+    (params.model.api === "anthropic-messages" && params.model.provider !== "anthropic")
   ) {
     const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
     if (boundaryAwareStreamFn) {
@@ -268,4 +277,3 @@ function wrapEmbeddedAgentStreamFn(
     });
   };
 }
-export { testing as __testing };

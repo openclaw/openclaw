@@ -18,6 +18,21 @@ let lifecycleHandler:
     }) => void)
   | undefined;
 
+const sessionStore = vi.hoisted(
+  () =>
+    new Proxy<Record<string, { sessionId: string; updatedAt: number }>>(
+      {},
+      {
+        get(target, prop, receiver) {
+          if (typeof prop !== "string" || prop in target) {
+            return Reflect.get(target, prop, receiver);
+          }
+          return { sessionId: `sess-${prop}`, updatedAt: 1 };
+        },
+      },
+    ),
+);
+
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async (opts: unknown) => {
     const request = opts as { method?: string };
@@ -42,18 +57,6 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => {
-  const sessionStore = new Proxy<Record<string, { sessionId: string; updatedAt: number }>>(
-    {},
-    {
-      get(target, prop, receiver) {
-        if (typeof prop !== "string" || prop in target) {
-          return Reflect.get(target, prop, receiver);
-        }
-        return { sessionId: `sess-${prop}`, updatedAt: 1 };
-      },
-    },
-  );
-
   return {
     loadSessionStore: vi.fn(() => sessionStore),
     resolveAgentIdFromSessionKey: (key: string) => {
@@ -65,6 +68,11 @@ vi.mock("../config/sessions.js", () => {
     updateSessionStore: vi.fn(),
   };
 });
+
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  loadSessionEntry: (scope: { sessionKey: string }) => sessionStore[scope.sessionKey],
+  patchSessionEntry: async () => null,
+}));
 
 const announceSpy = vi.fn(async (_params: unknown) => true);
 const runSubagentEndedHookMock = vi.fn(async (_eventValue?: unknown, _ctx?: unknown) => {});
@@ -284,12 +292,14 @@ describe("subagent registry steer restarts", () => {
     nextRunId: string;
     fallback?: ReturnType<typeof listMainRuns>[number];
     transcriptFile?: string;
+    task?: string;
   }) => {
     const replaced = mod.replaceSubagentRunAfterSteer({
       previousRunId: params.previousRunId,
       nextRunId: params.nextRunId,
       fallback: params.fallback,
       transcriptFile: params.transcriptFile,
+      task: params.task,
     });
     expect(replaced).toBe(true);
 
@@ -537,6 +547,55 @@ describe("subagent registry steer restarts", () => {
     expect(run.completion?.capturedAt).toBeUndefined();
     expect(run.cleanupCompletedAt).toBeUndefined();
     expect(run.cleanupHandled).toBe(false);
+  });
+
+  it("updates task to the dispatched steer message when provided", () => {
+    // Regression test: orphan-session recovery
+    // (`recoverOrphanedSubagentSessions` -> `resumeOrphanedSession` /
+    // `buildResumeMessage` in `subagent-orphan-recovery.ts`) rewraps
+    // `entry.task` into the [Subagent Task] block. If steer replacement did
+    // not update `task` to the new message, a gateway restart classified as
+    // resumable-fresh would re-run the stale pre-steer instruction and lose
+    // the user's steer update.
+    registerRun({
+      runId: "run-steer-task-old",
+      childSessionKey: "agent:main:subagent:steer-task",
+      task: "original pre-steer task",
+    });
+
+    const previous = listMainRuns()[0];
+    expect(previous?.runId).toBe("run-steer-task-old");
+
+    const run = replaceRunAfterSteer({
+      previousRunId: "run-steer-task-old",
+      nextRunId: "run-steer-task-new",
+      fallback: previous,
+      task: "new steer instruction from user",
+    });
+
+    expect(run.task).toBe("new steer instruction from user");
+  });
+
+  it("preserves the previous task when no replacement is provided", () => {
+    // Backwards-compatibility guard: callers that do not pass a new task
+    // (legacy or test fixtures) should still inherit the prior task so that
+    // orphan-session recovery remains deterministic.
+    registerRun({
+      runId: "run-task-preserve-old",
+      childSessionKey: "agent:main:subagent:task-preserve",
+      task: "preserve me verbatim",
+    });
+
+    const previous = listMainRuns()[0];
+    expect(previous?.runId).toBe("run-task-preserve-old");
+
+    const run = replaceRunAfterSteer({
+      previousRunId: "run-task-preserve-old",
+      nextRunId: "run-task-preserve-new",
+      fallback: previous,
+    });
+
+    expect(run.task).toBe("preserve me verbatim");
   });
 
   it("preserves cumulative session timing across steer replacement runs", () => {

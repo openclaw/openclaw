@@ -6,7 +6,7 @@
 const MAX_TOKENS_PARAM_KEYS = ["maxTokens", "max_completion_tokens", "max_tokens"] as const;
 
 /** Return a finite non-negative max-token value, or undefined for invalid input. */
-export function resolveNonNegativeMaxTokensParam(value: unknown): number | undefined {
+function resolveNonNegativeMaxTokensParam(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 

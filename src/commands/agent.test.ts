@@ -7,9 +7,12 @@ import "./agent-command.test-mocks.js";
 import { testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
 import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
+import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { loadManifestModelCatalog, loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
+import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
+import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
@@ -24,7 +27,12 @@ import {
 import type { PluginProviderRegistration } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { interruptSessionWorkAdmissions } from "../sessions/session-lifecycle-admission.js";
+import {
+  createDirectOutboundTestAdapter,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../test-utils/channel-plugins.js";
 import { agentCommand, agentCommandFromIngress, testing as agentCommandTesting } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -62,8 +70,14 @@ vi.mock("../agents/auth-profiles/store.js", () => {
   };
 });
 
+vi.mock("../agents/auth-profiles/source-check.js", () => ({
+  hasAnyAuthProfileStoreSource: vi.fn(() => false),
+}));
+
 vi.mock("../agents/command/session-store.runtime.js", () => {
   return {
+    loadSessionEntry: ({ storePath, sessionKey }: { storePath: string; sessionKey: string }) =>
+      loadSessionStore(storePath, { skipCache: true })[sessionKey],
     updateSessionStoreAfterAgentRun: vi.fn(async () => undefined),
   };
 });
@@ -84,12 +98,14 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
     emitAcpLifecycleEnd: vi.fn(),
     emitAcpLifecycleError: vi.fn(),
     emitAcpLifecycleStart: vi.fn(),
-    persistAcpTurnTranscript: vi.fn(
-      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
-    ),
-    persistCliTurnTranscript: vi.fn(
-      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
-    ),
+    persistAcpTurnTranscript: vi.fn(async (params: { sessionEntry?: unknown }) => ({
+      kind: "persisted",
+      sessionEntry: params.sessionEntry,
+    })),
+    persistCliTurnTranscript: vi.fn(async (params: { sessionEntry?: unknown }) => ({
+      kind: "persisted",
+      sessionEntry: params.sessionEntry,
+    })),
     runAgentAttempt: vi.fn(async (params: Record<string, unknown>) => {
       const opts = params.opts as Record<string, unknown>;
       const runContext = params.runContext as Record<string, unknown>;
@@ -335,8 +351,8 @@ function mockModelCatalogOnce(entries: ReturnType<typeof loadManifestModelCatalo
   vi.mocked(loadModelCatalog).mockResolvedValueOnce(entries);
 }
 
-function installThinkingTestProviders() {
-  const registry = createTestRegistry();
+function installThinkingTestProviders(channels: Parameters<typeof createTestRegistry>[0] = []) {
+  const registry = createTestRegistry(channels);
   registry.providers = ["anthropic", "codex", "ollama", "openai", "openrouter"].map(
     (providerId): PluginProviderRegistration => ({
       pluginId: providerId,
@@ -442,6 +458,211 @@ describe("agentCommand", () => {
         runtime,
       ),
     ).rejects.toThrow("allowModelOverride must be explicitly set for ingress agent runs.");
+  });
+
+  it("rejects archived sessions selected by session id", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      writeSessionStoreSeed(store, {
+        "agent:main:subagent:archived": {
+          sessionId: "archived-session-id",
+          archivedAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      });
+      vi.mocked(runEmbeddedAgent).mockClear();
+
+      await expect(
+        agentCommandFromIngress(
+          {
+            message: "blocked while archived",
+            sessionId: "archived-session-id",
+            allowModelOverride: false,
+          },
+          runtime,
+        ),
+      ).rejects.toThrow(
+        'Session "agent:main:subagent:archived" is archived. Restore it before starting new work.',
+      );
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reloads archive state after asynchronous command preparation", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:subagent:archive-race";
+      const sessionId = "archive-race-session-id";
+      mockConfig(home, store);
+      writeSessionStoreSeed(store, {
+        [sessionKey]: { sessionId, updatedAt: Date.now() },
+      });
+      vi.mocked(ensureAgentWorkspace).mockImplementationOnce(async (params) => {
+        writeSessionStoreSeed(store, {
+          [sessionKey]: {
+            sessionId,
+            archivedAt: Date.now(),
+            updatedAt: Date.now(),
+          },
+        });
+        return { dir: params?.dir ?? "/tmp/openclaw-workspace" };
+      });
+
+      await expect(
+        agentCommandFromIngress(
+          {
+            message: "blocked after preparation",
+            sessionId,
+            allowModelOverride: false,
+          },
+          runtime,
+        ),
+      ).rejects.toThrow(
+        `Session "${sessionKey}" is archived. Restore it before starting new work.`,
+      );
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("keeps a restored session restored after asynchronous command preparation", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:subagent:restore-race";
+      const sessionId = "restore-race-session-id";
+      mockConfig(home, store);
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId,
+          archivedAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      });
+      vi.mocked(ensureAgentWorkspace).mockImplementationOnce(async (params) => {
+        writeSessionStoreSeed(store, {
+          [sessionKey]: { sessionId, updatedAt: Date.now() },
+        });
+        return { dir: params?.dir ?? "/tmp/openclaw-workspace" };
+      });
+
+      await agentCommandFromIngress(
+        {
+          message: "run after restore",
+          sessionId,
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      expect(runEmbeddedAgent).toHaveBeenCalled();
+      expect(
+        readSessionStore<{ archivedAt?: number }>(store)[sessionKey]?.archivedAt,
+      ).toBeUndefined();
+    });
+  });
+
+  it("excludes an initiating agent turn from its own lifecycle interruption", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:subagent:in-band-lifecycle";
+      const sessionId = "in-band-lifecycle-session-id";
+      mockConfig(home, store);
+      writeSessionStoreSeed(store, {
+        [sessionKey]: { sessionId, updatedAt: Date.now() },
+      });
+      vi.mocked(runEmbeddedAgent).mockImplementationOnce(async () => {
+        await expect(
+          interruptSessionWorkAdmissions({
+            scope: store,
+            identities: [sessionKey, sessionId],
+            timeoutMs: 5,
+          }),
+        ).resolves.toBe(true);
+        return createDefaultAgentResult();
+      });
+
+      await agentCommandFromIngress(
+        {
+          message: "run an in-band lifecycle command",
+          sessionId,
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("classifies lifecycle interruption as a restart abort", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:subagent:lifecycle-restart";
+      const sessionId = "lifecycle-restart-session-id";
+      mockConfig(home, store);
+      writeSessionStoreSeed(store, {
+        [sessionKey]: { sessionId, updatedAt: Date.now() },
+      });
+      let observedAbortReason: unknown;
+      vi.mocked(runEmbeddedAgent).mockImplementationOnce(
+        async (opts) =>
+          await new Promise((resolve) => {
+            const finish = () => {
+              observedAbortReason = opts.abortSignal?.reason;
+              resolve(createDefaultAgentResult());
+            };
+            if (opts.abortSignal?.aborted) {
+              finish();
+              return;
+            }
+            opts.abortSignal?.addEventListener("abort", finish, { once: true });
+          }),
+      );
+
+      const command = agentCommandFromIngress(
+        {
+          message: "interrupt this lifecycle run",
+          sessionId,
+          allowModelOverride: false,
+        },
+        runtime,
+      ).catch((error: unknown) => error);
+      await vi.waitFor(() => {
+        expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      });
+      await interruptSessionWorkAdmissions({
+        scope: store,
+        identities: [sessionKey, sessionId],
+      });
+      const commandError = await command;
+
+      expect(isAgentRunRestartAbortReason(observedAbortReason)).toBe(true);
+      expect(isAgentRunRestartAbortReason(commandError)).toBe(true);
+    });
+  });
+
+  it("rejects a stale requested session id after command preparation", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:subagent:stale-request";
+      mockConfig(home, store);
+      writeSessionStoreSeed(store, {
+        [sessionKey]: { sessionId: "current-session-id", updatedAt: Date.now() },
+      });
+
+      await expect(
+        agentCommandFromIngress(
+          {
+            message: "do not enter the replacement session",
+            sessionKey,
+            sessionId: "stale-session-id",
+            allowModelOverride: false,
+          },
+          runtime,
+        ),
+      ).rejects.toThrow(`Session "${sessionKey}" changed while starting work. Retry.`);
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    });
   });
 
   it("uses the selected agent thinkingDefault for fresh ingress runs", async () => {
@@ -1278,6 +1499,59 @@ describe("agentCommand", () => {
       expect(callArgs?.agentId).toBe("ops");
       expect(callArgs?.sessionKey).toBe("agent:ops:global");
       expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
+    });
+  });
+
+  it("rejects agent-scoped to session selectors that conflict with the requested agent", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+      writeSessionStoreSeed(store, {
+        [sessionKey]: { sessionId: "wechat-session", updatedAt: Date.now() },
+      });
+      mockConfig(home, store, undefined, undefined, [{ id: "main" }, { id: "work" }]);
+
+      await expect(
+        agentCommand({ message: "hi", agentId: "work", to: sessionKey }, runtime),
+      ).rejects.toThrow('Agent id "work" does not match session key agent "main".');
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not forward agent-scoped to session selectors as delivery targets", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "wechat-session",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "+1555",
+        },
+      });
+      mockConfig(home, store);
+      installThinkingTestProviders([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: createDirectOutboundTestAdapter({ channel: "telegram" }),
+          }),
+        },
+      ]);
+
+      await agentCommand(
+        { message: "hi", to: sessionKey, deliver: true, channel: "telegram" },
+        runtime,
+      );
+
+      const deliveryCall = vi.mocked(deliverAgentCommandResult).mock.calls.at(-1)?.[0] as
+        | { opts?: { to?: string }; sessionEntry?: { lastTo?: string } }
+        | undefined;
+      expect(deliveryCall?.opts?.to).toBeUndefined();
+      expect(deliveryCall?.sessionEntry?.lastTo).toBe("+1555");
     });
   });
 

@@ -4,6 +4,12 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../config/sessions.js";
+import type {
+  SessionAccessScope,
+  SessionEntryPatchContext,
+  SessionEntryPatchOptions,
+} from "../config/sessions/session-accessor.js";
 
 const noop = () => {};
 const waitForFast = <T>(callback: () => T | Promise<T>) =>
@@ -80,7 +86,48 @@ const mocks = vi.hoisted(() => ({
     agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
     session: { mainKey: "main", scope: "per-sender" as const },
   })),
-  loadSessionStore: vi.fn(() => ({})),
+  loadSessionEntry: vi.fn((scope: SessionAccessScope) => {
+    const store = mocks.loadSessionStore(scope.storePath, { clone: false }) as Record<
+      string,
+      SessionEntry
+    >;
+    return store[scope.sessionKey];
+  }),
+  loadSessionStore: vi.fn((_storePath?: string, _options?: { clone?: boolean }) => ({})),
+  patchSessionEntry: vi.fn(
+    async (
+      scope: SessionAccessScope,
+      update: (
+        entry: SessionEntry,
+        context: SessionEntryPatchContext,
+      ) => Partial<SessionEntry> | null | Promise<Partial<SessionEntry> | null>,
+      options: SessionEntryPatchOptions = {},
+    ) => {
+      let updatedEntry: SessionEntry | null = null;
+      const store = mocks.loadSessionStore(scope.storePath, { clone: false }) as Record<
+        string,
+        SessionEntry
+      >;
+      const currentEntry = store[scope.sessionKey];
+      if (!currentEntry) {
+        return null;
+      }
+      const patch = await update(currentEntry, { existingEntry: { ...currentEntry } });
+      if (!patch) {
+        return currentEntry;
+      }
+      const applyPatch = (targetStore: Record<string, SessionEntry>) => {
+        const targetEntry = targetStore[scope.sessionKey] ?? currentEntry;
+        updatedEntry = options.replaceEntry
+          ? (patch as SessionEntry)
+          : { ...targetEntry, ...patch };
+        targetStore[scope.sessionKey] = updatedEntry;
+      };
+      mocks.updateSessionStore(scope.storePath, applyPatch);
+      applyPatch(store);
+      return updatedEntry;
+    },
+  ),
   resolveAgentIdFromSessionKey: vi.fn((sessionKey: string) => {
     return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
   }),
@@ -127,6 +174,11 @@ vi.mock("../config/sessions.js", () => ({
   resolveAgentIdFromSessionKey: mocks.resolveAgentIdFromSessionKey,
   resolveStorePath: mocks.resolveStorePath,
   updateSessionStore: mocks.updateSessionStore,
+}));
+
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  loadSessionEntry: mocks.loadSessionEntry,
+  patchSessionEntry: mocks.patchSessionEntry,
 }));
 
 vi.mock("../sessions/session-lifecycle-events.js", () => ({
@@ -3319,6 +3371,61 @@ describe("subagent registry seam flow", () => {
         workspaceDir: undefined,
       });
     });
+  });
+
+  it("wakes a sessions_yield-paused parent when pending descendants settle", async () => {
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:parent": {
+        sessionId: "sess-parent",
+        updatedAt: 1,
+      },
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: 1,
+      },
+    });
+
+    mod.addSubagentRunForTests({
+      runId: "run-yielded-parent",
+      childSessionKey: "agent:main:subagent:parent",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "yielded parent waiting on descendants",
+      cleanup: "keep",
+      createdAt: Date.parse("2026-06-26T02:17:00Z"),
+      startedAt: Date.parse("2026-06-26T02:18:00Z"),
+      endedAt: Date.parse("2026-06-26T02:19:00Z"),
+      pauseReason: "sessions_yield",
+      wakeOnDescendantSettle: true,
+      cleanupHandled: false,
+      cleanupCompletedAt: undefined,
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-yielded-child-finished",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:subagent:parent",
+      requesterDisplayKey: "parent",
+      task: "descendant settles after yield",
+      cleanup: "keep",
+    });
+
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
+    });
+    expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "child finished announce"),
+      { childRunId: "run-yielded-child-finished" },
+      "child finished announce params",
+    );
+    expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 1, 0, "yielded parent wake announce"),
+      {
+        childRunId: "run-yielded-parent",
+        wakeOnDescendantSettle: true,
+      },
+      "yielded parent wake announce params",
+    );
   });
 
   it("loads runtime plugins before emitting killed subagent ended hooks", async () => {

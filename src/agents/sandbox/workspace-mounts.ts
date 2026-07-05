@@ -41,10 +41,6 @@ export function resolveMaterializedSandboxSkillsWorkspaceDir(rootDir: string): s
   return path.join(rootDir, ...MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS);
 }
 
-export function resolveMaterializedSandboxSkillsRoot(rootDir: string): string {
-  return path.join(resolveMaterializedSandboxSkillsWorkspaceDir(rootDir), "skills");
-}
-
 /** Returns true when a skill mount source exists inside the canonical mount root. */
 export function isExistingWorkspaceSkillMountSource(params: {
   rootDir: string;

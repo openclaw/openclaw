@@ -1,6 +1,25 @@
 import com.android.build.api.variant.impl.VariantOutputImpl
+import java.util.Properties
 
 val dnsjavaInetAddressResolverService = "META-INF/services/java.net.spi.InetAddressResolverProvider"
+val openClawAndroidVersionFile = rootProject.file("Config/Version.properties")
+val thirdPartyLicensesDir = rootProject.file("THIRD_PARTY_LICENSES")
+val openClawAndroidVersionProperties =
+  Properties().apply {
+    if (!openClawAndroidVersionFile.isFile) {
+      error("Missing Android version properties. Run `pnpm android:version:sync`.")
+    }
+    openClawAndroidVersionFile.inputStream().use(::load)
+  }
+
+fun requireOpenClawAndroidVersionProperty(name: String): String =
+  openClawAndroidVersionProperties.getProperty(name)?.trim()?.takeIf { it.isNotEmpty() }
+    ?: error("Missing $name in Config/Version.properties. Run `pnpm android:version:sync`.")
+
+val openClawAndroidVersionName = requireOpenClawAndroidVersionProperty("OPENCLAW_ANDROID_VERSION_NAME")
+val openClawAndroidVersionCode =
+  requireOpenClawAndroidVersionProperty("OPENCLAW_ANDROID_VERSION_CODE").toIntOrNull()
+    ?: error("OPENCLAW_ANDROID_VERSION_CODE must be an integer in Config/Version.properties.")
 
 val androidStoreFile = providers.gradleProperty("OPENCLAW_ANDROID_STORE_FILE").orNull?.takeIf { it.isNotBlank() }
 val androidStorePassword = providers.gradleProperty("OPENCLAW_ANDROID_STORE_PASSWORD").orNull?.takeIf { it.isNotBlank() }
@@ -41,7 +60,7 @@ plugins {
 
 android {
   namespace = "ai.openclaw.app"
-  compileSdk = 37
+  compileSdk = 36
 
   // Release signing is local-only; keep the keystore path and passwords out of the repo.
   signingConfigs {
@@ -58,6 +77,7 @@ android {
   sourceSets {
     getByName("main") {
       assets.directories.add("../../shared/OpenClawKit/Sources/OpenClawKit/Resources")
+      assets.directories.add(thirdPartyLicensesDir.path)
     }
   }
 
@@ -65,8 +85,8 @@ android {
     applicationId = "ai.openclaw.app"
     minSdk = 31
     targetSdk = 36
-    versionCode = 2026060201
-    versionName = "2026.6.2"
+    versionCode = openClawAndroidVersionCode
+    versionName = openClawAndroidVersionName
     ndk {
       // Support all major ABIs — native libs are tiny (~47 KB per ABI)
       abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
@@ -210,8 +230,9 @@ dependencies {
   implementation(libs.androidx.camera.core)
   implementation(libs.androidx.camera.camera2)
   implementation(libs.androidx.camera.lifecycle)
+  implementation(libs.androidx.camera.view)
   implementation(libs.androidx.camera.video)
-  implementation(libs.play.services.code.scanner)
+  implementation(libs.barcode.scanning)
 
   // Unicast DNS-SD (Wide-Area Bonjour) for tailnet discovery domains.
   implementation(libs.dnsjava)
@@ -227,6 +248,33 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
   useJUnitPlatform()
+}
+
+val validateThirdPartyLicenseAssets =
+  tasks.register("validateThirdPartyLicenseAssets") {
+    inputs.dir(thirdPartyLicensesDir)
+    doLast {
+      if (!thirdPartyLicensesDir.isDirectory) {
+        error("Missing Android third-party license directory: ${thirdPartyLicensesDir.relativeTo(rootProject.projectDir)}")
+      }
+      val invalidFiles =
+        thirdPartyLicensesDir
+          .walkTopDown()
+          .filter { file -> file.isFile && file.extension.lowercase() != "txt" }
+          .map { file -> file.relativeTo(thirdPartyLicensesDir).path }
+          .toList()
+
+      if (invalidFiles.isNotEmpty()) {
+        error(
+          "Android third-party license assets must be .txt files:\n" +
+            invalidFiles.joinToString(separator = "\n") { path -> "- $path" },
+        )
+      }
+    }
+  }
+
+tasks.matching { task -> task.name == "preBuild" }.configureEach {
+  dependsOn(validateThirdPartyLicenseAssets)
 }
 
 androidComponents {

@@ -17,6 +17,7 @@ import {
   validateNodePresenceAlivePayload,
   validateTasksCancelParams,
   validateTasksListParams,
+  validateTalkCatalogResult,
   validateTalkConfigResult,
   validateTalkEvent,
   validateTalkClientCreateParams,
@@ -91,21 +92,33 @@ describe("lazy protocol validators", () => {
         sessionKey: "global",
         agentId: "work",
         limit: 50,
+        offset: 100,
       }),
     ).toBe(true);
     expect(
       validateChatSendParams({
         sessionKey: "global",
         agentId: "work",
+        sessionId: "session-work",
         message: "hello",
         idempotencyKey: "run-global-work",
       }),
     ).toBe(true);
     expect(
+      validateChatSendParams({
+        sessionKey: "global",
+        sessionId: "session-work",
+        resumeSession: true,
+        message: "hello",
+        idempotencyKey: "run-global-work",
+      }),
+    ).toBe(false);
+    expect(
       validateChatAbortParams({
         sessionKey: "global",
         agentId: "work",
         runId: "run-global-work",
+        preserveSideRuns: true,
       }),
     ).toBe(true);
     expect(
@@ -312,6 +325,32 @@ describe("validateTalkConfigResult", () => {
               brain: "agent-consult",
             },
           },
+        },
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("validateTalkCatalogResult", () => {
+  it("accepts provider registry aliases", () => {
+    expect(
+      validateTalkCatalogResult({
+        modes: ["realtime"],
+        transports: ["gateway-relay"],
+        brains: ["agent-consult"],
+        speech: { providers: [] },
+        transcription: { providers: [] },
+        realtime: {
+          ready: true,
+          activeProvider: "google",
+          providers: [
+            {
+              id: "google",
+              aliases: ["gemini-live"],
+              label: "Google Live Voice",
+              configured: true,
+            },
+          ],
         },
       }),
     ).toBe(true);
@@ -725,6 +764,21 @@ describe("validateChatEvent", () => {
         },
       }),
     ).toBe(false);
+  });
+});
+
+describe("validateChatSendParams", () => {
+  it("accepts one-turn fast:auto cutoff seconds", () => {
+    const base = {
+      sessionKey: "agent:main:main",
+      message: "hello",
+      fastMode: "auto",
+      idempotencyKey: "run-1",
+    };
+
+    expect(validateChatSendParams(base)).toBe(true);
+    expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 2 })).toBe(true);
+    expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 0 })).toBe(false);
   });
 });
 

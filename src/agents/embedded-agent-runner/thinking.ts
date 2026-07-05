@@ -1,7 +1,7 @@
 /**
  * Sanitizes reasoning/thinking blocks for replay and recovery.
  */
-import { formatErrorMessage } from "../../infra/errors.js";
+import { collectErrorGraphCandidates, formatErrorMessage } from "../../infra/errors.js";
 import type { AssistantMessageEvent } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import type { AgentMessage, StreamFn } from "../runtime/index.js";
@@ -10,7 +10,7 @@ import { log } from "./logger.js";
 type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 type RecoveryAssessment = "valid" | "incomplete-thinking" | "incomplete-text";
-export type AnthropicThinkingRecovery = {
+type AnthropicThinkingRecovery = {
   originalMessages: AgentMessage[];
   cleanedMessages: AgentMessage[];
 };
@@ -534,44 +534,29 @@ export function assessLastAssistantMessage(message: AgentMessage): RecoveryAsses
   return "valid";
 }
 
-export function sanitizeThinkingForRecovery(messages: AgentMessage[]): {
-  messages: AgentMessage[];
-  prefill: boolean;
-} {
-  if (messages.length === 0) {
-    return { messages, prefill: false };
-  }
-
-  let lastAssistantIndex = -1;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if ((messages[index] as { role?: unknown }).role === "assistant") {
-      lastAssistantIndex = index;
-      break;
-    }
-  }
-  if (lastAssistantIndex === -1) {
-    return { messages, prefill: false };
-  }
-
-  const assessment = assessLastAssistantMessage(messages[lastAssistantIndex]);
-  if (assessment === "valid") {
-    return { messages, prefill: false };
-  }
-  if (assessment === "incomplete-text") {
-    return { messages, prefill: true };
-  }
-
-  return {
-    messages: [...messages.slice(0, lastAssistantIndex), ...messages.slice(lastAssistantIndex + 1)],
-    prefill: false,
-  };
-}
-
 function shouldRecoverAnthropicThinkingError(
   error: unknown,
   sessionMeta: RecoverySessionMeta,
 ): boolean {
-  return shouldRecoverAnthropicThinkingErrorMessage(formatErrorMessage(error), sessionMeta);
+  // Provider detail survives genericization in different carriers across the
+  // Anthropic SDK, failover wrapping, and terminal stream messages.
+  const candidates = collectErrorGraphCandidates(error, (current) => [
+    current.cause,
+    current.error,
+    current.rawError,
+    current.errorMessage,
+    current.errorBody,
+    current.message,
+  ]);
+  for (const candidate of candidates) {
+    if (
+      typeof candidate === "string" &&
+      shouldRecoverAnthropicThinkingErrorMessage(candidate, sessionMeta)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function shouldRecoverAnthropicThinkingErrorMessage(
@@ -596,13 +581,6 @@ function isAssistantMessageErrorEvent(
   return (
     Boolean(event) && typeof event === "object" && (event as { type?: unknown }).type === "error"
   );
-}
-
-function getAssistantMessageErrorText(
-  event: Extract<AssistantMessageEvent, { type: "error" }>,
-): string {
-  const errorMessage = (event.error as { errorMessage?: unknown }).errorMessage;
-  return typeof errorMessage === "string" ? errorMessage : "";
 }
 
 async function notifyRecoveredAnthropicThinking(
@@ -682,12 +660,7 @@ async function pumpStreamWithRecovery(
     const resolved = stream instanceof Promise ? await stream : stream;
     for await (const chunk of resolved as AsyncIterable<unknown>) {
       if (isAssistantMessageErrorEvent(chunk)) {
-        if (
-          shouldRecoverAnthropicThinkingErrorMessage(
-            getAssistantMessageErrorText(chunk),
-            sessionMeta,
-          )
-        ) {
+        if (shouldRecoverAnthropicThinkingError(chunk.error, sessionMeta)) {
           if (yieldedOutput) {
             log.warn(
               `[session-recovery] Anthropic thinking error occurred after streaming began; skipping retry to avoid duplicate chunks: sessionId=${sessionMeta.id}`,
@@ -725,6 +698,26 @@ async function pumpStreamWithRecovery(
   }
 }
 
+function createRecoveryStream(
+  stream: Awaited<ReturnType<StreamFn>>,
+  sessionMeta: RecoverySessionMeta,
+  retry: () => ReturnType<StreamFn>,
+  notify: () => Promise<void>,
+): Awaited<ReturnType<StreamFn>> {
+  const outer = createAssistantMessageEventStream();
+  const finalResultPromise = pumpStreamWithRecovery(
+    outer,
+    stream,
+    sessionMeta,
+    retry,
+    notify,
+  ).finally(() => {
+    outer.end();
+  });
+  outer.result = () => finalResultPromise;
+  return outer;
+}
+
 export function wrapAnthropicStreamWithRecovery(
   innerStreamFn: StreamFn,
   sessionMeta: RecoverySessionMeta,
@@ -754,28 +747,20 @@ export function wrapAnthropicStreamWithRecovery(
 
     const stream = innerStreamFn(model, context, options);
     if (stream instanceof Promise) {
-      return stream.catch((error: unknown) => {
-        if (!shouldRecoverAnthropicThinkingError(error, requestMeta)) {
-          throw error;
-        }
-        requestMeta.recoveredAnthropicThinking = true;
-        log.warn(
-          `[session-recovery] Anthropic thinking request rejected; retrying once without thinking blocks: sessionId=${requestMeta.id}`,
-        );
-        return wrapRetryStreamWithRecoveryNotification(retry(), notify);
-      }) as ReturnType<StreamFn>;
+      return stream.then(
+        (resolved) => createRecoveryStream(resolved, requestMeta, retry, notify),
+        (error: unknown) => {
+          if (!shouldRecoverAnthropicThinkingError(error, requestMeta)) {
+            throw error;
+          }
+          requestMeta.recoveredAnthropicThinking = true;
+          log.warn(
+            `[session-recovery] Anthropic thinking request rejected; retrying once without thinking blocks: sessionId=${requestMeta.id}`,
+          );
+          return wrapRetryStreamWithRecoveryNotification(retry(), notify);
+        },
+      ) as ReturnType<StreamFn>;
     }
-    const outer = createAssistantMessageEventStream();
-    const finalResultPromise = pumpStreamWithRecovery(
-      outer,
-      stream,
-      requestMeta,
-      retry,
-      notify,
-    ).finally(() => {
-      outer.end();
-    });
-    outer.result = () => finalResultPromise;
-    return outer as unknown as ReturnType<StreamFn>;
+    return createRecoveryStream(stream, requestMeta, retry, notify);
   };
 }

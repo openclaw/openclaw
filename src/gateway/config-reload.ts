@@ -35,10 +35,26 @@ const MISSING_CONFIG_MAX_RETRIES = 2;
 
 // Watcher 'error' events (for example EMFILE/ENOSPC inotify exhaustion) close
 // the chokidar watcher. Re-create it with bounded backoff so a transient fault
-// does not permanently kill config hot-reload, but escalate to error + a
-// persistent disabled status once the retry budget is exhausted.
+// does not permanently kill config hot-reload. If all native retries are
+// exhausted (typical when the host has insufficient inotify watches), fall
+// back to polling mode before giving up entirely.
 const WATCHER_RECREATE_MAX_RETRIES = 3;
 const WATCHER_RECREATE_BACKOFF_MS = [500, 2000, 5000] as const;
+
+function resolveChokidarUsePolling(degradedToPolling: boolean): boolean {
+  const envPoll = process.env.CHOKIDAR_USEPOLLING;
+  if (envPoll !== undefined) {
+    const envLower = envPoll.toLowerCase();
+    if (envLower === "false" || envLower === "0") {
+      return false;
+    }
+    if (envLower === "true" || envLower === "1") {
+      return true;
+    }
+    return Boolean(envLower);
+  }
+  return Boolean(process.env.VITEST) || degradedToPolling;
+}
 
 /**
  * Paths under `skills.*` always change the snapshot that sessions cache in
@@ -57,10 +73,6 @@ function matchesSkillsInvalidationPrefix(path: string): boolean {
 
 function firstSkillsChangedPath(changedPaths: string[]): string | undefined {
   return changedPaths.find(matchesSkillsInvalidationPrefix);
-}
-
-export function shouldInvalidateSkillsSnapshotForPaths(changedPaths: string[]): boolean {
-  return firstSkillsChangedPath(changedPaths) !== undefined;
 }
 
 function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
@@ -103,6 +115,8 @@ export function startGatewayConfigReloader(opts: {
   initialCompareConfig?: OpenClawConfig;
   initialInternalWriteHash?: string | null;
   readSnapshot: () => Promise<ConfigFileSnapshot>;
+  onConfigChange?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
+  onConfigApplied?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   onHotReload: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
   onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
@@ -267,25 +281,27 @@ export function startGatewayConfigReloader(opts: {
       noopPaths: pluginInstallTimestampNoopPaths,
       forceChangedPaths: pluginInstallWholeRecordPaths,
     });
-    if (isNoopReloadPlan(plan) && !followUp.requiresRestart) {
-      return;
-    }
     if (settings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");
       return;
     }
+    if (isNoopReloadPlan(plan) && !followUp.requiresRestart) {
+      await opts.onConfigChange?.(plan, nextConfig);
+      await opts.onConfigApplied?.(plan, nextConfig);
+      return;
+    }
     if (followUp.requiresRestart) {
-      queueRestart(
-        {
-          ...plan,
-          restartGateway: true,
-          restartReasons: [...plan.restartReasons, followUp.reason],
-        },
-        nextConfig,
-      );
+      const restartPlan = {
+        ...plan,
+        restartGateway: true,
+        restartReasons: [...plan.restartReasons, followUp.reason],
+      };
+      await opts.onConfigChange?.(restartPlan, nextConfig);
+      queueRestart(restartPlan, nextConfig);
       return;
     }
     if (settings.mode === "restart") {
+      await opts.onConfigChange?.({ ...plan, restartGateway: true }, nextConfig);
       queueRestart(plan, nextConfig);
       return;
     }
@@ -298,11 +314,14 @@ export function startGatewayConfigReloader(opts: {
         );
         return;
       }
+      await opts.onConfigChange?.(plan, nextConfig);
       queueRestart(plan, nextConfig);
       return;
     }
 
+    await opts.onConfigChange?.(plan, nextConfig);
     await opts.onHotReload(plan, nextConfig);
+    await opts.onConfigApplied?.(plan, nextConfig);
   };
 
   const promoteAcceptedSnapshot = async (snapshot: ConfigFileSnapshot, reason: string) => {
@@ -407,15 +426,18 @@ export function startGatewayConfigReloader(opts: {
   let watcherRecreateRetries = 0;
   let watcherRecreateTimer: ReturnType<typeof setTimeout> | null = null;
   let hotReloadStatus: GatewayHotReloadStatus = "active";
+  let degradedToPolling = false;
+  let watcherUsesPolling = false;
 
   const createWatcher = () => {
     if (stopped) {
       return;
     }
+    const usePolling = resolveChokidarUsePolling(degradedToPolling);
     const next = chokidar.watch(opts.watchPath, {
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
-      usePolling: Boolean(process.env.VITEST),
+      usePolling,
     });
     next.on("add", scheduleFromWatcher);
     next.on("change", scheduleFromWatcher);
@@ -424,6 +446,7 @@ export function startGatewayConfigReloader(opts: {
       handleWatcherError(next, err);
     });
     watcher = next;
+    watcherUsesPolling = next.options.usePolling;
     hotReloadStatus = "active";
   };
 
@@ -432,12 +455,30 @@ export function startGatewayConfigReloader(opts: {
     if (stopped || source !== watcher) {
       return;
     }
+    const failedWatcherUsedPolling = watcherUsesPolling;
     watcher = null;
+    watcherUsesPolling = false;
     void source?.close().catch(() => {});
     if (watcherRecreateRetries >= WATCHER_RECREATE_MAX_RETRIES) {
+      // All native (inotify/kqueue) retries exhausted — fall back to polling
+      // mode so config hot-reload survives on hosts where inotify resources
+      // are constrained (e.g. low fs.inotify.max_user_watches).
+      if (!failedWatcherUsedPolling && resolveChokidarUsePolling(true)) {
+        degradedToPolling = true;
+        watcherRecreateRetries = 0;
+        opts.log.warn(
+          `config watcher native retries exhausted; degrading to polling mode: ${String(err)}`,
+        );
+        watcherRecreateTimer = setTimeout(() => {
+          watcherRecreateTimer = null;
+          createWatcher();
+        }, WATCHER_RECREATE_BACKOFF_MS[0] ?? 500);
+        return;
+      }
+      const mode = failedWatcherUsedPolling ? "polling mode" : "native mode";
       hotReloadStatus = "disabled";
       opts.log.error(
-        `config hot-reload disabled: watcher failed after ${WATCHER_RECREATE_MAX_RETRIES} re-create attempts: ${String(err)}`,
+        `config hot-reload disabled: watcher failed after ${WATCHER_RECREATE_MAX_RETRIES} re-create attempts in ${mode}: ${String(err)}`,
       );
       return;
     }

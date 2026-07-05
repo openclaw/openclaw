@@ -9,11 +9,17 @@ import {
   createRunningTaskRun,
   failTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
-import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
+import {
+  clearCronJobActive,
+  isCronActiveJobMarkerCurrent,
+  markCronJobActive,
+  type CronActiveJobMarker,
+} from "../active-jobs.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { createCronExecutionId } from "../run-id.js";
-import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
+import { cronSchedulingInputsEqual } from "../schedule-identity.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronPayload, CronStoreFile } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import {
@@ -26,7 +32,6 @@ import {
   isJobEnabled,
   isJobDue,
   nextWakeAtMs,
-  recomputeNextRuns,
   recomputeNextRunsForMaintenance,
 } from "./jobs.js";
 import type {
@@ -48,6 +53,8 @@ import {
   armTimer,
   emit,
   executeJobCoreWithTimeout,
+  type IsolatedAgentSetupTimeoutSignal,
+  maybeNotifyIsolatedAgentSetupTimeout,
   runMissedJobs,
   stopTimer,
 } from "./timer.js";
@@ -60,6 +67,45 @@ type InterruptedStartupRun = {
   runAtMs: number;
   durationMs: number;
 };
+
+function markManualCronJobActive(
+  state: CronServiceState,
+  job: CronJob,
+): CronActiveJobMarker | undefined {
+  const jobId = job.id;
+  state.activeManualRunJobIds.add(jobId);
+  return markCronJobActive(jobId, {
+    preserveAcrossGenerationAdvance: job.sessionTarget === "main",
+  });
+}
+
+function clearManualCronJobActive(
+  state: CronServiceState,
+  jobId: string,
+  activeJobMarker?: CronActiveJobMarker,
+): void {
+  state.activeManualRunJobIds.delete(jobId);
+  clearCronJobActive(jobId, activeJobMarker);
+  if (state.activeManualRunJobIds.size === 0) {
+    state.manualSetupTimeoutNotified = false;
+  }
+}
+
+function maybeNotifyManualIsolatedSetupTimeout(
+  state: CronServiceState,
+  result: {
+    jobId: string;
+    job: CronJob;
+    isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
+  },
+): boolean {
+  if (!result.isolatedAgentSetupTimeout || state.manualSetupTimeoutNotified) {
+    return false;
+  }
+  const notified = maybeNotifyIsolatedAgentSetupTimeout(state, result);
+  state.manualSetupTimeoutNotified ||= notified;
+  return notified;
+}
 
 function resolveInterruptedStartupFailureNotificationStatus(params: {
   state: CronServiceState;
@@ -169,6 +215,7 @@ async function ensureLoadedForRead(state: CronServiceState) {
 
 /** Starts the cron service, recovers interrupted runs, catches up missed jobs, and arms the timer. */
 export async function start(state: CronServiceState) {
+  state.stopped = false;
   if (!state.deps.cronEnabled) {
     state.deps.log.info({ enabled: false }, "cron: disabled");
     return;
@@ -179,6 +226,9 @@ export async function start(state: CronServiceState) {
   let markedAnyInterruptedRun = false;
   await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
+    if (state.stopped) {
+      return;
+    }
     const jobs = state.store?.jobs ?? [];
     for (const job of jobs) {
       job.state ??= {};
@@ -200,6 +250,9 @@ export async function start(state: CronServiceState) {
     }
   });
 
+  if (state.stopped) {
+    return;
+  }
   await runMissedJobs(state, {
     skipJobIds: interruptedJobIds.size > 0 ? interruptedJobIds : undefined,
     deferAgentTurnJobs: true,
@@ -210,6 +263,9 @@ export async function start(state: CronServiceState) {
     // this path runs before the scheduler begins servicing regular timer ticks.
     // Avoid an extra reload/write cycle on startup.
     await ensureLoaded(state, { skipRecompute: true });
+    if (state.stopped) {
+      return;
+    }
     const changed = recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
     if (changed) {
       await persist(state);
@@ -245,6 +301,7 @@ export async function start(state: CronServiceState) {
 
 /** Stops the cron service timer without mutating persisted job state. */
 export function stop(state: CronServiceState) {
+  state.stopped = true;
   stopTimer(state);
 }
 
@@ -293,7 +350,8 @@ function resolveScheduleKindFilter(opts?: CronListPageOptions): CronJobsSchedule
     opts?.scheduleKind === "all" ||
     opts?.scheduleKind === "at" ||
     opts?.scheduleKind === "every" ||
-    opts?.scheduleKind === "cron"
+    opts?.scheduleKind === "cron" ||
+    opts?.scheduleKind === "on-exit"
   ) {
     return opts.scheduleKind;
   }
@@ -415,18 +473,58 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
   });
 }
 
+type CronRollbackSnapshot = {
+  store: CronStoreFile | null;
+  pendingCatchupDeferralJobIds: Set<string>;
+};
+
+// Rolls the live scheduler state back to its pre-mutation snapshot when the
+// durable write fails. recomputeNextRunsForMaintenance mutates schedule state
+// across all jobs and drops catch-up deferral markers for removed/disabled
+// jobs, so restoring only the touched job would leave siblings and deferrals
+// ahead of disk; without the rollback a failed add/update/remove keeps
+// running, reverting, or resurrecting jobs the caller was told did not apply.
+async function persistOrRestore(
+  state: CronServiceState,
+  snapshot: CronRollbackSnapshot,
+  postPersistAutoDisableNotifications: Array<() => void> = [],
+) {
+  try {
+    await persist(state);
+  } catch (err) {
+    state.store = snapshot.store;
+    state.pendingCatchupDeferralJobIds = snapshot.pendingCatchupDeferralJobIds;
+    throw err;
+  }
+  for (const notify of postPersistAutoDisableNotifications) {
+    notify();
+  }
+}
+
+function snapshotStoreForRollback(state: CronServiceState): CronRollbackSnapshot {
+  return {
+    store: state.store ? structuredClone(state.store) : null,
+    pendingCatchupDeferralJobIds: new Set(state.pendingCatchupDeferralJobIds),
+  };
+}
+
 /** Adds a cron job, recomputes scheduler state, persists, and re-arms the timer. */
 export async function add(state: CronServiceState, input: CronJobCreate) {
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
-    await ensureLoaded(state);
+    await ensureLoaded(state, { skipRecompute: true });
+    const snapshot = snapshotStoreForRollback(state);
     const job = createJob(state, input);
     state.store?.jobs.push(job);
 
-    // Defensive: recompute all next-run times to ensure consistency
-    recomputeNextRuns(state);
+    // Auto-disable notifications describe durable state, so publish them only
+    // after the write succeeds instead of leaking a rolled-back transition.
+    const postPersistAutoDisableNotifications: Array<() => void> = [];
+    recomputeNextRunsForMaintenance(state, {
+      deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+    });
 
-    await persist(state);
+    await persistOrRestore(state, snapshot, postPersistAutoDisableNotifications);
     armTimer(state);
 
     state.deps.log.info(
@@ -456,6 +554,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
   return await locked(state, async () => {
     warnIfDisabled(state, "update");
     await ensureLoaded(state, { skipRecompute: true });
+    const snapshot = snapshotStoreForRollback(state);
     const job = findJobOrThrow(state, id);
     const now = state.deps.nowMs();
     const nextJob = structuredClone(job);
@@ -466,28 +565,47 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     if (nextJob.schedule.kind === "every") {
       const anchor = nextJob.schedule.anchorMs;
       if (typeof anchor !== "number" || !Number.isFinite(anchor)) {
-        const patchSchedule = patch.schedule;
+        // Inherit the previous cadence anchor only for an unchanged-interval
+        // re-save (UIs resubmit the schedule without the internal anchorMs).
+        // Without this an idempotent edit re-phases the job to now, shifting
+        // every future fire time and skipping an already-due slot. A genuine
+        // interval change still anchors to the edit time so the new cadence
+        // starts now, matching the prior update semantics.
+        const previousAnchorMs =
+          job.schedule.kind === "every" &&
+          job.schedule.everyMs === nextJob.schedule.everyMs &&
+          typeof job.schedule.anchorMs === "number" &&
+          Number.isFinite(job.schedule.anchorMs)
+            ? job.schedule.anchorMs
+            : undefined;
         const fallbackAnchorMs =
-          patchSchedule?.kind === "every"
+          previousAnchorMs ??
+          (patch.schedule?.kind === "every"
             ? now
             : typeof nextJob.createdAtMs === "number" && Number.isFinite(nextJob.createdAtMs)
               ? nextJob.createdAtMs
-              : now;
+              : now);
         nextJob.schedule = {
           ...nextJob.schedule,
           anchorMs: Math.max(0, Math.floor(fallbackAnchorMs)),
         };
       }
     }
+    // Only advance a recurring job's next run when the schedule/enabled inputs
+    // actually changed. An idempotent re-save (same schedule, or re-enabling an
+    // already-enabled job) must preserve a still-due slot, matching the
+    // add/remove maintenance recompute; otherwise the pending run is dropped.
+    const schedulingInputsChanged =
+      (patch.schedule !== undefined || patch.enabled !== undefined) &&
+      !cronSchedulingInputsEqual(job, nextJob);
     const scheduleChanged = patch.schedule !== undefined;
-    const enabledChanged = patch.enabled !== undefined;
 
     if (scheduleChanged && nextJob.schedule.kind === "cron" && !isJobEnabled(nextJob)) {
       computeJobNextRunAtMs({ ...nextJob, enabled: true }, now);
     }
 
     nextJob.updatedAtMs = now;
-    if (scheduleChanged || enabledChanged) {
+    if (schedulingInputsChanged) {
       if (isJobEnabled(nextJob)) {
         nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
       } else {
@@ -505,7 +623,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
       }
     }
 
-    await persist(state);
+    await persistOrRestore(state, snapshot);
     armTimer(state);
     emit(state, {
       jobId: id,
@@ -521,15 +639,22 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
 export async function remove(state: CronServiceState, id: string) {
   return await locked(state, async () => {
     warnIfDisabled(state, "remove");
-    await ensureLoaded(state);
+    await ensureLoaded(state, { skipRecompute: true });
     const before = state.store?.jobs.length ?? 0;
     if (!state.store) {
       return { ok: false, removed: false } as const;
     }
+    const snapshot = snapshotStoreForRollback(state);
     const removedJob = state.store.jobs.find((j) => j.id === id);
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = (state.store.jobs.length ?? 0) !== before;
-    await persist(state);
+
+    const postPersistAutoDisableNotifications: Array<() => void> = [];
+    recomputeNextRunsForMaintenance(state, {
+      deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+    });
+
+    await persistOrRestore(state, snapshot, postPersistAutoDisableNotifications);
     armTimer(state);
     if (removed) {
       emit(state, { jobId: id, action: "removed", job: removedJob });
@@ -542,7 +667,12 @@ type PreparedManualRun =
   | {
       ok: true;
       ran: false;
-      reason: "already-running" | "not-due" | "invalid-spec";
+      reason:
+        | "already-running"
+        | "not-due"
+        | "invalid-spec"
+        | "restart-recovery-pending"
+        | "stopped";
     }
   | {
       ok: true;
@@ -550,10 +680,16 @@ type PreparedManualRun =
       jobId: string;
       runId?: string;
       taskRunId?: string;
+      activeJobMarker?: CronActiveJobMarker;
       startedAt: number;
       executionJob: CronJob;
     }
   | { ok: false };
+
+type ManualRunOptions = {
+  runId?: string;
+  payload?: CronPayload;
+};
 
 type ManualRunDisposition =
   | Extract<PreparedManualRun, { ran: false }>
@@ -713,6 +849,12 @@ async function inspectManualRunPreflight(
   return await locked(state, async () => {
     warnIfDisabled(state, "run");
     await ensureLoaded(state, { skipRecompute: true });
+    if (state.stopped) {
+      return { ok: true, ran: false, reason: "stopped" as const };
+    }
+    if (state.restartRecoveryPending) {
+      return { ok: true, ran: false, reason: "restart-recovery-pending" as const };
+    }
     // Normalize job tick state (clears stale runningAtMs markers) before
     // checking if already running, so a stale marker from a crashed Phase-1
     // persist does not block manual triggers for up to STUCK_RUN_MS (#17554).
@@ -757,7 +899,7 @@ async function prepareManualRun(
   state: CronServiceState,
   id: string,
   mode?: "due" | "force",
-  opts?: { runId?: string },
+  opts?: ManualRunOptions,
 ): Promise<PreparedManualRun> {
   const preflight = await inspectManualRunPreflight(state, id, mode);
   if (!preflight.ok) {
@@ -773,6 +915,9 @@ async function prepareManualRun(
   return await locked(state, async () => {
     // Reserve this run under lock, then execute outside lock so read ops
     // (`list`, `status`) stay responsive while the run is in progress.
+    if (state.stopped) {
+      return { ok: true, ran: false, reason: "stopped" as const };
+    }
     const job = findJobOrThrow(state, id);
     if (typeof job.state.runningAtMs === "number") {
       return { ok: true, ran: false, reason: "already-running" as const };
@@ -782,22 +927,35 @@ async function prepareManualRun(
     // Persist the running marker before releasing lock so timer ticks that
     // force-reload from disk cannot start the same job concurrently.
     await persist(state);
+    if (state.stopped) {
+      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      const persistedJob = state.store?.jobs.find((entry) => entry.id === id);
+      if (persistedJob?.state.runningAtMs === preflight.now) {
+        delete persistedJob.state.runningAtMs;
+        await persist(state);
+      }
+      return { ok: true, ran: false, reason: "stopped" as const };
+    }
     emit(state, { jobId: job.id, action: "started", job, runAtMs: preflight.now });
     const taskRunId = tryCreateManualTaskRun({
       state,
       job,
       startedAt: preflight.now,
     });
-    markCronJobActive(job.id);
+    const activeJobMarker = markManualCronJobActive(state, job);
     // Execute against a snapshot so later reload/merge can preserve delivery
     // target writeback from disk without mutating the running object.
     const executionJob = structuredClone(job);
+    if (opts?.payload) {
+      executionJob.payload = structuredClone(opts.payload);
+    }
     return {
       ok: true,
       ran: true,
       jobId: job.id,
       runId: opts?.runId ?? taskRunId,
       taskRunId,
+      activeJobMarker,
       startedAt: preflight.now,
       executionJob,
     } as const;
@@ -818,7 +976,10 @@ async function finishPreparedManualRun(
   try {
     let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
     try {
-      coreResult = await executeJobCoreWithTimeout(state, executionJob, { runId: taskRunId });
+      coreResult = await executeJobCoreWithTimeout(state, executionJob, {
+        runId: taskRunId,
+        activeJobMarker: prepared.activeJobMarker,
+      });
     } catch (err) {
       coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
     }
@@ -828,9 +989,18 @@ async function finishPreparedManualRun(
       coreResult,
       endedAt,
     });
+    if (!isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
+      return;
+    }
 
+    let finalized = false;
+    let notifySetupTimeout = coreResult.isolatedAgentSetupTimeout !== undefined;
     await locked(state, async () => {
       await ensureLoaded(state, { skipRecompute: true });
+      if (!isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
+        notifySetupTimeout = false;
+        return;
+      }
       const job = state.store?.jobs.find((entry) => entry.id === jobId);
       if (!job) {
         return;
@@ -894,6 +1064,10 @@ async function finishPreparedManualRun(
       // Isolated Telegram send can persist target writeback directly to disk.
       // Reload before final persist so manual `cron run` keeps those changes.
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      if (!isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
+        notifySetupTimeout = false;
+        return;
+      }
       mergeManualRunSnapshotAfterReload({
         state,
         jobId,
@@ -902,10 +1076,20 @@ async function finishPreparedManualRun(
       });
       recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
       await persist(state);
-      armTimer(state);
+      finalized = true;
     });
+    if (notifySetupTimeout && isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
+      maybeNotifyManualIsolatedSetupTimeout(state, {
+        jobId,
+        job: executionJob,
+        isolatedAgentSetupTimeout: coreResult.isolatedAgentSetupTimeout,
+      });
+    }
+    if (finalized) {
+      armTimer(state);
+    }
   } finally {
-    clearCronJobActive(jobId);
+    clearManualCronJobActive(state, jobId, prepared.activeJobMarker);
   }
 }
 
@@ -914,7 +1098,7 @@ export async function run(
   state: CronServiceState,
   id: string,
   mode?: "due" | "force",
-  opts?: { runId?: string },
+  opts?: ManualRunOptions,
 ) {
   const prepared = await prepareManualRun(state, id, mode, opts);
   if (!prepared.ok || !prepared.ran) {

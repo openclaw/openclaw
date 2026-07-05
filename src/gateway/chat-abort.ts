@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
+import { createChatAbortMarker, type ChatAbortMarker } from "./server-chat-state.js";
 
 const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
 
@@ -49,6 +50,10 @@ export type ChatAbortControllerEntry = {
   projectSessionTerminalPersistence?: Promise<void>;
   /** Caller completion requested cleanup before terminal lifecycle persistence settled. */
   registrationCleanupRequested?: boolean;
+  /** False after the owning reply run commits a terminal outcome. */
+  isAbortable?: (entry: ChatAbortControllerEntry) => boolean;
+  /** Runs once when this registration is actually removed. */
+  onRemoved?: () => void;
   /**
    * Which RPC owns this registration. Absent (undefined) is treated as
    * `"chat-send"` so pre-existing callers that constructed entries without
@@ -56,6 +61,8 @@ export type ChatAbortControllerEntry = {
    * is active" must check `kind !== "agent"`, not just `.has(runId)`.
    */
   kind?: "chat-send" | "agent";
+  /** Side questions stay independent from main-turn TUI session stops. */
+  turnKind?: "main" | "btw";
 };
 
 export type RestartRecoveryCandidate = {
@@ -145,7 +152,10 @@ export function registerChatAbortController(params: {
   providerId?: string;
   authProviderId?: string;
   controlUiVisible?: boolean;
+  isAbortable?: (entry: ChatAbortControllerEntry) => boolean;
+  onRemoved?: () => void;
   kind?: ChatAbortControllerEntry["kind"];
+  turnKind?: ChatAbortControllerEntry["turnKind"];
   lifecycleGeneration?: string;
   now?: number;
   expiresAtMs?: number;
@@ -155,7 +165,7 @@ export function registerChatAbortController(params: {
     const entry = params.chatAbortControllers.get(params.runId);
     if (entry?.controller === controller) {
       if (opts?.force === true) {
-        params.chatAbortControllers.delete(params.runId);
+        removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
         return;
       }
       entry.registrationCleanupRequested = true;
@@ -169,17 +179,17 @@ export function registerChatAbortController(params: {
         void persistence
           .then(() => {
             if (params.chatAbortControllers.get(params.runId)?.controller === controller) {
-              params.chatAbortControllers.delete(params.runId);
+              removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
             }
           })
           .catch(() => {
             if (params.chatAbortControllers.get(params.runId)?.controller === controller) {
-              params.chatAbortControllers.delete(params.runId);
+              removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
             }
           });
         return;
       }
-      params.chatAbortControllers.delete(params.runId);
+      removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
     }
   };
 
@@ -208,8 +218,11 @@ export function registerChatAbortController(params: {
     providerId: normalizeProviderIdForActiveRun(params.providerId),
     authProviderId: normalizeProviderIdForActiveRun(params.authProviderId),
     controlUiVisible: params.controlUiVisible,
+    isAbortable: params.isAbortable,
+    onRemoved: params.onRemoved,
     projectSessionActive: true,
     kind: params.kind,
+    turnKind: params.turnKind,
   };
   params.chatAbortControllers.set(params.runId, entry);
   return { controller, registered: true, entry, cleanup };
@@ -337,7 +350,7 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
 export type ChatAbortOps = {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunBuffers: Map<string, string>;
-  chatAbortedRuns: Map<string, number>;
+  chatAbortedRuns: Map<string, ChatAbortMarker>;
   clearChatRunState: (runId: string) => void;
   removeChatRun: (
     sessionId: string,
@@ -350,7 +363,7 @@ export type ChatAbortOps = {
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
 };
 
-export type TrackedChatRunAbortOps = {
+type TrackedChatRunAbortOps = {
   chatAbortControllers: ChatAbortOps["chatAbortControllers"];
   chatRunBuffers: ChatAbortOps["chatRunBuffers"];
   chatRunState: {
@@ -450,6 +463,32 @@ function resolveDefaultGlobalAgentId(ops: ChatAbortOps): string | undefined {
   return cfg ? resolveDefaultAgentId(cfg) : undefined;
 }
 
+export function isChatAbortControllerEntryAbortable(entry: ChatAbortControllerEntry): boolean {
+  try {
+    return entry.isAbortable?.(entry) !== false;
+  } catch {
+    return false;
+  }
+}
+
+export function removeChatAbortControllerEntry(
+  entries: Map<string, ChatAbortControllerEntry>,
+  runId: string,
+  expectedEntry?: ChatAbortControllerEntry,
+): boolean {
+  const entry = entries.get(runId);
+  if (!entry || (expectedEntry && entry !== expectedEntry)) {
+    return false;
+  }
+  entries.delete(runId);
+  try {
+    entry.onRemoved?.();
+  } catch {
+    // Removal owns state cleanup even if a caller-provided release hook fails.
+  }
+  return true;
+}
+
 export function abortChatRunById(
   ops: ChatAbortOps,
   params: {
@@ -466,15 +505,18 @@ export function abortChatRunById(
   if (active.sessionKey !== sessionKey) {
     return { aborted: false };
   }
+  if (!isChatAbortControllerEntryAbortable(active)) {
+    return { aborted: false };
+  }
 
   const bufferedText = ops.chatRunBuffers.get(runId);
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
-  ops.chatAbortedRuns.set(runId, Date.now());
+  ops.chatAbortedRuns.set(runId, createChatAbortMarker());
   if (stopReason) {
     active.abortStopReason = stopReason;
   }
   active.controller.abort(createChatAbortSignalReason(stopReason));
-  ops.chatAbortControllers.delete(runId);
+  removeChatAbortControllerEntry(ops.chatAbortControllers, runId, active);
   ops.clearChatRunState(runId);
   const removed = ops.removeChatRun(runId, runId, sessionKey);
   if (active.controlUiVisible !== false) {

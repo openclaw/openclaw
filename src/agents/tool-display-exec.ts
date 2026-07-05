@@ -1,9 +1,12 @@
+import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { redactToolPayloadText } from "../logging/redact.js";
 /**
  * Exec tool display summaries.
  *
  * Turns common shell commands into short redacted labels for tool timelines and transcripts.
  */
-import { redactToolPayloadText } from "../logging/redact.js";
+import { formatInlineCodeSpan } from "../shared/markdown-code.js";
+import { sliceUtf16Safe } from "../shared/utf16-slice.js";
 import {
   binaryName,
   firstPositional,
@@ -17,7 +20,6 @@ import {
   trimLeadingEnv,
   unwrapShellWrapper,
 } from "./tool-display-exec-shell.js";
-import { asRecord } from "./tool-display-record.js";
 
 function summarizeKnownExec(words: string[]): string {
   if (words.length === 0) {
@@ -442,7 +444,7 @@ function compactRawCommand(raw: string, maxLength = 120): string {
     return oneLine;
   }
   const half = Math.floor((maxLength - 1) / 2);
-  return `${oneLine.slice(0, half)}…${oneLine.slice(-(maxLength - 1 - half))}`;
+  return `${sliceUtf16Safe(oneLine, 0, half)}…${sliceUtf16Safe(oneLine, -(maxLength - 1 - half))}`;
 }
 
 export type ToolDetailMode = "explain" | "raw";
@@ -494,7 +496,7 @@ export function resolveExecDetail(
     compact !== displaySummary &&
     compact !== summary
   ) {
-    return `${displaySummary}${nodeFragment} · \`${compact}\``;
+    return `${displaySummary}${nodeFragment} · ${formatInlineCodeSpan(compact)}`;
   }
 
   return `${displaySummary}${nodeFragment}`;

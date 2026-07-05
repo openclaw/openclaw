@@ -46,19 +46,25 @@ function createReplyOperation(): TestReplyOperation {
     sessionId: "session",
     abortSignal: new AbortController().signal,
     resetTriggered: false,
+    terminalRecovery: false,
     phase: "queued",
     result: null,
+    hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
     setPhase: vi.fn<ReplyOperation["setPhase"]>(),
     updateSessionId: vi.fn<ReplyOperation["updateSessionId"]>(),
     attachBackend: vi.fn(),
     detachBackend: vi.fn(),
+    freezeAbort: vi.fn(),
+    retainFailureUntilComplete: vi.fn(),
     complete: vi.fn(),
     completeThen: vi.fn((afterClear: () => void) => {
       afterClear();
     }),
+    completeWithAfterClearBarrier: vi.fn(),
     fail: vi.fn(),
-    abortByUser: vi.fn(),
-    abortForRestart: vi.fn(),
+    abortByUser: vi.fn(() => true),
+    abortForRestart: vi.fn(() => true),
+    markTerminalRecovery: vi.fn(),
   };
 }
 
@@ -98,6 +104,7 @@ type EmbeddedAgentParams = {
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   abortSignal?: AbortSignal;
+  isFinalFallbackAttempt?: boolean;
 };
 
 type CompactEmbeddedAgentSessionParams = {
@@ -812,6 +819,24 @@ describe("runMemoryFlushIfNeeded", () => {
       agentRuntimeOverride: "codex",
     };
     const runtimePolicySessionKey = "agent:main:telegram:default:direct:12345";
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: {
+        provider: string;
+        model: string;
+        run: (
+          provider: string,
+          model: string,
+          options?: { isFinalFallbackAttempt?: boolean },
+        ) => Promise<unknown>;
+      }) => ({
+        result: await params.run(params.provider, params.model, {
+          isFinalFallbackAttempt: false,
+        }),
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      }),
+    );
 
     await runMemoryFlushIfNeeded({
       cfg,
@@ -839,6 +864,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(fallbackCall.agentId).toBe("main");
     expect(fallbackCall.sessionKey).toBe(runtimePolicySessionKey);
     expect(fallbackCall.resolveAgentHarnessRuntimeOverride?.("openai", "gpt-5.4")).toBe("codex");
+    expect(requireEmbeddedAgentCall().isFinalFallbackAttempt).toBe(false);
 
     await fallbackCall.prepareAgentHarnessRuntime?.({
       provider: "openai",
@@ -1358,6 +1384,79 @@ describe("runMemoryFlushIfNeeded", () => {
     const compactCall = requireCompactEmbeddedAgentSessionCall();
     expect(compactCall.authProfileId).toBe("anthropic:claude@martian.engineering");
     expect(compactCall.contextTokenBudget).toBe(258_000);
+  });
+  it("preflight compacts a fresh session when the current prompt estimate pushes the next request over budget", async () => {
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 0,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 10,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 985,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        provider: "anthropic",
+        model: "claude",
+        sessionKey: "agent:main:main",
+      }),
+      promptForEstimate: "Please summarize the entire design discussion above. ".repeat(8),
+      defaultModel: "anthropic/claude",
+      agentCfgContextTokens: 1000,
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+  });
+  it("does not preflight compact a fresh session when only accumulated output tokens are large and the latest output keeps the request under budget", async () => {
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 0,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 10,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 985,
+      outputTokens: 50_000,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        provider: "anthropic",
+        model: "claude",
+        sessionKey: "agent:main:main",
+      }),
+      promptForEstimate: "",
+      defaultModel: "anthropic/claude",
+      agentCfgContextTokens: 1000,
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
   it("updates the active preflight run after transcript rotation", async () => {
     const sessionFile = path.join(rootDir, "session.jsonl");
@@ -2111,7 +2210,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const compactCall = requireCompactEmbeddedAgentSessionCall();
     expect(compactCall.sessionId).toBe("session");
     expect(compactCall.trigger).toBe("budget");
-    expect(compactCall.currentTokenCount).toBe(10);
+    expect(compactCall.currentTokenCount).toBe(12);
     expect(compactCall.sessionFile).toContain("large-session.jsonl");
   });
 

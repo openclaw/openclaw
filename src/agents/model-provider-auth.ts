@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { toErrorObject } from "../infra/errors.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -44,8 +45,6 @@ import {
 } from "./model-provider-auth-state.js";
 import { normalizeProviderId } from "./model-selection.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
-
-export type { ProviderAuthWarmSnapshot } from "./model-provider-auth-state.js";
 
 type ProviderAuthWarmWorkerResult =
   | {
@@ -396,30 +395,6 @@ export async function buildCurrentProviderAuthStateSnapshot(
   return serializeProviderAuthStates(states);
 }
 
-/** Warms process-current provider auth state on the main thread. */
-export async function warmCurrentProviderAuthState(
-  cfg: OpenClawConfig,
-  options: { isCancelled?: () => boolean } = {},
-): Promise<void> {
-  // Claim a fresh generation; any concurrent warm or clear bumps this and
-  // turns our published state stale.
-  const ownGeneration = claimCurrentProviderAuthStateGeneration();
-  const isWarmStale = () =>
-    options.isCancelled?.() === true || !isCurrentProviderAuthStateGeneration(ownGeneration);
-  const snapshot = await buildCurrentProviderAuthStateSnapshot(cfg, {
-    isCancelled: isWarmStale,
-  });
-  if (isWarmStale()) {
-    return;
-  }
-  if (options.isCancelled?.() || !isCurrentProviderAuthStateGeneration(ownGeneration)) {
-    // A newer warm or clear ran while we were building; skip publication so
-    // the newer answer wins.
-    return;
-  }
-  publishProviderAuthWarmSnapshot(snapshot);
-}
-
 function resolveProviderAuthWarmWorkerUrl(currentModuleUrl: string): URL {
   const currentPath = fileURLToPath(currentModuleUrl);
   const distMarker = `${path.sep}dist${path.sep}`;
@@ -608,7 +583,7 @@ function runProviderAuthWarmWorker(params: {
           resolve({ agents: [] });
           return;
         }
-        reject(toLintErrorObject(error, "Non-Error rejection"));
+        reject(toErrorObject(error, "Non-Error rejection"));
       });
     });
     worker.once("exit", (code) => {
@@ -663,18 +638,4 @@ export async function warmCurrentProviderAuthStateOffMainThread(
     return;
   }
   publishProviderAuthWarmSnapshot(snapshot);
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

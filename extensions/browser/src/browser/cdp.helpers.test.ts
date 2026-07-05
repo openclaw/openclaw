@@ -2,14 +2,13 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCdpReachabilityPolicy } from "./cdp-reachability-policy.js";
-import {
-  PROFILE_HTTP_REACHABILITY_TIMEOUT_MS,
-  PROFILE_WS_REACHABILITY_MAX_TIMEOUT_MS,
-  PROFILE_WS_REACHABILITY_MIN_TIMEOUT_MS,
-  resolveCdpReachabilityTimeouts,
-} from "./cdp-timeouts.js";
+import { resolveCdpReachabilityTimeouts } from "./cdp-timeouts.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { assertBrowserNavigationAllowed } from "./navigation-guard.js";
+
+const PROFILE_HTTP_REACHABILITY_TIMEOUT_MS = 300;
+const PROFILE_WS_REACHABILITY_MIN_TIMEOUT_MS = 200;
+const PROFILE_WS_REACHABILITY_MAX_TIMEOUT_MS = 2000;
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
@@ -143,6 +142,28 @@ describe("cdp helpers", () => {
     expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
     expect(request?.init?.headers).toEqual({
       Authorization: "Basic b3BlbmNsYXc6cmVsYXktdG9rZW4=",
+    });
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("decodes URL credentials before sending guarded CDP auth headers", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: {
+        ok: true,
+        status: 200,
+      },
+      release,
+    });
+
+    await expect(
+      fetchOk("http://alice:p%40ss%20word@127.0.0.1:9222/json/version", 250),
+    ).resolves.toBeUndefined();
+
+    const request = requireGuardedFetchRequest();
+    expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
+    expect(request?.init?.headers).toEqual({
+      Authorization: `Basic ${Buffer.from("alice:p@ss word").toString("base64")}`,
     });
     expect(release).toHaveBeenCalledTimes(1);
   });

@@ -25,8 +25,8 @@ import {
   formatSessionGoalStatus,
   getSessionGoal,
   updateSessionGoalStatus,
-  updateSessionStore,
 } from "../config/sessions.js";
+import { applySessionPatchProjection } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import {
@@ -49,7 +49,10 @@ import {
 } from "../gateway/server-methods/chat.js";
 import { loadGatewayModelCatalog } from "../gateway/server-model-catalog.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
-import { capArrayByJsonBytes } from "../gateway/session-utils.fs.js";
+import {
+  capArrayByJsonBytes,
+  readSessionMessagesAsync,
+} from "../gateway/session-transcript-readers.js";
 import {
   buildGatewaySessionInfo,
   getSessionDefaults,
@@ -60,11 +63,11 @@ import {
   migrateAndPruneGatewaySessionStoreKey,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
-  readSessionMessagesAsync,
 } from "../gateway/session-utils.js";
-import { applySessionsPatchToStore } from "../gateway/sessions-patch.js";
+import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
 import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
+import { logInfo, logWarn } from "../logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -73,6 +76,7 @@ import type {
   ChatSendOptions,
   TuiAgentsList,
   TuiBackend,
+  TuiChatSendResult,
   TuiEvent,
   TuiModelChoice,
   TuiSessionList,
@@ -108,6 +112,11 @@ const silentRuntime = {
   exit: (code: number): never => {
     throw new Error(`embedded tui runtime exit ${String(code)}`);
   },
+};
+
+const embeddedSessionStartupMigrationLog = {
+  info: (message: string) => logInfo(message, silentRuntime),
+  warn: (message: string) => logWarn(message, silentRuntime),
 };
 
 function hasProviderWildcardModelAllowlist(cfg: OpenClawConfig) {
@@ -297,6 +306,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
   private previousRuntimeError?: typeof defaultRuntime.error;
   private seq = 0;
   private readonly pendingLifecycleErrors = new Map<string, ReturnType<typeof setTimeout>>();
+  // Resolves once the one-time session-key migration has run; store methods await it.
+  private ready: Promise<void> = Promise.resolve();
 
   start() {
     if (this.unsubscribe) {
@@ -310,9 +321,18 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.previousRuntimeError = defaultRuntime.error;
     defaultRuntime.log = silentRuntime.log;
     defaultRuntime.error = silentRuntime.error;
-    this.unsubscribe = onAgentEvent((evt) => {
-      void this.handleAgentEvent(evt);
-    });
+    // Keep this synchronous so the shared event bus can isolate listener failures.
+    this.unsubscribe = onAgentEvent((evt) => this.handleAgentEvent(evt));
+    // Local mode never runs gateway startup; canonicalize orphaned keys once here.
+    this.ready = (async () => {
+      const { runSessionStartupMigration } =
+        await import("../config/sessions/startup-migration.js");
+      await runSessionStartupMigration({
+        cfg: getRuntimeConfig(),
+        env: process.env,
+        log: embeddedSessionStartupMigrationLog,
+      });
+    })();
     queueMicrotask(() => {
       this.onConnected?.();
     });
@@ -353,7 +373,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
     setEmbeddedMode(false);
   }
 
-  async sendChat(opts: ChatSendOptions): Promise<{ runId: string }> {
+  async sendChat(opts: ChatSendOptions): Promise<TuiChatSendResult> {
+    await this.ready;
     const runId = opts.runId ?? randomUUID();
     const question = resolveBtwQuestion(opts.message);
     const runScope = {
@@ -404,27 +425,56 @@ export class EmbeddedTuiBackend implements TuiBackend {
     return { runId };
   }
 
-  async abortChat(opts: { sessionKey: string; agentId?: string; runId: string }) {
+  async abortChat(opts: { sessionKey: string; agentId?: string; runId?: string }) {
+    if (!opts.runId) {
+      // Session-scoped abort for local embedded: abort all matching runs.
+      let aborted = false;
+      const runIds: string[] = [];
+      for (const [runId, run] of this.runs) {
+        if (run.isBtw) {
+          continue;
+        }
+        if (run.sessionKey !== opts.sessionKey) {
+          continue;
+        }
+        if (opts.sessionKey === "global") {
+          const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
+          const requestedAgentId = opts.agentId ? normalizeAgentId(opts.agentId) : defaultAgentId;
+          const runAgentId = run.agentId ? normalizeAgentId(run.agentId) : defaultAgentId;
+          if (runAgentId !== requestedAgentId) {
+            continue;
+          }
+        }
+        if (!this.isAbortableRun(runId, run)) {
+          continue;
+        }
+        run.controller.abort();
+        aborted = true;
+        runIds.push(runId);
+      }
+      return { ok: true, aborted, runIds };
+    }
     const run = this.runs.get(opts.runId);
     if (!run || run.sessionKey !== opts.sessionKey) {
-      return { ok: true, aborted: false };
+      return { ok: true, aborted: false, runIds: [] };
     }
     if (opts.sessionKey === "global") {
       const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
       const requestedAgentId = opts.agentId ? normalizeAgentId(opts.agentId) : defaultAgentId;
       const runAgentId = run.agentId ? normalizeAgentId(run.agentId) : defaultAgentId;
       if (runAgentId !== requestedAgentId) {
-        return { ok: true, aborted: false };
+        return { ok: true, aborted: false, runIds: [] };
       }
     }
     if (!this.isAbortableRun(opts.runId, run)) {
-      return { ok: true, aborted: false };
+      return { ok: true, aborted: false, runIds: [] };
     }
     run.controller.abort();
-    return { ok: true, aborted: true };
+    return { ok: true, aborted: true, runIds: [opts.runId] };
   }
 
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
+    await this.ready;
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
     const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(
       opts.sessionKey,
@@ -445,11 +495,21 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const localMessages =
       sessionId && storePath
-        ? await readSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
-            mode: "recent",
-            maxMessages: max,
-            maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-          })
+        ? await readSessionMessagesAsync(
+            {
+              agentId: sessionAgentId,
+              sessionEntry: entry,
+              sessionId,
+              sessionKey: canonicalKey,
+              storePath,
+            },
+            {
+              mode: "recent",
+              maxMessages: max,
+              maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+              allowResetArchiveFallback: true,
+            },
+          )
         : [];
     const rawMessages = augmentChatHistoryWithCliSessionImports({
       entry,
@@ -509,6 +569,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {
+    await this.ready;
     const cfg = getRuntimeConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
       agentId: opts?.agentId,
@@ -528,27 +589,37 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async patchSession(
     opts: Parameters<TuiBackend["patchSession"]>[0],
   ): Promise<SessionsPatchResult> {
+    await this.ready;
     const cfg = getRuntimeConfig();
     const target = resolveGatewaySessionStoreTarget({
       cfg,
       key: opts.key,
       agentId: opts.agentId,
     });
-    const applied = await updateSessionStore(target.storePath, async (store) => {
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-        cfg,
-        key: opts.key,
-        store,
-        agentId: opts.agentId,
-      });
-      return await applySessionsPatchToStore({
-        cfg,
-        store,
-        storeKey: primaryKey,
-        agentId: opts.agentId,
-        patch: opts,
-        loadGatewayModelCatalog: () => loadEmbeddedTuiModelCatalog(cfg),
-      });
+    const applied = await applySessionPatchProjection({
+      storePath: target.storePath,
+      resolveTarget: ({ entries }) => {
+        const store = Object.fromEntries(
+          entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+        );
+        const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+          cfg,
+          key: opts.key,
+          store,
+          agentId: opts.agentId,
+        });
+        return { primaryKey, candidateKeys: migratedTarget.storeKeys };
+      },
+      project: async ({ primaryKey, existingEntry, entries }) =>
+        await projectSessionsPatchEntry({
+          cfg,
+          entries,
+          existingEntry,
+          storeKey: primaryKey,
+          agentId: opts.agentId,
+          patch: opts,
+          loadGatewayModelCatalog: () => loadEmbeddedTuiModelCatalog(cfg),
+        }),
     });
     if (!applied.ok) {
       throw new Error(applied.error.message);
@@ -573,6 +644,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async resetSession(key: string, reason?: "new" | "reset", opts?: { agentId?: string }) {
+    await this.ready;
     const result = await performGatewaySessionReset({
       key,
       ...(opts?.agentId ? { agentId: opts.agentId } : {}),
@@ -665,6 +737,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async runGoalCommand(opts: Parameters<NonNullable<TuiBackend["runGoalCommand"]>>[0]) {
+    await this.ready;
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
     const { canonicalKey, storePath, entry } = loadSessionEntry(opts.sessionKey, loadOptions);
     const sessionKey = canonicalKey ?? opts.sessionKey;
@@ -948,7 +1021,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
   }
 
-  private async handleAgentEvent(evt: AgentEventPayload) {
+  private handleAgentEvent(evt: AgentEventPayload) {
     const run = this.runs.get(evt.runId);
     if (!run) {
       return;

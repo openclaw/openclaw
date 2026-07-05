@@ -10,13 +10,17 @@
  * Separated from gateway.ts for testability and to keep handleMessage thin.
  */
 
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-chunking";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { createQQBotMarkdownChunker } from "../messaging/markdown-table-chunking.js";
 import {
   parseAndSendMediaTags,
   sendPlainReply,
   sendTextOnlyReply,
+  TEXT_CHUNK_LIMIT,
   type DeliverDeps,
 } from "../messaging/outbound-deliver.js";
 import {
@@ -115,6 +119,10 @@ function isSilentBlockReply(payload: ReplyDeliverPayload): boolean {
   return !hasReplyMedia(payload) && isSilentBlockReplyText((payload.text ?? "").trim());
 }
 
+function isMediaOnlyBlockReply(payload: ReplyDeliverPayload): boolean {
+  return hasReplyMedia(payload) && isSilentBlockReplyText((payload.text ?? "").trim());
+}
+
 // ============ dispatchOutbound ============
 
 /**
@@ -130,6 +138,12 @@ export async function dispatchOutbound(
   const { runtime, cfg, account, log } = deps;
   const { event, qualifiedTarget } = inbound;
 
+  const openClawCfg = cfg as OpenClawConfig;
+  const routeAgentId = inbound.route.agentId ?? resolveDefaultAgentId(openClawCfg);
+  const workspaceDir = resolveAgentWorkspaceDir(openClawCfg, routeAgentId);
+  const gatewayMediaContext = workspaceDir
+    ? { mediaAccess: { workspaceDir }, mediaLocalRoots: [workspaceDir] }
+    : {};
   const replyTarget = {
     type: event.type,
     senderId: event.senderId,
@@ -138,7 +152,7 @@ export async function dispatchOutbound(
     guildId: event.guildId,
     groupOpenid: event.groupOpenid,
   };
-  const replyCtx = { target: replyTarget, account, cfg, log };
+  const replyCtx = { target: replyTarget, account, cfg, log, ...gatewayMediaContext };
 
   const sendWithRetry = <T>(sendFn: (token: string) => Promise<T>) =>
     sendWithTokenRetry(account.appId, account.clientSecret, sendFn, log, account.accountId);
@@ -190,6 +204,7 @@ export async function dispatchOutbound(
           accountId: account.accountId,
           replyToId: event.messageId,
           account,
+          ...gatewayMediaContext,
         }).then((r) => {
           if (ac.signal.aborted) {
             return { channel: "qqbot", error: "suppressed" } as OutboundResult;
@@ -223,7 +238,6 @@ export async function dispatchOutbound(
           thrownError: "Tool fallback failed",
         });
       }
-      return;
     }
     if (toolTexts.length > 0) {
       await sendErrorMessage(toolTexts.slice(-3).join("\n---\n").slice(0, 2000));
@@ -277,6 +291,9 @@ export async function dispatchOutbound(
   });
 
   // ---- Deliver deps ----
+  const markdownChunker = createQQBotMarkdownChunker((text, limit) =>
+    runtime.channel.text.chunkMarkdownText(text, limit),
+  );
   const deliverDeps: DeliverDeps = {
     mediaSender: {
       sendPhoto: (target, imageUrl) => sendPhoto(target, imageUrl),
@@ -286,7 +303,35 @@ export async function dispatchOutbound(
       sendDocument: (target, filePath) => sendDocument(target, filePath),
       sendMedia: (opts) => sendMedia(opts),
     },
-    chunkText: (text, limit) => runtime.channel.text.chunkMarkdownText(text, limit),
+    chunkText: (text, limit) => markdownChunker.chunkText(text, limit),
+  };
+  const flushPendingMarkdownText = async (): Promise<void> => {
+    const pendingChunks = markdownChunker.flushPendingText(TEXT_CHUNK_LIMIT);
+    if (pendingChunks.length === 0) {
+      return;
+    }
+    const passthroughDeps: DeliverDeps = {
+      ...deliverDeps,
+      chunkText: (text) => [text],
+    };
+    for (const chunk of pendingChunks) {
+      await sendTextOnlyReply(
+        chunk,
+        {
+          type: event.type,
+          senderId: event.senderId,
+          messageId: event.messageId,
+          channelId: event.channelId,
+          groupOpenid: event.groupOpenid,
+          msgIdx: event.msgIdx,
+        },
+        { account, qualifiedTarget, log },
+        sendWithRetry,
+        () => undefined,
+        passthroughDeps,
+      );
+      recordOutbound();
+    }
   };
 
   const replyDeps: ReplyDispatcherDeps = {
@@ -322,7 +367,7 @@ export async function dispatchOutbound(
             groupOpenid: event.groupOpenid,
             msgIdx: event.msgIdx,
           },
-          { account, qualifiedTarget, log },
+          { account, qualifiedTarget, log, ...gatewayMediaContext },
           sendWithRetry,
           () => undefined,
           deliverDeps,
@@ -339,10 +384,7 @@ export async function dispatchOutbound(
     });
 
   // ---- Dispatch ----
-  const messagesConfig = runtime.channel.reply.resolveEffectiveMessagesConfig(
-    cfg,
-    inbound.route.agentId,
-  );
+  const messagesConfig = runtime.channel.reply.resolveEffectiveMessagesConfig(cfg, routeAgentId);
 
   const targetType =
     event.type === "c2c"
@@ -374,14 +416,14 @@ export async function dispatchOutbound(
           channelId: event.channelId,
         },
         log,
+        ...gatewayMediaContext,
       },
     });
   }
 
   const cfgWithSession = cfg as { session?: { store?: unknown } };
-  const agentId = inbound.route.agentId ?? "default";
   const storePath = runtime.channel.session.resolveStorePath(cfgWithSession.session?.store, {
-    agentId,
+    agentId: routeAgentId,
   });
   const dispatchPromise = runtime.channel.inbound.run({
     channel: "qqbot",
@@ -437,7 +479,7 @@ export async function dispatchOutbound(
                         groupOpenid: event.groupOpenid,
                         msgIdx: event.msgIdx,
                       },
-                      { account, qualifiedTarget, log },
+                      { account, qualifiedTarget, log, ...gatewayMediaContext },
                       sendWithRetry,
                       () => undefined,
                       deliverDeps,
@@ -467,6 +509,7 @@ export async function dispatchOutbound(
                           accountId: account.accountId,
                           replyToId: event.messageId,
                           account,
+                          ...gatewayMediaContext,
                         });
                       } catch {}
                     }
@@ -492,7 +535,11 @@ export async function dispatchOutbound(
                 }
                 hasVisibleBlockResponse = true;
 
-                if (streamingController && !streamingController.isTerminalPhase) {
+                if (
+                  streamingController &&
+                  !streamingController.isTerminalPhase &&
+                  !isMediaOnlyBlockReply(payload)
+                ) {
                   try {
                     await streamingController.onDeliver(payload);
                   } catch (err) {
@@ -539,7 +586,7 @@ export async function dispatchOutbound(
                   groupOpenid: event.groupOpenid,
                   msgIdx: event.msgIdx,
                 };
-                const deliverActx = { account, qualifiedTarget, log };
+                const deliverActx = { account, qualifiedTarget, log, ...gatewayMediaContext };
 
                 // 1. Media tags
                 const mediaResult = await parseAndSendMediaTags(
@@ -690,6 +737,7 @@ export async function dispatchOutbound(
       toolFallbackSent = true;
       await sendToolFallback();
     }
+    await flushPendingMarkdownText();
     if (streamingController && !streamingController.isTerminalPhase) {
       try {
         streamingController.markFullyComplete();
@@ -746,7 +794,7 @@ async function buildCtxPayload(
       id: inbound.peerId,
     },
     route: {
-      agentId: inbound.route.agentId ?? "main",
+      agentId: inbound.route.agentId ?? resolveDefaultAgentId(cfg as OpenClawConfig),
       routeSessionKey: inbound.route.sessionKey,
       accountId: inbound.route.accountId,
     },

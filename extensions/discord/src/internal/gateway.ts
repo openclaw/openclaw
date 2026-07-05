@@ -28,7 +28,6 @@ export type Activity = NonNullable<GatewayPresenceUpdateData["activities"]>[numb
 export type UpdatePresenceData = Omit<GatewayPresenceUpdateData, "status"> & {
   status: "online" | "idle" | "dnd" | "invisible" | "offline";
 };
-type UpdateVoiceStateData = GatewayVoiceStateUpdateData;
 type RequestGuildMembersData = {
   guild_id: string;
   query?: string;
@@ -441,7 +440,7 @@ export class GatewayPlugin extends Plugin {
     this.send({ op: GatewayOpcodes.PresenceUpdate, d: data } as GatewaySendPayload);
   }
 
-  updateVoiceState(data: UpdateVoiceStateData): void {
+  updateVoiceState(data: GatewayVoiceStateUpdateData): void {
     this.send({ op: GatewayOpcodes.VoiceStateUpdate, d: data } as GatewaySendPayload, true);
   }
 
@@ -460,18 +459,6 @@ export class GatewayPlugin extends Plugin {
 
   getRateLimitStatus() {
     return this.outboundLimiter.getStatus();
-  }
-
-  getIntentsInfo() {
-    const intents = this.options.intents ?? 0;
-    return {
-      intents,
-      hasGuilds: this.hasIntent(GatewayIntentBits.Guilds),
-      hasGuildMembers: this.hasIntent(GatewayIntentBits.GuildMembers),
-      hasGuildPresences: this.hasIntent(GatewayIntentBits.GuildPresences),
-      hasGuildMessages: this.hasIntent(GatewayIntentBits.GuildMessages),
-      hasMessageContent: this.hasIntent(GatewayIntentBits.MessageContent),
-    };
   }
 
   hasIntent(intent: number): boolean {

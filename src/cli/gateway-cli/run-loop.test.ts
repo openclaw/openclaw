@@ -54,6 +54,18 @@ const getInspectableActiveTaskRestartBlockers = vi.fn(
 const markGatewayDraining = vi.fn();
 const waitForActiveTasks = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
 const resetAllLanes = vi.fn();
+const advanceCronActiveJobGeneration = vi.fn();
+const resetCronActiveJobs = vi.fn();
+const abortActiveCronTaskRuns = vi.fn((_reason?: string) => 0);
+const retireActiveCronTaskRunTracking = vi.fn();
+const waitForActiveCronTaskRuns = vi.fn(async (_timeoutMs?: number) => ({
+  drained: true,
+  active: 0,
+}));
+const waitForActiveCronJobs = vi.fn(async (_timeoutMs?: number) => ({
+  drained: true,
+  active: 0,
+}));
 const reloadTaskRegistryFromStore = vi.fn();
 const rotateAgentEventLifecycleGeneration = vi.fn();
 const clearRuntimeConfigSnapshot = vi.fn();
@@ -75,6 +87,7 @@ const respawnGatewayProcessForUpdate = vi.fn<
 const markUpdateRestartSentinelFailure = vi.fn<(reason: string) => Promise<null>>(
   async (_reason: string) => null,
 );
+const abortPendingChannelReloads = vi.fn();
 const abortEmbeddedAgentRun = vi.fn(
   (_sessionId?: string, _opts?: { mode?: "all" | "compacting"; reason?: "restart" }) => false,
 );
@@ -151,6 +164,18 @@ vi.mock("../../process/command-queue.js", () => ({
   resetAllLanes: () => resetAllLanes(),
 }));
 
+vi.mock("../../cron/active-jobs.js", () => ({
+  advanceCronActiveJobGeneration: () => advanceCronActiveJobGeneration(),
+  resetCronActiveJobs: () => resetCronActiveJobs(),
+  waitForActiveCronJobs: (timeoutMs: number) => waitForActiveCronJobs(timeoutMs),
+}));
+
+vi.mock("../../tasks/cron-task-cancel.js", () => ({
+  abortActiveCronTaskRuns: (reason?: string) => abortActiveCronTaskRuns(reason),
+  retireActiveCronTaskRunTracking: () => retireActiveCronTaskRunTracking(),
+  waitForActiveCronTaskRuns: (timeoutMs: number) => waitForActiveCronTaskRuns(timeoutMs),
+}));
+
 vi.mock("../../tasks/runtime-internal.js", () => ({
   reloadTaskRegistryFromStore: () => reloadTaskRegistryFromStore(),
 }));
@@ -189,6 +214,10 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => gatewayLog,
+}));
+
+vi.mock("../../gateway/server-reload-handlers.js", () => ({
+  abortPendingChannelReloads: () => abortPendingChannelReloads(),
 }));
 
 const LOOP_SIGNALS = ["SIGTERM", "SIGINT", "SIGUSR1"] as const;
@@ -876,7 +905,13 @@ describe("runGatewayLoop", () => {
       expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
       expectRestartCloseCall(closeFirst, 1_234);
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
+      expect(abortActiveCronTaskRuns).toHaveBeenCalledWith("Gateway restarting.");
+      expect(waitForActiveCronTaskRuns).toHaveBeenCalledWith(1_000);
+      expect(waitForActiveCronJobs).toHaveBeenCalledWith(1_000);
       expect(resetAllLanes).toHaveBeenCalledTimes(1);
+      expect(advanceCronActiveJobGeneration).toHaveBeenCalledTimes(1);
+      expect(retireActiveCronTaskRunTracking).toHaveBeenCalledTimes(1);
+      expect(resetCronActiveJobs).toHaveBeenCalledTimes(1);
       expect(clearRuntimeConfigSnapshot).toHaveBeenCalledTimes(1);
       expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(1);
       expect(rotateAgentEventLifecycleGeneration).toHaveBeenCalledTimes(1);
@@ -884,6 +919,18 @@ describe("runGatewayLoop", () => {
       expect(
         rotateAgentEventLifecycleGeneration.mock.invocationCallOrder[0] ?? Infinity,
       ).toBeLessThan(resetAllLanes.mock.invocationCallOrder[0] ?? Infinity);
+      expect(advanceCronActiveJobGeneration.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+        abortActiveCronTaskRuns.mock.invocationCallOrder[0] ?? Infinity,
+      );
+      expect(waitForActiveCronJobs.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+        retireActiveCronTaskRunTracking.mock.invocationCallOrder[0] ?? Infinity,
+      );
+      expect(retireActiveCronTaskRunTracking.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+        resetCronActiveJobs.mock.invocationCallOrder[0] ?? Infinity,
+      );
+      expect(resetCronActiveJobs.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+        resetAllLanes.mock.invocationCallOrder[0] ?? Infinity,
+      );
 
       sigusr1();
 
@@ -894,7 +941,13 @@ describe("runGatewayLoop", () => {
       expectRestartCloseCall(closeSecond, 1_234);
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(2);
       expect(markGatewayDraining).toHaveBeenCalledTimes(2);
+      expect(abortActiveCronTaskRuns).toHaveBeenCalledTimes(2);
+      expect(waitForActiveCronTaskRuns).toHaveBeenCalledTimes(2);
+      expect(waitForActiveCronJobs).toHaveBeenCalledTimes(2);
       expect(resetAllLanes).toHaveBeenCalledTimes(2);
+      expect(advanceCronActiveJobGeneration).toHaveBeenCalledTimes(2);
+      expect(retireActiveCronTaskRunTracking).toHaveBeenCalledTimes(2);
+      expect(resetCronActiveJobs).toHaveBeenCalledTimes(2);
       expect(clearRuntimeConfigSnapshot).toHaveBeenCalledTimes(2);
       expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(2);
       expect(rotateAgentEventLifecycleGeneration).toHaveBeenCalledTimes(2);
@@ -907,6 +960,42 @@ describe("runGatewayLoop", () => {
         reason: "gateway stopping",
         restartExpectedMs: null,
       });
+    });
+  });
+
+  it("advances stale cron active markers after bounded restart cron-run drain", async () => {
+    vi.clearAllMocks();
+    waitForActiveCronJobs.mockResolvedValueOnce({ drained: false, active: 1 });
+    peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
+    respawnGatewayProcessForUpdate.mockReturnValue({
+      mode: "disabled",
+      detail: "OPENCLAW_NO_RESPAWN",
+    });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { start, exited } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigint = captureSignal("SIGINT");
+
+      sigusr1();
+      await waitForLoopCondition(
+        () => start.mock.calls.length >= 2,
+        "expected SIGUSR1 to trigger restart",
+      );
+
+      expect(abortActiveCronTaskRuns).toHaveBeenCalledWith("Gateway restarting.");
+      expect(waitForActiveCronTaskRuns).toHaveBeenCalledWith(1_000);
+      expect(waitForActiveCronJobs).toHaveBeenCalledWith(1_000);
+      expect(resetAllLanes).toHaveBeenCalledTimes(1);
+      expect(advanceCronActiveJobGeneration).toHaveBeenCalledTimes(1);
+      expect(retireActiveCronTaskRunTracking).toHaveBeenCalledTimes(1);
+      expect(resetCronActiveJobs).toHaveBeenCalledTimes(1);
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        "cron run drain timed out during restart lifecycle reset after retiring old cron admission; 0 task handle(s) and 1 active marker(s) remain after aborting old cron runs",
+      );
+
+      sigint();
+      await expect(exited).resolves.toBe(0);
     });
   });
 
@@ -1371,6 +1460,53 @@ describe("runGatewayLoop", () => {
         sessionKeys: new Set(["agent:main:file-intent"]),
         reason: "gateway restart drain",
       });
+      expect(start).toHaveBeenCalledTimes(2);
+
+      sigint();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("calls abortPendingChannelReloads for file-intent restart even when authorization is false", async () => {
+    vi.clearAllMocks();
+    consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({
+      force: true,
+      reason: "file-intent restart",
+    });
+    consumeGatewaySigusr1RestartAuthorization.mockReturnValueOnce(false);
+    loadConfig.mockReturnValueOnce({
+      gateway: {
+        reload: {
+          deferralTimeoutMs: 90_000,
+        },
+      },
+    });
+    getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
+    listActiveEmbeddedRunSessionIds.mockReturnValueOnce(["session-file-intent"]);
+    listActiveEmbeddedRunSessionKeys.mockReturnValueOnce(["agent:main:file-intent"]);
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { start, exited } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigint = captureSignal("SIGINT");
+
+      sigusr1();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      // File-intent restart always restarts regardless of authorization.
+      // abortPendingChannelReloads must be called to cancel any stale
+      // deferred channel reload work before the in-process restart.
+      expect(abortPendingChannelReloads).toHaveBeenCalledOnce();
+      // Authorization was consumed but returned false.
+      expect(consumeGatewaySigusr1RestartAuthorization).toHaveBeenCalledOnce();
+      // markGatewaySigusr1RestartHandled should NOT be called when auth is false.
+      expect(markGatewaySigusr1RestartHandled).not.toHaveBeenCalled();
+      // Restart still proceeds for file-intent regardless of auth result.
       expect(start).toHaveBeenCalledTimes(2);
 
       sigint();
