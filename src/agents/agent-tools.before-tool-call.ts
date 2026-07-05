@@ -8,6 +8,7 @@ import path from "node:path";
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import { GatewayClientRequestError } from "../gateway/client.js";
 import {
   diagnosticErrorCategory,
   diagnosticHttpStatusCode,
@@ -32,6 +33,7 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getEmbeddedPluginApprovalBroker } from "../infra/embedded-plugin-approval-broker.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   describeNativePluginApprovalClientSetup,
   resolveApprovalInitiatingSurfaceState,
@@ -932,10 +934,17 @@ async function requestPluginToolApproval(params: {
       blocked: true,
       kind: "failure",
       deniedReason: "plugin-approval",
-      reason: "Plugin approval required (gateway unavailable)",
+      reason: formatPluginApprovalGatewayFailureReason(err),
       params: params.baseParams,
     };
   }
+}
+
+function formatPluginApprovalGatewayFailureReason(err: unknown): string {
+  if (err instanceof GatewayClientRequestError && err.gatewayCode === "INVALID_REQUEST") {
+    return `Plugin approval request rejected: ${formatErrorMessage(err)}`;
+  }
+  return "Plugin approval required (gateway unavailable)";
 }
 
 /** Resolve a deferred plugin approval request at the later execution boundary. */

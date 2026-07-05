@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../gateway/client.js";
 import {
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
@@ -1573,7 +1574,7 @@ describe("before_tool_call requireApproval handling", () => {
     }
   });
 
-  it("falls back to block on gateway error", async () => {
+  it("falls back to block on gateway transport errors", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "Gateway down",
@@ -1591,6 +1592,35 @@ describe("before_tool_call requireApproval handling", () => {
 
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty("reason", "Plugin approval required (gateway unavailable)");
+  });
+
+  it("surfaces plugin approval request rejections instead of reporting gateway unavailable", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Approval title that exceeds the gateway schema limit after interpolation",
+        description: "Gateway rejects the request while staying reachable",
+      },
+    });
+
+    mockCallGateway.mockRejectedValueOnce(
+      new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message:
+          "invalid plugin.approval.request params: at /title: must not have more than 80 characters",
+      }),
+    );
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: {},
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty(
+      "reason",
+      "Plugin approval request rejected: invalid plugin.approval.request params: at /title: must not have more than 80 characters",
+    );
   });
 
   it("blocks when gateway returns no id", async () => {
