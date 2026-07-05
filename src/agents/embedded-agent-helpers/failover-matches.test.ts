@@ -210,3 +210,32 @@ describe("generic assistant error text classification (#93931)", () => {
     ).toBe(false);
   });
 });
+
+describe("structured invalid request error classification (#99174)", () => {
+  it("classifies Anthropic invalid_request_error JSON body as format", () => {
+    const raw =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.27.content.1: `thinking` blocks cannot be modified."}}';
+    expect(classifyFailoverReason(raw)).toBe("format");
+  });
+
+  it("classifies OpenAI flattened invalid_request_error as format", () => {
+    const raw =
+      '{"error":{"code":"invalid_request_error","message":"The parameter `model` is required."}}';
+    expect(classifyFailoverReason(raw)).toBe("format");
+  });
+
+  it("keeps existing structured server_error classification", () => {
+    // server_error should still classify as server_error, not be affected
+    // by the new invalid_request check.
+    const raw = '{"type":"error","error":{"type":"server_error","message":"internal error"}}';
+    expect(classifyFailoverReason(raw)).toBe("server_error");
+  });
+
+  it("does not affect existing auth classification", () => {
+    expect(classifyFailoverReason("invalid api key provided")).toBe("auth");
+  });
+
+  it("does not affect existing rate_limit classification", () => {
+    expect(classifyFailoverReason("rate limit exceeded")).toBe("rate_limit");
+  });
+});

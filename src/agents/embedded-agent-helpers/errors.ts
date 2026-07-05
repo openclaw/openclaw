@@ -597,7 +597,12 @@ function isSandboxBlockedErrorMessage(raw: string): boolean {
 }
 
 function isSchemaErrorMessage(raw: string): boolean {
-  if (!raw || isReplayInvalidErrorMessage(raw) || isContextOverflowError(raw)) {
+  if (
+    !raw ||
+    isReplayInvalidErrorMessage(raw) ||
+    isContextOverflowError(raw) ||
+    isStructuredInvalidRequestError(raw)
+  ) {
     return false;
   }
   return classifyFailoverReason(raw) === "format" || matchesFormatErrorPattern(raw);
@@ -1113,6 +1118,9 @@ function classifyFailoverClassificationFromMessage(
     return toReasonClassification("timeout");
   }
   if (isCloudCodeAssistFormatError(raw)) {
+    return toReasonClassification("format");
+  }
+  if (isStructuredInvalidRequestError(raw)) {
     return toReasonClassification("format");
   }
   if (isExactUnknownNoDetailsError(raw)) {
@@ -1711,6 +1719,21 @@ function isStructuredServerErrorMessage(raw: string): boolean {
     value.includes('"code":"server_error"') ||
     value.includes('"type":"upstream_error"') ||
     value.includes('"code":"upstream_error"')
+  );
+}
+
+function isStructuredInvalidRequestError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const parsedType = normalizeOptionalLowercaseString(parseApiErrorInfo(raw)?.type);
+  if (parsedType && parsedType.includes("invalid_request")) {
+    return true;
+  }
+  const value = normalizeLowercaseStringOrEmpty(raw);
+  return (
+    value.includes('"type":"invalid_request_error"') ||
+    value.includes('"code":"invalid_request_error"')
   );
 }
 
