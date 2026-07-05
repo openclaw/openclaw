@@ -1395,7 +1395,11 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     expect(stats?.blockedReason).not.toBe("subscription_limit");
     expect(stats?.blockedUntil).toBeUndefined();
     expect(stats?.cooldownUntil).toBe(now + 15_000);
-    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.3-codex-spark")).toBe(false);
+    // The short burst window clears on its own, unlike the multi-hour
+    // subscription_limit block Spark would inherit off the sibling GPT bucket.
+    expect(isProfileInCooldown(store, "openai:default", now + 15_000, "gpt-5.3-codex-spark")).toBe(
+      false,
+    );
   });
 
   it("widens to profile-wide when a new model-scoped block lands on top of an already-active unscoped block", async () => {
