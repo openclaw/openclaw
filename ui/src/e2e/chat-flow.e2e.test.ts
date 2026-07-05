@@ -895,7 +895,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
       await page.getByText("First token visible.").waitFor({ timeout: 10_000 });
-      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
+      await gateway.waitForRequest("chat.metadata");
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(1);
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
       expect(await gateway.getRequests("commands.list")).toHaveLength(0);
       await gateway.emitChatFinal({ runId, text: "History race stayed visible." });
@@ -1277,6 +1278,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       };
       const selectModel = async (value: string) => {
         await main.locator('[data-chat-model-select="true"]').click();
+        const provider = value.split("/", 1)[0];
+        await main.locator(`[data-chat-model-provider="${provider}"]`).click();
         const option = main.locator(`[data-chat-model-option="${value}"]`);
         await option.waitFor({ state: "visible", timeout: 10_000 });
         await option.click();
@@ -1424,6 +1427,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       const main = page.getByRole("main");
       await main.locator('[data-chat-model-select="true"]').click();
+      await main.locator('[data-chat-model-provider="bedrock"]').click();
       await main.locator('[data-chat-model-option="bedrock/claude-opus-4.5"]').click();
       await gateway.waitForRequest("sessions.patch");
 

@@ -24,7 +24,8 @@ function createSettings(): UiSettings {
     splitRatio: 0.6,
     navCollapsed: false,
     navWidth: 280,
-    navGroupsCollapsed: {},
+    sidebarPinnedRoutes: ["overview", "workboard", "agents"],
+    sidebarMoreExpanded: false,
     borderRadius: 50,
   };
 }
