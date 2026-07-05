@@ -947,7 +947,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 333,
+      "line": 329,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Last gateway error",
       "surface": "android",
@@ -955,7 +955,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 333,
+      "line": 329,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Pairing required",
       "surface": "android",
@@ -963,7 +963,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 344,
+      "line": 340,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "OpenClaw Android ${openClawAndroidVersionLabel()}",
       "surface": "android",
@@ -971,7 +971,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 385,
+      "line": 381,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Setup code, endpoint, TLS, token, password, onboarding.",
       "surface": "android",
@@ -979,7 +979,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 389,
+      "line": 385,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Collapse advanced controls",
       "surface": "android",
@@ -987,7 +987,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 389,
+      "line": 385,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Expand advanced controls",
       "surface": "android",
@@ -995,7 +995,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 420,
+      "line": 416,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Run these on the gateway host:",
       "surface": "android",
@@ -1003,7 +1003,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 423,
+      "line": 419,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "For Tailscale or public hosts, use wss:// or Tailscale Serve. Private LAN ws:// remains supported.",
       "surface": "android",
@@ -1011,7 +1011,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 452,
+      "line": 448,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Android Emulator",
       "surface": "android",
@@ -1019,19 +1019,27 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 461,
+      "line": 457,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Localhost",
       "surface": "android",
       "id": "native.android.b28ff3f4d4bd3830"
     },
     {
-      "kind": "ui-call",
-      "line": 487,
+      "kind": "conditional-branch",
+      "line": 484,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
-      "source": "Port (optional)",
+      "source": "Port",
       "surface": "android",
-      "id": "native.android.eb8ea2ca4cc139ff"
+      "id": "native.android.8eb9efc461827277"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 484,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
+      "source": "Port (optional, defaults to 443)",
+      "surface": "android",
+      "id": "native.android.e1ad7cf446f7d370"
     },
     {
       "kind": "ui-call",
@@ -1187,7 +1195,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 297,
+      "line": 293,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "Setup code points to an insecure remote gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix",
       "surface": "android",
@@ -1195,7 +1203,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 299,
+      "line": 295,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "QR code points to an insecure remote gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix",
       "surface": "android",
@@ -1203,7 +1211,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 301,
+      "line": 297,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "$remoteGatewaySecurityRule $remoteGatewaySecurityFix",
       "surface": "android",
@@ -1211,7 +1219,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 306,
+      "line": 302,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
       "surface": "android",
@@ -1219,7 +1227,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 308,
+      "line": 304,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
       "surface": "android",
@@ -1227,7 +1235,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 310,
+      "line": 306,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname.",
       "surface": "android",
@@ -1235,7 +1243,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 315,
+      "line": 311,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "Setup code has invalid gateway URL.",
       "surface": "android",
@@ -1243,7 +1251,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 316,
+      "line": 312,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "QR code did not contain a valid setup code.",
       "surface": "android",
@@ -1251,7 +1259,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 317,
+      "line": 313,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "Enter a valid manual endpoint to connect.",
       "surface": "android",

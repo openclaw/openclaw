@@ -191,13 +191,14 @@ class GatewayConfigResolverTest {
   @Test
   fun parseGatewayEndpointReportsUnsupportedIpv6ZoneIds() {
     listOf(
-      "ws://[fe80::1%25eth0]",
-      "wss://[fe80::1%25wlan0]:443",
-    ).forEach { url ->
-      val parsed = parseGatewayEndpointResult(url)
-      assertNull(url, parsed.config)
-      assertEquals(url, GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED, parsed.error)
-    }
+        "ws://[fe80::1%25eth0]",
+        "wss://[fe80::1%25wlan0]:443",
+      )
+      .forEach { url ->
+        val parsed = parseGatewayEndpointResult(url)
+        assertNull(url, parsed.config)
+        assertEquals(url, GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED, parsed.error)
+      }
   }
 
   @Test
@@ -824,26 +825,6 @@ class GatewayConfigResolverTest {
     val url = composeGatewayManualUrl("gateway.ts.net.evil.com", "", tls = true)
 
     assertEquals("https://gateway.ts.net.evil.com:18789", url)
-  }
-
-  @Test
-  fun resolveManualPortPlaceholder_matchesResolvedEndpointForBareAndCompleteUrls() {
-    assertEquals(
-      "18789",
-      resolveManualPortPlaceholder("gateway.example.com", tls = true),
-    )
-    assertEquals(
-      "443",
-      resolveManualPortPlaceholder("device.sample.ts.net", tls = true),
-    )
-    assertEquals(
-      "443",
-      resolveManualPortPlaceholder("device.sample.ts.net/", tls = true),
-    )
-    assertEquals(
-      "443",
-      resolveManualPortPlaceholder("wss://gateway.example", tls = true),
-    )
   }
 
   @Test
