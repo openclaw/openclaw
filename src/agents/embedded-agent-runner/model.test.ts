@@ -2832,6 +2832,48 @@ describe("resolveModel", () => {
     );
   });
 
+  it("suggests running doctor for legacy openai-codex provider", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai-codex/gpt-5.4": {},
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await resolveModelAsync("openai-codex", "gpt-5.4", "/tmp/agent", cfg, {
+      runtimeHooks: createRuntimeHooks(),
+      skipAgentDiscovery: true,
+    });
+
+    expect(result.error).toBe(
+      'Unknown model: openai-codex/gpt-5.4. Found agents.defaults.models["openai-codex/gpt-5.4"], but "openai-codex" is a legacy provider ID. Run `openclaw doctor --fix` to migrate to the current OpenAI provider format. If the provider has no authenticated profile, run `openclaw models status` to check provider auth and re-authenticate if needed. See https://docs.openclaw.ai/concepts/model-providers.',
+    );
+  });
+
+  it("suggests adding config entry when a non-bundled provider model is missing", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "custom-provider/some-model": {},
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await resolveModelAsync("custom-provider", "some-model", "/tmp/agent", cfg, {
+      runtimeHooks: createRuntimeHooks(),
+      skipAgentDiscovery: true,
+    });
+
+    expect(result.error).toBe(
+      'Unknown model: custom-provider/some-model. Found agents.defaults.models["custom-provider/some-model"], but no matching models.providers["custom-provider"].models[] entry. Add { "id": "some-model", "name": "some-model" } to models.providers["custom-provider"].models[] to register this provider model. For custom or proxy providers, also set api and baseUrl so requests route to the intended endpoint. See https://docs.openclaw.ai/concepts/model-providers.',
+    );
+  });
+
   it("points runtime-bound model entries at the runtime catalog instead of provider registration", async () => {
     const cfg = {
       agents: {

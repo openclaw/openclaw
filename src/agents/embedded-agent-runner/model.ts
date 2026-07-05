@@ -1929,6 +1929,15 @@ function buildMissingProviderModelRegistrationHint(params: {
   if (agentRuntimeId) {
     return `Found agents.defaults.models["${agentModelKey}"] bound to the "${agentRuntimeId}" agent runtime. Models served by an agent runtime come from that runtime and its linked account, not from models.providers["${params.provider}"].models[] — registering it there will not make it usable. Confirm "${params.modelId}" is still offered by the "${agentRuntimeId}" runtime and switch agents.defaults.model.primary to a currently available model (run \`openclaw models list --provider ${params.provider}\` to list them). See https://docs.openclaw.ai/concepts/model-providers.`;
   }
+  // Legacy openai-codex is folded into the "openai" provider. Its models
+  // register through the OpenAI provider at startup, so a missing-model
+  // error here is almost always a legacy config reference or a missing
+  // auth profile. The correct fix is to migrate the config via doctor
+  // or re-authenticate the provider, not to add a models.providers[]
+  // overlay (which the validator rejects without baseUrl).
+  if (normalizeProviderId(params.provider) === "openai-codex") {
+    return `Found agents.defaults.models["${agentModelKey}"], but "openai-codex" is a legacy provider ID. Run \`openclaw doctor --fix\` to migrate to the current OpenAI provider format. If the provider has no authenticated profile, run \`openclaw models status\` to check provider auth and re-authenticate if needed. See https://docs.openclaw.ai/concepts/model-providers.`;
+  }
   const providerConfig = findNormalizedProviderValue(
     params.cfg?.models?.providers,
     params.provider,
