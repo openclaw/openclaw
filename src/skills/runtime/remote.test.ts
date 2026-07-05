@@ -12,6 +12,7 @@ import {
   recordRemoteNodeBins,
   recordRemoteNodeInfo,
   removeRemoteNodeInfo,
+  refreshRemoteBinsForConnectedNodes,
   refreshRemoteNodeBins,
   setSkillsRemoteRegistry,
 } from "./remote.js";
@@ -496,6 +497,48 @@ describe("skills-remote", () => {
       expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(before);
     } finally {
       removeRemoteNodeInfo(nodeId);
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("catches per-node refresh errors and continues across connected nodes", async () => {
+    await resetSkillsRefreshForTest();
+    const nodeA = `node-${randomUUID()}`;
+    const nodeB = `node-${randomUUID()}`;
+    const bin = `bin-${randomUUID()}`;
+    const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
+    try {
+      const invokeCalls: string[] = [];
+      setSkillsRemoteRegistry({
+        listConnected: () => [
+          { nodeId: nodeA, platform: "darwin", commands: ["system.run", "system.which"] },
+          { nodeId: nodeB, platform: "darwin", commands: ["system.run", "system.which"] },
+        ],
+        get: () => undefined,
+        checkConnectivity: (nodeId: string) => {
+          if (nodeId === nodeA) {
+            throw new Error("simulated connectivity failure");
+          }
+          return { ok: true };
+        },
+        invoke: async (params: { command: string }) => {
+          invokeCalls.push(params.command);
+          return {
+            ok: true,
+            payloadJSON: JSON.stringify({ bins: [bin] }),
+          };
+        },
+      } as unknown as NodeRegistry);
+      recordRemoteMacWithSystemWhich(nodeA);
+      recordRemoteMacWithSystemWhich(nodeB);
+
+      await expect(refreshRemoteBinsForConnectedNodes(cfg)).resolves.toBeUndefined();
+
+      expect(invokeCalls).toEqual(["system.which"]);
+      expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
+    } finally {
+      removeRemoteNodeInfo(nodeA);
+      removeRemoteNodeInfo(nodeB);
       fs.rmSync(workspaceDir, { recursive: true, force: true });
     }
   });

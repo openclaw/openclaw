@@ -490,12 +490,16 @@ export async function refreshRemoteBinsForConnectedNodes(cfg: OpenClawConfig) {
   }
   const connected = remoteRegistry.listConnected();
   for (const node of connected) {
-    await refreshRemoteNodeBins({
-      nodeId: node.nodeId,
-      platform: node.platform,
-      deviceFamily: node.deviceFamily,
-      commands: node.commands,
-      cfg,
-    });
+    try {
+      await refreshRemoteNodeBins({
+        nodeId: node.nodeId,
+        platform: node.platform,
+        deviceFamily: node.deviceFamily,
+        commands: node.commands,
+        cfg,
+      });
+    } catch (err) {
+      log.warn(`failed to refresh remote bins for ${describeNode(node.nodeId)}: ${String(err)}`);
+    }
   }
 }
