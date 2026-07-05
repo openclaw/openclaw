@@ -362,6 +362,59 @@ describe("runReplyAgent auto-compaction token update", () => {
     return { typing, sessionCtx, resolvedQueue, followupRun };
   }
 
+  async function runEmptyDirectReply(agentResult: Record<string, unknown>) {
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 50_000,
+    };
+    const agentMeta = requireRecord(
+      requireRecord(agentResult.meta, "agent result meta").agentMeta,
+      "agent result agent meta",
+    );
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      ...agentResult,
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          ...agentMeta,
+        },
+        finalAssistantVisibleText: "",
+      },
+    });
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath: "",
+      sessionEntry,
+    });
+    return runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+  }
+
   async function runBaseReplyWithAgentMeta(params: {
     agentMeta: Record<string, unknown>;
     collectDiagnostics?: boolean;
@@ -501,6 +554,27 @@ describe("runReplyAgent auto-compaction token update", () => {
     });
 
     expectReplyText(result, "⚠️ Gateway is restarting. Please wait a few seconds and try again.");
+  });
+
+  it.each([
+    ["without side effects", { meta: { agentMeta: {} } }],
+    ["after hidden compaction", { meta: { agentMeta: { compactionCount: 1 } } }],
+  ] satisfies Array<[string, Record<string, unknown>]>)(
+    "surfaces empty interactive direct replies %s",
+    async (_label, agentResult) => {
+      const result = await runEmptyDirectReply(agentResult);
+      const payload = expectRecordFields(result, { isError: true }, "empty interactive fallback");
+      expect(payload.text).toContain("did not produce a visible reply");
+    },
+  );
+
+  it("keeps spawn-only empty direct replies silent", async () => {
+    expect(
+      await runEmptyDirectReply({
+        acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:child" }],
+        meta: { agentMeta: {} },
+      }),
+    ).toBeUndefined();
   });
 
   it("starts queued followup drain only after clearing the active reply operation", async () => {
