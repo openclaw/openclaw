@@ -41,6 +41,8 @@ import {
   promoteThinkingTagsToBlocks,
   sanitizeAssistantVisibleStreamText,
 } from "./embedded-agent-utils.js";
+import { SMS_DELIVERY_ASSERTION_RE_SOURCE } from "./message-delivery-receipt-claims.js";
+import { guardMessageDeliveryReceiptText } from "./message-delivery-receipt-guard.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
 import {
   hasNonzeroUsage,
@@ -242,6 +244,52 @@ function hasMessageToolOnlySourceDelivery(ctx: EmbeddedAgentSubscribeContext): b
       ctx.params.hasDeliveredMessageToolOnlySourceReply?.() === true ||
       (ctx.state.messagingToolSourceReplyPayloads?.length ?? 0) > 0)
   );
+}
+
+function hasPotentialSmsReceiptAssertion(text: string): boolean {
+  return new RegExp(SMS_DELIVERY_ASSERTION_RE_SOURCE, "iu").test(text);
+}
+
+function hasPartialSmsReceiptAssertionPrefix(text: string): boolean {
+  return /\b(?:Sent(?:\s+to(?:\s+\S*)?)?|(?:sms|text message)\s+(?:was\s*)?|(?:sent|queued|delivered|accepted\/queued|accepted)\s+(?:(?:the|an?|this)\s+)?(?:s(?:m(?:s)?)?|t(?:e(?:x(?:t(?:\s+m(?:e(?:s(?:s(?:a(?:g(?:e)?)?)?)?)?)?)?)?)?)?)?)$/iu.test(
+    text,
+  );
+}
+
+function hasPotentialOrPartialSmsReceiptAssertion(text: string): boolean {
+  return hasPotentialSmsReceiptAssertion(text) || hasPartialSmsReceiptAssertionPrefix(text);
+}
+
+function guardChunkedBlockReplyBuffer(ctx: EmbeddedAgentSubscribeContext): boolean {
+  const bufferedText = ctx.blockChunker?.bufferedText;
+  if (!bufferedText) {
+    return true;
+  }
+  if (hasPotentialOrPartialSmsReceiptAssertion(bufferedText)) {
+    return false;
+  }
+  const receiptGuard = guardMessageDeliveryReceiptText({
+    text: bufferedText,
+    evidence: ctx.state.messageDeliveryEvidence,
+  });
+  if (!receiptGuard.allowed) {
+    const directives = ctx.consumeReplyDirectives(bufferedText, { final: true });
+    ctx.blockChunker?.reset();
+    ctx.state.suppressBlockChunks = true;
+    ctx.state.lastBlockReplyText = receiptGuard.replacementText;
+    ctx.state.lastDeliveredBlockReplyText = receiptGuard.replacementText;
+    ctx.emitBlockReply({
+      text: receiptGuard.replacementText,
+      ...(directives?.mediaUrl ? { mediaUrl: directives.mediaUrl } : {}),
+      ...(directives?.mediaUrls ? { mediaUrls: directives.mediaUrls } : {}),
+      ...(directives?.audioAsVoice ? { audioAsVoice: true } : {}),
+      ...(directives?.replyToId ? { replyToId: directives.replyToId } : {}),
+      ...(directives?.replyToCurrent ? { replyToCurrent: true } : {}),
+      ...(directives?.replyToTag ? { replyToTag: true } : {}),
+    });
+    return false;
+  }
+  return !hasPotentialSmsReceiptAssertion(bufferedText);
 }
 
 function appendBlockReplyChunk(ctx: EmbeddedAgentSubscribeContext, chunk: string) {
@@ -822,10 +870,22 @@ export function handleMessageUpdate(
   const skipLiveStream = ctx.params.suppressLiveStreamOutput === true;
   const shouldUsePhaseAwareBlockReply = Boolean(deliveryPhase);
 
+  const shouldHoldPotentialReceiptChunk =
+    Boolean(chunk) &&
+    evtType !== "text_end" &&
+    hasPotentialOrPartialSmsReceiptAssertion(`${ctx.state.deltaBuffer}${chunk}`);
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
-    if (!skipLiveStream && !shouldUsePhaseAwareBlockReply && !isPhasePendingAnthropicText) {
+    if (
+      !skipLiveStream &&
+      !shouldUsePhaseAwareBlockReply &&
+      !isPhasePendingAnthropicText &&
+      !shouldHoldPotentialReceiptChunk
+    ) {
       appendBlockReplyChunk(ctx, chunk);
+    }
+    if (shouldHoldPotentialReceiptChunk) {
+      ctx.state.suppressedReceiptPartialText = ctx.state.deltaBuffer;
     }
   }
 
@@ -954,13 +1014,40 @@ export function handleMessageUpdate(
         ? cleanedText !== previousCleaned || hasMedia || hasAudio
         : Boolean(deltaText || hasMedia || hasAudio);
     }
+    const hadSuppressedReceiptPartial = Boolean(ctx.state.suppressedReceiptPartialText);
+    let suppressReceiptPartialDelivery = false;
+    if (shouldHoldPotentialReceiptChunk) {
+      shouldEmit = false;
+      suppressReceiptPartialDelivery = true;
+    } else if (evtType === "text_end" && hadSuppressedReceiptPartial && cleanedText) {
+      replace = true;
+      deltaText = cleanedText;
+      shouldEmit = true;
+      ctx.state.suppressedReceiptPartialText = undefined;
+    } else if (
+      shouldEmit &&
+      evtType !== "text_end" &&
+      hasPotentialSmsReceiptAssertion(cleanedText)
+    ) {
+      ctx.state.suppressedReceiptPartialText = cleanedText;
+      shouldEmit = false;
+      suppressReceiptPartialDelivery = true;
+    }
 
-    if (shouldUsePhaseAwareBlockReply) {
+    if (!shouldUsePhaseAwareBlockReply && evtType === "text_end" && hadSuppressedReceiptPartial) {
+      ctx.state.blockBuffer = "";
+      ctx.blockChunker?.reset();
+      appendBlockReplyChunk(ctx, cleanedText);
+    } else if (shouldUsePhaseAwareBlockReply) {
       if (replace) {
         ctx.state.blockBuffer = "";
         ctx.blockChunker?.reset();
       }
-      const blockReplyChunk = replace ? cleanedText : deltaText;
+      const blockReplyChunk = suppressReceiptPartialDelivery
+        ? ""
+        : replace
+          ? cleanedText
+          : deltaText;
       if (blockReplyChunk) {
         appendBlockReplyChunk(ctx, blockReplyChunk);
       }
@@ -989,7 +1076,10 @@ export function handleMessageUpdate(
         mediaUrls,
         phase: deliveryPhase ?? assistantPhase,
       });
-      ctx.emitAssistantStreamData(data, { emitPartialReply: true });
+      ctx.emitAssistantStreamData(data, {
+        emitPartialReply: true,
+        guardMessageDeliveryReceipt: evtType === "text_end",
+      });
       ctx.state.emittedAssistantUpdate = true;
     }
   } else if (shouldPersistRawStreamText) {
@@ -1004,7 +1094,9 @@ export function handleMessageUpdate(
     ctx.blockChunking &&
     ctx.state.blockReplyBreak === "text_end"
   ) {
-    ctx.blockChunker?.drain({ force: false, emit: ctx.emitBlockChunk });
+    if (guardChunkedBlockReplyBuffer(ctx)) {
+      ctx.blockChunker?.drain({ force: false, emit: ctx.emitBlockChunk });
+    }
   }
 
   if (
@@ -1139,6 +1231,7 @@ export function handleMessageEnd(
     ctx.state.partialBlockState.pendingTagFragment = undefined;
     ctx.state.lastStreamedAssistant = undefined;
     ctx.state.lastStreamedAssistantCleaned = undefined;
+    ctx.state.suppressedReceiptPartialText = undefined;
     ctx.state.reasoningStreamOpen = false;
   };
 
@@ -1170,7 +1263,7 @@ export function handleMessageEnd(
       mediaUrls,
       phase: assistantPhase,
     });
-    ctx.emitAssistantStreamData(data);
+    ctx.emitAssistantStreamData(data, { guardMessageDeliveryReceipt: true });
     ctx.state.emittedAssistantUpdate = true;
     ctx.state.lastStreamedAssistantCleaned = cleanedText;
   }
