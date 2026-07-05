@@ -326,6 +326,29 @@ That means there are two valid plugin patterns:
 
 A no-op `compact()` is unsafe for an active non-owning engine because it disables the normal `/compact` and overflow-recovery compaction path for that engine slot.
 
+### Running summary pattern
+
+Use a context engine, not an internal hook, when you want a plugin to keep a
+running session summary and reduce how much work happens during compaction. The
+engine has access to both sides of the lifecycle:
+
+- `afterTurn()` can update a plugin-owned summary after each successful turn,
+  when the user is no longer waiting on the current reply.
+- `assemble()` can include that summary in the next prompt, often through a
+  `systemPromptAddition` or by replacing older raw turns with a compact summary.
+- `compact()` can then reuse the stored summary when `/compact` or overflow
+  recovery needs a smaller transcript, instead of starting every summary from
+  scratch.
+
+This pattern is different from the bundled `compaction-notifier` hook. The hook
+only sends visible start and finish notices; a context engine owns prompt
+assembly and compaction strategy for the selected engine slot.
+
+Keep the stored summary bounded and session-scoped. If the summary can hide a
+large raw transcript behind a small assembled prompt, return
+`promptAuthority: "preassembly_may_overflow"` from `assemble()` so OpenClaw can
+still consider the underlying transcript size during overflow prechecks.
+
 ## Configuration reference
 
 ```json5
