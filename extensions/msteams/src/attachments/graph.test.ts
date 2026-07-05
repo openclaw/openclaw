@@ -441,4 +441,64 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
     expect(message).toBe("msteams graph token acquisition failed");
     expect((context as { error?: unknown }).error).toBe("token expired");
   });
+
+  it("rejects oversized message response (> 256 KiB) and falls back to empty attachments", async () => {
+    // Build a message response body that exceeds the 256 KiB MSTEAMS_GRAPH_JSON_MAX_BYTES cap.
+    const oversizedBody = JSON.stringify({
+      body: { content: "x".repeat(300 * 1024) },
+      attachments: [],
+    });
+    const fetchCalls: string[] = [];
+    mockGraphMediaFetch({
+      messageId: "msg-oversized",
+      messageResponse: oversizedBody,
+      hostedContents: [],
+      fetchCalls,
+    });
+    const log = { debug: vi.fn() };
+
+    const result = await downloadMSTeamsGraphMedia({
+      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-oversized",
+      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
+      maxBytes: 10 * 1024 * 1024,
+      log,
+    });
+
+    // Oversized message → parse failure → empty attachments, no crash.
+    expect(result.media).toHaveLength(0);
+    expect(result.attachmentStatus).toBe(200); // message response was 200 OK
+    const debugCalls = log.debug.mock.calls.filter(
+      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("parse failed"),
+    );
+    expect(debugCalls.length).toBeGreaterThan(0);
+  });
+
+  it("propagates oversized collection response (> 256 KiB) error up the call stack", async () => {
+    // Build a hostedContents collection response exceeding the 256 KiB cap.
+    const oversizedCollection = JSON.stringify({
+      value: Array.from({ length: 50000 }, (_, i) => ({
+        id: `big-${i}`,
+        contentType: "image/png",
+        contentBytes: null,
+      })),
+    });
+    const fetchCalls: string[] = [];
+    mockGraphMediaFetch({
+      messageId: "msg-collection-over",
+      messageResponse: { body: {}, attachments: [{ id: "att-1", contentType: "reference" }] },
+      hostedContents: oversizedCollection,
+      fetchCalls,
+    });
+
+    // Collection overflow is NOT caught inside fetchGraphCollection or downloadGraphHostedContent —
+    // it propagates up through downloadMSTeamsGraphMedia (different from message overflow which
+    // is caught as a parse failure and continues with empty attachments).
+    await expect(
+      downloadMSTeamsGraphMedia({
+        messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-collection-over",
+        tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
+        maxBytes: 10 * 1024 * 1024,
+      }),
+    ).rejects.toThrow("MS Teams Graph response exceeds");
+  });
 });
