@@ -4,6 +4,7 @@
  * plugin hook decisions.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../gateway/client.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import {
   getGlobalHookRunner,
@@ -144,6 +145,44 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       { expectFinal: false },
     );
     expect(onResolution).toHaveBeenCalledTimes(1);
+    expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.CANCELLED);
+  });
+
+  it("reports gateway approval request rejections distinctly in embedded mode", async () => {
+    setEmbeddedMode(true);
+    const onResolution = vi.fn();
+
+    runBeforeToolCallMock.mockResolvedValue({
+      requireApproval: {
+        pluginId: "test-plugin",
+        title: "Needs approval",
+        description: "Test approval request",
+        severity: "info",
+        onResolution,
+      },
+    });
+    mockCallGatewayTool.mockRejectedValueOnce(
+      new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message:
+          "invalid plugin.approval.request params: at /title: must not have more than 80 characters",
+      }),
+    );
+
+    const result = await runBeforeToolCallHook({
+      toolName: "exec",
+      params: { command: "ls" },
+      toolCallId: "call-1",
+    });
+
+    expect(result).toEqual({
+      blocked: true,
+      kind: "failure",
+      deniedReason: "plugin-approval",
+      reason:
+        "Plugin approval request rejected: invalid plugin.approval.request params: at /title: must not have more than 80 characters",
+      params: { command: "ls" },
+    });
     expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.CANCELLED);
   });
 

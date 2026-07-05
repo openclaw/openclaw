@@ -8,6 +8,7 @@ import path from "node:path";
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import { GatewayClientRequestError } from "../gateway/client.js";
 import {
   diagnosticErrorCategory,
   diagnosticHttpStatusCode,
@@ -30,6 +31,7 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   describeNativePluginApprovalClientSetup,
   resolveApprovalInitiatingSurfaceState,
@@ -684,6 +686,13 @@ function buildPluginApprovalFailureReason(params: {
   return `${params.fallbackReason}\n\n${setupText}`;
 }
 
+function buildPluginApprovalGatewayFailureReason(err: unknown): string {
+  if (err instanceof GatewayClientRequestError && err.gatewayCode === "INVALID_REQUEST") {
+    return `Plugin approval request rejected: ${formatErrorMessage(err)}`;
+  }
+  return "Plugin approval required (gateway unavailable)";
+}
+
 async function requestPluginToolApproval(params: {
   approval: PluginApprovalRequest;
   toolName: string;
@@ -861,7 +870,7 @@ async function requestPluginToolApproval(params: {
       blocked: true,
       kind: "failure",
       deniedReason: "plugin-approval",
-      reason: "Plugin approval required (gateway unavailable)",
+      reason: buildPluginApprovalGatewayFailureReason(err),
       params: params.baseParams,
     };
   }
