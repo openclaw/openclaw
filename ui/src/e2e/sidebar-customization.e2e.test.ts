@@ -1,7 +1,7 @@
 // Control UI tests cover customizable sidebar navigation and persistence.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -18,6 +18,10 @@ const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? descri
 
 let browser: Browser;
 let server: ControlUiE2eServer;
+
+async function trimmedTextContents(locator: Locator): Promise<string[]> {
+  return (await locator.allTextContents()).map((text) => text.trim());
+}
 
 async function captureUiProof(page: Page, fileName: string) {
   if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
@@ -66,7 +70,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       const sidebar = page.locator("openclaw-app-sidebar");
       const pinnedItems = sidebar.locator(".sidebar-nav > .nav-section__items > .nav-item");
       await expect
-        .poll(() => pinnedItems.allTextContents())
+        .poll(() => trimmedTextContents(pinnedItems))
         .toEqual(["Overview", "Workboard", "Agents"]);
       await captureUiProof(page, "01-default-pinned.png");
 
@@ -94,13 +98,15 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await captureUiProof(page, "02-customize-menu.png");
 
       await overviewItem.click();
-      await expect.poll(() => pinnedItems.allTextContents()).toEqual(["Workboard", "Agents"]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Workboard", "Agents"]);
       await page.reload();
-      await expect.poll(() => pinnedItems.allTextContents()).toEqual(["Workboard", "Agents"]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Workboard", "Agents"]);
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
       await expect
         .poll(() =>
-          sidebar.locator(".nav-section--more .nav-section__items > .nav-item").allTextContents(),
+          trimmedTextContents(
+            sidebar.locator(".nav-section--more .nav-section__items > .nav-item"),
+          ),
         )
         .toContain("Overview");
       await captureUiProof(page, "03-persisted-customization.png");
@@ -108,7 +114,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await customizeButton.click();
       await menu.getByRole("menuitem", { name: "Reset to defaults" }).click();
       await expect
-        .poll(() => pinnedItems.allTextContents())
+        .poll(() => trimmedTextContents(pinnedItems))
         .toEqual(["Overview", "Workboard", "Agents"]);
 
       const collapseButton = page.getByRole("button", { name: "Collapse sidebar" });
