@@ -34,8 +34,8 @@ describe("talk silence timeout defaults", () => {
   it("keeps help text and docs aligned with the policy", () => {
     const defaultsDescription = describeTalkSilenceTimeoutDefaults();
     const talkDocDefaults =
-      `\`${EXPECTED_TALK_SILENCE_TIMEOUT_MS_BY_PLATFORM.macos}\` ms macOS/Android, ` +
-      `\`${EXPECTED_TALK_SILENCE_TIMEOUT_MS_BY_PLATFORM.ios}\` ms iOS`;
+      `The default silence window is ${EXPECTED_TALK_SILENCE_TIMEOUT_MS_BY_PLATFORM.macos} ms ` +
+      `on macOS and Android, ${EXPECTED_TALK_SILENCE_TIMEOUT_MS_BY_PLATFORM.ios} ms on iOS.`;
 
     expect(FIELD_HELP["talk.silenceTimeoutMs"]).toContain(defaultsDescription);
     expect(readRepoFile("docs/gateway/config-agents.md")).toContain(defaultsDescription);
