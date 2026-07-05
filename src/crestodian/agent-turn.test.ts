@@ -9,7 +9,7 @@ import {
 } from "./agent-turn.js";
 
 const mocks = vi.hoisted(() => ({
-  runEmbeddedAgent: vi.fn(async () => ({
+  runEmbeddedAgent: vi.fn(async (_params: { sessionFile: string }) => ({
     meta: { finalAssistantVisibleText: "ready" },
   })),
 }));
