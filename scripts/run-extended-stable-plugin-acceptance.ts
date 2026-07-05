@@ -151,7 +151,7 @@ function parsePluginList(output: string, pluginId: string, packageName: string):
   const errors = (list.diagnostics ?? []).filter(
     (entry) =>
       entry.level === "error" &&
-      (entry.pluginId === pluginId || String(entry.message ?? "").includes(pluginId)),
+      (entry.pluginId === pluginId || (entry.message ?? "").includes(pluginId)),
   );
   if (errors.length > 0) {
     throw new Error(`Plugin discovery reported errors: ${JSON.stringify(errors)}.`);

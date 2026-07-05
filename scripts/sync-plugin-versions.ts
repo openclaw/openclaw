@@ -193,14 +193,17 @@ export function syncPluginVersions(
 if (import.meta.main) {
   const check = process.argv.includes("--check");
   const summary = syncPluginVersions(resolve("."), { write: !check });
-  let supportValidationError: unknown;
+  let supportValidationError: Error | undefined;
   try {
     validateExtendedStablePluginPackages({
       rootDir: resolve("."),
       targetVersion: summary.targetVersion,
     });
   } catch (error) {
-    supportValidationError = error;
+    supportValidationError =
+      error instanceof Error
+        ? error
+        : new Error("Extended-stable plugin support validation failed.");
   }
   console.log(
     `Synced plugin versions to ${summary.targetVersion}. Updated: ${summary.updated.length}. Changelogged: ${summary.changelogged.length}. Skipped: ${summary.skipped.length}.`,
@@ -218,9 +221,7 @@ if (import.meta.main) {
       console.error(`  changelog entry required: ${packageName}`);
     }
     if (supportValidationError !== undefined) {
-      console.error(
-        `  extended-stable plugin support invalid: ${supportValidationError instanceof Error ? supportValidationError.message : String(supportValidationError)}`,
-      );
+      console.error(`  extended-stable plugin support invalid: ${supportValidationError.message}`);
     }
     console.error("Run `pnpm plugins:sync` and commit the plugin version alignment.");
     process.exit(1);
