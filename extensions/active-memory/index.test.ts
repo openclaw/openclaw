@@ -5876,6 +5876,41 @@ describe("active-memory plugin", () => {
     expect(testing.getCircuitBreakerEntry(key)).toBeUndefined();
     expect(testing.isCircuitBreakerOpen(key, maxTimeouts, cooldownMs)).toBe(false);
   });
+
+  it("holds a half-open probe closed until it could settle when cooldown < recall watchdog", () => {
+    testing.resetActiveRecallCacheForTests();
+    const maxTimeouts = 2;
+    const cooldownMs = 5_000;
+    // Recall watchdog longer than the cooldown — a valid config the breaker must
+    // handle without starting concurrent probes.
+    const probeSettleMs = 15_000;
+    const key = testing.buildCircuitBreakerKey("main", "openai", "gpt-5.5");
+
+    for (let i = 0; i < maxTimeouts; i += 1) {
+      testing.recordCircuitBreakerTimeout(key);
+    }
+    const tripped = testing.getCircuitBreakerEntry(key);
+    if (tripped) {
+      tripped.lastTimeoutAt = Date.now() - (cooldownMs + 1);
+    }
+
+    // Cooldown elapsed → first probe allowed.
+    expect(testing.isCircuitBreakerOpen(key, maxTimeouts, cooldownMs, probeSettleMs)).toBe(false);
+
+    // A turn arriving after the cooldown but before the probe could settle must be
+    // skipped, not allowed to start a second concurrent probe.
+    const probing = testing.getCircuitBreakerEntry(key);
+    if (probing) {
+      probing.halfOpenProbeAt = Date.now() - (cooldownMs + 1);
+    }
+    expect(testing.isCircuitBreakerOpen(key, maxTimeouts, cooldownMs, probeSettleMs)).toBe(true);
+
+    // Once the probe could no longer be in flight, another probe is allowed.
+    if (probing) {
+      probing.halfOpenProbeAt = Date.now() - (probeSettleMs + 1);
+    }
+    expect(testing.isCircuitBreakerOpen(key, maxTimeouts, cooldownMs, probeSettleMs)).toBe(false);
+  });
 });
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {

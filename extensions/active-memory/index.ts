@@ -375,17 +375,28 @@ function buildCircuitBreakerKey(agentId: string, provider?: string, model?: stri
   return `${agentId}:${provider ?? "unknown"}/${model ?? "unknown"}`;
 }
 
-function isCircuitBreakerOpen(key: string, maxTimeouts: number, cooldownMs: number): boolean {
+function isCircuitBreakerOpen(
+  key: string,
+  maxTimeouts: number,
+  cooldownMs: number,
+  probeSettleMs = 0,
+): boolean {
   const entry = timeoutCircuitBreaker.get(key);
   if (!entry || entry.consecutiveTimeouts < maxTimeouts) {
     return false;
   }
   const now = Date.now();
   // A half-open probe is already outstanding: keep skipping until it resolves.
-  // Self-heal if the probe was lost (e.g. aborted without recording a timeout or
-  // success) by letting another probe through once a full cooldown has elapsed.
+  // The probe clears halfOpenProbeAt only when the recall settles (records a
+  // timeout or a success), which can take up to the recall watchdog. Hold the
+  // breaker closed for at least that long — not just one cooldown — so a short
+  // cooldownMs (which may be below the recall timeout) cannot let a second
+  // concurrent probe start while the first is still running. Once a probe could
+  // no longer be in flight, allow another, which also self-heals a probe lost
+  // before it recorded (e.g. aborted without settling).
   if (entry.halfOpenProbeAt !== undefined) {
-    if (now - entry.halfOpenProbeAt < cooldownMs) {
+    const probeHoldMs = Math.max(cooldownMs, probeSettleMs);
+    if (now - entry.halfOpenProbeAt < probeHoldMs) {
       return true;
     }
     entry.halfOpenProbeAt = now;
@@ -3205,6 +3216,7 @@ async function maybeResolveActiveRecall(params: {
       cbKey,
       params.config.circuitBreakerMaxTimeouts,
       params.config.circuitBreakerCooldownMs,
+      params.config.timeoutMs + params.config.setupGraceTimeoutMs,
     )
   ) {
     const result: ActiveRecallResult = {
