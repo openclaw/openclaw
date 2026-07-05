@@ -251,6 +251,21 @@ async function persistSubagentAbortedLastRun(params: {
   }
 }
 
+function markSubagentRunTerminatedBestEffort(
+  params: Parameters<typeof markSubagentRunTerminated>[0],
+): number {
+  try {
+    return markSubagentRunTerminated(params);
+  } catch (error) {
+    // The registry transition rolled back atomically. Keep multi-run control
+    // moving so one persistence failure cannot leave siblings running.
+    logVerbose(
+      `subagents control kill: failed to persist ${params.runId ?? params.childSessionKey ?? "unknown"}: ${formatErrorMessage(error)}`,
+    );
+    return 0;
+  }
+}
+
 async function killSubagentRun(params: {
   cfg: OpenClawConfig;
   entry: SubagentRunRecord;
@@ -266,7 +281,7 @@ async function killSubagentRun(params: {
       params.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
       params.entry.suppressAnnounceReason !== "steer-restart"
     ) {
-      markSubagentRunTerminated({
+      markSubagentRunTerminatedBestEffort({
         runId: params.entry.runId,
         childSessionKey: params.entry.childSessionKey,
         reason: "killed",
@@ -291,7 +306,7 @@ async function killSubagentRun(params: {
       params.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
       params.entry.suppressAnnounceReason !== "steer-restart"
     ) {
-      markSubagentRunTerminated({
+      markSubagentRunTerminatedBestEffort({
         runId: params.entry.runId,
         childSessionKey,
         reason: "killed",
@@ -325,7 +340,7 @@ async function killSubagentRun(params: {
       targetState.task.status === "cancelled" &&
       targetState.task.error === SUBAGENT_KILL_TASK_ERROR;
     if (killedTarget) {
-      markSubagentRunTerminated({
+      markSubagentRunTerminatedBestEffort({
         runId: params.entry.runId,
         childSessionKey,
         reason: "killed",
@@ -337,7 +352,7 @@ async function killSubagentRun(params: {
       killedTarget && (aborted || cleared.followupCleared > 0 || cleared.laneCleared > 0);
     return { killed, sessionId, targetState };
   }
-  const marked = markSubagentRunTerminated({
+  const marked = markSubagentRunTerminatedBestEffort({
     runId: params.entry.runId,
     childSessionKey,
     reason: "killed",

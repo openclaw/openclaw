@@ -218,6 +218,21 @@ function normalizeRequesterSessionKey(
   return resolveInternalSessionKey({ key: cleaned, alias, mainKey });
 }
 
+function markSubagentRunTerminatedBestEffort(
+  params: Parameters<typeof markSubagentRunTerminated>[0],
+): number {
+  try {
+    return abortDeps.markSubagentRunTerminated(params);
+  } catch (error) {
+    // The runtime abort already happened. Keep stopping siblings and descendants;
+    // durable reconciliation can retry the rolled-back registry transition later.
+    logVerbose(
+      `abort: failed to persist killed subagent ${params.runId ?? params.childSessionKey ?? "unknown"}: ${formatErrorMessage(error)}`,
+    );
+    return 0;
+  }
+}
+
 export function stopSubagentsForRequester(params: {
   cfg: OpenClawConfig;
   requesterSessionKey?: string;
@@ -282,7 +297,7 @@ export function stopSubagentsForRequester(params: {
       const abortRejected = abortOutcome.active && !abortOutcome.aborted;
       const markedTerminated = abortRejected
         ? false
-        : abortDeps.markSubagentRunTerminated({
+        : markSubagentRunTerminatedBestEffort({
             runId: run.runId,
             childSessionKey: childKey,
             reason: "killed",

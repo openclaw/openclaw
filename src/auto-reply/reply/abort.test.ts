@@ -1206,6 +1206,43 @@ describe("abort detection", () => {
     expectSessionLaneCleared(childKey);
   });
 
+  it("continues stopping siblings when one termination persistence write fails", () => {
+    subagentRegistryMocks.markSubagentRunTerminated.mockClear();
+    const sessionKey = "telegram:persistence-failure-parent";
+    const firstChildKey = "agent:main:subagent:persistence-failure-first";
+    const secondChildKey = "agent:main:subagent:persistence-failure-second";
+    const run = (runId: string, childSessionKey: string): SubagentRunRecord => ({
+      runId,
+      childSessionKey,
+      requesterSessionKey: sessionKey,
+      requesterDisplayKey: sessionKey,
+      task: "stop despite persistence failure",
+      cleanup: "keep",
+      createdAt: Date.now(),
+    });
+    subagentRegistryMocks.listSubagentRunsForRequester
+      .mockReturnValueOnce([
+        run("run-persistence-failure-first", firstChildKey),
+        run("run-persistence-failure-second", secondChildKey),
+      ])
+      .mockReturnValue([]);
+    subagentRegistryMocks.markSubagentRunTerminated
+      .mockImplementationOnce(() => {
+        throw new Error("sqlite busy");
+      })
+      .mockReturnValue(1);
+
+    expect(
+      stopSubagentsForRequester({
+        cfg: {} as OpenClawConfig,
+        requesterSessionKey: sessionKey,
+      }),
+    ).toEqual({ stopped: 2 });
+    expect(subagentRegistryMocks.markSubagentRunTerminated).toHaveBeenCalledTimes(2);
+    expectSessionLaneCleared(firstChildKey);
+    expectSessionLaneCleared(secondChildKey);
+  });
+
   it("cascade stop kills depth-2 children when stopping depth-1 agent", async () => {
     const sessionKey = "telegram:parent";
     const depth1Key = "agent:main:subagent:child-1";

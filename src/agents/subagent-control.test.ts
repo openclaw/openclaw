@@ -1396,6 +1396,67 @@ describe("killAllControlledSubagentRuns", () => {
     testing.setDepsForTest();
   });
 
+  it("continues bulk cancellation after one registry persistence failure", async () => {
+    let persistenceAttempts = 0;
+    subagentRegistryTesting.setDepsForTest({
+      cleanupBrowserSessionsForLifecycleEnd: async () => {},
+      ensureContextEnginesInitialized: () => {},
+      ensureRuntimePluginsLoaded: () => {},
+      getSubagentRunsSnapshotForRead: (runs) => new Map(runs),
+      persistSubagentRunsToDisk: () => {},
+      persistSubagentRunsToDiskOrThrow: () => {
+        persistenceAttempts += 1;
+        if (persistenceAttempts === 1) {
+          throw new Error("sqlite busy");
+        }
+      },
+      restoreSubagentRunsFromDisk: () => 0,
+      resolveContextEngine: async () => ({
+        info: { id: "test", name: "Test" },
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+        compact: async () => ({ ok: true, compacted: false }),
+        ingest: async () => ({ ingested: false }),
+      }),
+    });
+    const first = {
+      runId: "run-bulk-persistence-failure-first",
+      childSessionKey: "agent:main:subagent:bulk-persistence-failure-first",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "first bulk task",
+      cleanup: "keep" as const,
+      createdAt: Date.now() - 2_000,
+      startedAt: Date.now() - 1_900,
+    };
+    const second = {
+      ...first,
+      runId: "run-bulk-persistence-failure-second",
+      childSessionKey: "agent:main:subagent:bulk-persistence-failure-second",
+      task: "second bulk task",
+      createdAt: Date.now() - 1_000,
+      startedAt: Date.now() - 900,
+    };
+    addSubagentRunForTests(first);
+    addSubagentRunForTests(second);
+
+    const result = await killAllControlledSubagentRuns({
+      cfg: cfgWithSessionStore(),
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      runs: [first, second],
+    });
+
+    expect(result).toEqual({ status: "ok", killed: 1, labels: ["second bulk task"] });
+    expect(persistenceAttempts).toBe(2);
+    expect(getSubagentRunByChildSessionKey(first.childSessionKey)?.endedAt).toBeUndefined();
+    expect(getSubagentRunByChildSessionKey(second.childSessionKey)?.endedAt).toBeTypeOf("number");
+  });
+
   it("ignores stale run snapshots in bulk kill requests", async () => {
     const childSessionKey = "agent:main:subagent:stale-kill-all-worker";
     const storePath = writeSessionStoreFixture("stale-kill-all", {
