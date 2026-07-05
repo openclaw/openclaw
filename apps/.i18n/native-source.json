@@ -947,7 +947,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 329,
+      "line": 333,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Last gateway error",
       "surface": "android",
@@ -955,7 +955,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 329,
+      "line": 333,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Pairing required",
       "surface": "android",
@@ -963,7 +963,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 340,
+      "line": 344,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "OpenClaw Android ${openClawAndroidVersionLabel()}",
       "surface": "android",
@@ -971,7 +971,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 381,
+      "line": 385,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Setup code, endpoint, TLS, token, password, onboarding.",
       "surface": "android",
@@ -979,7 +979,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 385,
+      "line": 389,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Collapse advanced controls",
       "surface": "android",
@@ -987,7 +987,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 385,
+      "line": 389,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Expand advanced controls",
       "surface": "android",
@@ -995,7 +995,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 416,
+      "line": 420,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Run these on the gateway host:",
       "surface": "android",
@@ -1003,7 +1003,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 419,
+      "line": 423,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "For Tailscale or public hosts, use wss:// or Tailscale Serve. Private LAN ws:// remains supported.",
       "surface": "android",
@@ -1011,7 +1011,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 448,
+      "line": 452,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Android Emulator",
       "surface": "android",
@@ -1019,7 +1019,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 457,
+      "line": 461,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Localhost",
       "surface": "android",
@@ -1027,7 +1027,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 484,
+      "line": 488,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Port",
       "surface": "android",
@@ -1035,15 +1035,15 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 484,
+      "line": 488,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
-      "source": "Port (optional, defaults to 443)",
+      "source": "Port (optional, defaults to $defaultManualPortPlaceholder)",
       "surface": "android",
-      "id": "native.android.e1ad7cf446f7d370"
+      "id": "native.android.61627725cc58a851"
     },
     {
       "kind": "ui-call",
-      "line": 510,
+      "line": 514,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Turn this on for Tailscale or public hosts. Private LAN ws:// remains supported.",
       "surface": "android",
@@ -1051,7 +1051,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 536,
+      "line": 540,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Leave blank to keep saved token",
       "surface": "android",
@@ -1059,7 +1059,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 545,
+      "line": 549,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Password (optional)",
       "surface": "android",

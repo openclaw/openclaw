@@ -342,6 +342,20 @@ internal fun resolveEmptyManualPort(
   return if (shouldForceTlsForGatewayHost(host)) 443 else 18789
 }
 
+/** Connect-tab placeholder/label for the manual port field when it is left blank. */
+internal fun resolveManualPortPlaceholder(
+  hostInput: String,
+  portInput: String,
+  tls: Boolean,
+): String {
+  if (!tls) return "18789"
+  if (portInput.trim().isNotEmpty()) return portInput.trim()
+  composeGatewayManualUrl(hostInput, "", tls)?.let { url ->
+    parseGatewayEndpoint(url)?.port?.let { return it.toString() }
+  }
+  return resolveEmptyManualPort(hostInput, tls)?.toString() ?: "18789"
+}
+
 /** Builds a URL from manual host/port/tls fields for shared endpoint parsing. */
 internal fun composeGatewayManualUrl(
   hostInput: String,

@@ -831,6 +831,30 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun resolveManualPortPlaceholder_matchesResolvedEndpointForBareAndCompleteUrls() {
+    assertEquals(
+      "18789",
+      resolveManualPortPlaceholder("gateway.example.com", "", tls = true),
+    )
+    assertEquals(
+      "443",
+      resolveManualPortPlaceholder("device.sample.ts.net", "", tls = true),
+    )
+    assertEquals(
+      "443",
+      resolveManualPortPlaceholder("wss://gateway.example", "", tls = true),
+    )
+  }
+
+  @Test
+  fun resolveManualPortPlaceholder_usesExplicitPortWhenProvided() {
+    assertEquals(
+      "8443",
+      resolveManualPortPlaceholder("gateway.example.com", "8443", tls = true),
+    )
+  }
+
+  @Test
   fun composeGatewayManualUrlRejectsBlankPortWhenTlsIsOff() {
     val url = composeGatewayManualUrl("127.0.0.1", "", tls = false)
 

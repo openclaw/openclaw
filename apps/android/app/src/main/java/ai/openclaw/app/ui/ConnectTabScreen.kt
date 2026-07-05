@@ -146,12 +146,8 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
       composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput)?.let { parseGatewayEndpoint(it)?.displayUrl }
     }
   val defaultManualPortPlaceholder =
-    remember(manualHostInput, manualTlsInput) {
-      if (!manualTlsInput) {
-        "18789"
-      } else {
-        resolveEmptyManualPort(manualHostInput, tls = true)?.toString() ?: "18789"
-      }
+    remember(manualHostInput, manualPortInput, manualTlsInput) {
+      resolveManualPortPlaceholder(manualHostInput, manualPortInput, manualTlsInput)
     }
 
   val activeEndpoint =
