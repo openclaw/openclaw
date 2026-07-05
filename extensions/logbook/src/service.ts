@@ -104,6 +104,9 @@ export class LogbookService {
   private lastCaptureError: string | undefined;
   private lastModelMissingLogMs = 0;
   private cachedNode: { nodeId: string; displayName?: string; command: string } | null = null;
+  // Nodes whose captures failed this rotation; skipped until every candidate
+  // has failed once, then retried so transient outages self-heal.
+  private failedNodeIds = new Set<string>();
 
   constructor(
     private readonly config: LogbookConfig,
@@ -176,16 +179,28 @@ export class LogbookService {
     const { nodes } = await this.deps.runtime.nodes.list({ connected: true });
     const captureCommand = (node: { commands?: string[] }) =>
       CAPTURE_COMMANDS.find((command) => (node.commands ?? []).includes(command));
+    // App nodes (screen.snapshot) come first: plugin node-host commands are
+    // advertised on every platform, but logbook.snapshot only captures on
+    // macOS, so headless hosts are a fallback rather than the default pick.
+    const commandRank = (node: { commands?: string[] }) =>
+      CAPTURE_COMMANDS.indexOf(captureCommand(node) as (typeof CAPTURE_COMMANDS)[number]);
     const candidates = nodes
       .filter((node) => captureCommand(node) !== undefined)
-      .toSorted((a, b) => a.nodeId.localeCompare(b.nodeId));
+      .toSorted((a, b) => commandRank(a) - commandRank(b) || a.nodeId.localeCompare(b.nodeId));
     const wanted = this.config.nodeId?.toLowerCase();
+    // Failed nodes rotate to the back until everything has failed once;
+    // without this, a broken node that sorts first is re-picked every tick.
+    let pool = candidates.filter((node) => !this.failedNodeIds.has(node.nodeId));
+    if (pool.length === 0) {
+      this.failedNodeIds.clear();
+      pool = candidates;
+    }
     const picked = wanted
       ? candidates.find(
           (node) =>
             node.nodeId.toLowerCase() === wanted || node.displayName?.toLowerCase() === wanted,
         )
-      : candidates[0];
+      : pool[0];
     const command = picked ? captureCommand(picked) : undefined;
     if (!picked || !command) {
       const inventory =
@@ -266,8 +281,12 @@ export class LogbookService {
       this.lastCaptureAtMs = capturedAtMs;
       this.lastCaptureError = undefined;
       this.captureFailures = 0;
+      this.failedNodeIds.clear();
     } catch (err) {
       this.captureFailures += 1;
+      if (this.cachedNode) {
+        this.failedNodeIds.add(this.cachedNode.nodeId);
+      }
       this.cachedNode = null;
       this.lastCaptureError = err instanceof Error ? err.message : String(err);
       if (this.captureFailures >= CAPTURE_FAILURE_THRESHOLD) {
