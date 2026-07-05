@@ -1451,6 +1451,12 @@ export const ko: TranslationMap = {
       },
     },
   },
+  connection: {
+    lostTitle: "Gateway 연결이 끊어졌습니다",
+    reconnecting: "다시 연결 중…",
+    offlineHint: "연결이 복구될 때까지 실시간 업데이트와 작업이 일시 중지됩니다.",
+    retryNow: "지금 다시 시도",
+  },
   chat: {
     disconnected: "Gateway와 연결이 끊어졌습니다.",
     archivedSessionDisabled: "메시지를 보내려면 이 세션을 복원하세요.",

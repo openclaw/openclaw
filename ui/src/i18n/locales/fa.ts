@@ -1462,6 +1462,12 @@ export const fa: TranslationMap = {
       },
     },
   },
+  connection: {
+    lostTitle: "اتصال Gateway قطع شد",
+    reconnecting: "در حال اتصال مجدد…",
+    offlineHint: "به‌روزرسانی‌های زنده و اقدامات تا زمان برقراری دوباره اتصال متوقف شده‌اند.",
+    retryNow: "اکنون دوباره تلاش کنید",
+  },
   chat: {
     disconnected: "اتصال از Gateway قطع شد.",
     archivedSessionDisabled: "برای ارسال پیام، این نشست را بازیابی کنید.",
