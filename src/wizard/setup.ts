@@ -568,6 +568,7 @@ async function runSetupWizardOnce(
       baseConfig = {};
       pendingPluginInstallMigrationBaseConfig = baseConfig;
       configResetPerformed = true;
+      useAgentAssistedSetup = await canUseAgentAssistedSetupForConfig(baseConfig);
     }
   }
 

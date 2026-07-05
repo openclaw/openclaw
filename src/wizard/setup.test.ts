@@ -755,6 +755,45 @@ describe("runSetupWizard", () => {
     vi.clearAllMocks();
   });
 
+  it("re-evaluates assisted setup eligibility after resetting an unsafe Gateway policy", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          auth: {
+            mode: "token",
+            rateLimit: { exemptLoopback: false },
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    hasRunnableLocalAgent.mockResolvedValueOnce(true);
+    finishAgentAssistedSetup.mockClear();
+
+    const select = vi.fn(async (opts: WizardSelectParams<unknown>) => {
+      if (opts.message === "Config handling") {
+        return "reset";
+      }
+      if (opts.message === "Reset scope") {
+        return "config";
+      }
+      return "quickstart";
+    }) as unknown as WizardPrompter["select"];
+
+    await runSetupWizard({ acceptRisk: true }, createRuntime(), buildWizardPrompter({ select }));
+
+    expect(finishAgentAssistedSetup).toHaveBeenCalledOnce();
+    vi.clearAllMocks();
+  });
+
   it("keeps an existing config while continuing explicit setup", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",
