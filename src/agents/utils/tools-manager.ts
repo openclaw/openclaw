@@ -21,6 +21,7 @@ import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import chalk from "chalk";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
+import { readProviderJsonResponse } from "../provider-http-errors.js";
 import {
   getWindowsPowerShellExePath,
   getWindowsSystem32ExePath,
@@ -154,7 +155,10 @@ async function getLatestVersion(repo: string): Promise<string> {
       throw new Error(`GitHub API error: ${response.status}`);
     }
 
-    const data = (await response.json()) as { tag_name: string };
+    const data = await readProviderJsonResponse<{ tag_name: string }>(
+      response,
+      "GitHub releases API",
+    );
     return data.tag_name.replace(/^v/, "");
   } finally {
     await guarded.release();
