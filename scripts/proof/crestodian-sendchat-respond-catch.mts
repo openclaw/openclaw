@@ -1,6 +1,8 @@
 // Real behavior proof: CrestodianTuiBackend.sendChat catches a rejecting
 // this.respond promise and emits a chat error event instead of an unhandled
-// rejection.
+// rejection. We replace the private respond() method itself so the error
+// escapes respond's internal try/catch and must be caught by sendChat's outer
+// .catch() -- which does not exist on current main.
 
 import { runCrestodianTui } from "../../src/crestodian/tui-backend.js";
 import type { RuntimeEnv } from "../../src/runtime.js";
@@ -39,7 +41,8 @@ const { backend } = await new Promise<{
   backend: {
     sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
     onEvent?: (evt: { event: string; payload?: { state?: string; errorMessage?: string } }) => void;
-    engine: { handle: () => Promise<unknown>; dispose: () => Promise<void> };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    respond?: any;
   };
 }>((resolve) => {
   void runCrestodianTui(
@@ -54,31 +57,38 @@ const { backend } = await new Promise<{
   );
 });
 
-backend.engine = {
-  handle: async () => {
-    throw new Error("simulated engine failure");
-  },
-  dispose: async () => {},
-};
-
 const events: Array<{ event: string; payload?: { state?: string; errorMessage?: string } }> = [];
 backend.onEvent = (evt) => events.push(evt);
 
+// Replace the private respond() method so it rejects; current main would leak
+// this as an unhandled rejection because sendChat fires respond as void.
+backend.respond = async () => {
+  throw new Error("simulated respond failure");
+};
+
+const unhandled: unknown[] = [];
+const onUnhandled = (reason: unknown) => unhandled.push(reason);
+process.on("unhandledRejection", onUnhandled);
+
 console.log("=== Proof: crestodian sendChat respond rejection catch ===\n");
-console.log("Sending a chat message while the engine handle rejects...\n");
+console.log("Sending a chat message while respond() itself rejects...\n");
 
-await backend.sendChat({ message: "hello" });
+try {
+  await backend.sendChat({ message: "hello" });
 
-await new Promise((resolve) => {
-  setTimeout(resolve, 100);
-});
+  await new Promise((resolve) => {
+    setTimeout(resolve, 100);
+  });
 
-const errorEvent = events.find((e) => e.event === "chat" && e.payload?.state === "error");
+  const errorEvent = events.find((e) => e.event === "chat" && e.payload?.state === "error");
 
-if (errorEvent?.payload?.errorMessage?.includes("simulated engine failure")) {
-  console.log(`Caught error event: ${JSON.stringify(errorEvent.payload)}`);
-  console.log("\nPASS: rejecting respond is caught and emitted as a chat error.");
-} else {
-  console.log("FAIL: expected chat error event with simulated engine failure.");
-  process.exitCode = 1;
+  if (unhandled.length === 0 && errorEvent?.payload?.errorMessage?.includes("simulated respond failure")) {
+    console.log(`Caught error event: ${JSON.stringify(errorEvent.payload)}`);
+    console.log("\nPASS: rejecting respond is caught and emitted as a chat error.");
+  } else {
+    console.log(`FAIL: unhandled=${unhandled.length}, errorEvent=${JSON.stringify(errorEvent?.payload)}`);
+    process.exitCode = 1;
+  }
+} finally {
+  process.off("unhandledRejection", onUnhandled);
 }

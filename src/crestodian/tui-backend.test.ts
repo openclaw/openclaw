@@ -83,6 +83,8 @@ describe("runCrestodianTui", () => {
           payload?: { state?: string; errorMessage?: string };
         }) => void;
         engine: { handle: () => Promise<unknown>; dispose: () => Promise<void> };
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        respond?: any;
       };
       dispose: () => Promise<void>;
     }>((resolve) => {
@@ -98,6 +100,8 @@ describe("runCrestodianTui", () => {
               }) => void;
               engine: { handle: () => Promise<unknown>; dispose: () => Promise<void> };
               dispose: () => Promise<void>;
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              respond: any;
             };
             resolve({ backend, dispose: async () => backend.dispose() });
             return { exitReason: "exit" };
@@ -108,26 +112,33 @@ describe("runCrestodianTui", () => {
     });
 
     const { backend, dispose } = backendWithEngine;
-    backend.engine = {
-      handle: async () => {
-        throw new Error("simulated engine failure");
-      },
-      dispose: async () => {},
-    };
-
     const events: Array<{ event: string; payload?: { state?: string; errorMessage?: string } }> =
       [];
     backend.onEvent = (evt) => events.push(evt);
 
-    await backend.sendChat({ message: "hello" });
-    // Wait for the fire-and-forget catch handler to run.
-    await new Promise((resolve) => {
-      setTimeout(resolve, 50);
-    });
+    // Make the private respond() method itself reject. Current main would leave
+    // this as an unhandled rejection because sendChat fires respond as void.
+    backend.respond = async () => {
+      throw new Error("simulated respond failure");
+    };
 
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      await backend.sendChat({ message: "hello" });
+      // Wait for the fire-and-forget catch handler to run.
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+
+    expect(unhandled).toHaveLength(0);
     const errorEvent = events.find((e) => e.event === "chat" && e.payload?.state === "error");
     expect(errorEvent).toBeDefined();
-    expect(errorEvent?.payload?.errorMessage).toMatch(/simulated engine failure/);
+    expect(errorEvent?.payload?.errorMessage).toMatch(/simulated respond failure/);
 
     await dispose();
   });
