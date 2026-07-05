@@ -43,6 +43,9 @@ creation has a token or password auth path.
 3. In the iOS app, open **Settings** -> **Gateway**, scan the QR code (or paste
    the setup code), and connect.
 
+   If the setup code contains both LAN and Tailscale Serve routes, the app
+   probes them in order and saves the first reachable endpoint.
+
 4. The official app connects automatically. If **Devices** shows a pending
    request, review its role and scopes before approving it.
 
