@@ -4,7 +4,6 @@ import type { MessageMetadata } from "@slack/types";
 import type { Block, ChatPostMessageArguments, KnownBlock, WebClient } from "@slack/web-api";
 import {
   createMessageReceiptFromOutboundResults,
-  createReplyToDeliveryPolicy,
   type ChannelMessageUnknownSendContext,
   type ChannelMessageUnknownSendReconciliationResult,
   type MessageReceipt,
@@ -999,12 +998,14 @@ export async function reconcileSlackUnknownSend(
   }
   const readClient = opts?.client ?? createSlackWebClient(readToken);
   const writeClient = opts?.client ?? (writeToken ? getSlackWriteClient(writeToken) : undefined);
+  const payloadReplyToId = ctx.payloads[0]?.replyToId;
   const effectiveReplyToId = Object.hasOwn(ctx, "effectiveReplyToId")
     ? normalizeOptionalString(ctx.effectiveReplyToId)
-    : createReplyToDeliveryPolicy({
-        replyToId: ctx.replyToId,
-        replyToMode: ctx.replyToMode,
-      }).resolveCurrentReplyTo(ctx.payloads[0] ?? {}).replyToId;
+    : payloadReplyToId != null
+      ? normalizeOptionalString(payloadReplyToId)
+      : ctx.replyToMode === "off"
+        ? undefined
+        : normalizeOptionalString(ctx.replyToId);
   const threadTs = resolveSlackThreadTsValue({
     replyToId: effectiveReplyToId,
     threadId: ctx.threadId,
