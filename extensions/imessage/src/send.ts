@@ -712,6 +712,16 @@ function isAttachmentCommandFallbackError(error: unknown): boolean {
   );
 }
 
+// A threaded reply (reply_to) needs the private-API bridge transport; on an
+// AppleScript-only deployment imsg rejects it outright. Detect that specific
+// error so we can resend the message unthreaded instead of dropping it (#99638).
+function isThreadedReplyUnsupportedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /reply_to requires bridge transport|cannot send threaded repl|threaded repl(?:y|ies)\b.*(?:unsupported|not supported|requires|unavailable)|requires bridge transport/iu.test(
+    message,
+  );
+}
+
 async function resolveAttachmentChatTarget(params: {
   target: ReturnType<typeof parseIMessageTarget>;
   service?: IMessageService;
@@ -946,6 +956,10 @@ export async function sendMessageIMessage(
   const echoText = resolveOutboundEchoText(message, filePath ? mediaContentType : undefined);
   const replyActionsEnabled = createActionGate(account.config.actions)("reply");
   const resolvedReplyToId = replyActionsEnabled ? sanitizeReplyToId(opts.replyToId) : undefined;
+  // The reply id actually delivered. The threaded-reply fallback below clears it
+  // so the receipt and approval binding report the unthreaded send it became,
+  // not the threaded reply the transport rejected (#99638).
+  let effectiveReplyToId = resolvedReplyToId;
   const runCliJson =
     opts.runCliJson ??
     ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, timeoutMs));
@@ -1054,10 +1068,20 @@ export async function sendMessageIMessage(
         timeoutMs,
       });
     } catch (error) {
-      if (filePath || !isIMessageRpcSendTimeout(error)) {
+      if (resolvedReplyToId && isThreadedReplyUnsupportedError(error)) {
+        // #99638: the transport cannot deliver a threaded reply, so resend the
+        // message unthreaded rather than dropping it. Covers text and media
+        // replies alike (both carry reply_to through this send). One retry with
+        // reply_to stripped, keeping any file; a further failure propagates.
+        const plainParams = { ...params };
+        delete plainParams.reply_to;
+        result = await client.request<Record<string, unknown>>("send", plainParams, {
+          timeoutMs,
+        });
+        effectiveReplyToId = undefined;
+      } else if (filePath || !isIMessageRpcSendTimeout(error)) {
         throw error;
-      }
-      if (
+      } else if (
         !shouldRecoverApprovalPromptGuid({
           message,
           filePath,
@@ -1069,18 +1093,19 @@ export async function sendMessageIMessage(
         })
       ) {
         throw error;
-      }
-      const recoveredGuid = await resolveFallbackSentMessageGuid({
-        dbPath: chatDbLookupPath,
-        target,
-        text: message,
-        sentAfterMs: sendStartedAtMs,
-        resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
-      });
-      if (recoveredGuid) {
-        result = { guid: recoveredGuid, status: "sent" };
       } else {
-        throw error;
+        const recoveredGuid = await resolveFallbackSentMessageGuid({
+          dbPath: chatDbLookupPath,
+          target,
+          text: message,
+          sentAfterMs: sendStartedAtMs,
+          resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
+        });
+        if (recoveredGuid) {
+          result = { guid: recoveredGuid, status: "sent" };
+        } else {
+          throw error;
+        }
       }
     }
     const resolvedId = resolveMessageId(result);
@@ -1102,7 +1127,7 @@ export async function sendMessageIMessage(
       shouldRecoverApprovalPromptGuid({
         message,
         filePath,
-        replyToId: resolvedReplyToId,
+        replyToId: effectiveReplyToId,
       })
     ) {
       approvalBindingMessageId = await resolveFallbackSentMessageGuid({
@@ -1165,7 +1190,7 @@ export async function sendMessageIMessage(
         messageId,
         target,
         kind: filePath ? "media" : "text",
-        ...(resolvedReplyToId ? { replyToId: resolvedReplyToId } : {}),
+        ...(effectiveReplyToId ? { replyToId: effectiveReplyToId } : {}),
       }),
     };
   } catch (error) {
