@@ -173,6 +173,17 @@ function isTrustedRetryEndpoint(url: string): boolean {
   }
 }
 
+export type GatewayControlUiPluginTab = {
+  pluginId: string;
+  id: string;
+  label: string;
+  description?: string;
+  icon?: string;
+  path?: string;
+  group?: "control" | "agent";
+  order?: number;
+};
+
 export type GatewayHelloOk = {
   type: "hello-ok";
   protocol: number;
@@ -188,6 +199,7 @@ export type GatewayHelloOk = {
     scopes: string[];
     issuedAtMs?: number;
   };
+  controlUiTabs?: GatewayControlUiPluginTab[];
   pluginSurfaceUrls?: Record<string, string>;
   policy?: { tickIntervalMs?: number };
 };

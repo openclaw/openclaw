@@ -2,7 +2,7 @@ import { consume } from "@lit/context";
 import { LitElement, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../api/gateway.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import {
   cancelRoutePreload,
@@ -45,7 +45,8 @@ import {
   resolvePreferredSessionForAgent,
   resolveSessionAgentFilterOptions,
 } from "../lib/sessions/session-options.ts";
-import { icons } from "./icons.ts";
+import { pluginTabKey, pluginTabSearch } from "../pages/plugin/route.ts";
+import { icons, type IconName } from "./icons.ts";
 
 type SidebarRecentSession = {
   key: string;
@@ -77,6 +78,7 @@ export class AppSidebar extends LitElement {
 
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
+  @property({ attribute: false }) activePluginTabId = "";
   @property({ attribute: false }) enabledRouteIds?: readonly NavigationRouteId[];
   @property({ attribute: false }) collapsed = false;
   @property({ attribute: false }) connected = false;
@@ -406,6 +408,39 @@ export class AppSidebar extends LitElement {
       : link;
   }
 
+  /** Plugin-declared tabs (hello controlUiTabs) render after a group's static routes. */
+  private pluginTabsForGroup(groupLabel: string): GatewayControlUiPluginTab[] {
+    const tabs = this.context?.gateway.snapshot.hello?.controlUiTabs ?? [];
+    return tabs.filter((tab) => (tab.group ?? "control") === groupLabel);
+  }
+
+  private renderPluginTab(tab: GatewayControlUiPluginTab) {
+    const ref = { pluginId: tab.pluginId, id: tab.id };
+    const search = pluginTabSearch(ref);
+    const href = `${pathForRoute("plugin", this.basePath)}${search}`;
+    const active = this.activeRouteId === "plugin" && this.activePluginTabId === pluginTabKey(ref);
+    const iconName = tab.icon && Object.hasOwn(icons, tab.icon) ? (tab.icon as IconName) : "puzzle";
+    const link = html`
+      <a
+        href=${href}
+        class="nav-item ${active ? "nav-item--active" : ""}"
+        @click=${(event: MouseEvent) => {
+          if (!shouldHandleNavigationClick(event)) {
+            return;
+          }
+          event.preventDefault();
+          this.onNavigate?.("plugin", { search });
+        }}
+      >
+        <span class="nav-item__icon" aria-hidden="true">${icons[iconName]}</span>
+        ${!this.collapsed ? html`<span class="nav-item__text">${tab.label}</span>` : nothing}
+      </a>
+    `;
+    return this.collapsed
+      ? html`<openclaw-tooltip .content=${tab.label}>${link}</openclaw-tooltip>`
+      : link;
+  }
+
   private renderRecentSession(session: SidebarRecentSession) {
     const context = this.context;
     const archiveAllowed = canArchiveSessionRow(
@@ -712,6 +747,9 @@ export class AppSidebar extends LitElement {
                         : nothing}
                       <div class="nav-section__items">
                         ${group.routes.map((routeId) => this.renderRoute(routeId))}
+                        ${this.pluginTabsForGroup(group.label).map((tab) =>
+                          this.renderPluginTab(tab),
+                        )}
                       </div>
                     </section>
                   `;

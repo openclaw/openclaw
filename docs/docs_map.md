@@ -5523,6 +5523,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Native Runtime
   - H2: Troubleshooting
 
+## plugins/logbook.md
+
+- Route: /plugins/logbook
+- Headings:
+  - H2: Default state
+  - H2: Requirements
+  - H2: How it works
+  - H2: Configuration
+  - H2: Dashboard tab
+  - H2: Gateway methods
+  - H2: Privacy notes
+
 ## plugins/manage-plugins.md
 
 - Route: /plugins/manage-plugins

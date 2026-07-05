@@ -6782,3 +6782,20 @@ details[open] > .ov-expandable-toggle::after {
     text-indent: 0;
   }
 }
+
+/* ---- Plugin tab embeds (plugin-served panels) ---- */
+
+.plugin-tab-embed {
+  display: flex;
+  min-height: 0;
+  height: 100%;
+}
+
+.plugin-tab-embed__frame {
+  flex: 1;
+  min-height: 480px;
+  width: 100%;
+  border: none;
+  border-radius: 10px;
+  background: var(--card);
+}
