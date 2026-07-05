@@ -45,6 +45,7 @@ import {
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
@@ -1913,7 +1914,9 @@ function buildOpenAIClientHeaders(
   // request can land on an arbitrary machine and the provider prompt cache misses.
   if (
     sessionId &&
-    resolvedHeaders.session_id === undefined &&
+    !Object.keys(resolvedHeaders).some(
+      (key) => normalizeLowercaseStringOrEmpty(key) === "session_id",
+    ) &&
     usesNativeOpenAICodexResponsesBackend(model)
   ) {
     resolvedHeaders.session_id = sessionId;
