@@ -30,6 +30,7 @@ type LspSession = {
   initialized: boolean;
   capabilities: LspServerCapabilities;
   disposed: boolean;
+  // Preserve a spawn failure so requests created after the event reject immediately.
   failure?: Error;
 };
 
