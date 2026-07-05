@@ -1,18 +1,31 @@
 // Command spec tests cover skill-provided command metadata and filtering.
-import { describe, expect, it, vi } from "vitest";
-import { createSyntheticSourceInfo } from "../../agents/sessions/source-info.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFixtureSkillEntry } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";
 import { buildWorkspaceSkillCommandSpecs } from "./command-specs.js";
 
+const bundleCommandState = vi.hoisted(() => ({
+  entries: [] as Array<{
+    pluginId: string;
+    rawName: string;
+    description: string;
+    promptTemplate: string;
+    sourceFilePath: string;
+  }>,
+}));
+
 vi.mock("../../plugins/bundle-commands.js", () => ({
-  loadEnabledClaudeBundleCommands: () => [],
+  loadEnabledClaudeBundleCommands: () => bundleCommandState.entries,
 }));
 
 vi.mock("../loading/workspace.js", () => ({
   filterWorkspaceSkillEntriesWithOptions: (entries: SkillEntry[]) => entries,
   loadVisibleWorkspaceSkillEntries: () => [],
 }));
+
+afterEach(() => {
+  bundleCommandState.entries = [];
+});
 
 describe("buildWorkspaceSkillCommandSpecs", () => {
   it("uses shared user-invocable skill exposure policy", () => {
@@ -39,60 +52,37 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
   });
 
   it("truncates workspace skill descriptions without splitting surrogate pairs", () => {
-    // 99 ASCII chars + 😀 (2 UTF-16 code units) → raw slice at 99 would
-    // split the surrogate pair, producing a dangling high surrogate + "…".
     const prefix = "a".repeat(98);
-    const name = "emoji-skill";
-    const entry: SkillEntry = {
-      skill: {
-        name,
-        description: `${prefix}😀 extra text beyond the limit`,
-        filePath: `/skills/${name}/SKILL.md`,
-        baseDir: `/skills/${name}`,
-        source: "openclaw-workspace",
-        sourceInfo: createSyntheticSourceInfo(`/skills/${name}/SKILL.md`, {
-          source: "openclaw-workspace",
-        }),
-        disableModelInvocation: false,
-      },
-      frontmatter: {},
-      invocation: { userInvocable: true, disableModelInvocation: false },
-    };
+    const entry = createFixtureSkillEntry("emoji-skill");
+    entry.skill.description = `${prefix}😀 extra text beyond the limit`;
+
     const specs = buildWorkspaceSkillCommandSpecs("/workspace", {
       entries: [entry],
     });
-    expect(specs).toHaveLength(1);
-    const desc = specs[0]?.description ?? "";
-    // No replacement character from a split surrogate pair
-    expect(desc).not.toContain("�");
-    // Truncation marker present (description exceeded the limit)
-    expect(desc).toContain("…");
+
+    expect(specs[0]?.description).toBe(`${prefix}…`);
   });
 
   it("truncates bundle command descriptions without splitting surrogate pairs", () => {
     const prefix = "a".repeat(98);
-    const name = "bundle-emoji";
-    const entry: SkillEntry = {
-      skill: {
-        name,
+    bundleCommandState.entries = [
+      {
+        pluginId: "bundle-plugin",
+        rawName: "bundle-emoji",
         description: `${prefix}😀 extra text beyond the limit`,
-        filePath: `/skills/${name}/SKILL.md`,
-        baseDir: `/skills/${name}`,
-        source: "openclaw-workspace",
-        sourceInfo: createSyntheticSourceInfo(`/skills/${name}/SKILL.md`, {
-          source: "openclaw-workspace",
-        }),
-        disableModelInvocation: false,
+        promptTemplate: "Run the bundled command.",
+        sourceFilePath: "/plugins/bundle-plugin/commands/bundle-emoji.md",
       },
-      frontmatter: {},
-      invocation: { userInvocable: true, disableModelInvocation: false },
-    };
+    ];
+
     const specs = buildWorkspaceSkillCommandSpecs("/workspace", {
-      entries: [entry],
+      entries: [],
     });
-    expect(specs).toHaveLength(1);
-    const desc = specs[0]?.description ?? "";
-    expect(desc).not.toContain("�");
-    expect(desc).toContain("…");
+
+    expect(specs[0]).toMatchObject({
+      skillName: "bundle-emoji",
+      description: `${prefix}…`,
+      promptTemplate: "Run the bundled command.",
+    });
   });
 });
