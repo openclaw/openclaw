@@ -95,7 +95,7 @@ function collectServeGatewayUrls(
   for (const [hostPort, webServer] of Object.entries(config.Web ?? {})) {
     const handler = webServer.Handlers["/"];
     if (
-      allowFunnel[hostPort] === true ||
+      allowFunnel[hostPort] ||
       !handler?.Proxy ||
       parseLoopbackProxyPort(handler.Proxy) !== gatewayPort
     ) {
