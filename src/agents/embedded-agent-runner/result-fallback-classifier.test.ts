@@ -106,6 +106,33 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
+  it("classifies Ollama incomplete stream error payloads as fallback-worthy", () => {
+    const rawError = "Ollama API stream ended without a final response";
+
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "ollama",
+      model: "repro-bad:latest",
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: rawError,
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message: `ollama/repro-bad:latest ended with a provider error: ${rawError}`,
+      reason: "server_error",
+      code: "embedded_error_payload",
+      rawError,
+    });
+  });
+
   it("classifies generic external runner failure text as fallback-worthy", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "claude-cli",
