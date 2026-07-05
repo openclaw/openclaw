@@ -97,7 +97,9 @@ export async function scryUrbitPath(
     if (!response.ok) {
       throw new Error(`Scry failed: ${response.status} for path ${params.path}`);
     }
-    return await readProviderJsonResponse(response, "tlon.scry");
+    // Scry paths are operator-controlled and may stream indefinitely. Keep the shared JSON
+    // ceiling while retaining the path operators need to identify an oversized endpoint.
+    return await readProviderJsonResponse(response, `Tlon scry response for path ${params.path}`);
   } finally {
     await release();
   }

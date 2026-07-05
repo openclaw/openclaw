@@ -17,22 +17,23 @@ const scryParams = {
   auditContext: "test",
 } as const;
 
-function oversizedScryJsonResponse(): Response {
-  const prefix = '{"payload":"';
-  const suffix = '"}';
+function oversizedScryJsonResponse(): {
+  response: Response;
+  getReadCount: () => number;
+  totalChunkCount: number;
+} {
   const bodyChunk = Buffer.alloc(64 * 1024, 0x61);
-  const targetBytes = 18 * 1024 * 1024;
-  return new Response(
+  const chunkCount = (18 * 1024 * 1024) / bodyChunk.length;
+  let readCount = 0;
+  const response = new Response(
     new ReadableStream({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(prefix));
-        let sent = prefix.length;
-        while (sent + bodyChunk.length + suffix.length < targetBytes) {
-          controller.enqueue(bodyChunk);
-          sent += bodyChunk.length;
+      pull(controller) {
+        if (readCount >= chunkCount) {
+          controller.close();
+          return;
         }
-        controller.enqueue(new TextEncoder().encode(suffix));
-        controller.close();
+        readCount += 1;
+        controller.enqueue(bodyChunk);
       },
     }),
     {
@@ -40,6 +41,7 @@ function oversizedScryJsonResponse(): Response {
       headers: { "content-type": "application/json" },
     },
   );
+  return { response, getReadCount: () => readCount, totalChunkCount: chunkCount };
 }
 
 describe("Urbit channel operations", () => {
@@ -71,22 +73,24 @@ describe("Urbit channel operations", () => {
     });
 
     await expect(scryUrbitPath(scryDeps, scryParams)).rejects.toThrow(
-      "tlon.scry: malformed JSON response",
+      "Tlon scry response for path /chat/inbox.json: malformed JSON response",
     );
     expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("bounds oversized scry JSON responses", async () => {
     const release = vi.fn().mockResolvedValue(undefined);
+    const streamed = oversizedScryJsonResponse();
     vi.mocked(urbitFetch).mockResolvedValue({
-      response: oversizedScryJsonResponse(),
+      response: streamed.response,
       finalUrl: "https://example.com/~/scry/chat/inbox.json",
       release,
     });
 
     await expect(scryUrbitPath(scryDeps, scryParams)).rejects.toThrow(
-      "tlon.scry: JSON response exceeds 16777216 bytes",
+      "Tlon scry response for path /chat/inbox.json: JSON response exceeds 16777216 bytes",
     );
+    expect(streamed.getReadCount()).toBeLessThan(streamed.totalChunkCount);
     expect(release).toHaveBeenCalledTimes(1);
   });
 });
