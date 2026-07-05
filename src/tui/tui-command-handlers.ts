@@ -18,7 +18,7 @@ import {
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { helpText, parseCommand } from "./commands.js";
+import { helpText, isSharedTextCommand, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
 import {
   createFilterableSelectList,
@@ -146,6 +146,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     runAuthFlow,
     requestExit,
   } = context;
+
+  const addUnsupportedLocalCommand = (name: string) => {
+    chatLog.addSystem(`/${name} is not available in local embedded mode; message not sent`);
+  };
 
   const setAgent = async (id: string) => {
     state.currentAgentId = normalizeAgentId(id);
@@ -435,7 +439,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await openAgentSelector();
         break;
       case "context":
-        if (!args) {
+        if (opts.local) {
+          addUnsupportedLocalCommand(name);
+        } else if (!args) {
           openContextModeSelector();
         } else {
           await sendMessage(raw);
@@ -460,6 +466,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           }
         } else {
           await sendMessage(raw);
+        }
+        break;
+      case "btw":
+        if (args) {
+          await sendMessage(raw);
+        } else {
+          chatLog.addSystem("Usage: /btw [side question]");
         }
         break;
       case "crestodian":
@@ -746,9 +759,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "quit":
         requestExit();
         break;
-      default:
+      default: {
+        if (opts.local && isSharedTextCommand(raw)) {
+          addUnsupportedLocalCommand(name);
+          break;
+        }
         await sendMessage(raw);
         break;
+      }
     }
     tui.requestRender();
   };

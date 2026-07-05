@@ -893,6 +893,7 @@ Scenario catalog (`extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.
   sticker, and reaction events through the driver.
 - Direct Gateway contract probes: `whatsapp-outbound-media-matrix`,
   `whatsapp-outbound-document-preserves-filename`, `whatsapp-outbound-poll`,
+  `whatsapp-outbound-send-serialization`,
   `whatsapp-group-outbound-media`, `whatsapp-group-outbound-poll`,
   `whatsapp-message-actions`, `whatsapp-reply-context-isolation`,
   `whatsapp-reply-delivery-shape`. These bypass model prompting on purpose
@@ -908,7 +909,7 @@ Scenario catalog (`extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.
 - Status reactions: `whatsapp-status-reactions`,
   `whatsapp-status-reaction-lifecycle`.
 
-The catalog currently contains 51 scenarios. The `live-frontier` default lane
+The catalog currently contains 52 scenarios. The `live-frontier` default lane
 is kept small at 10 scenarios for fast smoke coverage. The `mock-openai`
 default lane runs 45 scenarios deterministically through the real WhatsApp
 transport while mocking only model output; approval scenarios and a few

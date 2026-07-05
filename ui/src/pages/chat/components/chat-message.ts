@@ -44,6 +44,7 @@ import {
   renderToolCard,
   renderToolPreview,
   resolveCollapsedToolDetail,
+  shouldToggleSelectableDisclosure,
 } from "./chat-tool-cards.ts";
 
 function renderChatIcon(name: string) {
@@ -692,17 +693,20 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                 : ""}"
               type="button"
               aria-expanded=${String(activityExpanded)}
-              @click=${() =>
-                opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded)}
+              aria-label=${hasError
+                ? `Activity: ${toolCount} tool${toolCount === 1 ? "" : "s"}, includes errors. ${preview}`
+                : nothing}
+              @click=${(event: MouseEvent) => {
+                if (shouldToggleSelectableDisclosure(event)) {
+                  opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded);
+                }
+              }}
             >
-              <span class="chat-activity-group__icon">${icons.activity}</span>
+              <span class="chat-activity-group__icon">${hasError ? icons.x : icons.activity}</span>
               <span class="chat-activity-group__label"
                 >Activity: ${toolCount} tool${toolCount === 1 ? "" : "s"}</span
               >
               <span class="chat-activity-group__preview">${preview}</span>
-              ${hasError
-                ? html`<span class="chat-activity-group__badge">${icons.x}<span>Error</span></span>`
-                : nothing}
               <span
                 class="collapse-chevron ${activityExpanded ? "" : "collapse-chevron--collapsed"}"
                 aria-hidden="true"
@@ -1984,7 +1988,11 @@ function renderGroupedMessage(
                   : ""}"
                 type="button"
                 aria-expanded=${String(toolMessageExpanded)}
-                @click=${() => opts.onToggleToolMessageExpanded?.(toolMessageDisclosureId)}
+                @click=${(event: MouseEvent) => {
+                  if (shouldToggleSelectableDisclosure(event)) {
+                    opts.onToggleToolMessageExpanded?.(toolMessageDisclosureId);
+                  }
+                }}
               >
                 <span class="chat-tool-msg-summary__icon">${toolMessageIcon}</span>
                 <span class="chat-tool-msg-summary__label">${toolMessageLabel}</span>
@@ -1993,13 +2001,6 @@ function renderGroupedMessage(
                   : toolPreview
                     ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
                     : nothing}
-                ${toolMessageHasError
-                  ? html`<span
-                      class="chat-tool-msg-summary__error-badge"
-                      aria-label="Tool returned an error"
-                      >${icons.x}<span>Error</span></span
-                    >`
-                  : nothing}
               </button>
               ${toolMessageExpanded
                 ? html`

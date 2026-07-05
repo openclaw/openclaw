@@ -138,9 +138,13 @@ const config = {
       entry: rootEntries,
       ignoreDependencies: [
         "@openclaw/*",
+        // Docker packaging stages @openclaw/ai without nested dependencies after
+        // verifying the root owns its exact runtime dependency versions.
+        "@mistralai/mistralai",
         "cross-spawn",
         "file-type",
         "playwright-core",
+        "partial-json",
         "sqlite-vec",
         "tree-sitter-bash",
         ...rootBundledPluginRuntimeDependencies,
@@ -163,6 +167,19 @@ const config = {
       // Workboard lazy-loads Three.js at runtime; Knip's dependency pass misses it.
       ignoreDependencies: ["three"],
       project: ["src/**/*.{ts,tsx}!"],
+    },
+    "packages/ai": {
+      // Mirror the published export map so knip sees every dist entry point.
+      entry: [
+        "src/index.ts!",
+        "src/providers.ts!",
+        "src/types.ts!",
+        "src/validation.ts!",
+        "src/utils/diagnostics.ts!",
+        "src/utils/event-stream.ts!",
+        "src/internal/*.ts!",
+      ],
+      project: ["src/**/*.ts!"],
     },
     "packages/sdk": {
       entry: ["src/index.ts!"],
