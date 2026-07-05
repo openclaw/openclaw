@@ -1,13 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { AnyAgentTool } from "../tools/common.js";
+import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import { createAgentHarnessToolSurfaceRuntime } from "./tool-surface-bridge.js";
 
-function tools(names: string[]): AnyAgentTool[] {
-  return names.map((name) => ({
-    name,
-    parameters: { type: "object", properties: {}, additionalProperties: false },
-  })) as AnyAgentTool[];
+function tools(names: string[]) {
+  return names.map(createStubTool);
 }
 
 describe("createAgentHarnessToolSurfaceRuntime", () => {
@@ -18,7 +15,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     };
     const runtime = createAgentHarnessToolSurfaceRuntime({
       config,
-      executeTool: async () => ({ content: [] }),
+      executeTool: async () => ({ content: [], details: {} }),
       modelToolsEnabled: true,
     });
 
