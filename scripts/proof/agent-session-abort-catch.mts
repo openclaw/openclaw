@@ -51,13 +51,15 @@ const { session } = await createAgentSession({
   modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
 });
 
-// Capture stderr so the proof output is self-contained.
+// Capture stderr so the proof output is self-contained. Do not echo captured
+// chunks back to stderr: abort failures may carry provider/config details, and
+// this proof only needs to detect the generic diagnostic.
 const originalStderrWrite = process.stderr.write.bind(process.stderr);
 const stderrChunks: string[] = [];
-process.stderr.write = (chunk: string | Uint8Array, ...args: unknown[]) => {
+process.stderr.write = (chunk: string | Uint8Array) => {
   const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
   stderrChunks.push(text);
-  return originalStderrWrite(chunk, ...(args as never[]));
+  return true;
 };
 
 // Force the session abort() promise to reject to exercise the defensive catch.

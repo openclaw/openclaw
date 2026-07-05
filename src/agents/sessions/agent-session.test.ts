@@ -48,10 +48,12 @@ describe("AgentSession", () => {
   beforeEach(() => {
     originalStderrWrite = process.stderr.write.bind(process.stderr);
     stderrChunks.length = 0;
-    process.stderr.write = (chunk: string | Uint8Array, ...args: unknown[]) => {
+    // Swallow stderr during the test: we only need to detect the generic
+    // diagnostic, and we must not risk logging provider/config details.
+    process.stderr.write = (chunk: string | Uint8Array) => {
       const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
       stderrChunks.push(text);
-      return originalStderrWrite(chunk, ...(args as never[]));
+      return true;
     };
   });
 
