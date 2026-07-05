@@ -1,6 +1,7 @@
 // Qa Lab plugin module implements suite runtime gateway behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteInfraError, toQaErrorObject } from "./errors.js";
@@ -24,7 +25,7 @@ async function fetchJson<T>(url: string): Promise<T> {
     if (!response.ok) {
       throw new Error(`request failed ${response.status}: ${url}`);
     }
-    return (await response.json()) as T;
+    return await readProviderJsonResponse<T>(response, "qa-lab-suite-fetch-json");
   } finally {
     await release();
   }

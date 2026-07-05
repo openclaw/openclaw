@@ -3,6 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import {
   definePluginEntry,
@@ -23,6 +24,7 @@ import {
 } from "./src/config.js";
 import type { CoreConfig } from "./src/core-bridge.js";
 import { createVoiceCallContinueOperationStore } from "./src/gateway-continue-operation.js";
+import type { CallRecord } from "./src/types.js";
 
 const VOICE_CALL_WRITE_METHOD_SCOPE = { scope: "operator.write" as const };
 const VOICE_CALL_READ_METHOD_SCOPE = { scope: "operator.read" as const };
@@ -230,6 +232,33 @@ function asParamRecord(params: unknown): Record<string, unknown> {
 
 function isCliOnlyProcess(): boolean {
   return process.env.OPENCLAW_CLI === "1" && !process.argv.slice(2).includes("gateway");
+}
+
+type VoiceCallStatus = Pick<
+  CallRecord,
+  | "callId"
+  | "providerCallId"
+  | "provider"
+  | "direction"
+  | "state"
+  | "startedAt"
+  | "answeredAt"
+  | "endedAt"
+  | "endReason"
+>;
+
+function toVoiceCallStatus(call: CallRecord): VoiceCallStatus {
+  return {
+    callId: call.callId,
+    ...(call.providerCallId !== undefined ? { providerCallId: call.providerCallId } : {}),
+    provider: call.provider,
+    direction: call.direction,
+    state: call.state,
+    startedAt: call.startedAt,
+    ...(call.answeredAt !== undefined ? { answeredAt: call.answeredAt } : {}),
+    ...(call.endedAt !== undefined ? { endedAt: call.endedAt } : {}),
+    ...(call.endReason !== undefined ? { endReason: call.endReason } : {}),
+  };
 }
 
 const VOICE_CALL_RUNTIME_KEY = Symbol.for("openclaw.voice-call.runtime");
@@ -623,7 +652,10 @@ export default definePluginEntry({
             normalizeOptionalString(params?.callId) ?? normalizeOptionalString(params?.sid) ?? "";
           const rt = await ensureRuntime();
           if (!raw) {
-            respond(true, { found: true, calls: rt.manager.getActiveCalls() });
+            respond(true, {
+              found: true,
+              calls: rt.manager.getActiveCalls().map(toVoiceCallStatus),
+            });
             return;
           }
           const call = rt.manager.getCall(raw) || rt.manager.getCallByProviderCallId(raw);
@@ -631,7 +663,7 @@ export default definePluginEntry({
             respond(true, { found: false });
             return;
           }
-          respond(true, { found: true, call });
+          respond(true, { found: true, call: toVoiceCallStatus(call) });
         } catch (err) {
           sendError(respond, err);
         }
@@ -679,11 +711,6 @@ export default definePluginEntry({
       parameters: VoiceCallToolSchema,
       async execute(_toolCallId, params) {
         const rawParams = asParamRecord(params);
-        const json = (payload: unknown) => ({
-          content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
-          details: payload,
-        });
-
         try {
           const rt = await ensureRuntime();
 
@@ -765,7 +792,9 @@ export default definePluginEntry({
                 }
                 const call =
                   rt.manager.getCall(callId) || rt.manager.getCallByProviderCallId(callId);
-                return json(call ? { found: true, call } : { found: false });
+                return json(
+                  call ? { found: true, call: toVoiceCallStatus(call) } : { found: false },
+                );
               }
             }
           }
@@ -777,7 +806,7 @@ export default definePluginEntry({
               throw new Error("sid required for status");
             }
             const call = rt.manager.getCall(sid) || rt.manager.getCallByProviderCallId(sid);
-            return json(call ? { found: true, call } : { found: false });
+            return json(call ? { found: true, call: toVoiceCallStatus(call) } : { found: false });
           }
 
           const to = normalizeOptionalString(rawParams.to) ?? rt.config.toNumber;

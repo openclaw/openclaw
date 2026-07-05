@@ -13,16 +13,18 @@ Anthropic builds the **Claude** model family. OpenClaw supports two auth routes:
 <Warning>
 OpenClaw's Claude CLI backend runs the installed Claude Code CLI in
 non-interactive print mode. Anthropic's current Claude Code docs describe
-`claude -p` as Agent SDK/programmatic usage. Starting June 15, 2026, Anthropic
-says subscription-plan `claude -p` usage no longer draws from normal Claude
-plan limits; it draws from a separate monthly Agent SDK credit first, then from
-usage credits at standard API rates when those credits are enabled.
+`claude -p` as Agent SDK/programmatic usage. Anthropic's June 15, 2026 support
+update paused the announced Agent SDK billing change. For now, Anthropic says
+Claude Agent SDK, `claude -p`, and third-party app usage still draw from a
+subscription's usage limits. The previously announced monthly Agent SDK credit
+is not available while Anthropic revises that plan.
 
 Interactive Claude Code still draws from the signed-in Claude plan limits. API
 key auth remains direct pay-as-you-go API billing. For long-lived gateway hosts,
 shared automation, and predictable production spend, use an Anthropic API key.
 
-Anthropic's current public docs:
+Check Anthropic's current support articles before relying on subscription
+billing behavior:
 
 - [Claude Code CLI reference](https://code.claude.com/docs/en/cli-usage)
 - [Use the Claude Agent SDK with your Claude plan](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
@@ -141,13 +143,22 @@ Anthropic's current public docs:
     OpenClaw uses Claude Code's non-interactive `claude -p` path for Claude CLI
     runs. Anthropic currently treats that path as Agent SDK/programmatic usage:
 
-    - Until June 15, 2026, subscription-plan handling follows Anthropic's active
-      Claude Code rules for the signed-in account.
-    - Starting June 15, 2026, subscription-plan `claude -p` usage draws from the
-      user's monthly Agent SDK credit first, then from usage credits at standard
-      API rates if usage credits are enabled.
+    - Anthropic's June 15, 2026 support update paused the previously announced
+      separate Agent SDK credit plan.
+    - For now, subscription-plan Claude Agent SDK, `claude -p`, and third-party
+      app usage still draw from the signed-in subscription's usage limits.
+    - The previously announced monthly Agent SDK credit is not available while
+      Anthropic revises that plan.
     - Console/API-key logins use pay-as-you-go API billing and do not receive
       the subscription Agent SDK credit.
+
+    See Anthropic's [Agent SDK plan
+    article](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
+    for the pause notice, and the Claude Code plan articles for
+    [Pro/Max](https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan)
+    and
+    [Team/Enterprise](https://support.claude.com/en/articles/11845131-use-claude-code-with-your-team-or-enterprise-plan)
+    subscription behavior.
 
     Anthropic can change Claude Code billing and rate-limit behavior without an
     OpenClaw release. Check `claude auth status`, `/status`, and
@@ -194,6 +205,77 @@ Related Anthropic docs:
 - [Extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
 
 </Note>
+
+## Safety refusal fallback (Claude Fable 5)
+
+<Warning>
+Using Claude Fable 5 means also using Claude Opus 4.8. Fable 5 ships with
+safety classifiers that can decline a request, and Anthropic's sanctioned
+recovery is to have `claude-opus-4-8` serve that turn. OpenClaw opts into this
+automatically for direct API-key requests, so some Fable turns are answered
+and billed as Claude Opus 4.8. If your policy or budget cannot accept
+Opus-served turns, do not select `anthropic/claude-fable-5`.
+</Warning>
+
+### Why this exists
+
+Fable 5 classifiers return `stop_reason: "refusal"` on requests in restricted
+domains, and they also false-positive on benign-adjacent work (security
+tooling, life sciences, or even asking the model to reproduce its raw
+reasoning). Without a fallback, the turn dies with an error even though
+another Claude model would happily serve it — Anthropic's own refusal message
+tells API integrators to configure a fallback model.
+
+### How it works
+
+1. For every direct API-key request to `anthropic/claude-fable-5`, OpenClaw
+   sends Anthropic's server-side fallback opt-in: the
+   `server-side-fallback-2026-06-01` beta header plus
+   `fallbacks: [{"model": "claude-opus-4-8"}]`. Claude Opus 4.8 is the only
+   fallback target Anthropic permits for Fable 5.
+2. Only a safety-classifier decline triggers the fallback. Rate limits,
+   overloads, and server errors behave exactly as before and go through
+   OpenClaw's normal [model failover](/concepts/model-failover).
+3. The rescue happens inside the same call. A decline before any output is
+   invisible apart from latency; the whole answer comes from Opus 4.8. On a
+   mid-stream decline the partial text is kept as the prefix the fallback
+   model continues from, while the declined model's reasoning and tool calls
+   are discarded per Anthropic's replay rules (they must not be echoed back or
+   executed).
+4. If Claude Opus 4.8 declines as well, the turn surfaces the refusal as an
+   error, exactly like before this feature.
+
+The fallback happens at the Anthropic API level, so `claude-opus-4-8` does not
+need to be in your configured model list or fallback chain — a Fable-capable
+API key can always serve Opus.
+
+### Observability and billing
+
+- A fallback-served turn records a `provider_fallback` diagnostic on the
+  assistant message naming `fromModel` and `toModel`, and the message's
+  `responseModel` reports `claude-opus-4-8`.
+- Anthropic bills per attempt: a decline before output is free, and the rescue
+  bills at Claude Opus 4.8 rates (currently half of Fable 5 rates). OpenClaw's
+  per-turn cost estimate prices fallback-served turns at Opus rates to match.
+- A mid-stream decline additionally bills the already-streamed Fable partial
+  on Anthropic's side; that portion is reported in the API's per-attempt
+  usage but not folded into OpenClaw's per-turn estimate.
+
+### Scope
+
+Applies to `anthropic/claude-fable-5` with API-key auth against
+`api.anthropic.com`. OAuth (Claude CLI subscription reuse), proxy base URLs,
+Bedrock, Vertex, and Foundry requests are unchanged and still surface
+refusals as errors there.
+
+Verified live: a benign prompt asking Fable 5 to reproduce its raw chain of
+thought is declined with `category: "reasoning_extraction"` when sent without
+fallbacks, and the same prompt through OpenClaw returns a normal Opus-served
+answer with the `provider_fallback` diagnostic attached.
+
+See Anthropic's [refusals and fallback
+guide](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback)
+for the underlying behavior.
 
 ## Prompt caching
 

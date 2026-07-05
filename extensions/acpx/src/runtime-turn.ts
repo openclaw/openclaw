@@ -2,6 +2,7 @@
  * ACPX turn adapters. Modern runtimes can expose startTurn directly; legacy
  * runtimes that only stream runTurn events are adapted to the newer contract.
  */
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   AcpRuntime,
   AcpRuntimeEvent,
@@ -9,16 +10,6 @@ import type {
   AcpRuntimeTurnInput,
   AcpRuntimeTurnResult,
 } from "../runtime-api.js";
-
-function createDeferredResult<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
 
 class LegacyRunTurnEventQueue {
   private readonly items: AcpRuntimeEvent[] = [];
@@ -94,7 +85,7 @@ class LegacyRunTurnEventQueue {
 }
 
 function legacyRunTurnAsStartTurn(runtime: AcpRuntime, input: AcpRuntimeTurnInput): AcpRuntimeTurn {
-  const result = createDeferredResult<AcpRuntimeTurnResult>();
+  const result = createDeferred<AcpRuntimeTurnResult>();
   result.promise.catch(() => {});
   const queue = new LegacyRunTurnEventQueue();
   let resultSettled = false;

@@ -15,6 +15,8 @@ import {
   type AnthropicProjectedToolChoice,
   type AnthropicToolProjection,
 } from "../../agents/anthropic-tool-projection.js";
+import { resolveProviderEndpoint } from "../../agents/provider-attribution.js";
+import { buildGuardedModelFetch } from "../../agents/provider-transport-fetch.js";
 import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
@@ -32,6 +34,13 @@ import {
   usesClaudeFable5MessagesContract,
 } from "../../shared/anthropic-model-contract.js";
 import { applyAnthropicRefusal } from "../../shared/anthropic-refusal.js";
+import {
+  ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
+  CLAUDE_FABLE_5_FALLBACK_MODEL_COST,
+  applyAnthropicFallbackBoundary,
+  buildAnthropicServerSideFallbacks,
+  readAnthropicFallbackBoundary,
+} from "../../shared/anthropic-server-fallback.js";
 import { createDeferredEventBuffer } from "../../shared/deferred-event-buffer.js";
 import { notifyLlmRequestActivity } from "../../shared/llm-request-activity.js";
 import { getEnvApiKey } from "../env-api-keys.js";
@@ -43,7 +52,6 @@ import type {
   AssistantMessageEvent,
   CacheRetention,
   Context,
-  ImageContent,
   Message,
   Model,
   ModelThinkingLevel,
@@ -69,6 +77,11 @@ import { resolveCacheRetention } from "./cache-retention.js";
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultBlockText,
+  extractToolResultText,
+} from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
@@ -123,7 +136,7 @@ const toClaudeCodeName = (name: string) => ccToolLookup.get(name.toLowerCase()) 
 /**
  * Convert content blocks to Anthropic API format
  */
-function convertContentBlocks(content: (TextContent | ImageContent)[]):
+function convertContentBlocks(content: readonly unknown[]):
   | string
   | Array<
       | { type: "text"; text: string }
@@ -136,37 +149,61 @@ function convertContentBlocks(content: (TextContent | ImageContent)[]):
           };
         }
     > {
-  // If only text blocks, return as concatenated string for simplicity
-  const hasImages = content.some((c) => c.type === "image");
+  const text = extractToolResultText(content);
+  const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
+  const hasImages =
+    Array.isArray(content) &&
+    content.some(
+      (item) =>
+        item && typeof item === "object" && (item as Record<string, unknown>).type === "image",
+    );
+
   if (!hasImages) {
-    return sanitizeSurrogates(content.map((c) => (c as TextContent).text).join("\n"));
+    const sanitized = sanitizeSurrogates(text);
+    return sanitized.trim().length > 0 ? sanitized : (mediaPlaceholder ?? "");
   }
 
-  // If we have images, convert to content block array
-  const blocks = content.map((block) => {
-    if (block.type === "text") {
-      return {
-        type: "text" as const,
-        text: sanitizeSurrogates(block.text),
-      };
+  const blocks: Array<
+    | { type: "text"; text: string }
+    | {
+        type: "image";
+        source: {
+          type: "base64";
+          media_type: "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+          data: string;
+        };
+      }
+  > = [];
+  let hasTextBlock = false;
+
+  for (const block of Array.isArray(content) ? content : []) {
+    if (!block || typeof block !== "object") {
+      continue;
     }
-    return {
+    const record = block as Record<string, unknown>;
+    const blockText = extractToolResultBlockText(block);
+    if (blockText) {
+      blocks.push({ type: "text" as const, text: sanitizeSurrogates(blockText) });
+      hasTextBlock = true;
+    }
+    if (record.type !== "image") {
+      continue;
+    }
+    blocks.push({
       type: "image" as const,
       source: {
         type: "base64" as const,
-        media_type: block.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
-        data: block.data,
+        media_type: (typeof record.mimeType === "string" ? record.mimeType : "image/jpeg") as
+          | "image/jpeg"
+          | "image/png"
+          | "image/gif"
+          | "image/webp",
+        data: typeof record.data === "string" ? record.data : "",
       },
-    };
-  });
-
-  // If only images (no text), add placeholder text block
-  const hasText = blocks.some((b) => b.type === "text");
-  if (!hasText) {
-    blocks.unshift({
-      type: "text" as const,
-      text: "(see attached image)",
     });
+  }
+  if (!hasTextBlock) {
+    blocks.unshift({ type: "text" as const, text: mediaPlaceholder ?? "(see attached image)" });
   }
 
   return blocks;
@@ -477,10 +514,17 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         )
       : undefined;
     const eventSink = refusalBuffer ?? stream;
+    // Fallback-served turns bill at the serving model's rates; a boundary
+    // swaps this to the fallback model's cost table.
+    let costModel = model;
 
     try {
       let client: Anthropic;
       let isOAuth: boolean;
+      // The beta-gated fallbacks param may only ship on clients we built,
+      // where the matching beta header is guaranteed; injected clients carry
+      // caller-owned headers.
+      let serverSideFallback = false;
 
       if (options?.client) {
         client = options.client;
@@ -511,8 +555,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         );
         client = created.client;
         isOAuth = created.isOAuthToken;
+        serverSideFallback = created.serverSideFallback;
       }
-      const builtParams = buildParams(model, context, isOAuth, options);
+      const builtParams = buildParams(model, context, isOAuth, options, serverSideFallback);
       let params = builtParams.params;
       const toolProjection = builtParams.toolProjection;
       const nextParams = await options?.onPayload?.(params, model);
@@ -555,14 +600,57 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
             output.usage.output +
             output.usage.cacheRead +
             output.usage.cacheWrite;
-          calculateCost(model, output.usage);
+          calculateCost(costModel, output.usage);
           // Defer start until after message_start so that pre-stream SSE errors
           // (e.g. invalid thinking signatures) arrive before any non-error event
           // is yielded, keeping yieldedOutput=false in pumpStreamWithRecovery
           // and allowing the thinking-block recovery retry to fire.
           eventSink.push({ type: "start", partial: output });
         } else if (event.type === "content_block_start") {
-          if (event.content_block.type === "text") {
+          const fallbackBoundary = refusalBuffer
+            ? readAnthropicFallbackBoundary(event.content_block)
+            : null;
+          if (fallbackBoundary) {
+            // Server-side fallback boundary: pre-boundary thinking/tool blocks
+            // must not replay or execute, and the buffered preview events
+            // reference them, so rebuild the deferred timeline from the
+            // surviving text prefix the fallback model continued from.
+            refusalBuffer?.discard();
+            blockIndexes.clear();
+            applyAnthropicFallbackBoundary({
+              output,
+              boundary: fallbackBoundary,
+              provider: model.provider,
+            });
+            // Cost intentionally mirrors top-level usage (serving attempt at
+            // serving-model rates). A mid-stream decline's billed partial is
+            // only in usage.iterations and is not folded in here.
+            costModel = { ...model, cost: CLAUDE_FABLE_5_FALLBACK_MODEL_COST };
+            calculateCost(costModel, output.usage);
+            eventSink.push({ type: "start", partial: output });
+            for (let i = 0; i < blocks.length; i += 1) {
+              const block = blocks[i];
+              if (block.type !== "text") {
+                continue;
+              }
+              delete (block as Partial<Block>).index;
+              eventSink.push({ type: "text_start", contentIndex: i, partial: output });
+              if (block.text) {
+                eventSink.push({
+                  type: "text_delta",
+                  contentIndex: i,
+                  delta: block.text,
+                  partial: output,
+                });
+              }
+              eventSink.push({
+                type: "text_end",
+                contentIndex: i,
+                content: block.text,
+                partial: output,
+              });
+            }
+          } else if (event.content_block.type === "text") {
             const block: Block = {
               type: "text",
               text: "",
@@ -730,7 +818,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
             output.usage.output +
             output.usage.cacheRead +
             output.usage.cacheWrite;
-          calculateCost(model, output.usage);
+          calculateCost(costModel, output.usage);
         }
       }
 
@@ -883,6 +971,19 @@ function isOAuthToken(apiKey: string): boolean {
   return apiKey.includes("sk-ant-oat");
 }
 
+/**
+ * Server-side refusal fallback is a first-party Claude API beta: proxies and
+ * Bedrock/Vertex/Foundry reject the `fallbacks` param, and OAuth (Claude Code
+ * identity) requests are excluded until the beta is verified there.
+ */
+function supportsAnthropicServerSideFallback(model: Model<"anthropic-messages">): boolean {
+  if (!usesClaudeFable5MessagesContract(model) || model.provider !== "anthropic") {
+    return false;
+  }
+  const endpointClass = resolveProviderEndpoint(model.baseUrl).endpointClass;
+  return endpointClass === "default" || endpointClass === "anthropic-public";
+}
+
 function createClient(
   model: Model<"anthropic-messages">,
   apiKey: string,
@@ -891,7 +992,7 @@ function createClient(
   optionsHeaders?: Record<string, string>,
   dynamicHeaders?: Record<string, string>,
   sessionId?: string,
-): { client: Anthropic; isOAuthToken: boolean } {
+): { client: Anthropic; isOAuthToken: boolean; serverSideFallback: boolean } {
   // Adaptive thinking models (Opus 4.6, Sonnet 4.6) have interleaved thinking built-in.
   // The beta header is deprecated on Opus 4.6 and redundant on Sonnet 4.6, so skip it.
   const needsInterleavedBeta = interleavedThinking && !supportsAdaptiveThinking(model);
@@ -919,9 +1020,10 @@ function createClient(
         model.headers,
         optionsHeaders,
       ),
+      fetch: buildGuardedModelFetch(model),
     });
 
-    return { client, isOAuthToken: false };
+    return { client, isOAuthToken: false, serverSideFallback: false };
   }
 
   // Copilot: Bearer auth, selective betas.
@@ -943,7 +1045,7 @@ function createClient(
       ),
     });
 
-    return { client, isOAuthToken: false };
+    return { client, isOAuthToken: false, serverSideFallback: false };
   }
 
   if (usesFoundryBearerAuth(model)) {
@@ -964,7 +1066,7 @@ function createClient(
       ),
     });
 
-    return { client, isOAuthToken: false };
+    return { client, isOAuthToken: false, serverSideFallback: false };
   }
 
   // OAuth: Bearer auth, Claude Code identity headers
@@ -987,10 +1089,14 @@ function createClient(
       ),
     });
 
-    return { client, isOAuthToken: true };
+    return { client, isOAuthToken: true, serverSideFallback: false };
   }
 
   // API key auth
+  const serverSideFallback = supportsAnthropicServerSideFallback(model);
+  if (serverSideFallback) {
+    betaFeatures.push(ANTHROPIC_SERVER_SIDE_FALLBACK_BETA);
+  }
   const sessionAffinityHeaders: Record<string, string | null> =
     sessionId && getAnthropicCompat(model).sendSessionAffinityHeaders
       ? { "x-session-affinity": sessionId }
@@ -1012,7 +1118,7 @@ function createClient(
     ),
   });
 
-  return { client, isOAuthToken: false };
+  return { client, isOAuthToken: false, serverSideFallback };
 }
 
 function buildParams(
@@ -1020,6 +1126,7 @@ function buildParams(
   context: Context,
   isOAuthTokenResult: boolean,
   options?: AnthropicOptions,
+  serverSideFallback = false,
 ): {
   params: MessageCreateParamsStreaming;
   toolProjection?: AnthropicToolProjection;
@@ -1062,6 +1169,14 @@ function buildParams(
 
   if (system) {
     params.system = system;
+  }
+
+  // Fable safety classifiers can decline benign-adjacent work; server-side
+  // fallback re-serves the same call on claude-opus-4-8 instead of failing
+  // the turn. Only set when createClient added the matching beta header.
+  if (serverSideFallback) {
+    (params as { fallbacks?: Array<{ model: string }> }).fallbacks =
+      buildAnthropicServerSideFallbacks();
   }
 
   // Thinking and post-4.6 Claude models reject custom temperature values.

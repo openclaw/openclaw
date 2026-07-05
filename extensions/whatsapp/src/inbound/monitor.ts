@@ -9,7 +9,10 @@ import type {
   WASocket,
 } from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
-import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  formatInboundMediaUnavailableText,
+  formatLocationText,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import {
@@ -297,6 +300,7 @@ type MonitorWebInboxOptions = {
   groupMetadataCache?: WhatsAppGroupMetadataCache;
   recentMessageKeys?: WhatsAppBaileysMessageCache;
   baileysGroupMetaCache?: WhatsAppBaileysGroupMetadataCache;
+  onPendingWorkChanged?: (pendingWorkCount: number, at?: number) => void;
 };
 
 type AttachWebInboxToSocketOptions = Omit<
@@ -403,6 +407,14 @@ export async function attachWebInboxToSocket(
   const inboundDebounceMs = Math.max(0, Math.trunc(options.debounceMs ?? 0));
   const pendingDebounceKeys = new Set<string>();
   const activeInboundFlushes = new Set<Promise<void>>();
+  const pendingMessageHandlers = new Set<Promise<void>>();
+  let nextReceiveOrder = 0;
+  const publishPendingWorkState = (at = Date.now()) => {
+    options.onPendingWorkChanged?.(
+      pendingMessageHandlers.size + pendingDebounceKeys.size + activeInboundFlushes.size,
+      at,
+    );
+  };
   const buildInboundDebounceKey = (msg: QueuedInboundMessage): string | null => {
     const admission = requireWhatsAppInboundAdmission(msg);
     const sender = msg.platform.sender;
@@ -478,6 +490,7 @@ export async function attachWebInboxToSocket(
         finishFlush = resolve;
       });
       activeInboundFlushes.add(flushTask);
+      publishPendingWorkState();
       try {
         const orderedEntries = orderDebouncedInboundEntries(entries);
         const last = orderedEntries.at(-1);
@@ -500,6 +513,10 @@ export async function attachWebInboxToSocket(
             .map((entry) => entry.payload.body)
             .filter(Boolean)
             .join("\n");
+          const combinedCommandBody = orderedEntries
+            .map((entry) => entry.payload.commandBody ?? entry.payload.body)
+            .filter(Boolean)
+            .join("\n");
           const combinedMentions =
             mentioned.size > 0
               ? {
@@ -519,6 +536,7 @@ export async function attachWebInboxToSocket(
             payload: {
               ...last.payload,
               body: combinedBody,
+              commandBody: combinedCommandBody,
             },
             group: combinedGroup,
             event: {
@@ -540,6 +558,7 @@ export async function attachWebInboxToSocket(
         }
         activeInboundFlushes.delete(flushTask);
         finishFlush();
+        publishPendingWorkState();
       }
     },
     onError: (err) => {
@@ -1090,6 +1109,7 @@ export async function attachWebInboxToSocket(
 
   type EnrichedInboundMessage = {
     body: string;
+    commandBody: string;
     location?: ReturnType<typeof extractLocationData>;
     contactContext?: ReturnType<typeof extractContactContext>;
     externalAdReplyContext?: ReturnType<typeof extractExternalAdReplyContext>;
@@ -1104,16 +1124,18 @@ export async function attachWebInboxToSocket(
     const locationText = location ? formatLocationText(location) : undefined;
     const contactContext = extractContactContext(msg.message ?? undefined);
     const externalAdReplyContext = extractExternalAdReplyContext(msg.message ?? undefined);
+    const mediaPlaceholder = extractMediaPlaceholder(msg.message ?? undefined);
     let body = extractText(msg.message ?? undefined);
     if (locationText) {
       body = [body, locationText].filter(Boolean).join("\n").trim();
     }
     if (!body) {
-      body = extractMediaPlaceholder(msg.message ?? undefined);
+      body = mediaPlaceholder;
       if (!body) {
         return null;
       }
     }
+    const commandBody = body;
     const replyContext = describeReplyContext(msg.message as proto.IMessage | undefined);
 
     let mediaPath: string | undefined;
@@ -1135,17 +1157,31 @@ export async function attachWebInboxToSocket(
     try {
       const inboundMedia = await downloadInboundMedia(msg as proto.IWebMessageInfo, sock, maxBytes);
       await saveInboundMedia(inboundMedia);
-      if (!mediaPath && replyContext) {
+    } catch (err) {
+      logWhatsAppVerbose(options.verbose, `Inbound media download failed: ${String(err)}`);
+      body = formatInboundMediaUnavailableText({
+        body,
+        mediaPlaceholder,
+        notice: "[whatsapp attachment unavailable]",
+      });
+    }
+    if (!mediaPath && replyContext) {
+      try {
         await saveInboundMedia(
           await downloadQuotedInboundMedia(msg as proto.IWebMessageInfo, sock, maxBytes),
         );
+      } catch (err) {
+        logWhatsAppVerbose(options.verbose, `Quoted media download failed: ${String(err)}`);
+        body = formatInboundMediaUnavailableText({
+          body,
+          notice: "[whatsapp quoted attachment unavailable]",
+        });
       }
-    } catch (err) {
-      logWhatsAppVerbose(options.verbose, `Inbound media download failed: ${String(err)}`);
     }
 
     return {
       body,
+      commandBody,
       location: location ?? undefined,
       contactContext,
       externalAdReplyContext,
@@ -1261,6 +1297,7 @@ export async function attachWebInboxToSocket(
       },
       payload: {
         body: enriched.body,
+        commandBody: enriched.commandBody,
         location: enriched.location ?? undefined,
         untrustedStructuredContext:
           untrustedStructuredContext.length > 0 ? untrustedStructuredContext : undefined,
@@ -1310,6 +1347,7 @@ export async function attachWebInboxToSocket(
       inboundMessage.debounceKey = debounceKey;
       if (inboundDebounceMs > 0 && shouldDebounceInboundMessage(inboundMessage)) {
         pendingDebounceKeys.add(debounceKey);
+        publishPendingWorkState();
       }
     }
     if (inboundMessage.event.id) {
@@ -1341,8 +1379,6 @@ export async function attachWebInboxToSocket(
     }
   };
 
-  const pendingMessageHandlers = new Set<Promise<void>>();
-  let nextReceiveOrder = 0;
   const handleMessagesUpsert = async (upsert: { type?: string; messages?: Array<WAMessage> }) => {
     if (upsert.type !== "notify" && upsert.type !== "append") {
       return;
@@ -1375,8 +1411,10 @@ export async function attachWebInboxToSocket(
       inboundConsoleLog.error(`Messages upsert handler error: ${String(err)}`);
     });
     pendingMessageHandlers.add(task);
+    publishPendingWorkState();
     void task.finally(() => {
       pendingMessageHandlers.delete(task);
+      publishPendingWorkState();
     });
   };
   const waitForPendingMessageHandlers = async () => {
@@ -1525,8 +1563,10 @@ export async function attachWebInboxToSocket(
     inboundConsoleLog.error(`Failed replaying durable WhatsApp inbound: ${String(err)}`);
   });
   pendingMessageHandlers.add(replayTask);
+  publishPendingWorkState();
   void replayTask.finally(() => {
     pendingMessageHandlers.delete(replayTask);
+    publishPendingWorkState();
   });
 
   const groupHydrationTask = (async () => {

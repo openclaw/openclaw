@@ -131,11 +131,9 @@ two-party event loops that do not go through the shared inbound reply runner.
     await api.runtime.agent.ensureAgentWorkspace(cfg);
 
     // Run an embedded agent turn
-    const agentDir = api.runtime.agent.resolveAgentDir(cfg);
     const result = await api.runtime.agent.runEmbeddedAgent({
       sessionId: "my-plugin:task-1",
       runId: crypto.randomUUID(),
-      sessionFile: path.join(agentDir, "sessions", "my-plugin-task-1.jsonl"),
       workspaceDir: api.runtime.agent.resolveAgentWorkspaceDir(cfg),
       prompt: "Summarize the latest changes",
       timeoutMs: api.runtime.agent.resolveAgentTimeoutMs(cfg),
@@ -162,13 +160,23 @@ two-party event loops that do not go through the shared inbound reply runner.
       sessionKey,
       update: (entry) => ({ thinkingLevel: "high" }),
     });
+
+    const storePath = api.runtime.agent.session.resolveStorePath(cfg.session?.store, { agentId });
+    await api.runtime.agent.session.runWithWorkAdmission(
+      { storePath, sessionKey },
+      async (signal) => {
+        // Create or update the session, then pass signal to the admitted agent run.
+      },
+    );
     ```
 
     Prefer `getSessionEntry(...)`, `listSessionEntries(...)`, `patchSessionEntry(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted.
 
-    For transcript reads and writes, import `openclaw/plugin-sdk/session-transcript-runtime` and use `resolveSessionTranscriptIdentity(...)`, `resolveSessionTranscriptTarget(...)`, `readSessionTranscriptEvents(...)`, `appendSessionTranscriptMessageByIdentity(...)`, `publishSessionTranscriptUpdateByIdentity(...)`, or `withSessionTranscriptWriteLock(...)` with `{ agentId, sessionKey, sessionId }`. These APIs let plugins identify a transcript, read its events, append messages, publish updates, and run related operations under the same transcript write lock. Pass `sessionFile` only when adapting code that already receives an active transcript artifact and needs each helper to operate on that same artifact.
+    Use `runWithWorkAdmission(...)` when a plugin starts work on a persisted session. The callback rejects archived or concurrently replaced sessions, keeps archive/reset/delete mutations coordinated through completion, and receives an `AbortSignal` that must be forwarded to the agent run.
 
-    `loadSessionStore(...)`, `saveSessionStore(...)`, `updateSessionStore(...)`, and `resolveSessionFilePath(...)` are compatibility helpers for plugins that still intentionally depend on the legacy whole-store or transcript-file shape. New plugin code must not use those helpers, and existing callers should migrate to entry helpers.
+    For transcript reads and writes, import `openclaw/plugin-sdk/session-transcript-runtime` and use `resolveSessionTranscriptIdentity(...)`, `resolveSessionTranscriptTarget(...)`, `readSessionTranscriptEvents(...)`, `appendSessionTranscriptMessageByIdentity(...)`, `publishSessionTranscriptUpdateByIdentity(...)`, or `withSessionTranscriptWriteLock(...)` with `{ agentId, sessionKey, sessionId }`. These APIs let plugins identify a transcript, read its events, append messages, publish updates, and run related operations under the same transcript write lock. Passing `sessionFile`, using `resolveSessionTranscriptLegacyFileTarget(...)`, or importing low-level `appendSessionTranscriptMessage(...)` / `emitSessionTranscriptUpdate(...)` from `openclaw/plugin-sdk/agent-harness-runtime` is deprecated; those paths exist only for legacy code that already receives an active transcript artifact.
+
+    `loadSessionStore(...)`, `saveSessionStore(...)`, `updateSessionStore(...)`, `resolveSessionFilePath(...)`, and `resolveAndPersistSessionFile(...)` are deprecated compatibility helpers for plugins that still intentionally depend on the legacy whole-store or transcript-file shape. New plugin code must not use those helpers, and existing callers should migrate to entry helpers and transcript identity helpers.
 
   </Accordion>
   <Accordion title="api.runtime.agent.defaults">
@@ -258,6 +266,10 @@ two-party event loops that do not go through the shared inbound reply runner.
     Inside the Gateway this runtime is in-process. In plugin CLI commands it calls the configured Gateway over RPC, so commands such as `openclaw googlemeet recover-tab` can inspect paired nodes from the terminal. Node commands still go through normal Gateway node pairing, command allowlists, plugin node-invoke policies, and node-local command handling.
 
     Plugins that expose dangerous node-host commands should register a node-invoke policy with `api.registerNodeInvokePolicy(...)`. The policy runs in the Gateway after command allowlist checks and before the command is forwarded to the node, so direct `node.invoke` calls and higher-level plugin tools share the same enforcement path.
+
+    <Warning>
+    The optional `scopes` field requests Gateway operator scopes for the invocation. OpenClaw honors it only for bundled plugins and trusted official plugin installations; requests from other plugins do not elevate the call. Use it only when a trusted plugin must invoke a node command with a stricter Gateway scope, such as `operator.admin`.
+    </Warning>
 
   </Accordion>
   <Accordion title="api.runtime.tasks.managedFlows">

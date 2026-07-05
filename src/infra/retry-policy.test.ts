@@ -203,4 +203,55 @@ describe("createChannelApiRetryRunner", () => {
     await expect(promise).resolves.toBe("ok");
     expect(fn).toHaveBeenCalledTimes(2);
   });
+
+  it("keeps retry_after hints capped by maxDelayMs by default", async () => {
+    vi.useFakeTimers();
+
+    const runner = createChannelApiRetryRunner({
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 30_000, jitter: 0 },
+    });
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce({
+        message: "429 Too Many Requests",
+        response: { parameters: { retry_after: 45 } },
+      })
+      .mockResolvedValue("ok");
+
+    const promise = runner(fn, "test");
+
+    expect(fn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(promise).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("honors retry_after above maxDelayMs when a separate retry-after cap is configured", async () => {
+    vi.useFakeTimers();
+
+    const runner = createChannelApiRetryRunner({
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 30_000, jitter: 0 },
+      retryAfterMaxDelayMs: 60_000,
+    });
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce({
+        message: "429 Too Many Requests",
+        response: { parameters: { retry_after: 45 } },
+      })
+      .mockResolvedValue("ok");
+
+    const promise = runner(fn, "test");
+
+    expect(fn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(44_999);
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(promise).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
 });

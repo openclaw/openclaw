@@ -60,6 +60,29 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun beginPushToTalkRejectsNewCaptureWhenNewCaptureIsDisallowed() =
+    runTest {
+      val manager = createManager()
+
+      val error =
+        runCatching { manager.beginPushToTalk(allowNewCapture = false) }
+          .exceptionOrNull()
+
+      assertEquals("NODE_BACKGROUND_UNAVAILABLE: command requires foreground", error?.message)
+    }
+
+  @Test
+  fun beginPushToTalkReturnsActiveCaptureWhenNewCaptureIsDisallowed() =
+    runTest {
+      val manager = createManager()
+      setPrivateField(manager, "activePttCaptureId", "capture-1")
+
+      val payload = manager.beginPushToTalk(allowNewCapture = false)
+
+      assertEquals("capture-1", payload.captureId)
+    }
+
+  @Test
   fun duplicateFinalForPendingTalkRunDoesNotStartAllResponseTts() {
     val manager = createManager()
     val final = CompletableDeferred<Boolean>()
@@ -110,6 +133,43 @@ class TalkModeManagerTest {
 
     assertEquals(0L, playbackGeneration(manager).get())
     assertTrue(realtimeToolRuns(manager).isEmpty())
+  }
+
+  @Test
+  fun realtimeCloseErrorDisablesTalkButKeepsFailureStatus() {
+    var stoppedByRelay = false
+    val manager = createManager(onStoppedByRelay = { stoppedByRelay = true })
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+    setMutableStateFlow(manager, "_isEnabled", true)
+
+    manager.handleGatewayEvent(
+      "talk.event",
+      """{"relaySessionId":"relay-1","type":"close","reason":"error"}""",
+    )
+
+    assertFalse(manager.isEnabled.value)
+    assertTrue(stoppedByRelay)
+    assertEquals(
+      "Talk failed: Realtime provider closed unexpectedly.",
+      manager.statusText.value,
+    )
+  }
+
+  @Test
+  fun realtimeClosePreservesDetailedProviderFailure() {
+    val manager = createManager()
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+    setMutableStateFlow(manager, "_isEnabled", true)
+    setMutableStateFlow(manager, "_statusText", "Talk failed: Provider rejected the session.")
+
+    manager.handleGatewayEvent(
+      "talk.event",
+      """{"relaySessionId":"relay-1","type":"close","reason":"error"}""",
+    )
+
+    assertEquals("Talk failed: Provider rejected the session.", manager.statusText.value)
   }
 
   @Test

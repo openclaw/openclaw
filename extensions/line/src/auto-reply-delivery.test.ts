@@ -109,6 +109,31 @@ describe("deliverLineAutoReply", () => {
     expect(createQuickReplyItems).not.toHaveBeenCalled();
   });
 
+  it("truncates flex altText on a surrogate boundary", async () => {
+    // The emoji's surrogate pair straddles LINE's 400-char altText cap; a raw
+    // slice used to send a lone high surrogate to the LINE API.
+    const lineData = {
+      flexMessage: { altText: `${"a".repeat(399)}😀 overflow`, contents: { type: "bubble" } },
+    };
+    const createFlexMessageSpy = vi.fn(createFlexMessage);
+    const { deps } = createDeps({
+      createFlexMessage: createFlexMessageSpy as LineAutoReplyDeps["createFlexMessage"],
+    });
+
+    await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text: "hello", channelData: { line: lineData } },
+      lineData,
+      deps,
+    });
+
+    const sentAltText = createFlexMessageSpy.mock.calls[0]?.[0] ?? "";
+    expect(sentAltText.length).toBeLessThanOrEqual(400);
+    expect(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(sentAltText),
+    ).toBe(false);
+  });
+
   it("uses reply token for rich-only payloads", async () => {
     const lineData = {
       flexMessage: { altText: "Card", contents: { type: "bubble" } },

@@ -16,6 +16,7 @@ import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
@@ -35,6 +36,7 @@ const AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS = 10_000;
 const DEFERRED_SIDECAR_START_DELAY_MS = 100;
 const SESSION_LOCK_CLEANUP_CONCURRENCY = 4;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
+const SKIP_PROVIDER_AUTH_PREWARM_ENV = "OPENCLAW_SKIP_PROVIDER_AUTH_PREWARM";
 const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
 
 type Awaitable<T> = T | Promise<T>;
@@ -50,42 +52,21 @@ type GatewayMemoryStartupPolicy =
   | { mode: "immediate" }
   | { mode: "idle"; delayMs: number };
 
-let mainSessionRestartRecoveryModulePromise: Promise<
-  typeof import("../agents/main-session-restart-recovery.js")
-> | null = null;
-let agentDefaultsModulePromise: Promise<typeof import("../agents/defaults.js")> | null = null;
-let agentModelSelectionModulePromise: Promise<
-  typeof import("../agents/model-selection.js")
-> | null = null;
-let internalHooksModulePromise: Promise<typeof import("../hooks/internal-hooks.js")> | null = null;
-let gatewayRestartSentinelModulePromise: Promise<
-  typeof import("./server-restart-sentinel.js")
-> | null = null;
+const loadMainSessionRestartRecoveryModule = createLazyRuntimeModule(
+  () => import("../agents/main-session-restart-recovery.js"),
+);
 
-const loadMainSessionRestartRecoveryModule = async () => {
-  mainSessionRestartRecoveryModulePromise ??= import("../agents/main-session-restart-recovery.js");
-  return await mainSessionRestartRecoveryModulePromise;
-};
+const loadAgentDefaultsModule = createLazyRuntimeModule(() => import("../agents/defaults.js"));
 
-const loadAgentDefaultsModule = async () => {
-  agentDefaultsModulePromise ??= import("../agents/defaults.js");
-  return await agentDefaultsModulePromise;
-};
+const loadAgentModelSelectionModule = createLazyRuntimeModule(
+  () => import("../agents/model-selection.js"),
+);
 
-const loadAgentModelSelectionModule = async () => {
-  agentModelSelectionModulePromise ??= import("../agents/model-selection.js");
-  return await agentModelSelectionModulePromise;
-};
+const loadInternalHooksModule = createLazyRuntimeModule(() => import("../hooks/internal-hooks.js"));
 
-const loadInternalHooksModule = async () => {
-  internalHooksModulePromise ??= import("../hooks/internal-hooks.js");
-  return await internalHooksModulePromise;
-};
-
-const loadGatewayRestartSentinelModule = async () => {
-  gatewayRestartSentinelModulePromise ??= import("./server-restart-sentinel.js");
-  return await gatewayRestartSentinelModulePromise;
-};
+const loadGatewayRestartSentinelModule = createLazyRuntimeModule(
+  () => import("./server-restart-sentinel.js"),
+);
 
 export type GatewayPostReadySidecarHandle = {
   stop: () => Awaitable<void>;
@@ -146,6 +127,12 @@ function shouldCheckRestartSentinel(env: NodeJS.ProcessEnv = process.env): boole
 function shouldSkipStartupModelPrewarm(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = env[SKIP_STARTUP_MODEL_PREWARM_ENV]?.trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
+export function shouldSkipProviderAuthStartupPrewarm(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return isTruthyEnvValue(env[SKIP_PROVIDER_AUTH_PREWARM_ENV]);
 }
 
 function resolveGatewayMemoryStartupPolicy(cfg: OpenClawConfig): GatewayMemoryStartupPolicy {
@@ -220,6 +207,7 @@ function scheduleProviderAuthStatePrewarm(params: {
     warn: (msg: string) => void;
   };
   delayMs?: number;
+  startupEnabled?: boolean;
 }): GatewayPostReadySidecarHandle {
   let stopped = false;
   let startupTimer: ReturnType<typeof setTimeout> | undefined;
@@ -290,6 +278,9 @@ function scheduleProviderAuthStatePrewarm(params: {
       clearCurrentProviderAuthState();
       scheduleAuthMapRewarm("auth-profile-failure");
     });
+    if (params.startupEnabled === false) {
+      return;
+    }
     startupTimer = setTimeout(
       () => {
         void (async () => {
@@ -1096,6 +1087,7 @@ export async function startGatewayPostAttachRuntime(
       debug?: (msg: string) => void;
     };
     gatewayPluginConfigAtStart: OpenClawConfig;
+    activationSourceConfig: OpenClawConfig;
     pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
     defaultWorkspaceDir: string;
     deps: CliDeps;
@@ -1128,6 +1120,7 @@ export async function startGatewayPostAttachRuntime(
     logReadyOnSidecars?: boolean;
     providerAuthPrewarm?: {
       enabled?: boolean;
+      startupEnabled?: boolean;
       delayMs?: number;
       getConfig?: () => OpenClawConfig;
     };
@@ -1176,6 +1169,7 @@ export async function startGatewayPostAttachRuntime(
   const startupLogPromise = measureStartup(params.startupTrace, "post-attach.log", () =>
     runtimeDeps.logGatewayStartup({
       cfg: params.cfgAtStart,
+      activationSourceConfig: params.activationSourceConfig,
       bindHost: params.bindHost,
       bindHosts: params.bindHosts,
       port: params.port,
@@ -1306,6 +1300,7 @@ export async function startGatewayPostAttachRuntime(
               getConfig: params.providerAuthPrewarm?.getConfig ?? (() => params.cfgAtStart),
               log: params.log,
               delayMs: params.providerAuthPrewarm?.delayMs,
+              startupEnabled: params.providerAuthPrewarm?.startupEnabled,
             }),
           );
         }
@@ -1409,6 +1404,7 @@ export const testing = {
   cleanupStaleSessionLocks,
   scheduleProviderAuthStatePrewarm,
   schedulePrimaryModelPrewarm,
+  shouldSkipProviderAuthStartupPrewarm,
   shouldSkipStartupModelPrewarm,
   stopPostReadySidecarsAfterCloseStarted,
 };

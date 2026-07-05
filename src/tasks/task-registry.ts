@@ -15,6 +15,7 @@ import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { cancelActiveCronTaskRun } from "./cron-task-cancel.js";
@@ -91,9 +92,24 @@ type TaskRegistryGlobalWithRuntimeOverrides = typeof globalThis & {
   [TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY]?: TaskRegistryDeliveryRuntime | null;
   [TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY]?: TaskRegistryControlRuntime | null;
 };
-let deliveryRuntimePromise: Promise<typeof import("./task-registry-delivery-runtime.js")> | null =
-  null;
-let controlRuntimePromise: Promise<TaskRegistryControlRuntime> | null = null;
+const deliveryRuntimeLoader = createLazyPromiseLoader(
+  () => import("./task-registry-delivery-runtime.js"),
+  { cacheRejections: true },
+);
+const controlRuntimeLoader = createLazyPromiseLoader(
+  () =>
+    Promise.resolve().then(() => {
+      for (const candidate of TASK_REGISTRY_CONTROL_RUNTIME_CANDIDATES) {
+        try {
+          return require(candidate) as TaskRegistryControlRuntime;
+        } catch {
+          // Try runtime/source candidates in order.
+        }
+      }
+      throw new Error("Failed to load task registry control runtime.");
+    }),
+  { cacheRejections: true },
+);
 
 type TaskDeliveryOwner = {
   sessionKey?: string;
@@ -567,8 +583,7 @@ function loadTaskRegistryDeliveryRuntime() {
   if (deliveryRuntimeOverride) {
     return Promise.resolve(deliveryRuntimeOverride);
   }
-  deliveryRuntimePromise ??= import("./task-registry-delivery-runtime.js");
-  return deliveryRuntimePromise;
+  return deliveryRuntimeLoader.load();
 }
 
 function loadTaskRegistryControlRuntime() {
@@ -580,17 +595,7 @@ function loadTaskRegistryControlRuntime() {
   }
   // Registry reads happen far more often than task cancellation, so keep the ACP/subagent
   // control graph off the default import path until a cancellation flow actually needs it.
-  controlRuntimePromise ??= Promise.resolve().then(() => {
-    for (const candidate of TASK_REGISTRY_CONTROL_RUNTIME_CANDIDATES) {
-      try {
-        return require(candidate) as TaskRegistryControlRuntime;
-      } catch {
-        // Try runtime/source candidates in order.
-      }
-    }
-    throw new Error("Failed to load task registry control runtime.");
-  });
-  return controlRuntimePromise;
+  return controlRuntimeLoader.load();
 }
 
 function addRunIdIndex(taskId: string, runId?: string) {
@@ -812,17 +817,27 @@ function findExistingTaskForCreate(params: {
 }): TaskRecord | undefined {
   const runId = params.runId?.trim();
   const runScopeMatches = runId
-    ? getTasksByRunId(runId).filter(
-        (task) =>
-          task.runtime === params.runtime &&
-          task.scopeKind === params.scopeKind &&
-          (normalizeOptionalString(task.ownerKey) ?? "") ===
-            (normalizeOptionalString(params.ownerKey) ?? "") &&
-          (normalizeOptionalString(task.childSessionKey) ?? "") ===
-            (normalizeOptionalString(params.childSessionKey) ?? "") &&
+    ? getTasksByRunId(runId).filter((task) => {
+        if (
+          task.runtime !== params.runtime ||
+          task.scopeKind !== params.scopeKind ||
+          (normalizeOptionalString(task.ownerKey) ?? "") !==
+            (normalizeOptionalString(params.ownerKey) ?? "") ||
+          (normalizeOptionalString(task.childSessionKey) ?? "") !==
+            (normalizeOptionalString(params.childSessionKey) ?? "")
+        ) {
+          return false;
+        }
+        if (params.runtime === "acp") {
+          // ACP one-task flow ids can be derived after creation; they must not
+          // split one logical ACP run into duplicate task rows.
+          return true;
+        }
+        return (
           (normalizeOptionalString(task.parentFlowId) ?? "") ===
-            (normalizeOptionalString(params.parentFlowId) ?? ""),
-      )
+          (normalizeOptionalString(params.parentFlowId) ?? "")
+        );
+      })
     : [];
   const exact = runId
     ? runScopeMatches.find(
@@ -1170,6 +1185,9 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     return null;
   }
   const next = normalizeTaskTimestamps({ ...current, ...patch });
+  if (Object.hasOwn(patch, "error") && patch.error === undefined) {
+    delete next.error;
+  }
   if (isTerminalTaskStatus(next.status) && typeof next.cleanupAfter !== "number") {
     next.cleanupAfter = resolveTaskCleanupAfter({
       ...next,
@@ -1543,11 +1561,10 @@ export function markTaskTerminalById(params: {
   terminalOutcome?: TaskTerminalOutcome | null;
 }): TaskRecord | null {
   ensureTaskRegistryReady();
-  return updateTask(params.taskId, {
+  const patch: Partial<TaskRecord> = {
     status: params.status,
     endedAt: params.endedAt,
     lastEventAt: params.lastEventAt ?? params.endedAt,
-    ...(params.error !== undefined ? { error: params.error } : {}),
     ...(params.terminalSummary !== undefined
       ? { terminalSummary: normalizeTaskSummary(params.terminalSummary) }
       : {}),
@@ -1559,7 +1576,11 @@ export function markTaskTerminalById(params: {
           }),
         }
       : {}),
-  });
+  };
+  if (Object.hasOwn(params, "error")) {
+    patch.error = params.error;
+  }
+  return updateTask(params.taskId, patch);
 }
 
 export function markTaskLostById(params: {
@@ -2084,12 +2105,16 @@ export async function cancelTaskById(params: {
             reason: params.reason?.trim() || "Cancelled by operator.",
           })
         ) {
-          return {
-            found: true,
-            cancelled: false,
-            reason: "Cron task has no active cancellation handle.",
-            task: cloneTaskRecord(task),
-          };
+          if (childSessionKey) {
+            return {
+              found: true,
+              cancelled: false,
+              reason: "Cron task has no active cancellation handle.",
+              task: cloneTaskRecord(task),
+            };
+          }
+          // Childless cron rows are stale legacy ledger records; with no live
+          // runner handle and no child session to cancel, clear the task row.
         }
       } else if (!childSessionKey) {
         if (!isChildlessNativeSubagentTask(task)) {
@@ -2138,12 +2163,25 @@ export async function cancelTaskById(params: {
         };
       }
     }
-    const updated = updateTask(task.taskId, {
-      status: "cancelled",
-      endedAt: Date.now(),
-      lastEventAt: Date.now(),
-      error: params.reason?.trim() || "Cancelled by operator.",
-    });
+    const endedAt = Date.now();
+    const error = params.reason?.trim() || "Cancelled by operator.";
+    const updated =
+      task.runtime === "acp" && task.runId?.trim()
+        ? (updateTaskStateByRunId({
+            runId: task.runId,
+            runtime: "acp",
+            sessionKey: childSessionKey,
+            status: "cancelled",
+            endedAt,
+            lastEventAt: endedAt,
+            error,
+          }).find((record) => record.taskId === task.taskId) ?? null)
+        : updateTask(task.taskId, {
+            status: "cancelled",
+            endedAt,
+            lastEventAt: endedAt,
+            error,
+          });
     if (!updated) {
       return {
         found: true,
@@ -2370,8 +2408,8 @@ export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
     listenerStop = null;
   }
   listenerStarted = false;
-  deliveryRuntimePromise = null;
-  controlRuntimePromise = null;
+  deliveryRuntimeLoader.clear();
+  controlRuntimeLoader.clear();
   if (opts?.persist !== false) {
     persistTaskRegistry();
   }
@@ -2384,26 +2422,26 @@ export function resetTaskRegistryDeliveryRuntimeForTests() {
   (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
     TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
   ] = null;
-  deliveryRuntimePromise = null;
+  deliveryRuntimeLoader.clear();
 }
 
 export function setTaskRegistryDeliveryRuntimeForTests(runtime: TaskRegistryDeliveryRuntime): void {
   (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
     TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
   ] = runtime;
-  deliveryRuntimePromise = null;
+  deliveryRuntimeLoader.clear();
 }
 
 export function resetTaskRegistryControlRuntimeForTests() {
   (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
     TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY
   ] = null;
-  controlRuntimePromise = null;
+  controlRuntimeLoader.clear();
 }
 
 export function setTaskRegistryControlRuntimeForTests(runtime: TaskRegistryControlRuntime): void {
   (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
     TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY
   ] = runtime;
-  controlRuntimePromise = null;
+  controlRuntimeLoader.clear();
 }

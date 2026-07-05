@@ -172,6 +172,29 @@ describe("gateway session utils", () => {
     expect(listed.hasMore).toBe(true);
   });
 
+  test("session lists separate archived rows and sort pinned sessions first", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const store = {
+      recent: { sessionId: "recent", updatedAt: 30 },
+      pinned: { sessionId: "pinned", updatedAt: 10, pinnedAt: 40 },
+      archived: { sessionId: "archived", updatedAt: 20, archivedAt: 50 },
+    } satisfies Record<string, SessionEntry>;
+
+    const active = listSessionsFromStore({ cfg, storePath: "", store, opts: {} });
+    expect(active.sessions.map((session) => session.key)).toEqual(["pinned", "recent"]);
+    expect(active.sessions[0]).toMatchObject({ pinned: true, pinnedAt: 40, archived: false });
+
+    const archived = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { archived: true },
+    });
+    expect(archived.sessions).toMatchObject([
+      { key: "archived", archived: true, archivedAt: 50, pinned: false },
+    ]);
+  });
+
   test("session lists page from an offset after filtering and sorting", () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
     const store = Object.fromEntries(
@@ -2509,6 +2532,34 @@ describe("deriveSessionTitle", () => {
       subject: "Actual Subject",
     } as SessionEntry;
     expect(deriveSessionTitle(entry)).toBe("Actual Subject");
+  });
+
+  test.each([
+    {
+      name: "uses a label before the first user message",
+      fields: { label: "Label via /name" },
+      firstUserMessage: "Hello, what can you do?",
+      expected: "Label via /name",
+    },
+    {
+      name: "prefers an explicit label over display and group metadata",
+      fields: {
+        displayName: "Display Name",
+        subject: "Group Subject",
+        label: "Label via /name",
+      },
+      firstUserMessage: undefined,
+      expected: "Label via /name",
+    },
+    {
+      name: "ignores a blank label",
+      fields: { label: "   " },
+      firstUserMessage: "Hello!",
+      expected: "Hello!",
+    },
+  ])("$name", ({ fields, firstUserMessage, expected }) => {
+    const entry = { sessionId: "abc123", updatedAt: Date.now(), ...fields } as SessionEntry;
+    expect(deriveSessionTitle(entry, firstUserMessage)).toBe(expected);
   });
 });
 

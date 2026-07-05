@@ -8,6 +8,10 @@ import {
   onAgentEvent,
   resetAgentEventsForTest,
 } from "../../infra/agent-events.js";
+import type {
+  ReasoningProgressPayload,
+  ReasoningTextPayload,
+} from "./agent-runner-cli-dispatch.js";
 import {
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
@@ -29,6 +33,168 @@ afterEach(() => {
 });
 
 describe("runCliAgentWithLifecycle", () => {
+  it("bridges thinking events to reasoning text and dedupes identical snapshots", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { text: "Thinking", delta: "Thinking", isReasoningSnapshot: true },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { text: "Thinking", delta: "", isReasoningSnapshot: true },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { text: "Thinking more", delta: " more", isReasoningSnapshot: true },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "Visible answer", delta: "Visible answer" },
+      });
+      return { payloads: [{ text: "Visible answer" }], meta: { durationMs: 1 } };
+    });
+    const onReasoningText = vi.fn<(payload: ReasoningTextPayload) => Promise<void>>(
+      async () => undefined,
+    );
+
+    const result = await runCliAgentWithLifecycle({
+      runId: "run-thinking-bridge",
+      provider: "claude-cli",
+      onReasoningText,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-thinking-bridge",
+      },
+    });
+
+    expect(onReasoningText).toHaveBeenCalledTimes(2);
+    expect(onReasoningText.mock.calls.map((call) => call[0])).toEqual([
+      { text: "Thinking", isReasoningSnapshot: true },
+      { text: "Thinking more", isReasoningSnapshot: true },
+    ]);
+    expect(result.payloads).toEqual([
+      { text: "Thinking more", isReasoning: true },
+      { text: "Visible answer" },
+    ]);
+  });
+
+  it("keeps durable reasoning when the CLI has no visible final answer", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { text: "Only thinking", delta: "Only thinking", isReasoningSnapshot: true },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { text: "Only thinking more", delta: " more", isReasoningSnapshot: true },
+      });
+      return { payloads: [], meta: { durationMs: 1 } };
+    });
+
+    const result = await runCliAgentWithLifecycle({
+      runId: "run-thinking-without-answer",
+      provider: "claude-cli",
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-thinking-without-answer",
+      },
+    });
+
+    expect(result.payloads).toEqual([{ text: "Only thinking more", isReasoning: true }]);
+  });
+
+  it("bridges thinking token progress without adding durable reasoning", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { progressTokens: 50 },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { progressTokens: 50 },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { progressTokens: 200 },
+      });
+      return { payloads: [{ text: "Visible answer" }], meta: { durationMs: 1 } };
+    });
+    const onReasoningProgress = vi.fn<(payload: ReasoningProgressPayload) => Promise<void>>(
+      async () => undefined,
+    );
+
+    const result = await runCliAgentWithLifecycle({
+      runId: "run-thinking-progress",
+      provider: "claude-cli",
+      onReasoningProgress,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-thinking-progress",
+      },
+    });
+
+    expect(onReasoningProgress.mock.calls.map((call) => call[0])).toEqual([
+      { progressTokens: 50 },
+      { progressTokens: 200 },
+    ]);
+    expect(result.payloads).toEqual([{ text: "Visible answer" }]);
+  });
+
+  it("does not add a durable reasoning payload when the CLI emits no thinking", async () => {
+    cliDispatchState.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Visible answer" }],
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedAgentRunResult);
+
+    const result = await runCliAgentWithLifecycle({
+      runId: "run-no-thinking",
+      provider: "claude-cli",
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-no-thinking",
+      },
+    });
+
+    expect(result.payloads).toEqual([{ text: "Visible answer" }]);
+  });
+
   it("keeps the captured lifecycle generation on start and terminal events", async () => {
     const events: Array<{
       stream?: string;
@@ -261,6 +427,24 @@ describe("createCliToolSummaryTracker", () => {
     const payload = deliver.mock.calls[0]?.[0] as { text: string };
     expect(payload.text).toContain("```txt");
     expect(payload.text).toContain("Wed Jun 10 2026");
+  });
+
+  it("renders top-level structured CLI results in full verbose output", async () => {
+    const deliver = vi.fn();
+    const tracker = createCliToolSummaryTracker({
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => true,
+      deliver,
+    });
+    await tracker.noteToolEvent(startEvent);
+    await tracker.noteToolEvent({
+      ...resultEvent,
+      result: [{ type: "web_search_result", title: "OpenClaw", url: "https://example.com" }],
+    });
+
+    const payload = deliver.mock.calls[0]?.[0] as { text: string };
+    expect(payload.text).toContain('"type":"web_search_result"');
+    expect(payload.text).toContain('"title":"OpenClaw"');
   });
 
   it("emits nothing while tool summaries are disabled", async () => {

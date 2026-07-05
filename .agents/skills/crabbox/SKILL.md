@@ -43,11 +43,11 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
 
 - OpenClaw scripts prefer `../crabbox/bin/crabbox` when present. The user PATH
   shim can be stale.
-- Check `.crabbox.yaml` for direct-provider defaults. Omitting `--provider`
-  means brokered AWS for normal Linux/macOS paths; the wrapper selects Azure
-  for unqualified Windows/WSL2 runs when the local Crabbox binary advertises
-  Azure.
-- The brokered AWS default is a Linux developer image in `eu-west-1`; the repo
+- Check `.crabbox.yaml` for the provider default. Omitting `--provider`
+  means Blacksmith Testbox through Crabbox for normal Linux paths; the wrapper
+  selects Azure for unqualified Windows/WSL2 runs when the local Crabbox
+  binary advertises Azure. Pass `--provider aws` for direct brokered AWS runs.
+- The brokered AWS image is a Linux developer image in `eu-west-1`; the repo
   config pins hot `eu-west-1a/b/c` placement so Fast Snapshot Restore can apply.
   If warmup drifts well past the minute-scale path, verify image promotion,
   region/AZ placement, and FSR state before blaming OpenClaw.

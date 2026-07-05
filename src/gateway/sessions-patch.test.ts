@@ -216,6 +216,40 @@ describe("gateway sessions patch", () => {
     resetPluginRuntimeStateForTest();
   });
 
+  test("archives and restores sessions without retaining a pin", async () => {
+    const archived = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ pinnedAt: 10 }),
+        patch: { key: MAIN_SESSION_KEY, archived: true },
+      }),
+    );
+    expect(archived.archivedAt).toEqual(expect.any(Number));
+    expect(archived.pinnedAt).toBeUndefined();
+
+    const restored = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ archivedAt: archived.archivedAt }),
+        patch: { key: MAIN_SESSION_KEY, archived: false },
+      }),
+    );
+    expect(restored.archivedAt).toBeUndefined();
+  });
+
+  test("pins active sessions and rejects pinned archived sessions", async () => {
+    const pinned = expectPatchOk(
+      await runPatch({ patch: { key: MAIN_SESSION_KEY, pinned: true } }),
+    );
+    expect(pinned.pinnedAt).toEqual(expect.any(Number));
+
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({ archivedAt: 10 }),
+        patch: { key: MAIN_SESSION_KEY, pinned: true },
+      }),
+      "restore it first",
+    );
+  });
+
   test("persists thinkingLevel=off (does not clear)", async () => {
     const entry = expectPatchOk(
       await runPatch({
