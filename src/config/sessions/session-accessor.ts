@@ -2803,6 +2803,24 @@ export function resolveSessionTranscriptReadTarget(
   };
 }
 
+export type SessionStoreEntrySnapshot = {
+  entry?: SessionEntry;
+  normalizedKey: string;
+  store: Record<string, SessionEntry>;
+};
+
+export function loadSessionStoreEntrySnapshot(params: {
+  sessionKey: string;
+  storePath: string;
+}): SessionStoreEntrySnapshot {
+  const store = loadSessionStore(params.storePath, { skipCache: true });
+  const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
+  return {
+    ...(resolved.existing ? { entry: resolved.existing } : {}),
+    normalizedKey: resolved.normalizedKey,
+    store,
+  };
+}
 function resolveConcreteReadStorePath(storePath: string | undefined): string | undefined {
   const trimmed = storePath?.trim();
   if (!trimmed || trimmed === "(multiple)" || trimmed.includes("{agentId}")) {

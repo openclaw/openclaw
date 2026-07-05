@@ -61,8 +61,6 @@ import {
   deleteSessionEntryLifecycle,
   type SessionEntry,
   updateSessionStore,
-  resolveSessionStoreEntry,
-  loadSessionStore,
 } from "../../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import {
@@ -70,6 +68,7 @@ import {
   createSessionEntryWithTranscript,
   preflightSessionTranscriptForManualCompact,
   trimSessionTranscriptForManualCompact,
+  loadSessionStoreEntrySnapshot,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -200,24 +199,11 @@ function buildManualCompactionReleaseFollowupRun(params: {
 function sessionHasPostCompactionDelegates(params: {
   entry?: SessionEntry;
   sessionKey: string;
-  store?: Record<string, SessionEntry>;
 }): boolean {
-  if (stagedPostCompactionDelegateCount(params.sessionKey) > 0) {
-    return true;
-  }
-  if ((params.entry?.pendingPostCompactionDelegates?.length ?? 0) > 0) {
-    return true;
-  }
-  if (params.store) {
-    const resolved = resolveSessionStoreEntry({
-      store: params.store,
-      sessionKey: params.sessionKey,
-    });
-    if ((resolved.existing?.pendingPostCompactionDelegates?.length ?? 0) > 0) {
-      return true;
-    }
-  }
-  return false;
+  return (
+    stagedPostCompactionDelegateCount(params.sessionKey) > 0 ||
+    (params.entry?.pendingPostCompactionDelegates?.length ?? 0) > 0
+  );
 }
 
 async function releaseManualPostCompactionDelegatesIfNeeded(params: {
@@ -237,7 +223,6 @@ async function releaseManualPostCompactionDelegatesIfNeeded(params: {
     !sessionHasPostCompactionDelegates({
       entry: params.entry,
       sessionKey: params.sessionKey,
-      store: params.store,
     })
   ) {
     return;
@@ -2991,12 +2976,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
               undefined,
             );
             if (trimResult.compacted) {
-              const storeAfterTrim = loadSessionStore(storePath, { skipCache: true });
-              const resolvedAfterTrim = resolveSessionStoreEntry({
-                store: storeAfterTrim,
+              const snapshotAfterTrim = loadSessionStoreEntrySnapshot({
                 sessionKey: target.canonicalKey,
+                storePath,
               });
-              const entryAfterTrim = resolvedAfterTrim.existing ?? latestEntry;
+              const storeAfterTrim = snapshotAfterTrim.store;
+              const entryAfterTrim = snapshotAfterTrim.entry ?? latestEntry;
               await releaseManualPostCompactionDelegatesIfNeeded({
                 cfg,
                 compactionCount: entryAfterTrim.compactionCount ?? 0,

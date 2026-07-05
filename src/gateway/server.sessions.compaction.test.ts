@@ -717,7 +717,7 @@ test("sessions.compact preserves legacy route fields when releasing post-compact
   expectMainCompactionResult(compacted, true);
   expect(stagedPostCompactionDelegateCount("agent:main:main")).toBe(0);
   const queued = await loadPendingSessionDeliveries(process.env.OPENCLAW_STATE_DIR);
-  const [postCompaction] = queued.filter(
+  const postCompaction = queued.find(
     (entry) =>
       entry.kind === "postCompactionDelegate" &&
       entry.task === "rehydrate after compact with legacy route",
@@ -761,9 +761,10 @@ test("sessions.compact maxLines releases queued post-compaction delegates after 
 
 test("sessions.compact skips post-compaction lifecycle when no delegates exist", async () => {
   const { dir } = await createSessionStoreDir();
+  const noDelegateLines = buildSessionTranscriptLines("sess-post-compaction-empty", 120);
   await fs.writeFile(
     path.join(dir, "sess-post-compaction-empty.jsonl"),
-    `${JSON.stringify({ role: "user", content: "hello no delegates" })}\n`,
+    `${noDelegateLines.join("\n")}\n`,
     "utf-8",
   );
   await writeSessionStore({ entries: { main: sessionStoreEntry("sess-post-compaction-empty") } });
