@@ -29,8 +29,26 @@ struct ChatMarkdownTable: Equatable {
 }
 
 enum ChatMarkdownBlockSyntax {
-    private static let htmlBlockTagNames =
-        "address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h1|h2|h3|h4|h5|h6|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|section|source|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul"
+    private static let htmlBlockTagNames = [
+        "address", "article", "aside", "base", "basefont", "blockquote", "body", "caption", "center",
+        "col", "colgroup", "dd", "details", "dialog", "dir", "div", "dl", "dt", "fieldset",
+        "figcaption", "figure", "footer", "form", "frame", "frameset", "h1", "h2", "h3", "h4", "h5",
+        "h6", "head", "header", "hr", "html", "iframe", "legend", "li", "link", "main", "menu",
+        "menuitem", "nav", "noframes", "ol", "optgroup", "option", "p", "param", "section", "source",
+        "summary", "table", "tbody", "td", "tfoot", "th", "thead", "title", "tr", "track", "ul",
+    ].joined(separator: "|")
+    private static let htmlWhitespace = #"[ \t\v\f]"#
+    private static let htmlTagName = #"[A-Za-z][A-Za-z0-9-]*"#
+    private static let htmlAttributeName = #"[A-Za-z_:][A-Za-z0-9:._-]*"#
+    private static let htmlAttributeValue =
+        #"(?:[^ \t\r\n\v\f"'=<>`]+|'[^']*'|"[^"]*")"#
+    private static let htmlAttribute =
+        htmlWhitespace + "+" + htmlAttributeName
+            + "(?:" + htmlWhitespace + "*=" + htmlWhitespace + "*" + htmlAttributeValue + ")?"
+    private static let htmlCompleteTagPattern =
+        #"^\s{0,3}(?:<"# + htmlTagName + "(?:" + htmlAttribute + ")*"
+            + htmlWhitespace + #"*/?>|</"# + htmlTagName + htmlWhitespace + #"*>)"#
+            + htmlWhitespace + "*$"
 
     static func startsBlock(_ line: String, includesSetextUnderline: Bool = true) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -61,7 +79,7 @@ enum ChatMarkdownBlockSyntax {
             #"^\s{0,3}<\?"#,
             #"^\s{0,3}<![A-Z]"#,
             #"^\s{0,3}<!\[CDATA\["#,
-            #"^\s{0,3}(?:<[A-Za-z][A-Za-z0-9-]*(?:[ \t\v\f]+[A-Za-z_:][A-Za-z0-9:._-]*(?:[ \t\v\f]*=[ \t\v\f]*(?:[^ \t\r\n\v\f"'=<>`]+|'[^']*'|"[^"]*"))?)*[ \t\v\f]*/?>|</[A-Za-z][A-Za-z0-9-]*[ \t\v\f]*>)[ \t\v\f]*$"#,
+            self.htmlCompleteTagPattern,
         ]
         return caseInsensitivePatterns.contains { pattern in
             line.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
