@@ -124,11 +124,6 @@ public final class OpenClawChatViewModel {
         case externalSync
     }
 
-    struct SessionSnapshot {
-        var key: String
-        var generation: UInt64
-    }
-
     private struct BootstrapContext {
         var id: UInt64
         var historyRequest: HistoryRequest
@@ -389,14 +384,8 @@ public final class OpenClawChatViewModel {
 
     // MARK: - Internals
 
-    private func markTimelineChanged() {
+    func markTimelineChanged() {
         self.timelineRevision &+= 1
-    }
-
-    func replaceMessages(_ messages: [OpenClawChatMessage]) {
-        guard self.messages != messages else { return }
-        self.messages = messages
-        self.markTimelineChanged()
     }
 
     private func appendMessage(_ message: OpenClawChatMessage) {

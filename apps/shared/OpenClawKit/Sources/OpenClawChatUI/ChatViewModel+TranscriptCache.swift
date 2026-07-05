@@ -5,6 +5,17 @@ import Foundation
 // of truth and replace cached rows wholesale.
 
 extension OpenClawChatViewModel {
+    struct SessionSnapshot {
+        var key: String
+        var generation: UInt64
+    }
+
+    func replaceMessages(_ messages: [OpenClawChatMessage]) {
+        guard self.messages != messages else { return }
+        self.messages = messages
+        self.markTimelineChanged()
+    }
+
     func persistTranscriptToCache(sessionKey: String, messages: [OpenClawChatMessage]) {
         guard let transcriptCache else { return }
         // Chain writes so an older snapshot can never land after a newer one;

@@ -188,7 +188,7 @@ struct IPadActivityScreen: View {
     }
 
     private var sessionsMode: String {
-        self.appModel.chatTransportModeID
+        self.appModel.chatViewModelIdentityID
     }
 
     private var sessionRows: [CommandCenterTab.WorkItem] {

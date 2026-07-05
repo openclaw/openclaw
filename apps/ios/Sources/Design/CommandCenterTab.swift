@@ -372,7 +372,7 @@ struct CommandCenterTab: View {
     }
 
     private var sessionListMode: String {
-        self.appModel.chatTransportModeID
+        self.appModel.chatViewModelIdentityID
     }
 
     private var sessionItems: [WorkItem] {
@@ -416,7 +416,8 @@ struct CommandCenterTab: View {
     }
 
     private func applyCachedSessions() async {
-        self.applySessions(await self.appModel.loadCachedChatSessions())
+        let sessions = await self.appModel.loadCachedChatSessions()
+        self.applySessions(sessions)
     }
 
     private func applySessions(_ sessions: [OpenClawChatSessionEntry]) {
@@ -789,6 +790,6 @@ extension NodeAppModel {
     }
 
     fileprivate var commandSessionListMode: String {
-        self.chatTransportModeID
+        self.chatViewModelIdentityID
     }
 }
