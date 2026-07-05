@@ -1435,6 +1435,13 @@ export const id: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      contextUsage: {
+        title: "Detail penggunaan konteks",
+        open: "Buka detail penggunaan konteks",
+        summary: "Penggunaan konteks sesi: {used} dari {limit} ({pct}%)",
+        contextWindow: "Jendela konteks",
+        latestRunTokens: "Token eksekusi terbaru",
+      },
       dismissTalkError: "Tutup error Talk",
       startTalk: "Start Talk",
       stillListening: "Masih mendengarkan",

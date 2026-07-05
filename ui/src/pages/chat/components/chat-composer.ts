@@ -1220,6 +1220,11 @@ export function getContextNoticeViewModel(
   defaultContextTokens: number | null,
 ): {
   pct: number;
+  used: number;
+  limit: number;
+  input: number | null;
+  output: number | null;
+  model: string | null;
   detail: string;
   color: string;
   bg: string;
@@ -1237,9 +1242,20 @@ export function getContextNoticeViewModel(
   const ratio = used / limit;
   const pct = Math.min(Math.round(ratio * 100), 100);
   const warning = ratio >= CONTEXT_NOTICE_RATIO;
+  // Session rows expose the latest run snapshot; totalTokens is the separate context snapshot.
+  const input = Number.isFinite(session?.inputTokens) ? (session?.inputTokens ?? null) : null;
+  const output = Number.isFinite(session?.outputTokens) ? (session?.outputTokens ?? null) : null;
+  const usage = {
+    used,
+    limit,
+    input,
+    output,
+    model: session?.model?.trim() || null,
+  };
   if (!warning) {
     return {
       pct,
+      ...usage,
       detail: `${formatCompactTokenCount(used)} / ${formatCompactTokenCount(limit)}`,
       color: "var(--muted)",
       bg: "color-mix(in srgb, var(--muted) 8%, transparent)",
@@ -1259,6 +1275,7 @@ export function getContextNoticeViewModel(
   const bg = `rgba(${r}, ${g}, ${b}, ${bgOpacity})`;
   return {
     pct,
+    ...usage,
     detail: `${formatCompactTokenCount(used)} / ${formatCompactTokenCount(limit)}`,
     color,
     bg,
@@ -1281,27 +1298,81 @@ export function renderContextNotice(
   }
   const canRenderCompact = model.compactRecommended && options.onCompact;
   const compactDisabled = options.compactDisabled === true || options.compactBusy === true;
-  const summary = `Session context usage: ${model.detail} (${model.pct}%)`;
+  const summary = t("chat.composer.contextUsage.summary", {
+    used: formatCompactTokenCount(model.used),
+    limit: formatCompactTokenCount(model.limit),
+    pct: String(model.pct),
+  });
   const dashOffset = RING_CIRCUMFERENCE * (1 - model.pct / 100);
+  const formatStat = (value: number | null) =>
+    value === null ? t("usage.common.emptyValue") : formatCompactTokenCount(value);
   return html`
-    <div
-      class="context-ring ${model.warning ? "context-ring--warning" : ""}"
-      role="status"
-      aria-label=${summary}
-      style="--ctx-color:${model.color};--ctx-bg:${model.bg}"
-    >
-      <svg class="context-ring__dial" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-        <circle class="context-ring__track" cx="8" cy="8" r=${RING_RADIUS} />
-        <circle
-          class="context-ring__fill"
-          cx="8"
-          cy="8"
-          r=${RING_RADIUS}
-          stroke-dasharray=${RING_CIRCUMFERENCE.toFixed(2)}
-          stroke-dashoffset=${dashOffset.toFixed(2)}
-        />
-      </svg>
-      <span class="context-ring__pct">${model.pct}%</span>
+    <div class="context-usage" style="--ctx-color:${model.color};--ctx-bg:${model.bg}">
+      <details>
+        <summary
+          class="context-ring ${model.warning ? "context-ring--warning" : ""}"
+          aria-label=${summary}
+          title=${t("chat.composer.contextUsage.open")}
+        >
+          <svg
+            class="context-ring__dial"
+            viewBox="0 0 16 16"
+            width="16"
+            height="16"
+            aria-hidden="true"
+          >
+            <circle class="context-ring__track" cx="8" cy="8" r=${RING_RADIUS} />
+            <circle
+              class="context-ring__fill"
+              cx="8"
+              cy="8"
+              r=${RING_RADIUS}
+              stroke-dasharray=${RING_CIRCUMFERENCE.toFixed(2)}
+              stroke-dashoffset=${dashOffset.toFixed(2)}
+            />
+          </svg>
+          <span class="context-ring__pct">${model.pct}%</span>
+        </summary>
+        <section class="context-usage__popover" aria-label=${t("chat.composer.contextUsage.title")}>
+          <div class="context-usage__header">
+            <span class="context-usage__title"
+              >${t("chat.composer.contextUsage.contextWindow")}</span
+            >
+            <strong class="context-usage__context-value">${model.detail} · ${model.pct}%</strong>
+          </div>
+          <div
+            class="context-usage__bar"
+            role="progressbar"
+            aria-label=${summary}
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow=${model.pct}
+          >
+            <span style="width: ${model.pct}%"></span>
+          </div>
+          <div class="context-usage__section-label">
+            ${t("chat.composer.contextUsage.latestRunTokens")}
+          </div>
+          <dl class="context-usage__stats">
+            <div>
+              <dt>${t("usage.breakdown.input")}</dt>
+              <dd>${formatStat(model.input)}</dd>
+            </div>
+            <div>
+              <dt>${t("usage.breakdown.output")}</dt>
+              <dd>${formatStat(model.output)}</dd>
+            </div>
+          </dl>
+          ${model.model
+            ? html`
+                <div class="context-usage__model">
+                  <span>${t("sessionsView.model")}</span>
+                  <strong>${model.model}</strong>
+                </div>
+              `
+            : nothing}
+        </section>
+      </details>
       ${canRenderCompact
         ? html`
             <button
