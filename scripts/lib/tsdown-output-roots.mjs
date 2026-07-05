@@ -5,7 +5,6 @@ const TSDOWN_PACKAGE_NAMES = [
   "gateway-client",
   "gateway-protocol",
   "llm-core",
-  "llm-runtime",
   "markdown-core",
   "media-core",
   "media-generation-core",

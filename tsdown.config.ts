@@ -557,14 +557,6 @@ function buildModelCatalogCoreDistEntries(): Record<string, string> {
   };
 }
 
-function buildLlmRuntimeDistEntries(): Record<string, string> {
-  return {
-    index: "packages/llm-runtime/src/index.ts",
-    "api-registry": "packages/llm-runtime/src/api-registry.ts",
-    stream: "packages/llm-runtime/src/stream.ts",
-  };
-}
-
 function shouldExternalizeAgentCoreDependency(id: string): boolean {
   return (
     id === "@openclaw/ai" ||
@@ -604,10 +596,6 @@ function shouldExternalizeSpeechCoreDependency(id: string): boolean {
 
 function shouldExternalizeLlmCoreDependency(id: string): boolean {
   return id === "typebox" || id.startsWith("typebox/");
-}
-
-function shouldExternalizeLlmRuntimeDependency(id: string): boolean {
-  return id === "@openclaw/llm-core" || id.startsWith("@openclaw/llm-core/");
 }
 
 function shouldExternalizeMarkdownCoreDependency(id: string): boolean {
@@ -790,15 +778,6 @@ export default defineConfig([
     dts: TSDOWN_DECLARATIONS,
     entry: buildModelCatalogCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("model-catalog-core"),
-  }),
-  nodeWorkspacePackageBuildConfig({
-    clean: true,
-    dts: TSDOWN_DECLARATIONS,
-    entry: buildLlmRuntimeDistEntries(),
-    outDir: tsdownPackageOutputRoot("llm-runtime"),
-    deps: {
-      neverBundle: shouldExternalizeLlmRuntimeDependency,
-    },
   }),
   nodeBuildConfig({
     // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
