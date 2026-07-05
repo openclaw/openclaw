@@ -2,10 +2,6 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
-import {
-  isFutureDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -13,30 +9,11 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getHeader } from "./http-headers.js";
 import type { WebhookContext } from "./types.js";
+import { createWebhookReplayCache, markWebhookReplay } from "./webhook-replay.js";
 
-const REPLAY_WINDOW_MS = 10 * 60 * 1000;
-const REPLAY_CACHE_MAX_ENTRIES = 10_000;
-const REPLAY_CACHE_PRUNE_INTERVAL = 64;
-
-type ReplayCache = {
-  seenUntil: Map<string, number>;
-  calls: number;
-};
-
-const twilioReplayCache: ReplayCache = {
-  seenUntil: new Map<string, number>(),
-  calls: 0,
-};
-
-const plivoReplayCache: ReplayCache = {
-  seenUntil: new Map<string, number>(),
-  calls: 0,
-};
-
-const telnyxReplayCache: ReplayCache = {
-  seenUntil: new Map<string, number>(),
-  calls: 0,
-};
+const twilioReplayCache = createWebhookReplayCache();
+const plivoReplayCache = createWebhookReplayCache();
+const telnyxReplayCache = createWebhookReplayCache();
 
 function sha256Hex(input: string): string {
   return crypto.createHash("sha256").update(input).digest("hex");
@@ -44,43 +21,6 @@ function sha256Hex(input: string): string {
 
 function createSkippedVerificationReplayKey(provider: string, ctx: WebhookContext): string {
   return `${provider}:skip:${sha256Hex(`${ctx.method}\n${ctx.url}\n${ctx.rawBody}`)}`;
-}
-
-function pruneReplayCache(cache: ReplayCache, now: number): void {
-  for (const [key, expiresAt] of cache.seenUntil) {
-    if (!isFutureDateTimestampMs(expiresAt, { nowMs: now })) {
-      cache.seenUntil.delete(key);
-    }
-  }
-  while (cache.seenUntil.size > REPLAY_CACHE_MAX_ENTRIES) {
-    const oldest = cache.seenUntil.keys().next().value;
-    if (!oldest) {
-      break;
-    }
-    cache.seenUntil.delete(oldest);
-  }
-}
-
-function markReplay(cache: ReplayCache, replayKey: string): boolean {
-  const now = Date.now();
-  cache.calls += 1;
-  if (cache.calls % REPLAY_CACHE_PRUNE_INTERVAL === 0) {
-    pruneReplayCache(cache, now);
-  }
-
-  const existing = cache.seenUntil.get(replayKey);
-  if (existing !== undefined && isFutureDateTimestampMs(existing, { nowMs: now })) {
-    return true;
-  }
-
-  const expiresAt = resolveExpiresAtMsFromDurationMs(REPLAY_WINDOW_MS, { nowMs: now });
-  if (expiresAt !== undefined) {
-    cache.seenUntil.set(replayKey, expiresAt);
-  }
-  if (cache.seenUntil.size > REPLAY_CACHE_MAX_ENTRIES) {
-    pruneReplayCache(cache, now);
-  }
-  return false;
 }
 
 /**
@@ -491,7 +431,7 @@ export function verifyTelnyxWebhook(
 ): TelnyxVerificationResult {
   if (options?.skipVerification) {
     const replayKey = createSkippedVerificationReplayKey("telnyx", ctx);
-    const isReplay = markReplay(telnyxReplayCache, replayKey);
+    const isReplay = markWebhookReplay(telnyxReplayCache, replayKey);
     return {
       ok: true,
       reason: "verification skipped (dev mode)",
@@ -536,7 +476,7 @@ export function verifyTelnyxWebhook(
     }
 
     const replayKey = `telnyx:${sha256Hex(`${timestamp}\n${canonicalSignature}\n${ctx.rawBody}`)}`;
-    const isReplay = markReplay(telnyxReplayCache, replayKey);
+    const isReplay = markWebhookReplay(telnyxReplayCache, replayKey);
     return { ok: true, isReplay, verifiedRequestKey: replayKey };
   } catch (err) {
     return {
@@ -590,7 +530,7 @@ export function verifyTwilioWebhook(
   // Allow skipping verification for development/testing
   if (options?.skipVerification) {
     const replayKey = createSkippedVerificationReplayKey("twilio", ctx);
-    const isReplay = markReplay(twilioReplayCache, replayKey);
+    const isReplay = markWebhookReplay(twilioReplayCache, replayKey);
     return {
       ok: true,
       reason: "verification skipped (dev mode)",
@@ -627,7 +567,7 @@ export function verifyTwilioWebhook(
       signature,
       requestParams: params,
     });
-    const isReplay = markReplay(twilioReplayCache, replayKey);
+    const isReplay = markWebhookReplay(twilioReplayCache, replayKey);
     return { ok: true, verificationUrl, isReplay, verifiedRequestKey: replayKey };
   }
 
@@ -666,7 +606,7 @@ export function verifyTwilioWebhook(
       signature,
       requestParams: params,
     });
-    const isReplay = markReplay(twilioReplayCache, replayKey);
+    const isReplay = markWebhookReplay(twilioReplayCache, replayKey);
     return { ok: true, verificationUrl: candidateUrl, isReplay, verifiedRequestKey: replayKey };
   }
 
@@ -879,7 +819,7 @@ export function verifyPlivoWebhook(
 ): PlivoVerificationResult {
   if (options?.skipVerification) {
     const replayKey = createSkippedVerificationReplayKey("plivo", ctx);
-    const isReplay = markReplay(plivoReplayCache, replayKey);
+    const isReplay = markWebhookReplay(plivoReplayCache, replayKey);
     return {
       ok: true,
       reason: "verification skipped (dev mode)",
@@ -947,7 +887,7 @@ export function verifyPlivoWebhook(
       postParams,
       nonce: nonceV3,
     });
-    const isReplay = markReplay(plivoReplayCache, replayKey);
+    const isReplay = markWebhookReplay(plivoReplayCache, replayKey);
     return { ok: true, version: "v3", verificationUrl, isReplay, verifiedRequestKey: replayKey };
   }
 
@@ -967,7 +907,7 @@ export function verifyPlivoWebhook(
       };
     }
     const replayKey = createPlivoV2ReplayKey(verificationUrl, nonceV2);
-    const isReplay = markReplay(plivoReplayCache, replayKey);
+    const isReplay = markWebhookReplay(plivoReplayCache, replayKey);
     return { ok: true, version: "v2", verificationUrl, isReplay, verifiedRequestKey: replayKey };
   }
 

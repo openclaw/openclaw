@@ -18,10 +18,8 @@ import type {
   WebhookContext,
   WebhookVerificationResult,
 } from "../types.js";
+import { createWebhookReplayCache, markWebhookReplay } from "../webhook-replay.js";
 import type { VoiceCallProvider } from "./base.js";
-
-/** Match the shared webhook replay window in webhook-security.ts. */
-const REPLAY_WINDOW_MS = 10 * 60 * 1000;
 
 /**
  * Mock voice call provider for local testing.
@@ -32,30 +30,16 @@ const REPLAY_WINDOW_MS = 10 * 60 * 1000;
  */
 export class MockProvider implements VoiceCallProvider {
   readonly name = "mock" as const;
+  private readonly replayCache = createWebhookReplayCache();
 
-  /** Track seen request keys with expiry so replay is window-bounded.
-   *  Same 10-minute window as webhook-security.ts REPLAY_WINDOW_MS. */
-  private readonly seenKeys = new Map<string, number>();
-
-  verifyWebhook(_ctx: WebhookContext): WebhookVerificationResult {
-    const key = `mock:${crypto.createHash("sha256").update(`${_ctx.method}\n${_ctx.url}\n${_ctx.rawBody}`).digest("hex")}`;
-    const now = Date.now();
-    this.pruneExpiredKeys(now);
-    const isReplay = this.seenKeys.has(key);
-    // Only set on first sight so expiry is relative to the original delivery,
-    // not refreshed on every replay.
-    if (!isReplay) {
-      this.seenKeys.set(key, now + REPLAY_WINDOW_MS);
-    }
-    return { ok: true, verifiedRequestKey: key, isReplay };
-  }
-
-  private pruneExpiredKeys(now: number): void {
-    for (const [k, expiresAt] of this.seenKeys) {
-      if (expiresAt <= now) {
-        this.seenKeys.delete(k);
-      }
-    }
+  verifyWebhook(ctx: WebhookContext): WebhookVerificationResult {
+    const requestMaterial = `${ctx.method}\n${ctx.url}\n${ctx.rawBody}`;
+    const key = `mock:${crypto.createHash("sha256").update(requestMaterial).digest("hex")}`;
+    return {
+      ok: true,
+      verifiedRequestKey: key,
+      isReplay: markWebhookReplay(this.replayCache, key),
+    };
   }
 
   parseWebhookEvent(
