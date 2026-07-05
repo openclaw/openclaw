@@ -24,12 +24,12 @@ describe("resolveNonNegativeNumber", () => {
   });
 
   it("returns undefined for NaN", () => {
-    expect(resolveNonNegativeNumber(NaN)).toBeUndefined();
+    expect(resolveNonNegativeNumber(Number.NaN)).toBeUndefined();
   });
 
   it("returns undefined for Infinity and -Infinity", () => {
-    expect(resolveNonNegativeNumber(Infinity)).toBeUndefined();
-    expect(resolveNonNegativeNumber(-Infinity)).toBeUndefined();
+    expect(resolveNonNegativeNumber(Number.POSITIVE_INFINITY)).toBeUndefined();
+    expect(resolveNonNegativeNumber(Number.NEGATIVE_INFINITY)).toBeUndefined();
   });
 
   it("returns undefined for null and undefined", () => {
