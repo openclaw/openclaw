@@ -1766,6 +1766,7 @@ export const registerTelegramHandlers = ({
     result.kind === "failed-retryable" && isReplySessionInitConflictError(result.error);
 
   const processPluginCallbackSubmitText = async (params: {
+    callbackId: string;
     syntheticCtx: Parameters<typeof processMessageWithReplyChain>[0]["ctx"];
     syntheticMessage: Parameters<typeof processMessageWithReplyChain>[0]["msg"];
     storeAllowFrom: Parameters<typeof processMessageWithReplyChain>[0]["storeAllowFrom"];
@@ -1777,7 +1778,11 @@ export const registerTelegramHandlers = ({
           msg: params.syntheticMessage,
           allMedia: [],
           storeAllowFrom: params.storeAllowFrom,
-          options: { spooledReplay: true },
+          options: {
+            spooledReplay: true,
+            forceWasMentioned: true,
+            messageIdOverride: params.callbackId,
+          },
         });
         if (result.kind === "completed") {
           return;
@@ -2754,6 +2759,7 @@ export const registerTelegramHandlers = ({
               isForum,
             });
           await processPluginCallbackSubmitText({
+            callbackId: callback.id,
             syntheticCtx,
             syntheticMessage,
             storeAllowFrom,

@@ -4034,6 +4034,85 @@ describe("createTelegramBot", () => {
     expect(payload.SenderUsername).toBe("ada_bot");
   });
 
+  it("submits plugin-owned callback text in mention-required group topics", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageReplyMarkupSpy.mockClear();
+    const replyDone = waitForReplyCalls(1);
+    registerPluginInteractiveHandler("smart-replies-plugin", {
+      channel: "telegram",
+      namespace: "openclaw-smart-replies",
+      handler: async () => ({ handled: true, submitText: "Investigate topic callback" }),
+    } satisfies TelegramInteractiveHandlerRegistration);
+    setTelegramRuntime({
+      state: {
+        openKeyedStore: ((options) =>
+          createPluginStateKeyedStoreForTests(
+            "telegram",
+            options,
+          )) as TelegramRuntime["state"]["openKeyedStore"],
+        openSyncKeyedStore: ((options) =>
+          createPluginStateSyncKeyedStoreForTests(
+            "telegram",
+            options,
+          )) as TelegramRuntime["state"]["openSyncKeyedStore"],
+      },
+      channel: {},
+    } as TelegramRuntime);
+
+    try {
+      createTelegramBot({
+        token: "tok",
+        config: {
+          channels: {
+            telegram: {
+              dmPolicy: "open",
+              allowFrom: ["*"],
+              capabilities: { inlineButtons: "group" },
+              groupPolicy: "open",
+              groups: { "*": { requireMention: true } },
+            },
+          },
+        },
+      });
+      const callbackHandler = getOnHandler("callback_query") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-smart-reply-topic-submit",
+          data: "openclaw-smart-replies:v1:SW52ZXN0aWdhdGUgdG9waWMgY2FsbGJhY2s",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: -100987654321, type: "supergroup", title: "Forum Group", is_forum: true },
+            date: 1736380800,
+            is_topic_message: true,
+            message_id: 11,
+            message_thread_id: 99,
+            text: "What should I help you sharpen next?",
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+      await replyDone;
+    } finally {
+      clearTelegramRuntime();
+    }
+
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(-100987654321, 11, {
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    expect(payload.Body).toContain("Investigate topic callback");
+    expect(payload.MessageSid).toBe("cbq-smart-reply-topic-submit");
+    expect(payload.WasMentioned).toBe(true);
+    expect(payload.SenderId).toBe("9");
+    expect(payload.SenderUsername).toBe("ada_bot");
+  });
+
   it("retries plugin-owned callback text when the previous reply session is still closing", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
