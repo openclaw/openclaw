@@ -1356,7 +1356,6 @@ export async function runReplyAgent(params: {
     requesterSenderE164: followupRun.run.senderE164,
   });
   const compactionNoticeMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
-  let didSendDirectCompactionNoticePayload = false;
   const sendDirectCompactionNotice = shouldNotifyUserAboutCompaction(cfg)
     ? async (phase: CompactionNoticePhase) => {
         if (!opts?.onBlockReply) {
@@ -1369,7 +1368,6 @@ export async function runReplyAgent(params: {
         });
         try {
           await opts.onBlockReply(noticePayload);
-          didSendDirectCompactionNoticePayload = true;
         } catch (err) {
           logVerbose(`preflightCompaction notice delivery failed: ${String(err)}`);
         }
@@ -1737,7 +1735,6 @@ export async function runReplyAgent(params: {
       fallbackModel,
       fallbackExhausted,
       fallbackAttempts,
-      didDeliverCompactionNotice,
       directlySentBlockKeys,
       directlySentBlockPayloads,
       terminalFailurePayload,
@@ -1948,12 +1945,12 @@ export async function runReplyAgent(params: {
     const committedMessagingToolSourceReplyDelivery =
       hasCommittedSourceReplyDeliveryEvidence(runResult);
     const successfulSideEffectDelivery =
-      didSendDirectCompactionNoticePayload ||
-      didDeliverCompactionNotice ||
       successfulSourceReplyDelivery ||
       committedMessagingToolSourceReplyDelivery ||
       hasVisibleOutboundDeliveryEvidence(runResult) ||
       runResult.didSendDeterministicApprovalPrompt === true;
+    // Compaction notices are progress, not a terminal reply. Dispatcher-backed
+    // delivery settles after this run returns, so it cannot prove turn completion here.
     const shouldDeliverTerminalFailure = Boolean(
       terminalFailurePayload && !successfulSideEffectDelivery,
     );

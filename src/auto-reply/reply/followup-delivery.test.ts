@@ -48,6 +48,18 @@ describe("resolveFollowupDeliveryPayloads", () => {
     ).toEqual([{ text: "internal reasoning", isReasoning: true }, { text: "final answer" }]);
   });
 
+  it("drops commentary unless its delivery lane is enabled", () => {
+    const payload = { text: "internal commentary", isCommentary: true };
+    expect(resolveFollowupDeliveryPayloads({ cfg: baseConfig, payloads: [payload] })).toEqual([]);
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [payload],
+        commentaryPayloadsEnabled: true,
+      }),
+    ).toMatchObject([payload]);
+  });
+
   it("drops heartbeat ack payloads without media", () => {
     expect(
       resolveFollowupDeliveryPayloads({

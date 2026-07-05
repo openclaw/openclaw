@@ -4956,6 +4956,21 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(requireRecord(routed.payload, "fallback payload")).toMatchObject({ isError: true });
   });
 
+  it("routes the fallback for disabled commentary-only output", async () => {
+    await runMessagingCase({
+      agentResult: { payloads: [{ text: "internal commentary", isCommentary: true }] },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    const routed = requireMockCallArg(routeReplyMock, 0);
+    expect(requireRecord(routed.payload, "fallback payload")).toMatchObject({ isError: true });
+  });
+
   it("routes the fallback after a hidden compaction retry", async () => {
     await runMessagingCase({
       agentResult: { payloads: [] },
@@ -4974,9 +4989,10 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
   });
 
   it.each([
+    ["succeeds", { ok: true }],
     ["fails", { ok: false, error: "forced route failure" }],
     ["is hook-suppressed", { ok: true, suppressed: true }],
-  ])("routes the fallback when a compaction notice %s", async (_label, noticeResult) => {
+  ])("routes the fallback after compaction progress that %s", async (_label, noticeResult) => {
     routeReplyMock.mockResolvedValueOnce(noticeResult).mockResolvedValue({ ok: true });
     runEmbeddedAgentMock.mockImplementationOnce(async (runParams: unknown) => {
       const onAgentEvent = requireRecord(runParams, "embedded run params").onAgentEvent;
