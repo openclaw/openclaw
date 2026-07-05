@@ -1,5 +1,5 @@
 // Regression coverage for AgentSession defensive boundaries.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "./auth-storage.js";
 import { createExtensionRuntime } from "./extensions/loader.js";
 import type { LoadExtensionsResult, ResourceLoader } from "./extensions/types.js";
@@ -7,7 +7,6 @@ import { ModelRegistry } from "./model-registry.js";
 import { createAgentSession } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
-import { createSyntheticSourceInfo } from "./source-info.js";
 
 const testModel = {
   id: "test-model",

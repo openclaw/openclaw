@@ -8,7 +8,6 @@ import { SettingsManager } from "../../src/agents/sessions/settings-manager.js";
 import { ModelRegistry } from "../../src/agents/sessions/model-registry.js";
 import { AuthStorage } from "../../src/agents/sessions/auth-storage.js";
 import { createExtensionRuntime } from "../../src/agents/sessions/extensions/loader.js";
-import { createSyntheticSourceInfo } from "../../src/agents/sessions/source-info.js";
 import type { LoadExtensionsResult, ResourceLoader } from "../../src/agents/sessions/extensions/types.js";
 
 const testModel = {
