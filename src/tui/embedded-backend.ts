@@ -16,6 +16,7 @@ import {
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
 import { ensureRuntimePluginsLoaded } from "../agents/runtime-plugins.js";
+import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { parseGoalCommand } from "../auto-reply/reply/commands-goal.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -102,6 +103,7 @@ type LocalRunState = {
   finishing: boolean;
   lifecycleEnded: boolean;
   lifecycleStopReason?: string;
+  toolErrorSummary?: string;
   finalSent: boolean;
   registered: boolean;
   queuedRunReady: Promise<void>;
@@ -1008,7 +1010,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
   }
 
-  private emitChatAborted(runId: string, run: LocalRunState) {
+  private emitChatAborted(runId: string, run: LocalRunState, errorMessage?: string) {
     this.clearPendingLifecycleError(runId);
     run.markQueuedRunReady();
     const alreadyFinal = run.finalSent;
@@ -1020,10 +1022,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
     run.registered = true;
     run.lastBroadcastText = undefined;
+    const diagnostic = errorMessage ?? run.toolErrorSummary;
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
       state: "aborted",
+      ...(diagnostic ? { errorMessage: diagnostic } : {}),
     });
   }
 
@@ -1088,6 +1092,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
       data: evt.data,
     });
 
+    if (evt.stream === "assistant" || (evt.stream === "tool" && evt.data?.phase === "start")) {
+      run.toolErrorSummary = undefined;
+    } else if (evt.stream === "tool" && evt.data?.phase === "result") {
+      run.toolErrorSummary = readToolValidationErrorSummary(evt.data.toolErrorSummary);
+    }
+
     const assistantLiveChatInput =
       evt.stream === "assistant" ? resolveAssistantLiveChatInput(evt.data) : undefined;
     if (
@@ -1110,6 +1120,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
     const phase = lifecyclePhase;
     const aborted = evt.data?.aborted === true || run.controller.signal.aborted;
+    const toolErrorSummary = readToolValidationErrorSummary(evt.data?.toolErrorSummary);
     if (phase === "finishing") {
       run.finishing = true;
       run.markQueuedRunReady();
@@ -1120,7 +1131,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (phase === "end") {
       run.finishing = false;
       if (aborted) {
-        this.emitChatAborted(evt.runId, run);
+        this.emitChatAborted(evt.runId, run, toolErrorSummary);
         return;
       }
       run.lifecycleEnded = true;
@@ -1133,7 +1144,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (phase === "error") {
       run.finishing = false;
       if (aborted) {
-        this.emitChatAborted(evt.runId, run);
+        this.emitChatAborted(evt.runId, run, toolErrorSummary);
         return;
       }
       const errorMessage = typeof evt.data?.error === "string" ? evt.data.error : undefined;

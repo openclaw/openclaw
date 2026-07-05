@@ -1,5 +1,6 @@
 // Policy doctor health-check factories for one policy scope.
 import type { HealthCheck } from "openclaw/plugin-sdk/health";
+import { repairPolicyAutomaticNarrower } from "../automatic-repairs.js";
 import { CHECK_IDS } from "../metadata.js";
 import type { PolicyDoctorCheckDeps } from "../types.js";
 
@@ -85,6 +86,9 @@ export function createPolicyAgentToolChecks(deps: PolicyDoctorCheckDeps): readon
     source: "policy",
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyToolsElevatedEnabled);
+    },
+    repair(ctx, findings) {
+      return repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyToolsElevatedEnabled);
     },
   };
   const policyToolsAlsoAllowMissingCheck: HealthCheck = {
