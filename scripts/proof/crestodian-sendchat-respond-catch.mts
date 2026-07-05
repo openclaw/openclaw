@@ -35,22 +35,18 @@ const runtime: RuntimeEnv = {
   },
 };
 
-const { backend, finish } = await new Promise<{
+const { backend } = await new Promise<{
   backend: {
     sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
     onEvent?: (evt: { event: string; payload?: { state?: string; errorMessage?: string } }) => void;
     engine: { handle: () => Promise<unknown>; dispose: () => Promise<void> };
   };
-  finish: () => void;
 }>((resolve) => {
   void runCrestodianTui(
     {
       deps: { loadOverview: async () => overview },
       runTui: async (opts) => {
-        resolve({
-          backend: opts.backend as never,
-          finish: () => undefined,
-        });
+        resolve({ backend: opts.backend as never });
         return { exitReason: "exit" };
       },
     },
