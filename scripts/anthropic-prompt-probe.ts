@@ -455,7 +455,14 @@ async function getFreePort(): Promise<number> {
   });
 }
 
-async function runDirectPrompt(prompt: string): Promise<PromptResult> {
+async function runDirectPrompt(
+  prompt: string,
+  options: {
+    claudeBin?: string;
+    shutdownWaitMs?: number;
+    timeoutMs?: number;
+  } = {},
+): Promise<PromptResult> {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-direct-prompt-probe-"));
   const proxyPort = ENABLE_CAPTURE ? await getFreePort() : undefined;
   const proxy =
@@ -466,17 +473,21 @@ async function runDirectPrompt(prompt: string): Promise<PromptResult> {
   try {
     const stdout: string[] = [];
     const stderr: string[] = [];
-    const child = spawn(CLAUDE_BIN, [...DIRECT_CLAUDE_ARGS, prompt, USER_PROMPT], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        ...(proxyPort ? { ANTHROPIC_BASE_URL: `http://127.0.0.1:${proxyPort}` } : {}),
-        ANTHROPIC_API_KEY: "",
-        ANTHROPIC_API_KEY_OLD: "",
+    const child = spawn(
+      options.claudeBin ?? CLAUDE_BIN,
+      [...DIRECT_CLAUDE_ARGS, prompt, USER_PROMPT],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          ...(proxyPort ? { ANTHROPIC_BASE_URL: `http://127.0.0.1:${proxyPort}` } : {}),
+          ANTHROPIC_API_KEY: "",
+          ANTHROPIC_API_KEY_OLD: "",
+        },
+        detached: process.platform !== "win32",
+        stdio: ["ignore", "pipe", "pipe"],
       },
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    );
     child.stdout.on("data", (chunk) => stdout.push(String(chunk)));
     child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
     const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
@@ -490,7 +501,7 @@ async function runDirectPrompt(prompt: string): Promise<PromptResult> {
       await waitForGatewayPromptChildTreeExit(
         child,
         exitPromise.then(() => undefined),
-        1_500,
+        options.shutdownWaitMs ?? 1_500,
       );
     };
     const removeParentSignalHandlers = installGatewayPromptParentSignalHandlers(
@@ -505,7 +516,7 @@ async function runDirectPrompt(prompt: string): Promise<PromptResult> {
           void stopDirectChild("SIGKILL").finally(() => {
             resolve({ code: null, signal: "SIGKILL" });
           });
-        }, TIMEOUT_MS);
+        }, options.timeoutMs ?? TIMEOUT_MS);
       }),
     ]).finally(() => {
       if (timeoutTimer) {
@@ -963,6 +974,7 @@ export const testing = {
   readLogTail,
   readRequestBody,
   resolveAnthropicUpstreamUrl,
+  runDirectPrompt,
   stopGatewayPromptChild,
   summarizeCapture,
   summarizeText,

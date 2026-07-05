@@ -481,8 +481,8 @@ export async function buildRunPlan(
   );
 }
 
-function printHelp(): void {
-  console.log(`Media live harness
+export function formatHelp(): string {
+  return `Media live harness
 
 Usage:
   pnpm test:live:media
@@ -509,7 +509,11 @@ Flags:
   --all-providers           do not auto-filter by available auth
   --allow-empty             exit 0 when auth filtering leaves no runnable providers
   --quiet | --no-quiet      passed through to test:live
-`);
+`;
+}
+
+function printHelp(): void {
+  console.log(formatHelp());
 }
 
 export async function runSuite(params: {

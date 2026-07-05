@@ -1,6 +1,6 @@
 // Startup log tests cover security warnings, model detail formatting, plugin
 // summaries, bind URLs, ANSI output, and dangerous config reporting.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { formatAgentModelStartupDetails, logGatewayStartup } from "./server-startup-log.js";
 
@@ -15,6 +15,24 @@ vi.mock("../plugins/plugin-registry.js", async (importOriginal) => ({
 }));
 
 describe("gateway startup log", () => {
+  beforeAll(() => {
+    formatAgentModelStartupDetails({
+      cfg: {
+        models: {
+          providers: {
+            google: {
+              api: "google-generative-ai",
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "google",
+      model: "gemma-4-26b-a4b-it",
+    });
+  });
+
   beforeEach(() => {
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({

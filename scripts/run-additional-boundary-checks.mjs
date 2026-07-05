@@ -6,9 +6,10 @@ import { performance } from "node:perf_hooks";
 
 const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
-const TIMEOUT_KILL_GRACE_MS = 5_000;
+// Boundary checks are disposable subprocesses; bound descendant cleanup after timeout.
+const TIMEOUT_KILL_GRACE_MS = 250;
 const PROCESS_GROUP_EXIT_POLL_MS = 25;
-const POST_FORCE_KILL_WAIT_MS = 1_000;
+const POST_FORCE_KILL_WAIT_MS = 250;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
 /** Ordered list of supplemental boundary checks used by CI sharding. */

@@ -2839,10 +2839,10 @@ describe("active-memory plugin", () => {
   it("returns partial transcript text on timeout when the subagent has already written assistant output", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(200);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 1_000,
+      timeoutMs: 100,
       maxSummaryChars: 40,
       persistTranscripts: true,
       logging: true,
