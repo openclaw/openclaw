@@ -620,6 +620,69 @@ describe("doctor repair sequencing", () => {
     ]);
   });
 
+  it("surfaces ClawHub notices from successful missing configured plugin repair", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
+      changes: ['Installed missing configured plugin "brave" from @openclaw/brave-plugin.'],
+      warnings: [],
+      notices: [
+        'ClawHub trust warning for "@openclaw/brave-plugin@1.2.3": scan=pending; reasons=pending.',
+      ],
+    });
+    mocks.maybeRepairStalePluginConfig.mockImplementationOnce((cfg: OpenClawConfig) => ({
+      config: {
+        ...cfg,
+        plugins: {
+          ...cfg.plugins,
+          allow: [],
+          entries: {},
+        },
+      },
+      changes: ["- plugins.entries: removed 1 stale plugin entry (brave)"],
+    }));
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {
+          plugins: {
+            allow: ["brave"],
+            entries: {
+              brave: {
+                enabled: true,
+                source: "clawhub",
+                package: "@openclaw/brave-plugin",
+              },
+            },
+          },
+        } as OpenClawConfig,
+        candidate: {
+          plugins: {
+            allow: ["brave"],
+            entries: {
+              brave: {
+                enabled: true,
+                source: "clawhub",
+                package: "@openclaw/brave-plugin",
+              },
+            },
+          },
+        } as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(result.changeNotes).toStrictEqual([
+      'Installed missing configured plugin "brave" from @openclaw/brave-plugin.',
+      "- plugins.entries: removed 1 stale plugin entry (brave)",
+    ]);
+    expect(result.warningNotes).toStrictEqual([
+      'ClawHub trust warning for "@openclaw/brave-plugin@1.2.3": scan=pending; reasons=pending.',
+    ]);
+    expect(mocks.maybeRepairStalePluginConfig).toHaveBeenCalledOnce();
+    expect(result.state.pendingChanges).toBe(true);
+  });
+
   it("moves legacy Codex routes to canonical OpenAI before missing plugin install repair", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockImplementationOnce(
       async (params: { cfg: OpenClawConfig }) => {

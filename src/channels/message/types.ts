@@ -179,6 +179,8 @@ export type ChannelMessageSendTextContext<TConfig = OpenClawConfig> = {
   silent?: boolean;
   signal?: AbortSignal;
   gatewayClientScopes?: readonly string[];
+  /** @internal Report each completed platform sub-send before another fallible step. */
+  onDeliveryResult?: (result: ChannelMessageSendResult) => Promise<void> | void;
 };
 
 /** Media send context with validated access hooks and media presentation hints. */

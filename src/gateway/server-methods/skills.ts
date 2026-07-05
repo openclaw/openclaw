@@ -1,6 +1,7 @@
 // Gateway RPC handlers for skill discovery, install/update, and proposal workflows.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  buildClawHubTrustErrorDetails,
   ErrorCodes,
   errorShape,
   validateSkillsBinsParams,
@@ -116,6 +117,12 @@ function buildRemoteAwareWorkspaceSkillStatus(resolved: ResolvedSkillsWorkspace)
 
 function respondSkillWorkshopError(respond: RespondFn, err: unknown) {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(err)));
+}
+
+function collectClawHubTrustWarnings(results: Array<{ warning?: string }>): string[] {
+  return results
+    .map((result) => normalizeOptionalString(result.warning))
+    .filter((warning): warning is string => Boolean(warning));
 }
 
 function buildRevisionAgentInstruction(proposal: Awaited<ReturnType<typeof inspectSkillProposal>>) {
@@ -539,14 +546,17 @@ export const skillsHandlers: GatewayRequestHandlers = {
         slug: string;
         version?: string;
         force?: boolean;
+        acknowledgeClawHubRisk?: boolean;
       };
       const result = await installSkillFromClawHub({
         workspaceDir: workspaceDirRaw,
         slug: p.slug,
         version: p.version,
         force: Boolean(p.force),
+        ...(p.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
         config: cfg,
       });
+      const errorDetails = result.ok ? undefined : buildClawHubTrustErrorDetails(result);
       respond(
         result.ok,
         result.ok
@@ -559,9 +569,16 @@ export const skillsHandlers: GatewayRequestHandlers = {
               slug: result.slug,
               version: result.version,
               targetDir: result.targetDir,
+              ...(result.warning ? { warning: result.warning } : {}),
             }
           : result,
-        result.ok ? undefined : errorShape(ErrorCodes.UNAVAILABLE, result.error),
+        result.ok
+          ? undefined
+          : errorShape(
+              ErrorCodes.UNAVAILABLE,
+              result.error,
+              errorDetails ? { details: errorDetails } : undefined,
+            ),
       );
       return;
     }
@@ -629,6 +646,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         source: "clawhub";
         slug?: string;
         all?: boolean;
+        acknowledgeClawHubRisk?: boolean;
       };
       if (!p.slug && !p.all) {
         respond(
@@ -657,9 +675,11 @@ export const skillsHandlers: GatewayRequestHandlers = {
       const results = await updateSkillsFromClawHub({
         workspaceDir: resolved.workspaceDir,
         slug: p.slug,
+        ...(p.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
         config: resolved.cfg,
       });
       const errors = results.filter((result) => !result.ok);
+      const warnings = collectClawHubTrustWarnings(results);
       respond(
         errors.length === 0,
         {
@@ -672,7 +692,12 @@ export const skillsHandlers: GatewayRequestHandlers = {
         },
         errors.length === 0
           ? undefined
-          : errorShape(ErrorCodes.UNAVAILABLE, errors.map((result) => result.error).join("; ")),
+          : errorShape(ErrorCodes.UNAVAILABLE, errors.map((result) => result.error).join("; "), {
+              details: {
+                results,
+                ...(warnings.length > 0 ? { warnings } : {}),
+              },
+            }),
       );
       return;
     }

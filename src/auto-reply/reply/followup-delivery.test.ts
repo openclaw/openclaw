@@ -11,6 +11,31 @@ vi.mock("../../channels/plugins/index.js", () => ({
 const baseConfig = {} as OpenClawConfig;
 
 describe("resolveFollowupDeliveryPayloads", () => {
+  it("drops a durable reasoning payload when reasoningPayloadsEnabled is not set", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [
+          { text: "internal reasoning", isReasoning: true },
+          { text: "final answer" },
+        ],
+      }),
+    ).toEqual([{ text: "final answer" }]);
+  });
+
+  it("keeps a durable reasoning payload when reasoningPayloadsEnabled is true", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [
+          { text: "internal reasoning", isReasoning: true },
+          { text: "final answer" },
+        ],
+        reasoningPayloadsEnabled: true,
+      }),
+    ).toEqual([{ text: "internal reasoning", isReasoning: true }, { text: "final answer" }]);
+  });
+
   it("drops heartbeat ack payloads without media", () => {
     expect(
       resolveFollowupDeliveryPayloads({

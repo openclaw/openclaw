@@ -655,6 +655,52 @@ describe("GatewayChatClient", () => {
     });
   });
 
+  it("preserves side runs for session-scoped TUI aborts", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const request = vi.fn().mockResolvedValue({ ok: true, aborted: true });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    await client.abortChat({ sessionKey: "main" });
+
+    expect(request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: "main",
+      preserveSideRuns: true,
+    });
+  });
+
+  it("retries session aborts without side-run preservation on older Gateways", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "invalid chat.abort params: at root: unexpected property 'preserveSideRuns'",
+        }),
+      )
+      .mockResolvedValueOnce({ ok: true, aborted: true, runIds: ["run-main"] });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    await expect(client.abortChat({ sessionKey: "main" })).resolves.toEqual({
+      ok: true,
+      aborted: true,
+      runIds: ["run-main"],
+    });
+    expect(request).toHaveBeenNthCalledWith(1, "chat.abort", {
+      sessionKey: "main",
+      preserveSideRuns: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "chat.abort", { sessionKey: "main" });
+  });
+
   it("returns the actual chat send ack status from the gateway", async () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",

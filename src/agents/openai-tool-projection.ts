@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type OpenAI from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import { projectRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
@@ -42,10 +43,6 @@ export type OpenAICompletionsToolChoice = Exclude<
   OpenAICompletionsSdkToolChoice,
   { type: "custom" }
 >;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function unreadableToolDiagnostic(toolIndex: number): OpenAIToolProjectionDiagnostic {
   return {

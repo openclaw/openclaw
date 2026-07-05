@@ -40,6 +40,9 @@ const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const staggerOffsetCache = new Map<string, number>();
 
+type CronAgentTurnPayload = Extract<CronPayload, { kind: "agentTurn" }>;
+type CronAgentTurnPayloadPatch = Extract<CronPayloadPatch, { kind: "agentTurn" }>;
+
 /** Default retry delays applied after consecutive cron execution errors. */
 export const DEFAULT_ERROR_BACKOFF_SCHEDULE_MS = [
   30_000,
@@ -176,7 +179,13 @@ function isStaggeredCronRunAtMs(job: CronJob, runAtMs: number): boolean {
   if (job.schedule.kind !== "cron" || !isFiniteTimestamp(runAtMs)) {
     return false;
   }
-  const previous = computeStaggeredCronPreviousRunAtMs(job, runAtMs + 1);
+  // Probe past the candidate second. Croner-style second-granular schedules
+  // normalize a 1ms probe back to the candidate's second, so
+  // `previousRuns(1, runAtMs + 1)` returns the slot before the candidate
+  // rather than the candidate itself and exact-second slots get misclassified
+  // as stale. A 1s probe lands past the candidate second, matching the cursor
+  // step used elsewhere in this file (cf. #81691).
+  const previous = computeStaggeredCronPreviousRunAtMs(job, runAtMs + 1_000);
   return previous === runAtMs;
 }
 
@@ -483,6 +492,7 @@ export function recordScheduleComputeError(params: {
   state: CronServiceState;
   job: CronJob;
   err: unknown;
+  deferredAutoDisableNotifications?: Array<() => void>;
 }): boolean {
   const { state, job, err } = params;
   const errorCount = (job.state.scheduleErrorCount ?? 0) + 1;
@@ -499,20 +509,27 @@ export function recordScheduleComputeError(params: {
       "cron: auto-disabled job after repeated schedule errors",
     );
 
-    // Notify the user so the auto-disable is not silent (#28861).
     const notifyText = `⚠️ Cron job "${job.name}" has been auto-disabled after ${errorCount} consecutive schedule errors. Last error: ${errText}`;
-    state.deps.enqueueSystemEvent(notifyText, {
-      agentId: job.agentId,
-      sessionKey: job.sessionKey,
-      contextKey: `cron:${job.id}:auto-disabled`,
-    });
-    state.deps.requestHeartbeat({
-      source: "cron",
-      intent: "event",
-      reason: `cron:${job.id}:auto-disabled`,
-      agentId: job.agentId,
-      sessionKey: job.sessionKey,
-    });
+    const notify = () => {
+      state.deps.enqueueSystemEvent(notifyText, {
+        agentId: job.agentId,
+        sessionKey: job.sessionKey,
+        contextKey: `cron:${job.id}:auto-disabled`,
+      });
+      state.deps.requestHeartbeat({
+        source: "cron",
+        intent: "event",
+        reason: `cron:${job.id}:auto-disabled`,
+        agentId: job.agentId,
+        sessionKey: job.sessionKey,
+      });
+    };
+    if (params.deferredAutoDisableNotifications) {
+      params.deferredAutoDisableNotifications.push(notify);
+    } else {
+      // Notify the user so the auto-disable is not silent (#28861).
+      notify();
+    }
   } else {
     state.deps.log.warn(
       { jobId: job.id, name: job.name, errorCount, err: errText },
@@ -608,7 +625,12 @@ function walkSchedulableJobs(
   return changed;
 }
 
-function recomputeJobNextRunAtMs(params: { state: CronServiceState; job: CronJob; nowMs: number }) {
+function recomputeJobNextRunAtMs(params: {
+  state: CronServiceState;
+  job: CronJob;
+  nowMs: number;
+  deferredAutoDisableNotifications?: Array<() => void>;
+}) {
   let changed = false;
   try {
     let newNext = computeJobNextRunAtMs(params.job, params.nowMs);
@@ -635,7 +657,14 @@ function recomputeJobNextRunAtMs(params: { state: CronServiceState; job: CronJob
       changed = true;
     }
   } catch (err) {
-    if (recordScheduleComputeError({ state: params.state, job: params.job, err })) {
+    if (
+      recordScheduleComputeError({
+        state: params.state,
+        job: params.job,
+        err,
+        deferredAutoDisableNotifications: params.deferredAutoDisableNotifications,
+      })
+    ) {
       changed = true;
     }
   }
@@ -673,26 +702,56 @@ export function recomputeNextRunsForMaintenance(
     recomputeExpired?: boolean;
     nowMs?: number;
     repairFutureCronNextRunAtMs?: boolean;
-    skipFutureRepairJobIds?: ReadonlySet<string>;
+    deferredAutoDisableNotifications?: Array<() => void>;
   },
 ): boolean {
   const recomputeExpired = opts?.recomputeExpired ?? false;
   const repairFutureCronNextRunAtMs = opts?.repairFutureCronNextRunAtMs ?? true;
-  const skipFutureRepairJobIds = opts?.skipFutureRepairJobIds;
+  const recomputeJob = (job: CronJob, nowMs: number) =>
+    recomputeJobNextRunAtMs({
+      state,
+      job,
+      nowMs,
+      deferredAutoDisableNotifications: opts?.deferredAutoDisableNotifications,
+    });
+  const deferralIds = state.pendingCatchupDeferralJobIds;
+  // Drop deferral markers for jobs that no longer exist in the store or
+  // are disabled. They will not fire, so no deferral is needed.
+  if (state.store && deferralIds.size > 0) {
+    const relevantDeferralIds = new Set(
+      state.store.jobs.filter((job) => isJobEnabled(job)).map((job) => job.id),
+    );
+    for (const jobId of deferralIds) {
+      if (!relevantDeferralIds.has(jobId)) {
+        deferralIds.delete(jobId);
+      }
+    }
+  }
   return walkSchedulableJobs(
     state,
     ({ job, nowMs: now }) => {
       let changed = false;
+
+      // Clear stale deferral markers once the deferred staggered slot arrives.
+      // After the slot fires, future repair is safe for this job again.
+      if (deferralIds.has(job.id)) {
+        const nextRun = job.state.nextRunAtMs;
+        if (hasScheduledNextRunAtMs(nextRun) && now >= nextRun) {
+          deferralIds.delete(job.id);
+          changed = true;
+        }
+      }
+
       if (!hasScheduledNextRunAtMs(job.state.nextRunAtMs)) {
-        if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
+        if (recomputeJob(job, now)) {
           changed = true;
         }
       } else if (
         repairFutureCronNextRunAtMs &&
-        !skipFutureRepairJobIds?.has(job.id) &&
+        !deferralIds.has(job.id) &&
         shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })
       ) {
-        if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
+        if (recomputeJob(job, now)) {
           changed = true;
         }
       } else if (
@@ -714,7 +773,7 @@ export function recomputeNextRunsForMaintenance(
           now < backoffUntilMs &&
           job.state.nextRunAtMs < backoffUntilMs;
         if (alreadyExecutedSlot || isStaleBackoffSlot) {
-          if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
+          if (recomputeJob(job, now)) {
             changed = true;
           }
         }
@@ -897,6 +956,42 @@ export function applyJobPatch(
   }
 }
 
+function applyAgentTurnToolsAllowPatch(
+  payload: CronAgentTurnPayload,
+  patch: CronAgentTurnPayloadPatch,
+  existing?: CronAgentTurnPayload,
+): void {
+  if (Array.isArray(patch.toolsAllow)) {
+    payload.toolsAllow = patch.toolsAllow;
+    // Same-kind edits keep the marker only when the default list is unchanged;
+    // kind replacements carry the cron-tool-stamped marker into persistence.
+    if (
+      patch.toolsAllowIsDefault === true &&
+      (!existing || (existing.toolsAllowIsDefault === true && toolsAllowEqual(existing, patch)))
+    ) {
+      payload.toolsAllowIsDefault = true;
+    } else {
+      delete payload.toolsAllowIsDefault;
+    }
+  } else if (patch.toolsAllow === null) {
+    delete payload.toolsAllow;
+    delete payload.toolsAllowIsDefault;
+  }
+}
+
+function toolsAllowEqual(
+  left: Pick<CronAgentTurnPayload, "toolsAllow">,
+  right: Pick<CronAgentTurnPayloadPatch, "toolsAllow">,
+): boolean {
+  const rightToolsAllow = right.toolsAllow;
+  return (
+    Array.isArray(left.toolsAllow) &&
+    Array.isArray(rightToolsAllow) &&
+    left.toolsAllow.length === rightToolsAllow.length &&
+    left.toolsAllow.every((toolName, index) => toolName === rightToolsAllow[index])
+  );
+}
+
 function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronPayload {
   if (patch.kind !== existing.kind) {
     return buildPayloadFromPatch(patch);
@@ -943,7 +1038,7 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
     return buildPayloadFromPatch(patch);
   }
 
-  const next: Extract<CronPayload, { kind: "agentTurn" }> = { ...existing };
+  const next: CronAgentTurnPayload = { ...existing };
   if (typeof patch.message === "string") {
     next.message = patch.message;
   }
@@ -957,13 +1052,11 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   } else if (patch.fallbacks === null) {
     delete next.fallbacks;
   }
-  if (Array.isArray(patch.toolsAllow)) {
-    next.toolsAllow = patch.toolsAllow;
-  } else if (patch.toolsAllow === null) {
-    delete next.toolsAllow;
-  }
+  applyAgentTurnToolsAllowPatch(next, patch, existing);
   if (typeof patch.thinking === "string") {
     next.thinking = patch.thinking;
+  } else if (patch.thinking === null) {
+    delete next.thinking;
   }
   if (typeof patch.timeoutSeconds === "number") {
     next.timeoutSeconds = patch.timeoutSeconds;
@@ -1005,17 +1098,18 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     throw new Error('cron.update payload.kind="agentTurn" requires message');
   }
 
-  return {
+  const next: CronAgentTurnPayload = {
     kind: "agentTurn",
     message: patch.message,
     model: typeof patch.model === "string" ? patch.model : undefined,
     fallbacks: Array.isArray(patch.fallbacks) ? patch.fallbacks : undefined,
-    toolsAllow: Array.isArray(patch.toolsAllow) ? patch.toolsAllow : undefined,
-    thinking: patch.thinking,
+    thinking: typeof patch.thinking === "string" ? patch.thinking : undefined,
     timeoutSeconds: patch.timeoutSeconds,
     lightContext: patch.lightContext,
     allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
   };
+  applyAgentTurnToolsAllowPatch(next, patch);
+  return next;
 }
 
 function mergeCronDelivery(

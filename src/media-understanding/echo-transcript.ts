@@ -4,16 +4,12 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 
-let messageRuntimePromise: Promise<typeof import("../channels/message/runtime.js")> | null = null;
-
-function loadMessageRuntime() {
-  // The message runtime is heavy and only needed when echo delivery actually
-  // proceeds to a deliverable channel.
-  messageRuntimePromise ??= import("../channels/message/runtime.js");
-  return messageRuntimePromise;
-}
+// The message runtime is heavy and only needed when echo delivery actually
+// proceeds to a deliverable channel.
+const loadMessageRuntime = createLazyRuntimeModule(() => import("../channels/message/runtime.js"));
 
 /** Default operator-visible transcript echo format for preflight audio transcription. */
 export const DEFAULT_ECHO_TRANSCRIPT_FORMAT = '📝 "{transcript}"';

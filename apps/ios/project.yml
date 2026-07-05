@@ -3,7 +3,7 @@ options:
   bundleIdPrefix: ai.openclawfoundation
   deploymentTarget:
     iOS: "18.0"
-  xcodeVersion: "16.0"
+  xcodeVersion: "26.0"
 
 settings:
   base:
@@ -60,6 +60,13 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: Sources
+      - path: Resources/Licenses
+        type: folder
+        buildPhase: resources
+      - path: Sources/Fonts
+        buildPhase: resources
+      - path: Resources/Localizable.xcstrings
+        buildPhase: resources
     dependencies:
       - target: OpenClawShareExtension
         embed: true
@@ -147,6 +154,7 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         UIBackgroundModes:
           - audio
+          - location
           - remote-notification
         BGTaskSchedulerPermittedIdentifiers:
           - "$(OPENCLAW_APP_BUNDLE_ID).bgrefresh"
@@ -156,7 +164,7 @@ targets:
           NSAllowsLocalNetworking: true
         NSBonjourServices:
           - _openclaw-gw._tcp
-        NSCameraUsageDescription: OpenClaw can capture photos or short video clips when requested via the gateway.
+        NSCameraUsageDescription: OpenClaw uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace.
         NSCalendarsUsageDescription: OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.
         NSCalendarsFullAccessUsageDescription: OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.
         NSCalendarsWriteOnlyAccessUsageDescription: OpenClaw uses your calendars to add events when you enable calendar access.
@@ -165,11 +173,19 @@ targets:
         NSLocationAlwaysAndWhenInUseUsageDescription: OpenClaw can share your location in the background when you enable Always.
         NSMicrophoneUsageDescription: OpenClaw uses the microphone for realtime chat, voice wake, and push-to-talk.
         NSMotionUsageDescription: OpenClaw may use motion data to support device-aware interactions and automations.
-        NSPhotoLibraryUsageDescription: OpenClaw needs photo library access when you choose existing photos to share with your assistant.
+        NSPhotoLibraryUsageDescription: OpenClaw lets your assistant read photos you allow and lets you choose photos to share.
+        PHPhotoLibraryPreventAutomaticLimitedAccessAlert: true
         NSRemindersFullAccessUsageDescription: OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access.
         NSSpeechRecognitionUsageDescription: OpenClaw uses on-device speech recognition for talk mode and voice wake.
         NSSupportsLiveActivities: true
         ITSAppUsesNonExemptEncryption: false
+        UIAppFonts:
+          - RedHatDisplay[wght].ttf
+          - Inter[opsz,wght].ttf
+          - Inter-Italic[opsz,wght].ttf
+          - JetBrainsMono-Regular.ttf
+          - JetBrainsMono-Medium.ttf
+          - JetBrainsMono-SemiBold.ttf
         OpenClawPushMode: "$(OPENCLAW_PUSH_MODE)"
         OpenClawPushRelayBaseURL: "$(OPENCLAW_PUSH_RELAY_BASE_URL)"
         UISupportedInterfaceOrientations:
@@ -185,6 +201,8 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: ShareExtension
+      - path: Resources/Localizable.xcstrings
+        buildPhase: resources
     dependencies:
       - package: OpenClawKit
       - sdk: AppIntents.framework
@@ -227,6 +245,10 @@ targets:
     sources:
       - path: ActivityWidget
       - path: Sources/LiveActivity/OpenClawActivityAttributes.swift
+      - path: Sources/Fonts
+        buildPhase: resources
+      - path: Resources/Localizable.xcstrings
+        buildPhase: resources
     dependencies:
       - sdk: WidgetKit.framework
       - sdk: ActivityKit.framework
@@ -248,6 +270,13 @@ targets:
         CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
         CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         NSSupportsLiveActivities: true
+        UIAppFonts:
+          - RedHatDisplay[wght].ttf
+          - Inter[opsz,wght].ttf
+          - Inter-Italic[opsz,wght].ttf
+          - JetBrainsMono-Regular.ttf
+          - JetBrainsMono-Medium.ttf
+          - JetBrainsMono-SemiBold.ttf
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
 
@@ -259,6 +288,10 @@ targets:
       - path: WatchApp
         excludes:
           - Info.plist
+      - path: Sources/Fonts
+        buildPhase: resources
+      - path: Resources/Localizable.xcstrings
+        buildPhase: resources
     dependencies:
       - sdk: AppIntents.framework
       - sdk: WatchConnectivity.framework
@@ -289,6 +322,13 @@ targets:
         CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         WKCompanionAppBundleIdentifier: "$(OPENCLAW_APP_BUNDLE_ID)"
         WKApplication: true
+        UIAppFonts:
+          - RedHatDisplay[wght].ttf
+          - Inter[opsz,wght].ttf
+          - Inter-Italic[opsz,wght].ttf
+          - JetBrainsMono-Regular.ttf
+          - JetBrainsMono-Medium.ttf
+          - JetBrainsMono-SemiBold.ttf
 
   OpenClawTests:
     type: bundle.unit-test

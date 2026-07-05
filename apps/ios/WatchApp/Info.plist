@@ -24,5 +24,14 @@
 	<true/>
 	<key>WKCompanionAppBundleIdentifier</key>
 	<string>$(OPENCLAW_APP_BUNDLE_ID)</string>
+	<key>UIAppFonts</key>
+	<array>
+		<string>RedHatDisplay[wght].ttf</string>
+		<string>Inter[opsz,wght].ttf</string>
+		<string>Inter-Italic[opsz,wght].ttf</string>
+		<string>JetBrainsMono-Regular.ttf</string>
+		<string>JetBrainsMono-Medium.ttf</string>
+		<string>JetBrainsMono-SemiBold.ttf</string>
+	</array>
 </dict>
 </plist>

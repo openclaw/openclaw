@@ -5,8 +5,9 @@
  */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "../../utils.js";
+import { isStringOption } from "../../utils/string-readers.js";
 
-const CRON_SCHEDULE_KINDS = ["at", "every", "cron"] as const;
+const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit"] as const;
 const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn"] as const;
 const CRON_FLAT_PAYLOAD_KEYS = [
   "message",
@@ -32,6 +33,8 @@ const CRON_FLAT_SCHEDULE_KEYS = [
   "stagger",
   "staggerMs",
   "exact",
+  "command",
+  "cwd",
 ] as const;
 const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "name",
@@ -54,7 +57,7 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 function isCronScheduleKind(value: unknown): value is (typeof CRON_SCHEDULE_KINDS)[number] {
-  return value === "at" || value === "every" || value === "cron";
+  return isStringOption(value, CRON_SCHEDULE_KINDS);
 }
 
 function isCronPayloadKind(value: unknown): value is (typeof CRON_PAYLOAD_KINDS)[number] {
@@ -178,7 +181,12 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
     schedule.kind = "cron";
   }
 
-  for (const key of ["anchorMs", "tz", "staggerMs"] as const) {
+  const movedCommand = moveDefinedField({ source: value, target: schedule, from: "command" });
+  if (movedCommand && !isCronScheduleKind(schedule.kind)) {
+    schedule.kind = "on-exit";
+  }
+
+  for (const key of ["anchorMs", "tz", "staggerMs", "cwd"] as const) {
     hasSchedule = moveDefinedField({ source: value, target: schedule, from: key }) || hasSchedule;
   }
   hasSchedule =
@@ -198,6 +206,8 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
       schedule.kind = "every";
     } else if (schedule.expr !== undefined) {
       schedule.kind = "cron";
+    } else if (schedule.command !== undefined) {
+      schedule.kind = "on-exit";
     }
   }
 

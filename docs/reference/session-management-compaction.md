@@ -81,6 +81,7 @@ Session persistence has automatic maintenance controls (`session.maintenance`) f
 - `mode`: `enforce` (default) or `warn`
 - `pruneAfter`: stale-entry age cutoff (default `30d`)
 - `maxEntries`: cap entries in `sessions.json` (default `500`)
+- Short-lived gateway model-run probe retention is fixed at `24h`, but it is pressure-gated: it only removes stale strict probe rows when session-entry maintenance/cap pressure is reached. This applies only to strict explicit probe keys matching `agent:*:explicit:model-run-<uuid>` and runs before global stale-entry cleanup/capping when it runs.
 - `resetArchiveRetention`: retention for `*.reset.<timestamp>` transcript archives (default: same as `pruneAfter`; `false` disables cleanup)
 - `maxDiskBytes`: optional sessions-directory budget
 - `highWaterBytes`: optional target after cleanup (default `80%` of `maxDiskBytes`)
@@ -90,7 +91,12 @@ Normal Gateway writes flow through a per-store session writer that serializes in
 Maintenance keeps durable external conversation pointers such as group sessions
 and thread-scoped chat sessions, but synthetic runtime entries for cron, hooks,
 heartbeat, ACP, and sub-agents can still be removed when they exceed the
-configured age, count, or disk budget.
+configured age, count, or disk budget. Gateway model-run probe sessions use the
+separate `24h` model-run retention only when their key exactly matches
+`agent:*:explicit:model-run-<uuid>`; other explicit sessions are not part of
+that retention. The model-run cleanup is applied only under session-entry cap
+pressure. Isolated cron runs keep their own `cron.sessionRetention` control,
+independent of model-run probe retention.
 
 OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups during Gateway writes. The legacy `session.maintenance.rotateBytes` key is ignored and `openclaw doctor --fix` removes it from older configs.
 
@@ -185,6 +191,18 @@ Key fields (not exhaustive):
   time for idle freshness.
 - `updatedAt`: last store-row mutation timestamp, used for listing, pruning, and
   bookkeeping. It is not the authority for daily/idle reset freshness.
+- `archivedAt`: optional archive timestamp. Archived sessions stay in the store
+  with their transcript intact and are excluded from normal active listings.
+- `pinnedAt`: optional pin timestamp. Active pinned sessions sort ahead of
+  unpinned sessions; archiving a session clears its pin.
+- Codex thread interop: both fields follow the Codex thread-management shape —
+  the `archived`/`pinned` booleans on the wire are always derived from the
+  timestamp and stamped server-side, matching Codex `threads.archived_at`
+  semantics and camelCase serialization. OpenClaw timestamps are epoch
+  milliseconds while Codex uses epoch seconds, so bridges convert at the codex
+  plugin seam. Codex has no pin API yet (`thread/archive`/`thread/unarchive`
+  only); pinned state stays OpenClaw-side until one exists, at which point the
+  matching shape lets bound sessions round-trip pin state mechanically.
 - `sessionFile`: optional explicit transcript path override
 - `chatType`: `direct | group | room` (helps UIs and send policy)
 - `provider`, `subject`, `room`, `space`, `displayName`: metadata for group/channel labeling

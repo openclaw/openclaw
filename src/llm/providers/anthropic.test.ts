@@ -75,12 +75,14 @@ describe("Anthropic provider", () => {
       apiKey?: string | null;
       authToken?: string | null;
       defaultHeaders?: Record<string, string | null>;
+      fetch?: unknown;
     };
 
     expect(config.apiKey).toBe("sk-ant-provider");
     expect(config.authToken).toBeNull();
     expect(config.defaultHeaders?.["x-api-key"]).toBeUndefined();
     expect(config.defaultHeaders?.["cf-aig-authorization"]).toBe("Bearer gateway-token");
+    expect(typeof config.fetch).toBe("function");
   });
 
   it("uses bearer auth for Microsoft Foundry Anthropic requests", async () => {
@@ -384,6 +386,82 @@ describe("Anthropic provider", () => {
     ]);
   });
 
+  it("preserves mixed text and image tool-result order", async () => {
+    let capturedPayload: unknown;
+    const imageData = Buffer.from("image").toString("base64");
+    const stream = streamAnthropic(
+      makeAnthropicModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            content: [{ type: "toolCall", id: "call_1", name: "lookup", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "lookup",
+            content: [
+              { type: "text", text: "before image" },
+              { type: "image", data: imageData, mimeType: "image/png" },
+              {
+                type: "resource" as const,
+                resource: { uri: "https://example.com/data.json", text: '{"key":"value"}' },
+              },
+              { type: "text", text: "after image" },
+            ],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+      } as unknown as Context,
+      {
+        apiKey: "sk-ant-provider",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    await stream.result();
+
+    const payload = capturedPayload as {
+      messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    };
+    const userMessage = payload.messages.find((message) => message.role === "user");
+    const toolResult = userMessage?.content.find((entry) => entry.type === "tool_result") as {
+      content: unknown[];
+    };
+
+    expect(toolResult.content).toEqual([
+      { type: "text", text: "before image" },
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/png",
+          data: imageData,
+        },
+      },
+      { type: "text", text: expect.stringContaining('{"type":"resource"') },
+      { type: "text", text: "after image" },
+    ]);
+  });
+
   it.each([
     ["anthropic", "sk-ant-provider"],
     ["anthropic-vertex", "vertex-token"],
@@ -460,6 +538,247 @@ describe("Anthropic provider", () => {
         },
       }),
     ]);
+  });
+
+  it("sends server-side fallback params for direct Fable API-key requests", async () => {
+    let capturedPayload: unknown;
+    const stream = streamAnthropic(
+      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      {
+        apiKey: "sk-ant-provider",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+    await stream.result();
+
+    expect((capturedPayload as { fallbacks?: unknown }).fallbacks).toEqual([
+      { model: "claude-opus-4-8" },
+    ]);
+    await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
+    const config = anthropicMockState.configs[0] as {
+      defaultHeaders?: Record<string, string>;
+    };
+    expect(config.defaultHeaders?.["anthropic-beta"]).toContain("server-side-fallback-2026-06-01");
+  });
+
+  it.each([
+    { label: "OAuth tokens", overrides: {}, apiKey: "sk-ant-oat01-token" },
+    {
+      label: "custom proxy endpoints",
+      overrides: { baseUrl: "https://proxy.example.com/v1" },
+      apiKey: "sk-ant-provider",
+    },
+    {
+      label: "Anthropic Vertex models",
+      overrides: { provider: "anthropic-vertex" },
+      apiKey: "vertex-token",
+    },
+    {
+      label: "non-Fable models",
+      overrides: { id: "claude-opus-4-8", name: "Claude Opus 4.8" },
+      apiKey: "sk-ant-provider",
+    },
+  ])("omits server-side fallback params for $label", async ({ overrides, apiKey }) => {
+    let capturedPayload: unknown;
+    const stream = streamAnthropic(
+      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5", ...overrides }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      {
+        apiKey,
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+    await stream.result();
+
+    expect((capturedPayload as { fallbacks?: unknown }).fallbacks).toBeUndefined();
+  });
+
+  it("rebuilds Fable output at a mid-stream server-side fallback boundary", async () => {
+    const client = {
+      messages: {
+        create: vi.fn(() => ({
+          asResponse: () =>
+            Promise.resolve(
+              createSseResponse([
+                {
+                  type: "message_start",
+                  message: {
+                    id: "msg_fallback",
+                    model: "claude-fable-5",
+                    usage: { input_tokens: 5, output_tokens: 0 },
+                  },
+                },
+                {
+                  type: "content_block_start",
+                  index: 0,
+                  content_block: { type: "thinking", thinking: "" },
+                },
+                {
+                  type: "content_block_delta",
+                  index: 0,
+                  delta: { type: "thinking_delta", thinking: "pre-boundary reasoning" },
+                },
+                { type: "content_block_stop", index: 0 },
+                {
+                  type: "content_block_start",
+                  index: 1,
+                  content_block: { type: "text", text: "" },
+                },
+                {
+                  type: "content_block_delta",
+                  index: 1,
+                  delta: { type: "text_delta", text: "partial " },
+                },
+                { type: "content_block_stop", index: 1 },
+                {
+                  type: "content_block_start",
+                  index: 2,
+                  content_block: { type: "tool_use", id: "call_1", name: "lookup", input: {} },
+                },
+                { type: "content_block_stop", index: 2 },
+                {
+                  type: "content_block_start",
+                  index: 3,
+                  content_block: {
+                    type: "fallback",
+                    from: { model: "claude-fable-5" },
+                    to: { model: "claude-opus-4-8" },
+                  },
+                },
+                { type: "content_block_stop", index: 3 },
+                {
+                  type: "content_block_start",
+                  index: 4,
+                  content_block: { type: "text", text: "" },
+                },
+                {
+                  type: "content_block_delta",
+                  index: 4,
+                  delta: { type: "text_delta", text: "continued" },
+                },
+                { type: "content_block_stop", index: 4 },
+                {
+                  type: "message_delta",
+                  delta: { stop_reason: "end_turn" },
+                  usage: { input_tokens: 5, output_tokens: 9 },
+                },
+                { type: "message_stop" },
+              ]),
+            ),
+        })),
+      },
+    };
+
+    const stream = streamAnthropic(
+      makeAnthropicModel({
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+      }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    // Pre-boundary thinking/tool blocks must not replay or execute; text is
+    // the continuation prefix the fallback model built on.
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toEqual([
+      { type: "text", text: "partial " },
+      { type: "text", text: "continued" },
+    ]);
+    expect(result.responseModel).toBe("claude-opus-4-8");
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        type: "provider_fallback",
+        details: {
+          provider: "anthropic",
+          fromModel: "claude-fable-5",
+          toModel: "claude-opus-4-8",
+        },
+      }),
+    ]);
+    expect(eventTypes).not.toContain("thinking_start");
+    expect(eventTypes).not.toContain("toolcall_start");
+    expect(eventTypes.filter((type) => type === "start")).toHaveLength(1);
+    // Fallback-served turns bill at the serving model's rates, not Fable's:
+    // 5 input tokens at $5/MTok plus 9 output tokens at $25/MTok.
+    expect(result.usage.cost.input).toBeCloseTo(0.000025, 10);
+    expect(result.usage.cost.output).toBeCloseTo(0.000225, 10);
+    expect(result.usage.cost.total).toBeCloseTo(0.00025, 10);
+  });
+
+  it("records a pre-output server-side fallback and keeps the continuation", async () => {
+    const client = {
+      messages: {
+        create: vi.fn(() => ({
+          asResponse: () =>
+            Promise.resolve(
+              createSseResponse([
+                {
+                  type: "message_start",
+                  message: {
+                    id: "msg_fallback",
+                    // Pre-output declines: message_start names the fallback model.
+                    model: "claude-opus-4-8",
+                    usage: { input_tokens: 5, output_tokens: 0 },
+                  },
+                },
+                {
+                  type: "content_block_start",
+                  index: 0,
+                  content_block: {
+                    type: "fallback",
+                    from: { model: "claude-fable-5" },
+                    to: { model: "claude-opus-4-8" },
+                  },
+                },
+                { type: "content_block_stop", index: 0 },
+                {
+                  type: "content_block_start",
+                  index: 1,
+                  content_block: { type: "text", text: "" },
+                },
+                {
+                  type: "content_block_delta",
+                  index: 1,
+                  delta: { type: "text_delta", text: "Hi!" },
+                },
+                { type: "content_block_stop", index: 1 },
+                {
+                  type: "message_delta",
+                  delta: { stop_reason: "end_turn" },
+                  usage: { input_tokens: 5, output_tokens: 2 },
+                },
+                { type: "message_stop" },
+              ]),
+            ),
+        })),
+      },
+    };
+
+    const stream = streamAnthropic(
+      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toEqual([{ type: "text", text: "Hi!" }]);
+    expect(result.responseModel).toBe("claude-opus-4-8");
+    expect(result.diagnostics).toEqual([expect.objectContaining({ type: "provider_fallback" })]);
   });
 
   it("routes interleaved active content blocks by their event indexes", async () => {

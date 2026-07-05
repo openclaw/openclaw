@@ -1110,7 +1110,7 @@ describe("tui command handlers", () => {
     expect(state.pendingChatRunId).toEqual(expect.any(String));
   });
 
-  it("blocks gateway slash prompts while a run is active", async () => {
+  it("forwards gateway slash prompts while a run is active", async () => {
     const { handleCommand, sendChat, addPendingUser, addSystem } = createHarness({
       activeChatRunId: "run-active",
       activityStatus: "streaming",
@@ -1118,9 +1118,9 @@ describe("tui command handlers", () => {
 
     await handleCommand("/context detail");
 
-    expect(sendChat).not.toHaveBeenCalled();
-    expect(addPendingUser).not.toHaveBeenCalled();
-    expect(addSystem).toHaveBeenCalledWith(
+    expectSendChatFields(sendChat, { message: "/context detail" });
+    expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "/context detail");
+    expect(addSystem).not.toHaveBeenCalledWith(
       "agent is busy — press Esc to abort before sending a new message",
     );
   });
@@ -1140,19 +1140,15 @@ describe("tui command handlers", () => {
     expect(addUser).not.toHaveBeenCalled();
   });
 
-  it("sends slash stop to the backend when there is no tracked run", async () => {
+  it("routes slash stop to session abort when there is no tracked run", async () => {
     const abortActive = vi.fn().mockResolvedValue(undefined);
     const { handleCommand, sendChat, addPendingUser } = createHarness({ abortActive });
 
     await handleCommand("/stop");
 
-    expect(abortActive).not.toHaveBeenCalled();
-    expect(sendChat).toHaveBeenCalledTimes(1);
-    expectSendChatFields(sendChat, {
-      message: "/stop",
-      sessionKey: "agent:main:main",
-    });
-    expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "/stop");
+    expect(abortActive).toHaveBeenCalledWith({ preferActive: true });
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addPendingUser).not.toHaveBeenCalled();
   });
 
   it("sends broad stop-like text as a normal prompt when idle", async () => {
@@ -1179,6 +1175,7 @@ describe("tui command handlers", () => {
     expect(addUser).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith(
       "agent is busy — press Esc to abort before sending a new message",
+      { coalesceConsecutive: true },
     );
   });
 
@@ -1198,19 +1195,100 @@ describe("tui command handlers", () => {
     );
   });
 
-  it("blocks gateway sends while the current run is finishing", async () => {
-    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+  it("forwards gateway sends while the current run is finishing", async () => {
+    const { handleCommand, sendChat, addPendingUser, addSystem } = createHarness({
       activeChatRunId: "run-active",
       activityStatus: "finishing context",
     });
 
     await handleCommand("/context detail");
 
-    expect(sendChat).not.toHaveBeenCalled();
-    expect(addUser).not.toHaveBeenCalled();
-    expect(addSystem).toHaveBeenCalledWith(
+    expect(sendChat).toHaveBeenCalledTimes(1);
+    expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "/context detail");
+    expect(addSystem).not.toHaveBeenCalledWith(
       "agent is busy — press Esc to abort before sending a new message",
     );
+  });
+
+  it("forwards gateway sends while a run is active so Gateway owns queue policy", async () => {
+    const { handleCommand, sendChat, addPendingUser, addSystem } = createHarness({
+      activeChatRunId: "run-active",
+      activityStatus: "streaming",
+    });
+
+    await handleCommand("follow up question");
+
+    expect(sendChat).toHaveBeenCalledTimes(1);
+    expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "follow up question");
+    expect(addSystem).not.toHaveBeenCalledWith(
+      "agent is busy — press Esc to abort before sending a new message",
+    );
+  });
+
+  it("blocks sends while optimistic user message admission is pending", async () => {
+    const { handleCommand, sendChat, addSystem } = createHarness({
+      activeChatRunId: "run-active",
+      pendingOptimisticUserMessage: true,
+      activityStatus: "sending",
+    });
+
+    await handleCommand("another message");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith(
+      "agent is busy — press Esc to abort before sending a new message",
+      { coalesceConsecutive: true },
+    );
+  });
+
+  it("preserves activeChatRunId when a queued followup send fails", async () => {
+    const sendChat = vi.fn().mockRejectedValue(new Error("network error"));
+    const { handleCommand, addSystem, state } = createHarness({
+      sendChat,
+      activeChatRunId: "run-active",
+      activityStatus: "streaming",
+    });
+
+    await handleCommand("queued followup");
+
+    expect(addSystem).toHaveBeenCalledWith(expect.stringContaining("send failed"));
+    expect(state.activeChatRunId).toBe("run-active");
+  });
+
+  it("does not restore a queued run that completes before the followup send fails", async () => {
+    let rejectSend: (error: Error) => void = () => {
+      throw new Error("sendChat promise rejector was not initialized");
+    };
+    const sendChat = vi.fn(
+      () =>
+        new Promise<never>((_resolve, reject) => {
+          rejectSend = reject;
+        }),
+    );
+    const { handleCommand, state } = createHarness({
+      sendChat,
+      activeChatRunId: "run-active",
+      activityStatus: "streaming",
+    });
+
+    const pendingSend = handleCommand("queued followup");
+    await Promise.resolve();
+    state.activeChatRunId = null;
+    rejectSend(new Error("network error"));
+    await pendingSend;
+
+    expect(state.activeChatRunId).toBeNull();
+  });
+
+  it("clears activeChatRunId when a non-queued send fails", async () => {
+    const sendChat = vi.fn().mockRejectedValue(new Error("network error"));
+    const { handleCommand, state } = createHarness({
+      sendChat,
+    });
+
+    await handleCommand("some message");
+
+    expect(state.activeChatRunId).toBeNull();
   });
 
   it("runs /auth through the local auth flow and refreshes session info", async () => {
@@ -1441,5 +1519,114 @@ describe("tui command handlers", () => {
     await pending;
 
     expect(openOverlay).toHaveBeenCalledTimes(1);
+  });
+
+  it("/usage reset clears the stale local responseUsage after the gateway patch", async () => {
+    // Regression: after /usage reset sends responseUsage: null and the gateway deletes
+    // the field, applySessionInfoFromPatch skips absent fields. The command handler must
+    // explicitly clear the stale local value so no-arg cycles and subsequent refreshes
+    // start from the correct effective mode.
+    const patchSession = vi.fn().mockResolvedValue({
+      entry: {
+        // Gateway returns the updated entry without the responseUsage field (it was deleted).
+        sessionId: "sess-reset",
+        updatedAt: Date.now(),
+      },
+    });
+    const { handleCommand, addSystem, state } = createHarness({ patchSession });
+    const sessionInfo = state.sessionInfo as {
+      responseUsage?: string;
+      effectiveResponseUsage?: string;
+    };
+    sessionInfo.responseUsage = "tokens";
+    sessionInfo.effectiveResponseUsage = "tokens";
+
+    await handleCommand("/usage reset");
+
+    expect(patchSession).toHaveBeenCalledWith(expect.objectContaining({ responseUsage: null }));
+    expect(addSystem).toHaveBeenCalledWith("usage footer: reset to default");
+    // Both stale local values must be cleared so the toggle/display is not stale
+    // until refreshSessionInfo() repopulates the inherited default.
+    expect(sessionInfo.responseUsage).toBeUndefined();
+    expect(sessionInfo.effectiveResponseUsage).toBeUndefined();
+  });
+
+  it("/usage no-arg toggle cycles from effectiveResponseUsage when the session override is unset", async () => {
+    // Regression: when the session has no explicit responseUsage but the config default
+    // is "tokens", the toggle should cycle tokens→full, not off→tokens.
+    const patchSession = vi.fn().mockResolvedValue({
+      entry: { sessionId: "sess-toggle", updatedAt: Date.now(), responseUsage: "full" },
+    });
+    const { handleCommand, addSystem, state } = createHarness({ patchSession });
+    // No raw responseUsage on session, but effective (from config default) is "tokens".
+    const sessionInfo = state.sessionInfo as {
+      responseUsage?: string;
+      effectiveResponseUsage?: string;
+    };
+    sessionInfo.responseUsage = undefined;
+    sessionInfo.effectiveResponseUsage = "tokens";
+
+    await handleCommand("/usage");
+
+    expect(patchSession).toHaveBeenCalledWith(expect.objectContaining({ responseUsage: "full" }));
+    expect(addSystem).toHaveBeenCalledWith("usage footer: full");
+  });
+
+  it("allows /queue directives to reach gateway during an active run in steer mode", async () => {
+    const { handleCommand, sendChat, addPendingUser, addSystem } = createHarness({
+      activeChatRunId: "run-active",
+      activityStatus: "streaming",
+    });
+
+    await handleCommand("/queue followup");
+
+    expect(sendChat).toHaveBeenCalledTimes(1);
+    expectSendChatFields(sendChat, { message: "/queue followup" });
+    expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "/queue followup");
+    expect(addSystem).not.toHaveBeenCalledWith(
+      "agent is busy — press Esc to abort before sending a new message",
+    );
+  });
+
+  it("allows bare /queue to reach gateway during an active run", async () => {
+    const { handleCommand, sendChat, addSystem } = createHarness({
+      activeChatRunId: "run-active",
+      activityStatus: "streaming",
+    });
+
+    await handleCommand("/queue");
+
+    expect(sendChat).toHaveBeenCalledTimes(1);
+    expectSendChatFields(sendChat, { message: "/queue" });
+    expect(addSystem).not.toHaveBeenCalledWith(
+      "agent is busy — press Esc to abort before sending a new message",
+    );
+  });
+
+  it("allows colon-form /queue directives during an active run", async () => {
+    const { handleCommand, sendChat } = createHarness({
+      activeChatRunId: "run-active",
+      activityStatus: "streaming",
+    });
+
+    await handleCommand("/queue:followup");
+
+    expectSendChatFields(sendChat, { message: "/queue:followup" });
+  });
+
+  it("blocks /queue while optimistic user message is pending", async () => {
+    const { handleCommand, sendChat, addSystem } = createHarness({
+      activeChatRunId: "run-active",
+      pendingOptimisticUserMessage: true,
+      activityStatus: "sending",
+    });
+
+    await handleCommand("/queue followup");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith(
+      "agent is busy — press Esc to abort before sending a new message",
+      { coalesceConsecutive: true },
+    );
   });
 });

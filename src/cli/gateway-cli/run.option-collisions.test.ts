@@ -5,7 +5,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
-import { captureEnv, withEnvAsync } from "../../test-utils/env.js";
+import {
+  captureEnv,
+  deleteTestEnvValue,
+  setTestEnvValue,
+  withEnvAsync,
+} from "../../test-utils/env.js";
 import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import { installGatewayRunRuntimeHooks } from "./runtime-hooks.js";
@@ -96,10 +101,15 @@ const withoutGatewayAuthEnv = {
 };
 
 const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+// gateway run exports --token/--password into process.env as a side effect
+// (see runGatewayCli auth wiring); snapshot and clear them so shared vitest
+// workers do not leak credentials into later files' gateway connects.
 const serviceEnvSnapshot = captureEnv([
   "OPENCLAW_SERVICE_MARKER",
   "OPENCLAW_SERVICE_KIND",
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
+  "OPENCLAW_GATEWAY_TOKEN",
+  "OPENCLAW_GATEWAY_PASSWORD",
 ]);
 
 vi.mock("../../config/config.js", () => ({
@@ -299,7 +309,9 @@ describe("gateway run option collisions", () => {
   beforeEach(() => {
     delete process.env.OPENCLAW_SERVICE_MARKER;
     delete process.env.OPENCLAW_SERVICE_KIND;
-    delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    deleteTestEnvValue(GATEWAY_SERVICE_RUNTIME_PID_ENV);
     resetRuntimeCapture();
     configState.cfg = {};
     configState.snapshot = { config: {}, exists: false, sourceConfig: {}, valid: true };
@@ -1035,7 +1047,9 @@ describe("gateway run option collisions", () => {
         loadGlobalRuntimeDotEnvFiles.mockImplementation(() => {
           process.env.OPENCLAW_GATEWAY_TOKEN ??= "trusted-token";
           process.env.OPENCLAW_PROFILE ??= "dev";
-          process.env.OPENCLAW_WORKSPACE_DIR ??= "/tmp/openclaw-reset-workspace";
+          if (process.env.OPENCLAW_WORKSPACE_DIR === undefined) {
+            setTestEnvValue("OPENCLAW_WORKSPACE_DIR", "/tmp/openclaw-reset-workspace");
+          }
         });
 
         await prepareGatewayReset();
@@ -1059,7 +1073,7 @@ describe("gateway run option collisions", () => {
       };
       await prepareGatewayReset();
       loadGlobalRuntimeDotEnvFiles.mockImplementation(() => {
-        process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-reset-retargeted";
+        setTestEnvValue("OPENCLAW_STATE_DIR", "/tmp/openclaw-reset-retargeted");
         return {
           gatewayEnvAppliedKeys: [],
           stateEnvAppliedKeys: ["OPENCLAW_STATE_DIR"],
@@ -1091,7 +1105,7 @@ describe("gateway run option collisions", () => {
   ])("blocks trusted dotenv selector drift for %s after startup mutations", async (selector) => {
     await withEnvAsync({ [selector]: "/tmp/openclaw-reset-value" }, async () => {
       loadGlobalRuntimeDotEnvFiles.mockImplementation(() => {
-        process.env[selector] = "/tmp/openclaw-reset-retargeted";
+        setTestEnvValue(selector, "/tmp/openclaw-reset-retargeted");
       });
       const { reloadTrustedGatewayRunEnvironment } = await import("./pre-bootstrap.js");
 

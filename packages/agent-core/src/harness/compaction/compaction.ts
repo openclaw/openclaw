@@ -37,6 +37,7 @@ import {
   extractFileOpsFromMessage,
   type FileOperations,
   formatFileOperations,
+  getCompactionContentBlockText,
   serializeConversation,
 } from "./utils.js";
 
@@ -246,13 +247,15 @@ export function shouldCompact(
 
 const IMAGE_BLOCK_CHARS = 4800;
 
-function countContentBlockChars(content: Array<{ type: string; text?: string }>): number {
+function countContentBlockChars(
+  content: Array<{ type: string; content?: unknown; text?: string }>,
+): number {
   let chars = 0;
   for (const block of content) {
-    if (block.type === "text" && block.text) {
-      chars += block.text.length;
-    } else if (block.type === "image") {
+    if (block.type === "image") {
       chars += IMAGE_BLOCK_CHARS;
+    } else {
+      chars += getCompactionContentBlockText(block).length;
     }
   }
   return chars;
@@ -438,7 +441,7 @@ export function findCutPoint(
   };
 }
 
-export const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI coding assistant, then produce a structured summary following the exact format specified.
+export const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
 
 Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
 
@@ -545,6 +548,63 @@ async function completeSummarization(
   return await resolveAgentCoreCompleteFn(runtime)(model, context, options);
 }
 
+/** Runs one summarization completion and maps abort/error stops to CompactionError. */
+async function runSummarizationCompletion(params: {
+  promptText: string;
+  model: Model;
+  maxTokens: number;
+  apiKey: string | undefined;
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
+  thinkingLevel?: ThinkingLevel;
+  streamFn?: StreamFn;
+  runtime?: AgentCoreCompletionRuntimeDeps;
+  errorLabel: string;
+}): Promise<Result<string, CompactionError>> {
+  const summarizationMessages = [
+    {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: params.promptText }],
+      timestamp: Date.now(),
+    },
+  ];
+
+  const response = await completeSummarization(
+    params.model,
+    { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
+    createSummarizationOptions(
+      params.model,
+      params.maxTokens,
+      params.apiKey,
+      params.headers,
+      params.signal,
+      params.thinkingLevel,
+    ),
+    params.streamFn,
+    params.runtime,
+  );
+  if (response.stopReason === "aborted") {
+    return err(
+      new CompactionError("aborted", response.errorMessage || `${params.errorLabel} aborted`),
+    );
+  }
+  if (response.stopReason === "error") {
+    return err(
+      new CompactionError(
+        "summarization_failed",
+        `${params.errorLabel} failed: ${response.errorMessage || "Unknown error"}`,
+      ),
+    );
+  }
+
+  return ok(
+    response.content
+      .filter((c): c is { type: "text"; text: string } => c.type === "text")
+      .map((c) => c.text)
+      .join("\n"),
+  );
+}
+
 /** Generate or update a conversation summary for compaction. */
 export async function generateSummary(
   currentMessages: AgentMessage[],
@@ -575,39 +635,18 @@ export async function generateSummary(
   }
   promptText += basePrompt;
 
-  const summarizationMessages = [
-    {
-      role: "user" as const,
-      content: [{ type: "text" as const, text: promptText }],
-      timestamp: Date.now(),
-    },
-  ];
-
-  const response = await completeSummarization(
+  return await runSummarizationCompletion({
+    promptText,
     model,
-    { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-    createSummarizationOptions(model, maxTokens, apiKey, headers, signal, thinkingLevel),
+    maxTokens,
+    apiKey,
+    headers,
+    signal,
+    thinkingLevel,
     streamFn,
     runtime,
-  );
-  if (response.stopReason === "aborted") {
-    return err(new CompactionError("aborted", response.errorMessage || "Summarization aborted"));
-  }
-  if (response.stopReason === "error") {
-    return err(
-      new CompactionError(
-        "summarization_failed",
-        `Summarization failed: ${response.errorMessage || "Unknown error"}`,
-      ),
-    );
-  }
-
-  const textContent = response.content
-    .filter((c): c is { type: "text"; text: string } => c.type === "text")
-    .map((c) => c.text)
-    .join("\n");
-
-  return ok(textContent);
+    errorLabel: "Summarization",
+  });
 }
 
 /** Prepared inputs for a compaction run. */
@@ -761,9 +800,9 @@ export async function compact(
   let summary: string;
 
   if (isSplitTurn && turnPrefixMessages.length > 0) {
-    const [historyResult, turnPrefixResult] = await Promise.all([
+    const historyResult =
       messagesToSummarize.length > 0
-        ? generateSummary(
+        ? await generateSummary(
             messagesToSummarize,
             model,
             settings.reserveTokens,
@@ -776,22 +815,21 @@ export async function compact(
             streamFn,
             runtime,
           )
-        : Promise.resolve(ok<string, CompactionError>("No prior history.")),
-      generateTurnPrefixSummary(
-        turnPrefixMessages,
-        model,
-        settings.reserveTokens,
-        apiKey,
-        headers,
-        signal,
-        thinkingLevel,
-        streamFn,
-        runtime,
-      ),
-    ]);
+        : ok<string, CompactionError>("No prior history.");
     if (!historyResult.ok) {
       return err(historyResult.error);
     }
+    const turnPrefixResult = await generateTurnPrefixSummary(
+      turnPrefixMessages,
+      model,
+      settings.reserveTokens,
+      apiKey,
+      headers,
+      signal,
+      thinkingLevel,
+      streamFn,
+      runtime,
+    );
     if (!turnPrefixResult.ok) {
       return err(turnPrefixResult.error);
     }
@@ -844,39 +882,16 @@ async function generateTurnPrefixSummary(
   const llmMessages = convertToLlm(messages);
   const conversationText = serializeConversation(llmMessages);
   const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
-  const summarizationMessages = [
-    {
-      role: "user" as const,
-      content: [{ type: "text" as const, text: promptText }],
-      timestamp: Date.now(),
-    },
-  ];
-
-  const response = await completeSummarization(
+  return await runSummarizationCompletion({
+    promptText,
     model,
-    { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-    createSummarizationOptions(model, maxTokens, apiKey, headers, signal, thinkingLevel),
+    maxTokens,
+    apiKey,
+    headers,
+    signal,
+    thinkingLevel,
     streamFn,
     runtime,
-  );
-  if (response.stopReason === "aborted") {
-    return err(
-      new CompactionError("aborted", response.errorMessage || "Turn prefix summarization aborted"),
-    );
-  }
-  if (response.stopReason === "error") {
-    return err(
-      new CompactionError(
-        "summarization_failed",
-        `Turn prefix summarization failed: ${response.errorMessage || "Unknown error"}`,
-      ),
-    );
-  }
-
-  return ok(
-    response.content
-      .filter((c): c is { type: "text"; text: string } => c.type === "text")
-      .map((c) => c.text)
-      .join("\n"),
-  );
+    errorLabel: "Turn prefix summarization",
+  });
 }

@@ -16,6 +16,7 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../../../config/sessions/transcript.js";
+import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../../shared/transcript-only-openclaw-assistant.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
   SessionWriteLockStaleError,
@@ -60,6 +61,18 @@ async function createTempSessionFile(): Promise<string> {
   const sessionFile = path.join(dir, "session.jsonl");
   await fs.writeFile(sessionFile, '{"type":"session"}\n', "utf8");
   return sessionFile;
+}
+
+async function waitUntil(predicate: () => boolean, message: string): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error(message);
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 1);
+    });
+  }
 }
 
 function cloneBigIntStatWith(
@@ -2590,7 +2603,7 @@ describe("embedded attempt session lock lifecycle", () => {
           message: {
             role: "assistant",
             content: [{ type: "text", text: "first-turn delivery" }],
-            api: "openai-responses",
+            api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
             provider: "openclaw",
             model: "delivery-mirror",
             usage: {
@@ -3976,20 +3989,118 @@ describe("embedded attempt session lock lifecycle", () => {
       .finally(() => {
         takeoverSettled = true;
       });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await waitUntil(
+      () => controller.hasSessionTakeover(),
+      "expected takeover detection while active retained writer was still running",
+    );
 
     expect(takeoverSettled).toBe(false);
     expect(releaseRetained).not.toHaveBeenCalled();
 
     releaseActiveWrite();
-    await expect(activeWrite).resolves.toBeUndefined();
+    await expect(activeWrite).rejects.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
     await expect(takeoverWrite).resolves.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
 
     expect(releaseRetained).toHaveBeenCalledTimes(1);
     expect(events).toEqual(["prep-release", "active-start", "active-finish", "retained-release"]);
     expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(2);
+  });
+
+  it("releaseHeldLockWithFence sets deferred flag when bailed out during active scope; re-attempted after scope deactivation (#95915)", async () => {
+    const events: string[] = [];
+    const releasePrep = vi.fn(async () => events.push("prep-release"));
+    const releaseRetained = vi.fn(async () => events.push("retained-release"));
+    const acquireSessionWriteLockLocal = vi
+      .fn()
+      .mockResolvedValueOnce({ release: releasePrep })
+      .mockResolvedValueOnce({ release: releaseRetained });
+
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions,
+    });
+
+    await controller.releaseForPrompt();
+    await controller.reacquireAfterPrompt();
+
+    await controller.withSessionWriteLock(async () => {
+      events.push("write-start");
+      await controller.releaseHeldLockForAbort();
+      events.push("write-end");
+    });
+
+    expect(events).toEqual(["prep-release", "write-start", "write-end", "retained-release"]);
+    expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(2);
+  });
+
+  it("controls the held lock lifecycle across deferred abort release, reacquisition, and prompt release", async () => {
+    const events: string[] = [];
+    const acquireSessionWriteLockLocal = vi
+      .fn()
+      .mockResolvedValueOnce({ release: vi.fn(async () => events.push("init-release")) })
+      .mockResolvedValueOnce({ release: vi.fn(async () => events.push("held-release")) })
+      .mockResolvedValueOnce({ release: vi.fn(async () => events.push("reacquire-release")) });
+
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions,
+    });
+
+    await controller.releaseForPrompt();
+    await controller.reacquireAfterPrompt();
+
+    await controller.withSessionWriteLock(async () => {
+      events.push("write");
+      await controller.releaseHeldLockForAbort();
+    });
+
+    expect(events).toEqual(["init-release", "write", "held-release"]);
+
+    await controller.reacquireAfterPrompt();
+    await controller.releaseForPrompt();
+
+    expect(events).toEqual(["init-release", "write", "held-release", "reacquire-release"]);
+    expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(3);
+  });
+
+  it("takeHeldLockAfterRetainedIdle does not self-deadlock when called from inside active write scope (#95915)", async () => {
+    const events: string[] = [];
+    const acquireSessionWriteLockLocal = vi
+      .fn()
+      .mockResolvedValueOnce({ release: vi.fn(async () => events.push("init-release")) })
+      .mockResolvedValueOnce({ release: vi.fn(async () => events.push("held-release")) })
+      .mockRejectedValueOnce(
+        new SessionWriteLockTimeoutError({
+          timeoutMs: lockOptions.timeoutMs,
+          owner: "pid=test",
+          lockPath: `${lockOptions.sessionFile}.lock`,
+        }),
+      );
+
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions,
+    });
+
+    await controller.releaseForPrompt();
+    await controller.reacquireAfterPrompt();
+
+    const takeoverError = await controller
+      .withSessionWriteLock(async () => {
+        events.push("write-start");
+        const cleanupLock = await controller.acquireForCleanup();
+        await cleanupLock.release();
+        events.push("cleanup-inside-done");
+      })
+      .catch((error: unknown) => error);
+
+    expect(takeoverError).toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
+
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+
+    expect(events).toEqual(["init-release", "write-start", "cleanup-inside-done", "held-release"]);
+    expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(3);
   });
 
   it("returns a no-op cleanup lock after prompt lock reacquisition times out", async () => {

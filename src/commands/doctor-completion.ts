@@ -15,6 +15,7 @@ import {
   type CompletionShell,
 } from "../cli/completion-runtime.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
+import { isErrno } from "../infra/errors.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -24,6 +25,15 @@ const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
 export type ShellCompletionStatusOptions = {
   shell?: CompletionShell;
 };
+
+const PROFILE_WRITE_ERROR_CODES = new Set(["EACCES", "EPERM", "EROFS"]);
+
+function findProfileWriteError(err: unknown): NodeJS.ErrnoException | undefined {
+  if (isErrno(err) && PROFILE_WRITE_ERROR_CODES.has(err.code ?? "")) {
+    return err;
+  }
+  return err instanceof Error ? findProfileWriteError(err.cause) : undefined;
+}
 
 function resolveCompletionReloadPath(shell: CompletionShell): string {
   if (shell === "powershell") {
@@ -38,6 +48,28 @@ function formatCompletionReloadNote(
 ): string {
   const profilePath = resolveCompletionReloadPath(shell);
   return `Shell completion ${action}. Restart your shell or run: ${formatCompletionReloadCommand(shell, profilePath)}`;
+}
+
+async function installCompletionForDoctor(
+  shell: CompletionShell,
+  cliName: string,
+  action: "installed" | "upgraded",
+): Promise<void> {
+  try {
+    await installCompletion(shell, true, cliName);
+    note(formatCompletionReloadNote(shell, action), "Shell completion");
+  } catch (err) {
+    // Completion is optional, but only profile permission failures are safe to downgrade.
+    const writeError = findProfileWriteError(err);
+    if (!writeError) {
+      throw err;
+    }
+    const profilePath = writeError.path ?? resolveCompletionProfilePath(shell);
+    note(
+      `Shell completion not ${action}: ${profilePath} is not writable. Run \`${cliName} completion --install\` against a writable profile file.`,
+      "Shell completion",
+    );
+  }
 }
 
 /** Generate the completion cache by spawning the CLI. */
@@ -195,8 +227,7 @@ export async function doctorShellCompletion(
       }
     }
 
-    await installCompletion(status.shell, true, cliName);
-    note(formatCompletionReloadNote(status.shell, "upgraded"), "Shell completion");
+    await installCompletionForDoctor(status.shell, cliName, "upgraded");
     return;
   }
 
@@ -237,8 +268,7 @@ export async function doctorShellCompletion(
         return;
       }
 
-      await installCompletion(status.shell, true, cliName);
-      note(formatCompletionReloadNote(status.shell, "installed"), "Shell completion");
+      await installCompletionForDoctor(status.shell, cliName, "installed");
     }
   }
 }

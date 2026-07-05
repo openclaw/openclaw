@@ -7,6 +7,7 @@ import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plu
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   createChannelInboundDebouncer,
+  formatInboundMediaUnavailableText,
   resolveEnvelopeFormatOptions,
   runChannelInboundEvent,
   shouldDebounceTextInbound,
@@ -45,7 +46,7 @@ import {
   resolveSendPolicy,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
@@ -94,6 +95,7 @@ import {
   releaseIMessageInboundReplay,
 } from "./inbound-dedupe.js";
 import {
+  buildDirectIMessageReplyTarget,
   buildIMessageInboundContext,
   rememberIMessageSkippedFromMeForSelfChatDedupe,
   resolveIMessageReactionContext,
@@ -102,11 +104,13 @@ import {
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { stageIMessageAttachments } from "./media-staging.js";
 import { parseIMessageNotification } from "./parse-notification.js";
+import { createPollCommentFolder } from "./poll-comment.js";
+import { renderIMessagePollBody } from "./poll-render.js";
 import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
 import { advanceIMessageRecoveryCursor, loadIMessageRecoveryCursor } from "./recovery-cursor.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
-import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
+import type { IMessageAttachment, IMessagePayload, MonitorIMessageOpts } from "./types.js";
 import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
 
 const WATCH_SUBSCRIBE_MAX_ATTEMPTS = 3;
@@ -153,6 +157,69 @@ function isIMessagePluginPayloadAttachment(attachment: {
     transferName.endsWith(".pluginpayloadattachment") ||
     uti === "com.apple.messages.pluginpayloadattachment"
   );
+}
+
+export function resolveIMessageInboundMediaInput(params: {
+  messageText: string;
+  attachments: IMessageAttachment[];
+  effectiveAttachmentRoots: readonly string[];
+  logVerbose?: (message: string) => void;
+}) {
+  // Apple rich-link previews are opaque plugin payloads; the useful URL stays
+  // in message text. Treating them as media creates phantom attachments and
+  // keeps split-send URL previews out of the text debounce path.
+  const mediaCandidates = params.attachments.filter(
+    (entry) => !isIMessagePluginPayloadAttachment(entry),
+  );
+  const rawMediaAttachments = mediaCandidates.flatMap((attachment) => {
+    const attachmentPath = attachment.original_path?.trim();
+    if (!attachmentPath || attachment.missing) {
+      return [];
+    }
+    if (
+      !isInboundPathAllowed({ filePath: attachmentPath, roots: params.effectiveAttachmentRoots })
+    ) {
+      params.logVerbose?.(
+        `imessage: dropping inbound attachment outside allowed roots: ${attachmentPath}`,
+      );
+      return [];
+    }
+    return [{ path: attachmentPath, contentType: attachment.mime_type ?? undefined }];
+  });
+  const kind = kindFromMime(
+    rawMediaAttachments[0]?.contentType ?? mediaCandidates[0]?.mime_type ?? undefined,
+  );
+  const mediaPlaceholder = kind
+    ? `<media:${kind}>`
+    : mediaCandidates.length
+      ? "<media:attachment>"
+      : "";
+  return {
+    bodyText: params.messageText || mediaPlaceholder,
+    mediaPlaceholder,
+    mediaCandidates,
+    rawMediaAttachments,
+  };
+}
+
+export function formatIMessageInboundMediaBody(params: {
+  messageText: string;
+  optimisticPlaceholder: string;
+  mediaAttachments: Array<{ contentType?: string }>;
+  unavailableCount: number;
+}): string {
+  const materializedKind = kindFromMime(params.mediaAttachments[0]?.contentType);
+  const materializedPlaceholder = materializedKind
+    ? `<media:${materializedKind}>`
+    : params.mediaAttachments.length > 0
+      ? "<media:attachment>"
+      : "";
+  return formatInboundMediaUnavailableText({
+    body: params.messageText || materializedPlaceholder || params.optimisticPlaceholder,
+    mediaPlaceholder:
+      params.mediaAttachments.length === 0 ? params.optimisticPlaceholder : undefined,
+    notice: `[imessage ${params.unavailableCount > 1 ? `${params.unavailableCount} attachments` : "attachment"} unavailable]`,
+  });
 }
 
 async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | undefined> {
@@ -727,7 +794,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       const combined = combineIMessagePayloads(messages);
       if (shouldLogVerbose()) {
         const text = combined.text ?? "";
-        const preview = text.slice(0, 50);
+        const preview = sliceUtf16Safe(text, 0, 50);
         const ellipsis = text.length > 50 ? "..." : "";
         logVerbose(
           `[imessage] merged ${entries.length} debounced messages: "${preview}${ellipsis}"`,
@@ -830,46 +897,27 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
   }
 
+  // iMessage delivers a poll's comment as a separate inline reply to the poll
+  // balloon; fold it into the poll so the agent votes once instead of also
+  // replying to the caption in prose (a redundant restatement of the vote).
+  const pollCommentFolder = createPollCommentFolder();
+
   function resolveIMessageInboundBodyText(message: IMessagePayload) {
-    const messageText = (message.text ?? "").trim();
+    // Native poll balloons carry only a 0xFFFD placeholder in `text`; render the
+    // decoded poll (question/options/votes) so the agent sees the actual poll.
+    const pollBody = message.poll ? renderIMessagePollBody(message.poll) : null;
+    const messageText = (pollBody ?? message.text ?? "").trim();
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
     const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;
-    const validAttachments = attachments.filter((entry) => {
-      if (isIMessagePluginPayloadAttachment(entry)) {
-        // Apple rich-link previews arrive as opaque .pluginPayloadAttachment
-        // files. The useful URL remains in message.text/attributedBody; treating
-        // the preview blob as media creates noisy phantom attachments and can
-        // keep split-send URL previews out of the text debounce path.
-        return false;
-      }
-      const attachmentPath = entry?.original_path?.trim();
-      if (!attachmentPath || entry?.missing) {
-        return false;
-      }
-      if (isInboundPathAllowed({ filePath: attachmentPath, roots: effectiveAttachmentRoots })) {
-        return true;
-      }
-      logVerbose(`imessage: dropping inbound attachment outside allowed roots: ${attachmentPath}`);
-      return false;
+    const mediaInput = resolveIMessageInboundMediaInput({
+      messageText,
+      attachments,
+      effectiveAttachmentRoots,
+      logVerbose,
     });
-    const rawMediaAttachments = validAttachments.flatMap((a) => {
-      const attachmentPath = a.original_path?.trim();
-      return attachmentPath
-        ? [{ path: attachmentPath, contentType: a.mime_type ?? undefined }]
-        : [];
-    });
-    const placeholderMediaType = rawMediaAttachments[0]?.contentType;
-    const kind = kindFromMime(placeholderMediaType ?? undefined);
-    const placeholder = kind
-      ? `<media:${kind}>`
-      : validAttachments.length
-        ? "<media:attachment>"
-        : "";
     return {
       messageText,
-      bodyText: messageText || placeholder,
-      validAttachments,
-      rawMediaAttachments,
+      ...mediaInput,
       effectiveAttachmentRoots,
     };
   }
@@ -880,10 +928,30 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return;
     }
 
+    // Remember native polls so a caption reply that lands WITH the poll is
+    // recognized and folded. The poll balloon (rendered with options + a vote
+    // cue) is still delivered; only the near-simultaneous comment is dropped so
+    // the agent votes without also answering it as a standalone question. A
+    // deliberate later inline reply to the poll falls outside the window and is
+    // delivered normally.
+    const pollFoldAtMs = message.created_at ? Date.parse(message.created_at) : Number.NaN;
+    if (message.poll) {
+      pollCommentFolder.rememberPoll(message.guid, pollFoldAtMs, message.sender);
+    } else if (
+      message.reply_to_guid != null &&
+      pollCommentFolder.isPollComment(message.reply_to_guid, pollFoldAtMs, message.sender)
+    ) {
+      logVerbose(
+        "imessage: folding poll comment (inline reply sent with a poll) into the poll; not delivering standalone",
+      );
+      return;
+    }
+
     const {
       messageText,
       bodyText,
-      validAttachments,
+      mediaPlaceholder,
+      mediaCandidates,
       rawMediaAttachments,
       effectiveAttachmentRoots,
     } = resolveIMessageInboundBodyText(message);
@@ -1039,20 +1107,117 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const storePath = resolveStorePath(cfg.session?.store, {
       agentId: decision.route.agentId,
     });
-    const stagedAttachments = remoteHost
-      ? []
-      : await stageIMessageAttachments(validAttachments, {
+    const privateApiStatus = getCachedIMessagePrivateApiStatus(cliPath);
+    const supportsTyping = imessageRpcSupportsMethod(privateApiStatus, "typing");
+    const supportsRead = imessageRpcSupportsMethod(privateApiStatus, "read");
+    if (privateApiStatus?.available === true) {
+      // Surface a single warning per restart when the bridge is up but we
+      // had to gate off typing/read because the imsg build pre-dates the
+      // capability list. Otherwise the user sees no typing bubble / no
+      // "Read" receipt with no visible reason.
+      if (!supportsTyping || !supportsRead) {
+        warnIfImsgUpgradeNeeded.fireOnce(privateApiStatus.rpcMethods, runtime);
+      }
+    }
+    const configuredTypingMode = resolveConfiguredIMessageTypingMode(cfg);
+    const sendPolicy = resolveSendPolicy({
+      cfg,
+      entry: getSessionEntry({ storePath, sessionKey: decision.route.sessionKey }),
+      sessionKey: decision.route.sessionKey,
+      channel: "imessage",
+      chatType: decision.isGroup ? "group" : "direct",
+    });
+    const shouldUseDirectToolTypingOptions =
+      !decision.isGroup &&
+      sendPolicy !== "deny" &&
+      (configuredTypingMode === undefined || configuredTypingMode === "instant");
+    const shouldStartDirectTyping = supportsTyping && shouldUseDirectToolTypingOptions;
+    const earlyDirectTypingTarget = shouldStartDirectTyping
+      ? buildDirectIMessageReplyTarget({
+          cfg,
+          accountId: decision.route.accountId,
+          sender: decision.sender,
+        })
+      : undefined;
+    let stopEarlyDirectTyping: (() => void) | undefined;
+    if (earlyDirectTypingTarget) {
+      // Start channel-native feedback before the expensive history/context/model
+      // path. Use a short-lived client so a slow typing RPC cannot block the
+      // monitor client's watch stream. Stop is sequenced after start so fast
+      // command replies cannot leave a late true after typing:false.
+      const earlyDirectTypingStarted = sendIMessageTyping(earlyDirectTypingTarget, true, {
+        cfg,
+        accountId: accountInfo.accountId,
+      }).then(
+        () => true,
+        (err: unknown) => {
+          logTypingFailure({
+            log: (msg) => logVerbose(msg),
+            channel: "imessage",
+            action: "start",
+            target: earlyDirectTypingTarget,
+            error: err,
+          });
+          return false;
+        },
+      );
+      let earlyTypingStopQueued = false;
+      stopEarlyDirectTyping = () => {
+        if (earlyTypingStopQueued) {
+          return;
+        }
+        earlyTypingStopQueued = true;
+        void earlyDirectTypingStarted
+          .then(async (started) => {
+            if (!started) {
+              return;
+            }
+            await sendIMessageTyping(earlyDirectTypingTarget, false, {
+              cfg,
+              accountId: accountInfo.accountId,
+            });
+          })
+          .catch((err: unknown) => {
+            logTypingFailure({
+              log: (msg) => logVerbose(msg),
+              channel: "imessage",
+              action: "stop",
+              target: earlyDirectTypingTarget,
+              error: err,
+            });
+          });
+      };
+    }
+    const staged = remoteHost
+      ? {
+          attachments: rawMediaAttachments,
+          unavailableCount: mediaCandidates.length - rawMediaAttachments.length,
+        }
+      : await stageIMessageAttachments(mediaCandidates, {
           maxBytes: mediaMaxBytes,
           allowedRoots: effectiveAttachmentRoots,
           deps: { logVerbose },
         });
-    const mediaAttachments = remoteHost ? rawMediaAttachments : stagedAttachments;
+    const mediaAttachments = staged.attachments;
     const firstAttachment = mediaAttachments[0];
     const mediaPath = firstAttachment?.path ?? undefined;
     const mediaType = firstAttachment?.contentType ?? undefined;
     // Build arrays for all attachments (for multi-image support)
     const mediaPaths = mediaAttachments.map((a) => a.path).filter(Boolean);
     const mediaTypes = mediaAttachments.map((a) => a.contentType ?? undefined);
+    const unavailableCount = staged.unavailableCount;
+    const contextDecision =
+      unavailableCount > 0
+        ? {
+            ...decision,
+            agentBodyText: formatIMessageInboundMediaBody({
+              messageText,
+              optimisticPlaceholder: mediaPlaceholder,
+              mediaAttachments,
+              unavailableCount,
+            }),
+          }
+        : decision;
     const previousTimestamp = readSessionUpdatedAt({
       storePath,
       sessionKey: decision.route.sessionKey,
@@ -1077,7 +1242,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         : undefined;
     const { ctxPayload, chatTarget, imessageTo } = await buildIMessageInboundContext({
       cfg,
-      decision,
+      decision: contextDecision,
       message,
       previousTimestamp,
       remoteHost,
@@ -1107,31 +1272,20 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       );
     }
 
-    const privateApiStatus = getCachedIMessagePrivateApiStatus(cliPath);
-    const supportsTyping = imessageRpcSupportsMethod(privateApiStatus, "typing");
-    const supportsRead = imessageRpcSupportsMethod(privateApiStatus, "read");
-    if (privateApiStatus?.available === true) {
-      // Surface a single warning per restart when the bridge is up but we
-      // had to gate off typing/read because the imsg build pre-dates the
-      // capability list. Otherwise the user sees no typing bubble / no
-      // "Read" receipt with no visible reason.
-      if (!supportsTyping || !supportsRead) {
-        warnIfImsgUpgradeNeeded.fireOnce(privateApiStatus.rpcMethods, runtime);
-      }
-    }
     const sendReadReceipts = imessageCfg.sendReadReceipts !== false;
     const typingTarget = ctxPayload.To;
 
     if (supportsRead && sendReadReceipts && typingTarget) {
-      try {
-        await markIMessageChatRead(typingTarget, {
-          cfg,
-          accountId: accountInfo.accountId,
-          client: getActiveClient(),
-        });
-      } catch (err) {
+      // Read receipts are best-effort channel UI. Do not put them on the
+      // critical path before model dispatch; slow private-API reads otherwise
+      // make accepted iMessage turns feel stuck before the agent starts. Use
+      // a short-lived client so a stuck read cannot block monitor-client typing.
+      void markIMessageChatRead(typingTarget, {
+        cfg,
+        accountId: accountInfo.accountId,
+      }).catch((err: unknown) => {
         runtime.error?.(`imessage: mark read failed: ${String(err)}`);
-      }
+      });
     }
 
     const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
@@ -1234,35 +1388,27 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
     });
     let directTypingController: IMessageTypingController | undefined;
-    const configuredTypingMode = resolveConfiguredIMessageTypingMode(cfg);
-    const sendPolicy = resolveSendPolicy({
-      cfg,
-      entry: getSessionEntry({ storePath, sessionKey: decision.route.sessionKey }),
-      sessionKey: decision.route.sessionKey,
-      channel: "imessage",
-      chatType: decision.isGroup ? "group" : "direct",
-    });
-    const shouldStartToolTyping =
-      !decision.isGroup &&
-      sendPolicy !== "deny" &&
-      (configuredTypingMode === undefined || configuredTypingMode === "instant");
-    const directToolTypingOptions = shouldStartToolTyping
+    const directToolTypingOptions = shouldUseDirectToolTypingOptions
       ? ({
           // iMessage's native typing bubble is channel-owned UI, not a
           // visible tool-progress message. The suppress flag is what lets
           // dispatch forward this callback even when verbose progress is off;
           // allowProgress covers message_tool_only source delivery. Keep this on
-          // the direct instant/default path so configured typingMode values still
-          // decide when typing can begin.
+          // the direct instant/default path even when older imsg builds do not
+          // report native typing support.
           suppressDefaultToolProgressMessages: true,
           allowProgressCallbacksWhenSourceDeliverySuppressed: true,
           onTypingController: (typing: IMessageTypingController) => {
             directTypingController = typing;
             typingReplyOptions.onTypingController?.(typing);
           },
-          onToolStart: async () => {
-            await directTypingController?.startTypingLoop();
-          },
+          ...(supportsTyping
+            ? {
+                onToolStart: async () => {
+                  await directTypingController?.startTypingLoop();
+                },
+              }
+            : {}),
         } as const)
       : {};
     const configuredBlockStreaming = resolveChannelStreamingBlockEnabled(accountInfo.config);
@@ -1325,11 +1471,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             historyMap: groupHistories,
             limit: historyLimit,
           },
-          onPreDispatchFailure: () =>
-            settleReplyDispatcher({
+          onPreDispatchFailure: () => {
+            stopEarlyDirectTyping?.();
+            void settleReplyDispatcher({
               dispatcher,
               onSettled: () => markDispatchIdle(),
-            }),
+            });
+          },
           runDispatch: async () => {
             try {
               return await dispatchInboundMessage({
@@ -1348,6 +1496,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
               });
             } finally {
               markDispatchIdle();
+              stopEarlyDirectTyping?.();
             }
           },
         }),
