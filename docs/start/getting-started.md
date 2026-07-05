@@ -13,7 +13,7 @@ working chat session.
 ## What you need
 
 - **Node.js 22.19+, 23.11+, or 24+** (24 is the recommended default)
-- **An API key** from a model provider (Anthropic, OpenAI, Google, etc.) — onboarding will prompt you
+- **A model auth method** — onboarding supports API keys, OAuth, and provider-specific manual auth
 
 <Tip>
 Check your Node version with `node --version`.
@@ -54,8 +54,8 @@ Need to install Node? See [Node setup](/install/node).
     openclaw onboard --install-daemon
     ```
 
-    The wizard walks you through choosing a model provider, setting an API key,
-    and configuring the Gateway. QuickStart is usually only a few minutes, but
+    The wizard walks you through choosing a model provider, configuring auth,
+    and setting up the Gateway. QuickStart is usually only a few minutes, but
     provider sign-in, channel pairing, daemon install, network downloads, skills,
     or optional plugins can make full onboarding take longer. Skip optional
     steps and return later with `openclaw configure`.
