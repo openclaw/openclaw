@@ -68,6 +68,9 @@ const legacyConfigRepairMocks = vi.hoisted(() => ({
 const launchdUpdateCleanupMocks = vi.hoisted(() => ({
   disableCurrentOpenClawUpdateLaunchdJob: vi.fn(async () => false),
 }));
+const restartHealthTestControl = vi.hoisted(() => ({
+  snapshot: undefined as unknown,
+}));
 const nodeVersionSatisfiesEngine = vi.fn();
 const execFile = vi.fn((...args: unknown[]) => {
   const callback = args.at(-1);
@@ -339,6 +342,23 @@ vi.mock("./update-cli/restart-helper.js", () => ({
   prepareRestartScript: (...args: unknown[]) => prepareRestartScript(...args),
   runRestartScript: (...args: unknown[]) => runRestartScript(...args),
 }));
+
+vi.mock("./daemon-cli/restart-health.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./daemon-cli/restart-health.js")>();
+  return {
+    ...actual,
+    waitForGatewayHealthyRestart: (
+      ...args: Parameters<typeof actual.waitForGatewayHealthyRestart>
+    ) =>
+      restartHealthTestControl.snapshot === undefined
+        ? actual.waitForGatewayHealthyRestart(...args)
+        : Promise.resolve(
+            restartHealthTestControl.snapshot as Awaited<
+              ReturnType<typeof actual.waitForGatewayHealthyRestart>
+            >,
+          ),
+  };
+});
 
 // Mock doctor (heavy module; should not run in unit tests)
 vi.mock("../commands/doctor.js", () => ({
@@ -781,6 +801,7 @@ describe("update-cli", () => {
     delete process.env.OPENCLAW_SERVICE_MARKER;
     delete process.env.OPENCLAW_SERVICE_KIND;
     delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
+    restartHealthTestControl.snapshot = undefined;
     vi.clearAllMocks();
     resetRuntimeCapture();
     spawn.mockImplementation(() => {
@@ -3722,6 +3743,20 @@ describe("update-cli", () => {
       pid: 4242,
       state: "running",
     });
+    restartHealthTestControl.snapshot = {
+      runtime: { status: "stopped", pid: null, state: "stopped" },
+      portUsage: {
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 4242, command: "openclaw-gateway" }],
+        hints: [],
+      },
+      healthy: true,
+      staleGatewayPids: [],
+      gatewayVersion: "1.0.0",
+      waitOutcome: "timeout",
+      elapsedMs: 60_000,
+    };
     mockGitUpdateAfterMutation();
 
     await updateCommand({ yes: true });

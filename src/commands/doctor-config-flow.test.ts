@@ -1501,7 +1501,16 @@ describe("doctor config flow", () => {
       import("./doctor/shared/legacy-config-issues.js"),
       import("./doctor/shared/plugin-tool-allowlist-warnings.js"),
       import("./doctor/shared/preview-warnings.js"),
+      import("./doctor/shared/hooks-token-reuse-repair.js"),
     ]);
+    await collectDoctorWarnings({
+      channels: {
+        slack: {
+          dangerouslyAllowNameMatching: true,
+          accounts: { work: { allowFrom: ["alice"] } },
+        },
+      },
+    });
   });
 
   beforeEach(() => {
