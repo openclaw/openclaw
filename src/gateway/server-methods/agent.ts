@@ -242,6 +242,11 @@ function clientHasAdminScope(client: GatewayRequestHandlerOptions["client"]): bo
   return scopes.includes(ADMIN_SCOPE);
 }
 
+function isCliGatewayClient(client: GatewayRequestHandlerOptions["client"]): boolean {
+  const info = client?.connect?.client;
+  return info?.mode === GATEWAY_CLIENT_MODES.CLI || info?.id === GATEWAY_CLIENT_NAMES.CLI;
+}
+
 function respondDeletedAgentSession(params: {
   cfg: OpenClawConfig;
   canonicalKey: string;
@@ -1169,7 +1174,6 @@ export const agentHandlers: GatewayRequestHandlers = {
       internalRuntimeHandoffId?: string;
       execApprovalFollowupExpectedSessionId?: string;
       internalEvents?: AgentInternalEvent[];
-      sourceCliLaneBusyRejection?: boolean;
       suppressPromptPersistence?: boolean;
       sessionEffects?: "visible" | "internal";
       idempotencyKey: string;
@@ -1185,6 +1189,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     };
     const allowModelOverride = resolveAllowModelOverrideFromClient(client);
     const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(client);
+    const shouldFailOnSessionLaneWait = isCliGatewayClient(client);
     const requestedModelOverride = Boolean(request.provider || request.model);
     const requestedInternalSessionEffects = request.sessionEffects === "internal";
     const requestedPromptPersistenceSuppression = request.suppressPromptPersistence === true;
@@ -3273,9 +3278,7 @@ export const agentHandlers: GatewayRequestHandlers = {
               messageChannel: originMessageChannel,
               runId,
               lane: request.lane,
-              ...(request.sourceCliLaneBusyRejection === true
-                ? { failOnSessionLaneWait: true }
-                : {}),
+              ...(shouldFailOnSessionLaneWait ? { failOnSessionLaneWait: true } : {}),
               modelRun: request.modelRun === true,
               promptMode: request.promptMode,
               extraSystemPrompt: request.extraSystemPrompt,

@@ -509,6 +509,22 @@ function backendGatewayClient(): AgentHandlerArgs["client"] {
   } as AgentHandlerArgs["client"];
 }
 
+function cliGatewayClient(): AgentHandlerArgs["client"] {
+  return {
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: {
+        id: "cli",
+        version: "test",
+        platform: "test",
+        mode: "cli",
+      },
+      scopes: ["operator.write"],
+    },
+  } as AgentHandlerArgs["client"];
+}
+
 // Operator-write client that is NOT the in-process backend ACP spawn caller:
 // a control-UI connection with the same operator.write scope. It can set
 // acpTurnSource but owns no replacement `acp` task row, so CLI tracking stays on.
@@ -4377,10 +4393,9 @@ describe("gateway agent handler", () => {
         {
           message: "background cli task",
           sessionKey: "agent:main:main",
-          sourceCliLaneBusyRejection: true,
           idempotencyKey: "task-registry-agent-run-lane-busy",
         },
-        { context, reqId: "task-registry-agent-run-lane-busy" },
+        { client: cliGatewayClient(), context, reqId: "task-registry-agent-run-lane-busy" },
       );
 
       await waitForAssertion(() => {

@@ -302,6 +302,8 @@ describe("agentCliCommand", () => {
       expect(request.mode).toBe("cli");
       expect(request).not.toHaveProperty("scopes");
       expect(request.params).toHaveProperty("cleanupBundleMcpOnRunEnd", true);
+      const laneBusyRejectionParam = ["sourceCli", "LaneBusyRejection"].join("");
+      expect(request.params).not.toHaveProperty(laneBusyRejectionParam);
       expect(agentCommand).not.toHaveBeenCalled();
       expect(agentModuleLoadCount).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledWith("hello");
