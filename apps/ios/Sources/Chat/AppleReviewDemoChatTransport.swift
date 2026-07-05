@@ -399,7 +399,8 @@ private actor LocalFixtureChatStore {
                     content: nil),
             ],
             timestamp: timestamp,
-            idempotencyKey: idempotencyKey)
+            idempotencyKey: idempotencyKey,
+            stopReason: role == "assistant" ? "stop" : nil)
     }
 
     private static func normalizedSessionKey(_ value: String, fallback: String) -> String {
