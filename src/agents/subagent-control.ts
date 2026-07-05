@@ -371,10 +371,7 @@ async function cascadeKillChildren(params: {
     ) {
       continue;
     }
-    const existing = childRunsBySessionKey.get(childKey);
-    if (!existing || run.createdAt >= existing.createdAt) {
-      childRunsBySessionKey.set(childKey, run);
-    }
+    childRunsBySessionKey.set(childKey, run);
   }
   const childRuns = Array.from(childRunsBySessionKey.values());
   const seenChildSessionKeys = params.seenChildSessionKeys ?? new Set<string>();

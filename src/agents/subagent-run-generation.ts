@@ -1,6 +1,8 @@
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-function normalizeGeneration(entry: SubagentRunRecord): number {
+type ComparableSubagentRun = Pick<SubagentRunRecord, "runId" | "createdAt" | "generation">;
+
+function normalizeGeneration(entry: ComparableSubagentRun): number {
   return typeof entry.generation === "number" && Number.isFinite(entry.generation)
     ? entry.generation
     : 0;
@@ -8,8 +10,8 @@ function normalizeGeneration(entry: SubagentRunRecord): number {
 
 /** Orders runs that share a child session, including legacy rows without a generation. */
 export function compareSubagentRunGeneration(
-  left: SubagentRunRecord,
-  right: SubagentRunRecord,
+  left: ComparableSubagentRun,
+  right: ComparableSubagentRun,
 ): number {
   const generationDelta = normalizeGeneration(left) - normalizeGeneration(right);
   if (generationDelta !== 0) {
