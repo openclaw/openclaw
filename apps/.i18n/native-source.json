@@ -8355,7 +8355,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 403,
+      "line": 404,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Request ID: \\(value)",
       "surface": "apple",
@@ -8363,7 +8363,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 656,
+      "line": 657,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -8371,7 +8371,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 684,
+      "line": 685,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Gateway \\(self.title)",
       "surface": "apple",
@@ -8379,7 +8379,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 689,
+      "line": 690,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Online",
       "surface": "apple",
@@ -8387,7 +8387,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 691,
+      "line": 692,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Connecting",
       "surface": "apple",
@@ -8395,7 +8395,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 693,
+      "line": 694,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Attention",
       "surface": "apple",
@@ -8403,7 +8403,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 695,
+      "line": 696,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Offline",
       "surface": "apple",
@@ -12802,8 +12802,16 @@
       "id": "native.apple.096fb24013ac5455"
     },
     {
+      "kind": "ui-modifier",
+      "line": 23,
+      "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
+      "source": "OpenClaw on GitHub",
+      "surface": "apple",
+      "id": "native.apple.6fdc607c6178ba31"
+    },
+    {
       "kind": "ui-call",
-      "line": 32,
+      "line": 31,
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -12811,7 +12819,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 34,
+      "line": 33,
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "Version \\(self.versionString)",
       "surface": "apple",
@@ -12819,7 +12827,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 37,
+      "line": 36,
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "Built \\(buildTimestamp)\\(self.buildSuffix)",
       "surface": "apple",
@@ -12827,7 +12835,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 41,
+      "line": 40,
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "Menu bar companion for notifications, screenshots, and privileged agent actions.",
       "surface": "apple",
@@ -12835,7 +12843,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 51,
+      "line": 50,
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "GitHub",
       "surface": "apple",
@@ -12843,7 +12851,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 53,
+      "line": 52,
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "Website",
       "surface": "apple",
@@ -12851,7 +12859,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 54,
+      "line": 53,
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "Twitter",
       "surface": "apple",
@@ -12859,7 +12867,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 55,
+      "line": 54,
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "Email",
       "surface": "apple",
@@ -12867,7 +12875,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 67,
+      "line": 66,
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "Check for updates automatically",
       "surface": "apple",
@@ -12875,7 +12883,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 71,
+      "line": 70,
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "Check for Updates…",
       "surface": "apple",
@@ -12883,7 +12891,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 74,
+      "line": 73,
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "Updates unavailable in this build.",
       "surface": "apple",
@@ -12891,7 +12899,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 80,
+      "line": 79,
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "© 2026 OpenClaw Foundation — MIT License.",
       "surface": "apple",
