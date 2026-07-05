@@ -172,6 +172,13 @@ export async function execCommand(
       }, options.timeout);
     }
 
+    // stdout/stderr can fault (EPIPE, resource limits) independently of the
+    // child process exit. Swallow those stream errors so they do not escape as
+    // unhandled exceptions; waitForChildProcess remains the completion source.
+    const ignoreOutputStreamError = () => {};
+    proc.stdout?.on("error", ignoreOutputStreamError);
+    proc.stderr?.on("error", ignoreOutputStreamError);
+
     proc.stdout?.on("data", (data) => {
       const before = stdout.truncatedChars;
       stdout = appendCapturedOutput(stdout, data, maxOutputChars, truncateOutput);
