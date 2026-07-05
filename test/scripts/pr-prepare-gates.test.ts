@@ -242,6 +242,8 @@ describe("remote testbox gate delegation", () => {
         "not json at all",
         '{"provider":"blacksmith-testbox","leaseId":"tbx_first","exitCode":1,"runStatus":"failed"}',
         '{"provider":"blacksmith-testbox","leaseId":"tbx_final","exitCode":0,"runStatus":"passed"}',
+        "GitHub Actions run: https://github.com/openclaw/openclaw/actions/runs/9999",
+        "GitHub Actions run: https://github.com/example/other/actions/runs/8888",
         "",
       ].join("\n"),
     );
@@ -448,6 +450,22 @@ describe("pr-gates-lock helper", () => {
 });
 
 describe("gates.sh gate lock plumbing", () => {
+  it("acquires the block lock before dependency bootstrap", () => {
+    const result = runGatesBash(
+      [
+        "events=$(mktemp)",
+        'pin_worktree_bundled_plugins_dir() { echo pin >> "$events"; }',
+        'acquire_pr_gates_lock() { echo lock >> "$events"; }',
+        'bootstrap_deps_if_needed() { echo bootstrap >> "$events"; }',
+        "prepare_local_gate_workspace",
+        'cat "$events"',
+      ].join("\n"),
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual(["pin", "lock", "bootstrap"]);
+  });
+
   it("exports the held-lock contract while holding and clears it on release", () => {
     const repoDir = makeLockRepoDir();
     const result = runGatesBash(

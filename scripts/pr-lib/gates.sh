@@ -58,7 +58,6 @@ acquire_pr_gates_lock() {
   fi
 
   PR_GATES_LOCK_STATUS_FILE=$(mktemp)
-  rm -f "$PR_GATES_LOCK_STATUS_FILE"
   # Use the canonical helper: the PR branch under test may predate it.
   local scripts_dir="${script_parent_dir:-}"
   if [ -z "$scripts_dir" ]; then
@@ -80,6 +79,12 @@ acquire_pr_gates_lock() {
   export OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD=1
   export OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD=1
   export OPENCLAW_OXLINT_SKIP_LOCK=1
+}
+
+prepare_local_gate_workspace() {
+  pin_worktree_bundled_plugins_dir
+  acquire_pr_gates_lock
+  bootstrap_deps_if_needed
 }
 
 release_pr_gates_lock() {
@@ -130,9 +135,23 @@ read_remote_testbox_gate_run_url() {
   # The delegated timing report currently omits actionsRunUrl, while the same
   # run prints the canonical Actions URL as a separate line.
   local log_file="$1"
-  jq -Rr '
-    try capture("(?<url>https://github\\.com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/actions/runs/[0-9]+)").url catch empty
-  ' "$log_file" | tail -n 1
+  local pr_url="${PR_URL:-}"
+  local expected_repo="${pr_url#https://github.com/}"
+  expected_repo="${expected_repo%%/pull/*}"
+  if [ -z "$expected_repo" ] || [ "$expected_repo" = "$pr_url" ]; then
+    expected_repo="openclaw/openclaw"
+  fi
+  local url_prefix="https://github.com/$expected_repo/actions/runs/"
+  local marker="GitHub Actions run: $url_prefix"
+  awk -v marker="$marker" -v url_prefix="$url_prefix" '
+    index($0, marker) {
+      suffix = substr($0, index($0, marker) + length(marker))
+      if (match(suffix, /^[0-9]+/)) {
+        print url_prefix substr(suffix, RSTART, RLENGTH)
+        exit
+      }
+    }
+  ' "$log_file"
 }
 
 require_remote_testbox_gate_stamp() {
@@ -193,9 +212,7 @@ run_prepare_push_retry_gates() {
   local gates_remote_mode
   gates_remote_mode=$(resolve_pr_gates_remote_mode)
 
-  pin_worktree_bundled_plugins_dir
-  bootstrap_deps_if_needed
-  acquire_pr_gates_lock
+  prepare_local_gate_workspace
   run_quiet_logged "pnpm build (lease-retry)" ".local/lease-retry-build.log" pnpm build
   run_quiet_logged "pnpm check (lease-retry)" ".local/lease-retry-check.log" pnpm check
 
@@ -367,9 +384,7 @@ prepare_gates() {
     gates_mode="reused_docs_only"
     echo "Docs/changelog-only delta since last verified head $previous_last_verified_head; reusing prior gates."
   else
-    pin_worktree_bundled_plugins_dir
-    bootstrap_deps_if_needed
-    acquire_pr_gates_lock
+    prepare_local_gate_workspace
     run_quiet_logged "pnpm build" ".local/gates-build.log" pnpm build
     run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check
 
