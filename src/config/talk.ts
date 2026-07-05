@@ -194,7 +194,7 @@ function activeProviderFromTalk(talk: TalkConfig): string | undefined {
   const provider = normalizeOptionalString(talk.provider);
   const providers = talk.providers;
   if (provider) {
-    if (providers && !(provider in providers)) {
+    if (providers && !Object.hasOwn(providers, provider)) {
       return undefined;
     }
     return provider;
