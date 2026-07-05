@@ -249,4 +249,3 @@ https://github.com/apple/swift-cmark.
     * https://opensource.org/licenses/BSD-2-Clause
   * HOMEPAGE:
     * https://github.com/github/cmark-gfm
-
