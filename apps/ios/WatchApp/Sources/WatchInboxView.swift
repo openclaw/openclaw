@@ -1189,7 +1189,7 @@ private struct WatchChatComposer: View {
                     onSubmit: self.onSendMessage)
             } label: {
                 HStack(spacing: 5) {
-                    Text("Message")
+                    Text("Message OpenClaw")
                         .font(WatchClawType.body(size: 12, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

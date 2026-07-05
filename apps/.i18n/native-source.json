@@ -12741,9 +12741,9 @@
       "kind": "ui-call",
       "line": 1192,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
-      "source": "Message",
+      "source": "Message OpenClaw",
       "surface": "apple",
-      "id": "native.apple.23e5c409f5338b5e"
+      "id": "native.apple.b816e4b9e492ae6c"
     },
     {
       "kind": "ui-named-argument",
