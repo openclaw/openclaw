@@ -881,7 +881,7 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
 
     **Scope (`messages.ackReactionScope`):**
 
-    Values: `"all"` (DMs + groups, including ambient room events), `"direct"` (DMs only), `"group-all"` (every group message, no DMs), `"group-mentions"` (groups when the bot is mentioned; **no DMs**, default), `"off"` / `"none"` (disabled).
+    Values: `"all"` (DMs + groups, including ambient room events), `"direct"` (DMs only), `"group-all"` (every group message except ambient room events, no DMs), `"group-mentions"` (groups when the bot is mentioned; **no DMs**, default), `"off"` / `"none"` (disabled).
 
     <Note>
     The default scope (`"group-mentions"`) does not fire ack reactions in direct messages or ambient room events. To get an ack reaction on inbound Discord DMs and quiet room events, set `messages.ackReactionScope` to `"all"`.

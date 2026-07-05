@@ -1104,7 +1104,7 @@ Values:
 
 - `"all"`: react in DMs and groups, including ambient room events.
 - `"direct"`: react in DMs only.
-- `"group-all"`: react on every group message (no DMs).
+- `"group-all"`: react on every group message except ambient room events (no DMs).
 - `"group-mentions"` (default): react in groups, but only when the bot is mentioned (or in group mentionables that opted in). **DMs are excluded.**
 - `"off"` / `"none"`: never react.
 

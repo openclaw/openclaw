@@ -532,7 +532,6 @@ export const buildTelegramMessageContext = async ({
     sessionRuntime,
   });
   const isRoomEvent = ctxPayload.InboundEventKind === "room_event";
-  const canShowAckReaction = !isRoomEvent || ackReactionScope === "all";
   const canShowStatusReaction = !isRoomEvent;
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "telegram",
@@ -542,10 +541,10 @@ export const buildTelegramMessageContext = async ({
     ackReaction && isTelegramSupportedReactionEmoji(ackReaction) ? ackReaction : undefined;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const shouldSendAckReaction = Boolean(
-    canShowAckReaction &&
     ackReaction &&
     shouldAckReactionGate({
       scope: ackReactionScope,
+      inboundEventKind: ctxPayload.InboundEventKind,
       isDirect: !isGroup,
       isGroup,
       isMentionableGroup: isGroup,
