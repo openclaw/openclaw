@@ -251,19 +251,24 @@ final class WebChatSwiftUIWindowController {
 
     convenience init(sessionKey: String, presentation: WebChatPresentation) {
         // Connection-mode changes tear chat windows down via resetTunnels(),
-        // so binding the cache identity at construction stays correct.
+        // so binding the cache identity at construction stays correct. One
+        // store instance backs both the transcript cache and the offline
+        // command outbox.
+        let store = MacChatTranscriptCache.make()
         self.init(
             sessionKey: sessionKey,
             presentation: presentation,
             transport: MacGatewayChatTransport(),
-            transcriptCache: MacChatTranscriptCache.make())
+            transcriptCache: store,
+            outbox: store)
     }
 
     init(
         sessionKey: String,
         presentation: WebChatPresentation,
         transport: any OpenClawChatTransport,
-        transcriptCache: (any OpenClawChatTranscriptCache)? = nil)
+        transcriptCache: (any OpenClawChatTranscriptCache)? = nil,
+        outbox: (any OpenClawChatCommandOutbox)? = nil)
     {
         self.sessionKey = sessionKey
         self.presentation = presentation
@@ -271,6 +276,7 @@ final class WebChatSwiftUIWindowController {
             sessionKey: sessionKey,
             transport: transport,
             transcriptCache: transcriptCache,
+            outbox: outbox,
             initialThinkingLevel: Self.persistedThinkingLevel(),
             onThinkingLevelChanged: { level in
                 UserDefaults.standard.set(level, forKey: webChatThinkingLevelDefaultsKey)
