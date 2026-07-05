@@ -47,4 +47,18 @@ class NodeUtilsTest {
     assertNull(parseJsonBooleanFlag(params, "enabled"))
     assertNull(parseJsonBooleanFlag(params, "missing"))
   }
+
+  @Test
+  fun parseJsonBooleanFlag_parsesIncludeAudioAliasesForCameraClip() {
+    val cases =
+      linkedMapOf(
+        """{"includeAudio":"no"}""" to false,
+        """{"includeAudio":"0"}""" to false,
+        """{"includeAudio":"yes"}""" to true,
+      )
+    for ((source, expected) in cases) {
+      val params = json.parseToJsonElement(source) as JsonObject
+      assertEquals(source, expected, parseJsonBooleanFlag(params, "includeAudio"))
+    }
+  }
 }
