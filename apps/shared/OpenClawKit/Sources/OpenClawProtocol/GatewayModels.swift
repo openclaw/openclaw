@@ -2437,6 +2437,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let key: String
     public let agentid: String?
     public let label: AnyCodable?
+    public let category: AnyCodable?
     public let archived: Bool?
     public let pinned: Bool?
     public let thinkinglevel: AnyCodable?
@@ -2466,6 +2467,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         key: String,
         agentid: String? = nil,
         label: AnyCodable?,
+        category: AnyCodable?,
         archived: Bool? = nil,
         pinned: Bool? = nil,
         thinkinglevel: AnyCodable?,
@@ -2494,6 +2496,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.key = key
         self.agentid = agentid
         self.label = label
+        self.category = category
         self.archived = archived
         self.pinned = pinned
         self.thinkinglevel = thinkinglevel
@@ -2524,6 +2527,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case key
         case agentid = "agentId"
         case label
+        case category
         case archived
         case pinned
         case thinkinglevel = "thinkingLevel"
