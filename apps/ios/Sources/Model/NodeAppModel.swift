@@ -6801,11 +6801,6 @@ extension NodeAppModel {
         self.presentFetchedExecApprovalPrompt(prompt)
     }
 
-    func _test_cacheExecApprovalPromptForWatch(_ prompt: ExecApprovalPrompt) {
-        self.watchExecApprovalPromptsByID[prompt.id] = prompt
-        self.persistWatchExecApprovalBridgeState()
-    }
-
     func _test_dismissPendingExecApprovalPrompt() {
         self.dismissPendingExecApprovalPrompt()
     }
@@ -6868,14 +6863,6 @@ extension NodeAppModel {
 
     func _test_pendingExecApprovalResolvedPushes() -> [ExecApprovalNotificationPrompt] {
         self.pendingExecApprovalResolvedPushes
-    }
-
-    func _test_pendingWatchExecApprovalResolutionCount() -> Int {
-        self.pendingWatchExecApprovalResolutions.count
-    }
-
-    func _test_flushPendingWatchExecApprovalResolutions() async {
-        await self.flushPendingWatchExecApprovalResolutions()
     }
 
     func _test_pendingExecApprovalIDsForWatchRecovery() async -> [String] {
