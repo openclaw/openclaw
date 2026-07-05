@@ -163,6 +163,19 @@ describe("Session Store Cache", () => {
     }
   });
 
+  it("does not retry permanent session store read failures", () => {
+    clearSessionStoreCacheForTest();
+    const missingPath = path.join(testDir, "missing-sessions.json");
+    const readSpy = vi.spyOn(fs, "readFileSync");
+
+    try {
+      expect(loadSessionStore(missingPath, { skipCache: true })).toEqual({});
+      expect(readSpy).toHaveBeenCalledOnce();
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
   it("should serve freshly saved session stores from cache without disk reads", async () => {
     const testStore = createSingleSessionStore();
 

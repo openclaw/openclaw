@@ -418,8 +418,10 @@ export function loadSessionStore(
       // writes the file after readFileSync returns, a post-read stat could tag
       // stale content as current and make future cache hits return old data.
       break;
-    } catch {
-      if (attempt < maxReadAttempts - 1) {
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      const isPermanentReadError = code === "ENOENT" || code === "EACCES" || code === "EPERM";
+      if (!isPermanentReadError && attempt < maxReadAttempts - 1) {
         Atomics.wait(retryBuf!, 0, 0, 50);
         continue;
       }

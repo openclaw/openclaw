@@ -273,7 +273,7 @@ async function fileContentDiffersFromTemplate(
     });
   } catch (err) {
     const anyErr = err as { code?: string };
-    if (anyErr.code === "ENOENT" || isTransientWorkspaceReadError(err)) {
+    if (anyErr.code === "ENOENT") {
       return false;
     }
     throw err;
