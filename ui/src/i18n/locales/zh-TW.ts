@@ -440,6 +440,7 @@ export const zh_TW: TranslationMap = {
     detached: "已分離",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
+    unavailable: "The terminal is not available on this gateway.",
   },
   tabs: {
     agents: "代理",

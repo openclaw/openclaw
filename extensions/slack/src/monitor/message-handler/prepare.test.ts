@@ -742,6 +742,10 @@ describe("slack prepareSlackMessage inbound contract", () => {
     groupPolicy?: "open";
     defaultRequireMention?: boolean;
     asChannel?: boolean;
+    channelsConfig?: Record<
+      string,
+      { requireMention?: boolean; replyToMode?: "off" | "all" | "first" | "batched" }
+    >;
   }): SlackMonitorContext {
     const slackCtx = createInboundSlackCtx({
       cfg: {
@@ -754,6 +758,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
         },
       } as OpenClawConfig,
       replyToMode: "all",
+      channelsConfig: params?.channelsConfig,
       ...(params?.defaultRequireMention === undefined
         ? {}
         : { defaultRequireMention: params.defaultRequireMention }),
@@ -1807,6 +1812,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
     assertPrepared(prepared);
     expect(prepared.replyToMode).toBe("off");
+    expect(prepared.ctxPayload.ReplyToMode).toBe("off");
     expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
   });
 
@@ -1824,6 +1830,25 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     assertPrepared(prepared);
     expect(prepared.replyToMode).toBe("all");
     expect(prepared.ctxPayload.MessageThreadId).toBe("1.000");
+  });
+
+  it("uses per-channel replyToMode before account fallback", async () => {
+    const prepared = await prepareMessageWith(
+      createReplyToAllSlackCtx({
+        groupPolicy: "open",
+        defaultRequireMention: false,
+        asChannel: true,
+        channelsConfig: {
+          C123: { requireMention: false, replyToMode: "off" },
+        },
+      }),
+      createSlackAccount({ replyToMode: "all", replyToModeByChatType: { channel: "all" } }),
+      createSlackMessage({ channel: "C123", channel_type: "channel" }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.replyToMode).toBe("off");
+    expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
   });
 
   it("respects dm.replyToMode legacy override for DMs", async () => {
@@ -3417,6 +3442,47 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(followUp.ctxPayload.SessionKey).toBe(expectedSessionKey);
     expect(root.ctxPayload.WasMentioned).toBe(true);
     expect(followUp.ctxPayload.WasMentioned).toBe(true);
+  });
+
+  it("keeps per-channel replyToMode during regex mention reroute", async () => {
+    const rootTs = "1777244692.409919";
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        messages: { groupChat: { mentionPatterns: ["\\bbill\\b"] } },
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      channelsConfig: {
+        C0AHZFCAS1K: { requireMention: true, replyToMode: "off" },
+      },
+      defaultRequireMention: true,
+      replyToMode: "all",
+    });
+    slackCtx.resolveChannelName = async () => ({ name: "proj-openclaw", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Bek" });
+
+    const prepared = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount({
+        replyToMode: "all",
+        replyToModeByChatType: { channel: "all" },
+      }),
+      message: {
+        type: "message",
+        channel: "C0AHZFCAS1K",
+        channel_type: "channel",
+        user: "U_BEK",
+        text: "Bill send a subagent to review GitHub issue #50621",
+        ts: rootTs,
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    assertPrepared(prepared);
+    expect(prepared.replyToMode).toBe("off");
+    expect(prepared.ctxPayload.ReplyToMode).toBe("off");
+    expect(prepared.ctxPayload.WasMentioned).toBe(true);
+    expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
+    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:slack:channel:c0ahzfcas1k");
   });
 
   it("keeps runtime-bound regex mentions on the bound parent session", async () => {

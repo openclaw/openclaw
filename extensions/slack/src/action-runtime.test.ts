@@ -873,6 +873,54 @@ describe("handleSlackAction", () => {
     expectLastSlackSend("No thread", cfg);
   });
 
+  it("keeps same-channel sends and uploads top-level for a prepared channel override", async () => {
+    const cfg = slackConfig({
+      replyToMode: "all",
+      channels: { C123: { replyToMode: "off" } },
+    });
+    const context = buildSlackThreadingToolContext({
+      cfg,
+      accountId: null,
+      context: {
+        ChatType: "channel",
+        To: "channel:C123",
+        CurrentMessageId: "1111111111.111111",
+        ReplyToId: "1111111111.111111",
+        ReplyToMode: "off",
+      },
+    });
+
+    await handleSlackAction(
+      { action: "sendMessage", to: "channel:C123", content: "Channel root" },
+      cfg,
+      context,
+    );
+    await handleSlackAction(
+      {
+        action: "uploadFile",
+        to: "channel:C123",
+        filePath: "/tmp/report.png",
+        initialComment: "fresh report",
+      },
+      cfg,
+      context,
+    );
+
+    expectSlackSendCall(0, "channel:C123", "Channel root", {
+      cfg,
+      mediaUrl: undefined,
+      threadTs: undefined,
+      blocks: undefined,
+    });
+    expectSlackSendCall(1, "channel:C123", "fresh report", {
+      cfg,
+      mediaUrl: "/tmp/report.png",
+      threadTs: undefined,
+      uploadFileName: undefined,
+      uploadTitle: undefined,
+    });
+  });
+
   it("does not auto-inject threadTs when sending to different channel", async () => {
     const cfg = slackConfig();
     await handleSlackAction(

@@ -61,9 +61,9 @@ Full reference: [Onboarding (macOS App)](/start/onboarding)
 If your provider is not listed in onboarding, choose **Custom Provider** and
 enter:
 
-- API compatibility mode (OpenAI-compatible, Anthropic-compatible, or auto-detect)
-- Base URL and API key
-- Model ID and optional alias
+- Endpoint compatibility: OpenAI-compatible (`/chat/completions`), OpenAI Responses-compatible (`/responses`), Anthropic-compatible (`/messages`), or unknown (probes all three and auto-detects)
+- Base URL and API key (API key is optional if the endpoint does not require one)
+- Model ID and optional model alias
 
 Multiple custom endpoints can coexist — each gets its own endpoint ID.
 

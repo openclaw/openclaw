@@ -1468,6 +1468,7 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(result.promptError).toBeNull();
     expect(result.assistantTexts).toEqual(["Nested done."]);
+    expect(result.assistantTranscriptOwned).toBe(true);
   });
 
   it("delivers completed assistant text when an orphan native tool call lacks a matching result", async () => {

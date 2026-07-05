@@ -34,19 +34,19 @@ If you want "100% tailored to me" _and_ easy updates, keep your customization in
 - **Config:** `~/.openclaw/openclaw.json` (JSON/JSON5-ish)
 - **Workspace:** `~/.openclaw/workspace` (skills, prompts, memories; make it a private git repo)
 
-Bootstrap once:
+Bootstrap the config/workspace folders once, without opening the local agent:
 
 ```bash
 openclaw setup --skip-ui
 ```
 
-From inside this repo, use the local CLI entry:
+No global install yet? Run it from this repo instead:
 
 ```bash
-openclaw setup --skip-ui
+pnpm openclaw setup --skip-ui
 ```
 
-If you don't have a global install yet, run it via `pnpm openclaw setup --skip-ui`.
+(Bare `openclaw setup` is an alias for `openclaw onboard` and runs minimal-first onboarding.)
 
 ## Run the Gateway from this repo
 
@@ -99,15 +99,17 @@ pnpm gateway:watch
 ```
 
 `gateway:watch` starts or restarts the Gateway watch process in a named tmux
-session and auto-attaches from interactive terminals. Non-interactive shells stay
-detached and print `tmux attach -t openclaw-gateway-watch-main`; use
+session (`openclaw-gateway-watch-main`) and auto-attaches from interactive
+terminals. Non-interactive shells stay detached and print
+`tmux attach -t openclaw-gateway-watch-main`; use
 `OPENCLAW_GATEWAY_WATCH_ATTACH=0 pnpm gateway:watch` to keep an interactive run
 detached, or `pnpm gateway:watch:raw` for foreground watch mode. The watcher
 reloads on relevant source, config, and bundled-plugin metadata changes. If the
 watched Gateway exits during startup, `gateway:watch` runs
 `openclaw doctor --fix --non-interactive` once and retries; set
 `OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR=0` to disable that dev-only repair pass.
-`pnpm openclaw setup --skip-ui` is the one-time local setup step for a fresh checkout without opening the agent TUI.
+`pnpm openclaw setup --skip-ui` is the one-time local setup step for a fresh
+checkout without opening the agent TUI.
 `pnpm gateway:watch` does not rebuild `dist/control-ui`, so rerun `pnpm ui:build` after `ui/` changes or use `pnpm ui:dev` while developing the Control UI.
 
 ### 2) Point the macOS app at your running Gateway

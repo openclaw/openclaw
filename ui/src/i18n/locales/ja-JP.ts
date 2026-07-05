@@ -447,6 +447,7 @@ export const ja_JP: TranslationMap = {
     detached: "デタッチ済み",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
+    unavailable: "The terminal is not available on this gateway.",
   },
   tabs: {
     agents: "エージェント",

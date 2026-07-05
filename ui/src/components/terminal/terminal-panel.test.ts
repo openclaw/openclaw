@@ -89,4 +89,58 @@ describe("OpenClawTerminalPanel", () => {
       });
     });
   });
+
+  it("fullscreen mode auto-opens without dock chrome and survives last-tab close", async () => {
+    createGhosttyTerminalMock.mockImplementation(async () => {
+      return {
+        terminal: {
+          cols: 100,
+          rows: 30,
+          viewportY: 0,
+          write: vi.fn(),
+          focus: vi.fn(),
+        },
+        write: vi.fn(),
+        fit: vi.fn(),
+        dispose: vi.fn(),
+      };
+    });
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const client: TerminalGatewayClient = {
+      request: async <T>(method: string, params?: unknown) => {
+        requests.push({ method, params });
+        return {
+          sessionId: "session-1",
+          agentId: "ops",
+          shell: "/bin/zsh",
+          cwd: "/work/ops",
+          confined: false,
+        } as T;
+      },
+      addEventListener: () => () => {},
+    };
+    const panel = document.createElement("openclaw-terminal-panel") as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.available = true;
+    panel.fullscreen = true;
+    document.body.append(panel);
+
+    // No toggle: the terminal-only document opens its session on mount.
+    await vi.waitFor(() => {
+      expect(requests.some((entry) => entry.method === "terminal.open")).toBe(true);
+    });
+    await panel.updateComplete;
+    const section = panel.renderRoot.querySelector(".tp");
+    expect(section?.classList.contains("tp--fullscreen")).toBe(true);
+    expect(panel.renderRoot.querySelector(".tp-resizer")).toBeNull();
+    expect(panel.renderRoot.querySelector(".tp-actions")).toBeNull();
+
+    // Closing the last tab must keep the panel (with its "+" button) rendered —
+    // a fullscreen document has no toggle to bring a closed panel back.
+    (panel.renderRoot.querySelector(".tp-tab__close") as HTMLElement).click();
+    await panel.updateComplete;
+    expect(requests.some((entry) => entry.method === "terminal.close")).toBe(true);
+    expect(panel.renderRoot.querySelector(".tp")).not.toBeNull();
+    expect(panel.renderRoot.querySelector(".tp-new")).not.toBeNull();
+  });
 });

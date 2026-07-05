@@ -7,40 +7,37 @@ title: "Onboarding (CLI)"
 sidebarTitle: "Onboarding: CLI"
 ---
 
-CLI onboarding is the **recommended** terminal setup path for OpenClaw on
-macOS, Linux, or Windows. Windows desktop users can also start with
-[Windows Hub](/platforms/windows).
-It gets a local agent running with the fewest required prompts, then opens that
-agent to help configure optional features.
-
 ```bash
 openclaw onboard
 ```
 
-QuickStart is usually only a few minutes, but full onboarding can take longer
-when provider sign-in, channel pairing, daemon install, network downloads,
-skills, or optional plugins need extra setup. The wizard shows this timeline up
-front, and optional steps can be skipped and revisited later with
-`openclaw configure`.
+CLI onboarding is the recommended terminal setup path on macOS, Linux, and
+Windows (native or WSL2). It gets a local agent running with the fewest required
+prompts, then opens that agent to help configure optional features. `openclaw
+setup` runs the same flow ([Setup](/cli/setup) covers baseline-only variants).
+Windows desktop users can also start from [Windows Hub](/platforms/windows).
 
-## Locale
-
-The CLI wizard localizes fixed onboarding copy. It resolves locale from
-`OPENCLAW_LOCALE`, then `LC_ALL`, then `LC_MESSAGES`, then `LANG`, and falls
-back to English. Supported wizard locales are `en`, `zh-CN`, and `zh-TW`.
-
-```bash
-OPENCLAW_LOCALE=zh-CN openclaw onboard
-```
-
-Names and stable identifiers stay literal: `OpenClaw`, `Gateway`, `Tailscale`,
-commands, config keys, URLs, provider IDs, model IDs, and plugin/channel labels
-are not translated.
+Provider sign-in or migration can extend the minimal flow. Advanced channel
+pairing, daemon install, and skill downloads can be revisited later with the
+agent, `openclaw configure`, or `openclaw onboard --flow advanced`.
 
 <Info>
 Fastest first chat: run `openclaw`. After minimal setup, the normal local agent
 opens directly.
 </Info>
+
+## Locale
+
+The wizard localizes fixed onboarding copy. Resolve order: `OPENCLAW_LOCALE`,
+`LC_ALL`, `LC_MESSAGES`, `LANG`, then English. Supported locales: `en`,
+`zh-CN`, `zh-TW`.
+
+```bash
+OPENCLAW_LOCALE=zh-CN openclaw onboard
+```
+
+Product names, commands, config keys, URLs, provider IDs, model IDs, and
+plugin/channel labels stay in English regardless of locale.
 
 To reconfigure later:
 
@@ -50,21 +47,22 @@ openclaw agents add <name>
 ```
 
 <Note>
-`--json` does not imply non-interactive mode. For scripts, use `--non-interactive`.
+`--json` does not imply non-interactive mode. For scripts, use `--non-interactive` (see [CLI automation](/start/wizard-cli-automation)).
 </Note>
 
 <Tip>
-Advanced CLI onboarding includes a web search step where you can pick a provider
-such as Brave, DuckDuckGo, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search,
-Ollama Web Search, Perplexity, SearXNG, or Tavily. Some providers require an
-API key, while others are key-free. You can also configure this later with
-`openclaw configure --section web`. Docs: [Web tools](/tools/web).
+Advanced onboarding includes a web search step where you can pick a provider: Brave,
+DuckDuckGo, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search, Ollama Web
+Search, Perplexity, SearXNG, or Tavily. Some need an API key; others are
+key-free. Configure this later with `openclaw configure --section web`. Docs:
+[Web tools](/tools/web).
 </Tip>
 
 ## Default vs Advanced
 
-Default onboarding runs the minimal QuickStart path. Use
-`openclaw onboard --flow advanced` for full infrastructure control.
+Default onboarding runs the minimal QuickStart path. Use `openclaw onboard
+--flow advanced` for full infrastructure control. `manual` is an alias for
+`advanced`.
 
 <Tabs>
   <Tab title="QuickStart (default)">
@@ -72,57 +70,85 @@ Default onboarding runs the minimal QuickStart path. Use
     - Model/auth only when no runnable local agent exists
     - Workspace default (or existing workspace)
     - Local mode
-    - Tool policy default for new local setups: `tools.profile: "coding"` (existing explicit profile is preserved)
-    - DM isolation default: local onboarding writes `session.dmScope: "per-channel-peer"` when unset. Details: [CLI Setup Reference](/start/wizard-cli-reference#outputs-and-internals)
+    - Tool policy: `tools.profile: "coding"` for new setups (an existing explicit profile is preserved)
+    - DM isolation: `session.dmScope: "per-channel-peer"` for new setups. Details: [CLI setup reference](/start/wizard-cli-reference#outputs-and-internals)
     - Opens the normal local agent for assisted optional setup
 
   </Tab>
   <Tab title="Advanced (full control)">
-    - Exposes mode, workspace, Gateway, channels, daemon, search, skills, hooks, and health.
+    - Exposes mode, workspace, Gateway, channels, daemon, search, skills, hooks, and health
 
   </Tab>
 </Tabs>
 
+Remote mode (`--mode remote`) always uses the advanced flow; it only
+configures this machine to connect to a Gateway elsewhere and never installs
+or changes anything on the remote host.
+
 ## What onboarding configures
 
-**Default local mode** performs only the required steps:
+Default local mode performs only the required steps:
 
-1. **Import or Model/Auth** — choose a registered migration source such as Codex, Claude, or Hermes, or set up a model separately. Detected migration sources appear first. Migration previews supported skills, instructions, settings, and other artifacts, and asks separately before importing supported auth credentials. If you skip import, choose any supported provider/auth flow (API key, OAuth, or provider-specific manual auth), including Custom Provider
-   (OpenAI-compatible, Anthropic-compatible, or Unknown auto-detect). Pick a default model.
-   Security note: if this agent will run tools or process webhook/hooks content, prefer the strongest latest-generation model available and keep tool policy strict. Weaker/older tiers are easier to prompt-inject.
-   For non-interactive runs, `--secret-input-mode ref` stores env-backed refs in auth profiles instead of plaintext API key values.
-   In non-interactive `ref` mode, the provider env var must be set; passing inline key flags without that env var fails fast.
-   In interactive runs, choosing secret reference mode lets you point at either an environment variable or a configured provider ref (`file` or `exec`), with a fast preflight validation before saving.
-   For Anthropic, interactive onboarding/configure offers **Anthropic Claude CLI** as the preferred local path and **Anthropic API key** as the recommended production path. Anthropic setup-token also remains available as a supported token-auth path.
-2. **Workspace** — Location for agent files (default `~/.openclaw/workspace`). Seeds bootstrap files.
-3. **Agent handoff** — Opens the normal local agent with a short request to help finish only the optional setup you need. Runtime-only setup guidance tells the agent to read the current channel inventory, follow the selected channel's official `docsPath`, use guided setup unless the installed CLI exposes every required non-interactive option, and verify the result with a channel probe instead of improvising provider-specific instructions.
+1. **Import or Model/Auth** - choose a registered migration source such as
+   Codex, Claude, or Hermes, or set up a model separately. Detected migration
+   sources appear first. Migration previews supported skills, instructions,
+   settings, and other artifacts, and asks separately before importing supported
+   auth credentials. If you skip import, pick a provider auth flow (API key, OAuth, or
+   provider-specific manual auth), including Custom Provider
+   (OpenAI-compatible, OpenAI Responses-compatible, Anthropic-compatible, or
+   Unknown auto-detect). Pick a default model.
+   Security note: if this agent will run tools or process webhook/hook
+   content, prefer the strongest latest-generation model available and keep
+   tool policy strict - weaker or older tiers are easier to prompt-inject.
+   For non-interactive runs, `--secret-input-mode ref` stores env-backed refs
+   instead of plaintext API key values; the referenced env var must already
+   be set, or onboarding fails fast. Interactive secret reference mode can
+   point at an environment variable or a configured provider ref (`file` or
+   `exec`), with a fast preflight check before saving.
+2. **Workspace** - directory for agent files (default `~/.openclaw/workspace`). Seeds bootstrap files.
+3. **Agent handoff** - starts a temporary local Gateway and opens the normal
+   local agent with a request to help finish only the optional setup you need.
 
-**Advanced local mode** additionally walks through:
+Advanced local mode additionally walks through:
 
-1. **Gateway** — Port, bind address, auth mode, Tailscale exposure.
-   In interactive token mode, choose default plaintext token storage or opt into SecretRef.
-   Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
-2. **Channels** — built-in and official plugin chat channels such as iMessage, Discord, Feishu, Google Chat, Mattermost, Microsoft Teams, QQ Bot, Signal, Slack, Telegram, WhatsApp, and more.
-3. **Daemon** — Installs a LaunchAgent (macOS), systemd user unit (Linux/WSL2), or native Windows Scheduled Task with per-user Startup-folder fallback.
-   If token auth requires a token and `gateway.auth.token` is SecretRef-managed, daemon install validates it but does not persist the resolved token into supervisor service environment metadata.
-   If token auth requires a token and the configured token SecretRef is unresolved, daemon install is blocked with actionable guidance.
-   If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, daemon install is blocked until mode is set explicitly.
-4. **Health check** — Starts the Gateway and verifies it's running.
-5. **Search, skills, and hooks** — Configures optional capabilities and dependencies.
+1. **Gateway** - port, bind address, auth mode, Tailscale exposure. In
+   interactive token mode, choose plaintext token storage (default) or opt
+   into a SecretRef. Non-interactive SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
+2. **Channels** - built-in and official plugin chat channels, including
+   Discord, Feishu, Google Chat, iMessage, Mattermost, Microsoft Teams,
+   QQ Bot, Signal, Slack, Telegram, WhatsApp, and more.
+3. **Daemon** - installs a LaunchAgent (macOS), a systemd user unit
+   (Linux/WSL2), or a native Windows Scheduled Task with a per-user
+   Startup-folder fallback.
+   If token auth is required and `gateway.auth.token` is SecretRef-managed,
+   daemon install validates it but does not persist a resolved token into
+   supervisor service environment metadata; an unresolved SecretRef blocks
+   install with guidance. If both `gateway.auth.token` and
+   `gateway.auth.password` are set while `gateway.auth.mode` is unset, install
+   is blocked until you set the mode explicitly.
+4. **Health check** - starts the Gateway and verifies it is reachable.
+5. **Search, skills, and hooks** - configures optional capabilities and dependencies.
 
 <Note>
-Re-running onboarding does **not** wipe anything unless you explicitly choose **Reset** (or pass `--reset`).
-CLI `--reset` defaults to config, credentials, and sessions; use `--reset-scope full` to include workspace.
-If the config is invalid or contains legacy keys, onboarding asks you to run `openclaw doctor` first.
+Re-running onboarding does **not** wipe anything unless you explicitly choose
+**Reset** (or pass `--reset`). CLI `--reset` defaults to config, credentials,
+and sessions; use `--reset-scope full` to also remove the workspace. If the
+config is invalid or contains legacy keys, onboarding asks you to run
+`openclaw doctor` first.
 </Note>
 
-**Remote mode** only configures the local client to connect to a Gateway elsewhere.
-It does **not** install or change anything on the remote host.
+`--flow import` runs a detected migration flow instead of fresh setup; see
+[Migrate](/cli/migrate) and the migration guides under
+[Install](/install/migrating-hermes). `openclaw onboard --modern` starts
+[Crestodian](/cli/crestodian), a conversational setup/repair assistant, in
+place of onboarding.
 
 ## Add another agent
 
-Use `openclaw agents add <name>` to create a separate agent with its own workspace,
-sessions, and auth profiles. Running without `--workspace` launches onboarding.
+Use `openclaw agents add <name>` to create a separate agent with its own
+workspace, sessions, and auth profiles. Running without `--workspace` starts
+an interactive flow for name, workspace, auth, channels, and bindings - it is
+not the full `openclaw onboard` wizard.
 
 What it sets:
 
@@ -132,21 +158,21 @@ What it sets:
 
 Notes:
 
-- Default workspaces follow `~/.openclaw/workspace-<agentId>`.
-- Add `bindings` to route inbound messages (onboarding can do this).
+- Default workspace: `~/.openclaw/workspace-<agentId>` (or under
+  `agents.defaults.workspace` if that is set).
+- Add `bindings` to route inbound messages to this agent (onboarding can do this for you).
 - Non-interactive flags: `--model`, `--agent-dir`, `--bind`, `--non-interactive`.
 
 ## Full reference
 
-For detailed step-by-step breakdowns and config outputs, see
-[CLI Setup Reference](/start/wizard-cli-reference).
-For non-interactive examples, see [CLI Automation](/start/wizard-cli-automation).
-For the deeper technical reference, including RPC details, see
-[Onboarding Reference](/reference/wizard).
+For detailed step-by-step behavior and config outputs, see
+[CLI setup reference](/start/wizard-cli-reference).
+For non-interactive examples, see [CLI automation](/start/wizard-cli-automation).
+For the full flag reference, see [`openclaw onboard`](/cli/onboard).
 
 ## Related docs
 
 - CLI command reference: [`openclaw onboard`](/cli/onboard)
-- Onboarding overview: [Onboarding Overview](/start/onboarding-overview)
+- Onboarding overview: [Onboarding overview](/start/onboarding-overview)
 - macOS app onboarding: [Onboarding](/start/onboarding)
 - Agent first-run ritual: [Agent Bootstrapping](/start/bootstrapping)

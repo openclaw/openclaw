@@ -320,6 +320,18 @@
   box-shadow: var(--focus-ring);
 }
 
+/* Without explicit sizing/stroke the Lucide-style icon renders as a filled
+   blob at the browser's default svg size (e.g. the terminal toggle glyph). */
+.topbar-icon-btn svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .topbar-search__label {
   flex: 1;
   text-align: left;
@@ -1143,6 +1155,13 @@
   min-height: 42px;
 }
 
+.sidebar-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 /* Borderless status line: the sidebar footer signals connectivity only;
    the gateway version moved into Settings (Quick Settings footer). */
 .sidebar-status {
@@ -1175,6 +1194,53 @@
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 14%, transparent);
 }
 
+.sidebar-pair-mobile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.sidebar-pair-mobile:hover:not(:disabled),
+.sidebar-pair-mobile:focus-visible {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--border) 76%, transparent);
+  background: var(--bg-hover);
+}
+
+.sidebar-pair-mobile:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: 1px;
+}
+
+.sidebar-pair-mobile:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.sidebar-pair-mobile svg {
+  width: 17px;
+  height: 17px;
+  stroke: currentColor;
+  fill: none;
+}
+
+.sidebar-pair-mobile svg * {
+  stroke: currentColor;
+  fill: none;
+}
+
 .sidebar--collapsed .sidebar-shell__footer {
   padding: 8px 0 2px;
 }
@@ -1189,6 +1255,10 @@
   min-height: 36px;
   padding: 0;
   justify-content: center;
+}
+
+.sidebar--collapsed .sidebar-footer-row {
+  flex-direction: column-reverse;
 }
 
 /* Mode switch in sidebar — hidden on desktop, shown on mobile */
@@ -1598,4 +1668,18 @@
 
 .chat-controls-dropdown {
   display: none;
+}
+
+/* Terminal-only document (`?view=terminal`, mobile WebViews): centered notice
+   when the gateway refuses or lacks the terminal surface. */
+.terminal-view-unavailable {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+  background: var(--bg);
 }

@@ -12,8 +12,8 @@ with help from the agent.
 
 ## What you need
 
-- **Node.js** — Node 24 recommended (Node 22.19+ also supported)
-- **An API key** from a model provider (Anthropic, OpenAI, Google, etc.) — onboarding will prompt you
+- **Node.js 22.19+, 23.11+, or 24+** (24 is the recommended default)
+- **Model access** through an API key, provider login, or supported local harness - onboarding will guide you
 
 <Tip>
 Check your Node version with `node --version`.
@@ -62,8 +62,8 @@ Need to install Node? See [Node setup](/install/node).
   </Step>
   <Step title="Send your first message">
     Chat immediately in the local agent. Ask it to help configure only the
-    optional features you need, such as a Gateway service, Telegram, Discord,
-    web search, or skills.
+    optional features you need, such as a persistent Gateway service, Telegram,
+    Discord, web search, or skills.
 
   </Step>
 </Steps>
