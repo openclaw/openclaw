@@ -1281,6 +1281,46 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).not.toContain("private-token");
   });
 
+  it("preserves every media content type for a history message with multiple attachments", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      InboundHistory: [
+        {
+          sender: "Alice",
+          body: "<media:image> (2 images)",
+          timestamp: 1_736_380_700_000,
+          messageId: "m-2",
+          media: [
+            {
+              path: "/tmp/openclaw-secret-image-1.png",
+              url: "https://cdn.example.test/private-token-1",
+              contentType: "image/png",
+              kind: "image",
+              messageId: "m-2",
+            },
+            {
+              path: "/tmp/openclaw-secret-image-2.jpg",
+              url: "https://cdn.example.test/private-token-2",
+              contentType: "image/jpeg",
+              kind: "image",
+              messageId: "m-2",
+            },
+          ],
+        },
+      ],
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["history_media_count"]).toBe(2);
+
+    expect(text).toContain("#m-2");
+    expect(text).toContain("Alice: <media:image> (2 images) [image/png, image/jpeg]");
+    expect(text).not.toContain("/tmp/openclaw-secret-image-1.png");
+    expect(text).not.toContain("/tmp/openclaw-secret-image-2.jpg");
+    expect(text).not.toContain("private-token-1");
+    expect(text).not.toContain("private-token-2");
+  });
+
   it("renders chat history as per-message prose instead of a raw JSON dump", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",

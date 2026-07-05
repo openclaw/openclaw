@@ -693,13 +693,20 @@ export function buildInboundUserContextPrefix(
 
   if (boundedHistory.length > 0 && !chatWindowCoversHistory) {
     const historyLines = boundedHistory.flatMap((entry) => {
+      const mediaTypes = [
+        ...new Set(
+          buildInboundHistoryMediaPromptPayload(entry.media)
+            .map((media) => media["content_type"])
+            .filter((value): value is string => typeof value === "string"),
+        ),
+      ];
       const line = formatChatWindowMessage(
         {
           message_id: entry.messageId,
           sender: entry.sender,
           timestamp_ms: entry.timestamp,
           body: entry.body,
-          media_type: entry.media?.[0]?.contentType,
+          media_type: mediaTypes.length > 0 ? mediaTypes.join(", ") : undefined,
         },
         envelope,
       );
