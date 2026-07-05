@@ -5,7 +5,6 @@ import { registerOnboardCommand } from "./register.onboard.js";
 
 const mocks = vi.hoisted(() => ({
   runCrestodian: vi.fn(),
-  setupCommandMock: vi.fn(),
   setupWizardCommandMock: vi.fn(),
   runtime: {
     log: vi.fn(),
@@ -14,7 +13,6 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-const setupCommandMock = mocks.setupCommandMock;
 const setupWizardCommandMock = mocks.setupWizardCommandMock;
 const runtime = mocks.runtime;
 
@@ -51,10 +49,6 @@ vi.mock("../../commands/onboard.js", () => ({
   setupWizardCommand: mocks.setupWizardCommandMock,
 }));
 
-vi.mock("../../commands/setup.js", () => ({
-  setupCommand: mocks.setupCommandMock,
-}));
-
 vi.mock("../../crestodian/crestodian.js", () => ({
   runCrestodian: mocks.runCrestodian,
 }));
@@ -82,7 +76,6 @@ describe("registerOnboardCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.runCrestodian.mockResolvedValue(undefined);
-    setupCommandMock.mockResolvedValue(undefined);
     setupWizardCommandMock.mockResolvedValue(undefined);
   });
 
@@ -128,21 +121,6 @@ describe("registerOnboardCommand", () => {
   it("forwards --skip-bootstrap to setup wizard options", async () => {
     await runCli(["onboard", "--skip-bootstrap"]);
     expect(setupWizardOptions().skipBootstrap).toBe(true);
-  });
-
-  it("preserves baseline setup for a bare --skip-ui invocation", async () => {
-    await runCli(["onboard", "--workspace", "/tmp/ws", "--skip-ui"]);
-
-    expect(setupCommandMock).toHaveBeenCalledWith({ workspace: "/tmp/ws" }, runtime);
-    expect(setupWizardCommandMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps explicit onboarding intent on the wizard path with --skip-ui", async () => {
-    await runCli(["onboard", "--flow", "quickstart", "--skip-ui"]);
-
-    expect(setupCommandMock).not.toHaveBeenCalled();
-    expect(setupWizardOptions().flow).toBe("quickstart");
-    expect(setupWizardOptions().skipUi).toBe(true);
   });
 
   it("parses --mistral-api-key and forwards mistralApiKey", async () => {

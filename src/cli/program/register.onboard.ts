@@ -17,7 +17,6 @@ import type {
 } from "../../commands/onboard-types.js";
 import { resolveProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
-import { hasExplicitOptions } from "../command-options.js";
 import { parsePort } from "../shared/parse-port.js";
 
 function resolveInstallDaemonFlag(
@@ -83,16 +82,6 @@ function resolveOnboardAuthFlags(): OnboardAuthFlag[] {
 }
 
 const ONBOARD_AUTH_FLAGS = resolveOnboardAuthFlags();
-
-export function shouldRunBaselineSetup(command: Command, opts: { skipUi?: boolean }): boolean {
-  if (opts.skipUi !== true || command.getOptionValueSource("skipUi") !== "cli") {
-    return false;
-  }
-  const onboardingOptionNames = command.options
-    .map((option) => option.attributeName())
-    .filter((name) => name !== "skipUi" && name !== "workspace");
-  return !hasExplicitOptions(command, onboardingOptionNames);
-}
 
 function pickOnboardProviderAuthOptionValues(
   opts: Record<string, unknown>,
@@ -233,11 +222,6 @@ export function registerOnboardCommand(program: Command): void {
   command.action(async (opts, commandRuntime) => {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
-      if (shouldRunBaselineSetup(command, opts)) {
-        const { setupCommand } = await import("../../commands/setup.js");
-        await setupCommand({ workspace: opts.workspace as string | undefined }, defaultRuntime);
-        return;
-      }
       if (opts.modern) {
         // Deprecated alias for `openclaw crestodian`: skip bootstrap prompts and
         // open the conversation directly (same as the pre-Commander fast path).

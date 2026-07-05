@@ -8795,7 +8795,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /start/wizard
 - Headings:
   - H2: Locale
-  - H2: Default vs Advanced
+  - H2: QuickStart vs Advanced
   - H2: What onboarding configures
   - H2: Add another agent
   - H2: Full reference

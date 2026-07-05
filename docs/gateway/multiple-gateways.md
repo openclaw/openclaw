@@ -20,13 +20,13 @@ This keeps the rescue bot able to debug or apply config changes if the primary b
 
 ```bash
 # Rescue bot (separate Telegram bot, separate profile, port 19789)
-openclaw --profile rescue onboard --flow advanced
+openclaw --profile rescue onboard
 openclaw --profile rescue gateway install --port 19789
 ```
 
 If your main bot is already running, that's usually all you need. If onboarding already installed the rescue service, skip the final `gateway install`.
 
-During `openclaw --profile rescue onboard --flow advanced`:
+During `openclaw --profile rescue onboard`:
 
 - Use a separate Telegram bot token, dedicated to the rescue account (easy to keep operator-only, independent from the main bot's channel/app install, and a simple DM-based recovery path).
 - Keep the `rescue` profile name.
@@ -52,21 +52,21 @@ The same isolation pattern works for any pair or group of Gateways on one host -
 
 ```bash
 # main (default profile)
-openclaw onboard --skip-ui
+openclaw setup
 openclaw gateway --port 18789
 
 # extra gateway
-openclaw --profile ops onboard --skip-ui
+openclaw --profile ops setup
 openclaw --profile ops gateway --port 19789
 ```
 
 Named profiles on both sides also work:
 
 ```bash
-openclaw --profile main onboard --skip-ui
+openclaw --profile main setup
 openclaw --profile main gateway --port 18789
 
-openclaw --profile ops onboard --skip-ui
+openclaw --profile ops setup
 openclaw --profile ops gateway --port 19789
 ```
 

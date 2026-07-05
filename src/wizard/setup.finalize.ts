@@ -416,7 +416,7 @@ export async function finalizeSetupWizard(
     runtime,
   });
 
-  if (settings.authMode === "password" || settings.authMode === "trusted-proxy") {
+  if (settings.authMode === "password") {
     try {
       resolvedGatewayPassword =
         (await resolveSetupSecretInputString({
@@ -435,10 +435,6 @@ export async function finalizeSetupWizard(
       );
     }
   }
-  const gatewayProbePassword =
-    settings.authMode === "password" || settings.authMode === "trusted-proxy"
-      ? resolvedGatewayPassword || undefined
-      : undefined;
 
   if (containerWithoutUserSystemd && !opts.skipUi) {
     sessionGateway = await startSessionGatewayForOnboarding({
@@ -462,7 +458,7 @@ export async function finalizeSetupWizard(
       gatewayProbe = await waitForGatewayReachable({
         url: probeLinks.wsUrl,
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-        password: gatewayProbePassword,
+        password: settings.authMode === "password" ? resolvedGatewayPassword : undefined,
         deadlineMs: 15_000,
       });
       if (gatewayProbe.ok) {
@@ -487,7 +483,7 @@ export async function finalizeSetupWizard(
               timeoutMs: 10_000,
               config: healthConfig,
               token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-              password: gatewayProbePassword,
+              password: settings.authMode === "password" ? resolvedGatewayPassword : undefined,
             },
             runtime,
           );
@@ -581,7 +577,7 @@ export async function finalizeSetupWizard(
       gatewayProbe = await probeGatewayReachable({
         url: probeLinks.wsUrl,
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-        password: gatewayProbePassword,
+        password: settings.authMode === "password" ? resolvedGatewayPassword : "",
       });
     }
     const gatewayStatusLine = gatewayProbe.ok

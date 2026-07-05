@@ -55,7 +55,11 @@ export function rewriteUpdateFlagArgv(argv: string[]): string[] {
 
 export function shouldEnsureCliPath(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
-  if (invocation.hasHelpOrVersion || isBareParentDefaultHelpArgv(argv)) {
+  if (
+    invocation.hasHelpOrVersion ||
+    shouldStartCrestodianForBareRoot(argv) ||
+    isBareParentDefaultHelpArgv(argv)
+  ) {
     return false;
   }
   return resolveCliCommandPathPolicy(invocation.commandPath).ensureCliPath;
@@ -148,7 +152,7 @@ export function resolvePrecomputedSubcommandHelpFastPath(
   return resolvePrecomputedSubcommandHelpCommand(argv);
 }
 
-export function shouldHandleBareRoot(argv: string[]): boolean {
+export function shouldStartCrestodianForBareRoot(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
   return invocation.commandPath.length === 0 && !invocation.hasHelpOrVersion;
 }

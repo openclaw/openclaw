@@ -9,9 +9,7 @@ title: "Configure"
 
 Interactive prompts for targeted changes to an existing setup: credentials, devices, agent defaults, gateway, channels, plugins, skills, and health checks.
 
-Use `openclaw onboard` or its `openclaw setup` alias for first-run setup,
-`openclaw setup --baseline` for baseline config/workspace initialization only,
-and `openclaw channels add` when you only need channel account setup.
+Use `openclaw onboard` or `openclaw setup` for the full guided first-run journey, `openclaw setup --baseline` for the baseline config/workspace only, and `openclaw channels add` when you only need channel account setup.
 
 <Tip>
 `openclaw config` with no subcommand opens the same wizard. Use `openclaw config get|set|unset` for non-interactive edits.

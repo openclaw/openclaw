@@ -18,7 +18,7 @@ Each agent uses a single workspace directory (`agents.defaults.workspace`, or
 `agents.list[].workspace` per agent) as its **only** working directory (`cwd`)
 for tools and context.
 
-Recommended: use `openclaw onboard --skip-ui` to create `~/.openclaw/openclaw.json` if missing and initialize the workspace files without opening the local agent.
+Recommended: use `openclaw setup` to create `~/.openclaw/openclaw.json` if missing and initialize the workspace files.
 
 Full workspace layout + backup guide: [Agent workspace](/concepts/agent-workspace)
 
@@ -43,7 +43,7 @@ Inside the workspace, OpenClaw expects these user-editable files:
 
 On the first turn of a new session, OpenClaw injects the contents of these files into the system prompt's Project Context. `MEMORY.md` is only injected when it exists at the workspace root.
 
-Blank files are skipped. Large files are trimmed and truncated with a marker so prompts stay lean (read the file for full content). A missing file (other than `MEMORY.md`) injects a single "missing file" marker line instead; `openclaw setup --skip-ui` creates a safe default template for it.
+Blank files are skipped. Large files are trimmed and truncated with a marker so prompts stay lean (read the file for full content). A missing file (other than `MEMORY.md`) injects a single "missing file" marker line instead; `openclaw setup` creates a safe default template for it.
 
 `BOOTSTRAP.md` is only created for a **brand new workspace** (no other bootstrap files present). While it is pending, OpenClaw keeps it in Project Context and adds system-prompt bootstrap guidance for the initial ritual instead of copying it into the user message. If you delete it after completing the ritual, it is not recreated on later restarts.
 

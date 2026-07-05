@@ -43,7 +43,7 @@ field map and defaults.
 <Tabs>
   <Tab title="Interactive wizard">
     ```bash
-    openclaw onboard --flow advanced  # full infrastructure onboarding flow
+    openclaw onboard       # full onboarding flow
     openclaw configure     # config wizard
     ```
   </Tab>

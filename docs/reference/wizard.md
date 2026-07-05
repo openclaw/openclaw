@@ -14,8 +14,6 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
 
 ## Flow details (local mode)
 
-Plain `openclaw onboard` and its `openclaw setup` alias configure the minimum needed to run the local agent, securely configure and start a temporary local Gateway, then open the agent for assisted setup of optional infrastructure. The temporary Gateway stops when the assisted TUI exits. Exit the TUI and run `openclaw onboard --install-daemon` when you want a persistent background service. Run `openclaw onboard --flow advanced` to use the full local flow described below.
-
 <Steps>
   <Step title="Reset (optional)">
     - `--reset` resets state before setup runs; without it, re-running onboarding

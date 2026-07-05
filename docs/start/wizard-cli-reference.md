@@ -14,9 +14,7 @@ commands), see [`openclaw onboard`](/cli/onboard).
 
 ## What the wizard does
 
-The default local flow configures the minimum needed to run the local agent, securely configures and starts a temporary local Gateway, then opens the agent for assisted setup of optional infrastructure such as channels, Gateway network access, Tailscale, search, skills, and plugins. The temporary Gateway stops when the assisted TUI exits. Exit the TUI and run `openclaw onboard --install-daemon` when you want a persistent background service. For channel requests, the assisted setup agent discovers the current channel inventory, reads the selected channel's official guide, uses guided setup unless the installed CLI exposes every required non-interactive option, and probes the result after configuration.
-
-Run `openclaw onboard --flow advanced` to use the full local wizard described below. It walks you through:
+Local mode (default) walks you through:
 
 - Model and auth setup (Anthropic, OpenAI Code subscription OAuth, xAI, OpenCode, custom endpoints, and more provider-owned auth flows)
 - Workspace location and bootstrap files

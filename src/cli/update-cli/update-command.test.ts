@@ -511,8 +511,6 @@ describe("collectMissingPluginInstallPayloads", () => {
               source: "clawhub",
               spec: "clawhub:@openclaw/diagnostics-otel@2026.5.3",
               installPath: missingDir,
-              clawhubUrl: "https://clawhub.ai",
-              clawhubChannel: "official",
             },
           },
         }),

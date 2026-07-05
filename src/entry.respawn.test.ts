@@ -258,7 +258,8 @@ describe("runCliRespawnPlan", () => {
       {
         stdio: "inherit",
         env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
-        detached: process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
+        detached:
+          process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
       },
     );
     const [bridgeChild, bridgeOptions] = requireFirstMockCall(

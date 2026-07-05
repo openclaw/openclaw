@@ -356,13 +356,11 @@ module.exports = {
 
       const wizardToken = nextGatewayId("wiz-token");
       const port = await getFreeGatewayPort();
-      let wizardOpts: Record<string, unknown> | undefined;
       const server = await startGatewayServer(port, {
         bind: "loopback",
         auth: { mode: "token", token: wizardToken },
         controlUiEnabled: false,
-        wizardRunner: async (opts, _runtime, prompter) => {
-          wizardOpts = opts;
+        wizardRunner: async (_opts, _runtime, prompter) => {
           await prompter.intro("Wizard E2E");
           await prompter.note("write token");
           const token = await prompter.text({ message: "token" });
@@ -389,7 +387,7 @@ module.exports = {
             type: "note" | "select" | "text" | "confirm" | "multiselect" | "progress";
           };
           error?: string;
-        }>("wizard.start", {});
+        }>("wizard.start", { mode: "local" });
         const sessionId = start.sessionId;
         expect(typeof sessionId).toBe("string");
 
@@ -420,12 +418,6 @@ module.exports = {
           true,
         );
         expect(next.status).toBe("done");
-        expect(wizardOpts).toEqual(
-          expect.objectContaining({
-            flow: "advanced",
-            skipUi: true,
-          }),
-        );
 
         await expect
           .poll(

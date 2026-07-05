@@ -7,6 +7,7 @@ import {
   runCrestodian,
   runTui,
   runtime,
+  setupCommand,
   setupWizardCommand,
 } from "./program.test-mocks.js";
 
@@ -90,9 +91,10 @@ describe("cli program (smoke)", () => {
     expect(runTui).not.toHaveBeenCalled();
   });
 
-  it("runs onboarding for plain setup", async () => {
-    await runProgram(["setup"]);
+  it("runs setup wizard when wizard flags are present", async () => {
+    await runProgram(["setup", "--remote-url", "ws://example"]);
 
+    expect(setupCommand).not.toHaveBeenCalled();
     expect(setupWizardCommand).toHaveBeenCalledTimes(1);
   });
 });

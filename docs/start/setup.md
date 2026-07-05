@@ -34,19 +34,19 @@ If you want "100% tailored to me" _and_ easy updates, keep your customization in
 - **Config:** `~/.openclaw/openclaw.json` (JSON/JSON5-ish)
 - **Workspace:** `~/.openclaw/workspace` (skills, prompts, memories; make it a private git repo)
 
-Bootstrap the config/workspace folders once, without opening the local agent:
+Bootstrap the config/workspace folders once, without running the full onboarding wizard:
 
 ```bash
-openclaw setup --skip-ui
+openclaw setup --baseline
 ```
 
 No global install yet? Run it from this repo instead:
 
 ```bash
-pnpm openclaw setup --skip-ui
+pnpm openclaw setup --baseline
 ```
 
-(Bare `openclaw setup` is an alias for `openclaw onboard` and runs minimal-first onboarding.)
+(Bare `openclaw setup`, without `--baseline`, is an alias for `openclaw onboard` and runs the full interactive wizard.)
 
 ## Run the Gateway from this repo
 
@@ -75,7 +75,7 @@ openclaw health
 
 If onboarding is not available in your build:
 
-- Run `openclaw setup --flow advanced`, then start the Gateway manually (`openclaw gateway`).
+- Run `openclaw setup`, then `openclaw channels login`, then start the Gateway manually (`openclaw gateway`).
 
 ## Bleeding edge workflow (Gateway in a terminal)
 
@@ -94,7 +94,7 @@ If you also want the macOS app on the bleeding edge:
 ```bash
 pnpm install
 # First run only (or after resetting local OpenClaw config/workspace)
-pnpm openclaw setup --skip-ui
+pnpm openclaw setup
 pnpm gateway:watch
 ```
 
@@ -108,8 +108,6 @@ reloads on relevant source, config, and bundled-plugin metadata changes. If the
 watched Gateway exits during startup, `gateway:watch` runs
 `openclaw doctor --fix --non-interactive` once and retries; set
 `OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR=0` to disable that dev-only repair pass.
-`pnpm openclaw setup --skip-ui` is the one-time local setup step for a fresh
-checkout without opening the agent TUI.
 `pnpm gateway:watch` does not rebuild `dist/control-ui`, so rerun `pnpm ui:build` after `ui/` changes or use `pnpm ui:dev` while developing the Control UI.
 
 ### 2) Point the macOS app at your running Gateway

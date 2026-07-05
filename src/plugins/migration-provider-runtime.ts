@@ -6,7 +6,6 @@ import {
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
 import { resolveManifestContractRuntimePluginResolution } from "./manifest-contract-runtime.js";
-import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { ensureStandaloneRuntimePluginRegistryLoaded } from "./runtime/standalone-runtime-registry-loader.js";
 import type { MigrationProviderPlugin } from "./types.js";
 
@@ -54,23 +53,15 @@ function mergeMigrationProviders(
 export function ensureStandaloneMigrationProviderRegistryLoaded(
   params: {
     cfg?: OpenClawConfig;
-    forceLoad?: boolean;
     providerId?: string;
-    requiredPluginIds?: readonly string[];
   } = {},
 ): void {
-  if (params.forceLoad) {
-    clearPluginMetadataLifecycleCaches();
-  }
   const resolution = resolveManifestContractRuntimePluginResolution({
     cfg: params.cfg,
     contract: "migrationProviders",
     ...(params.providerId ? { value: params.providerId } : {}),
   });
-  const pluginIds = [
-    ...new Set([...resolution.pluginIds, ...(params.requiredPluginIds ?? [])]),
-  ].toSorted((left, right) => left.localeCompare(right));
-  if (pluginIds.length === 0) {
+  if (resolution.pluginIds.length === 0) {
     return;
   }
   const compatConfig = resolveMigrationProviderConfig({
@@ -79,11 +70,10 @@ export function ensureStandaloneMigrationProviderRegistryLoaded(
   });
   ensureStandaloneRuntimePluginRegistryLoaded({
     surface: "active",
-    requiredPluginIds: pluginIds,
-    forceLoad: params.forceLoad,
+    requiredPluginIds: resolution.pluginIds,
     loadOptions: {
       ...(compatConfig === undefined ? {} : { config: compatConfig }),
-      onlyPluginIds: pluginIds,
+      onlyPluginIds: resolution.pluginIds,
       activate: false,
     },
   });

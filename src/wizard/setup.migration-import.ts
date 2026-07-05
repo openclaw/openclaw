@@ -13,10 +13,6 @@ import {
   loadManifestContractSnapshot,
 } from "../plugins/manifest-contract-eligibility.js";
 import {
-  resolveTrustedSourceLinkedOfficialClawHubInstall,
-  resolveTrustedSourceLinkedOfficialNpmSpec,
-} from "../plugins/official-external-install-records.js";
-import {
   getOfficialExternalPluginCatalogManifest,
   listOfficialExternalPluginCatalogEntries,
   resolveOfficialExternalPluginId,
@@ -29,6 +25,7 @@ import type {
   MigrationProviderPlugin,
 } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
@@ -72,27 +69,15 @@ const MEANINGFUL_WORKSPACE_ENTRIES = [
 ] as const;
 const MEANINGFUL_STATE_ENTRIES = ["credentials", "sessions", "agents"] as const;
 
-let migrationProviderRuntimeModulePromise: Promise<
-  typeof import("../plugins/migration-provider-runtime.js")
-> | null = null;
-let migrationContextModulePromise: Promise<typeof import("../commands/migrate/context.js")> | null =
-  null;
-let configPathsModulePromise: Promise<typeof import("../config/paths.js")> | null = null;
+const loadMigrationProviderRuntimeModule = createLazyRuntimeModule(
+  () => import("../plugins/migration-provider-runtime.js"),
+);
 
-const loadMigrationProviderRuntimeModule = async () => {
-  migrationProviderRuntimeModulePromise ??= import("../plugins/migration-provider-runtime.js");
-  return await migrationProviderRuntimeModulePromise;
-};
+const loadMigrationContextModule = createLazyRuntimeModule(
+  () => import("../commands/migrate/context.js"),
+);
 
-const loadMigrationContextModule = async () => {
-  migrationContextModulePromise ??= import("../commands/migrate/context.js");
-  return await migrationContextModulePromise;
-};
-
-const loadConfigPathsModule = async () => {
-  configPathsModulePromise ??= import("../config/paths.js");
-  return await configPathsModulePromise;
-};
+const loadConfigPathsModule = createLazyRuntimeModule(() => import("../config/paths.js"));
 
 async function exists(candidate: string): Promise<boolean> {
   try {
@@ -112,49 +97,15 @@ async function hasDirectoryEntries(candidate: string): Promise<boolean> {
 }
 
 function hasMeaningfulConfig(config: OpenClawConfig): boolean {
-  const meaningfulEntries = Object.entries(config as Record<string, unknown>).filter(
-    ([key, value]) =>
-      !MEANINGFUL_CONFIG_IGNORED_KEYS.has(key) &&
-      (key !== "wizard" || hasMeaningfulWizardConfig(value)),
-  );
-  if (meaningfulEntries.length !== 1 || meaningfulEntries[0]?.[0] !== "plugins") {
-    return meaningfulEntries.length > 0;
-  }
-  const pluginKeys = Object.keys(config.plugins ?? {});
-  const entries = Object.entries(config.plugins?.entries ?? {});
-  const installs = Object.entries(config.plugins?.installs ?? {});
-  const retryablePluginIds = new Set(
-    resolveInstallableSetupMigrationProviders().map((provider) => provider.entry.pluginId),
-  );
-  return (
-    pluginKeys.some((key) => key !== "entries" && key !== "installs") ||
-    entries.length + installs.length === 0 ||
-    entries.some(([pluginId, entry]) => {
-      if (!retryablePluginIds.has(pluginId) || !entry || typeof entry !== "object") {
-        return true;
-      }
-      const entryRecord = entry as Record<string, unknown>;
-      return Object.keys(entryRecord).length !== 1 || entryRecord.enabled !== true;
-    }) ||
-    installs.some(([pluginId, record]) => {
-      if (
-        !retryablePluginIds.has(pluginId) ||
-        !record ||
-        typeof record !== "object" ||
-        Array.isArray(record)
-      ) {
-        return true;
-      }
-      const installRecord = record;
-      if (typeof installRecord.installPath !== "string" || !installRecord.installPath.trim()) {
-        return true;
-      }
-      return !(
-        resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record: installRecord }) ||
-        resolveTrustedSourceLinkedOfficialClawHubInstall({ pluginId, record: installRecord })
-      );
-    })
-  );
+  return Object.entries(config as Record<string, unknown>).some(([key, value]) => {
+    if (MEANINGFUL_CONFIG_IGNORED_KEYS.has(key)) {
+      return false;
+    }
+    if (key === "wizard") {
+      return hasMeaningfulWizardConfig(value);
+    }
+    return true;
+  });
 }
 
 function hasMeaningfulWizardConfig(value: unknown): boolean {
@@ -186,19 +137,6 @@ export async function inspectSetupMigrationFreshness(params: {
     }
   }
   return { fresh: reasons.length === 0, reasons };
-}
-
-export async function isSetupMigrationTargetFresh(params: {
-  baseConfig: OpenClawConfig;
-  workspaceDir: string;
-}): Promise<boolean> {
-  const { resolveStateDir } = await loadConfigPathsModule();
-  return (
-    await inspectSetupMigrationFreshness({
-      ...params,
-      stateDir: resolveStateDir(),
-    })
-  ).fresh;
 }
 
 function assertFreshSetupMigrationTarget(freshness: {
@@ -347,9 +285,7 @@ export async function listSetupMigrationOptions(params: {
   baseConfig: OpenClawConfig;
   detections: readonly SetupMigrationDetection[];
 }): Promise<SetupMigrationOption[]> {
-  const { ensureStandaloneMigrationProviderRegistryLoaded, resolvePluginMigrationProviders } =
-    await loadMigrationProviderRuntimeModule();
-  ensureStandaloneMigrationProviderRegistryLoaded({ cfg: params.baseConfig });
+  const { resolvePluginMigrationProviders } = await loadMigrationProviderRuntimeModule();
   const providers = resolvePluginMigrationProviders({ cfg: params.baseConfig });
   const options: SetupMigrationOption[] = [];
   const providerIds = new Set<string>();
@@ -391,6 +327,7 @@ export async function listSetupMigrationOptions(params: {
       hint: provider.description ?? t("wizard.migration.sourcePathHint"),
     });
   }
+
   return options;
 }
 
@@ -400,10 +337,6 @@ async function selectSetupMigrationProvider(params: {
   detections: readonly SetupMigrationDetection[];
   prompter: WizardPrompter;
 }): Promise<string> {
-  const { ensureStandaloneMigrationProviderRegistryLoaded, resolvePluginMigrationProviders } =
-    await loadMigrationProviderRuntimeModule();
-  ensureStandaloneMigrationProviderRegistryLoaded({ cfg: params.baseConfig });
-  const providers = resolvePluginMigrationProviders({ cfg: params.baseConfig });
   const options = await listSetupMigrationOptions({
     baseConfig: params.baseConfig,
     detections: params.detections,
@@ -420,7 +353,7 @@ async function selectSetupMigrationProvider(params: {
         label: option.label,
         ...(option.hint ? { hint: option.hint } : {}),
       })),
-      initialValue: params.detections[0]?.providerId ?? providers[0]?.id ?? options[0]?.providerId,
+      initialValue: params.detections[0]?.providerId ?? options[0]?.providerId,
     }));
   if (!options.some((option) => option.providerId === providerId)) {
     throw new Error(`Unknown migration provider "${providerId}".`);
@@ -434,8 +367,6 @@ async function resolveSetupMigrationProvider(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   workspaceDir: string;
-  nonInteractive: boolean;
-  commitConfigFile: (config: OpenClawConfig) => Promise<OpenClawConfig>;
 }): Promise<{ provider: MigrationProviderPlugin; baseConfig: OpenClawConfig }> {
   const { ensureStandaloneMigrationProviderRegistryLoaded, resolvePluginMigrationProvider } =
     await loadMigrationProviderRuntimeModule();
@@ -462,27 +393,23 @@ async function resolveSetupMigrationProvider(params: {
     prompter: params.prompter,
     runtime: params.runtime,
     workspaceDir: params.workspaceDir,
-    promptInstall: !params.nonInteractive,
+    promptInstall: false,
   });
   if (!result.installed) {
     throw new Error(`Could not install migration provider "${params.providerId}".`);
   }
-  // Planning needs the provider runtime, so persist the explicitly accepted
-  // install before any later preview or migration cancellation can exit.
-  const committedConfig = await params.commitConfigFile(result.cfg);
   ensureStandaloneMigrationProviderRegistryLoaded({
-    cfg: committedConfig,
-    forceLoad: true,
-    requiredPluginIds: [result.pluginId],
+    cfg: result.cfg,
+    providerId: params.providerId,
   });
   const provider = resolvePluginMigrationProvider({
     providerId: params.providerId,
-    cfg: committedConfig,
+    cfg: result.cfg,
   });
   if (!provider) {
     throw new Error(`Installed plugin did not register migration provider "${params.providerId}".`);
   }
-  return { provider, baseConfig: committedConfig };
+  return { provider, baseConfig: result.cfg };
 }
 
 function hasCredentialCandidate(plan: MigrationPlan): boolean {
@@ -524,9 +451,6 @@ export async function runSetupMigrationImport(params: {
   commitConfigFile: (config: OpenClawConfig) => Promise<OpenClawConfig>;
   continueOnboarding?: boolean;
 }): Promise<void> {
-  if (params.opts.nonInteractive && !params.opts.importFrom?.trim()) {
-    throw new Error("--import-from is required for non-interactive migration import.");
-  }
   const [
     { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig },
     { createMigrationLogger, buildMigrationReportDir },
@@ -548,13 +472,6 @@ export async function runSetupMigrationImport(params: {
     detections: params.detections,
     prompter: params.prompter,
   });
-  const initialSourceDefault = resolveImportSourceDefault({
-    providerId,
-    detections: params.detections,
-  });
-  if (params.opts.nonInteractive && !params.opts.importSource?.trim() && !initialSourceDefault) {
-    throw new Error("--import-source is required for non-interactive migration import.");
-  }
   const workspaceInput =
     params.opts.workspace ??
     (params.opts.nonInteractive
@@ -566,8 +483,6 @@ export async function runSetupMigrationImport(params: {
         }));
   const workspaceDir = resolveUserPath(workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE);
   const stateDir = resolveStateDir();
-  // Freshness is checked after workspace selection because the migration target
-  // can be different from the process cwd/default workspace.
   assertFreshSetupMigrationTarget(
     await inspectSetupMigrationFreshness({
       baseConfig: params.baseConfig,
@@ -581,8 +496,6 @@ export async function runSetupMigrationImport(params: {
     prompter: params.prompter,
     runtime: params.runtime,
     workspaceDir,
-    nonInteractive: Boolean(params.opts.nonInteractive),
-    commitConfigFile: params.commitConfigFile,
   });
   const migrationLogger = createMigrationLogger(params.runtime);
   const selectedDetections = [...params.detections];
@@ -622,11 +535,7 @@ export async function runSetupMigrationImport(params: {
           message: t("wizard.migration.sourceAgentHome"),
           initialValue: providerId === "hermes" ? "~/.hermes" : undefined,
         }));
-  let targetConfig = applyLocalSetupWorkspaceConfig(
-    resolvedProvider.baseConfig,
-    workspaceDir,
-    params.opts.agentId ? { agentId: params.opts.agentId } : undefined,
-  );
+  let targetConfig = applyLocalSetupWorkspaceConfig(resolvedProvider.baseConfig, workspaceDir);
   if (params.opts.skipBootstrap) {
     targetConfig = applySkipBootstrapConfig(targetConfig);
   }

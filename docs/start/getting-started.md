@@ -6,14 +6,14 @@ read_when:
 title: "Getting started"
 ---
 
-Install OpenClaw and start chatting with your AI assistant in minutes. Gateway,
-channels, search, skills, and other integrations can be configured afterward
-with help from the agent.
+Install OpenClaw, run onboarding, and chat with your AI assistant in about 5
+minutes. By the end you will have a running Gateway, configured auth, and a
+working chat session.
 
 ## What you need
 
 - **Node.js 22.19+, 23.11+, or 24+** (24 is the recommended default)
-- **Model access** through an API key, provider login, or supported local harness - onboarding will guide you
+- **An API key** from a model provider (Anthropic, OpenAI, Google, etc.) — onboarding will prompt you
 
 <Tip>
 Check your Node version with `node --version`.
@@ -49,21 +49,42 @@ Need to install Node? See [Node setup](/install/node).
     </Note>
 
   </Step>
-  <Step title="Start OpenClaw">
+  <Step title="Run onboarding">
     ```bash
-    openclaw
+    openclaw onboard --install-daemon
     ```
 
-    On first run, OpenClaw asks only for the required model/auth setup and
-    workspace, then opens the local agent.
+    The wizard walks you through choosing a model provider, setting an API key,
+    and configuring the Gateway. QuickStart is usually only a few minutes, but
+    provider sign-in, channel pairing, daemon install, network downloads, skills,
+    or optional plugins can make full onboarding take longer. Skip optional
+    steps and return later with `openclaw configure`.
 
     See [Onboarding (CLI)](/start/wizard) for the full reference.
 
   </Step>
+  <Step title="Verify the Gateway is running">
+    ```bash
+    openclaw gateway status
+    ```
+
+    You should see the Gateway listening on port 18789.
+
+  </Step>
+  <Step title="Open the dashboard">
+    ```bash
+    openclaw dashboard
+    ```
+
+    This opens the Control UI in your browser. If it loads, everything is working.
+
+  </Step>
   <Step title="Send your first message">
-    Chat immediately in the local agent. Ask it to help configure only the
-    optional features you need, such as a persistent Gateway service, Telegram,
-    Discord, web search, or skills.
+    Type a message in the Control UI chat and you should get an AI reply.
+
+    Want to chat from your phone instead? The fastest channel to set up is
+    [Telegram](/channels/telegram) (just a bot token). See [Channels](/channels)
+    for all options.
 
   </Step>
 </Steps>

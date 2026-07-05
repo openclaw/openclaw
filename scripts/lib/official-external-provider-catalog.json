@@ -399,9 +399,6 @@
             ]
           }
         ],
-        "contracts": {
-          "migrationProviders": ["codex"]
-        },
         "install": {
           "npmSpec": "@openclaw/codex",
           "defaultChoice": "npm",

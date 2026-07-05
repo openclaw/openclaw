@@ -16,7 +16,6 @@ export type ChatSendOptions = {
   agentId?: string;
   sessionId?: string | null;
   message: string;
-  extraSystemPrompt?: string;
   thinking?: string;
   deliver?: boolean;
   timeoutMs?: number;

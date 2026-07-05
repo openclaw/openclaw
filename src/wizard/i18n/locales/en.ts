@@ -241,24 +241,12 @@ export const en = {
       websocketUrl: "Gateway WebSocket URL",
     },
     setup: {
-      agentAssistedInstructions:
-        "You are guiding OpenClaw assisted setup. The local Gateway is already securely configured and running for this setup session; do not ask the user to set it up before channels. Do not run Gateway install, start, restart, or stop commands from this TUI. For your first reply, ask one concise question about what the user wants to configure, and explicitly offer these choices: messaging channels; Gateway network access and Tailscale; model providers and authentication; web search; skills and plugins; hooks and automation; Control UI; voice/TTS; or start using OpenClaw now. After the user chooses, inspect the current setup, ask only for decisions you need, and make the requested changes after the user confirms. Keep optional steps skippable. For every messaging channel setup request, do not rely on memory or a static channel list. First run `openclaw channels list --all --json`. When the selected channel has a `docsPath`, read its full official guide with `web_fetch` at `https://docs.openclaw.ai${docsPath}`. If `docsPath` is missing or the full guide cannot be read, say that channel-specific instructions cannot be verified and use guided setup instead. Inspect `openclaw channels add --help` to learn which non-interactive flags the installed build exposes. When the user asks how to set one up, answer from the verified guide before requesting required input. Explain provider-side prerequisites and the next user action. Use bare `openclaw channels add` and select the channel in the wizard for guided setup. Only use a non-interactive `openclaw channels add --channel <id> ...` command when the verified official guide documents it and every required flag is exposed by the installed help. Verify with `openclaw channels status --probe`. Do not improvise channel-specific setup instructions or ask the user to paste secrets into chat when an environment, file, login, or guided setup path exists. Do not describe a plan or make changes in your first reply.",
-      agentAssistedMessage: "Help me finish setting up OpenClaw.",
-      agentAssistedOpening: "Core setup and Gateway are ready. Opening agent-assisted setup.",
-      agentAssistedGatewayReady:
-        "Gateway is configured and running for this assisted setup session.",
-      agentAssistedGatewayReadyTitle: "Gateway ready",
-      agentAssistedSkipped:
-        "Core setup complete. Run `openclaw` to start using your agent, or rerun `openclaw onboard` for agent-assisted setup.",
-      agentNotRunnable:
-        "The selected model authentication did not make the default agent runnable.",
       authChoiceRequired: "auth choice is required",
       channelsTitle: "Channels",
       configHandling: "Config handling",
       durationNote:
         "We'll walk through model/auth, workspace, Gateway, channels, web search, skills, and optional plugin setup. QuickStart is usually only a few minutes, but provider sign-in, channel pairing, daemon install, network downloads, and optional dependencies can take longer. You can skip optional steps and return later with {command}.",
       durationTitle: "Setup timeline",
-      existingConfigKept: "Current configuration kept.",
       existingConfigTitle: "Existing config detected",
       flowAdvanced: "Manual setup",
       flowAdvancedHint: "Choose Gateway port, network exposure, Tailscale, and auth.",

@@ -71,19 +71,18 @@ function createApproveAllPool(): CopilotClientPool {
   return {
     async acquire(key, options) {
       const client = new CopilotClient(options);
-      const pooledClient = {
-        createSession: (config: Parameters<CopilotClient["createSession"]>[0]) =>
-          client.createSession({ ...config, onPermissionRequest: approveAll }),
-        resumeSession: (
-          sessionId: Parameters<CopilotClient["resumeSession"]>[0],
-          config: Parameters<CopilotClient["resumeSession"]>[1],
-        ) => client.resumeSession(sessionId, { ...config, onPermissionRequest: approveAll }),
-        stop: () => client.stop(),
-      } as unknown as CopilotClient;
-      activeClients.add(pooledClient);
+      activeClients.add(client);
       return {
         key,
-        client: pooledClient,
+        client: {
+          createSession: (config: Parameters<CopilotClient["createSession"]>[0]) =>
+            client.createSession({ ...config, onPermissionRequest: approveAll }),
+          resumeSession: (
+            sessionId: Parameters<CopilotClient["resumeSession"]>[0],
+            config: Parameters<CopilotClient["resumeSession"]>[1],
+          ) => client.resumeSession(sessionId, { ...config, onPermissionRequest: approveAll }),
+          stop: () => client.stop(),
+        } as unknown as CopilotClient,
       };
     },
     async dispose() {
@@ -97,10 +96,6 @@ function createApproveAllPool(): CopilotClientPool {
       }
       activeClients.clear();
       return errors;
-    },
-    async invalidate(handle) {
-      activeClients.delete(handle.client);
-      await handle.client.stop();
     },
     async release() {},
     size() {

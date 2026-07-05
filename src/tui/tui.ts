@@ -15,10 +15,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
-import {
-  resolveAgentIdFromSessionOrWorkspace,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -41,7 +38,6 @@ import { getSlashCommands } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
 import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
-import { consumeTuiSetupExtraSystemPrompt } from "./setup-launch-env.js";
 import { editorTheme, theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { addBlockedChatSubmitNotice } from "./tui-busy-notice.js";
@@ -217,12 +213,20 @@ export function resolveInitialTuiAgentId(params: {
   initialSessionInput?: string;
   cwd?: string;
 }) {
-  return resolveAgentIdFromSessionOrWorkspace({
-    cfg: params.cfg,
-    fallbackAgentId: params.fallbackAgentId,
-    sessionKey: params.initialSessionInput,
-    workspacePath: params.cwd ?? process.cwd(),
-  });
+  const parsed = parseAgentSessionKey((params.initialSessionInput ?? "").trim());
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId);
+  }
+
+  const inferredFromWorkspace = resolveAgentIdByWorkspacePath(
+    params.cfg,
+    params.cwd ?? process.cwd(),
+  );
+  if (inferredFromWorkspace) {
+    return inferredFromWorkspace;
+  }
+
+  return normalizeAgentId(params.fallbackAgentId);
 }
 
 export function resolveGatewayDisconnectState(reason?: string): {
@@ -558,9 +562,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
 
   const deliverDefault = opts.deliver ?? false;
   const autoMessage = opts.message?.trim();
-  // Setup guidance is trusted runtime context for this local TUI session;
-  // keeping it out of visible messages avoids persisting internal instructions.
-  const autoMessageExtraSystemPrompt = consumeTuiSetupExtraSystemPrompt({ local: isLocalMode });
   let autoMessageSent = false;
   let sessionInfo: SessionInfo = { ...emptySessionInfoDefaults };
   let dynamicSlashCommands: CommandEntry[] = [];
@@ -1424,12 +1425,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       flushPendingHistoryRefreshIfIdle,
       runAuthFlow,
       requestExit,
-      sessionExtraSystemPrompt: autoMessageExtraSystemPrompt
-        ? {
-            sessionKey: currentSessionKey,
-            text: autoMessageExtraSystemPrompt,
-          }
-        : undefined,
     });
 
   const { runLocalShellLine } = createLocalShellRunner({

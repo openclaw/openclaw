@@ -58,7 +58,7 @@ openclaw gateway --port 18789
 
 Now message the assistant number from your allowlisted phone.
 
-The default onboarding flow opens the local agent as soon as model authentication and the workspace are ready. Ask the agent to set up the Gateway and channels you need, or run `openclaw onboard --flow advanced` for the full infrastructure wizard. Its temporary Gateway remains available only while the assisted TUI is open. To use the Control UI afterward, start a foreground Gateway with `openclaw gateway run` or install a persistent one with `openclaw onboard --install-daemon`, then run `openclaw dashboard`.
+When onboarding finishes, OpenClaw auto-opens the dashboard and prints a clean (non-tokenized) link. If the dashboard prompts for auth, paste the configured shared secret into Control UI settings. Onboarding uses a token by default (`gateway.auth.token`), but password auth works too if you switched `gateway.auth.mode` to `password`. To reopen later: `openclaw dashboard`.
 
 ## Give the agent a workspace (AGENTS)
 
@@ -70,13 +70,13 @@ By default, OpenClaw uses `~/.openclaw/workspace` as the agent workspace, and cr
 Treat this folder like OpenClaw's memory and make it a git repo (ideally private) so your `AGENTS.md` and memory files are backed up. If git is installed, brand-new workspaces are auto-initialized with `git init`.
 </Tip>
 
-To create the workspace and config folders without opening the local agent:
+To create the workspace and config folders without running the full onboarding wizard:
 
 ```bash
-openclaw onboard --skip-ui
+openclaw setup --baseline
 ```
 
-(Bare `openclaw setup` is an alias for `openclaw onboard` and runs minimal-first onboarding.)
+(Bare `openclaw setup` is an alias for `openclaw onboard` and runs the full interactive wizard.)
 
 Full workspace layout + backup guide: [Agent workspace](/concepts/agent-workspace)
 Memory workflow: [Memory](/concepts/memory)

@@ -8,7 +8,9 @@ import {
   type RequirementsMetadata,
 } from "./requirements.js";
 
-type EntryMetadataRequirementsParams = Parameters<typeof evaluateEntryMetadataRequirements>[0];
+type EntryMetadataRequirementsParams = Parameters<
+  typeof evaluateEntryMetadataRequirements
+>[0];
 
 /** Resolves entry presentation metadata and requirement eligibility in one shared shape. */
 export function evaluateEntryMetadataRequirements(params: {

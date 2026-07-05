@@ -33,13 +33,8 @@ The Control UI is an **admin surface** (chat, config, exec approvals). Do not ex
 
 ## Fast path (recommended)
 
-- Default onboarding uses a temporary Gateway that stops when the assisted TUI
-  exits. Keep that TUI open while using its dashboard, or start a Gateway first
-  with `openclaw gateway run`, `openclaw onboard --install-daemon`, or the
-  advanced onboarding flow.
-- With a Gateway running, run `openclaw dashboard` (copies the link, opens a
-  browser if possible, and prints an SSH hint if headless).
-- Re-open anytime while the Gateway is running: `openclaw dashboard`.
+- After onboarding, the CLI auto-opens the dashboard and prints a clean (non-tokenized) link.
+- Re-open anytime: `openclaw dashboard` (copies the link, opens a browser if possible, prints an SSH hint if headless).
 - If clipboard and browser delivery both fail, `openclaw dashboard` still prints the clean URL and tells you to append your token (from `OPENCLAW_GATEWAY_TOKEN` or `gateway.auth.token`) as the URL fragment key `token`; it never prints the token value in logs.
 - If the UI prompts for shared-secret auth, paste the configured token or password into Control UI settings.
 

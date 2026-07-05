@@ -12,11 +12,7 @@ import type {
 } from "../../commands/onboard-types.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { parsePort } from "../shared/parse-port.js";
-import {
-  pickOnboardAuthOptionValues,
-  registerOnboardAuthOptions,
-  shouldRunBaselineSetup,
-} from "./register.onboard.js";
+import { pickOnboardAuthOptionValues, registerOnboardAuthOptions } from "./register.onboard.js";
 
 function resolveInstallDaemonFlag(
   command: unknown,
@@ -58,8 +54,6 @@ export function registerSetupCommand(program: Command): void {
       "Agent workspace directory (default: ~/.openclaw/workspace; stored as agents.defaults.workspace)",
     )
     .option("--wizard", "Run interactive onboarding", false)
-    .option("--modern", "Use the conversational setup/repair assistant", false)
-    .option("--classic", "Use the classic multi-step setup wizard", false)
     .option(
       "--baseline",
       "Create baseline config/workspace/session folders without onboarding",
@@ -71,6 +65,7 @@ export function registerSetupCommand(program: Command): void {
     )
     .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
     .option("--non-interactive", "Run onboarding without prompts", false)
+    .option("--classic", "Use the classic multi-step setup wizard", false)
     .option(
       "--accept-risk",
       "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
@@ -115,19 +110,9 @@ export function registerSetupCommand(program: Command): void {
     .action(async (opts, commandRuntime) => {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
-        if (opts.baseline || shouldRunBaselineSetup(commandRuntime, opts)) {
+        if (opts.baseline) {
           const { setupCommand } = await import("../../commands/setup.js");
           await setupCommand({ workspace: opts.workspace as string | undefined }, defaultRuntime);
-          return;
-        }
-        if (opts.modern) {
-          const { runCrestodian } = await import("../../crestodian/crestodian.js");
-          await runCrestodian({
-            message: opts.nonInteractive ? "overview" : undefined,
-            yes: false,
-            json: Boolean(opts.json),
-            interactive: !opts.nonInteractive,
-          });
           return;
         }
         const installDaemon = resolveInstallDaemonFlag(commandRuntime, {
@@ -141,12 +126,7 @@ export function registerSetupCommand(program: Command): void {
             nonInteractive: Boolean(opts.nonInteractive),
             acceptRisk: Boolean(opts.acceptRisk),
             classic: Boolean(opts.classic),
-            flow: (opts.flow ?? (opts.wizard ? "advanced" : undefined)) as
-              | "quickstart"
-              | "advanced"
-              | "manual"
-              | "import"
-              | undefined,
+            flow: opts.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
             mode: opts.mode as "local" | "remote" | undefined,
             ...pickOnboardAuthOptionValues(opts as Record<string, unknown>),
             reset: Boolean(opts.reset),

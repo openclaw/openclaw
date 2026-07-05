@@ -465,9 +465,7 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="What does onboarding actually do?">
-    `openclaw onboard` is the recommended setup path. The default local flow configures model authentication and the workspace, starts a temporary local Gateway, then opens the local agent so it can help configure only the optional infrastructure you need.
-
-    Run `openclaw onboard --flow advanced` for the full local wizard:
+    `openclaw onboard` is the recommended setup path. In **local mode** it walks through:
 
     1. **Model/Auth** - provider OAuth, API keys, or manual auth (including local options like LM Studio); pick a default model.
     2. **Workspace** - location + bootstrap files.
@@ -475,7 +473,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     4. **Channels** - built-in and official plugin chat channels: iMessage, Discord, Feishu, Google Chat, Mattermost, Microsoft Teams, QQ Bot, Signal, Slack, Telegram, WhatsApp, and more.
     5. **Daemon** - LaunchAgent (macOS), systemd user unit (Linux/WSL2), or native Windows Scheduled Task.
     6. **Health check** - starts the Gateway and verifies it is running.
-    7. **Search, skills, and hooks** - configures optional capabilities and dependencies.
+    7. **Skills** - installs recommended skills and optional dependencies.
 
     It sets duration expectations up front and warns if your configured model is unknown
     or missing auth. Full breakdown: [Onboarding (CLI)](/start/wizard).

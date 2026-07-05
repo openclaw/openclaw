@@ -236,7 +236,6 @@ export async function probeGateway(opts: {
   detailLevel?: "none" | "presence" | "full";
   tlsFingerprint?: string;
   env?: NodeJS.ProcessEnv;
-  signal?: AbortSignal;
 }): Promise<GatewayProbeResult> {
   const startedAt = Date.now();
   const instanceId = randomUUID();
@@ -306,7 +305,6 @@ export async function probeGateway(opts: {
         return;
       }
       settled = true;
-      opts.signal?.removeEventListener("abort", abortProbe);
       startAbort.abort();
       clearProbeTimer();
       void (async () => {
@@ -361,16 +359,6 @@ export async function probeGateway(opts: {
         configSnapshot: params.configSnapshot,
       });
     };
-    function abortProbe() {
-      settleProbe({
-        ok: false,
-        error: "aborted",
-        health: null,
-        status: null,
-        presence: null,
-        configSnapshot: null,
-      });
-    }
 
     const client = new GatewayClient({
       url: opts.url,
@@ -489,12 +477,6 @@ export async function probeGateway(opts: {
         })();
       },
     });
-
-    opts.signal?.addEventListener("abort", abortProbe, { once: true });
-    if (opts.signal?.aborted) {
-      abortProbe();
-      return;
-    }
 
     armProbeTimer(() => {
       const error = connectError ? `connect failed: ${connectError}` : "timeout";

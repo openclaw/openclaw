@@ -238,22 +238,12 @@ export const zh_CN = {
       websocketUrl: "Gateway WebSocket URL",
     },
     setup: {
-      agentAssistedInstructions:
-        "你正在引导 OpenClaw 辅助设置。本地 Gateway 已安全配置，并将在本次设置会话期间保持运行；不要要求用户先设置 Gateway 才能配置频道。不要从本 TUI 运行 Gateway 安装、启动、重启或停止命令。第一轮只问一个简短问题，并明确让用户选择要配置的项目：消息频道；Gateway 网络访问和 Tailscale；模型提供商和认证；Web 搜索；技能和插件；Hooks 和自动化；Control UI；语音/TTS；或立即开始使用 OpenClaw。用户选择后，检查当前设置，只询问必要的决定，并在用户确认后进行所需更改。所有可选步骤都应可跳过。对于每个消息频道设置请求，不要依赖记忆或静态频道列表。先运行 `openclaw channels list --all --json`。当所选频道有 `docsPath` 时，通过 `web_fetch` 阅读 `https://docs.openclaw.ai${docsPath}` 的完整官方指南。如果缺少 `docsPath` 或无法阅读完整指南，请说明无法验证频道专属说明，并改用引导式设置。检查 `openclaw channels add --help`，了解当前安装版本公开的非交互参数。当用户询问如何设置频道时，先根据已验证的指南回答，再请求必要输入。说明提供商侧的前置条件和用户下一步操作。引导式设置请运行不带参数的 `openclaw channels add` 并在向导中选择频道。仅当已验证的官方指南有记录，并且当前安装版本帮助公开了所有必需参数时，才使用非交互的 `openclaw channels add --channel <id> ...` 命令。最后通过 `openclaw channels status --probe` 验证。不要臆测频道专属设置说明；如果存在环境变量、文件、登录或引导式设置路径，不要要求用户在聊天中粘贴密钥。第一轮不要描述计划或进行更改。",
-      agentAssistedMessage: "帮我完成 OpenClaw 设置。",
-      agentAssistedOpening: "核心设置和 Gateway 已就绪。正在打开 agent 辅助设置。",
-      agentAssistedGatewayReady: "Gateway 已配置，并将在本次辅助设置会话期间保持运行。",
-      agentAssistedGatewayReadyTitle: "Gateway 已就绪",
-      agentAssistedSkipped:
-        "核心设置已完成。运行 `openclaw` 开始使用 agent，或重新运行 `openclaw onboard` 进行 agent 辅助设置。",
-      agentNotRunnable: "所选模型认证未能使默认 agent 正常运行。",
       authChoiceRequired: "必须选择认证方式",
       channelsTitle: "频道",
       configHandling: "配置处理",
       durationNote:
         "接下来会依次设置模型/认证、工作区、Gateway、频道、网页搜索、技能和可选插件。QuickStart 通常只需几分钟，但提供商登录、频道配对、daemon 安装、网络下载和可选依赖可能需要更久。你可以跳过可选步骤，之后用 {command} 返回配置。",
       durationTitle: "设置流程",
-      existingConfigKept: "已保留当前配置。",
       existingConfigTitle: "检测到已有配置",
       flowAdvanced: "手动设置",
       flowAdvancedHint: "选择 Gateway 端口、网络暴露、Tailscale 和认证方式。",

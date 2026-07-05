@@ -103,10 +103,6 @@ function createHarness(params?: {
   consumeCompletedRunForPendingSend?: ConsumeCompletedRunMock;
   isRunObserved?: (runId: string) => boolean;
   flushPendingHistoryRefreshIfIdle?: FlushPendingHistoryRefreshMock;
-  sessionExtraSystemPrompt?: {
-    sessionKey: string;
-    text: string;
-  };
 }) {
   const sendChat =
     params?.sendChat ??
@@ -210,7 +206,6 @@ function createHarness(params?: {
     flushPendingHistoryRefreshIfIdle: params?.flushPendingHistoryRefreshIfIdle,
     runAuthFlow,
     requestExit,
-    sessionExtraSystemPrompt: params?.sessionExtraSystemPrompt,
   });
 
   return {
@@ -254,73 +249,6 @@ function createHarness(params?: {
 }
 
 describe("tui command handlers", () => {
-  it("forwards runtime-only system context only in the assisted setup session", async () => {
-    const { sendMessage, sendChat, state } = createHarness({
-      opts: { local: true },
-      sessionExtraSystemPrompt: {
-        sessionKey: "agent:main:main",
-        text: "Use official channel setup instructions.",
-      },
-    });
-
-    await sendMessage("Help me finish setting up OpenClaw.");
-    state.pendingOptimisticUserMessage = false;
-    state.pendingChatRunId = null;
-    await sendMessage("Set up Telegram.");
-    state.pendingOptimisticUserMessage = false;
-    state.pendingChatRunId = null;
-    state.currentSessionKey = "agent:main:other";
-    await sendMessage("Normal conversation.");
-
-    expect(sendChat).toHaveBeenCalledTimes(3);
-    for (const [payload] of sendChat.mock.calls.slice(0, 2)) {
-      expect(payload).toEqual(
-        expect.objectContaining({
-          extraSystemPrompt: "Use official channel setup instructions.",
-        }),
-      );
-    }
-    expect(sendChat.mock.calls[2]?.[0]).not.toHaveProperty("extraSystemPrompt");
-  });
-
-  it("clears runtime-only system context when the assisted setup session is reset", async () => {
-    const { handleCommand, sendMessage, sendChat } = createHarness({
-      opts: { local: true },
-      sessionExtraSystemPrompt: {
-        sessionKey: "agent:main:main",
-        text: "Use official channel setup instructions.",
-      },
-    });
-
-    await handleCommand("/reset");
-    await sendMessage("Normal conversation.");
-
-    expect(sendChat).toHaveBeenCalledTimes(1);
-    expect(sendChat.mock.calls[0]?.[0]).not.toHaveProperty("extraSystemPrompt");
-  });
-
-  it("keeps runtime-only system context when another session is reset", async () => {
-    const { handleCommand, sendMessage, sendChat, state } = createHarness({
-      opts: { local: true },
-      currentSessionKey: "agent:main:other",
-      sessionExtraSystemPrompt: {
-        sessionKey: "agent:main:main",
-        text: "Use official channel setup instructions.",
-      },
-    });
-
-    await handleCommand("/reset");
-    state.currentSessionKey = "agent:main:main";
-    await sendMessage("Continue setup.");
-
-    expect(sendChat).toHaveBeenCalledTimes(1);
-    expect(sendChat.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        extraSystemPrompt: "Use official channel setup instructions.",
-      }),
-    );
-  });
-
   it("bounds session picker hydration to recent TUI sessions", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       sessions: [

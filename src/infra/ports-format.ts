@@ -40,7 +40,7 @@ export function classifyPortListener(listener: PortListener, _port: number): Por
   return "unknown";
 }
 
-export function parsePortListenerAddress(address: string): { host: string; port: number } | null {
+function parseListenerAddress(address: string): { host: string; port: number } | null {
   const trimmed = address.trim();
   if (!trimmed) {
     return null;
@@ -106,7 +106,7 @@ export function isSingleExpectedGatewayListener(listeners: PortListener[], port:
   if (typeof listener.address !== "string") {
     return false;
   }
-  const parsedAddress = parsePortListenerAddress(listener.address);
+  const parsedAddress = parseListenerAddress(listener.address);
   return Boolean(
     parsedAddress &&
     parsedAddress.port === port &&
@@ -136,7 +136,7 @@ export function isDualStackLoopbackGatewayListeners(
     if (typeof listener.address !== "string") {
       return false;
     }
-    const parsedAddress = parsePortListenerAddress(listener.address);
+    const parsedAddress = parseListenerAddress(listener.address);
     if (!parsedAddress || parsedAddress.port !== port) {
       return false;
     }

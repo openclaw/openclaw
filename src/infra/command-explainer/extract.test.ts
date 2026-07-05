@@ -386,10 +386,7 @@ describe("command explainer tree-sitter runtime", () => {
       }),
     ]);
     expect(
-      spanText(
-        stderrPipe.source,
-        stderrPipe.operators?.[0]?.span ?? { startIndex: 0, endIndex: 0 },
-      ),
+      spanText(stderrPipe.source, stderrPipe.operators?.[0]?.span ?? { startIndex: 0, endIndex: 0 }),
     ).toBe("|&");
 
     const newline = await explainShellCommand("echo a\npwd");

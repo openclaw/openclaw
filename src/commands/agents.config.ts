@@ -13,7 +13,6 @@ import {
 import type { AgentIdentityFile } from "../agents/identity-file.js";
 import { identityHasValues, loadAgentIdentityFromWorkspace } from "../agents/identity-file.js";
 import { listRouteBindings } from "../config/bindings.js";
-import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { IdentityConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -119,7 +118,7 @@ export function applyAgentConfig(
     name?: string;
     workspace?: string;
     agentDir?: string;
-    model?: AgentModelConfig;
+    model?: string;
     identity?: IdentityConfig;
   },
 ): OpenClawConfig {

@@ -657,7 +657,6 @@ beforeEach(() => {
     warnings: [],
   });
   autoMigrateLegacyState.mockReset().mockResolvedValue({ changes: [], warnings: [] });
-  autoMigrateLegacyPluginDoctorState.mockReset().mockResolvedValue({ changes: [], warnings: [] });
   autoMigrateLegacyTaskStateSidecars.mockReset().mockResolvedValue({ changes: [], warnings: [] });
   runChannelPluginStartupMaintenance.mockReset().mockResolvedValue(undefined);
 

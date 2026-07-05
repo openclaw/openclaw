@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSetupCommand } from "./register.setup.js";
 
 const mocks = vi.hoisted(() => ({
-  runCrestodian: vi.fn(),
   setupCommandMock: vi.fn(),
   setupWizardCommandMock: vi.fn(),
   runtime: {
@@ -36,10 +35,6 @@ vi.mock("../../commands/onboard.js", () => ({
   setupWizardCommand: mocks.setupWizardCommandMock,
 }));
 
-vi.mock("../../crestodian/crestodian.js", () => ({
-  runCrestodian: mocks.runCrestodian,
-}));
-
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: mocks.runtime,
 }));
@@ -55,7 +50,6 @@ describe("registerSetupCommand", () => {
     vi.clearAllMocks();
     setupCommandMock.mockResolvedValue(undefined);
     setupWizardCommandMock.mockResolvedValue(undefined);
-    mocks.runCrestodian.mockResolvedValue(undefined);
   });
 
   it("runs setup wizard command by default", async () => {
@@ -74,29 +68,12 @@ describe("registerSetupCommand", () => {
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
-  it("preserves baseline setup for a bare --skip-ui invocation", async () => {
-    await runCli(["setup", "--workspace", "/tmp/ws", "--skip-ui"]);
-
-    expect(setupCommandMock).toHaveBeenCalledWith({ workspace: "/tmp/ws" }, runtime);
-    expect(setupWizardCommandMock).not.toHaveBeenCalled();
-  });
-
   it("runs setup wizard command when --wizard is set", async () => {
     await runCli(["setup", "--wizard", "--mode", "remote", "--remote-url", "wss://example"]);
 
     expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
-    expect(lastWizardOptions()?.flow).toBe("advanced");
     expect(lastWizardOptions()?.mode).toBe("remote");
     expect(lastWizardOptions()?.remoteUrl).toBe("wss://example");
-    expect(setupCommandMock).not.toHaveBeenCalled();
-  });
-
-  it("forwards the classic wizard escape hatch", async () => {
-    await runCli(["setup", "--classic"]);
-
-    expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
-    expect(lastWizardOptions()?.classic).toBe(true);
-    expect(mocks.runCrestodian).not.toHaveBeenCalled();
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
@@ -108,32 +85,6 @@ describe("registerSetupCommand", () => {
     expect(lastWizardOptions()?.nonInteractive).toBe(true);
     expect(lastWizardOptions()?.acceptRisk).toBe(true);
     expect(setupCommandMock).not.toHaveBeenCalled();
-  });
-
-  it("routes --modern to Crestodian", async () => {
-    await runCli(["setup", "--modern", "--json"]);
-
-    expect(setupCommandMock).not.toHaveBeenCalled();
-    expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expect(mocks.runCrestodian).toHaveBeenCalledWith({
-      message: undefined,
-      yes: false,
-      json: true,
-      interactive: true,
-    });
-  });
-
-  it("uses a noninteractive overview for modern noninteractive setup", async () => {
-    await runCli(["setup", "--modern", "--non-interactive"]);
-
-    expect(setupCommandMock).not.toHaveBeenCalled();
-    expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expect(mocks.runCrestodian).toHaveBeenCalledWith({
-      message: "overview",
-      yes: false,
-      json: false,
-      interactive: false,
-    });
   });
 
   it("forwards scripted onboarding controls", async () => {

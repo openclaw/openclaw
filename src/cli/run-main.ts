@@ -42,7 +42,7 @@ import {
   resolveMissingPluginCommandMessage as resolveMissingPluginCommandMessageFromPolicy,
   rewriteUpdateFlagArgv,
   shouldEnsureCliPath,
-  shouldHandleBareRoot,
+  shouldStartCrestodianForBareRoot,
   shouldStartCrestodianForModernOnboard,
   shouldStartProxyForCli,
   shouldUseBrowserHelpFastPath,
@@ -58,7 +58,7 @@ export {
   resolvePrecomputedSubcommandHelpFastPath,
   rewriteUpdateFlagArgv,
   shouldEnsureCliPath,
-  shouldHandleBareRoot,
+  shouldStartCrestodianForBareRoot,
   shouldStartCrestodianForModernOnboard,
   shouldStartProxyForCli,
   shouldUseBrowserHelpFastPath,
@@ -282,13 +282,22 @@ function isUnconfiguredConfigSnapshot(
   );
 }
 
+export async function shouldStartOnboardingForFreshInstall(argv: string[]): Promise<boolean> {
+  if (!shouldStartCrestodianForBareRoot(argv)) {
+    return false;
+  }
+  const { readConfigFileSnapshot } = await import("../config/config.js");
+  const snapshot = await readConfigFileSnapshot();
+  return isUnconfiguredConfigSnapshot(snapshot);
+}
+
 type BareRootLaunchTarget =
   | { kind: "onboarding" }
   | { kind: "tui"; local: boolean; gatewayUrl?: string; authSource?: "config" }
   | { kind: "crestodian" };
 
 async function resolveBareRootLaunchTarget(argv: string[]): Promise<BareRootLaunchTarget | null> {
-  if (!shouldHandleBareRoot(argv)) {
+  if (!shouldStartCrestodianForBareRoot(argv)) {
     return null;
   }
   const { readConfigFileSnapshot } = await import("../config/config.js");
@@ -1054,7 +1063,7 @@ export async function runCli(argv: string[] = process.argv) {
       }
     }
 
-    const shouldRunBareRootCommand = shouldHandleBareRoot(normalizedArgv);
+    const shouldRunBareRootCommand = shouldStartCrestodianForBareRoot(normalizedArgv);
     const shouldRunModernOnboardCrestodian = shouldStartCrestodianForModernOnboard(normalizedArgv);
     if (shouldRunBareRootCommand || shouldRunModernOnboardCrestodian) {
       await ensureCliEnvProxyDispatcher();
