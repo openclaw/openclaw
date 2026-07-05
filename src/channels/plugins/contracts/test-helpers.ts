@@ -35,6 +35,8 @@ function normalizeContextString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+const sourceActorRoles = new Set(["operator", "participant", "self", "system", "external"]);
+
 export function expectChannelInboundContextContract(ctx: MsgContext) {
   expect(ctx.Body).toBeTypeOf("string");
   expect(ctx.BodyForAgent).toBeTypeOf("string");
@@ -93,6 +95,9 @@ export function expectChannelInboundContextContract(ctx: MsgContext) {
       expect(normalizeContextString(ctx.SourceActorRole)).toBe(
         normalizeContextString(ctx.SourceActor.role),
       );
+    }
+    if (ctx.SourceActor.role != null) {
+      expect(sourceActorRoles.has(ctx.SourceActor.role)).toBe(true);
     }
     if (ctx.SourceActorContext != null && ctx.SourceActor.context != null) {
       expect(normalizeContextString(ctx.SourceActorContext)).toBe(

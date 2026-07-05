@@ -26,6 +26,12 @@ export type MentionSource =
 
 export type SourceActorRole = "operator" | "participant" | "self" | "system" | "external";
 
+/**
+ * Canonical participant/source actor attribution for the current inbound turn.
+ * Values are channel-supplied metadata for routing, diagnostics, and memory
+ * attribution; consumers must not treat display names or peer ids as trusted
+ * authorization facts.
+ */
 export type SourceActorContext = {
   id: string;
   peerId?: string;
@@ -272,12 +278,17 @@ export type MsgContext = {
   SenderTag?: string;
   SenderE164?: string;
   SenderIsBot?: boolean;
-  /** Stable participant/source actor attribution for hooks, memory, and diagnostics. */
+  /** Canonical participant/source actor attribution for hooks, memory, and diagnostics. */
   SourceActor?: SourceActorContext;
+  /** Template-friendly mirror of `SourceActor.id`; keep synchronized with `SourceActor`. */
   SourceActorId?: string;
+  /** Template-friendly mirror of `SourceActor.peerId`; channel-supplied and untrusted. */
   SourceActorPeerId?: string;
+  /** Template-friendly mirror of `SourceActor.displayName`; channel-supplied and untrusted. */
   SourceActorDisplayName?: string;
+  /** Template-friendly mirror of `SourceActor.role`; keep synchronized with `SourceActor`. */
   SourceActorRole?: SourceActorRole;
+  /** Template-friendly mirror of `SourceActor.context`; keep synchronized with `SourceActor`. */
   SourceActorContext?: string;
   Timestamp?: number;
   LocationLat?: number;
