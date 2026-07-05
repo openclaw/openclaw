@@ -33,8 +33,6 @@ class TestProxyAgent {
   constructor(readonly options: unknown) {}
 }
 
-const MAX_FOREIGN_TEXT_BYTES = 1024 * 1024;
-
 function useBodylessForeignResponse(params: { text: string; contentLength?: string }) {
   const text = vi.fn(async () => params.text);
   const headers = new Headers({ "content-type": "application/json" });
@@ -242,42 +240,28 @@ describe("MCP HTTP fetch helpers", () => {
     expect(calls[1]?.[1]?.headers).toBeUndefined();
   });
 
-  it("returns fetch responses compatible with MCP SDK OAuth error parsing", async () => {
-    const body = '{"error":"invalid_client_metadata","error_description":"bad redirect"}';
-    useBodylessForeignResponse({
-      text: body,
-      contentLength: String(Buffer.byteLength(body, "utf8")),
-    });
+  it.each([undefined, "64", "1048577"])(
+    "drops body-less foreign OAuth text without trusting Content-Length %s",
+    async (contentLength) => {
+      const text = useBodylessForeignResponse({
+        text: '{"error_description":"unbounded"}',
+        contentLength,
+      });
 
-    const response = await fetchOAuthRegistrationError();
-    expect(response).toBeInstanceOf(Response);
-    const error = await parseErrorResponse(response);
-    expect(error.message).toContain("bad redirect");
-    expect(error.message).not.toContain("[object Response]");
-  });
+      const response = await fetchOAuthRegistrationError();
 
-  it.each([
-    { label: "missing length", contentLength: undefined },
-    { label: "exponent length", contentLength: "1e3" },
-    { label: "hex length", contentLength: "0x40" },
-    { label: "oversized length", contentLength: String(MAX_FOREIGN_TEXT_BYTES + 1) },
-  ])("drops body-less OAuth text with $label before reading", async ({ contentLength }) => {
+      expect(response).toBeInstanceOf(Response);
+      expect(response.status).toBe(400);
+      expect(response.body).toBeNull();
+      expect(text).not.toHaveBeenCalled();
+      const error = await parseErrorResponse(response);
+      expect(error.message).toContain("HTTP 400");
+    },
+  );
+
+  it("never materializes a body-less foreign response with a lying safe length", async () => {
     const text = useBodylessForeignResponse({
-      text: '{"error_description":"unbounded"}',
-      contentLength,
-    });
-
-    const response = await fetchOAuthRegistrationError();
-
-    expect(response).toBeInstanceOf(Response);
-    expect(response.status).toBe(400);
-    expect(response.body).toBeNull();
-    expect(text).not.toHaveBeenCalled();
-  });
-
-  it("drops body-less text when the returned bytes exceed the declared safe length", async () => {
-    const text = useBodylessForeignResponse({
-      text: "x".repeat(MAX_FOREIGN_TEXT_BYTES + 1),
+      text: "x".repeat(1024 * 1024 + 1),
       contentLength: "64",
     });
 
@@ -286,6 +270,6 @@ describe("MCP HTTP fetch helpers", () => {
     expect(response).toBeInstanceOf(Response);
     expect(response.status).toBe(400);
     expect(response.body).toBeNull();
-    expect(text).toHaveBeenCalledOnce();
+    expect(text).not.toHaveBeenCalled();
   });
 });
