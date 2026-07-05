@@ -61,22 +61,22 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
   run, launch an installed trusted Crabbox binary from a clean trusted `main`
   checkout and fetch the remote PR with `--fresh-pr`; never execute the
   untrusted checkout's wrapper or config locally. Set
-  `CRABBOX_ENV_ALLOW=CI,NODE_OPTIONS` to replace the repo's `OPENCLAW_*`
+  `CRABBOX_ENV_ALLOW=CI` to replace the repo's `OPENCLAW_*`/`NODE_OPTIONS`
   allowlist, pass `--provider aws --no-hydrate`, and use a fresh temporary
   remote `HOME` on a newly warmed lease dedicated to that untrusted source.
   Unset `CRABBOX_AWS_INSTANCE_PROFILE` and fail closed unless resolved
   `aws.instanceProfile` is empty. Before install/test, use trusted absolute-path
   tools to require an IMDSv2 token, prove the IAM credentials endpoint returns
   404, and verify remote `git rev-parse HEAD` equals the full reviewed PR head
-  SHA. Bind the lease to that SHA; stop and rewarm when the head changes. Never
+  SHA. Bind the lease to that SHA; stop and rewarm when the head changes. Do not
   inherit Tailscale: unset every `CRABBOX_TAILSCALE*` override, force
   `--network public --tailscale=false`, clear exit-node/LAN flags, and require
   `crabbox inspect` to report public networking with no Tailscale state before
-  uploading any script. Never
-  run PR code until trusted `scripts/crabbox-untrusted-bootstrap.sh` has
-  installed the pinned Node/pnpm runtime; reject a changed PR `packageManager`
-  pin before install. Never
-  reuse a trusted or previously hydrated lease. If the broker cannot provide
+  uploading any script. Execute PR code only through trusted
+  `scripts/crabbox-untrusted-bootstrap.sh`, uploaded from clean `main` alongside
+  `--fresh-pr`; it installs pinned Node/pnpm and rejects a changed PR
+  `packageManager` pin before install. Never reuse a trusted or previously
+  hydrated lease. If the broker cannot provide
   the no-role proof or no remote PR exists, use secretless fork CI. Never use
   `hydrate-github` or a credential-hydrated Testbox workflow for untrusted code.
 - Cold Testbox acquisition and hydration often take about a minute. At the
@@ -118,22 +118,15 @@ env -u CRABBOX_AWS_INSTANCE_PROFILE \
 crabbox inspect --provider aws --id <cbx_id> --json | \
   jq -e '.network == "public" and .tailscale == null' >/dev/null
 env -u CRABBOX_AWS_INSTANCE_PROFILE \
-  CRABBOX_ENV_ALLOW=CI,NODE_OPTIONS \
-  crabbox run \
-  --provider aws \
-  --id <cbx_id> \
-  --no-hydrate \
-  --script scripts/crabbox-untrusted-bootstrap.sh
-env -u CRABBOX_AWS_INSTANCE_PROFILE \
-  CRABBOX_ENV_ALLOW=CI,NODE_OPTIONS \
+  CRABBOX_ENV_ALLOW=CI \
   crabbox run \
   --provider aws \
   --id <cbx_id> \
   --fresh-pr <owner/repo#number> \
   --no-hydrate \
   --timing-json \
-  --shell -- \
-  'token="$(/usr/bin/curl -fsS -X PUT -H "X-aws-ec2-metadata-token-ttl-seconds: 60" http://169.254.169.254/latest/api/token)" && iam_code="$(/usr/bin/curl -sS -o /dev/null -w "%{http_code}" -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/iam/security-credentials/)" && test "$iam_code" = 404 && test "$(/usr/bin/git rev-parse HEAD)" = "<expected_head_sha>" && test "$(/usr/local/bin/node -p '\''require("./package.json").packageManager'\'')" = "pnpm@11.2.2+sha512.36e6621fad506178936455e70247b8808ef4ec25797a9f437a93281a020484e2607f6a469a22e982987c3dbb8866e3071514ab10a4a1749e06edcd1ec118436f" && export HOME="$(/usr/bin/mktemp -d)" COREPACK_HOME=/opt/openclaw-untrusted-corepack && /usr/local/bin/pnpm install --frozen-lockfile && /usr/local/bin/pnpm test <path>'
+  --script scripts/crabbox-untrusted-bootstrap.sh -- \
+  <expected_head_sha> /usr/local/bin/pnpm test <path>
 # After all proof:
 env -u CRABBOX_AWS_INSTANCE_PROFILE \
   crabbox stop --provider aws <cbx_id>
@@ -538,7 +531,7 @@ single late proof when early warmup was not warranted.
 
 Reuse the lease, not stale source. Each command must sync the current checkout;
 use `--no-sync` only to rerun an unchanged, already-synced tree intentionally.
-Untrusted reuse still requires `CRABBOX_ENV_ALLOW=CI,NODE_OPTIONS`,
+Untrusted reuse still requires `CRABBOX_ENV_ALLOW=CI`,
 `--no-hydrate`, and a fresh temporary remote `HOME` on every command. Reuse
 only a fresh lease dedicated to the same untrusted source; never a trusted or
 previously hydrated lease. Launch from the clean trusted `main` checkout and

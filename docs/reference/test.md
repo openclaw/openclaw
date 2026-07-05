@@ -29,7 +29,7 @@ requested by the user. Remote-provider unavailability must be reported; it is
 not permission to silently run a broad local gate.
 
 For untrusted code, pre-warm with `--provider aws`. Every run must set
-`CRABBOX_ENV_ALLOW=CI,NODE_OPTIONS`, pass `--provider aws --no-hydrate`, and use
+`CRABBOX_ENV_ALLOW=CI`, pass `--provider aws --no-hydrate`, and use
 a fresh temporary remote `HOME` before installing dependencies or running
 tests. Use a newly warmed lease dedicated to that untrusted source; never reuse
 a trusted or previously hydrated lease. Launch an installed trusted Crabbox
@@ -40,11 +40,11 @@ Unset `CRABBOX_AWS_INSTANCE_PROFILE` and fail closed unless resolved
 absolute-path tools to require an IMDSv2 token, prove the IAM credentials
 endpoint returns 404, and verify remote `git rev-parse HEAD` equals the full
 reviewed PR head SHA. Bind the lease to that SHA and stop/rewarm when the head
-changes. Before `--fresh-pr`, use trusted
-`scripts/crabbox-untrusted-bootstrap.sh` to install the pinned Node/pnpm
-runtime; reject a changed PR `packageManager` pin before install. If the broker
-cannot prove no role or no remote PR exists, use
-secretless fork CI. Do not use `hydrate-github`, `--no-sync`, or a
+changes. Upload trusted `scripts/crabbox-untrusted-bootstrap.sh` from clean
+`main` alongside `--fresh-pr`; it installs pinned Node/pnpm, verifies the SHA
+and package-manager pin, isolates `HOME`, installs dependencies, then executes
+the requested test. If the broker cannot prove no role or no remote PR exists,
+use secretless fork CI. Do not use `hydrate-github`, `--no-sync`, or a
 credential-hydrated Testbox workflow.
 Unset all `CRABBOX_TAILSCALE*` overrides, force `--network public
 --tailscale=false`, clear exit-node/LAN flags, and require `crabbox inspect` to

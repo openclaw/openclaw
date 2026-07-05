@@ -612,7 +612,7 @@ proof, and CI parity. Trusted maintainer code defaults to
 `blacksmith-testbox`, and `.crabbox.yaml` now defaults to it. Its configured
 workflow hydrates provider and agent credentials, so untrusted contributor or
 fork code must use secretless fork CI or sanitized direct AWS Crabbox instead.
-Sanitized AWS runs set `CRABBOX_ENV_ALLOW=CI,NODE_OPTIONS`, pass
+Sanitized AWS runs set `CRABBOX_ENV_ALLOW=CI`, pass
 `--no-hydrate`, and use a fresh temporary remote `HOME`; this prevents the repo
 `OPENCLAW_*` allowlist and existing auth profiles from reaching untrusted code.
 They use a newly warmed lease dedicated to that untrusted source, never a
@@ -624,9 +624,10 @@ Unset `CRABBOX_AWS_INSTANCE_PROFILE` and fail closed unless resolved
 absolute-path tools to require an IMDSv2 token, prove the IAM credentials
 endpoint returns 404, and compare remote `git rev-parse HEAD` to the full
 reviewed PR head SHA. Bind the lease to that SHA and stop/rewarm on head change.
-Before `--fresh-pr`, upload trusted `scripts/crabbox-untrusted-bootstrap.sh`
-from clean `main` to install the pinned Node/pnpm runtime; reject a changed PR
-`packageManager` pin before install.
+Upload trusted `scripts/crabbox-untrusted-bootstrap.sh` from clean `main`
+alongside `--fresh-pr`; it installs pinned Node/pnpm, verifies the SHA and
+package-manager pin, isolates `HOME`, installs dependencies, then executes the
+requested test.
 Unset all `CRABBOX_TAILSCALE*` overrides, force `--network public
 --tailscale=false`, clear exit-node/LAN flags, and require `crabbox inspect` to
 report public networking with no Tailscale state before uploading any script.
@@ -736,7 +737,7 @@ pnpm crabbox:stop -- <tbx_id>
 Reuse the lease, not stale source. Omit `--no-sync` so each run uploads the
 current checkout; use it only to rerun an unchanged, already-synced tree
 intentionally. Untrusted contributor/fork code must use
-`CRABBOX_ENV_ALLOW=CI,NODE_OPTIONS`, `--provider aws --no-hydrate`, and a fresh
+`CRABBOX_ENV_ALLOW=CI`, `--provider aws --no-hydrate`, and a fresh
 temporary remote `HOME` for every command; install dependencies inside that
 sanitized command before testing. Reuse only a newly warmed lease dedicated to
 the same untrusted source; never a trusted or previously hydrated lease. Never

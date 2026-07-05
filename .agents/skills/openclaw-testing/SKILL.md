@@ -68,35 +68,24 @@ Bind the returned lease to one immutable reviewed head SHA; never repurpose a
 trusted or previously hydrated lease, and stop/rewarm if the head changes.
 Record the reviewed PR's full head SHA with
 `gh pr view <number> --repo <owner/repo> --json headRefOid --jq .headRefOid`.
-Before fetching the PR, upload and run the trusted runtime bootstrap from the
-clean `main` checkout. `--script` bypasses raw-box JavaScript preflight without
-executing PR-controlled setup:
-
-```bash
-env -u CRABBOX_AWS_INSTANCE_PROFILE \
-  CRABBOX_ENV_ALLOW=CI,NODE_OPTIONS \
-  crabbox run \
-  --provider aws \
-  --id <cbx_id> \
-  --no-hydrate \
-  --script scripts/crabbox-untrusted-bootstrap.sh
-```
-
 Every untrusted AWS run must override the repo env allowlist, skip Actions
-hydration, verify that exact SHA, and isolate `HOME` before package installation
-or tests:
+hydration, and upload the trusted bootstrap script from clean `main` alongside
+`--fresh-pr`. The script bypasses raw-box JavaScript preflight, proves the
+identity boundary, installs pinned Node/pnpm, verifies the exact SHA and
+package-manager pin, isolates `HOME`, installs dependencies, then runs the
+requested test command:
 
 ```bash
 env -u CRABBOX_AWS_INSTANCE_PROFILE \
-  CRABBOX_ENV_ALLOW=CI,NODE_OPTIONS \
+  CRABBOX_ENV_ALLOW=CI \
   crabbox run \
   --provider aws \
   --id <cbx_id> \
   --fresh-pr <owner/repo#number> \
   --no-hydrate \
   --timing-json \
-  --shell -- \
-  'token="$(/usr/bin/curl -fsS -X PUT -H "X-aws-ec2-metadata-token-ttl-seconds: 60" http://169.254.169.254/latest/api/token)" && iam_code="$(/usr/bin/curl -sS -o /dev/null -w "%{http_code}" -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/iam/security-credentials/)" && test "$iam_code" = 404 && test "$(/usr/bin/git rev-parse HEAD)" = "<expected_head_sha>" && test "$(/usr/local/bin/node -p '\''require("./package.json").packageManager'\'')" = "pnpm@11.2.2+sha512.36e6621fad506178936455e70247b8808ef4ec25797a9f437a93281a020484e2607f6a469a22e982987c3dbb8866e3071514ab10a4a1749e06edcd1ec118436f" && export HOME="$(/usr/bin/mktemp -d)" COREPACK_HOME=/opt/openclaw-untrusted-corepack && /usr/local/bin/pnpm install --frozen-lockfile && /usr/local/bin/pnpm test <path-or-filter>'
+  --script scripts/crabbox-untrusted-bootstrap.sh -- \
+  <expected_head_sha> /usr/local/bin/pnpm test <path-or-filter>
 # After all proof:
 env -u CRABBOX_AWS_INSTANCE_PROFILE \
   crabbox stop --provider aws <cbx_id>
@@ -148,7 +137,7 @@ commands.
   requested proof surface allows either.
 - Treat contributor and fork patches as untrusted unless a maintainer
   explicitly approves credentialed execution after review. For untrusted AWS
-  runs, `CRABBOX_ENV_ALLOW=CI,NODE_OPTIONS` must replace the repo's
+  runs, `CRABBOX_ENV_ALLOW=CI` must replace the repo's
   `OPENCLAW_*` allowlist, `--no-hydrate` must block auth-profile hydration, and
   the remote command must use a fresh temporary `HOME`. The lease must be newly
   warmed for and bound to one reviewed head SHA, never trusted or previously
@@ -163,9 +152,9 @@ commands.
   Unset all `CRABBOX_TAILSCALE*` overrides, pass `--network public
   --tailscale=false`, clear exit-node/LAN flags, then require `crabbox inspect`
   to report `network=public` and no Tailscale state before uploading any script.
-  Bootstrap Node 24 and the repository-pinned pnpm through trusted
-  `scripts/crabbox-untrusted-bootstrap.sh` before `--fresh-pr`; reject a changed
-  PR `packageManager` pin before install.
+  Upload trusted `scripts/crabbox-untrusted-bootstrap.sh` with `--fresh-pr`; it
+  bootstraps Node 24 and repository-pinned pnpm before executing PR code and
+  rejects a changed `packageManager` pin before install.
   If the broker cannot provide that no-role proof or no remote PR exists, use
   secretless fork CI. Do not select `hydrate-github` or a credential-hydrated
   Testbox workflow.

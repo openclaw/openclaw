@@ -284,15 +284,16 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
   in the background. Trusted maintainer code defaults to Blacksmith Testbox;
   contributor/fork code stays untrusted unless a maintainer explicitly approves
   credentialed execution after review; it uses secretless fork CI or
-  sanitized direct AWS Crabbox with `CRABBOX_ENV_ALLOW=CI,NODE_OPTIONS`,
+  sanitized direct AWS Crabbox with `CRABBOX_ENV_ALLOW=CI`,
   `--no-hydrate`, and a fresh temporary remote `HOME`, never the
   credential-hydrated Testbox workflow or a previously hydrated lease. Launch
   an installed trusted Crabbox binary from clean trusted `main`, fetch the PR
   with `--fresh-pr`, unset and reject any resolved AWS instance profile, verify
   trusted IMDS reports no IAM credentials, bind the lease to the reviewed head
-  SHA, and never execute its local wrapper or config. Before fetching the PR,
-  upload trusted `scripts/crabbox-untrusted-bootstrap.sh` from clean `main` to
-  install the pinned Node/pnpm runtime. Force public networking, disable and
+  SHA, and never execute its local wrapper or config. Upload trusted
+  `scripts/crabbox-untrusted-bootstrap.sh` from clean `main` alongside
+  `--fresh-pr`; it installs the pinned Node/pnpm runtime before executing PR
+  code. Force public networking, disable and
   unset inherited Tailscale/exit-node settings, and fail closed unless
   `crabbox inspect` reports no Tailscale state before any script. Rewarm after
   any head change. Continue
