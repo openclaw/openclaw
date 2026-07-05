@@ -782,6 +782,148 @@ describe("convertResponsesMessages", () => {
       output: expect.stringContaining('"type":"json"'),
     });
   });
+
+  describe("multimodal image extraction — canonical and non-canonical shapes", () => {
+    const visionModel = { ...nativeOpenAIModel, input: ["text", "image"] };
+    const makeVisionContext = (toolContent: Array<Record<string, unknown>>) => ({
+      systemPrompt: "system",
+      messages: [
+        {
+          role: "assistant" as const,
+          api: nativeOpenAIModel.api,
+          provider: nativeOpenAIModel.provider,
+          model: nativeOpenAIModel.id,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "toolUse" as const,
+          timestamp: 1,
+          content: [
+            { type: "toolCall" as const, id: "call_img", name: "screenshot", arguments: {} },
+          ],
+        },
+        {
+          role: "toolResult" as const,
+          toolCallId: "call_img",
+          toolName: "screenshot",
+          content: toolContent,
+          isError: false,
+          timestamp: 2,
+        },
+      ],
+    });
+
+    it("extracts canonical type:image with data + mimeType", () => {
+      const input = convertResponsesMessages(
+        visionModel,
+        makeVisionContext([{ type: "image", mimeType: "image/png", data: "YWJj" }]),
+        allowedToolCallProviders,
+        { includeSystemPrompt: false },
+      );
+      const fnOutput = (input as unknown as Array<{ type?: string; output?: unknown }>).find(
+        (item) => item.type === "function_call_output",
+      );
+      expect(fnOutput?.output).toEqual([
+        { type: "input_image", detail: "auto", image_url: "data:image/png;base64,YWJj" },
+      ]);
+    });
+
+    it("extracts type:image_url with image_url.url", () => {
+      const input = convertResponsesMessages(
+        visionModel,
+        makeVisionContext([
+          { type: "image_url", image_url: { url: "https://example.com/img.png" } },
+        ]),
+        allowedToolCallProviders,
+        { includeSystemPrompt: false },
+      );
+      const fnOutput = (input as unknown as Array<{ type?: string; output?: unknown }>).find(
+        (item) => item.type === "function_call_output",
+      );
+      expect(fnOutput?.output).toEqual([
+        { type: "input_image", detail: "auto", image_url: "https://example.com/img.png" },
+      ]);
+    });
+
+    it("extracts type:input_image with image_url string", () => {
+      const input = convertResponsesMessages(
+        visionModel,
+        makeVisionContext([{ type: "input_image", image_url: "data:image/jpeg;base64,/9j/4AAQ" }]),
+        allowedToolCallProviders,
+        { includeSystemPrompt: false },
+      );
+      const fnOutput = (input as unknown as Array<{ type?: string; output?: unknown }>).find(
+        (item) => item.type === "function_call_output",
+      );
+      expect(fnOutput?.output).toEqual([
+        { type: "input_image", detail: "auto", image_url: "data:image/jpeg;base64,/9j/4AAQ" },
+      ]);
+    });
+
+    it("extracts MIME-only block (no type field, mimeType + data)", () => {
+      const input = convertResponsesMessages(
+        visionModel,
+        makeVisionContext([{ mimeType: "image/webp", data: "d2VicA==" }]),
+        allowedToolCallProviders,
+        { includeSystemPrompt: false },
+      );
+      const fnOutput = (input as unknown as Array<{ type?: string; output?: unknown }>).find(
+        (item) => item.type === "function_call_output",
+      );
+      // MIME-only blocks are detected as both text (stringifyStructuredBlock) and image (mimeType match)
+      const output = fnOutput?.output as Array<Record<string, unknown>>;
+      expect(output.length).toBe(2);
+      expect(output[0]).toMatchObject({ type: "input_text" });
+      expect(output[1]).toMatchObject({
+        type: "input_image",
+        detail: "auto",
+        image_url: "data:image/webp;base64,d2VicA==",
+      });
+    });
+
+    it("emits placeholder text when no text and no extractable image URLs", () => {
+      const input = convertResponsesMessages(
+        visionModel,
+        makeVisionContext([{ type: "image_url", image_url: {} }]),
+        allowedToolCallProviders,
+        { includeSystemPrompt: false },
+      );
+      const fnOutput = (input as unknown as Array<{ type?: string; output?: unknown }>).find(
+        (item) => item.type === "function_call_output",
+      );
+      expect(fnOutput).toMatchObject({ type: "function_call_output", call_id: "call_img" });
+      const output = fnOutput?.output;
+      expect(Array.isArray(output)).toBe(true);
+      if (Array.isArray(output))
+        expect((output as Array<Record<string, unknown>>)[0]?.type).toBe("input_text");
+    });
+
+    it("non-vision model downgrades image_url tool results to text placeholder", () => {
+      const input = convertResponsesMessages(
+        nativeOpenAIModel,
+        makeVisionContext([
+          { type: "image_url", image_url: { url: "https://example.com/img.png" } },
+        ]),
+        allowedToolCallProviders,
+        { includeSystemPrompt: false },
+      );
+      const fnOutput = (input as unknown as Array<{ type?: string; output?: unknown }>).find(
+        (item) => item.type === "function_call_output",
+      );
+      expect(fnOutput).toBeDefined();
+      const output = fnOutput?.output;
+      expect(typeof output).toBe("string");
+      if (typeof output === "string") {
+        expect(output.length).toBeGreaterThan(0);
+        expect(output).not.toBe("(see attached image)");
+      }
+    });
+  });
 });
 
 describe("processResponsesStream", () => {

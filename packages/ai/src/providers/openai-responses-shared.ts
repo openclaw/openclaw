@@ -73,6 +73,60 @@ function sanitizeToolResultText(text: string, fallback: string): string {
   return sanitized.trim().length > 0 ? sanitized : fallback;
 }
 
+function readImageUrlFromBlock(block: unknown): string | undefined {
+  if (!block || typeof block !== "object") {
+    return undefined;
+  }
+  const record = block as Record<string, unknown>;
+
+  // Canonical ImageContent: type="image" with data + mimeType
+  if (record.type === "image") {
+    const data = typeof record.data === "string" ? record.data : undefined;
+    const mimeType = typeof record.mimeType === "string" ? record.mimeType : "image/png";
+    if (data) {
+      return `data:${mimeType};base64,${data}`;
+    }
+    return undefined;
+  }
+
+  // image_url block: {type: "image_url", image_url: {url: string}}
+  if (record.type === "image_url") {
+    const imageUrl = record.image_url;
+    if (imageUrl && typeof imageUrl === "object") {
+      const url = (imageUrl as Record<string, unknown>).url;
+      if (typeof url === "string" && url.length > 0) {
+        return url;
+      }
+    }
+    return undefined;
+  }
+
+  // input_image block: {type: "input_image", image_url: string}
+  if (record.type === "input_image") {
+    const url = record.image_url;
+    if (typeof url === "string" && url.length > 0) {
+      return url;
+    }
+    return undefined;
+  }
+
+  // MIME-only block: no type field, mimeType starts with "image/", has data
+  const mimeType =
+    typeof record.mimeType === "string"
+      ? record.mimeType
+      : typeof record.mime_type === "string"
+        ? record.mime_type
+        : undefined;
+  if (mimeType?.toLowerCase().startsWith("image/")) {
+    const data = typeof record.data === "string" ? record.data : undefined;
+    if (data) {
+      return `data:${mimeType};base64,${data}`;
+    }
+  }
+
+  return undefined;
+}
+
 type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
 type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> & { id?: string };
 type ResponsesTextContentPart =
@@ -431,26 +485,24 @@ export function convertResponsesMessages<TApi extends Api>(
             type: "input_text",
             text: sanitizedTextResult,
           });
-        } else if (mediaPlaceholder === "(see attached media)") {
-          contentParts.push({
-            type: "input_text",
-            text: mediaPlaceholder,
-          });
         }
 
         for (const block of msg.content) {
-          if (
-            block &&
-            typeof block === "object" &&
-            (block as unknown as Record<string, unknown>).type === "image"
-          ) {
-            const image = block as unknown as { mimeType: string; data: string };
+          const imageUrl = readImageUrlFromBlock(block);
+          if (imageUrl) {
             contentParts.push({
               type: "input_image",
               detail: "auto",
-              image_url: `data:${image.mimeType};base64,${image.data}`,
+              image_url: imageUrl,
             });
           }
+        }
+
+        if (contentParts.length === 0) {
+          contentParts.push({
+            type: "input_text",
+            text: mediaPlaceholder ?? "(no output)",
+          });
         }
 
         output = contentParts;
