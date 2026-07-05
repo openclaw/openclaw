@@ -1,8 +1,11 @@
 // Slack plugin module implements send behavior.
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { MessageMetadata } from "@slack/types";
 import type { Block, ChatPostMessageArguments, KnownBlock, WebClient } from "@slack/web-api";
 import {
   createMessageReceiptFromOutboundResults,
+  type ChannelMessageUnknownSendContext,
+  type ChannelMessageUnknownSendReconciliationResult,
   type MessageReceipt,
   type MessageReceiptPartKind,
   type MessageReceiptSourceResult,
@@ -27,16 +30,16 @@ import {
   normalizeOptionalString as normalizeSlackApiString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackTokenSource } from "./accounts.js";
-import { resolveSlackAccount } from "./accounts.js";
+import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
-import { createSlackTokenCacheKey, getSlackWriteClient } from "./client.js";
+import { createSlackTokenCacheKey, createSlackWebClient, getSlackWriteClient } from "./client.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
 import { parseSlackTarget } from "./targets.js";
-import { normalizeSlackThreadTsCandidate } from "./thread-ts.js";
+import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
 import { resolveSlackBotToken } from "./token.js";
 import { truncateSlackText } from "./truncate.js";
 const SLACK_UPLOAD_SSRF_POLICY = {
@@ -47,6 +50,15 @@ const SLACK_DM_CHANNEL_CACHE_MAX = 1024;
 const SLACK_DNS_RETRY_CODES = new Set(["EAI_AGAIN", "ENOTFOUND", "UND_ERR_DNS_RESOLVE_FAILED"]);
 const SLACK_DNS_RETRY_ATTEMPTS = 2;
 const SLACK_DNS_RETRY_BASE_DELAY_MS = 250;
+const SLACK_DELIVERY_METADATA_EVENT = "openclaw_delivery";
+const SLACK_DELIVERY_METADATA_KEY = "openclaw_delivery_id";
+const SLACK_DELIVERY_METADATA_PART_INDEX_KEY = "openclaw_delivery_part_index";
+const SLACK_DELIVERY_METADATA_PART_COUNT_KEY = "openclaw_delivery_part_count";
+const SLACK_DELIVERY_METADATA_SIGNATURE_KEY = "openclaw_delivery_signature";
+const SLACK_RECONCILE_LOOKBACK_MS = 30_000;
+const SLACK_RECONCILE_CLOCK_SKEW_MS = 5 * 60_000;
+const SLACK_RECONCILE_LIMIT = 100;
+const SLACK_RECONCILE_MAX_PAGES = 10;
 const slackDmChannelCache = new Map<string, string>();
 const slackSendQueue = new KeyedAsyncQueue();
 
@@ -115,6 +127,10 @@ type SlackSendOpts = {
   identity?: SlackSendIdentity;
   blocks?: (Block | KnownBlock)[];
   metadata?: MessageMetadata;
+  /** Opaque durable intent id used to reconcile ambiguous platform outcomes. */
+  deliveryQueueId?: string;
+  /** Refresh durable timing after the per-target queue and before Slack API work. */
+  onPlatformSendDispatch?: () => Promise<void>;
   /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: SlackSendResult) => Promise<void> | void;
 };
@@ -452,6 +468,20 @@ export type SlackSendResult = {
   threadTs?: string;
 };
 
+type SlackConversationMessage = {
+  ts?: unknown;
+  thread_ts?: unknown;
+  metadata?: unknown;
+};
+
+type SlackConversationLookupResponse = {
+  messages?: unknown;
+  has_more?: unknown;
+  response_metadata?: { next_cursor?: unknown };
+};
+
+type SlackConversationLookupClient = Pick<WebClient, "conversations">;
+
 function createSlackSendReceipt(params: {
   platformMessageIds: readonly string[];
   channelId?: string;
@@ -626,6 +656,423 @@ export function clearSlackDefaultSendIdentitiesForTest(): void {
   slackDefaultSendIdentities.clear();
 }
 
+function createSlackDeliveryMetadataId(queueId?: string): string | undefined {
+  const normalized = normalizeOptionalString(queueId);
+  if (!normalized) {
+    return undefined;
+  }
+  // Slack metadata is visible to workspace apps and members. Keep the durable
+  // store key inside OpenClaw while retaining a stable provider-side marker.
+  return createHash("sha256").update(normalized).digest("base64url");
+}
+
+function createSlackDeliveryMetadataSignature(params: {
+  queueId: string;
+  channelId: string;
+  threadTs?: string;
+  partIndex: number;
+  partCount: number;
+}): string {
+  return createHmac("sha256", params.queueId)
+    .update(
+      JSON.stringify([
+        SLACK_DELIVERY_METADATA_EVENT,
+        params.channelId,
+        params.threadTs ?? "",
+        params.partIndex,
+        params.partCount,
+      ]),
+    )
+    .digest("base64url");
+}
+
+function matchesSlackDeliveryMetadataSignature(actual: unknown, expected: string): boolean {
+  if (typeof actual !== "string" || actual.length !== expected.length) {
+    return false;
+  }
+  return timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
+}
+
+function withSlackDeliveryMetadata(
+  metadata: MessageMetadata | undefined,
+  params: {
+    queueId?: string;
+    channelId: string;
+    threadTs?: string;
+    partIndex: number;
+    partCount: number;
+  },
+): MessageMetadata | undefined {
+  const queueId = normalizeOptionalString(params.queueId);
+  const deliveryId = createSlackDeliveryMetadataId(queueId);
+  if (!queueId || !deliveryId) {
+    return metadata;
+  }
+  const marker = {
+    [SLACK_DELIVERY_METADATA_KEY]: deliveryId,
+    [SLACK_DELIVERY_METADATA_PART_INDEX_KEY]: params.partIndex,
+    [SLACK_DELIVERY_METADATA_PART_COUNT_KEY]: params.partCount,
+    [SLACK_DELIVERY_METADATA_SIGNATURE_KEY]: createSlackDeliveryMetadataSignature({
+      queueId,
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      partIndex: params.partIndex,
+      partCount: params.partCount,
+    }),
+  };
+  if (!metadata) {
+    return {
+      event_type: SLACK_DELIVERY_METADATA_EVENT,
+      event_payload: marker,
+    };
+  }
+  return {
+    ...metadata,
+    event_payload: {
+      ...metadata.event_payload,
+      ...marker,
+    },
+  };
+}
+
+function formatSlackTimestampFromMs(ms: number): string {
+  return (Math.max(0, ms) / 1000).toFixed(6);
+}
+
+function asSlackConversationMessages(
+  response: SlackConversationLookupResponse,
+): SlackConversationMessage[] {
+  return Array.isArray(response.messages)
+    ? response.messages.filter(
+        (message): message is SlackConversationMessage =>
+          typeof message === "object" && message !== null && !Array.isArray(message),
+      )
+    : [];
+}
+
+type SlackDeliveryPart = {
+  messageId: string;
+  threadTs?: string;
+  partIndex: number;
+  partCount: number;
+};
+
+type SlackConversationDeliveryScan = {
+  reconciliation: ChannelMessageUnknownSendReconciliationResult;
+  evidence: "none" | "partial" | "conflict" | "complete";
+};
+
+const SLACK_RECONCILIATION_EVIDENCE_RANK = {
+  none: 0,
+  partial: 1,
+  conflict: 2,
+  complete: 3,
+} as const satisfies Record<SlackConversationDeliveryScan["evidence"], number>;
+
+function findSlackConversationDeliveryParts(params: {
+  messages: readonly SlackConversationMessage[];
+  queueId: string;
+  deliveryId: string;
+  channelId: string;
+  threadTs?: string;
+}): SlackDeliveryPart[] {
+  const matches: SlackDeliveryPart[] = [];
+  for (const message of params.messages) {
+    if (
+      !message.metadata ||
+      typeof message.metadata !== "object" ||
+      Array.isArray(message.metadata)
+    ) {
+      continue;
+    }
+    const eventPayload = (message.metadata as { event_payload?: unknown }).event_payload;
+    if (!eventPayload || typeof eventPayload !== "object" || Array.isArray(eventPayload)) {
+      continue;
+    }
+    const marker = eventPayload as Record<string, unknown>;
+    if (marker[SLACK_DELIVERY_METADATA_KEY] !== params.deliveryId) {
+      continue;
+    }
+    const partIndex = marker[SLACK_DELIVERY_METADATA_PART_INDEX_KEY];
+    const partCount = marker[SLACK_DELIVERY_METADATA_PART_COUNT_KEY];
+    if (
+      typeof partIndex !== "number" ||
+      !Number.isInteger(partIndex) ||
+      typeof partCount !== "number" ||
+      !Number.isInteger(partCount) ||
+      partIndex < 0 ||
+      partCount <= 0 ||
+      partIndex >= partCount
+    ) {
+      continue;
+    }
+    const expectedSignature = createSlackDeliveryMetadataSignature({
+      queueId: params.queueId,
+      channelId: params.channelId,
+      threadTs: params.threadTs,
+      partIndex,
+      partCount,
+    });
+    if (
+      !matchesSlackDeliveryMetadataSignature(
+        marker[SLACK_DELIVERY_METADATA_SIGNATURE_KEY],
+        expectedSignature,
+      )
+    ) {
+      continue;
+    }
+    const messageId =
+      typeof message.ts === "string" ? normalizeSlackThreadTsCandidate(message.ts) : undefined;
+    if (!messageId) {
+      continue;
+    }
+    const threadTs =
+      typeof message.thread_ts === "string"
+        ? normalizeSlackThreadTsCandidate(message.thread_ts)
+        : undefined;
+    matches.push({ messageId, partIndex, partCount, ...(threadTs ? { threadTs } : {}) });
+  }
+  return matches;
+}
+
+async function scanSlackConversationForDelivery(params: {
+  client: SlackConversationLookupClient;
+  channelId: string;
+  threadTs?: string;
+  oldest: string;
+  latest: string;
+  queueId: string;
+  deliveryId: string;
+  retryCount: number;
+}): Promise<SlackConversationDeliveryScan> {
+  const threadTs = params.threadTs;
+  let cursor: string | undefined;
+  let expectedPartCount: number | undefined;
+  const deliveryParts = new Map<number, SlackDeliveryPart>();
+  for (let page = 0; page < SLACK_RECONCILE_MAX_PAGES; page += 1) {
+    const response = (
+      threadTs
+        ? await withSlackDnsRequestRetry("conversations.replies", () =>
+            params.client.conversations.replies({
+              channel: params.channelId,
+              ts: threadTs,
+              oldest: params.oldest,
+              latest: params.latest,
+              include_all_metadata: true,
+              limit: SLACK_RECONCILE_LIMIT,
+              ...(cursor ? { cursor } : {}),
+            }),
+          )
+        : await withSlackDnsRequestRetry("conversations.history", () =>
+            params.client.conversations.history({
+              channel: params.channelId,
+              oldest: params.oldest,
+              latest: params.latest,
+              include_all_metadata: true,
+              limit: SLACK_RECONCILE_LIMIT,
+              ...(cursor ? { cursor } : {}),
+            }),
+          )
+    ) as SlackConversationLookupResponse;
+    const matches = findSlackConversationDeliveryParts({
+      messages: asSlackConversationMessages(response),
+      queueId: params.queueId,
+      deliveryId: params.deliveryId,
+      channelId: params.channelId,
+      ...(threadTs ? { threadTs } : {}),
+    });
+    for (const match of matches) {
+      expectedPartCount ??= match.partCount;
+      const existing = deliveryParts.get(match.partIndex);
+      if (
+        expectedPartCount !== match.partCount ||
+        (existing && existing.messageId !== match.messageId)
+      ) {
+        return {
+          reconciliation: {
+            status: "unresolved",
+            error: "Slack history contains conflicting durable delivery markers",
+            retryable: false,
+          },
+          evidence: "conflict",
+        };
+      }
+      deliveryParts.set(match.partIndex, match);
+    }
+    if (expectedPartCount !== undefined && deliveryParts.size === expectedPartCount) {
+      const orderedParts = Array.from({ length: expectedPartCount }, (_, index) =>
+        deliveryParts.get(index),
+      );
+      if (orderedParts.some((part) => !part)) {
+        return {
+          reconciliation: {
+            status: "unresolved",
+            error: "Slack history contains an invalid durable delivery marker set",
+            retryable: false,
+          },
+          evidence: "conflict",
+        };
+      }
+      const completeParts = orderedParts as SlackDeliveryPart[];
+      const reconciledThreadTs = completeParts[0]?.threadTs ?? params.threadTs;
+      const platformMessageIds = completeParts.map((part) => part.messageId);
+      return {
+        reconciliation: {
+          status: "sent",
+          messageId: platformMessageIds[0],
+          receipt: createSlackSendReceipt({
+            platformMessageIds,
+            channelId: params.channelId,
+            kind: "text",
+            ...(reconciledThreadTs ? { threadTs: reconciledThreadTs } : {}),
+          }),
+        },
+        evidence: "complete",
+      };
+    }
+    const nextCursor = normalizeOptionalString(response.response_metadata?.next_cursor);
+    if (!nextCursor) {
+      if (response.has_more === true) {
+        break;
+      }
+      // Marker absence cannot prove that Slack never committed the request: a
+      // delayed, deleted, or visibility-filtered message would make replay duplicate it.
+      return {
+        reconciliation: {
+          status: "unresolved",
+          error:
+            deliveryParts.size > 0
+              ? "Slack history contains an incomplete durable delivery marker set"
+              : "Slack history contains no exact durable delivery marker",
+          retryable: params.retryCount < 2,
+        },
+        evidence: deliveryParts.size > 0 ? "partial" : "none",
+      };
+    }
+    cursor = nextCursor;
+  }
+  return {
+    reconciliation: {
+      status: "unresolved",
+      error: "Slack unknown-send reconciliation exceeded its history page budget",
+      retryable: params.retryCount < 2,
+    },
+    evidence: deliveryParts.size > 0 ? "partial" : "none",
+  };
+}
+
+export async function reconcileSlackUnknownSend(
+  ctx: ChannelMessageUnknownSendContext,
+  opts?: { client?: SlackConversationLookupClient },
+): Promise<ChannelMessageUnknownSendReconciliationResult> {
+  const cfg = requireRuntimeConfig(ctx.cfg, "Slack delivery reconciliation");
+  const account = resolveSlackAccount({
+    cfg,
+    accountId: ctx.accountId ?? undefined,
+  });
+  const deliveryId = createSlackDeliveryMetadataId(ctx.queueId);
+  if (!deliveryId) {
+    return {
+      status: "unresolved",
+      error: "Slack unknown-send reconciliation requires a durable delivery id",
+      retryable: false,
+    };
+  }
+  const readToken = resolveSlackOperationToken(account, "read");
+  if (!readToken) {
+    return {
+      status: "unresolved",
+      error: `Slack read token missing for account "${account.accountId}"`,
+      retryable: false,
+    };
+  }
+  const recipient = parseRecipient(ctx.to);
+  const userRecipient = isSlackUserRecipient(recipient);
+  const writeToken = resolveSlackOperationToken(account, "write");
+  if (userRecipient && !writeToken) {
+    return {
+      status: "unresolved",
+      error: `Slack write token missing for direct-message reconciliation on account "${account.accountId}"`,
+      retryable: false,
+    };
+  }
+  const readClient = opts?.client ?? createSlackWebClient(readToken);
+  const writeClient = opts?.client ?? (writeToken ? getSlackWriteClient(writeToken) : undefined);
+  const payloadReplyToId = ctx.payloads[0]?.replyToId;
+  const effectiveReplyToId = Object.hasOwn(ctx, "effectiveReplyToId")
+    ? normalizeOptionalString(ctx.effectiveReplyToId)
+    : payloadReplyToId != null
+      ? normalizeOptionalString(payloadReplyToId)
+      : ctx.replyToMode === "off"
+        ? undefined
+        : normalizeOptionalString(ctx.replyToId);
+  const threadTs = resolveSlackThreadTsValue({
+    replyToId: effectiveReplyToId,
+    threadId: ctx.threadId,
+  });
+  const searchStartedAt = ctx.platformSendStartedAt ?? ctx.enqueuedAt;
+  const oldest = formatSlackTimestampFromMs(
+    searchStartedAt - SLACK_RECONCILE_LOOKBACK_MS - SLACK_RECONCILE_CLOCK_SKEW_MS,
+  );
+  // Slack message timestamps use provider time. Bound the scan near the local
+  // attempt while leaving a generous skew budget between the two clocks.
+  const latest = formatSlackTimestampFromMs(searchStartedAt + SLACK_RECONCILE_CLOCK_SKEW_MS);
+
+  try {
+    const channelClient = userRecipient ? writeClient : readClient;
+    const channelToken = userRecipient ? writeToken : readToken;
+    if (!channelClient || !channelToken) {
+      throw new Error(`Slack channel resolution token missing for account "${account.accountId}"`);
+    }
+    const { channelId } = await resolveChannelId(channelClient as WebClient, recipient, {
+      accountId: account.accountId,
+      token: channelToken,
+    });
+    const lookupClients = opts?.client
+      ? [opts.client]
+      : [readClient, ...(writeClient && writeToken !== readToken ? [writeClient] : [])];
+    let lookupError: unknown;
+    let bestUnresolvedScan: SlackConversationDeliveryScan | undefined;
+    for (const lookupClient of lookupClients) {
+      try {
+        const scan = await scanSlackConversationForDelivery({
+          client: lookupClient,
+          channelId,
+          ...(threadTs ? { threadTs } : {}),
+          oldest,
+          latest,
+          queueId: ctx.queueId,
+          deliveryId,
+          retryCount: ctx.retryCount,
+        });
+        if (scan.reconciliation.status === "sent") {
+          return scan.reconciliation;
+        }
+        if (
+          !bestUnresolvedScan ||
+          SLACK_RECONCILIATION_EVIDENCE_RANK[scan.evidence] >
+            SLACK_RECONCILIATION_EVIDENCE_RANK[bestUnresolvedScan.evidence]
+        ) {
+          bestUnresolvedScan = scan;
+        }
+      } catch (err) {
+        lookupError = err;
+      }
+    }
+    if (bestUnresolvedScan) {
+      return bestUnresolvedScan.reconciliation;
+    }
+    throw lookupError;
+  } catch (err) {
+    const enriched = enrichSlackWebApiError(err);
+    return {
+      status: "unresolved",
+      error: readSlackRequestErrorMessage(enriched),
+      retryable: ctx.retryCount < 3,
+    };
+  }
+}
+
 async function uploadSlackFile(params: {
   client: WebClient;
   channelId: string;
@@ -641,6 +1088,7 @@ async function uploadSlackFile(params: {
   caption?: string;
   threadTs?: string;
   maxBytes?: number;
+  onPlatformSendDispatch?: () => Promise<void>;
 }): Promise<string> {
   const { buffer, contentType, fileName } = await loadOutboundMediaFromUrl(params.mediaUrl, {
     maxBytes: params.maxBytes,
@@ -687,6 +1135,7 @@ async function uploadSlackFile(params: {
   }
 
   // Complete the upload and share to channel/thread
+  await params.onPlatformSendDispatch?.();
   const completeResp = await withSlackDnsRequestRetry("files.completeUploadExternal", () =>
     params.client.files.completeUploadExternal({
       files: [{ id: uploadFileId, title: uploadTitle }],
@@ -794,11 +1243,15 @@ async function sendMessageSlackQueuedInner(params: {
     unfurlLinks: account.config.unfurlLinks,
     unfurlMedia: account.config.unfurlMedia,
   };
-  const directUserPostChannelId = resolveDirectUserPostChannelId({
-    recipient,
-    hasMedia: Boolean(opts.mediaUrl),
-    ...(opts.threadTs ? { threadTs: opts.threadTs } : {}),
-  });
+  // Durable signatures bind the concrete provider channel, so user-targeted
+  // sends must resolve U... to the resulting D... conversation first.
+  const directUserPostChannelId = opts.deliveryQueueId
+    ? undefined
+    : resolveDirectUserPostChannelId({
+        recipient,
+        hasMedia: Boolean(opts.mediaUrl),
+        ...(opts.threadTs ? { threadTs: opts.threadTs } : {}),
+      });
   const { channelId } = directUserPostChannelId
     ? { channelId: directUserPostChannelId }
     : await resolveChannelId(client, recipient, {
@@ -817,6 +1270,7 @@ async function sendMessageSlackQueuedInner(params: {
       trimmedMessage || buildSlackBlocksFallbackText(blocks),
       SLACK_TEXT_LIMIT,
     );
+    await opts.onPlatformSendDispatch?.();
     const { response } = await postSlackMessageBestEffort({
       client,
       channelId,
@@ -886,6 +1340,7 @@ async function sendMessageSlackQueuedInner(params: {
       caption: firstChunk,
       threadTs: opts.threadTs,
       maxBytes: mediaMaxBytes,
+      onPlatformSendDispatch: opts.onPlatformSendDispatch,
     });
     sentMessageIds.push(lastMessageId);
     await reportDelivery({
@@ -905,7 +1360,22 @@ async function sendMessageSlackQueuedInner(params: {
   }
 
   let sendIdentity = identity;
-  for (const chunk of chunksToPost) {
+  for (const [partIndex, chunk] of chunksToPost.entries()) {
+    const baseMetadata = sentMessageIds.length === 0 ? opts.metadata : undefined;
+    // Every post carries its index/count so reconciliation proves the complete
+    // logical text send and never mistakes a partial chunk fanout for success.
+    const metadata = opts.mediaUrl
+      ? baseMetadata
+      : withSlackDeliveryMetadata(baseMetadata, {
+          queueId: opts.deliveryQueueId,
+          channelId,
+          threadTs: opts.threadTs,
+          partIndex,
+          partCount: chunksToPost.length,
+        });
+    if (partIndex === 0 && !opts.mediaUrl) {
+      await opts.onPlatformSendDispatch?.();
+    }
     const posted = await postSlackMessageBestEffort({
       client,
       channelId,
@@ -913,7 +1383,7 @@ async function sendMessageSlackQueuedInner(params: {
       threadTs: opts.threadTs,
       replyBroadcast: sentMessageIds.length === 0 ? opts.replyBroadcast : undefined,
       identity: sendIdentity,
-      metadata: sentMessageIds.length === 0 ? opts.metadata : undefined,
+      metadata,
       unfurl,
     });
     const response = posted.response;
