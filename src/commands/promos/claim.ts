@@ -20,6 +20,7 @@ import {
 import { resolveProviderInstallCatalogEntry } from "../../plugins/provider-install-catalog.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
+import { normalizeAlias } from "../models/alias-name.js";
 import {
   applyDefaultModelPrimaryUpdate,
   updateConfig,
@@ -222,7 +223,14 @@ export async function promosClaimCommand(
     for (const model of promotion.models) {
       const target = resolvePromotionModelTarget(promotion, model.modelRef);
       const key = upsertCanonicalModelConfigEntry(models, target);
-      const alias = model.alias?.trim();
+      // Aliases are remote text persisted into config and rendered by other
+      // CLI surfaces; hold them to the same contract as `models aliases add`.
+      let alias: string | undefined;
+      try {
+        alias = model.alias ? normalizeAlias(model.alias) : undefined;
+      } catch {
+        skippedAliases.push(model.alias ?? "");
+      }
       if (alias && !models[key]?.alias) {
         if (aliasTaken(models, alias)) {
           skippedAliases.push(alias);

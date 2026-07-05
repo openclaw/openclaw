@@ -76,7 +76,7 @@ function makePromotion(overrides: Record<string, unknown> = {}) {
     provider: "openrouter",
     authChoiceId: "openrouter-api-key",
     models: [
-      { modelRef: "openrouter/example/model-alpha", alias: "Model Alpha", suggestedDefault: true },
+      { modelRef: "openrouter/example/model-alpha", alias: "model-alpha", suggestedDefault: true },
     ],
     signupUrl: "https://signup.example.com",
     ...overrides,
@@ -127,7 +127,7 @@ describe("promosClaimCommand", () => {
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
     const next = mocks.replaceConfigFile.mock.calls[0]?.[0]?.nextConfig;
     expect(next.agents.defaults.models["openrouter/example/model-alpha"]).toEqual({
-      alias: "Model Alpha",
+      alias: "model-alpha",
     });
     expect(next.agents.defaults.model).toBeUndefined();
     expect(mocks.applyAuthChoiceLoadedPluginProvider).not.toHaveBeenCalled();
@@ -141,11 +141,24 @@ describe("promosClaimCommand", () => {
     expect(next.agents.defaults.model.primary).toBe("openrouter/example/model-alpha");
   });
 
+  it("skips aliases outside the models-aliases contract but still registers the model", async () => {
+    mocks.fetchClawHubPromotion.mockResolvedValue(
+      makePromotion({
+        models: [{ modelRef: "openrouter/example/model-alpha", alias: "bad alias [31m" }],
+      }),
+    );
+    const runtime = makeRuntime();
+    await promosClaimCommand("spring-models", {}, runtime);
+
+    const next = mocks.replaceConfigFile.mock.calls[0]?.[0]?.nextConfig;
+    expect(next.agents.defaults.models["openrouter/example/model-alpha"]).toEqual({});
+  });
+
   it("keeps an existing alias owner and reports the skip", async () => {
     const existing = {
       agents: {
         defaults: {
-          models: { "openrouter/other/model": { alias: "Model Alpha" } },
+          models: { "openrouter/other/model": { alias: "model-alpha" } },
         },
       },
     };
@@ -155,7 +168,7 @@ describe("promosClaimCommand", () => {
 
     const next = mocks.replaceConfigFile.mock.calls[0]?.[0]?.nextConfig;
     expect(next.agents.defaults.models["openrouter/example/model-alpha"].alias).toBeUndefined();
-    expect(next.agents.defaults.models["openrouter/other/model"].alias).toBe("Model Alpha");
+    expect(next.agents.defaults.models["openrouter/other/model"].alias).toBe("model-alpha");
   });
 
   it("runs the provider auth choice when no credentials exist", async () => {
