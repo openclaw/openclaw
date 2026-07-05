@@ -12,6 +12,9 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
+import { getSandboxBackendWorkdirResolver } from "../agents/sandbox/backend.js";
+import { buildSandboxFsMounts } from "../agents/sandbox/fs-paths.js";
+import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -171,6 +174,33 @@ export async function sandboxExplainCommand(
   });
 
   const sandboxCfg = resolveSandboxConfigForAgent(cfg, resolvedAgentId);
+  const agentConfig = resolveAgentConfig(cfg, resolvedAgentId);
+  const workspaceLayout = resolveSandboxWorkspaceLayoutPaths({
+    cfg: sandboxCfg,
+    rawSessionKey: sessionKey,
+    workspaceDir: agentConfig?.workspace,
+  });
+  const containerWorkdir =
+    getSandboxBackendWorkdirResolver(sandboxCfg.backend)?.({
+      sessionKey,
+      scopeKey: workspaceLayout.scopeKey,
+      workspaceDir: workspaceLayout.workspaceDir,
+      agentWorkspaceDir: workspaceLayout.agentWorkspaceDir,
+      skillsWorkspaceDir: workspaceLayout.skillsWorkspaceDir,
+      cfg: sandboxCfg,
+    }) ?? sandboxCfg.docker.workdir;
+  const workspaceMounts =
+    sandboxCfg.backend === "docker"
+      ? buildSandboxFsMounts({
+          workspaceDir: workspaceLayout.workspaceDir,
+          agentWorkspaceDir: workspaceLayout.agentWorkspaceDir,
+          skillsWorkspaceDir: workspaceLayout.skillsWorkspaceDir,
+          workspaceAccess: sandboxCfg.workspaceAccess,
+          containerName: "",
+          containerWorkdir,
+          docker: sandboxCfg.docker,
+        })
+      : [];
   const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, resolvedAgentId);
   const mainSessionKey = resolveAgentMainSessionKey({
     cfg,
@@ -189,7 +219,6 @@ export async function sandboxExplainCommand(
     sessionKey,
   });
 
-  const agentConfig = resolveAgentConfig(cfg, resolvedAgentId);
   const elevatedGlobal = cfg.tools?.elevated;
   const elevatedAgent = agentConfig?.tools?.elevated;
   const elevatedGlobalEnabled = elevatedGlobal?.enabled !== false;
@@ -264,7 +293,13 @@ export async function sandboxExplainCommand(
       mode: sandboxCfg.mode,
       scope: sandboxCfg.scope,
       workspaceAccess: sandboxCfg.workspaceAccess,
-      workspaceRoot: sandboxCfg.workspaceRoot,
+      workspaceRoot: workspaceLayout.workspaceDir,
+      configuredWorkspaceRoot: sandboxCfg.workspaceRoot,
+      sandboxWorkspaceRoot: workspaceLayout.sandboxWorkspaceDir,
+      agentWorkspaceRoot: workspaceLayout.agentWorkspaceDir,
+      containerWorkdir,
+      workspaceMounts,
+      workspaceSource: workspaceLayout.workspaceSource,
       sessionIsSandboxed,
       tools: {
         allow: toolPolicy.allow,
@@ -318,6 +353,24 @@ export async function sandboxExplainCommand(
       payload.sandbox.workspaceAccess,
     )} ${key("workspaceRoot:")} ${value(payload.sandbox.workspaceRoot)}`,
   );
+  lines.push(
+    `  ${key("configuredWorkspaceRoot:")} ${value(payload.sandbox.configuredWorkspaceRoot)}`,
+  );
+  lines.push(
+    `  ${key("containerWorkdir:")} ${value(
+      payload.sandbox.containerWorkdir,
+    )} ${key("workspaceSource:")} ${value(payload.sandbox.workspaceSource)}`,
+  );
+  if (payload.sandbox.workspaceMounts.length > 0) {
+    lines.push(`  ${key("workspaceMounts:")}`);
+    for (const mount of payload.sandbox.workspaceMounts) {
+      lines.push(
+        `    - ${value(mount.hostRoot)} -> ${value(mount.containerRoot)} ${key(
+          mount.writable ? "rw" : "ro",
+        )} ${key(`(${mount.source})`)}`,
+      );
+    }
+  }
   lines.push("");
   lines.push(heading("Sandbox tool policy:"));
   lines.push(

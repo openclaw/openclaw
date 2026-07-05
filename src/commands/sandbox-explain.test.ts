@@ -1,4 +1,5 @@
 // Sandbox explain tests cover command output for sandbox browser and container diagnostics.
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { sandboxExplainCommand } from "./sandbox-explain.js";
 
@@ -98,5 +99,51 @@ describe("sandbox explain command", () => {
       source: "agent",
       key: "agents.list[].tools.sandbox.tools.alsoAllow",
     });
+  });
+
+  it("reports the rw agent workspace as the effective workspace mount", async () => {
+    mockCfg = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "agent",
+            workspaceAccess: "rw",
+            workspaceRoot: "/tmp/openclaw-sandboxes",
+          },
+        },
+        list: [
+          {
+            id: "builder",
+            workspace: "/tmp/openclaw-agent-workspace",
+          },
+        ],
+      },
+      session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+    };
+
+    const logs: string[] = [];
+    await sandboxExplainCommand({ json: true, agent: "builder" }, {
+      log: (msg: string) => logs.push(msg),
+      error: (msg: string) => logs.push(msg),
+      exit: (_code: number) => {},
+    } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
+
+    const parsed = JSON.parse(logs.join(""));
+    const agentWorkspace = path.resolve("/tmp/openclaw-agent-workspace");
+    expect(parsed.sandbox.workspaceAccess).toBe("rw");
+    expect(parsed.sandbox.workspaceRoot).toBe(agentWorkspace);
+    expect(parsed.sandbox.configuredWorkspaceRoot).toBe("/tmp/openclaw-sandboxes");
+    expect(parsed.sandbox.agentWorkspaceRoot).toBe(agentWorkspace);
+    expect(parsed.sandbox.workspaceSource).toBe("agent");
+    expect(parsed.sandbox.containerWorkdir).toBe("/workspace");
+    expect(parsed.sandbox.workspaceMounts).toEqual([
+      {
+        hostRoot: agentWorkspace,
+        containerRoot: "/workspace",
+        writable: true,
+        source: "workspace",
+      },
+    ]);
   });
 });
