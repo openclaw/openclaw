@@ -116,6 +116,9 @@ export function inspectMemory(workspaceDir = DEFAULT_WORKSPACE) {
 export function inspectCodexBinding(openclawHome, sessionId) {
   const resolvedOpenclawHome = openclawHome ?? DEFAULT_OPENCLAW_HOME;
   const sessionsDir = path.join(resolvedOpenclawHome, "agents/main/sessions");
+  if (!sessionId && !fs.existsSync(sessionsDir)) {
+    return [];
+  }
   const candidates = sessionId
     ? [path.join(sessionsDir, `${sessionId}.jsonl.codex-app-server.json`)]
     : fs
