@@ -1343,6 +1343,29 @@ async function finalizeCronRun(params: {
       sourceDeliveryOutcome,
     });
   }
+  if (
+    prepared.deliveryRequested &&
+    !hasFatalErrorPayload &&
+    !sourceDeliveryOutcome.satisfiesSourceDelivery &&
+    finalRunResult.meta?.terminalReplyKind !== "silent-empty" &&
+    deliveryPayloads.length === 0 &&
+    normalizeOptionalString(synthesizedText) === undefined
+  ) {
+    const error = "cron isolated run completed without a final assistant payload";
+    return prepared.withRunSession({
+      status: "error",
+      error,
+      summary: error,
+      outputText: error,
+      delivered: false,
+      deliveryAttempted: false,
+      diagnostics: mergeCronRunDiagnostics(
+        runDiagnostics,
+        createCronRunDiagnosticsFromError("agent-run", error),
+      ),
+      ...telemetry,
+    });
+  }
   if (hasFatalStructuredErrorPayload && prepared.deliveryRequested) {
     // Structured run error payloads belong in cron state and failure alerts,
     // not the normal completion announce path where provider JSON can leak.
