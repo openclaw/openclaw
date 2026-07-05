@@ -37,6 +37,7 @@ import type {
   TuiBackend,
   TuiEvent,
   TuiModelChoice,
+  TuiApprovalDecision,
   TuiSessionList,
   TuiSessionMutationResult,
   TuiChatSendResult,
@@ -306,6 +307,17 @@ export class GatewayChatClient implements TuiBackend {
   async listCommands(opts?: CommandsListParams): Promise<CommandEntry[]> {
     const res = await this.client.request<CommandsListResult>("commands.list", opts ?? {});
     return Array.isArray(res?.commands) ? res.commands : [];
+  }
+
+  async listPluginApprovals() {
+    return await this.client.request("plugin.approval.list", {});
+  }
+
+  async resolvePluginApproval(id: string, decision: TuiApprovalDecision) {
+    return await this.client.request<{ ok?: boolean }>("plugin.approval.resolve", {
+      id,
+      decision,
+    });
   }
 }
 

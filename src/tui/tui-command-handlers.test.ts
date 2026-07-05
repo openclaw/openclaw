@@ -1,4 +1,5 @@
 // Covers TUI slash command handlers and backend call wiring.
+import type { OverlayHandle } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import {
@@ -19,6 +20,17 @@ type SetSessionMock = ReturnType<typeof vi.fn> & ((key: string) => Promise<void>
 type SetEmptySessionMock = ReturnType<typeof vi.fn> & ((key: string) => Promise<void>);
 type ConsumeCompletedRunMock = ReturnType<typeof vi.fn> & ((runId: string) => boolean);
 type FlushPendingHistoryRefreshMock = ReturnType<typeof vi.fn> & (() => void);
+
+function createOverlayHandle(): OverlayHandle {
+  return {
+    hide: vi.fn(),
+    setHidden: vi.fn(),
+    isHidden: vi.fn(() => false),
+    focus: vi.fn(),
+    unfocus: vi.fn(),
+    isFocused: vi.fn(() => true),
+  };
+}
 
 async function flushAsyncSelect() {
   await new Promise<void>((resolve) => {
@@ -123,7 +135,8 @@ function createHarness(params?: {
   const setActivityStatus = params?.setActivityStatus ?? (vi.fn() as SetActivityStatusMock);
   const forgetLocalRunId = vi.fn();
   const forgetLocalBtwRunId = vi.fn();
-  const openOverlay = vi.fn();
+  const overlayHandle = createOverlayHandle();
+  const openOverlay = vi.fn(() => overlayHandle);
   const closeOverlay = vi.fn();
   const requestExit = vi.fn();
   const abortActive =
@@ -200,6 +213,7 @@ function createHarness(params?: {
     sendChat,
     openSessionSelector,
     openOverlay,
+    overlayHandle,
     closeOverlay,
     patchSession,
     resetSession,
@@ -532,7 +546,7 @@ describe("tui command handlers", () => {
   });
 
   it("sends the selected context mode through the gateway command path", async () => {
-    const { handleCommand, sendChat, openOverlay, closeOverlay } = createHarness();
+    const { handleCommand, sendChat, openOverlay, closeOverlay, overlayHandle } = createHarness();
 
     await handleCommand("/context");
     const selector = firstMockArg(openOverlay, "openOverlay") as SelectableOverlay;
@@ -544,6 +558,7 @@ describe("tui command handlers", () => {
       message: "/context detail",
     });
     expect(closeOverlay).toHaveBeenCalledTimes(1);
+    expect(closeOverlay).toHaveBeenCalledWith(overlayHandle);
   });
 
   it("forwards /context list directly", async () => {
