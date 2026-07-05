@@ -1563,4 +1563,16 @@ describe("scheduleRestartSentinelWake", () => {
       threadId: "$thread-event",
     });
   });
+
+  it("catches and logs unexpected wake errors instead of leaking them", async () => {
+    mocks.readRestartSentinel.mockRejectedValue(new Error("simulated sentinel read failure"));
+
+    await expect(scheduleRestartSentinelWake({ deps: {} as never })).resolves.toBeUndefined();
+
+    expect(
+      mocks.logWarn.mock.calls.some((call) =>
+        String(call[0]).includes("restart sentinel wake attempt failed"),
+      ),
+    ).toBe(true);
+  });
 });

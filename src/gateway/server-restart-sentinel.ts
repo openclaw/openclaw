@@ -633,11 +633,15 @@ async function loadRestartSentinelStartupTask(params: {
 }
 
 async function scheduleRestartSentinelWakeAttempt(params: { deps: CliDeps; attempt: number }) {
-  const task = await loadRestartSentinelStartupTask(params);
-  if (!task) {
-    return;
+  try {
+    const task = await loadRestartSentinelStartupTask(params);
+    if (!task) {
+      return;
+    }
+    await runStartupTasks({ tasks: [task], log });
+  } catch (err) {
+    log.warn(`restart sentinel wake attempt failed: ${String(err)}`);
   }
-  await runStartupTasks({ tasks: [task], log });
 }
 
 export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
