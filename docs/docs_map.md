@@ -7041,6 +7041,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Setup subpaths
   - H3: Other narrow channel subpaths
   - H2: Inbound mention policy
+  - H2: Inbound source actor attribution
   - H2: Walkthrough
   - H2: File structure
   - H2: Advanced topics
