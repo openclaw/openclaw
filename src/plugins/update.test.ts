@@ -3220,6 +3220,89 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
+  it("targets the exact core version for official extended-stable updates and preserves intent", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/acpx",
+      version: "2026.6.33",
+    });
+    mockNpmViewMetadata({
+      name: "@openclaw/acpx",
+      version: "2026.7.33",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "acpx",
+        targetDir: installPath,
+        version: "2026.7.33",
+        npmResolution: {
+          name: "@openclaw/acpx",
+          version: "2026.7.33",
+          resolvedSpec: "@openclaw/acpx@2026.7.33",
+        },
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "acpx",
+        spec: "@openclaw/acpx",
+        installPath,
+        resolvedName: "@openclaw/acpx",
+        resolvedSpec: "@openclaw/acpx@2026.6.33",
+        resolvedVersion: "2026.6.33",
+      }),
+      pluginIds: ["acpx"],
+      syncOfficialPluginInstalls: true,
+      officialPluginUpdateChannel: "extended-stable",
+      coreVersion: "2026.7.33",
+    });
+
+    expectNpmUpdateCall({
+      spec: "@openclaw/acpx@2026.7.33",
+      expectedPluginId: "acpx",
+    });
+    expectRecordFields(result.config.plugins?.installs?.acpx, {
+      spec: "@openclaw/acpx",
+      version: "2026.7.33",
+      resolvedSpec: "@openclaw/acpx@2026.7.33",
+    });
+  });
+
+  it("preserves an explicit official pin during extended-stable updates", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/acpx",
+      version: "2026.6.33",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "acpx",
+        targetDir: installPath,
+        version: "2026.6.33",
+      }),
+    );
+
+    await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "acpx",
+        spec: "@openclaw/acpx@2026.6.33",
+        installPath,
+        resolvedName: "@openclaw/acpx",
+        resolvedSpec: "@openclaw/acpx@2026.6.33",
+        resolvedVersion: "2026.6.33",
+      }),
+      pluginIds: ["acpx"],
+      syncOfficialPluginInstalls: true,
+      officialPluginUpdateChannel: "extended-stable",
+      coreVersion: "2026.7.33",
+      dryRun: true,
+    });
+
+    expectNpmUpdateCall({
+      spec: "@openclaw/acpx@2026.6.33",
+      expectedPluginId: "acpx",
+    });
+  });
+
   it("falls back to the default npm spec when a beta tag is unavailable", async () => {
     installPluginFromNpmSpecMock
       .mockResolvedValueOnce({
@@ -4740,6 +4823,62 @@ describe("syncPluginsForUpdateChannel", () => {
       spec: "@openclaw/legacy-chat",
       installPath: "/tmp/openclaw-plugins/legacy-chat",
       version: "2.0.0",
+    });
+  });
+
+  it("uses exact-core npm when an official ClawHub bridge falls back on extended-stable", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+    installPluginFromClawHubMock.mockResolvedValue({
+      ok: false,
+      code: "package_not_found",
+      error: "Package not found on ClawHub.",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "voice-call",
+        targetDir: "/tmp/openclaw-plugins/voice-call",
+        version: "2026.7.33",
+        npmResolution: {
+          name: "@openclaw/voice-call",
+          version: "2026.7.33",
+          resolvedSpec: "@openclaw/voice-call@2026.7.33",
+        },
+      }),
+    );
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "extended-stable",
+      coreVersion: "2026.7.33",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "voice-call",
+          preferredSource: "clawhub",
+          clawhubSpec: "clawhub:@openclaw/voice-call",
+          npmSpec: "@openclaw/voice-call",
+          channelIds: ["voice-call"],
+        },
+      ],
+      config: {
+        channels: { "voice-call": { enabled: true } },
+        plugins: {
+          installs: {
+            "voice-call": {
+              source: "path",
+              sourcePath: appBundledPluginRoot("voice-call"),
+              installPath: appBundledPluginRoot("voice-call"),
+            },
+          },
+        },
+      },
+    });
+
+    expect(npmInstallCall()?.spec).toBe("@openclaw/voice-call@2026.7.33");
+    expect(npmInstallCall()?.trustedSourceLinkedOfficialInstall).toBe(true);
+    expectRecordFields(result.config.plugins?.installs?.["voice-call"], {
+      source: "npm",
+      spec: "@openclaw/voice-call",
+      version: "2026.7.33",
+      resolvedSpec: "@openclaw/voice-call@2026.7.33",
     });
   });
 

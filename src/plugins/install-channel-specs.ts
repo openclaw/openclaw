@@ -1,6 +1,6 @@
 // Parses channel-oriented plugin install specs from package inputs.
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
-import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { isExactSemverVersion, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 
 export type ChannelInstallSpecs = {
@@ -10,7 +10,7 @@ export type ChannelInstallSpecs = {
   fallbackLabel?: string;
 };
 
-function isDefaultNpmSpecForBetaChannel(spec: string): { name: string } | null {
+function resolveDefaultNpmSpec(spec: string): { name: string } | null {
   const parsed = parseRegistryNpmSpec(spec);
   if (!parsed) {
     return null;
@@ -38,14 +38,35 @@ function isDefaultClawHubSpecForBetaChannel(spec: string): { name: string } | nu
 export function resolveNpmInstallSpecsForUpdateChannel(params: {
   spec: string;
   updateChannel?: UpdateChannel;
+  officialPackageName?: string;
+  coreVersion?: string;
 }): ChannelInstallSpecs {
+  if (params.updateChannel === "extended-stable") {
+    const target = resolveDefaultNpmSpec(params.spec);
+    const coreVersion = params.coreVersion?.trim();
+    if (
+      target &&
+      params.officialPackageName === target.name &&
+      coreVersion &&
+      isExactSemverVersion(coreVersion)
+    ) {
+      return {
+        installSpec: `${target.name}@${coreVersion}`,
+        recordSpec: params.spec,
+      };
+    }
+    return {
+      installSpec: params.spec,
+      recordSpec: params.spec,
+    };
+  }
   if (params.updateChannel !== "beta") {
     return {
       installSpec: params.spec,
       recordSpec: params.spec,
     };
   }
-  const betaTarget = isDefaultNpmSpecForBetaChannel(params.spec);
+  const betaTarget = resolveDefaultNpmSpec(params.spec);
   if (!betaTarget) {
     return {
       installSpec: params.spec,

@@ -73,7 +73,7 @@ import {
   resolveWebSearchInstallCatalogEntry,
 } from "../../../plugins/web-search-install-catalog.js";
 import { resolveUserPath } from "../../../utils.js";
-import { VERSION } from "../../../version.js";
+import { resolveCompatibilityHostVersion, VERSION } from "../../../version.js";
 import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
 import {
   collectConfiguredRuntimePluginIds,
@@ -1071,6 +1071,10 @@ async function installCandidate(params: {
     ? resolveNpmInstallSpecsForUpdateChannel({
         spec: candidate.npmSpec,
         updateChannel: params.updateChannel,
+        officialPackageName: candidate.trustedSourceLinkedOfficialInstall
+          ? parseRegistryNpmSpec(candidate.npmSpec)?.name
+          : undefined,
+        coreVersion: resolveCompatibilityHostVersion(params.env),
       })
     : null;
   const clawhubInstallSpec = clawhubSpecs?.installSpec ?? candidate.clawhubSpec;
@@ -1100,6 +1104,9 @@ async function installCandidate(params: {
       records: params.records,
       npmInstallSpec,
       npmRecordSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
+      pinResolvedRegistrySpec:
+        candidate.trustedSourceLinkedOfficialInstall === true &&
+        params.updateChannel !== "extended-stable",
       packagePath: existingNpmPackagePath,
       version: existingNpmPackageVersion,
     });
@@ -1229,7 +1236,9 @@ async function installCandidate(params: {
         spec: resolveNpmInstallRecordSpec({
           requestedSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
           resolution: result.npmResolution,
-          pinResolvedRegistrySpec: candidate.trustedSourceLinkedOfficialInstall === true,
+          pinResolvedRegistrySpec:
+            candidate.trustedSourceLinkedOfficialInstall === true &&
+            params.updateChannel !== "extended-stable",
         }),
         installPath: result.targetDir,
         version: result.version,
@@ -1308,6 +1317,7 @@ async function adoptExistingNpmPackage(params: {
   records: Record<string, PluginInstallRecord>;
   npmInstallSpec: string;
   npmRecordSpec: string;
+  pinResolvedRegistrySpec: boolean;
   packagePath: string;
   version: string;
 }): Promise<{
@@ -1332,7 +1342,7 @@ async function adoptExistingNpmPackage(params: {
         spec: resolveNpmInstallRecordSpec({
           requestedSpec: params.npmRecordSpec,
           resolution: npmResolution,
-          pinResolvedRegistrySpec: params.candidate.trustedSourceLinkedOfficialInstall === true,
+          pinResolvedRegistrySpec: params.pinResolvedRegistrySpec,
         }),
         installPath: params.packagePath,
         installedAt: new Date().toISOString(),
@@ -1353,6 +1363,7 @@ async function adoptExistingNpmPackage(params: {
 function resolveCandidateInstallSpec(params: {
   candidate: DownloadableInstallCandidate;
   updateChannel: UpdateChannel;
+  coreVersion: string;
 }): string | undefined {
   if (params.candidate.defaultChoice !== "npm" && params.candidate.clawhubSpec) {
     return resolveClawHubInstallSpecsForUpdateChannel({
@@ -1364,6 +1375,10 @@ function resolveCandidateInstallSpec(params: {
     return resolveNpmInstallSpecsForUpdateChannel({
       spec: params.candidate.npmSpec,
       updateChannel: params.updateChannel,
+      officialPackageName: params.candidate.trustedSourceLinkedOfficialInstall
+        ? parseRegistryNpmSpec(params.candidate.npmSpec)?.name
+        : undefined,
+      coreVersion: params.coreVersion,
     }).installSpec;
   }
   if (params.candidate.clawhubSpec) {
@@ -1608,7 +1623,11 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
     if (!shouldReplaceBrokenOfficialInstall && hasUsableRecord) {
       continue;
     }
-    const installSpec = resolveCandidateInstallSpec({ candidate, updateChannel });
+    const installSpec = resolveCandidateInstallSpec({
+      candidate,
+      updateChannel,
+      coreVersion: resolveCompatibilityHostVersion(env),
+    });
     if (shouldReplaceBrokenOfficialInstall) {
       const installPath = resolveRecordInstallPath(record, env);
       if (staleVersionBoundRuntimePluginIds.has(candidate.pluginId)) {
@@ -2005,6 +2024,7 @@ async function repairMissingPluginInstalls(params: {
       },
       pluginIds: missingRecordedPluginIds,
       updateChannel,
+      coreVersion: resolveCompatibilityHostVersion(env),
       logger: {
         terminalLinks: false,
         warn: (message) => {

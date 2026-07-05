@@ -956,6 +956,53 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     ]);
   });
 
+  it("repairs official plugins at the exact extended-stable core version", async () => {
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "diagnostics-otel",
+      targetDir: "/tmp/openclaw-plugins/diagnostics-otel",
+      version: VERSION,
+      npmResolution: {
+        name: "@openclaw/diagnostics-otel",
+        version: VERSION,
+        resolvedSpec: `@openclaw/diagnostics-otel@${VERSION}`,
+      },
+    });
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+      {
+        id: "diagnostics-otel",
+        label: "Diagnostics OpenTelemetry",
+        install: {
+          npmSpec: "@openclaw/diagnostics-otel",
+          defaultChoice: "npm",
+        },
+      },
+    ]);
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        update: { channel: "extended-stable" },
+        plugins: { entries: { "diagnostics-otel": { enabled: true } } },
+      },
+      env: {},
+    });
+
+    expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
+      spec: `@openclaw/diagnostics-otel@${VERSION}`,
+      expectedPluginId: "diagnostics-otel",
+      trustedSourceLinkedOfficialInstall: true,
+    });
+    const persistedRecords = mockCallArg(
+      mocks.writePersistedInstalledPluginIndexInstallRecords,
+    ) as Record<string, unknown>;
+    expectRecordFields(persistedRecords["diagnostics-otel"], {
+      spec: "@openclaw/diagnostics-otel",
+      resolvedSpec: `@openclaw/diagnostics-otel@${VERSION}`,
+    });
+  });
+
   it("installs the official llama.cpp plugin for configured local memory embeddings", async () => {
     mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
       ok: true,
