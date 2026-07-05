@@ -4919,6 +4919,51 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     });
   });
 
+  it("retains reply-lane ownership until empty fallback delivery settles", async () => {
+    let releaseDelivery = () => {};
+    const deliveryStarted = new Promise<void>((resolveStarted) => {
+      routeReplyMock.mockImplementationOnce(
+        async () =>
+          await new Promise<{ ok: true }>((resolveDelivery) => {
+            releaseDelivery = () => resolveDelivery({ ok: true });
+            resolveStarted();
+          }),
+      );
+    });
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "openai/gpt-5.5",
+    });
+
+    const pending = runner(
+      createQueuedRun({
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: { sessionKey: "main", sessionId: "active-session", messageProvider: "discord" },
+      }),
+    );
+    await deliveryStarted;
+
+    expect(replyRunRegistryForTest.get("main")?.result).toMatchObject({
+      kind: "failed",
+      code: "run_failed",
+    });
+    expect(() =>
+      createReplyOperationForTest({
+        sessionKey: "main",
+        sessionId: "next-session",
+        resetTriggered: false,
+      }),
+    ).toThrow();
+
+    releaseDelivery();
+    await pending;
+    expect(replyRunRegistryForTest.get("main")).toBeUndefined();
+  });
+
   it("routes the fallback for whitespace-only messaging evidence", async () => {
     await runMessagingCase({
       agentResult: {
