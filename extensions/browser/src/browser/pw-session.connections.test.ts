@@ -99,7 +99,6 @@ function makeDisconnectedReadBrowser(): BrowserMockBundle {
 function makeStuckPageTargetBrowser(): BrowserMockBundle & {
   rejectTargetRead: (error: Error) => void;
 } {
-  let context: import("playwright-core").BrowserContext;
   let rejectTargetRead: ((error: Error) => void) | undefined;
   const browserClose = vi.fn(async () => {});
   const page = {
@@ -109,7 +108,7 @@ function makeStuckPageTargetBrowser(): BrowserMockBundle & {
     url: vi.fn(() => "https://stuck.example"),
   } as unknown as import("playwright-core").Page;
 
-  context = {
+  const context = {
     pages: () => [page],
     on: vi.fn(),
     newCDPSession: vi.fn(
@@ -386,7 +385,9 @@ describe("pw-session connection scoping", () => {
     expect(recovered.map((page) => page.targetId)).toEqual(["A"]);
 
     stuck.rejectTargetRead(new Error("Target page, context or browser has been closed"));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
     const stillCached = await listPagesViaPlaywright({
       cdpUrl: "http://127.0.0.1:9222",
