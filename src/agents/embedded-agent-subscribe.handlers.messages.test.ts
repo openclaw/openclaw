@@ -1099,6 +1099,67 @@ describe("handleMessageEnd", () => {
     expect(ctx.recordAssistantUsage).toHaveBeenCalledWith(message.usage);
   });
 
+  it("carries streamed total onto cached final usage when totalTokens is missing (#99843)", () => {
+    // The exact scenario from #99843: the final assistant snapshot already has
+    // usage buckets (input/output/cacheRead/cacheWrite with aggregated cache)
+    // but totalTokens is 0. The streamed pending total is the real per-call
+    // context — preservePendingAssistantUsage must carry it onto the message
+    // while keeping the provider's billing buckets intact.
+    const ctx = createMessageEndContext({
+      state: {
+        pendingAssistantUsage: {
+          input: 12,
+          output: 15_104,
+          cacheRead: 148_862,
+          cacheWrite: 0,
+          total: 163_978,
+        },
+      },
+    });
+    const message = {
+      role: "assistant" as const,
+      api: "anthropic-messages" as const,
+      provider: "anthropic" as const,
+      model: "claude-opus-4-8" as const,
+      content: [{ type: "text" as const, text: "Done." }],
+      stopReason: "stop" as const,
+      usage: {
+        input: 12,
+        output: 15_104,
+        cacheRead: 819_661,
+        cacheWrite: 93_130,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      timestamp: 1,
+    };
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message,
+    } as never);
+
+    // Billing buckets preserved, totalTokens restored from streamed total
+    expect(firstMockArg(ctx.noteLastAssistant as never, "last assistant")).toMatchObject({
+      usage: {
+        input: 12,
+        output: 15_104,
+        cacheRead: 819_661,
+        cacheWrite: 93_130,
+        totalTokens: 163_978,
+      },
+    });
+    expect(ctx.recordAssistantUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: 12,
+        output: 15_104,
+        cacheRead: 819_661,
+        cacheWrite: 93_130,
+        totalTokens: 163_978,
+      }),
+    );
+  });
+
   it("warns when assistant text only pretends to call a registered tool", () => {
     const warn = vi.fn();
     const ctx = createMessageEndContext({

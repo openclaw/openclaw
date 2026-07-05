@@ -631,6 +631,19 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     if (!usage) {
       return;
     }
+    // Ensure `total` is populated before downstream compaction estimation reads
+    // it via preservePendingAssistantUsage. When the provider stream event omits
+    // a total, derive it from per-call component fields instead of leaving it
+    // undefined. An undefined total forces the caller's fallback to re-sum
+    // the components, which can inflate estimates when cacheRead/cacheWrite
+    // are turn-aggregated across multiple API calls in a tool-loop turn (#99843).
+    if (usage.total === undefined || usage.total <= 0) {
+      const derived =
+        (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+      if (derived > 0) {
+        usage.total = derived;
+      }
+    }
     state.pendingAssistantUsage = usage;
   };
   const getUsageTotals = () => {

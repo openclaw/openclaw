@@ -96,6 +96,24 @@ export function preservePendingAssistantUsage(
   }
   const messageUsage = normalizeUsage((message as { usage?: UsageLike }).usage);
   if (hasNonzeroUsage(messageUsage)) {
+    // The final assistant snapshot already carries usage buckets (input/output/
+    // cacheRead/cacheWrite) from the provider, but totalTokens may still be
+    // zero when the provider omits the aggregate total. The streamed pending
+    // total is the real per-call context snapshot — carry it onto the final
+    // usage so compaction estimation never re-sums turn-aggregated cache
+    // buckets (which can inflate the estimate ~5.7x, see #99843).
+    if (
+      typeof pendingUsage.total === "number" &&
+      Number.isFinite(pendingUsage.total) &&
+      pendingUsage.total > 0 &&
+      !(typeof messageUsage?.total === "number" && messageUsage.total > 0)
+    ) {
+      message.usage = {
+        ...makeZeroUsageSnapshot(),
+        ...(message as { usage?: UsageLike }).usage,
+        totalTokens: pendingUsage.total,
+      };
+    }
     return message;
   }
 
