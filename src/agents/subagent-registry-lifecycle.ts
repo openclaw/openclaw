@@ -1434,6 +1434,7 @@ export function createSubagentRegistryLifecycleController(params: {
         entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
         entry.killReconciliation !== undefined
       ) {
+        const killReconciliation = entry.killReconciliation;
         const taskResolution = params.resolveSubagentTask(entry);
         const stableTaskCancellation =
           taskResolution.lookup === "available" &&
@@ -1450,12 +1451,12 @@ export function createSubagentRegistryLifecycleController(params: {
         provisionalKillSnapshot = structuredClone(currentEntry);
         // The sweeper uses marker identity to reject a concurrently replaced
         // kill generation. A completion rollback must retain the same marker.
-        provisionalKillSnapshot.killReconciliation = currentEntry.killReconciliation;
+        provisionalKillSnapshot.killReconciliation = killReconciliation;
         // Completion capture yields. Stage the provider result off-registry so
         // an unrelated persistence write cannot publish a tentative winner.
         entry = structuredClone(currentEntry);
         entry.suppressCompletionDelivery =
-          entry.killReconciliation.suppressTaskDelivery === true ? true : undefined;
+          killReconciliation.suppressTaskDelivery === true ? true : undefined;
         entry.suppressAnnounceReason = undefined;
         entry.killReconciliation = undefined;
         entry.cleanupHandled = false;
