@@ -2263,12 +2263,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     const icon = normalizeOptionalHostHookString(descriptor.icon);
     const tabPath = normalizeOptionalHostHookString(descriptor.path);
-    if (tabPath !== undefined && !tabPath.startsWith("/")) {
+    // Single leading slash only: "//host" and "/\\host" are protocol-relative
+    // URLs in browsers, which would let a descriptor iframe external content.
+    const isLocalAbsolutePath =
+      tabPath === undefined ||
+      (tabPath.startsWith("/") && !tabPath.startsWith("//") && !tabPath.startsWith("/\\"));
+    if (!isLocalAbsolutePath) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: `control UI descriptor path must start with "/": ${id}`,
+        message: `control UI descriptor path must be a gateway-local absolute path: ${id}`,
       });
       return;
     }

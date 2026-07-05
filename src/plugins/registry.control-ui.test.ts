@@ -72,6 +72,29 @@ describe("plugin registry Control UI descriptors", () => {
     ]);
   });
 
+  it("rejects protocol-relative tab paths that would iframe external content", () => {
+    for (const path of ["//attacker.example/panel", "/\\attacker.example/panel"]) {
+      const { config, registry } = createPluginRegistryFixture();
+      registerTestPlugin({
+        registry,
+        config,
+        record: createPluginRecord({ id: "external-tab", name: "External Tab" }),
+        register(api) {
+          api.registerControlUiDescriptor({
+            surface: "tab",
+            id: "journal",
+            label: "Journal",
+            path,
+          });
+        },
+      });
+      expect(registry.registry.controlUiDescriptors ?? []).toEqual([]);
+      expect(registry.registry.diagnostics).toContainEqual(
+        expect.objectContaining({ level: "error", pluginId: "external-tab" }),
+      );
+    }
+  });
+
   it("rejects tab descriptors whose path is not absolute", () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
@@ -93,7 +116,7 @@ describe("plugin registry Control UI descriptors", () => {
       expect.objectContaining({
         level: "error",
         pluginId: "bad-tab-fixture",
-        message: expect.stringContaining("path must start with"),
+        message: expect.stringContaining("gateway-local absolute path"),
       }),
     );
   });
