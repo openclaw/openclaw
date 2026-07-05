@@ -61,9 +61,9 @@ const sharedUiTestConfig = {
 } as const;
 const nodeDrivenBrowserLayoutTests = [
   "src/ui/chat/sidebar-session-picker.browser.test.ts",
-  "src/ui/chat/chat-responsive.browser.test.ts",
+  "src/pages/chat/chat-responsive.browser.test.ts",
   "src/components/form-controls.browser.test.ts",
-  "src/ui/views/sessions.browser.test.ts",
+  "src/pages/sessions/view.browser.test.ts",
 ] as const;
 const chromiumExecutableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
 const systemChromiumExecutableCandidates = [

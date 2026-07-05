@@ -51,6 +51,8 @@ export type HandleCommandsParams = {
   sessionEntry?: SessionEntry;
   /** Snapshot captured before command handlers mutate the active entry. */
   initialSessionEntry?: SessionEntry;
+  /** True only when the current command owns first creation of this session row. */
+  allowCreateSessionEntry?: boolean;
   previousSessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;

@@ -675,6 +675,7 @@ function createChatContext(): Pick<
   | "nodeSendToSession"
   | "agentRunSeq"
   | "chatAbortControllers"
+  | "chatQueuedTurns"
   | "chatRunBuffers"
   | "chatDeltaSentAt"
   | "chatDeltaLastBroadcastLen"
@@ -698,6 +699,7 @@ function createChatContext(): Pick<
     nodeSendToSession: vi.fn() as unknown as GatewayRequestContext["nodeSendToSession"],
     agentRunSeq: new Map<string, number>(),
     chatAbortControllers: new Map(),
+    chatQueuedTurns: new Map(),
     chatRunBuffers: new Map(),
     chatDeltaSentAt: new Map(),
     chatDeltaLastBroadcastLen: new Map(),

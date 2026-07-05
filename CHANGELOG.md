@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Conversational onboarding:** add a real agent-loop Crestodian setup flow across the CLI, Gateway, web install, and macOS app, with typed operations, exact approval binding, masked credential prompts, isolated session transcripts, and safe handoff to the normal agent.
 - **Generated session titles:** name new Control UI sessions from their first message, and add default/per-agent `utilityModel` routing for lower-cost session, topic, and thread title generation. Thanks @Juliangsm and @zhangguiping-xydt.
 - **ClawRouter routing and quotas:** add the bundled ClawRouter provider plugin with credential-scoped dynamic model discovery, OpenAI-compatible and native Anthropic/Gemini transports, and managed budget reporting across OpenClaw usage surfaces. (#99658)
 - **Model and provider coverage:** add GPT-5.6 support, use Nemotron Super's 1M context window, and preserve explicit OpenRouter authentication headers. (#98333, #98726, #98187) Thanks @steipete-oai, @eleqtrizit, @sunlit-deng, and @laurencebrown.
@@ -31,8 +32,18 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Control UI terminal tabs:** vertically center the new-session button in the terminal tab strip.
+- **Control UI composer scrollbar:** show the message-field scrollbar only when the draft actually overflows its autosized height.
+- **Control UI terminal cursor:** hide the browser-native contenteditable caret so the integrated terminal shows only its canvas-rendered cursor.
+- **macOS SSH tunnels:** resolve user-installed SSH `ProxyCommand` helpers through the app's managed PATH while preserving inherited connection environment, so remote aliases work after Finder and sanitized-script launches.
+- **Control UI OpenAI speed picker:** show only Standard and Fast choices for OpenAI models.
+- **Control UI terminal rendering:** adopt the shared `@openclaw/libterminal` browser lifecycle and add Nerd Font fallbacks so icon-enabled shell listings render their glyphs when a compatible local font is installed.
+- **Slack transcript history:** let Codex app-server own its persisted assistant replies so Slack does not append redundant delivery-mirror rows, while the Control UI keeps legacy duplicate mirrors hidden.
+- **Control UI chat history:** hide redundant channel-final delivery mirrors when the preceding app-server assistant reply already shows the same text.
+- **Control UI chat spacing:** keep the first message comfortably clear of the topbar with a responsive minimum transcript inset.
 - **ClawRouter auth profiles:** resolve credential-scoped catalog models during agent runs when the proxy key is stored in an auth profile, and document plugin and model allowlists.
 - **Telegram durability:** recover stalled ingress claims, retry restart-dropped media, survive transient polling errors, dead-letter poison updates, preserve forwarded rich text, route plugin callbacks correctly, keep progress updates in one stable multi-line window, map self-hosted Bot API container paths through trusted host roots, and fall back safely when Telegram rejects rich final replies. (#97118, #98102, #98735, #98775, #98776, #97174, #98907, #91984, #98786) Thanks @vincentkoc, @luoyanglang, @DaveArcher18, @obviyus, @goldmar, @Marvinthebored, @Dizesales, and @shakkernerd.
+- **Cross-channel inbound media:** preserve captions and expose unavailable-attachment notices when WhatsApp, LINE, Signal, iMessage, Microsoft Teams, Feishu, Mattermost, or Zalo cannot materialize inbound media, instead of dispatching phantom placeholders or dropping media-only turns. (#100092)
 - **Agent and context reliability:** preserve runtime overrides, steered subagent tasks, fallback tool-call hints, and legacy reseed attachments; soft-resume CLI sessions across prompt-only drift; improve harness-aware context estimation and compaction prechecks; time out silent local streams; recover mid-stream failures; and cap Gateway run-cache growth. (#92237, #77539, #99851, #99839, #99822, #97928, #97861, #98525, #95430, #77973) Thanks @sercada, @amittell, @obviyus, @liuhao1024, @yetval, @osolmaz, @lzyyzznl, @vincentkoc, @alexelgier, and @fede-kamel.
 - **Provider and network safety:** bound oversized or malformed responses across Moonshot, MiniMax, Anthropic OAuth, Discord, Matrix, SMS, browser, update, embeddings, Tlön, and Inworld paths. (#96502, #96322, #96644, #97693, #97662, #97999, #98455, #98508, #98554, #98496, #98660) Thanks @hugenshen, @cursoragent, @lsr911, @solodmd, @Alix-007, @wings1029, @lzyyzznl, @sunlit-deng, @vincentkoc, and @Pandah97.
 - **Channel delivery and routing:** keep Slack replies in the active thread, preserve account-bound delivery routes, apply response prefixes, suppress internal traces and unwanted fallback replies, and retain WeChat session routing for opaque account ids. (#97168, #98240, #89949, #93639, #97989, #80928, #93686) Thanks @LiuwqGit, @gorkem2020, @yetval, @wangwllu, @ZengWen-DT, @alexuser, @UnClouded77, @zhangguiping-xydt, @htkillermax-gif, and @vincentkoc.

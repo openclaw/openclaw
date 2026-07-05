@@ -43,6 +43,10 @@ extension OnboardingView {
         self.updatePermissionMonitoring(for: pageIndex)
         self.updateDiscoveryMonitoring(for: pageIndex)
         self.maybeInstallCLI(for: pageIndex)
+        self.maybeStartCrestodianChat(for: pageIndex)
+        // Crestodian setup creates the workspace (BOOTSTRAP.md); re-check so
+        // the Meet-your-agent page joins the flow once setup ran.
+        self.refreshBootstrapStatus()
         maybeKickoffOnboardingChat(for: pageIndex)
     }
 

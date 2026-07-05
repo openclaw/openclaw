@@ -1098,6 +1098,7 @@ export const OpenClawSchema = z
           .object({
             enabled: z.boolean().optional(),
             shell: z.string().optional(),
+            detachedSessionTimeoutSeconds: z.number().int().min(0).optional(),
           })
           .strict()
           .optional(),

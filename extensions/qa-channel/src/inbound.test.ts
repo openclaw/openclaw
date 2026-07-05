@@ -118,6 +118,26 @@ describe("handleQaInbound", () => {
     );
   });
 
+  it("treats deliveries without dispatcher metadata as final replies", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+
+    await handleQaInbound(createQaInboundParams());
+
+    const assembled = firstRunAssembledParams(runtime);
+    await assembled.replyOptions?.onPartialReply?.({ text: "preview" });
+    const missingDeliveryInfo = undefined as unknown as Parameters<
+      typeof assembled.delivery.deliver
+    >[1];
+    await assembled.delivery.deliver({ text: "final answer" }, missingDeliveryInfo);
+
+    expect(sendQaBusMessage).toHaveBeenCalledOnce();
+    expect(editQaBusMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "preview-1", text: "final answer" }),
+    );
+    expect(deleteQaBusMessage).not.toHaveBeenCalled();
+  });
+
   it("keeps block deliveries separate and retains tool calls discovered after a preview", async () => {
     const runtime = createPluginRuntimeMock();
     setQaChannelRuntime(runtime);

@@ -15,6 +15,7 @@ import type {
 } from "../embedded-agent-messaging.types.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { AgentRunTimeoutPhase } from "../run-timeout-attribution.js";
+import type { ContextUsage } from "../usage.js";
 
 export type EmbeddedAgentMeta = {
   sessionId: string;
@@ -59,6 +60,7 @@ export type EmbeddedAgentMeta = {
     output?: number;
     cacheRead?: number;
     cacheWrite?: number;
+    contextUsage?: ContextUsage;
     reasoningTokens?: number;
     total?: number;
   };

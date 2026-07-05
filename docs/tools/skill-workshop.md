@@ -9,31 +9,28 @@ sidebarTitle: "Skill Workshop"
 ---
 
 Skill Workshop is OpenClaw's governed path for creating and updating workspace
-skills.
+skills. Agents and operators never write `SKILL.md` directly through this
+path — they create a **proposal** (pending draft with content, target
+binding, scanner state, hashes, and rollback metadata) that becomes a live
+skill only when applied.
 
-Agents and operators do not write active `SKILL.md` files directly through this
-path. They create a **proposal** first. A proposal is a pending draft containing
-the proposed skill content, target binding, scanner state, hashes, support-file
-metadata, and rollback metadata. It becomes a live skill only when applied.
-
-Skill Workshop writes workspace skills only. It does not mutate bundled,
+Skill Workshop writes workspace skills only. It never touches bundled,
 plugin, ClawHub, extra-root, managed, personal-agent, or system skills.
 
 ## How it works
 
-- **Proposal first:** generated skill content is stored as `PROPOSAL.md`, not
+- **Proposal first:** generated content is stored as `PROPOSAL.md`, not
   `SKILL.md`.
-- **Apply is the only live write:** create, update, and revise do not change
+- **Apply is the only live write:** create, update, and revise never change
   active skills.
-- **Workspace scoped:** creates target the workspace `skills/` root. Updates
+- **Workspace scoped:** creates target the workspace `skills/` root; updates
   are allowed only for writable workspace skills.
 - **No clobber:** create fails if the target skill already exists.
-- **Hash bound:** update proposals bind to the current target hash and become
-  stale if the live skill changes before apply.
-- **Scanner gated:** apply reruns scanning before writing.
-- **Recoverable:** apply writes rollback metadata before changing live files.
-- **Consistent surfaces:** chat, CLI, and Gateway all call the same Skill
-  Workshop service.
+- **Hash bound:** update proposals bind to the current target hash and go
+  `stale` if the live skill changes before apply.
+- **Scanner gated:** apply reruns the security scanner before writing.
+- **Recoverable:** apply writes rollback metadata before touching live files.
+- **Consistent surfaces:** chat, CLI, and Gateway all call the same service.
 
 ## Lifecycle
 
@@ -46,12 +43,12 @@ quarantine    -> quarantined
 target change -> stale
 ```
 
-Only `pending` proposals can be revised, applied, rejected, or quarantined.
+Only a `pending` proposal can be revised, applied, rejected, or quarantined.
 
 ## Chat
 
-Ask the agent for the skill you want. The agent calls `skill_workshop` and
-returns a proposal id.
+Ask the agent for the skill you want; it calls `skill_workshop` and returns a
+proposal id.
 
 Create:
 
@@ -73,47 +70,39 @@ Revise it to also flag anything marked urgent.
 Apply the morning-catchup proposal.
 ```
 
-By default, agent-initiated `apply`, `reject`, and `quarantine` show an
-approval prompt before they run. Set `skills.workshop.approvalPolicy` to
-`"auto"` to skip the prompt for trusted environments.
+Agent-initiated `apply`, `reject`, and `quarantine` show an approval prompt by
+default. Set `skills.workshop.approvalPolicy` to `"auto"` to skip it in
+trusted environments.
 
 ## CLI
 
-Create a new skill proposal:
-
 ```bash
+# Create
 openclaw skills workshop propose-create \
   --name morning-catchup \
   --description "Daily inbox catch-up: triage, archive, surface, draft, plan" \
   --proposal ./PROPOSAL.md
-```
 
-Create an update proposal for an existing workspace skill:
-
-```bash
+# Update an existing workspace skill
 openclaw skills workshop propose-update trip-planning --proposal ./PROPOSAL.md
-```
 
-List and inspect:
-
-```bash
+# List and inspect
 openclaw skills workshop list
 openclaw skills workshop inspect <proposal-id>
-```
 
-Revise before approval:
-
-```bash
+# Revise before approval
 openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
-```
 
-Close out the proposal:
-
-```bash
+# Close out
 openclaw skills workshop apply <proposal-id>
 openclaw skills workshop reject <proposal-id> --reason "Duplicate"
 openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
 ```
+
+Every subcommand takes `--agent <id>` (target workspace; defaults to
+cwd-inferred, then the default agent) and `--json` (structured output).
+`propose-create`, `propose-update`, and `revise` also take `--goal <text>` and
+`--evidence <text>` to record proposal context alongside `--proposal`.
 
 ## Proposal content
 
@@ -130,12 +119,13 @@ date: "2026-05-30T00:00:00.000Z"
 ---
 ```
 
-On apply, Skill Workshop writes the active `SKILL.md` and removes proposal-only
-fields: `status`, proposal `version`, and proposal `date`.
+On apply, Skill Workshop writes the active `SKILL.md` and removes the
+proposal-only fields: `status`, proposal `version`, and proposal `date`.
 
 ## Support files
 
-Use `--proposal-dir` when the proposed skill needs files beside `PROPOSAL.md`:
+Use `--proposal-dir` when the proposed skill needs files beside
+`PROPOSAL.md`:
 
 ```bash
 openclaw skills workshop propose-create \
@@ -144,32 +134,36 @@ openclaw skills workshop propose-create \
   --proposal-dir ./weekly-update-proposal
 ```
 
-The directory must contain `PROPOSAL.md`. Support files must be under:
+The directory must contain `PROPOSAL.md`. Support files must live under
+`assets/`, `examples/`, `references/`, `scripts/`, or `templates/`. Skill
+Workshop scans, hashes, and stores them with the proposal, then writes them
+beside the live `SKILL.md` only on apply.
 
-- `assets/`
-- `examples/`
-- `references/`
-- `scripts/`
-- `templates/`
-
-Skill Workshop scans, hashes, and stores support files with the proposal. They
-are written beside the live `SKILL.md` only on apply.
-
-Rejected support-file paths include absolute paths, hidden path segments, path
-traversal, overlapping paths, executable files from proposal directories,
-non-UTF-8 text, null bytes, and files outside the standard support folders.
+Rejected support-file paths: absolute paths, hidden path segments, path
+traversal, overlapping paths, executable files, non-UTF-8 text, null bytes,
+and paths outside the standard support folders.
 
 ## Agent tool
 
-The model uses `skill_workshop`:
+The model uses `skill_workshop` with one required `action`:
+`create | update | revise | list | inspect | apply | reject | quarantine`.
+Other parameters apply depending on the action:
 
-```text
-action: create | update | revise | list | inspect | apply | reject | quarantine
-```
+| Parameter                  | Used by                                              | Notes                                                                |
+| -------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------- |
+| `name`                     | `create`, `inspect`, `revise`                        | Required for `create`; resolves a pending proposal by name otherwise |
+| `description`              | `create`, `update`, `revise`                         | Max 160 bytes                                                        |
+| `skill_name`               | `update`                                             | Existing skill name or key                                           |
+| `proposal_content`         | `create`, `update`, `revise`                         | Stored as `PROPOSAL.md`; capped by `skills.workshop.maxSkillBytes`   |
+| `support_files`            | `create`, `update`, `revise`                         | Array of `{ path, content }`                                         |
+| `goal`, `evidence`         | `create`, `update`, `revise`                         | Free-text context                                                    |
+| `proposal_id`              | `inspect`, `revise`, `apply`, `reject`, `quarantine` | Target proposal                                                      |
+| `reason`                   | `apply`, `reject`, `quarantine`                      | Optional                                                             |
+| `query`, `status`, `limit` | `list`                                               | Filter/paginate; `limit` max 50, default 20                          |
 
-Agents must use `skill_workshop` for generated skill work. They must not create
-or change proposal files through `write`, `edit`, `exec`, shell commands, or
-direct filesystem operations.
+Agents must use `skill_workshop` for generated skill work. They must not
+create or change proposal files through `write`, `edit`, `exec`, shell
+commands, or direct filesystem operations.
 
 <Note>
 `skill_workshop` is a built-in agent tool and is included in
@@ -199,35 +193,35 @@ agent session or the CLI.
 }
 ```
 
-- `autonomous.enabled`: allows OpenClaw to create pending proposals from durable
-  conversation signals after successful turns. Default: `false`.
-- `allowSymlinkTargetWrites`: allows apply to write through workspace skill
-  symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.
-  Default: `false`.
-- `approvalPolicy: "pending"`: requires an approval prompt before
-  agent-initiated `apply`, `reject`, or `quarantine`.
-- `approvalPolicy: "auto"`: skips that approval prompt. The agent must still
-  call the action.
-- `maxPending`: caps pending and quarantined proposals per workspace.
-- `maxSkillBytes`: caps proposal body size. Default: `40000`.
+| Setting                    | Default     | Effect                                                                                                                                                                 |
+| -------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autonomous.enabled`       | `false`     | Lets OpenClaw create pending proposals from durable conversation signals after a successful turn.                                                                      |
+| `allowSymlinkTargetWrites` | `false`     | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                    |
+| `approvalPolicy`           | `"pending"` | `"pending"` requires an approval prompt before agent-initiated `apply`, `reject`, or `quarantine`. `"auto"` skips the prompt (the agent still has to call the action). |
+| `maxPending`               | `50`        | Caps pending and quarantined proposals per workspace (1-200).                                                                                                          |
+| `maxSkillBytes`            | `40000`     | Caps proposal body size in bytes (1024-200000).                                                                                                                        |
 
-Proposal descriptions are always capped at 160 bytes.
+Proposal descriptions are always capped at 160 bytes, independent of
+`maxSkillBytes`.
 
 ## Gateway methods
 
-```text
-skills.proposals.list
-skills.proposals.inspect
-skills.proposals.create
-skills.proposals.update
-skills.proposals.revise
-skills.proposals.apply
-skills.proposals.reject
-skills.proposals.quarantine
-```
+| Method                             | Scope            |
+| ---------------------------------- | ---------------- |
+| `skills.proposals.list`            | `operator.read`  |
+| `skills.proposals.inspect`         | `operator.read`  |
+| `skills.proposals.create`          | `operator.admin` |
+| `skills.proposals.update`          | `operator.admin` |
+| `skills.proposals.revise`          | `operator.admin` |
+| `skills.proposals.requestRevision` | `operator.admin` |
+| `skills.proposals.apply`           | `operator.admin` |
+| `skills.proposals.reject`          | `operator.admin` |
+| `skills.proposals.quarantine`      | `operator.admin` |
 
-Read-only methods require `operator.read`. Mutating methods require
-`operator.admin`.
+`requestRevision` is Gateway-only (no CLI or agent-tool equivalent): it
+forwards free-text revision instructions to the owning agent's chat session
+instead of replacing `PROPOSAL.md` directly, for UIs that ask the agent to
+revise rather than submit literal new content.
 
 ## Storage
 
@@ -254,12 +248,13 @@ Default state directory: `~/.openclaw`.
 
 ## Limits
 
-- Description: 160 bytes.
-- Proposal body: `skills.workshop.maxSkillBytes` (default 40,000).
-- Support files: 64 per proposal.
-- Support file size: 256 KB each, 2 MB total.
-- Pending and quarantined proposals: `skills.workshop.maxPending` per workspace
-  (default 50).
+| Limit                           | Value                                                                |
+| ------------------------------- | -------------------------------------------------------------------- |
+| Description                     | 160 bytes                                                            |
+| Proposal body                   | `skills.workshop.maxSkillBytes` (default 40,000; hard ceiling 1 MiB) |
+| Support files                   | 64 per proposal                                                      |
+| Support file size               | 256 KiB each, 2 MiB total                                            |
+| Pending + quarantined proposals | `skills.workshop.maxPending` per workspace (default 50)              |
 
 ## Troubleshooting
 

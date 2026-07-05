@@ -276,6 +276,12 @@ export type GatewayTerminalConfig = {
    * ($SHELL on Unix, %ComSpec% on Windows).
    */
   shell?: string;
+  /**
+   * How long (seconds) a session survives after its connection drops, staying
+   * reattachable via terminal.attach. 0 kills sessions on disconnect
+   * immediately. Default: 300.
+   */
+  detachedSessionTimeoutSeconds?: number;
 };
 
 /** Gateway config reload strategy for managed installs. */

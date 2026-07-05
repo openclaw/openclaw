@@ -141,6 +141,7 @@ import {
   UpdateStatusParamsSchema,
   UpdateRunParamsSchema,
 } from "./config.js";
+import { CrestodianChatParamsSchema, CrestodianChatResultSchema } from "./crestodian.js";
 import {
   CronAddParamsSchema,
   CronGetParamsSchema,
@@ -303,14 +304,20 @@ import {
 } from "./tasks.js";
 import {
   TerminalAckResultSchema,
+  TerminalAttachParamsSchema,
+  TerminalAttachResultSchema,
   TerminalCloseParamsSchema,
   TerminalDataEventSchema,
   TerminalEventSchema,
   TerminalExitEventSchema,
   TerminalInputParamsSchema,
+  TerminalListResultSchema,
   TerminalOpenParamsSchema,
   TerminalOpenResultSchema,
   TerminalResizeParamsSchema,
+  TerminalSessionInfoSchema,
+  TerminalTextParamsSchema,
+  TerminalTextResultSchema,
 } from "./terminal.js";
 import {
   WizardCancelParamsSchema,
@@ -439,6 +446,8 @@ export const ProtocolSchemas = {
   ConfigSchemaLookupParams: ConfigSchemaLookupParamsSchema,
   ConfigSchemaResponse: ConfigSchemaResponseSchema,
   ConfigSchemaLookupResult: ConfigSchemaLookupResultSchema,
+  CrestodianChatParams: CrestodianChatParamsSchema,
+  CrestodianChatResult: CrestodianChatResultSchema,
   WizardStartParams: WizardStartParamsSchema,
   WizardNextParams: WizardNextParamsSchema,
   WizardCancelParams: WizardCancelParamsSchema,
@@ -574,6 +583,12 @@ export const ProtocolSchemas = {
   TerminalInputParams: TerminalInputParamsSchema,
   TerminalResizeParams: TerminalResizeParamsSchema,
   TerminalCloseParams: TerminalCloseParamsSchema,
+  TerminalAttachParams: TerminalAttachParamsSchema,
+  TerminalAttachResult: TerminalAttachResultSchema,
+  TerminalSessionInfo: TerminalSessionInfoSchema,
+  TerminalListResult: TerminalListResultSchema,
+  TerminalTextParams: TerminalTextParamsSchema,
+  TerminalTextResult: TerminalTextResultSchema,
   TerminalAckResult: TerminalAckResultSchema,
   TerminalDataEvent: TerminalDataEventSchema,
   TerminalExitEvent: TerminalExitEventSchema,

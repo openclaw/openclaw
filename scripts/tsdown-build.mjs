@@ -596,6 +596,18 @@ export function resolveTsdownBuildInvocation(params = {}) {
   };
 }
 
+/** Builds AI package declarations first, then consumes them from the main graph. */
+export function resolveTsdownBuildInvocations(params = {}) {
+  const forwardedArgs = params.args ?? [];
+  return [
+    resolveTsdownBuildInvocation({
+      ...params,
+      args: ["--config", "tsdown.ai.config.ts", ...forwardedArgs],
+    }),
+    resolveTsdownBuildInvocation(params),
+  ];
+}
+
 function signalWindowsProcessTree(pid, signal, runTaskkill = spawnSync) {
   const args = ["/PID", String(pid), "/T"];
   if (signal === "SIGKILL") {
@@ -844,8 +856,14 @@ if (isMainModule()) {
   pruneUntrackedGeneratedSourceDeclarations();
   pruneStaleRuntimeSymlinks();
   cleanTsdownOutputRoots();
-  const invocation = resolveTsdownBuildInvocation({ args: args.forwardedArgs });
-  const result = await runTsdownBuildInvocation(invocation);
+  const invocations = resolveTsdownBuildInvocations({ args: args.forwardedArgs });
+  let result;
+  for (const invocation of invocations) {
+    result = await runTsdownBuildInvocation(invocation);
+    if (result.status !== 0 || result.hasIneffectiveDynamicImport || result.fatalUnresolvedImport) {
+      break;
+    }
+  }
 
   if (result.status === 0 && result.hasIneffectiveDynamicImport) {
     console.error(

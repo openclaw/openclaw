@@ -25,6 +25,7 @@ import {
   buildToolsEffectiveRequestKey,
   refreshVisibleToolsEffectiveForCurrentSession,
   resetToolsEffectiveState,
+  setDefaultAgent,
   type AgentsPanel,
   type AgentsState,
 } from "../../lib/agents/index.ts";
@@ -265,6 +266,12 @@ export class AgentsPage extends LitElement implements AgentsState {
   private ensureInitialData() {
     if (!this.connected || !this.client || !this.routeDataInitialized) {
       return;
+    }
+    if (
+      !this.context.runtimeConfig.state.configSnapshot &&
+      !this.context.runtimeConfig.state.configLoading
+    ) {
+      void this.context.runtimeConfig.ensureLoaded();
     }
     if (!this.agentsList && !this.agentsLoading) {
       void this.loadAgentsAndCommit();
@@ -726,12 +733,12 @@ export class AgentsPage extends LitElement implements AgentsState {
             }
           },
           onSetDefault: (agentId) => {
-            const hadPendingConfigDraft = this.context.runtimeConfig.state.configFormDirty;
-            if (this.context.runtimeConfig.stageDefaultAgent(agentId)) {
-              if (!hadPendingConfigDraft && this.context.runtimeConfig.state.configFormDirty) {
-                this.saveAgentConfig();
-              }
-            }
+            void (async () => {
+              await this.context.runtimeConfig.ensureLoaded();
+              await setDefaultAgent(this.context.runtimeConfig, agentId, () =>
+                this.context.agents.refreshList(),
+              );
+            })();
           },
         }),
         "agents",

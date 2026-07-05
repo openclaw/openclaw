@@ -94,7 +94,8 @@ struct OnboardingView: View {
     @State var gatewayDiscovery: GatewayDiscoveryModel
     @State var onboardingChatModel: OpenClawChatViewModel
     @State var onboardingSkillsModel = SkillsSettingsModel()
-    @State var onboardingWizard = OnboardingWizardModel()
+    @State var crestodianChat = CrestodianOnboardingChatModel()
+    @State var crestodianSetupComplete = false
     @State var didLoadOnboardingSkills = false
     @State var localGatewayProbe: LocalGatewayProbe?
     @State var defaultsToLocalGateway: Bool
@@ -105,10 +106,12 @@ struct OnboardingView: View {
     static let windowHeight: CGFloat = 752 // ~+10% to fit full onboarding content
 
     let pageWidth: CGFloat = Self.windowWidth
-    let contentHeight: CGFloat = 460
+    // Sized so the permissions page fits all capabilities without scrolling:
+    // 145 (icon header) + 535 + ~60 (nav bar) stays inside windowHeight 752.
+    let contentHeight: CGFloat = 535
     let connectionPageIndex = 1
     let cliPageIndex = 2
-    let wizardPageIndex = 3
+    let crestodianPageIndex = 3
     let onboardingChatPageIndex = 8
 
     let permissionsPageIndex = 5
@@ -164,20 +167,22 @@ struct OnboardingView: View {
         self.currentPage == self.pageCount - 1 ? "Finish" : "Next"
     }
 
-    var wizardPageOrderIndex: Int? {
-        self.pageOrder.firstIndex(of: self.wizardPageIndex)
-    }
-
-    var isWizardBlocking: Bool {
-        self.activePageIndex == self.wizardPageIndex && !self.onboardingWizard.isComplete
-    }
-
     var isCLIBlocking: Bool {
         self.activePageIndex == self.cliPageIndex && !self.cliInstalled
     }
 
+    /// Local onboarding must not finish with nothing configured: the Crestodian
+    /// page blocks Next until setup authored the config (the conversation's
+    /// "yes"), mirroring the old wizard-completion gate. "Configure later" on
+    /// the connection page remains the explicit skip path.
+    var isCrestodianBlocking: Bool {
+        self.activePageIndex == self.crestodianPageIndex &&
+            self.state.connectionMode == .local &&
+            !self.crestodianSetupComplete
+    }
+
     var canAdvance: Bool {
-        !self.isCLIBlocking && !self.isWizardBlocking
+        !self.isCLIBlocking && !self.isCrestodianBlocking
     }
 
     struct LocalGatewayProbe: Equatable {

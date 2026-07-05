@@ -892,6 +892,7 @@ describe("test-projects args", () => {
         includePatterns: [
           "src/scripts/docs-link-audit.test.ts",
           "src/scripts/sync-plugin-versions.test.ts",
+          "test/e2e/qa-lab/runtime/gateway-mcp-real-transports.test.ts",
           "test/helpers/temp-dir.test.ts",
           "test/scripts/android-pin-version.test.ts",
           "test/scripts/bench-cli-startup.test.ts",
@@ -993,6 +994,12 @@ describe("test-projects args", () => {
           "src/agents/sessions/tools/find.fd.test.ts",
           "src/agents/sessions/tools/read.test.ts",
         ],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.plugins.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/plugins/git-install.test.ts"],
         watchMode: false,
       },
       {

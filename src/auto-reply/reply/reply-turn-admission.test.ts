@@ -431,6 +431,7 @@ describe("reply turn admission", () => {
   });
 
   it("waits for visible turns and reuses the active session id", async () => {
+    const waitChanges: boolean[] = [];
     const active = createReplyOperation({
       sessionKey: "agent:main:telegram:topic:42",
       sessionId: "active-session",
@@ -443,6 +444,7 @@ describe("reply turn admission", () => {
       sessionId: "new-session",
       kind: "visible",
       resetTriggered: false,
+      onFollowupAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
     });
 
     let settled = false;
@@ -453,9 +455,11 @@ describe("reply turn admission", () => {
       setImmediate(resolve);
     });
     expect(settled).toBe(false);
+    expect(waitChanges).toEqual([]);
 
     active.complete();
     const result = await admitted;
+    expect(waitChanges).toEqual([]);
 
     expect(result.status).toBe("owned");
     if (result.status === "owned") {
@@ -533,6 +537,7 @@ describe("reply turn admission", () => {
   });
 
   it("keeps an already-waiting follow-up behind the delivery barrier", async () => {
+    const waitChanges: boolean[] = [];
     const active = createReplyOperation({
       sessionKey: "agent:main:discord:channel:42",
       sessionId: "active-session",
@@ -547,6 +552,7 @@ describe("reply turn admission", () => {
       sessionId: "queued-session",
       kind: "queued_followup",
       resetTriggered: false,
+      onFollowupAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
     });
     let settled = false;
     void admitted.then(() => {
@@ -558,9 +564,13 @@ describe("reply turn admission", () => {
     await Promise.resolve();
 
     expect(settled).toBe(false);
+    await vi.waitFor(() => {
+      expect(waitChanges).toEqual([true]);
+    });
 
     releaseBarrier();
     const result = await admitted;
+    expect(waitChanges).toEqual([true, false]);
     expect(result.status).toBe("owned");
     if (result.status === "owned") {
       result.operation.complete();

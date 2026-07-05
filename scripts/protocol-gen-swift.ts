@@ -42,6 +42,7 @@ const STRICT_LITERAL_STRUCTS = new Set([
 ]);
 
 const DEFAULTED_OPTIONAL_INIT_PARAM_ENTRIES: readonly [string, readonly string[]][] = [
+  ["CrestodianChatResult", ["sensitive"]],
   ["SendParams", ["buffer", "filename", "contentType"]],
   ["SessionOperationEvent", ["agentId"]],
   ["SessionsCompactionListParams", ["agentId"]],
@@ -64,7 +65,7 @@ const DEFAULTED_OPTIONAL_INIT_PARAM_ENTRIES: readonly [string, readonly string[]
   ["SessionsUsageParams", ["agentId", "agentScope"]],
   ["ChatHistoryParams", ["agentId", "offset"]],
   ["ChatSendParams", ["agentId"]],
-  ["ChatAbortParams", ["agentId"]],
+  ["ChatAbortParams", ["agentId", "preserveSideRuns"]],
   ["ChatInjectParams", ["agentId"]],
   ["ChatDeltaEvent", ["agentId"]],
   ["ChatFinalEvent", ["agentId"]],
@@ -73,7 +74,7 @@ const DEFAULTED_OPTIONAL_INIT_PARAM_ENTRIES: readonly [string, readonly string[]
   ["ArtifactsListParams", ["agentId"]],
   ["ArtifactsGetParams", ["agentId"]],
   ["ArtifactsDownloadParams", ["agentId"]],
-  ["ChatAbortParams", ["agentId"]],
+  ["ChatAbortParams", ["agentId", "preserveSideRuns"]],
   ["ChatAbortedEvent", ["agentId"]],
   ["ChatDeltaEvent", ["agentId"]],
   ["ChatErrorEvent", ["agentId"]],

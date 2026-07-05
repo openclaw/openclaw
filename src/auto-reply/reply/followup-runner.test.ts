@@ -618,6 +618,32 @@ function createQueuedRun(
 }
 
 describe("createFollowupRunner reply-lane admission", () => {
+  it("notifies queued owners after admission and before model execution", async () => {
+    const events: string[] = [];
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      events.push("run");
+      return { payloads: [], meta: {} };
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        queuedLifecycle: {
+          onAdmitted: () => events.push("admitted"),
+          onComplete: () => events.push("complete"),
+        },
+        run: { provider: "anthropic", model: "claude" },
+      }),
+    );
+
+    expect(events).toEqual(["admitted", "run", "complete"]);
+  });
+
   it("passes prepared media user turns to embedded runtime dispatch", async () => {
     const preparedUserTurnMessage = {
       role: "user",
@@ -706,6 +732,50 @@ describe("createFollowupRunner reply-lane admission", () => {
     const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     expect(call.sessionId).toBe("post-compact-session");
     expect(call.sessionFile).toBe("/tmp/post-compact.jsonl");
+  });
+
+  it("marks only the delivery-dependent follow-up admission wait", async () => {
+    const waitChanges: boolean[] = [];
+    const active = createReplyOperationForTest({
+      sessionKey: "main",
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    let releaseBarrier = () => {};
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    const pending = runner(
+      createQueuedRun({
+        onFollowupAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
+        run: {
+          sessionId: "queued-session",
+          sessionKey: "main",
+          provider: "anthropic",
+          model: "claude",
+        },
+      }),
+    );
+    await Promise.resolve();
+    expect(waitChanges).toEqual([]);
+
+    active.completeWithAfterClearBarrier(barrier);
+    await vi.waitFor(() => {
+      expect(waitChanges).toEqual([true]);
+    });
+
+    releaseBarrier();
+    await pending;
+    expect(waitChanges).toEqual([true, false]);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
   it("uses an admission session hint while refreshing the queued session file", async () => {
@@ -888,6 +958,7 @@ describe("createFollowupRunner reply-lane admission", () => {
 
   it("preserves non-compaction preflight failures for queued followup runs", async () => {
     runPreflightCompactionIfNeededMock.mockRejectedValueOnce(new Error("session load failed"));
+    const onComplete = vi.fn();
     const runner = createFollowupRunner({
       typing: createMockTypingController(),
       typingMode: "instant",
@@ -906,12 +977,14 @@ describe("createFollowupRunner reply-lane admission", () => {
             model: "claude",
             sessionKey: "main",
           },
+          queuedLifecycle: { onComplete },
         }),
       ),
     ).rejects.toThrow("session load failed");
 
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
   });
 });
 
@@ -1158,6 +1231,73 @@ describe("createFollowupRunner runtime config", () => {
       suppressNextUserMessagePersistence: false,
     });
     expect(call.onUserMessagePersisted).toEqual(expect.any(Function));
+  });
+
+  it("bridges queued CLI thinking events into reasoning stream progress", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const onReasoningStream = vi.fn<
+      NonNullable<import("../types.js").GetReplyOptions["onReasoningStream"]>
+    >(async () => {});
+    runCliAgentMock.mockImplementationOnce((params: { runId?: string }) => {
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId ?? "run-cli-followup-reasoning",
+        stream: "thinking",
+        data: { text: "checking files", isReasoningSnapshot: true },
+      });
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId ?? "run-cli-followup-reasoning",
+        stream: "thinking",
+        data: { text: "checking tests" },
+      });
+      return { payloads: [], meta: { agentMeta: { provider: "claude-cli" } } };
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onReasoningStream },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "user_request",
+        originatingChannel: "telegram",
+        run: {
+          config: runtimeConfig,
+          messageProvider: "telegram",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+
+    expect(onReasoningStream.mock.calls.map((call) => call[0])).toEqual([
+      {
+        text: "checking files",
+        isReasoningSnapshot: true,
+        requiresReasoningProgressOptIn: true,
+      },
+      {
+        text: "checking tests",
+        requiresReasoningProgressOptIn: true,
+      },
+    ]);
   });
 
   it("reuses CLI session bindings for queued room-event followups", async () => {
@@ -1472,6 +1612,121 @@ describe("createFollowupRunner runtime config", () => {
       expect.objectContaining({
         payload: { text: "persisted CLI followup" },
         mirror: false,
+      }),
+    );
+  });
+
+  it("does not deliver durable reasoning for a queued CLI followup when reasoning payloads are disabled", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "internal reasoning", isReasoning: true }, { text: "final answer" }],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+      opts: { reasoningPayloadsEnabled: false },
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "telegram",
+        originatingTo: "telegram:-100123",
+        run: {
+          config: runtimeConfig,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+        },
+      }),
+    );
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { text: "final answer" },
+      }),
+    );
+    expect(
+      routeReplyMock.mock.calls.some((call) => {
+        const payload = requireRecord(
+          requireRecord(call[0], "route reply params").payload,
+          "payload",
+        );
+        return payload.isReasoning === true;
+      }),
+    ).toBe(false);
+  });
+
+  // Resolver-level gate, not an end-to-end delivery proof: route-reply.js is
+  // mocked above (routeReplyMock), but resolveFollowupDeliveryPayloads is the
+  // REAL implementation, so this still proves the gate itself fires correctly
+  // for a queued CLI followup — the runner only forwards a reasoning payload
+  // to routing when opts.reasoningPayloadsEnabled is true. Whether the
+  // real routeReply then delivers it is a separate, pre-existing question:
+  // routeReply unconditionally suppresses isReasoning payloads on the
+  // origin-routing branch (route-reply.ts:131, shouldSuppressReasoningPayload,
+  // predates this change, shared with the embedded runner) and that
+  // suppression is intentionally out of scope here — see route-reply.test.ts.
+  it("passes the durable reasoning payload through to routing for a queued CLI followup when reasoning payloads are enabled", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "internal reasoning", isReasoning: true }, { text: "final answer" }],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+      opts: { reasoningPayloadsEnabled: true },
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "telegram",
+        originatingTo: "telegram:-100123",
+        run: {
+          config: runtimeConfig,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+        },
+      }),
+    );
+
+    // Proves the resolver kept the reasoning payload (it survived
+    // resolveFollowupDeliveryPayloads) and the runner routed it — not that a
+    // real channel received it (routeReply is mocked; see comment above).
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { text: "internal reasoning", isReasoning: true },
+      }),
+    );
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { text: "final answer" },
       }),
     );
   });
