@@ -74,9 +74,10 @@ Where does the **Gateway** run?
   ambiguous transport failure, restart the setup conversation instead of
   replaying the previous turn.
 
-  Remote and Configure Later flows skip this local setup conversation.
+Remote and Configure Later flows skip this local setup conversation.
 </Step>
 <Step title="Permissions">
+
 <Frame caption="Choose what permissions do you want to give OpenClaw">
 <img src="/assets/macos-onboarding/05-permissions.png" alt="" />
 </Frame>

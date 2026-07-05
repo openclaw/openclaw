@@ -38,11 +38,10 @@ export async function buildOnboardingWelcome(params: {
     normalizeSecretInputString(auth?.token) !== undefined ||
     isSecretRef(auth?.password) ||
     normalizeSecretInputString(auth?.password) !== undefined;
-  const hasAuthoredSetup = Boolean(
+  const hasAuthoredSetup =
     (authoredConfig?.wizard && Object.keys(authoredConfig.wizard).length > 0) ||
     hasAuthMode ||
-    hasAuthSecret,
-  );
+    hasAuthSecret;
   if (hasAuthoredSetup && overview.defaultModel) {
     const welcome = formatCrestodianOnboardingWelcome(overview);
     params.engine.noteAssistantMessage(welcome);

@@ -12,13 +12,13 @@ optional chat channels — they just differ in how you interact with the setup.
 
 ## Which path should I use?
 
-|                | CLI onboarding                         | macOS app onboarding      |
-| -------------- | -------------------------------------- | ------------------------- |
-| **Platforms**  | macOS, Linux, Windows (native or WSL2) | macOS only                |
+|                | CLI onboarding                         | macOS app onboarding        |
+| -------------- | -------------------------------------- | --------------------------- |
+| **Platforms**  | macOS, Linux, Windows (native or WSL2) | macOS only                  |
 | **Interface**  | Terminal wizard                        | Guided UI + Crestodian chat |
-| **Best for**   | Servers, headless, full control        | Desktop Mac, visual setup |
-| **Automation** | `--non-interactive` for scripts        | Manual only               |
-| **Command**    | `openclaw onboard`                     | Launch the app            |
+| **Best for**   | Servers, headless, full control        | Desktop Mac, visual setup   |
+| **Automation** | `--non-interactive` for scripts        | Manual only                 |
+| **Command**    | `openclaw onboard`                     | Launch the app              |
 
 Most users should start with **CLI onboarding** — it works everywhere and gives
 you the most control.
