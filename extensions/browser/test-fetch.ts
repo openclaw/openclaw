@@ -18,7 +18,7 @@ type MockReadableBody = {
 };
 
 type MockResponseRecord = Record<string, unknown> & {
-  arrayBuffer?: () => Promise<ArrayBuffer> | ArrayBuffer;
+  arrayBuffer?: () => Promise<ArrayBuffer>;
   body?: MockReadableBody | null;
   json?: () => Promise<unknown> | unknown;
   text?: () => Promise<string> | string;
