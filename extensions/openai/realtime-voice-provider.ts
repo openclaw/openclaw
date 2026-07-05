@@ -192,19 +192,6 @@ type RealtimeAzureDeploymentSessionUpdate = {
   };
 };
 
-type RealtimeAutoResponseSessionUpdate =
-  | {
-      type: "session.update";
-      session: {
-        type: "realtime";
-        audio: { input: { turn_detection: RealtimeTurnDetectionConfig } };
-      };
-    }
-  | {
-      type: "session.update";
-      session: { turn_detection: RealtimeTurnDetectionConfig };
-    };
-
 type OpenAIRealtimeAudioFormatConfig =
   | {
       type: "audio/pcm";
@@ -849,8 +836,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   private buildGaSessionUpdate(): RealtimeGaSessionUpdate {
     const cfg = this.config;
-    const autoRespondToAudio = cfg.autoRespondToAudio ?? true;
-    const interruptResponseOnInputAudio = cfg.interruptResponseOnInputAudio ?? autoRespondToAudio;
     return {
       type: "session.update",
       session: {
@@ -863,14 +848,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
             format: this.resolveRealtimeAudioFormat(),
             noise_reduction: null,
             transcription: { model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL },
-            turn_detection: {
-              type: "server_vad",
-              threshold: cfg.vadThreshold ?? 0.5,
-              prefix_padding_ms: cfg.prefixPaddingMs ?? 300,
-              silence_duration_ms: cfg.silenceDurationMs ?? 500,
-              create_response: autoRespondToAudio,
-              interrupt_response: interruptResponseOnInputAudio,
-            },
+            turn_detection: this.buildTurnDetectionConfig({ includeInterruptResponse: true }),
           },
           output: {
             format: this.resolveRealtimeAudioFormat(),
@@ -904,13 +882,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         input_audio_format: format,
         output_audio_format: format,
         input_audio_transcription: { model: "whisper-1" },
-        turn_detection: {
-          type: "server_vad",
-          threshold: cfg.vadThreshold ?? 0.5,
-          prefix_padding_ms: cfg.prefixPaddingMs ?? 300,
-          silence_duration_ms: cfg.silenceDurationMs ?? 500,
-          create_response: cfg.autoRespondToAudio ?? true,
-        },
+        turn_detection: this.buildTurnDetectionConfig(),
         temperature: cfg.temperature ?? 0.8,
         ...(cfg.tools && cfg.tools.length > 0
           ? {
@@ -922,31 +894,39 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     };
   }
 
+  private buildTurnDetectionConfig(options?: {
+    createResponse?: boolean;
+    includeInterruptResponse?: boolean;
+  }): RealtimeTurnDetectionConfig {
+    const configuredAutoResponse = this.config.autoRespondToAudio ?? true;
+    return {
+      type: "server_vad",
+      threshold: this.config.vadThreshold ?? 0.5,
+      prefix_padding_ms: this.config.prefixPaddingMs ?? 300,
+      silence_duration_ms: this.config.silenceDurationMs ?? 500,
+      create_response: options?.createResponse ?? configuredAutoResponse,
+      ...(options?.includeInterruptResponse
+        ? {
+            interrupt_response: this.config.interruptResponseOnInputAudio ?? configuredAutoResponse,
+          }
+        : {}),
+    };
+  }
+
   private sendAutoResponseSessionUpdate(createResponse: boolean): void {
-    let event: RealtimeAutoResponseSessionUpdate;
-    if (this.usesAzureDeploymentRealtimeApi()) {
-      const turnDetection = this.buildAzureDeploymentSessionUpdate().session.turn_detection;
-      event = {
-        type: "session.update",
-        session: {
-          turn_detection: { ...turnDetection, create_response: createResponse },
-        },
-      };
-    } else {
-      const turnDetection = this.buildGaSessionUpdate().session.audio.input.turn_detection;
-      event = {
-        type: "session.update",
-        session: {
-          type: "realtime",
-          audio: {
-            input: {
-              turn_detection: { ...turnDetection, create_response: createResponse },
-            },
-          },
-        },
-      };
+    const azureDeployment = this.usesAzureDeploymentRealtimeApi();
+    const turnDetection = this.buildTurnDetectionConfig({
+      createResponse,
+      includeInterruptResponse: !azureDeployment,
+    });
+    if (azureDeployment) {
+      this.sendEvent({ type: "session.update", session: { turn_detection: turnDetection } });
+      return;
     }
-    this.sendEvent(event);
+    this.sendEvent({
+      type: "session.update",
+      session: { type: "realtime", audio: { input: { turn_detection: turnDetection } } },
+    });
   }
 
   private resolveRealtimeAudioFormat(): OpenAIRealtimeAudioFormatConfig {
