@@ -10,7 +10,6 @@ import {
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "../src/infra/package-dist-inventory.ts";
-import { EXTENDED_STABLE_PLUGIN_COHORT_PATH } from "../src/plugins/extended-stable-plugin-cohort.ts";
 import { EXTENDED_STABLE_PLUGIN_SUPPORT_PATH } from "../src/plugins/extended-stable-plugin-support.ts";
 import {
   compareReleaseVersions as compareReleaseVersionsBase,
@@ -642,15 +641,10 @@ export function collectControlUiPackErrors(paths: Iterable<string>): string[] {
 
 export function collectExtendedStableMetadataPackErrors(
   paths: Iterable<string>,
-  packageVersion: string,
+  _packageVersion: string,
 ): string[] {
   const packedPaths = new Set(paths);
-  const required = [EXTENDED_STABLE_PLUGIN_SUPPORT_PATH];
-  const parsed = parseReleaseVersion(packageVersion);
-  if (parsed?.channel === "stable" && parsed.correctionNumber === undefined && parsed.patch >= 33) {
-    required.push(EXTENDED_STABLE_PLUGIN_COHORT_PATH);
-  }
-  return required
+  return [EXTENDED_STABLE_PLUGIN_SUPPORT_PATH]
     .filter((path) => !packedPaths.has(path))
     .map((path) => `npm package is missing required extended-stable metadata "${path}".`);
 }

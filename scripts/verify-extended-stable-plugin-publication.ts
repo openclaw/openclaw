@@ -8,7 +8,11 @@ import {
   assertExtendedStableReleaseVersion,
   sha256File,
 } from "./lib/extended-stable-plugin-acceptance.js";
-import { loadExtendedStablePluginSupport } from "./lib/extended-stable-plugin-support.js";
+import {
+  collectExtendedStablePublishablePluginPackages,
+  collectExtendedStableSnapshotPluginPackages,
+  deriveExtendedStablePluginCandidateTag,
+} from "./lib/plugin-npm-release.js";
 
 type Args = {
   result: string;
@@ -115,8 +119,17 @@ export function verifyPublication(args: Args) {
   if (!isRecord(raw)) {
     throw new Error("Publication result must be an object.");
   }
-  assertKeys(raw, ["schemaVersion", "sourceSha", "workflow", "plugins"], "publication result");
-  if (raw.schemaVersion !== 1 || raw.sourceSha !== args.sourceSha || !Array.isArray(raw.plugins)) {
+  assertKeys(
+    raw,
+    ["schemaVersion", "sourceSha", "workflow", "plugins", "snapshotReadbacks"],
+    "publication result",
+  );
+  if (
+    raw.schemaVersion !== 2 ||
+    raw.sourceSha !== args.sourceSha ||
+    !Array.isArray(raw.plugins) ||
+    !Array.isArray(raw.snapshotReadbacks)
+  ) {
     throw new Error("Publication result version, source SHA, or plugins is invalid.");
   }
   if (!isRecord(raw.workflow)) {
@@ -146,8 +159,12 @@ export function verifyPublication(args: Args) {
     throw new Error("Publication result workflow identity does not match its Actions run.");
   }
 
-  const support = loadExtendedStablePluginSupport(args.root);
-  const expectedPackageNames = support.plugins.map((plugin) => plugin.packageName);
+  const selectedPackages = collectExtendedStablePublishablePluginPackages(args.root);
+  if (selectedPackages.some((plugin) => plugin.version !== releaseVersion)) {
+    throw new Error("Publication release version must match the packaged root version.");
+  }
+  const selectedByName = new Map(selectedPackages.map((plugin) => [plugin.packageName, plugin]));
+  const expectedPackageNames = selectedPackages.map((plugin) => plugin.packageName);
   const entries = raw.plugins.map((value, index) => {
     if (!isRecord(value)) {
       throw new Error(`publication plugins[${index}] must be an object.`);
@@ -158,12 +175,14 @@ export function verifyPublication(args: Args) {
       `publication plugins[${index}]`,
     );
     const packageName = string(value.packageName, `publication plugins[${index}].packageName`);
-    const plugin = support.plugins.find((candidate) => candidate.packageName === packageName);
+    const plugin = selectedByName.get(packageName);
     if (!plugin) {
-      throw new Error(`Publication contains uncovered package ${packageName}.`);
+      throw new Error(`Publication contains unexpected package ${packageName}.`);
     }
-    const [year, month, patch] = releaseVersion.split(".");
-    const candidateTag = `extended-stable-plugin-candidate-${plugin.pluginId}-${year}-${month}-${patch}`;
+    const candidateTag = deriveExtendedStablePluginCandidateTag({
+      pluginId: plugin.extensionId,
+      version: releaseVersion,
+    });
     const integrity = npmIntegrity(`${packageName}@${releaseVersion}`);
     const candidateVersion = npmVersion(`${packageName}@${candidateTag}`);
     if (
@@ -182,7 +201,39 @@ export function verifyPublication(args: Args) {
     JSON.stringify(expectedPackageNames)
   ) {
     throw new Error(
-      "Publication result must contain exactly the covered packages in package-name order.",
+      "Publication result must contain exactly the patch-derived packages in package-name order.",
+    );
+  }
+  const snapshotVersion = `${releaseVersion.split(".").slice(0, 2).join(".")}.33`;
+  const expectedSnapshotNames = collectExtendedStableSnapshotPluginPackages(args.root).map(
+    (plugin) => plugin.packageName,
+  );
+  const snapshotReadbacks = raw.snapshotReadbacks.map((value, index) => {
+    if (!isRecord(value)) {
+      throw new Error(`snapshot readbacks[${index}] must be an object.`);
+    }
+    assertKeys(
+      value,
+      ["packageName", "version", "npmIntegrity", "installVerified"],
+      `snapshot readbacks[${index}]`,
+    );
+    const packageName = string(value.packageName, `snapshot readbacks[${index}].packageName`);
+    const integrity = npmIntegrity(`${packageName}@${snapshotVersion}`);
+    if (
+      value.version !== snapshotVersion ||
+      value.npmIntegrity !== integrity ||
+      value.installVerified !== true
+    ) {
+      throw new Error(`Snapshot readback is invalid for ${packageName}.`);
+    }
+    return { packageName, version: snapshotVersion, npmIntegrity: integrity };
+  });
+  if (
+    JSON.stringify(snapshotReadbacks.map((entry) => entry.packageName)) !==
+    JSON.stringify(expectedSnapshotNames)
+  ) {
+    throw new Error(
+      "Publication result must contain exactly the snapshot-only packages in package-name order.",
     );
   }
   return {
@@ -192,6 +243,7 @@ export function verifyPublication(args: Args) {
     publicationArtifactDigest: args.artifactDigest,
     publicationResultSha256: sha256File(args.result),
     plugins: entries,
+    snapshotReadbacks,
   };
 }
 

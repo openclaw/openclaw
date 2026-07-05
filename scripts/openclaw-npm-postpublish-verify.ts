@@ -25,7 +25,6 @@ import {
 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
-import { loadExtendedStablePluginCohort } from "../src/plugins/extended-stable-plugin-cohort.ts";
 import { loadExtendedStablePluginSupport } from "../src/plugins/extended-stable-plugin-support.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 import { readBoundedResponseText } from "./lib/bounded-response.ts";
@@ -431,27 +430,7 @@ export function collectInstalledExtendedStableMetadataErrors(params: {
       `installed package extended-stable support metadata is invalid: ${formatErrorMessage(error)}`,
     ];
   }
-  const release = parseReleaseVersion(params.expectedVersion);
-  if (
-    release?.channel !== "stable" ||
-    release.correctionNumber !== undefined ||
-    release.patch < 33
-  ) {
-    return [];
-  }
-  try {
-    const cohort = loadExtendedStablePluginCohort(params.packageRoot);
-    const expectedLine = `${release.year}.${release.month}`;
-    return cohort.releaseLine === expectedLine
-      ? []
-      : [
-          `installed package cohort release line is ${cohort.releaseLine}; expected ${expectedLine}.`,
-        ];
-  } catch (error) {
-    return [
-      `installed package extended-stable cohort metadata is invalid: ${formatErrorMessage(error)}`,
-    ];
-  }
+  return [];
 }
 
 function collectInstalledBundledExtensionIds(packageRoot: string): Set<string> {

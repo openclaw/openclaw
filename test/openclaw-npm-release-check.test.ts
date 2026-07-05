@@ -556,7 +556,7 @@ describe("collectControlUiPackErrors", () => {
 });
 
 describe("collectExtendedStableMetadataPackErrors", () => {
-  it("requires support metadata always and cohort metadata from patch 33", () => {
+  it("requires only support metadata", () => {
     expect(collectExtendedStableMetadataPackErrors([], "2026.6.21")).toEqual([
       'npm package is missing required extended-stable metadata "release/extended-stable-plugin-support.json".',
     ]);
@@ -565,9 +565,7 @@ describe("collectExtendedStableMetadataPackErrors", () => {
         ["release/extended-stable-plugin-support.json"],
         "2026.6.33",
       ),
-    ).toEqual([
-      'npm package is missing required extended-stable metadata "release/extended-stable-plugin-cohort.json".',
-    ]);
+    ).toEqual([]);
   });
 });
 

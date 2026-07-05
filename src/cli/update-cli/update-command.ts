@@ -703,7 +703,7 @@ export function hasBlockingExtendedStablePluginTargetFailure(
     (outcome) =>
       outcome.status === "error" &&
       (outcome.code === "exact_package_unavailable" ||
-        outcome.code === "cohort_package_unavailable"),
+        outcome.code === "snapshot_package_unavailable"),
   );
 }
 
@@ -786,7 +786,7 @@ async function previewExtendedStablePluginMetadata(params: {
   packageSpec: string;
   targetVersion: string;
   timeoutMs: number;
-}): Promise<{ baselineVersion: string; coveredPlugins: number; cohortPlugins: number }> {
+}): Promise<{ snapshotVersion: string; coveredPlugins: number; snapshotPlugins: number }> {
   return await withTempDir("openclaw-extended-stable-preview-", async (tmpDir) => {
     const packed = await packNpmSpecToArchive({
       spec: params.packageSpec,
@@ -808,9 +808,9 @@ async function previewExtendedStablePluginMetadata(params: {
         });
         return {
           ok: true as const,
-          baselineVersion: context.cohort.baselineVersion,
+          snapshotVersion: context.snapshotVersion,
           coveredPlugins: context.support.plugins.length,
-          cohortPlugins: context.cohortPackageNames.size,
+          snapshotPlugins: context.snapshotPackageNames.size,
         };
       },
     });
@@ -818,9 +818,9 @@ async function previewExtendedStablePluginMetadata(params: {
       throw new Error(inspected.error);
     }
     return {
-      baselineVersion: inspected.baselineVersion,
+      snapshotVersion: inspected.snapshotVersion,
       coveredPlugins: inspected.coveredPlugins,
-      cohortPlugins: inspected.cohortPlugins,
+      snapshotPlugins: inspected.snapshotPlugins,
     };
   });
 }
@@ -3844,7 +3844,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
 
   if (opts.dryRun) {
     let extendedStablePluginPreview:
-      | { baselineVersion: string; coveredPlugins: number; cohortPlugins: number }
+      | { snapshotVersion: string; coveredPlugins: number; snapshotPlugins: number }
       | undefined;
     if (channel === "extended-stable") {
       if (!packageInstallSpec || !targetVersion) {
@@ -3919,7 +3919,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     }
     if (extendedStablePluginPreview) {
       notes.push(
-        `Extended-stable plugin plan: ${extendedStablePluginPreview.coveredPlugins} covered plugins target ${targetVersion}; ${extendedStablePluginPreview.cohortPlugins} cohort plugins target ${extendedStablePluginPreview.baselineVersion}.`,
+        `Extended-stable plugin plan: ${extendedStablePluginPreview.coveredPlugins} covered plugins target ${targetVersion}; ${extendedStablePluginPreview.snapshotPlugins} snapshot plugins target ${extendedStablePluginPreview.snapshotVersion}.`,
       );
     }
 

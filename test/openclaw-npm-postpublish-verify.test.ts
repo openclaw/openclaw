@@ -449,29 +449,13 @@ describe("collectInstalledPackageErrors", () => {
 });
 
 describe("collectInstalledExtendedStableMetadataErrors", () => {
-  it("requires a valid packaged cohort only for patch 33 and later", () => {
-    const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-postpublish-cohort-"));
+  it("requires only valid packaged support metadata", () => {
+    const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-postpublish-support-"));
     try {
       mkdirSync(join(packageRoot, "release"), { recursive: true });
       writeFileSync(
         join(packageRoot, "release/extended-stable-plugin-support.json"),
         readFileSync("release/extended-stable-plugin-support.json", "utf8"),
-      );
-      expect(
-        collectInstalledExtendedStableMetadataErrors({
-          expectedVersion: "2026.6.21",
-          packageRoot,
-        }),
-      ).toEqual([]);
-      expect(
-        collectInstalledExtendedStableMetadataErrors({
-          expectedVersion: "2026.6.33",
-          packageRoot,
-        }),
-      ).toEqual([expect.stringContaining("cohort metadata is invalid")]);
-      writeFileSync(
-        join(packageRoot, "release/extended-stable-plugin-cohort.json"),
-        '{"schemaVersion":1,"releaseLine":"2026.6","baselineVersion":"2026.6.21"}\n',
       );
       expect(
         collectInstalledExtendedStableMetadataErrors({

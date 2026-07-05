@@ -7,7 +7,6 @@ import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const SCRIPT = "scripts/release-preflight.mjs";
 const CHECK_COMMANDS = [
-  "extended-stable:cohort:check",
   "deps:root-ownership:check",
   "deps:shrinkwrap:check",
   "plugins:sync:check",
@@ -20,7 +19,6 @@ const CHECK_COMMANDS = [
   "plugin-sdk:surface:check",
 ];
 const FIX_COMMANDS = [
-  "extended-stable:cohort:gen",
   "plugins:sync",
   "deps:shrinkwrap:changed:generate",
   "plugins:inventory:gen",
@@ -120,22 +118,16 @@ describe("scripts/release-preflight.mjs", () => {
     });
 
     expect(result.status).toBe(1);
-    expect(readPnpmLog(fakePnpm.logPath)).toEqual(FIX_COMMANDS.slice(0, 3));
+    expect(readPnpmLog(fakePnpm.logPath)).toEqual(FIX_COMMANDS.slice(0, 2));
     expect(result.stderr).toContain(
       "- npm shrinkwraps: exit 7 (pnpm deps:shrinkwrap:changed:generate)",
     );
   });
 
-  it("passes the explicit cohort evidence directory to generation and validation", () => {
-    const fakePnpm = makeFakePnpm();
-    const result = runPreflight(
-      ["--check", "--cohort-evidence-dir", "/tmp/cohort-evidence"],
-      fakePnpm,
-    );
+  it("rejects the removed cohort evidence input", () => {
+    const result = runPreflight(["--check", "--cohort-evidence-dir", "/tmp/cohort-evidence"]);
 
-    expect(result.status).toBe(0);
-    expect(readPnpmLog(fakePnpm.logPath)[0]).toBe(
-      "extended-stable:cohort:check --cohort-evidence-dir /tmp/cohort-evidence",
-    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Unknown release preflight argument: --cohort-evidence-dir");
   });
 });

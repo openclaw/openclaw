@@ -4,10 +4,6 @@ import { join } from "node:path";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import {
-  loadExtendedStablePluginCohort,
-  type ExtendedStablePluginCohort,
-} from "./extended-stable-plugin-cohort.js";
-import {
   loadExtendedStablePluginSupport,
   type ExtendedStablePluginSupport,
 } from "./extended-stable-plugin-support.js";
@@ -19,39 +15,46 @@ import {
 
 export type ExtendedStablePluginTargetCode =
   | "extended_stable_target"
-  | "monthly_cohort_target"
+  | "monthly_snapshot_target"
   | "user_pin_preserved";
 
 type ExtendedStablePluginTargetDecision =
   | { kind: "covered"; code: "extended_stable_target"; installSpec: string; recordSpec: string }
-  | { kind: "cohort"; code: "monthly_cohort_target"; installSpec: string; recordSpec: string }
+  | { kind: "snapshot"; code: "monthly_snapshot_target"; installSpec: string; recordSpec: string }
   | { kind: "preserved"; code: "user_pin_preserved"; installSpec: string; recordSpec: string }
   | { kind: "unchanged"; installSpec: string; recordSpec: string };
 
 export type ExtendedStablePluginTargetContext = {
   installedCoreVersion: string;
+  snapshotVersion: string;
   support: ExtendedStablePluginSupport;
-  cohort: ExtendedStablePluginCohort;
-  cohortPackageNames: ReadonlySet<string>;
+  snapshotPackageNames: ReadonlySet<string>;
 };
+
+const FINAL_CALENDAR_VERSION_RE = /^(?<year>\d{4})\.(?<month>[1-9]|1[0-2])\.(?<patch>0|[1-9]\d*)$/u;
+
+export function resolveExtendedStableSnapshotVersion(coreVersion: string): string {
+  const match = FINAL_CALENDAR_VERSION_RE.exec(coreVersion)?.groups;
+  const patch = match ? Number.parseInt(match.patch, 10) : Number.NaN;
+  if (!match || !Number.isSafeInteger(patch) || patch < 33) {
+    throw new Error(
+      `extended-stable core version ${coreVersion} must be a final YYYY.M.PATCH with PATCH >= 33`,
+    );
+  }
+  return `${match.year}.${match.month}.33`;
+}
 
 export function loadExtendedStablePluginTargetContext(params: {
   rootDir: string;
   installedCoreVersion: string;
 }): ExtendedStablePluginTargetContext {
   const support = loadExtendedStablePluginSupport(params.rootDir);
-  const cohort = loadExtendedStablePluginCohort(params.rootDir);
-  const releaseLine = params.installedCoreVersion.split(".").slice(0, 2).join(".");
-  if (cohort.releaseLine !== releaseLine) {
-    throw new Error(
-      `cohort releaseLine ${cohort.releaseLine} does not match installed core ${params.installedCoreVersion}`,
-    );
-  }
+  const snapshotVersion = resolveExtendedStableSnapshotVersion(params.installedCoreVersion);
   return {
     installedCoreVersion: params.installedCoreVersion,
+    snapshotVersion,
     support,
-    cohort,
-    cohortPackageNames: resolveExtendedStableCohortPackageNames({ support }),
+    snapshotPackageNames: resolveExtendedStableSnapshotPackageNames({ support }),
   };
 }
 
@@ -103,7 +106,7 @@ function isDefaultIntent(spec: string): { packageName: string } | null {
   return null;
 }
 
-export function resolveExtendedStableCohortPackageNames(params: {
+export function resolveExtendedStableSnapshotPackageNames(params: {
   support: ExtendedStablePluginSupport;
   entries?: readonly OfficialExternalPluginCatalogEntry[];
 }): Set<string> {
@@ -127,9 +130,9 @@ export function resolveExtendedStablePluginTarget(params: {
   officialPackageName?: string;
   updateChannel?: UpdateChannel;
   installedCoreVersion?: string;
+  snapshotVersion?: string;
   support?: ExtendedStablePluginSupport;
-  cohort?: ExtendedStablePluginCohort;
-  cohortPackageNames?: ReadonlySet<string>;
+  snapshotPackageNames?: ReadonlySet<string>;
 }): ExtendedStablePluginTargetDecision {
   const unchanged = {
     kind: "unchanged",
@@ -159,6 +162,7 @@ export function resolveExtendedStablePluginTarget(params: {
     if (!params.installedCoreVersion) {
       throw new Error("extended-stable covered plugin targeting requires installed core version");
     }
+    resolveExtendedStableSnapshotVersion(params.installedCoreVersion);
     return {
       kind: "covered",
       code: "extended_stable_target",
@@ -166,14 +170,20 @@ export function resolveExtendedStablePluginTarget(params: {
       recordSpec: params.requestedSpec,
     };
   }
-  if (params.cohortPackageNames?.has(params.officialPackageName)) {
-    if (!params.cohort) {
-      throw new Error("extended-stable cohort plugin targeting requires cohort metadata");
+  if (params.snapshotPackageNames?.has(params.officialPackageName)) {
+    if (!params.installedCoreVersion) {
+      throw new Error("extended-stable snapshot plugin targeting requires installed core version");
+    }
+    const snapshotVersion = resolveExtendedStableSnapshotVersion(params.installedCoreVersion);
+    if (params.snapshotVersion && params.snapshotVersion !== snapshotVersion) {
+      throw new Error(
+        `extended-stable snapshot version ${params.snapshotVersion} does not match installed core ${params.installedCoreVersion}`,
+      );
     }
     return {
-      kind: "cohort",
-      code: "monthly_cohort_target",
-      installSpec: `${defaultIntent.packageName}@${params.cohort.baselineVersion}`,
+      kind: "snapshot",
+      code: "monthly_snapshot_target",
+      installSpec: `${defaultIntent.packageName}@${snapshotVersion}`,
       recordSpec: params.requestedSpec,
     };
   }

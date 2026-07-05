@@ -193,19 +193,24 @@ export function collectExtendedStablePublishablePluginPackages(
   if (
     parsedRootVersion === null ||
     parsedRootVersion.channel !== "stable" ||
-    parsedRootVersion.correctionNumber !== undefined
+    parsedRootVersion.correctionNumber !== undefined ||
+    parsedRootVersion.patch < 33
   ) {
     throw new Error(
-      `Extended-stable plugin publication requires a stable root YYYY.M.PATCH version; found "${rootVersion}".`,
+      `Extended-stable plugin publication requires a stable root YYYY.M.PATCH version at patch 33 or later; found "${rootVersion}".`,
     );
   }
 
-  const publishable = collectPublishablePluginPackages(rootDir, {
-    packageNames: manifest.plugins.map((entry) => entry.packageName),
-  });
-  const byName = new Map(publishable.map((plugin) => [plugin.packageName, plugin]));
-  return manifest.plugins.map((entry) => {
-    const plugin = byName.get(entry.packageName);
+  const coveredByName = new Map(manifest.plugins.map((entry) => [entry.packageName, entry]));
+  const publishable =
+    parsedRootVersion.patch === 33
+      ? collectPublishablePluginPackages(rootDir)
+      : collectPublishablePluginPackages(rootDir, {
+          packageNames: manifest.plugins.map((entry) => entry.packageName),
+        });
+  const publishableByName = new Map(publishable.map((plugin) => [plugin.packageName, plugin]));
+  for (const entry of manifest.plugins) {
+    const plugin = publishableByName.get(entry.packageName);
     if (
       !plugin ||
       plugin.extensionId !== entry.pluginId ||
@@ -220,17 +225,37 @@ export function collectExtendedStablePublishablePluginPackages(
         `${entry.packageName} version must equal root release version ${rootVersion}; found ${plugin.version}.`,
       );
     }
+  }
+
+  return publishable.map((plugin) => {
+    if (plugin.version !== rootVersion) {
+      throw new Error(
+        `${plugin.packageName} version must equal root release version ${rootVersion}; found ${plugin.version}.`,
+      );
+    }
     const candidateTag = deriveExtendedStablePluginCandidateTag({
-      pluginId: entry.pluginId,
+      pluginId: plugin.extensionId,
       version: rootVersion,
     });
+    const covered = coveredByName.get(plugin.packageName);
     return Object.assign({}, plugin, {
       channel: "stable",
       publishTag: candidateTag,
       candidateTag,
-      acceptanceProfile: entry.acceptanceProfile,
+      ...(covered ? { acceptanceProfile: covered.acceptanceProfile } : {}),
     });
   });
+}
+
+export function collectExtendedStableSnapshotPluginPackages(
+  rootDir = resolve("."),
+): PublishablePluginPackage[] {
+  const coveredPackageNames = new Set(
+    loadExtendedStablePluginSupport(rootDir).plugins.map((entry) => entry.packageName),
+  );
+  return collectPublishablePluginPackages(rootDir).filter(
+    (plugin) => !coveredPackageNames.has(plugin.packageName),
+  );
 }
 
 export function collectExtensionPackageJsonCandidates<

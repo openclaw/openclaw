@@ -7,17 +7,20 @@ read_when:
   - Looking for version naming and cadence
 ---
 
-OpenClaw currently exposes three user-facing update channels:
+OpenClaw exposes four user-facing update channels:
 
-- stable: the existing promoted release channel, which still resolves through npm `latest` until the separate CLI/channel milestone lands
+- stable: the existing promoted release channel, which resolves through npm `latest`
+- extended-stable: the opt-in trailing-month npm line, which resolves core through npm `extended-stable`
 - beta: prerelease tags that publish to npm `beta`
 - dev: the moving head of `main`
 
-Separately, release operators can publish immutable candidates for the trailing
-completed month's core package and the covered Codex, Discord, and Slack plugin
-packages, beginning at patch `33`. The current-month regular final line continues
-on npm `latest`; this operator-side publication split does not by itself change
-CLI update-channel resolution.
+For a foreground extended-stable update, core resolves to one verified exact
+version. Eligible covered Codex, Discord, and Slack default/latest npm installs
+target that exact core version; eligible uncovered official default/latest npm
+installs target exact same-month `YYYY.M.33`. Explicit pins, non-latest npm
+selectors, third-party packages, and non-npm sources retain their recorded
+intent. The current-month regular final line continues on npm `latest` and
+therefore remains the existing stable target.
 
 Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `alpha`), covered under [NPM workflow inputs](#npm-workflow-inputs) and [Release test boxes](#release-test-boxes).
 
@@ -35,7 +38,7 @@ Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `al
 - `latest` continues to follow the current regular/daily npm line; `beta` is the current beta install target
 - `extended-stable` means the supported trailing-month npm package, beginning at patch `33`; patch `34` and later are maintenance releases on that monthly line
 - Regular final and regular correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later
-- The dedicated monthly extended-stable path publishes core plus the covered `@openclaw/codex`, `@openclaw/discord`, and `@openclaw/slack` npm candidates. It does not publish other plugins, macOS or Windows artifacts, a GitHub Release, private-repository dist-tags, Docker images, mobile artifacts, or website downloads.
+- The dedicated monthly extended-stable path publishes core plus every npm-publishable official plugin at `.33`. Maintenance patches `.34+` publish only the covered `@openclaw/codex`, `@openclaw/discord`, and `@openclaw/slack` candidates. It does not publish macOS or Windows artifacts, a GitHub Release, private-repository dist-tags, Docker images, mobile artifacts, or website downloads.
 - Installing core does not automatically install every covered plugin. As with the regular channel, onboarding, configuration, or explicit plugin commands install the plugins a user actually enables.
 - Every regular final release ships the npm package, macOS app, and signed Windows Hub installers together. Beta releases normally validate and publish the npm/package path first, with native app build/sign/notarize/promote reserved for regular final unless explicitly requested.
 
@@ -57,23 +60,20 @@ already contain a strictly later calendar month's final version below patch
 `33`; maintenance patches stay eligible after `main` advances by more than one
 month.
 
-Before the first `.33` of a monthly line, download the immutable postpublish
-evidence JSON files for that month's regular `latest` releases into a local
-directory. Evidence must identify a full `all-publishable` plugin release and
-include exact package versions and npm integrities. Generate the scalar monthly
-compatibility cohort while preparing the release:
+Synchronize the root and official plugin source versions while preparing every
+release:
 
 ```bash
-pnpm release:prep -- --cohort-evidence-dir /path/to/postpublish-evidence
+pnpm release:prep
 ```
 
-The generator selects the greatest successful same-month patch below `33` and
-writes `release/extended-stable-plugin-cohort.json`. Later `.34+` maintenance
-releases verify the same immutable baseline against the supplied evidence; they
-must not advance it. Cohort packages are verified at that exact version but are
-never republished, tagged, or added to the protected selector transaction.
-They remain outside the covered acceptance, backport, and priority-support
-contract.
+The `.33` release is the monthly compatibility snapshot. It publishes and
+candidate-tags every npm-publishable official plugin at exact `YYYY.M.33`.
+Later `.34+` releases publish and candidate-tag only Slack, Discord, and Codex;
+all other official npm plugins remain on that month's exact `.33`. The release
+workflow re-verifies those snapshot-only packages and clean-installs them with
+`openclaw@YYYY.M.33` before core promotion. Snapshot-only packages remain
+outside the covered acceptance, backport, and priority-support contract.
 
 Run the npm preflight and Full Release Validation from the exact
 extended-stable branch, then save both run IDs:
@@ -95,8 +95,21 @@ gh workflow run full-release-validation.yml \
 separate from the npm `extended-stable` dist-tag and is intentionally
 unchanged.
 
-After both runs succeed and the npm release environment is ready, run the
-extended-stable release orchestrator. Patch `P` must be `33` or greater:
+<Warning>
+Do not run the candidate publication command below until the protected
+`openclaw/releases` DST-07 selector workflow has landed and been verified as a
+consumer of the closed v2 plugin handoff (`publicationPackages`, fixed
+`acceptancePackages`, `selectorPackages`, and `snapshotReadbacks`). That
+consumer is not available in the currently verified releases-repository
+contract. This is a hard prerequisite before immutable candidate publication:
+without it, the public workflow can produce candidates but cannot complete the
+required plugin-first, core-last protected promotion. Stop after preflight and
+Full Release Validation until this prerequisite is satisfied.
+</Warning>
+
+After both runs succeed, the npm release environment is ready, and that
+protected v2 consumer has been verified, run the extended-stable release
+orchestrator. Patch `P` must be `33` or greater:
 
 ```bash
 gh workflow run openclaw-release-publish.yml \
@@ -118,17 +131,20 @@ an end-to-end rehearsal. The lower-level bypass never relaxes the canonical
 workflow ref, branch-tip/tag/checkout equality, referenced evidence, or
 candidate readback.
 
-The public workflow publishes each immutable package under a derived,
-version-specific candidate tag, verifies exact versions, integrities,
-provenance, and package acceptance, proves both `latest` and shared
-`extended-stable` selectors remained unchanged, then uploads one closed
-plugin-first/core-last selector handoff.
+The public workflow publishes each selected immutable package under a derived,
+version-specific candidate tag, verifies exact versions, integrities, and
+provenance, runs covered acceptance for Slack, Discord, and Codex, and records
+snapshot-only clean-install readbacks in the aggregate publication artifact.
+It proves both `latest` and shared `extended-stable` selectors remained
+unchanged, then uploads one closed plugin-first/core-last selector handoff.
 
-The protected `openclaw/releases` selector owner is a separate required phase.
-Until that workflow consumes the handoff and reports successful plugin-first,
-core-last promotion and candidate cleanup, the release is candidate-only and
-must not be announced as available on `extended-stable`. Do not repair shared
-selectors from this public repository or republish immutable versions.
+Once the prerequisite above lands, the protected `openclaw/releases` selector
+owner is a separate required phase. Until it consumes the handoff and reports
+successful plugin-first, core-last promotion and candidate cleanup, the release
+is candidate-only and must not be announced as available on
+`extended-stable`. The current unverified consumer must not be treated as a
+working promotion path. Do not repair shared selectors from this public
+repository or republish immutable versions.
 
 After protected promotion succeeds, independently confirm the result:
 
@@ -140,13 +156,17 @@ npm view @openclaw/discord@extended-stable version --userconfig "$(mktemp)"
 npm view @openclaw/slack@extended-stable version --userconfig "$(mktemp)"
 ```
 
-Every command must return `YYYY.M.P`. If promotion or readback fails, do not
-republish. Use only the protected selector owner's guarded repair operation,
-with its captured prior state and terminal evidence.
+For `.34+`, the commands above must return `YYYY.M.P`. For `.33`, also verify
+every package named in the handoff's `selectorPackages` returns `YYYY.M.33`.
+Every snapshot-only entry in `snapshotReadbacks` must identify exact
+`YYYY.M.33` bytes and the aggregate install-proof run and artifact. If
+promotion or readback fails, do not republish. Use only the protected selector
+owner's guarded repair operation, with its captured prior state and terminal
+evidence.
 
 The regular checklist below continues to own beta, `latest`, GitHub Release,
-uncovered plugins, macOS, Windows, and other platform publication. Do not run
-those steps for this npm-only extended-stable path.
+macOS, Windows, and other platform publication. Do not run those steps for this
+npm-only extended-stable path.
 
 ## Regular release operator checklist
 

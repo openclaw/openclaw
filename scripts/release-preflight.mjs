@@ -4,15 +4,8 @@ import { runManagedCommand } from "./lib/managed-child-process.mjs";
 
 const parsedArgs = parseArgs(process.argv.slice(2));
 const fix = parsedArgs.fix;
-const cohortEvidenceArgs = parsedArgs.cohortEvidenceDir
-  ? ["--cohort-evidence-dir", parsedArgs.cohortEvidenceDir]
-  : [];
 
 const fixCommands = [
-  {
-    name: "extended-stable plugin cohort",
-    args: ["extended-stable:cohort:gen", ...cohortEvidenceArgs],
-  },
   { name: "plugin versions", args: ["plugins:sync"] },
   { name: "npm shrinkwraps", args: ["deps:shrinkwrap:changed:generate"] },
   { name: "plugin inventory", args: ["plugins:inventory:gen"] },
@@ -24,10 +17,6 @@ const fixCommands = [
 ];
 
 const checkCommands = [
-  {
-    name: "extended-stable plugin cohort",
-    args: ["extended-stable:cohort:check", ...cohortEvidenceArgs],
-  },
   { name: "root dependency ownership", args: ["deps:root-ownership:check"] },
   { name: "npm shrinkwraps", args: ["deps:shrinkwrap:check"] },
   { name: "plugin versions", args: ["plugins:sync:check"] },
@@ -106,7 +95,6 @@ function printFailures(title, failures) {
 function parseArgs(argv) {
   let check = false;
   let wantsFix = false;
-  let cohortEvidenceDir;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--help") {
@@ -121,15 +109,6 @@ function parseArgs(argv) {
       wantsFix = true;
       continue;
     }
-    if (arg === "--cohort-evidence-dir") {
-      cohortEvidenceDir = argv[++index];
-      if (!cohortEvidenceDir) {
-        console.error("--cohort-evidence-dir requires a value.");
-        printUsage(console.error);
-        process.exit(1);
-      }
-      continue;
-    }
     console.error(`Unknown release preflight argument: ${arg}`);
     printUsage(console.error);
     process.exit(1);
@@ -138,15 +117,12 @@ function parseArgs(argv) {
     console.error("Use either --fix or --check, not both.");
     process.exit(1);
   }
-  return { fix: wantsFix, cohortEvidenceDir };
+  return { fix: wantsFix };
 }
 
 function printUsage(writeLine) {
-  writeLine(
-    "Usage: node scripts/release-preflight.mjs [--check|--fix] [--cohort-evidence-dir DIR]",
-  );
+  writeLine("Usage: node scripts/release-preflight.mjs [--check|--fix]");
   writeLine("");
   writeLine("  --check  verify generated release artifacts without writing changes (default)");
   writeLine("  --fix    refresh generated release artifacts, then verify them");
-  writeLine("  --cohort-evidence-dir DIR  verify immutable regular-release evidence for patch 33+");
 }

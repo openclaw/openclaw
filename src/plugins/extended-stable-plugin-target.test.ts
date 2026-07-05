@@ -4,8 +4,9 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   loadExtendedStablePluginTargetContextFromRoot,
-  resolveExtendedStableCohortPackageNames,
+  resolveExtendedStableSnapshotPackageNames,
   resolveExtendedStablePluginTarget,
+  resolveExtendedStableSnapshotVersion,
 } from "./extended-stable-plugin-target.js";
 
 const support = {
@@ -19,11 +20,10 @@ const support = {
     },
   ],
 };
-const cohort = { schemaVersion: 1 as const, releaseLine: "2026.6", baselineVersion: "2026.6.21" };
-const cohortPackageNames = new Set(["@openclaw/matrix"]);
+const snapshotPackageNames = new Set(["@openclaw/matrix"]);
 
 describe("resolveExtendedStablePluginTarget", () => {
-  it("reads core identity and version from the same package root as cohort metadata", () => {
+  it("reads and validates the core identity and version from the package root", () => {
     const rootDir = mkdtempSync(join(tmpdir(), "openclaw-target-context-"));
     mkdirSync(join(rootDir, "release"));
     writeFileSync(join(rootDir, "package.json"), '{"name":"openclaw","version":"2026.6.34"}\n');
@@ -53,10 +53,6 @@ describe("resolveExtendedStablePluginTarget", () => {
         ],
       }),
     );
-    writeFileSync(
-      join(rootDir, "release/extended-stable-plugin-cohort.json"),
-      '{"schemaVersion":1,"releaseLine":"2026.6","baselineVersion":"2026.6.21"}\n',
-    );
     try {
       expect(() =>
         loadExtendedStablePluginTargetContextFromRoot({
@@ -68,23 +64,43 @@ describe("resolveExtendedStablePluginTarget", () => {
         loadExtendedStablePluginTargetContextFromRoot({
           rootDir,
           expectedCoreVersion: "2026.6.34",
-        }).installedCoreVersion,
-      ).toBe("2026.6.34");
+        }),
+      ).toMatchObject({
+        installedCoreVersion: "2026.6.34",
+        snapshotVersion: "2026.6.33",
+      });
     } finally {
       rmSync(rootDir, { recursive: true, force: true });
     }
   });
 
-  it("derives deduplicated official npm cohort membership minus support", () => {
+  it("derives deduplicated official npm snapshot membership minus support", () => {
     const entries = [
       { source: "official", openclaw: { install: { npmSpec: "@openclaw/slack" } } },
       { source: "official", openclaw: { install: { npmSpec: "@openclaw/matrix" } } },
       { source: "official", openclaw: { install: { npmSpec: "@openclaw/matrix@latest" } } },
       { source: "community", openclaw: { install: { npmSpec: "third-party" } } },
     ];
-    expect([...resolveExtendedStableCohortPackageNames({ support, entries })]).toEqual([
+    expect([...resolveExtendedStableSnapshotPackageNames({ support, entries })]).toEqual([
       "@openclaw/matrix",
     ]);
+  });
+
+  it.each([
+    "2026.6.32",
+    "2026.06.33",
+    "2026.13.33",
+    "2026.6.033",
+    "2026.6.33-beta.1",
+    "v2026.6.33",
+  ])("rejects non-extended-stable core version %s", (version) => {
+    expect(() => resolveExtendedStableSnapshotVersion(version)).toThrow(
+      /final YYYY\.M\.PATCH with PATCH >= 33/u,
+    );
+  });
+
+  it("derives the monthly .33 snapshot from a maintenance patch", () => {
+    expect(resolveExtendedStableSnapshotVersion("2026.12.104")).toBe("2026.12.33");
   });
 
   it("targets covered default intent to the exact installed core version", () => {
@@ -95,8 +111,7 @@ describe("resolveExtendedStablePluginTarget", () => {
         updateChannel: "extended-stable",
         installedCoreVersion: "2026.6.34",
         support,
-        cohort,
-        cohortPackageNames,
+        snapshotPackageNames,
       }),
     ).toEqual({
       kind: "covered",
@@ -106,7 +121,7 @@ describe("resolveExtendedStablePluginTarget", () => {
     });
   });
 
-  it("targets non-covered official default intent to the monthly baseline", () => {
+  it("targets non-covered official default intent to the monthly .33 snapshot", () => {
     expect(
       resolveExtendedStablePluginTarget({
         requestedSpec: "@openclaw/matrix",
@@ -114,13 +129,12 @@ describe("resolveExtendedStablePluginTarget", () => {
         updateChannel: "extended-stable",
         installedCoreVersion: "2026.6.34",
         support,
-        cohort,
-        cohortPackageNames,
+        snapshotPackageNames,
       }),
     ).toMatchObject({
-      kind: "cohort",
-      code: "monthly_cohort_target",
-      installSpec: "@openclaw/matrix@2026.6.21",
+      kind: "snapshot",
+      code: "monthly_snapshot_target",
+      installSpec: "@openclaw/matrix@2026.6.33",
       recordSpec: "@openclaw/matrix",
     });
   });
@@ -132,8 +146,7 @@ describe("resolveExtendedStablePluginTarget", () => {
         officialPackageName: "@openclaw/matrix",
         updateChannel: "extended-stable",
         support,
-        cohort,
-        cohortPackageNames,
+        snapshotPackageNames,
       }).kind,
     ).toBe("preserved");
     expect(
@@ -142,8 +155,7 @@ describe("resolveExtendedStablePluginTarget", () => {
         officialPackageName: "@openclaw/matrix",
         updateChannel: "stable",
         support,
-        cohort,
-        cohortPackageNames,
+        snapshotPackageNames,
       }).kind,
     ).toBe("unchanged");
   });

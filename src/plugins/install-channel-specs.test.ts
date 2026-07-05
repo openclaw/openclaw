@@ -3,6 +3,7 @@ import { resolveNpmInstallSpecsForUpdateChannel } from "./install-channel-specs.
 
 const extendedStableTargetContext = {
   installedCoreVersion: "2026.6.34",
+  snapshotVersion: "2026.6.33",
   support: {
     schemaVersion: 1 as const,
     plugins: [
@@ -14,16 +15,11 @@ const extendedStableTargetContext = {
       },
     ],
   },
-  cohort: {
-    schemaVersion: 1 as const,
-    releaseLine: "2026.6",
-    baselineVersion: "2026.6.21",
-  },
-  cohortPackageNames: new Set(["@openclaw/matrix"]),
+  snapshotPackageNames: new Set(["@openclaw/matrix"]),
 };
 
 describe("extended-stable npm install specs", () => {
-  it("targets covered and cohort packages while retaining default intent", () => {
+  it("targets covered and snapshot packages while retaining default intent", () => {
     expect(
       resolveNpmInstallSpecsForUpdateChannel({
         spec: "@openclaw/slack@latest",
@@ -44,9 +40,9 @@ describe("extended-stable npm install specs", () => {
         extendedStableTargetContext,
       }),
     ).toEqual({
-      installSpec: "@openclaw/matrix@2026.6.21",
+      installSpec: "@openclaw/matrix@2026.6.33",
       recordSpec: "@openclaw/matrix",
-      targetCode: "monthly_cohort_target",
+      targetCode: "monthly_snapshot_target",
     });
   });
 

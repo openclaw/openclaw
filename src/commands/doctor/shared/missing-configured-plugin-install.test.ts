@@ -530,7 +530,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.warnings).toStrictEqual([]);
   });
 
-  it("repairs a missing cohort plugin at the monthly baseline without pinning intent", async () => {
+  it("repairs a missing snapshot plugin at monthly .33 without pinning intent", async () => {
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
       {
         id: "matrix",
@@ -544,11 +544,11 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       ok: true,
       pluginId: "matrix",
       targetDir: "/tmp/openclaw-plugins/matrix",
-      version: "2026.6.21",
+      version: "2026.6.33",
       npmResolution: {
         name: "@openclaw/plugin-matrix",
-        version: "2026.6.21",
-        resolvedSpec: "@openclaw/plugin-matrix@2026.6.21",
+        version: "2026.6.33",
+        resolvedSpec: "@openclaw/plugin-matrix@2026.6.33",
       },
     });
 
@@ -562,23 +562,19 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       env: {},
       extendedStableTargetContext: {
         installedCoreVersion: "2026.6.34",
+        snapshotVersion: "2026.6.33",
         support: { schemaVersion: 1, plugins: [] },
-        cohort: {
-          schemaVersion: 1,
-          releaseLine: "2026.6",
-          baselineVersion: "2026.6.21",
-        },
-        cohortPackageNames: new Set(["@openclaw/plugin-matrix"]),
+        snapshotPackageNames: new Set(["@openclaw/plugin-matrix"]),
       },
     });
 
     expect(mockCallArg(mocks.installPluginFromNpmSpec)).toMatchObject({
-      spec: "@openclaw/plugin-matrix@2026.6.21",
+      spec: "@openclaw/plugin-matrix@2026.6.33",
       expectedPluginId: "matrix",
     });
     expect(result.records.matrix).toMatchObject({
       spec: "@openclaw/plugin-matrix",
-      version: "2026.6.21",
+      version: "2026.6.33",
     });
   });
 
@@ -3983,6 +3979,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       env: {},
       extendedStableTargetContext: {
         installedCoreVersion: "2026.6.34",
+        snapshotVersion: "2026.6.33",
         support: {
           schemaVersion: 1,
           plugins: [
@@ -3994,12 +3991,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
             },
           ],
         },
-        cohort: {
-          schemaVersion: 1,
-          releaseLine: "2026.6",
-          baselineVersion: "2026.6.21",
-        },
-        cohortPackageNames: new Set(),
+        snapshotPackageNames: new Set(),
       },
     });
 

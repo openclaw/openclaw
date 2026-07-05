@@ -39,7 +39,7 @@ describe("hasBlockingExtendedStablePluginTargetFailure", () => {
   it("blocks restart only for unavailable exact extended-stable targets", () => {
     expect(
       hasBlockingExtendedStablePluginTargetFailure([
-        { status: "error", code: "cohort_package_unavailable" },
+        { status: "error", code: "snapshot_package_unavailable" },
       ]),
     ).toBe(true);
     expect(

@@ -2,18 +2,15 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { loadExtendedStablePluginCohort } from "../src/plugins/extended-stable-plugin-cohort.js";
-import {
-  collectAllPublishablePluginPackageNames,
-  collectExtendedStableCohortPackageNames,
-  parseEligibleCohortEvidence,
-} from "./generate-extended-stable-plugin-cohort.js";
 import { loadExtendedStablePluginSupport } from "./lib/extended-stable-plugin-support.js";
-import { verifyNpmPackage } from "./lib/npm-package-readback.js";
+import {
+  collectExtendedStablePublishablePluginPackages,
+  collectExtendedStableSnapshotPluginPackages,
+} from "./lib/plugin-npm-release.js";
 import { verifySelectorHandoff } from "./verify-extended-stable-selector-handoff.js";
 
 type Args = {
@@ -289,70 +286,72 @@ function verifyJsonScript(script: string, args: string[], env?: NodeJS.ProcessEn
   );
 }
 
-async function verifyMonthlyCohortProof(params: {
+async function publishCoreCandidate(params: {
   repository: string;
+  parentRunId: string;
   releaseVersion: string;
   rootDir: string;
-  outputDir: string;
+  args: Args;
 }) {
-  const cohort = loadExtendedStablePluginCohort(params.rootDir);
-  const [releaseYear, releaseMonth] = params.releaseVersion.split(".");
-  if (cohort.releaseLine !== `${releaseYear}.${releaseMonth}`) {
-    throw new Error("Packaged monthly cohort release line does not match the candidate release.");
-  }
-  const evidenceAsset = `openclaw-${cohort.baselineVersion}-postpublish-evidence.json`;
-  const checksumAsset = `${evidenceAsset}.sha256`;
-  const evidenceDir = join(params.outputDir, "monthly-cohort-evidence");
-  rmSync(evidenceDir, { force: true, recursive: true });
-  mkdirSync(evidenceDir, { recursive: true });
-  command("gh", [
-    "release",
-    "download",
-    `v${cohort.baselineVersion}`,
-    "--repo",
+  const coreRunId = await dispatchWorkflow(
     params.repository,
-    "--pattern",
-    evidenceAsset,
-    "--pattern",
-    checksumAsset,
-    "--dir",
-    evidenceDir,
-  ]);
-  const evidenceBytes = readFileSync(join(evidenceDir, evidenceAsset));
-  const evidenceSha256 = createHash("sha256").update(evidenceBytes).digest("hex");
-  const checksum = readFileSync(join(evidenceDir, checksumAsset), "utf8").trim();
-  if (checksum !== `${evidenceSha256}  ${evidenceAsset}`) {
-    throw new Error("Monthly cohort source evidence does not match its immutable checksum asset.");
-  }
-  const evidence = parseEligibleCohortEvidence({
-    value: JSON.parse(evidenceBytes.toString("utf8")) as unknown,
-    releaseLine: cohort.releaseLine,
-    expectedPackageNames: collectAllPublishablePluginPackageNames(params.rootDir),
-  });
-  if (!evidence || evidence.releaseVersion !== cohort.baselineVersion) {
-    throw new Error("Monthly cohort source evidence is not an eligible full regular release.");
-  }
-  const evidenceByPackage = new Map(
-    evidence.pluginNpmPackages.map((plugin) => [plugin.packageName, plugin.npmIntegrity]),
+    "openclaw-npm-release.yml",
+    params.args.workflowRef,
+    [
+      "-f",
+      `tag=${params.args.releaseTag}`,
+      "-f",
+      "preflight_only=false",
+      "-f",
+      `preflight_run_id=${params.args.preflightRunId}`,
+      "-f",
+      `full_release_validation_run_id=${params.args.validationRunId}`,
+      "-f",
+      `release_publish_run_id=${params.parentRunId}`,
+      "-f",
+      "npm_dist_tag=extended-stable",
+    ],
+    params.args.sourceSha,
   );
-  const packages: Array<{ packageName: string; version: string; npmIntegrity: string }> = [];
-  for (const packageName of collectExtendedStableCohortPackageNames(params.rootDir)) {
-    const readback = await verifyNpmPackage(packageName, cohort.baselineVersion);
-    const npmIntegrity = readback.integrity;
-    if (!npmIntegrity || npmIntegrity !== evidenceByPackage.get(packageName)) {
-      throw new Error(
-        `${packageName}@${cohort.baselineVersion} integrity differs from cohort evidence.`,
-      );
-    }
-    packages.push({ packageName, version: cohort.baselineVersion, npmIntegrity });
-  }
-  return {
-    releaseLine: cohort.releaseLine,
-    baselineVersion: cohort.baselineVersion,
-    sourceReleaseTag: evidence.releaseTag,
-    sourceEvidenceSha256: evidenceSha256,
-    packages,
+  const coreRun = await waitForRun(params.repository, coreRunId);
+  assertRunIdentity(coreRun, {
+    path: ".github/workflows/openclaw-npm-release.yml",
+    sha: params.args.sourceSha,
+    event: "workflow_dispatch",
+  });
+  const coreArtifact = artifactForRun(
+    params.repository,
+    coreRunId,
+    `extended-stable-core-publication-${coreRunId}-${coreRun.run_attempt}`,
+  );
+  const coreResultPath = downloadVerifiedArtifact(
+    params.repository,
+    coreArtifact,
+    "extended-stable-core-publication.json",
+    join(dirname(params.args.output), "core-publication"),
+  );
+  command(
+    process.execPath,
+    [
+      join(params.rootDir, "scripts/openclaw-npm-extended-stable-release.mjs"),
+      "verify-publication-result",
+    ],
+    {
+      env: {
+        CORE_PUBLICATION_RESULT_FILE: coreResultPath,
+        EXPECTED_VERSION: params.releaseVersion,
+        EXPECTED_SOURCE_SHA: params.args.sourceSha,
+        EXPECTED_WORKFLOW_REF: `refs/heads/${params.args.workflowRef}`,
+        EXPECTED_RUN_ID: String(coreRunId),
+        EXPECTED_RUN_ATTEMPT: String(coreRun.run_attempt),
+        EXPECTED_REPOSITORY: params.repository,
+      },
+    },
+  );
+  const coreResult = JSON.parse(readFileSync(coreResultPath, "utf8")) as {
+    package: { candidateTag: string; integrity: string; version: string };
   };
+  return { coreRunId, coreRun, coreArtifact, coreResult };
 }
 
 export async function orchestrate(args: Args, rootDir = resolve(".")): Promise<void> {
@@ -363,16 +362,21 @@ export async function orchestrate(args: Args, rootDir = resolve(".")): Promise<v
   }
   const releaseVersion = args.releaseTag.replace(/^v/u, "");
   const support = loadExtendedStablePluginSupport(rootDir);
-  const monthlyCohort = await verifyMonthlyCohortProof({
-    repository,
-    releaseVersion,
-    rootDir,
-    outputDir: dirname(args.output),
-  });
-  const packageNames = ["openclaw", ...support.plugins.map((plugin) => plugin.packageName)];
+  const publicationPackages = collectExtendedStablePublishablePluginPackages(rootDir);
+  const snapshotPackages = collectExtendedStableSnapshotPluginPackages(rootDir);
+  const selectorPackageNames = publicationPackages.map((plugin) => plugin.packageName);
+  const packageNames = ["openclaw", ...selectorPackageNames];
   const selectorsBefore = Object.fromEntries(
     packageNames.map((packageName) => [packageName, selectorSnapshot(packageName)]),
   );
+  // The aggregate plugin proof clean-installs the monthly snapshot with this exact core.
+  const { coreRunId, coreRun, coreArtifact, coreResult } = await publishCoreCandidate({
+    repository,
+    parentRunId,
+    releaseVersion,
+    rootDir,
+    args,
+  });
 
   const pluginRunId = await dispatchWorkflow(
     repository,
@@ -427,68 +431,33 @@ export async function orchestrate(args: Args, rootDir = resolve(".")): Promise<v
       "--artifact-digest",
       pluginArtifact.digest,
     ],
-  ) as { plugins: Array<{ packageName: string; npmIntegrity: string; candidateTag: string }> };
-
-  const coreRunId = await dispatchWorkflow(
-    repository,
-    "openclaw-npm-release.yml",
-    args.workflowRef,
-    [
-      "-f",
-      `tag=${args.releaseTag}`,
-      "-f",
-      "preflight_only=false",
-      "-f",
-      `preflight_run_id=${args.preflightRunId}`,
-      "-f",
-      `full_release_validation_run_id=${args.validationRunId}`,
-      "-f",
-      `release_publish_run_id=${parentRunId}`,
-      "-f",
-      "npm_dist_tag=extended-stable",
-    ],
-    args.sourceSha,
-  );
-  const coreRun = await waitForRun(repository, coreRunId);
-  assertRunIdentity(coreRun, {
-    path: ".github/workflows/openclaw-npm-release.yml",
-    sha: args.sourceSha,
-    event: "workflow_dispatch",
-  });
-  const coreArtifact = artifactForRun(
-    repository,
-    coreRunId,
-    `extended-stable-core-publication-${coreRunId}-${coreRun.run_attempt}`,
-  );
-  const coreResultPath = downloadVerifiedArtifact(
-    repository,
-    coreArtifact,
-    "extended-stable-core-publication.json",
-    join(dirname(args.output), "core-publication"),
-  );
-  command(
-    process.execPath,
-    [
-      join(rootDir, "scripts/openclaw-npm-extended-stable-release.mjs"),
-      "verify-publication-result",
-    ],
-    {
-      env: {
-        CORE_PUBLICATION_RESULT_FILE: coreResultPath,
-        EXPECTED_VERSION: releaseVersion,
-        EXPECTED_SOURCE_SHA: args.sourceSha,
-        EXPECTED_WORKFLOW_REF: `refs/heads/${args.workflowRef}`,
-        EXPECTED_RUN_ID: String(coreRunId),
-        EXPECTED_RUN_ATTEMPT: String(coreRun.run_attempt),
-        EXPECTED_REPOSITORY: repository,
-      },
-    },
-  );
-  const coreResult = JSON.parse(readFileSync(coreResultPath, "utf8")) as {
-    package: { candidateTag: string; integrity: string; version: string };
+  ) as {
+    sourceSha: string;
+    publicationRunId: string;
+    publicationRunAttempt: string;
+    publicationArtifactDigest: string;
+    publicationResultSha256: string;
+    plugins: Array<{
+      packageName: string;
+      version: string;
+      npmIntegrity: string;
+      candidateTag: string;
+    }>;
+    snapshotReadbacks: Array<{
+      packageName: string;
+      version: string;
+      npmIntegrity: string;
+    }>;
   };
+  if (
+    JSON.stringify(pluginProof.snapshotReadbacks.map((entry) => entry.packageName)) !==
+    JSON.stringify(snapshotPackages.map((plugin) => plugin.packageName))
+  ) {
+    throw new Error("Aggregate publication proof does not contain the derived snapshot set.");
+  }
 
   const acceptanceProofs = [];
+  const acceptancePackages = [];
   for (const plugin of support.plugins) {
     const acceptanceRunId = await dispatchWorkflow(
       repository,
@@ -517,8 +486,9 @@ export async function orchestrate(args: Args, rootDir = resolve(".")): Promise<v
       "extended-stable-plugin-acceptance.json",
       join(dirname(args.output), `acceptance-${plugin.pluginId}`),
     );
-    acceptanceProofs.push(
-      verifyJsonScript(join(rootDir, "scripts/verify-extended-stable-plugin-acceptance.ts"), [
+    const acceptanceProof = verifyJsonScript(
+      join(rootDir, "scripts/verify-extended-stable-plugin-acceptance.ts"),
+      [
         "--result",
         resultPath,
         "--root",
@@ -537,8 +507,17 @@ export async function orchestrate(args: Args, rootDir = resolve(".")): Promise<v
         String(acceptanceRun.run_attempt),
         "--artifact-digest",
         artifact.digest,
-      ]),
+      ],
     );
+    acceptanceProofs.push(acceptanceProof);
+    acceptancePackages.push({
+      packageName: plugin.packageName,
+      acceptanceProfile: plugin.acceptanceProfile,
+      runId: acceptanceRunId,
+      runAttempt: acceptanceRun.run_attempt,
+      artifactName: artifact.name,
+      artifactDigest: artifact.digest,
+    });
   }
 
   const selectorsAfter = Object.fromEntries(
@@ -549,11 +528,10 @@ export async function orchestrate(args: Args, rootDir = resolve(".")): Promise<v
   }
 
   const handoff = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     handoffId: `${repository}:${parentRunId}:${releaseVersion}`,
     releaseVersion,
     sourceSha: args.sourceSha,
-    monthlyCohort,
     core: {
       publicationRunId: String(coreRunId),
       publicationRunAttempt: String(coreRun.run_attempt),
@@ -564,6 +542,16 @@ export async function orchestrate(args: Args, rootDir = resolve(".")): Promise<v
     },
     pluginPublication: pluginProof,
     acceptances: acceptanceProofs,
+    publicationPackages: pluginProof.plugins,
+    acceptancePackages,
+    selectorPackages: selectorPackageNames,
+    snapshotReadbacks: pluginProof.snapshotReadbacks.map((entry) => ({
+      ...entry,
+      installProofRunId: pluginRunId,
+      installProofRunAttempt: pluginRun.run_attempt,
+      installProofArtifactName: pluginArtifact.name,
+      installProofArtifactDigest: pluginArtifact.digest,
+    })),
     selectorsBefore,
     selectorsAfter,
     selectorOrder: ["plugins", "core"],

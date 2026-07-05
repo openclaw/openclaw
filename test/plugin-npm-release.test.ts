@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
+import { loadExtendedStablePluginSupport } from "../scripts/lib/extended-stable-plugin-support.ts";
 import { collectClawHubPublishablePluginPackages } from "../scripts/lib/plugin-clawhub-release.ts";
 import {
   collectChangedExtensionIdsFromPaths,
@@ -20,6 +21,7 @@ import {
   resolveSelectedPublishablePluginPackages,
   type PublishablePluginPackage,
 } from "../scripts/lib/plugin-npm-release.ts";
+import { resolveExtendedStableSnapshotPackageNames } from "../src/plugins/extended-stable-plugin-target.ts";
 import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
@@ -125,21 +127,43 @@ describe("parsePluginReleaseArgs", () => {
 });
 
 describe("extended-stable plugin publication", () => {
-  it("derives the closed covered package set and immutable candidate tags", () => {
-    const rootVersion = (JSON.parse(readFileSync("package.json", "utf8")) as { version: string })
-      .version;
-    const plugins = collectExtendedStablePublishablePluginPackages();
+  function makeReleaseRoot(version: string): string {
+    const rootDir = makeTempRepoRoot(tempDirs, "openclaw-extended-stable-release-");
+    writeJsonFile(join(rootDir, "package.json"), { version });
+    mkdirSync(join(rootDir, "release"), { recursive: true });
+    writeFileSync(
+      join(rootDir, "release/extended-stable-plugin-support.json"),
+      readFileSync("release/extended-stable-plugin-support.json", "utf8"),
+    );
+    for (const pluginId of ["codex", "discord", "matrix", "slack"]) {
+      writePluginReadme(rootDir, pluginId);
+      writeJsonFile(join(rootDir, "extensions", pluginId, "package.json"), {
+        name: `@openclaw/${pluginId}`,
+        version,
+        type: "module",
+        repository: { type: "git", url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL },
+        openclaw: {
+          extensions: ["./index.ts"],
+          ...externalPluginContract(version),
+          install: { npmSpec: `@openclaw/${pluginId}` },
+          release: { publishToNpm: true },
+        },
+      });
+    }
+    return rootDir;
+  }
+
+  it("publishes every official npm plugin for the monthly patch 33 snapshot", () => {
+    const rootVersion = "2026.6.33";
+    const plugins = collectExtendedStablePublishablePluginPackages(makeReleaseRoot(rootVersion));
 
     expect(plugins.map((plugin) => plugin.packageName)).toEqual([
       "@openclaw/codex",
       "@openclaw/discord",
+      "@openclaw/matrix",
       "@openclaw/slack",
     ]);
-    expect(plugins.map((plugin) => plugin.version)).toEqual([
-      rootVersion,
-      rootVersion,
-      rootVersion,
-    ]);
+    expect(plugins.every((plugin) => plugin.version === rootVersion)).toBe(true);
     expect(plugins.map((plugin) => plugin.candidateTag)).toEqual(
       plugins.map((plugin) =>
         deriveExtendedStablePluginCandidateTag({
@@ -149,6 +173,33 @@ describe("extended-stable plugin publication", () => {
       ),
     );
     expect(plugins.every((plugin) => plugin.publishTag === plugin.candidateTag)).toBe(true);
+  });
+
+  it("publishes only covered plugins for patch 34 and later", () => {
+    const plugins = collectExtendedStablePublishablePluginPackages(makeReleaseRoot("2026.6.34"));
+
+    expect(plugins.map((plugin) => plugin.packageName)).toEqual([
+      "@openclaw/codex",
+      "@openclaw/discord",
+      "@openclaw/slack",
+    ]);
+  });
+
+  it("keeps runtime official npm membership equal to the all-publishable release plan", () => {
+    const support = loadExtendedStablePluginSupport(process.cwd());
+    const runtimePackageNames = [
+      ...new Set([
+        ...support.plugins.map((plugin) => plugin.packageName),
+        ...resolveExtendedStableSnapshotPackageNames({ support }),
+      ]),
+    ].toSorted();
+    const releasePackageNames = collectPublishablePluginPackages().map(
+      (plugin) => plugin.packageName,
+    );
+
+    expect(runtimePackageNames).toEqual([...new Set(runtimePackageNames)].toSorted());
+    expect(releasePackageNames).toEqual([...new Set(releasePackageNames)].toSorted());
+    expect(runtimePackageNames).toEqual(releasePackageNames);
   });
 });
 

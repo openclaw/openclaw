@@ -162,6 +162,23 @@ Beta-channel installs and updates prefer the npm `beta` dist-tag when available,
 falling back to `latest`.
 </Note>
 
+### Extended-stable install and update boundaries
+
+`openclaw update --channel extended-stable` and a channel-aware
+`openclaw plugins update --all` converge eligible official default/latest npm
+installs with the selected core line. Covered Codex, Discord, and Slack plugins
+target the exact installed core version; uncovered official plugins target
+exact same-month `YYYY.M.33`.
+
+Targeted `openclaw plugins update <id-or-npm-spec>` and
+`openclaw plugins install <path-or-spec>` follow the recorded or explicitly
+supplied spec. They do not reinterpret that spec merely because core uses
+extended-stable. Exact pins, explicit non-`latest` selectors, third-party npm
+packages, ClawHub packages, Git installs, marketplace installs, archives, and
+local paths are preserved. `openclaw plugins doctor` and onboarding use the
+same channel-aware exact-target rules when they repair or provision eligible
+official default/latest npm installs.
+
 <AccordionGroup>
   <Accordion title="Config includes and invalid-config repair">
     If your `plugins` section is backed by a single-file `$include`, `plugins install/update/enable/disable/uninstall` write through to that included file and leave `openclaw.json` untouched. Root includes, include arrays, and includes with sibling overrides fail closed instead of flattening. See [Config includes](/gateway/configuration) for the supported shapes.

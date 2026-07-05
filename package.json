@@ -178,7 +178,6 @@
     "scripts/lib/official-external-plugin-catalog.json",
     "scripts/lib/official-external-provider-catalog.json",
     "release/extended-stable-plugin-support.json",
-    "release/extended-stable-plugin-cohort.json",
     "scripts/lib/package-dist-imports.mjs",
     "scripts/postinstall-bundled-plugins.mjs",
     "scripts/windows-cmd-helpers.mjs"
@@ -1755,8 +1754,6 @@
     "release:check": "pnpm release:generated:check && node --import tsx scripts/release-check.ts",
     "release:fast-pretag-check": "bash scripts/release-fast-pretag-check.sh",
     "release:generated:check": "node scripts/release-preflight.mjs --check",
-    "extended-stable:cohort:check": "node --import tsx scripts/generate-extended-stable-plugin-cohort.ts --check",
-    "extended-stable:cohort:gen": "node --import tsx scripts/generate-extended-stable-plugin-cohort.ts --fix",
     "release:openclaw:npm:check": "node --import tsx scripts/openclaw-npm-release-check.ts",
     "release:openclaw:npm:verify-published": "node --import tsx scripts/openclaw-npm-postpublish-verify.ts",
     "release:plugins:clawhub:check": "node --import tsx scripts/plugin-clawhub-release-check.ts",

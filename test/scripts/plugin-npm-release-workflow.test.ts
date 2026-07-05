@@ -7,7 +7,12 @@ import { assertExtendedStableReleaseVersion } from "../../scripts/lib/extended-s
 const workflowPath = ".github/workflows/plugin-npm-release.yml";
 
 type Step = { env?: Record<string, string>; if?: string; name?: string; run?: string };
-type Job = { permissions?: Record<string, string>; steps?: Step[] };
+type Job = {
+  if?: string;
+  needs?: string | string[];
+  permissions?: Record<string, string>;
+  steps?: Step[];
+};
 type Workflow = {
   on?: { workflow_dispatch?: { inputs?: { publish_scope?: { options?: string[] } } } };
   jobs?: Record<string, Job>;
@@ -26,7 +31,7 @@ function step(job: Job | undefined, name: string): Step {
 }
 
 describe("plugin npm extended-stable publication", () => {
-  it("exposes the fixed policy mode and publishes candidates with OIDC only", () => {
+  it("exposes the patch-derived policy mode and publishes candidates with OIDC only", () => {
     const parsed = workflow();
     expect(parsed.on?.workflow_dispatch?.inputs?.publish_scope?.options).toContain(
       "extended-stable",
@@ -88,7 +93,36 @@ describe("plugin npm extended-stable publication", () => {
         ),
     ).toBeTruthy();
     expect(raw).toContain("extended-stable-plugin-publication.json");
+    const snapshotProof = step(aggregate, "Verify monthly snapshot package installs");
+    expect(snapshotProof.run).toContain("verify-extended-stable-snapshot-packages.ts");
+    expect(snapshotProof.run).toContain("extended-stable-snapshot-readbacks.json");
+    expect(step(aggregate, "Close aggregate publication result").run).toContain(
+      "--snapshot-readbacks",
+    );
     expect(raw).not.toContain("npm dist-tag add");
     expect(raw).not.toContain("npm dist-tag rm");
+  });
+
+  it("proves the patch 33 snapshot before maintenance publication without blocking other flows", () => {
+    const parsed = workflow();
+    const plan = step(parsed.jobs?.preview_plugins_npm, "Resolve plugin release plan");
+    expect(plan.run).toContain("if (( 10#${root_patch} > 33 )); then");
+    expect(plan.run).toContain('extended_stable_maintenance="true"');
+
+    const prerequisite = parsed.jobs?.verify_extended_stable_snapshot_prerequisite;
+    expect(prerequisite?.if).toContain("extended_stable_maintenance == 'true'");
+    expect(
+      step(prerequisite, "Verify monthly snapshot before maintenance publication").run,
+    ).toContain("verify-extended-stable-snapshot-packages.ts");
+
+    const publish = parsed.jobs?.publish_plugins_npm;
+    expect(publish?.needs).toContain("verify_extended_stable_snapshot_prerequisite");
+    expect(publish?.if).toContain("always()");
+    expect(publish?.if).toContain(
+      "needs.verify_extended_stable_snapshot_prerequisite.result == 'success'",
+    );
+    expect(publish?.if).toContain(
+      "needs.verify_extended_stable_snapshot_prerequisite.result == 'skipped'",
+    );
   });
 });

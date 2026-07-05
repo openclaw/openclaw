@@ -1044,13 +1044,9 @@ describe("plugins cli update", () => {
     config.update = { channel: "extended-stable" };
     const extendedStableTargetContext = {
       installedCoreVersion: "2026.6.34",
+      snapshotVersion: "2026.6.33",
       support: { schemaVersion: 1 as const, plugins: [] },
-      cohort: {
-        schemaVersion: 1 as const,
-        releaseLine: "2026.6",
-        baselineVersion: "2026.6.21",
-      },
-      cohortPackageNames: new Set<string>(),
+      snapshotPackageNames: new Set<string>(),
     };
     loadConfig.mockReturnValue(config);
     setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
@@ -1080,7 +1076,7 @@ describe("plugins cli update", () => {
     loadConfig.mockReturnValue(config);
     setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
     loadExtendedStablePluginTargetContextFromRoot.mockImplementation(() => {
-      throw new Error("cohort metadata missing");
+      throw new Error("support metadata missing");
     });
 
     await expect(runPluginsCommand(["plugins", "update", "--all"])).rejects.toThrow("__exit__:1");

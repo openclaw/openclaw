@@ -676,25 +676,25 @@ describe("updateNpmInstalledPlugins", () => {
     expect(result.config.plugins?.installs?.acpx?.spec).toBe("@openclaw/acpx@2026.5.2-beta.2");
   });
 
-  it("uses the extended-stable monthly cohort target without rewriting default intent", async () => {
+  it("uses the extended-stable monthly snapshot target without rewriting default intent", async () => {
     const installPath = createInstalledPackageDir({
       name: "@openclaw/acpx",
       version: "2026.6.20",
     });
     mockNpmViewMetadata({
       name: "@openclaw/acpx",
-      version: "2026.6.21",
-      integrity: "sha512-cohort",
+      version: "2026.6.33",
+      integrity: "sha512-snapshot",
     });
     installPluginFromNpmSpecMock.mockResolvedValue(
       createSuccessfulNpmUpdateResult({
         pluginId: "acpx",
         targetDir: installPath,
-        version: "2026.6.21",
+        version: "2026.6.33",
         npmResolution: {
           name: "@openclaw/acpx",
-          version: "2026.6.21",
-          resolvedSpec: "@openclaw/acpx@2026.6.21",
+          version: "2026.6.33",
+          resolvedSpec: "@openclaw/acpx@2026.6.33",
         },
       }),
     );
@@ -714,23 +714,19 @@ describe("updateNpmInstalledPlugins", () => {
       disableOnFailure: true,
       extendedStableTargetContext: {
         installedCoreVersion: "2026.6.34",
+        snapshotVersion: "2026.6.33",
         support: { schemaVersion: 1, plugins: [] },
-        cohort: {
-          schemaVersion: 1,
-          releaseLine: "2026.6",
-          baselineVersion: "2026.6.21",
-        },
-        cohortPackageNames: new Set(["@openclaw/acpx"]),
+        snapshotPackageNames: new Set(["@openclaw/acpx"]),
       },
     });
 
-    expect(npmInstallCall()?.spec).toBe("@openclaw/acpx@2026.6.21");
+    expect(npmInstallCall()?.spec).toBe("@openclaw/acpx@2026.6.33");
     expect(result.config.plugins?.installs?.acpx?.spec).toBe("@openclaw/acpx@latest");
     expect(result.outcomes[0]).toMatchObject({
       pluginId: "acpx",
       status: "updated",
-      code: "monthly_cohort_target",
-      nextVersion: "2026.6.21",
+      code: "monthly_snapshot_target",
+      nextVersion: "2026.6.33",
     });
   });
 
@@ -756,13 +752,9 @@ describe("updateNpmInstalledPlugins", () => {
       disableOnFailure: true,
       extendedStableTargetContext: {
         installedCoreVersion: "2026.6.34",
+        snapshotVersion: "2026.6.33",
         support: { schemaVersion: 1, plugins: [] },
-        cohort: {
-          schemaVersion: 1,
-          releaseLine: "2026.6",
-          baselineVersion: "2026.6.21",
-        },
-        cohortPackageNames: new Set(["@openclaw/acpx"]),
+        snapshotPackageNames: new Set(["@openclaw/acpx"]),
       },
     });
 
@@ -774,12 +766,12 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
-  it("reports an unavailable cohort package without falling back to latest", async () => {
+  it("reports an unavailable snapshot package without falling back to latest", async () => {
     const installPath = createInstalledPackageDir({
       name: "@openclaw/acpx",
       version: "2026.6.20",
     });
-    mockNpmViewMetadata({ name: "@openclaw/acpx", version: "2026.6.21" });
+    mockNpmViewMetadata({ name: "@openclaw/acpx", version: "2026.6.33" });
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: false,
       error: "package unavailable",
@@ -801,20 +793,16 @@ describe("updateNpmInstalledPlugins", () => {
       disableOnFailure: true,
       extendedStableTargetContext: {
         installedCoreVersion: "2026.6.34",
+        snapshotVersion: "2026.6.33",
         support: { schemaVersion: 1, plugins: [] },
-        cohort: {
-          schemaVersion: 1,
-          releaseLine: "2026.6",
-          baselineVersion: "2026.6.21",
-        },
-        cohortPackageNames: new Set(["@openclaw/acpx"]),
+        snapshotPackageNames: new Set(["@openclaw/acpx"]),
       },
     });
 
-    expect(npmInstallCall()?.spec).toBe("@openclaw/acpx@2026.6.21");
+    expect(npmInstallCall()?.spec).toBe("@openclaw/acpx@2026.6.33");
     expect(result.outcomes[0]).toMatchObject({
       status: "error",
-      code: "cohort_package_unavailable",
+      code: "snapshot_package_unavailable",
     });
     expect(result.config.plugins?.entries?.acpx?.enabled).not.toBe(false);
     expect(result.config.plugins?.installs?.acpx?.spec).toBe("@openclaw/acpx");
@@ -2404,6 +2392,7 @@ describe("updateNpmInstalledPlugins", () => {
       updateChannel: "extended-stable",
       extendedStableTargetContext: {
         installedCoreVersion: "2026.6.34",
+        snapshotVersion: "2026.6.33",
         support: {
           schemaVersion: 1,
           plugins: [
@@ -2415,12 +2404,7 @@ describe("updateNpmInstalledPlugins", () => {
             },
           ],
         },
-        cohort: {
-          schemaVersion: 1,
-          releaseLine: "2026.6",
-          baselineVersion: "2026.6.21",
-        },
-        cohortPackageNames: new Set(),
+        snapshotPackageNames: new Set(),
       },
     });
 

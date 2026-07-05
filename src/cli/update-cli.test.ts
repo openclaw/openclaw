@@ -517,15 +517,6 @@ describe("update-cli", () => {
       })}\n`,
       "utf8",
     );
-    await fs.writeFile(
-      path.join(root, "release/extended-stable-plugin-cohort.json"),
-      `${JSON.stringify({
-        schemaVersion: 1,
-        releaseLine: "2026.6",
-        baselineVersion: "2026.6.21",
-      })}\n`,
-      "utf8",
-    );
     readPackageVersion.mockResolvedValue("2026.6.33");
   };
 
@@ -2604,7 +2595,7 @@ describe("update-cli", () => {
     expect(syncPluginCall()?.channel).toBe("extended-stable");
     expect(syncPluginCall()?.extendedStableTargetContext).toMatchObject({
       installedCoreVersion: "2026.6.33",
-      cohort: { baselineVersion: "2026.6.21" },
+      snapshotVersion: "2026.6.33",
     });
     expect(lastNpmPluginUpdateCall()?.updateChannel).toBe("extended-stable");
   });
@@ -2634,7 +2625,7 @@ describe("update-cli", () => {
     expect(syncPluginCall()?.channel).toBe("extended-stable");
     expect(syncPluginCall()?.extendedStableTargetContext).toMatchObject({
       installedCoreVersion: "2026.6.33",
-      cohort: { baselineVersion: "2026.6.21" },
+      snapshotVersion: "2026.6.33",
     });
   });
 

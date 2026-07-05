@@ -4,8 +4,11 @@
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { loadExtendedStablePluginSupport } from "./lib/extended-stable-plugin-support.js";
-import { deriveExtendedStablePluginCandidateTag } from "./lib/plugin-npm-release.ts";
+import {
+  collectExtendedStablePublishablePluginPackages,
+  collectExtendedStableSnapshotPluginPackages,
+  deriveExtendedStablePluginCandidateTag,
+} from "./lib/plugin-npm-release.ts";
 
 type PublicationIdentity = {
   repository: string;
@@ -26,7 +29,7 @@ export type ExtendedStablePluginPublicationRecord = PublicationIdentity & {
 };
 
 export type ExtendedStablePluginPublicationResult = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   sourceSha: string;
   workflow: PublicationIdentity;
   plugins: Array<{
@@ -35,6 +38,12 @@ export type ExtendedStablePluginPublicationResult = {
     npmIntegrity: string;
     candidateTag: string;
     provenanceVerified: true;
+  }>;
+  snapshotReadbacks: Array<{
+    packageName: string;
+    version: string;
+    npmIntegrity: string;
+    installVerified: true;
   }>;
 };
 
@@ -77,6 +86,7 @@ function parseClosedRecord(value: unknown, label: string): ExtendedStablePluginP
 export function buildExtendedStablePluginPublicationResult(params: {
   rootDir?: string;
   records: unknown[];
+  snapshotReadbacks: unknown[];
   sourceSha: string;
   identity: PublicationIdentity;
 }): ExtendedStablePluginPublicationResult {
@@ -106,20 +116,20 @@ export function buildExtendedStablePluginPublicationResult(params: {
     throw new Error("Root package.json version must be a non-empty string.");
   }
   const version = rootPackage.version.trim();
-  const manifest = loadExtendedStablePluginSupport(rootDir);
+  const selectedPackages = collectExtendedStablePublishablePluginPackages(rootDir);
   const records = params.records
     .map((record, index) => parseClosedRecord(record, `publication record ${index}`))
     .toSorted((left, right) => left.packageName.localeCompare(right.packageName));
 
-  const expectedNames = manifest.plugins.map((entry) => entry.packageName);
+  const expectedNames = selectedPackages.map((entry) => entry.packageName);
   if (
     JSON.stringify(records.map((record) => record.packageName)) !== JSON.stringify(expectedNames)
   ) {
     throw new Error(`Publication records must contain exactly: ${expectedNames.join(", ")}.`);
   }
-  const manifestByName = new Map(manifest.plugins.map((entry) => [entry.packageName, entry]));
+  const selectedByName = new Map(selectedPackages.map((entry) => [entry.packageName, entry]));
   for (const record of records) {
-    const entry = manifestByName.get(record.packageName);
+    const entry = selectedByName.get(record.packageName);
     if (!entry) {
       throw new Error(`Unexpected publication package: ${record.packageName}.`);
     }
@@ -129,7 +139,7 @@ export function buildExtendedStablePluginPublicationResult(params: {
       );
     }
     const expectedCandidateTag = deriveExtendedStablePluginCandidateTag({
-      pluginId: entry.pluginId,
+      pluginId: entry.extensionId,
       version,
     });
     if (record.candidateTag !== expectedCandidateTag) {
@@ -157,8 +167,64 @@ export function buildExtendedStablePluginPublicationResult(params: {
     }
   }
 
+  const snapshotVersion = `${version.split(".").slice(0, 2).join(".")}.33`;
+  const expectedSnapshotNames = collectExtendedStableSnapshotPluginPackages(rootDir).map(
+    (plugin) => plugin.packageName,
+  );
+  const snapshotReadbacks = params.snapshotReadbacks
+    .map((value, index) => {
+      const label = `snapshot readback ${index}`;
+      if (!isRecord(value)) {
+        throw new Error(`${label} must be a JSON object.`);
+      }
+      const expectedKeys = ["installVerified", "npmIntegrity", "packageName", "version"];
+      if (JSON.stringify(Object.keys(value).toSorted()) !== JSON.stringify(expectedKeys)) {
+        throw new Error(`${label} has an unexpected field set.`);
+      }
+      const packageName = value.packageName;
+      const readbackVersion = value.version;
+      const npmIntegrity = value.npmIntegrity;
+      if (
+        typeof packageName !== "string" ||
+        typeof readbackVersion !== "string" ||
+        typeof npmIntegrity !== "string" ||
+        !npmIntegrity.startsWith("sha512-") ||
+        value.installVerified !== true
+      ) {
+        throw new Error(`${label} is invalid.`);
+      }
+      if (readbackVersion !== snapshotVersion) {
+        throw new Error(`${packageName} snapshot version must be ${snapshotVersion}.`);
+      }
+      return {
+        packageName,
+        version: readbackVersion,
+        npmIntegrity,
+        installVerified: true as const,
+      };
+    })
+    .toSorted((left, right) => left.packageName.localeCompare(right.packageName));
+  if (
+    JSON.stringify(snapshotReadbacks.map((entry) => entry.packageName)) !==
+    JSON.stringify(expectedSnapshotNames)
+  ) {
+    throw new Error(
+      `Snapshot readbacks must contain exactly: ${expectedSnapshotNames.join(", ")}.`,
+    );
+  }
+  if (version === snapshotVersion) {
+    const publicationIntegrityByPackage = new Map(
+      records.map((record) => [record.packageName, record.npmIntegrity]),
+    );
+    for (const snapshot of snapshotReadbacks) {
+      if (publicationIntegrityByPackage.get(snapshot.packageName) !== snapshot.npmIntegrity) {
+        throw new Error(`${snapshot.packageName} snapshot integrity must match publication.`);
+      }
+    }
+  }
+
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sourceSha: params.sourceSha,
     workflow: params.identity,
     plugins: records.map((record) => ({
@@ -168,6 +234,7 @@ export function buildExtendedStablePluginPublicationResult(params: {
       candidateTag: record.candidateTag,
       provenanceVerified: true,
     })),
+    snapshotReadbacks,
   };
 }
 
@@ -183,6 +250,7 @@ function requiredArg(argv: string[], flag: string): string {
 function main(argv: string[]): void {
   const resultsDir = requiredArg(argv, "--results-dir");
   const output = requiredArg(argv, "--output");
+  const snapshotReadbacksPath = requiredArg(argv, "--snapshot-readbacks");
   const sourceSha = requiredArg(argv, "--source-sha");
   const identity: PublicationIdentity = {
     repository: requiredArg(argv, "--repository"),
@@ -198,6 +266,7 @@ function main(argv: string[]): void {
     .map((name) => JSON.parse(readFileSync(join(resultsDir, name), "utf8")) as unknown);
   const result = buildExtendedStablePluginPublicationResult({
     records,
+    snapshotReadbacks: JSON.parse(readFileSync(snapshotReadbacksPath, "utf8")) as unknown[],
     sourceSha,
     identity,
   });

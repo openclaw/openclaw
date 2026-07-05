@@ -42,39 +42,48 @@ function validAcceptanceResult() {
   };
 }
 
-function validSelectorHandoff() {
-  const packageNames = ["@openclaw/codex", "@openclaw/discord", "@openclaw/slack"];
+function validSelectorHandoff(releaseVersion = "2026.6.33") {
+  const coveredPackageNames = ["@openclaw/codex", "@openclaw/discord", "@openclaw/slack"];
+  const publicationPackageNames =
+    releaseVersion === "2026.6.33"
+      ? ["@openclaw/codex", "@openclaw/discord", "@openclaw/matrix", "@openclaw/slack"]
+      : coveredPackageNames;
+  const publicationPackages = publicationPackageNames.map((packageName) => {
+    const pluginId = packageName.slice("@openclaw/".length);
+    return {
+      packageName,
+      version: releaseVersion,
+      npmIntegrity: `sha512-${pluginId}`,
+      candidateTag: `extended-stable-plugin-candidate-${pluginId}-${releaseVersion.replaceAll(".", "-")}`,
+    };
+  });
   const selectorState = Object.fromEntries(
-    ["openclaw", ...packageNames].map((packageName) => [
+    ["openclaw", ...publicationPackageNames].map((packageName) => [
       packageName,
       { latest: "2026.7.2", extendedStable: "2026.6.32" },
     ]),
   );
+  const acceptances = coveredPackageNames.map((packageName, index) => ({
+    packageName,
+    npmIntegrity: `sha512-${packageName.slice("@openclaw/".length)}`,
+    workflowSha: "b".repeat(40),
+    acceptanceRunId: 200 + index,
+    acceptanceRunAttempt: 1,
+    acceptanceArtifactDigest: `sha256:${String(index + 4).repeat(64)}`,
+    acceptanceResultSha256: String(index + 7).repeat(64),
+  }));
   return {
-    schemaVersion: 1,
-    handoffId: "openclaw/openclaw:123:2026.6.33",
-    releaseVersion: "2026.6.33",
+    schemaVersion: 2,
+    handoffId: `openclaw/openclaw:123:${releaseVersion}`,
+    releaseVersion,
     sourceSha: "a".repeat(40),
-    monthlyCohort: {
-      releaseLine: "2026.6",
-      baselineVersion: "2026.6.21",
-      sourceReleaseTag: "v2026.6.21",
-      sourceEvidenceSha256: "0".repeat(64),
-      packages: [
-        {
-          packageName: "@openclaw/example-cohort",
-          version: "2026.6.21",
-          npmIntegrity: "sha512-cohort",
-        },
-      ],
-    },
     core: {
       publicationRunId: "100",
       publicationRunAttempt: "1",
       publicationArtifactDigest: `sha256:${"1".repeat(64)}`,
-      version: "2026.6.33",
+      version: releaseVersion,
       npmIntegrity: "sha512-core",
-      candidateTag: "extended-stable-candidate-2026-6-33",
+      candidateTag: `extended-stable-candidate-${releaseVersion.replaceAll(".", "-")}`,
     },
     pluginPublication: {
       sourceSha: "a".repeat(40),
@@ -82,30 +91,74 @@ function validSelectorHandoff() {
       publicationRunAttempt: "1",
       publicationArtifactDigest: `sha256:${"2".repeat(64)}`,
       publicationResultSha256: "3".repeat(64),
-      plugins: packageNames.map((packageName) => {
-        const pluginId = packageName.slice("@openclaw/".length);
-        return {
-          packageName,
+      plugins: publicationPackages,
+      snapshotReadbacks: [
+        {
+          packageName: "@openclaw/matrix",
           version: "2026.6.33",
-          npmIntegrity: `sha512-${pluginId}`,
-          candidateTag: `extended-stable-plugin-candidate-${pluginId}-2026-6-33`,
-        };
-      }),
+          npmIntegrity: "sha512-matrix",
+        },
+      ],
     },
-    acceptances: packageNames.map((packageName, index) => ({
-      packageName,
-      npmIntegrity: `sha512-${packageName.slice("@openclaw/".length)}`,
-      workflowSha: "b".repeat(40),
-      acceptanceRunId: 200 + index,
-      acceptanceRunAttempt: 1,
-      acceptanceArtifactDigest: `sha256:${String(index + 4).repeat(64)}`,
-      acceptanceResultSha256: String(index + 7).repeat(64),
+    acceptances,
+    publicationPackages,
+    acceptancePackages: acceptances.map((acceptance, index) => ({
+      packageName: acceptance.packageName,
+      acceptanceProfile: ["codex-provider-v1", "discord-channel-v1", "slack-channel-v1"][index],
+      runId: acceptance.acceptanceRunId,
+      runAttempt: acceptance.acceptanceRunAttempt,
+      artifactName: `extended-stable-plugin-acceptance-${acceptance.acceptanceRunId}-${acceptance.acceptanceRunAttempt}`,
+      artifactDigest: acceptance.acceptanceArtifactDigest,
     })),
+    selectorPackages: publicationPackageNames,
+    snapshotReadbacks: [
+      {
+        packageName: "@openclaw/matrix",
+        version: "2026.6.33",
+        npmIntegrity: "sha512-matrix",
+        installProofRunId: 101,
+        installProofRunAttempt: 1,
+        installProofArtifactName: "extended-stable-plugin-publication-101-1",
+        installProofArtifactDigest: `sha256:${"2".repeat(64)}`,
+      },
+    ],
     selectorsBefore: selectorState,
     selectorsAfter: structuredClone(selectorState),
     selectorOrder: ["plugins", "core"],
     conclusion: "ready_for_protected_selector_promotion",
   };
+}
+
+function makeSelectorHandoffRoot(version = "2026.6.33") {
+  const rootDir = mkdtempSync(join(tmpdir(), "openclaw-selector-handoff-"));
+  mkdirSync(join(rootDir, "release"));
+  writeFileSync(
+    join(rootDir, "release/extended-stable-plugin-support.json"),
+    readFileSync("release/extended-stable-plugin-support.json", "utf8"),
+  );
+  writeFileSync(join(rootDir, "package.json"), `${JSON.stringify({ version })}\n`);
+  for (const pluginId of ["codex", "discord", "matrix", "slack"]) {
+    const packageDir = join(rootDir, "extensions", pluginId);
+    mkdirSync(packageDir, { recursive: true });
+    writeFileSync(join(packageDir, "README.md"), `# ${pluginId}\n`);
+    writeFileSync(
+      join(packageDir, "package.json"),
+      `${JSON.stringify({
+        name: `@openclaw/${pluginId}`,
+        version,
+        type: "module",
+        repository: { type: "git", url: "https://github.com/openclaw/openclaw" },
+        openclaw: {
+          extensions: ["./index.ts"],
+          install: { npmSpec: `@openclaw/${pluginId}` },
+          compat: { pluginApi: `>=${version}` },
+          build: { openclawVersion: version },
+          release: { publishToNpm: true },
+        },
+      })}\n`,
+    );
+  }
+  return rootDir;
 }
 
 describe("extended-stable plugin release artifacts", () => {
@@ -125,32 +178,32 @@ describe("extended-stable plugin release artifacts", () => {
     expect(() => parseExtendedStablePluginAcceptanceResult(incomplete)).toThrow("canonical order");
   });
 
-  it("binds candidate tags, package integrities, and unchanged shared selectors", () => {
-    const rootDir = mkdtempSync(join(tmpdir(), "openclaw-selector-handoff-"));
-    mkdirSync(join(rootDir, "release"));
-    writeFileSync(
-      join(rootDir, "release/extended-stable-plugin-support.json"),
-      readFileSync("release/extended-stable-plugin-support.json", "utf8"),
-    );
-    writeFileSync(
-      join(rootDir, "release/extended-stable-plugin-cohort.json"),
-      '{"schemaVersion":1,"releaseLine":"2026.6","baselineVersion":"2026.6.21"}\n',
-    );
+  it("binds the patch 33 package sets, proof artifacts, and unchanged selectors", () => {
+    const rootDir = makeSelectorHandoffRoot();
     const handoff = validSelectorHandoff();
-    const cohortPackages = ["@openclaw/example-cohort"];
-    expect(() => verifySelectorHandoff(handoff, rootDir, cohortPackages)).not.toThrow();
+    expect(() => verifySelectorHandoff(handoff, rootDir)).not.toThrow();
 
     const mismatched = validSelectorHandoff();
     mismatched.acceptances[0]!.npmIntegrity = "sha512-wrong";
-    expect(() => verifySelectorHandoff(mismatched, rootDir, cohortPackages)).toThrow(
-      /integrity does not match/u,
+    expect(() => verifySelectorHandoff(mismatched, rootDir)).toThrow(/integrity does not match/u);
+
+    const mismatchedSnapshot = validSelectorHandoff();
+    mismatchedSnapshot.pluginPublication.snapshotReadbacks[0]!.npmIntegrity =
+      "sha512-wrong-snapshot";
+    mismatchedSnapshot.snapshotReadbacks[0]!.npmIntegrity = "sha512-wrong-snapshot";
+    expect(() => verifySelectorHandoff(mismatchedSnapshot, rootDir)).toThrow(
+      /snapshot integrity must match its patch 33 publication integrity/u,
     );
 
     const moved = validSelectorHandoff();
     moved.selectorsAfter.openclaw!.extendedStable = "2026.6.33";
-    expect(() => verifySelectorHandoff(moved, rootDir, cohortPackages)).toThrow(
-      /shared selectors changed/u,
-    );
+    expect(() => verifySelectorHandoff(moved, rootDir)).toThrow(/shared selectors changed/u);
+    rmSync(rootDir, { force: true, recursive: true });
+  });
+
+  it("uses covered publication and selector sets after patch 33", () => {
+    const rootDir = makeSelectorHandoffRoot("2026.6.34");
+    expect(() => verifySelectorHandoff(validSelectorHandoff("2026.6.34"), rootDir)).not.toThrow();
     rmSync(rootDir, { force: true, recursive: true });
   });
 
@@ -212,9 +265,13 @@ describe("extended-stable plugin release artifacts", () => {
     expect(orchestrator).toContain('"extended-stable-plugin-acceptance.yml"');
     expect(orchestrator).toContain('selectorOrder: ["plugins", "core"]');
     expect(orchestrator).toContain('conclusion: "ready_for_protected_selector_promotion"');
-    expect(orchestrator).toContain("verifyMonthlyCohortProof");
-    expect(orchestrator).toContain("parseEligibleCohortEvidence");
-    expect(orchestrator).toContain("await verifyNpmPackage(packageName, cohort.baselineVersion)");
+    expect(orchestrator).toContain("schemaVersion: 2");
+    expect(orchestrator).toContain("publicationPackages: pluginProof.plugins");
+    expect(orchestrator).toContain("acceptancePackages");
+    expect(orchestrator).toContain("selectorPackages: selectorPackageNames");
+    expect(orchestrator).toContain("snapshotReadbacks: pluginProof.snapshotReadbacks");
+    expect(orchestrator).not.toContain("verifyMonthlyCohortProof");
+    expect(orchestrator).not.toContain("parseEligibleCohortEvidence");
     expect(orchestrator).toContain("verifySelectorHandoff(handoff, rootDir)");
     expect(orchestrator).toContain('extendedStable: read("extended-stable")');
     expect(orchestrator).toContain("Candidate publication moved one or more shared selectors");

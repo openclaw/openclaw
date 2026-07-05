@@ -1555,8 +1555,8 @@ export async function updateNpmInstalledPlugins(params: {
           : record.spec;
     const targetCode = npmSpecs?.targetCode;
     const targetFailureCode =
-      targetCode === "monthly_cohort_target"
-        ? "cohort_package_unavailable"
+      targetCode === "monthly_snapshot_target"
+        ? "snapshot_package_unavailable"
         : targetCode === "extended_stable_target"
           ? "exact_package_unavailable"
           : undefined;

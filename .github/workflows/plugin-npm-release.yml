@@ -16,11 +16,12 @@ on:
       - "scripts/plugin-npm-release-check.ts"
       - "scripts/plugin-npm-release-plan.ts"
       - "scripts/plugin-npm-publication-result.ts"
+      - "scripts/verify-extended-stable-snapshot-packages.ts"
       - "scripts/verify-plugin-npm-published-runtime.mjs"
   workflow_dispatch:
     inputs:
       publish_scope:
-        description: Publish selected, all publishable, or the fixed extended-stable plugin set
+        description: Publish selected, all publishable, or the patch-derived extended-stable plugin set
         required: true
         default: selected
         type: choice
@@ -60,6 +61,7 @@ jobs:
       candidate_count: ${{ steps.plan.outputs.candidate_count }}
       matrix: ${{ steps.plan.outputs.matrix }}
       extended_stable: ${{ steps.plan.outputs.extended_stable }}
+      extended_stable_maintenance: ${{ steps.plan.outputs.extended_stable_maintenance }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -190,9 +192,15 @@ jobs:
 
           matrix_selector='.candidates'
           extended_stable="false"
+          extended_stable_maintenance="false"
           if [[ "${PUBLISH_SCOPE}" == "extended-stable" ]]; then
             matrix_selector='.all'
             extended_stable="true"
+            root_version="$(node -p "require('./package.json').version")"
+            root_patch="${root_version##*.}"
+            if (( 10#${root_patch} > 33 )); then
+              extended_stable_maintenance="true"
+            fi
           fi
           candidate_count="$(jq -r "${matrix_selector} | length" .local/plugin-npm-release-plan.json)"
           has_candidates="false"
@@ -206,6 +214,7 @@ jobs:
             echo "has_candidates=${has_candidates}"
             echo "matrix=${matrix_json}"
             echo "extended_stable=${extended_stable}"
+            echo "extended_stable_maintenance=${extended_stable_maintenance}"
           } >> "$GITHUB_OUTPUT"
 
           echo "Plugin release candidates:"
@@ -310,9 +319,47 @@ jobs:
           fi
           bash scripts/plugin-npm-publish.sh "${args[@]}" "${PACKAGE_DIR}"
 
+  verify_extended_stable_snapshot_prerequisite:
+    needs: preview_plugins_npm
+    if: github.event_name == 'workflow_dispatch' && needs.preview_plugins_npm.outputs.extended_stable_maintenance == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Verify monthly snapshot before maintenance publication
+        run: |
+          set -euo pipefail
+          mkdir -p .local/plugin-publication-prerequisite
+          node --import tsx scripts/verify-extended-stable-snapshot-packages.ts \
+            --output .local/plugin-publication-prerequisite/extended-stable-snapshot-readbacks.json
+
   publish_plugins_npm:
-    needs: [preview_plugins_npm, preview_plugin_pack, validate_release_publish_approval]
-    if: github.event_name == 'workflow_dispatch' && needs.preview_plugins_npm.outputs.has_candidates == 'true'
+    needs:
+      - preview_plugins_npm
+      - preview_plugin_pack
+      - validate_release_publish_approval
+      - verify_extended_stable_snapshot_prerequisite
+    if: >-
+      always() &&
+      github.event_name == 'workflow_dispatch' &&
+      needs.preview_plugins_npm.outputs.has_candidates == 'true' &&
+      needs.preview_plugin_pack.result == 'success' &&
+      needs.validate_release_publish_approval.result == 'success' &&
+      (needs.verify_extended_stable_snapshot_prerequisite.result == 'success' ||
+      needs.verify_extended_stable_snapshot_prerequisite.result == 'skipped')
     runs-on: ubuntu-latest
     environment: npm-release
     permissions:
@@ -533,6 +580,13 @@ jobs:
           path: .local/plugin-publication-records
           merge-multiple: true
 
+      - name: Verify monthly snapshot package installs
+        run: |
+          set -euo pipefail
+          mkdir -p .local/plugin-publication-aggregate
+          node --import tsx scripts/verify-extended-stable-snapshot-packages.ts \
+            --output .local/plugin-publication-aggregate/extended-stable-snapshot-readbacks.json
+
       - name: Close aggregate publication result
         env:
           SOURCE_SHA: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
@@ -541,6 +595,7 @@ jobs:
           mkdir -p .local/plugin-publication-aggregate
           node --import tsx scripts/plugin-npm-publication-result.ts \
             --results-dir .local/plugin-publication-records \
+            --snapshot-readbacks .local/plugin-publication-aggregate/extended-stable-snapshot-readbacks.json \
             --output .local/plugin-publication-aggregate/extended-stable-plugin-publication.json \
             --source-sha "${SOURCE_SHA}" \
             --repository "${GITHUB_REPOSITORY}" \
