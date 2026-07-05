@@ -7085,6 +7085,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
     public let alloweddecisions: [String]?
     public let agentid: String?
     public let sessionkey: String?
+    public let approvalreviewerdeviceids: [String]?
     public let turnsourcechannel: String?
     public let turnsourceto: String?
     public let turnsourceaccountid: String?
@@ -7102,6 +7103,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         alloweddecisions: [String]?,
         agentid: String? = nil,
         sessionkey: String?,
+        approvalreviewerdeviceids: [String]?,
         turnsourcechannel: String?,
         turnsourceto: String?,
         turnsourceaccountid: String?,
@@ -7118,6 +7120,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         self.alloweddecisions = alloweddecisions
         self.agentid = agentid
         self.sessionkey = sessionkey
+        self.approvalreviewerdeviceids = approvalreviewerdeviceids
         self.turnsourcechannel = turnsourcechannel
         self.turnsourceto = turnsourceto
         self.turnsourceaccountid = turnsourceaccountid
@@ -7136,6 +7139,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         case alloweddecisions = "allowedDecisions"
         case agentid = "agentId"
         case sessionkey = "sessionKey"
+        case approvalreviewerdeviceids = "approvalReviewerDeviceIds"
         case turnsourcechannel = "turnSourceChannel"
         case turnsourceto = "turnSourceTo"
         case turnsourceaccountid = "turnSourceAccountId"
