@@ -19,6 +19,17 @@ describe("visible messaging-tool delivery evidence", () => {
       }),
     ).toBe(false);
   });
+
+  it("keeps rich delivery evidence when accompanying text is blank", () => {
+    expect(
+      hasVisibleOutboundDeliveryEvidence({
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [{ text: "  ", hasRichContent: true }],
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("collectDeliveredMediaUrls attachment recursion", () => {

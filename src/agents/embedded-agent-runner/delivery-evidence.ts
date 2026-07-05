@@ -63,9 +63,13 @@ function hasVisibleMessagingToolTarget(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
-  const target = value as { text?: unknown; mediaUrls?: unknown };
-  if ("text" in target || "mediaUrls" in target) {
-    return hasNonEmptyString(target.text) || hasNonEmptyStringArray(target.mediaUrls);
+  const target = value as { text?: unknown; mediaUrls?: unknown; hasRichContent?: unknown };
+  if ("text" in target || "mediaUrls" in target || "hasRichContent" in target) {
+    return (
+      hasNonEmptyString(target.text) ||
+      hasNonEmptyStringArray(target.mediaUrls) ||
+      target.hasRichContent === true
+    );
   }
   return true;
 }
