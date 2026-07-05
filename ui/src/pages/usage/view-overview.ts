@@ -368,21 +368,21 @@ function renderDailyChartCompact(
                         `${t("usage.breakdown.cacheRead")} ${formatTokens(d.cacheRead)}`,
                       ]
                     : [
-                        `${t("usage.breakdown.output")} ${formatCost(d.outputCost ?? 0)}`,
-                        `${t("usage.breakdown.input")} ${formatCost(d.inputCost ?? 0)}`,
-                        `${t("usage.breakdown.cacheWrite")} ${formatCost(d.cacheWriteCost ?? 0)}`,
-                        `${t("usage.breakdown.cacheRead")} ${formatCost(d.cacheReadCost ?? 0)}`,
+                        `${t("usage.breakdown.output")} ${formatAnalysisCost(d.outputCost ?? 0)}`,
+                        `${t("usage.breakdown.input")} ${formatAnalysisCost(d.inputCost ?? 0)}`,
+                        `${t("usage.breakdown.cacheWrite")} ${formatAnalysisCost(d.cacheWriteCost ?? 0)}`,
+                        `${t("usage.breakdown.cacheRead")} ${formatAnalysisCost(d.cacheReadCost ?? 0)}`,
                       ]
                   : [];
               const totalLabel = isTokenMode
                 ? formatTokens(d.totalTokens)
-                : formatCost(d.totalCost);
+                : formatAnalysisCost(d.totalCost);
               const tooltipContent = {
                 dateLabel: formatFullDate(d.date),
                 tokensLabel: `${formatTokens(d.totalTokens)} ${normalizeLowercaseStringOrEmpty(
                   t("usage.metrics.tokens"),
                 )}`.trim(),
-                costLabel: formatCost(d.totalCost),
+                costLabel: formatAnalysisCost(d.totalCost),
                 breakdownLines,
               };
               return html`
@@ -465,14 +465,14 @@ function renderCostBreakdownCompact(totals: UsageTotals, mode: "tokens" | "cost"
           style="width: ${(isTokenMode ? tokenPcts.output : breakdown.output.pct).toFixed(1)}%"
           title="${t("usage.breakdown.output")}: ${isTokenMode
             ? formatTokens(totals.output)
-            : formatCost(breakdown.output.cost)}"
+            : formatAnalysisCost(breakdown.output.cost)}"
         ></div>
         <div
           class="cost-segment input"
           style="width: ${(isTokenMode ? tokenPcts.input : breakdown.input.pct).toFixed(1)}%"
           title="${t("usage.breakdown.input")}: ${isTokenMode
             ? formatTokens(totals.input)
-            : formatCost(breakdown.input.cost)}"
+            : formatAnalysisCost(breakdown.input.cost)}"
         ></div>
         <div
           class="cost-segment cache-write"
@@ -481,7 +481,7 @@ function renderCostBreakdownCompact(totals: UsageTotals, mode: "tokens" | "cost"
           )}%"
           title="${t("usage.breakdown.cacheWrite")}: ${isTokenMode
             ? formatTokens(totals.cacheWrite)
-            : formatCost(breakdown.cacheWrite.cost)}"
+            : formatAnalysisCost(breakdown.cacheWrite.cost)}"
         ></div>
         <div
           class="cost-segment cache-read"
@@ -490,34 +490,38 @@ function renderCostBreakdownCompact(totals: UsageTotals, mode: "tokens" | "cost"
           )}%"
           title="${t("usage.breakdown.cacheRead")}: ${isTokenMode
             ? formatTokens(totals.cacheRead)
-            : formatCost(breakdown.cacheRead.cost)}"
+            : formatAnalysisCost(breakdown.cacheRead.cost)}"
         ></div>
       </div>
       <div class="cost-breakdown-legend">
         <span class="legend-item"
           ><span class="legend-dot output"></span>${t("usage.breakdown.output")}
-          ${isTokenMode ? formatTokens(totals.output) : formatCost(breakdown.output.cost)}</span
+          ${isTokenMode
+            ? formatTokens(totals.output)
+            : formatAnalysisCost(breakdown.output.cost)}</span
         >
         <span class="legend-item"
           ><span class="legend-dot input"></span>${t("usage.breakdown.input")}
-          ${isTokenMode ? formatTokens(totals.input) : formatCost(breakdown.input.cost)}</span
+          ${isTokenMode
+            ? formatTokens(totals.input)
+            : formatAnalysisCost(breakdown.input.cost)}</span
         >
         <span class="legend-item"
           ><span class="legend-dot cache-write"></span>${t("usage.breakdown.cacheWrite")}
           ${isTokenMode
             ? formatTokens(totals.cacheWrite)
-            : formatCost(breakdown.cacheWrite.cost)}</span
+            : formatAnalysisCost(breakdown.cacheWrite.cost)}</span
         >
         <span class="legend-item"
           ><span class="legend-dot cache-read"></span>${t("usage.breakdown.cacheRead")}
           ${isTokenMode
             ? formatTokens(totals.cacheRead)
-            : formatCost(breakdown.cacheRead.cost)}</span
+            : formatAnalysisCost(breakdown.cacheRead.cost)}</span
         >
       </div>
       <div class="cost-breakdown-total">
         ${t("usage.breakdown.total")}:
-        ${isTokenMode ? formatTokens(totals.totalTokens) : formatCost(totals.totalCost)}
+        ${isTokenMode ? formatTokens(totals.totalTokens) : formatAnalysisCost(totals.totalCost)}
       </div>
     </div>
   `;
@@ -651,7 +655,7 @@ function renderUsageInsights(
       : t("usage.common.emptyValue");
   const throughputCostLabel =
     stats.throughputCostPerMin !== undefined
-      ? `${formatCost(stats.throughputCostPerMin, 4)} ${t("usage.overview.perMinute")}`
+      ? `${formatAnalysisCost(stats.throughputCostPerMin)} ${t("usage.overview.perMinute")}`
       : t("usage.common.emptyValue");
   const avgDurationLabel =
     stats.durationCount > 0
@@ -696,12 +700,12 @@ function renderUsageInsights(
 
   const topModels = aggregates.byModel.slice(0, 5).map((entry) => ({
     label: entry.model ?? t("usage.common.unknown"),
-    value: formatCost(entry.totals.totalCost),
+    value: formatAnalysisCost(entry.totals.totalCost),
     sub: costAttributionSub(entry.totals.totalCost, entry.totals.totalTokens, entry.count),
   }));
   const topProviders = aggregates.byProvider.slice(0, 5).map((entry) => ({
     label: entry.provider ?? t("usage.common.unknown"),
-    value: formatCost(entry.totals.totalCost),
+    value: formatAnalysisCost(entry.totals.totalCost),
     sub: costAttributionSub(entry.totals.totalCost, entry.totals.totalTokens, entry.count),
   }));
   const topTools = aggregates.tools.tools.slice(0, 6).map((tool) => ({
@@ -711,12 +715,12 @@ function renderUsageInsights(
   }));
   const topAgents = aggregates.byAgent.slice(0, 5).map((entry) => ({
     label: entry.agentId,
-    value: formatCost(entry.totals.totalCost),
+    value: formatAnalysisCost(entry.totals.totalCost),
     sub: costAttributionSub(entry.totals.totalCost, entry.totals.totalTokens),
   }));
   const topChannels = aggregates.byChannel.slice(0, 5).map((entry) => ({
     label: entry.channel,
-    value: formatCost(entry.totals.totalCost),
+    value: formatAnalysisCost(entry.totals.totalCost),
     sub: costAttributionSub(entry.totals.totalCost, entry.totals.totalTokens),
   }));
 
@@ -775,8 +779,8 @@ function renderUsageInsights(
           ${renderSummaryStat({
             title: t("usage.overview.avgCost"),
             hint: costHint,
-            value: formatCost(avgCost, 4),
-            sub: `${formatCost(totals.totalCost)} ${normalizeLowercaseStringOrEmpty(t("usage.breakdown.total"))}`,
+            value: formatAnalysisCost(avgCost),
+            sub: `${formatAnalysisCost(totals.totalCost)} ${normalizeLowercaseStringOrEmpty(t("usage.breakdown.total"))}`,
             className: "usage-summary-card--compact",
           })}
           ${renderSummaryStat({
@@ -992,7 +996,7 @@ function renderSessionsCard(
             ${t("usage.sessions.copy")}
           </button>
           <div class="session-bar-value">
-            ${isTokenMode ? formatTokens(value) : formatCost(value)}
+            ${isTokenMode ? formatTokens(value) : formatAnalysisCost(value)}
           </div>
         </div>
       </div>
@@ -1021,7 +1025,7 @@ function renderSessionsCard(
       <div class="sessions-card-meta">
         <div class="sessions-card-stats">
           <span>
-            ${isTokenMode ? formatTokens(avgValue) : formatCost(avgValue)}
+            ${isTokenMode ? formatTokens(avgValue) : formatAnalysisCost(avgValue)}
             ${t("usage.sessions.avg")}
           </span>
           <span>${totalErrors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))}</span>

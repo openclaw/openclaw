@@ -474,6 +474,7 @@ function buildCostUsageSummaryFromCache(params: {
   files: UsageCostTranscriptFile[];
   startMs: number;
   endMs: number;
+  dailyUtcOffsetMinutes?: number;
   refreshing: boolean;
 }): CostUsageSummary {
   const dailyMap = new Map<string, CostUsageTotals>();
@@ -503,7 +504,7 @@ function buildCostUsageSummaryFromCache(params: {
       if (usageEntry.timestamp < params.startMs || usageEntry.timestamp > params.endMs) {
         continue;
       }
-      const date = formatDayKey(new Date(usageEntry.timestamp));
+      const date = formatDayKey(new Date(usageEntry.timestamp), params.dailyUtcOffsetMinutes);
       const bucket = dailyMap.get(date) ?? emptyTotals();
       addTotals(bucket, usageEntry);
       dailyMap.set(date, bucket);
@@ -511,7 +512,7 @@ function buildCostUsageSummaryFromCache(params: {
     }
   }
 
-  fillMissingDays(dailyMap, params.startMs, params.endMs);
+  fillMissingDays(dailyMap, params.startMs, params.endMs, params.dailyUtcOffsetMinutes);
 
   const daily = Array.from(dailyMap.entries())
     .map(([date, bucket]) => Object.assign({ date }, bucket))
@@ -919,8 +920,17 @@ const parseTranscriptEntry = (entry: Record<string, unknown>): ParsedTranscriptE
   };
 };
 
-const formatDayKey = (date: Date): string =>
-  date.toLocaleDateString("en-CA", { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
+const formatUtcDayKey = (date: Date): string =>
+  `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+
+const formatDayKey = (date: Date, utcOffsetMinutes?: number): string => {
+  if (utcOffsetMinutes === undefined) {
+    return date.toLocaleDateString("en-CA", {
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    });
+  }
+  return formatUtcDayKey(new Date(date.getTime() + utcOffsetMinutes * 60 * 1000));
+};
 
 /**
  * Maximum window (in days) for which we will zero-fill missing calendar
@@ -935,14 +945,11 @@ const formatDayKey = (date: Date): string =>
 const MAX_ZERO_FILL_DAYS = 366;
 
 /**
- * Parse a `YYYY-MM-DD` day key (as produced by `formatDayKey`) into a Date
- * constructed at local noon on that calendar date. Local-noon anchoring
- * gives a ±12h cushion so the resulting Date always formats back to the
- * same key via `formatDayKey`, even across DST transitions where the
- * local clock shifts by ±1h. Returns `null` for malformed keys so the
- * caller can fall back safely.
+ * Parse a `YYYY-MM-DD` day key into its UTC calendar-day timestamp. The
+ * timestamp is only used to enumerate calendar labels; usage timestamps stay
+ * in their requested timezone bucket.
  */
-const parseDayKeyToLocalNoon = (dayKey: string): Date | null => {
+const parseDayKeyToUtcMs = (dayKey: string): number | null => {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey);
   if (!match) {
     return null;
@@ -950,10 +957,13 @@ const parseDayKeyToLocalNoon = (dayKey: string): Date | null => {
   const year = Number(match[1]);
   const monthIdx = Number(match[2]) - 1;
   const day = Number(match[3]);
-  // Constructs the Date in the runtime's local timezone, which is the same
-  // timezone `formatDayKey` uses (`Intl.DateTimeFormat().resolvedOptions().timeZone`).
-  const date = new Date(year, monthIdx, day, 12, 0, 0, 0);
-  return Number.isFinite(date.getTime()) ? date : null;
+  const dayMs = Date.UTC(year, monthIdx, day);
+  const date = new Date(dayMs);
+  return date.getUTCFullYear() === year &&
+    date.getUTCMonth() === monthIdx &&
+    date.getUTCDate() === day
+    ? dayMs
+    : null;
 };
 
 /**
@@ -962,17 +972,15 @@ const parseDayKeyToLocalNoon = (dayKey: string): Date | null => {
  * resulting `daily` series matches the requested range length (one bar per
  * calendar day) instead of only covering days with recorded usage.
  *
- * Iteration steps by calendar day in the local timezone — we derive the
- * start and end day keys via `formatDayKey`, anchor a cursor at local noon
- * of the start day, and advance via `setDate(getDate() + 1)`. This is
- * robust against local-clock DST transitions where a fixed 24h ms step
- * would land in the previous or next calendar day (and risk skipping an
- * interior day from the zero-fill output).
+ * Day keys must use the same fixed offset as the request range. Otherwise a
+ * remote Gateway can return local-date labels for UTC/browser-local ranges,
+ * which drops boundary usage when the UI compares calendar windows.
  */
 const fillMissingDays = (
   dailyMap: Map<string, CostUsageTotals>,
   startMs: number,
   endMs: number,
+  utcOffsetMinutes?: number,
 ): void => {
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
     return;
@@ -985,10 +993,11 @@ const fillMissingDays = (
   if (spanDays > MAX_ZERO_FILL_DAYS) {
     return;
   }
-  const startKey = formatDayKey(new Date(startMs));
-  const endKey = formatDayKey(new Date(endMs));
-  const cursorDate = parseDayKeyToLocalNoon(startKey);
-  if (cursorDate === null) {
+  const startKey = formatDayKey(new Date(startMs), utcOffsetMinutes);
+  const endKey = formatDayKey(new Date(endMs), utcOffsetMinutes);
+  const startDayMs = parseDayKeyToUtcMs(startKey);
+  const endDayMs = parseDayKeyToUtcMs(endKey);
+  if (startDayMs === null || endDayMs === null) {
     // Defensive fallback — formatDayKey should always produce a YYYY-MM-DD
     // key, but if locale data ever shifts under us, at least make sure the
     // endpoint days are present so the chart isn't completely empty.
@@ -1000,35 +1009,18 @@ const fillMissingDays = (
     }
     return;
   }
-  // Hard upper bound to avoid runaway loops on bogus inputs (e.g. malformed
-  // formatDayKey output that never reaches endKey). Pads the expected span
-  // by a few iterations to cover any DST-driven boundary fuzz.
-  const maxIterations = MAX_ZERO_FILL_DAYS + 5;
-  let lastKey: string | undefined;
-  for (let i = 0; i <= maxIterations; i += 1) {
-    const key = formatDayKey(cursorDate);
+  const maxIterations = MAX_ZERO_FILL_DAYS + 1;
+  for (let cursorMs = startDayMs, i = 0; cursorMs <= endDayMs && i < maxIterations; i += 1) {
+    const key = formatUtcDayKey(new Date(cursorMs));
     if (!dailyMap.has(key)) {
       dailyMap.set(key, emptyTotals());
     }
-    lastKey = key;
-    if (key === endKey) {
-      break;
-    }
-    // Advance one calendar day in the local timezone. `setDate` handles
-    // month/year rollover, and the local-noon anchor (set in
-    // parseDayKeyToLocalNoon) gives us a ±12h cushion against ±1h DST
-    // shifts, so the cursor never lands in the prior or next calendar day.
-    cursorDate.setDate(cursorDate.getDate() + 1);
+    cursorMs += dayMs;
   }
-  // Defensive: make sure the end-day key is present even if the loop
-  // terminated early (e.g. iteration cap hit before reaching endKey).
-  if (lastKey !== endKey && !dailyMap.has(endKey)) {
+  if (!dailyMap.has(endKey)) {
     dailyMap.set(endKey, emptyTotals());
   }
 };
-
-const formatUtcDayKey = (date: Date): string =>
-  `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 
 const getUtcQuarterHourBucketKey = (
   date: Date,
@@ -1406,6 +1398,7 @@ export function resolveExistingUsageSessionFile(params: {
 export async function loadCostUsageSummary(params?: {
   startMs?: number;
   endMs?: number;
+  dailyUtcOffsetMinutes?: number;
   /** @deprecated Use startMs/endMs. */
   days?: number;
   config?: OpenClawConfig;
@@ -1445,7 +1438,7 @@ export async function loadCostUsageSummary(params?: {
         if (!ts || ts < sinceTime || ts > untilTime) {
           return;
         }
-        const dayKey = formatDayKey(entry.timestamp ?? now);
+        const dayKey = formatDayKey(entry.timestamp ?? now, params?.dailyUtcOffsetMinutes);
         const bucket = dailyMap.get(dayKey) ?? emptyTotals();
         applyUsageTotals(bucket, entry.usage);
         if (entry.costBreakdown?.total !== undefined) {
@@ -1465,7 +1458,7 @@ export async function loadCostUsageSummary(params?: {
     });
   }
 
-  fillMissingDays(dailyMap, sinceTime, untilTime);
+  fillMissingDays(dailyMap, sinceTime, untilTime, params?.dailyUtcOffsetMinutes);
 
   const daily = Array.from(dailyMap.entries())
     .map(([date, bucket]) => Object.assign({ date }, bucket))
@@ -1730,6 +1723,7 @@ export async function refreshCostUsageCache(params?: {
 export async function loadCostUsageSummaryFromCache(params: {
   startMs: number;
   endMs: number;
+  dailyUtcOffsetMinutes?: number;
   config?: OpenClawConfig;
   agentId?: string;
   requestRefresh?: boolean;
@@ -1779,6 +1773,7 @@ export async function loadCostUsageSummaryFromCache(params: {
     files,
     startMs: params.startMs,
     endMs: params.endMs,
+    dailyUtcOffsetMinutes: params.dailyUtcOffsetMinutes,
     refreshing: usageCostRefreshes.has(cachePath) || refreshRunning,
   });
 }

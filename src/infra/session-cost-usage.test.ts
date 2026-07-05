@@ -655,6 +655,38 @@ describe("session cost usage", () => {
     });
   });
 
+  it("buckets daily totals with the request timezone offset", async () => {
+    const root = await makeSessionCostRoot("cost-offset-bucket");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-offset.jsonl"),
+      transcriptText("sess-offset", {
+        type: "message",
+        timestamp: "2026-02-12T00:30:00.000Z",
+        message: {
+          role: "assistant",
+          usage: { input: 10, output: 5, totalTokens: 15, cost: { total: 0.00001 } },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const startMs = Date.UTC(2026, 1, 11, 2);
+      const endMs = Date.UTC(2026, 1, 12, 1, 59, 59, 999);
+      const summary = await loadCostUsageSummary({
+        startMs,
+        endMs,
+        dailyUtcOffsetMinutes: -120,
+      });
+
+      expect(summary.daily.map((entry) => entry.date)).toEqual(["2026-02-11"]);
+      expect(summary.daily[0]?.totalTokens).toBe(15);
+      expect(summary.daily[0]?.totalCost).toBeCloseTo(0.00001, 8);
+    });
+  });
+
   it("fills missing days between sparse activity within the requested range", async () => {
     const root = await makeSessionCostRoot("cost-sparse");
     const sessionsDir = path.join(root, "agents", "main", "sessions");

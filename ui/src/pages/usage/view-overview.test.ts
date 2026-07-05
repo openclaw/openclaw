@@ -296,12 +296,17 @@ describe("renderDailyChartCompact", () => {
 
   it("normalizes a nonzero micro-cost bar to the labeled maximum", () => {
     const container = document.createElement("div");
+    const entry = {
+      ...dailyEntry("2026-05-04", 1_000, 0.00001),
+      inputCost: 0.000004,
+      outputCost: 0.000006,
+    };
     render(
       renderDailyChartCompact(
-        [dailyEntry("2026-05-04", 1_000, 0.00001)],
+        [entry],
         [],
         "cost",
-        "total",
+        "by-type",
         () => {},
         () => {},
       ),
@@ -314,6 +319,11 @@ describe("renderDailyChartCompact", () => {
       ),
     ).toEqual(["$0.000010", "$0.000005", "$0.00"]);
     expect(container.querySelector<HTMLElement>(".daily-bar")?.style.height).toBe("200px");
+    expect(container.querySelector(".daily-bar-total")?.textContent?.trim()).toBe("$0.000010");
+    const tooltip = container.querySelector<HTMLElement & { content: string }>("openclaw-tooltip");
+    expect(tooltip?.content).toContain("$0.000010");
+    expect(tooltip?.content).toContain("Output $0.000006");
+    expect(tooltip?.content).toContain("Input $0.000004");
     expect(container.querySelector(".daily-chart-scale-badge")).toBeNull();
   });
 
