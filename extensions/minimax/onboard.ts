@@ -39,14 +39,18 @@ function applyMinimaxApiProviderConfigWithBaseUrl(
     baseUrl: params.baseUrl,
     models: [],
   };
-  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
-  const normalizedApiKey = resolvedApiKey?.trim() === "minimax" ? "" : resolvedApiKey;
+  const preservedApiKey =
+    typeof existingApiKey === "string"
+      ? existingApiKey.trim() === "" || existingApiKey.trim() === "minimax"
+        ? undefined
+        : existingApiKey
+      : existingApiKey;
   providers[params.providerId] = {
     ...existingProviderRest,
     baseUrl: params.baseUrl,
     api: "anthropic-messages",
     authHeader: true,
-    ...(normalizedApiKey?.trim() ? { apiKey: normalizedApiKey } : {}),
+    ...(preservedApiKey ? { apiKey: preservedApiKey } : {}),
     models: mergedModels.length > 0 ? mergedModels : [apiModel],
   };
 

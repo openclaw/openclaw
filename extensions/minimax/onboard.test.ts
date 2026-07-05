@@ -107,6 +107,7 @@ describe("minimax onboard", () => {
           MiniMax: {
             baseUrl: "https://api.minimax.io/anthropic",
             api: "anthropic-messages",
+            apiKey: { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
             timeoutSeconds: 900,
             models: [buildMinimaxApiModelDefinition("MiniMax-M2.7")],
           },
@@ -115,6 +116,11 @@ describe("minimax onboard", () => {
     });
 
     expect(Object.keys(cfg.models?.providers ?? {})).toEqual(["minimax"]);
+    expect(cfg.models?.providers?.minimax?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MINIMAX_API_KEY",
+    });
     expect(cfg.models?.providers?.minimax?.timeoutSeconds).toBe(900);
     expect(cfg.models?.providers?.minimax?.models.map((model) => model.id)).toEqual([
       "MiniMax-M2.7",
