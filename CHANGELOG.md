@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Control UI sidebar usage:** remove the provider usage quota row from the expanded sidebar while keeping usage details available in the chat composer and Usage page. Thanks @shakkernerd.
+
 ### Fixes
 
 - **Message delivery status:** report failed and partially failed best-effort channel delivery instead of returning a success-shaped message-tool result. (#99928) Thanks @masatohoshino.
