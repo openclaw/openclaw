@@ -286,6 +286,7 @@ describe("handleClickClackInbound", () => {
         onModelSelected?: unknown;
         commentaryProgressEnabled?: unknown;
         suppressDefaultToolProgressMessages?: unknown;
+        allowProgressCallbacksWhenSourceDeliverySuppressed?: unknown;
       };
     };
     // Model provenance capture applies to every account (it stamps the final
@@ -294,8 +295,9 @@ describe("handleClickClackInbound", () => {
     expect(withoutOptIn.replyOptions?.onItemEvent).toBeUndefined();
     expect(withOptIn.replyOptions?.commentaryProgressEnabled).toBe(true);
     // Channel-owned progress rendering: item events must flow even when
-    // session verbose mode is off.
+    // session verbose mode is off and source delivery is handled by ClickClack.
     expect(withOptIn.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+    expect(withOptIn.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
     expect(typeof withOptIn.replyOptions?.onItemEvent).toBe("function");
   });
 

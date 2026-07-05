@@ -233,6 +233,7 @@ export async function handleClickClackInbound(params: {
             // rendering, so item events must flow even when session verbose
             // mode is off and the default tool-progress texts stay suppressed.
             suppressDefaultToolProgressMessages: true,
+            allowProgressCallbacksWhenSourceDeliverySuppressed: true,
           }
         : {}),
     },
