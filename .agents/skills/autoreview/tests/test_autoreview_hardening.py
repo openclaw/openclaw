@@ -161,35 +161,13 @@ class AutoreviewHardeningTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "invalid boolean environment value"):
                 self.helper["env_truthy"]("AUTOREVIEW_TEST_BOOL")
 
-    def test_droid_runs_without_repo_context_or_tools(self) -> None:
+    def test_droid_fails_closed_without_complete_isolation(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             repo = init_repo(Path(tempdir))
             (repo / "AGENTS.md").write_text("hostile instructions\n", encoding="utf-8")
-            droid_bin = repo.parent / "droid"
-            droid_bin.write_text("#!/bin/sh\n", encoding="utf-8")
-            droid_bin.chmod(0o755)
-            captured: dict[str, object] = {}
 
-            def fake_run_with_heartbeat(cmd: list[str], cwd: Path, **kwargs: object) -> subprocess.CompletedProcess[str]:
-                captured.update(cmd=cmd, cwd=cwd, kwargs=kwargs)
-                return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
-
-            self.helper["run_droid"].__globals__["run_with_heartbeat"] = fake_run_with_heartbeat
-            args = argparse.Namespace(
-                droid_bin=str(droid_bin),
-                model=None,
-                thinking=None,
-                stream_engine_output=False,
-            )
-
-            self.helper["run_droid"](args, repo, "prompt")
-
-            command = captured["cmd"]
-            self.assertIn("--disabled-tools", command)
-            self.assertIn("*", command)
-            self.assertNotEqual(Path(captured["cwd"]).resolve(), repo.resolve())
-            droid_cwd = Path(command[command.index("--cwd") + 1])
-            self.assertNotEqual(droid_cwd.resolve(), repo.resolve())
+            with self.assertRaisesRegex(SystemExit, "droid engine is unavailable"):
+                self.helper["run_droid"](argparse.Namespace(), repo, "prompt")
 
     def test_prompt_file_keeps_recoverable_repo_path(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

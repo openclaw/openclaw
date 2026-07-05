@@ -22,7 +22,7 @@ from typing import Any, Callable
 ENGINES = ("codex", "claude", "droid", "copilot", "pi", "opencode", "cursor")
 ENGINE_ALIASES = {"cursor-agent": "cursor"}
 ENGINE_CHOICES = (*ENGINES, *ENGINE_ALIASES)
-ALL_REVIEWERS = ("codex", "claude", "droid", "copilot", "pi", "opencode")
+ALL_REVIEWERS = ("codex", "claude", "copilot", "pi", "opencode")
 SAFE_GIT_CONFIG_ARGS = (
     "-c",
     "core.fsmonitor=false",
@@ -93,7 +93,7 @@ DEFAULT_MODEL_BY_ENGINE = {
 THINKING_LEVELS_BY_ENGINE = {
     "codex": {"none", "minimal", "low", "medium", "high", "xhigh"},
     "claude": {"low", "medium", "high", "xhigh", "max"},
-    "droid": {"off", "none", "low", "medium", "high"},
+    "droid": {"off", "none", "low", "medium", "high", "xhigh", "max"},
     "copilot": set(),
     "pi": {"off", "minimal", "low", "medium", "high", "xhigh"},
     "opencode": {"minimal", "low", "medium", "high", "max"},
@@ -1424,37 +1424,10 @@ def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
 
 
 def run_droid(args: argparse.Namespace, repo: Path, prompt: str) -> str:
-    droid_bin = resolve_command(args.droid_bin, repo)
-    with tempfile.TemporaryDirectory(prefix="autoreview-droid.") as tempdir:
-        neutral_cwd = Path(tempdir)
-        prompt_path = neutral_cwd / "prompt.txt"
-        prompt_path.write_text(prompt)
-        cmd = [
-            droid_bin,
-            "exec",
-            "--cwd",
-            str(neutral_cwd),
-            "--disabled-tools",
-            "*",
-            "--output-format",
-            "stream-json" if args.stream_engine_output else "json",
-            "-f",
-            str(prompt_path),
-        ]
-        if args.model:
-            cmd.extend(["--model", args.model])
-        if args.thinking:
-            cmd.extend(["-r", args.thinking])
-        result = run_with_heartbeat(
-            cmd,
-            neutral_cwd,
-            label="droid",
-            stream_output=args.stream_engine_output,
-            env=safe_engine_env(repo, [Path(droid_bin).parent]),
-        )
-    if result.returncode != 0:
-        raise SystemExit(f"droid engine failed ({result.returncode})\n{result.stderr or result.stdout}")
-    return result.stdout
+    raise SystemExit(
+        "droid engine is unavailable: the current Droid CLI cannot disable project instructions and all tools; "
+        "use codex, claude, copilot, pi, opencode, or cursor"
+    )
 
 
 def run_copilot(args: argparse.Namespace, repo: Path, prompt: str) -> str:
