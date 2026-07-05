@@ -5,6 +5,7 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { GatewayClient } from "../gateway/client.js";
+import { truncateUtf16Safe } from "../utils.js";
 import {
   analyzeArgvCommand,
   ensureExecApprovals,
@@ -230,7 +231,7 @@ function truncateOutput(raw: string, maxChars: number): { text: string; truncate
   if (raw.length <= maxChars) {
     return { text: raw, truncated: false };
   }
-  return { text: `... (truncated) ${raw.slice(raw.length - maxChars)}`, truncated: true };
+  return { text: `... (truncated) ${truncateUtf16Safe(raw, maxChars)}`, truncated: true };
 }
 
 export function decodeCapturedOutputBuffer(params: {
