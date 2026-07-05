@@ -1189,7 +1189,6 @@ export async function runReplyAgent(params: {
     shouldFollowup,
     isActive,
     isRunActive,
-    isStreaming,
     opts,
     typing,
     sessionEntry,
@@ -1275,7 +1274,7 @@ export async function runReplyAgent(params: {
     }
   };
 
-  if (effectiveShouldSteer && isStreaming) {
+  if (effectiveShouldSteer && isActive) {
     const steerSessionId =
       (sessionKey ? replyRunRegistry.resolveSessionId(sessionKey) : undefined) ??
       followupRun.run.sessionId;
@@ -1446,6 +1445,8 @@ export async function runReplyAgent(params: {
     const admission = await admitReplyTurn({
       sessionId: followupRun.run.sessionId,
       sessionKey: replySessionKey ?? "",
+      expectedSessionId: activeSessionEntry?.sessionId,
+      storePath,
       kind: replyTurnKind,
       resetTriggered: effectiveResetTriggered,
       routeThreadId: replyRouteThreadId,
@@ -1625,6 +1626,10 @@ export async function runReplyAgent(params: {
       }),
     );
 
+    if (replyOperation.result?.kind === "aborted") {
+      throw replyOperation.abortSignal.reason ?? new Error("reply operation aborted");
+    }
+
     if (visibleMemoryFlushErrorPayloads.length > 0) {
       const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
       const payloadResult = await buildReplyPayloads({
@@ -1654,6 +1659,7 @@ export async function runReplyAgent(params: {
         markReplyPayloadForSourceSuppressionDelivery(payload),
       );
       if (replyPayloads.length > 0) {
+        replyOperation.freezeAbort();
         replyOperation.fail(
           "run_failed",
           new Error("memory flush produced visible error payloads"),

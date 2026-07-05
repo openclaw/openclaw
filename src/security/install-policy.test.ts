@@ -235,8 +235,11 @@ describe("runInstallPolicy", () => {
                   command: forkScriptPath,
                   env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
                   allowInsecurePath: true,
-                  noOutputTimeoutMs: 150,
-                  timeoutMs: 2000,
+                  // The first no-output window must absorb shell spawn latency
+                  // under parallel-suite load; the script's readiness byte then
+                  // pins the killing silence window after the pid write.
+                  noOutputTimeoutMs: 1000,
+                  timeoutMs: 10_000,
                 },
               },
             },
@@ -246,7 +249,7 @@ describe("runInstallPolicy", () => {
 
         expect(result?.blocked?.reason).toContain("policy command produced no output");
         childPid = await readPidFile(pidPath);
-        expect(await waitForPidToExit(childPid)).toBe(true);
+        expect(await waitForPidToExit(childPid, 5_000)).toBe(true);
       } finally {
         killPidIfAlive(childPid);
       }

@@ -716,6 +716,7 @@ export async function runCopilotAttempt(
           developerInstructions: originalDeveloperInstructions,
           messages,
           ctx: hookContext,
+          bootstrapContextRunKind: input.bootstrapContextRunKind,
           ...("beforeAgentStartResult" in input
             ? { beforeAgentStartResult: input.beforeAgentStartResult }
             : {}),
@@ -1515,7 +1516,7 @@ function createSystemMessageContent(
   const extraSystemPrompt = readString(params.extraSystemPrompt)?.trim();
   if (extraSystemPrompt && !isRawCopilotModelRun(params)) {
     const contextHeader =
-      params.promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
+      params.promptMode === "minimal" ? "## Subagent Context" : "## Conversation Context";
     sections.push(`${contextHeader}\n${extraSystemPrompt}`);
   }
   return sections.length > 0 ? sections.join("\n\n") : undefined;
@@ -1613,9 +1614,7 @@ export function resolveModelRef(params: AttemptParamsLike): ModelRef {
         readString((params as { provider?: unknown }).provider) ??
         "unknown-provider",
       baseUrl: readString(model.baseUrl),
-      azureApiVersion: readString(
-        model.azureApiVersion ?? model.params?.azureApiVersion,
-      ),
+      azureApiVersion: readString(model.azureApiVersion ?? model.params?.azureApiVersion),
       headers: model.headers,
       authHeader: model.authHeader,
       requestAuthMode: readString(requestTransport?.auth?.mode ?? rawRequest?.auth?.mode),

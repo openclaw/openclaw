@@ -4,6 +4,7 @@ import {
   sanitizeForLog,
   splitGraphemes,
   stripAnsi,
+  stripAnsiSequences,
   truncateToVisibleWidth,
   visibleWidth,
 } from "./ansi.js";
@@ -15,6 +16,16 @@ describe("terminal ansi helpers", () => {
     expect(stripAnsi("\u001B]8;;https://openclaw.ai\u001B\\link\u001B]8;;\u001B\\")).toBe("link");
     expect(stripAnsi("\u001B]8;;https://openclaw.ai\u0007link\u001B]8;;\u0007")).toBe("link");
     expect(stripAnsi("copy\u001B]52;c;YWJj\u0007safe")).toBe("copysafe");
+  });
+
+  it("strips the agent output escape grammar without changing text policy", () => {
+    expect(stripAnsiSequences("\u001B[38:5:196mred\u001B[0m")).toBe("red");
+    expect(stripAnsiSequences("\u009B31mred\u009B0m")).toBe("red");
+    expect(stripAnsiSequences("\u001B]8;;https://openclaw.ai\u009Clink\u001B]8;;\u0007")).toBe(
+      "link",
+    );
+    expect(stripAnsiSequences("line\n\t🙂\u001B]unterminated")).toBe("line\n\t🙂nterminated");
+    expect(() => stripAnsiSequences(null as never)).toThrow("Expected a `string`, got `object`");
   });
 
   it("sanitizes control characters for log-safe interpolation", () => {

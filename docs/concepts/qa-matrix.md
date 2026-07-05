@@ -23,12 +23,13 @@ Plain `pnpm openclaw qa matrix` runs `--profile all` and does not stop on first 
 
 ## What the lane does
 
-1. Provisions a disposable Tuwunel homeserver in Docker (default image `ghcr.io/matrix-construct/tuwunel:v1.5.1`, server name `matrix-qa.test`, port `28008`).
+1. Provisions a disposable Tuwunel homeserver in Docker (default image `ghcr.io/matrix-construct/tuwunel:v1.5.1`, server name `matrix-qa.test`, port `28008`) behind a bounded redacting request/response recorder.
 2. Registers three temporary users - `driver` (sends inbound traffic), `sut` (the OpenClaw Matrix account under test), `observer` (third-party traffic capture).
 3. Seeds rooms required by the selected scenarios (main, threading, media, restart, secondary, allowlist, E2EE, verification DM, etc.).
-4. Starts a child OpenClaw gateway with the real Matrix plugin scoped to the SUT account; `qa-channel` is not loaded in the child.
-5. Runs scenarios in sequence, observing events through the driver/observer Matrix clients.
-6. Tears down the homeserver, writes report and summary artifacts, then exits.
+4. Runs the substrate-neutral `matrix-qa-v1` protocol probe against the recorded Tuwunel boundary. Unit tests prove the probe contract with the Matrix protocol fixture; the canonical QA transport adapter host in [#99707](https://github.com/openclaw/openclaw/pull/99707) owns real Crabline target wiring.
+5. Starts a child OpenClaw gateway with the real Matrix plugin scoped to the SUT account; `qa-channel` is not loaded in the child.
+6. Runs scenarios in sequence, observing events through the driver/observer Matrix clients and deriving route/state expectations from the recorded traffic.
+7. Tears down the homeserver, writes report and evidence artifacts, then exits.
 
 ## CLI
 
@@ -38,14 +39,14 @@ pnpm openclaw qa matrix [options]
 
 ### Common flags
 
-| Flag                  | Default                                       | Description                                                                                                            |
-| --------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `--profile <profile>` | `all`                                         | Scenario profile. See [Profiles](#profiles).                                                                           |
-| `--fail-fast`         | off                                           | Stop after the first failed check or scenario.                                                                         |
-| `--scenario <id>`     | -                                             | Run only this scenario. Repeatable. See [Scenarios](#scenarios).                                                       |
-| `--output-dir <path>` | `<repo>/.artifacts/qa-e2e/matrix-<timestamp>` | Where reports, summary, observed events, and the output log are written. Relative paths resolve against `--repo-root`. |
-| `--repo-root <path>`  | `process.cwd()`                               | Repository root when invoking from a neutral working directory.                                                        |
-| `--sut-account <id>`  | `sut`                                         | Matrix account id inside the QA gateway config.                                                                        |
+| Flag                  | Default                                       | Description                                                                                                                                   |
+| --------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--profile <profile>` | `all`                                         | Scenario profile. See [Profiles](#profiles).                                                                                                  |
+| `--fail-fast`         | off                                           | Stop after the first failed check or scenario.                                                                                                |
+| `--scenario <id>`     | -                                             | Run only this scenario. Repeatable. See [Scenarios](#scenarios).                                                                              |
+| `--output-dir <path>` | `<repo>/.artifacts/qa-e2e/matrix-<timestamp>` | Where reports, summary, route/state inventory, observed events, and the output log are written. Relative paths resolve against `--repo-root`. |
+| `--repo-root <path>`  | `process.cwd()`                               | Repository root when invoking from a neutral working directory.                                                                               |
+| `--sut-account <id>`  | `sut`                                         | Matrix account id inside the QA gateway config.                                                                                               |
 
 ### Provider flags
 
@@ -114,6 +115,7 @@ Written to `--output-dir`:
 
 - `matrix-qa-report.md` - Markdown protocol report (what passed, failed, was skipped, and why).
 - `matrix-qa-summary.json` - Structured summary suitable for CI parsing and dashboards.
+- `matrix-qa-route-state-manifest.json` - Dynamic `matrix-qa-v1` inventory keyed by scenario id. It records redacted route/body shapes, request ordering, observed retries, errors, sync-token continuity, and device/key/media/backup state families observed during that run. This is executable evidence, not a checked-in baseline.
 - `matrix-qa-observed-events.json` - Observed Matrix events from the driver and observer clients. Bodies are redacted unless `OPENCLAW_QA_MATRIX_CAPTURE_CONTENT=1`; approval metadata is summarized with selected safe fields and truncated command preview.
 - `matrix-qa-output.log` - Combined stdout/stderr from the run. If `OPENCLAW_RUN_NODE_OUTPUT_LOG` is set, the outer launcher's log is reused instead.
 

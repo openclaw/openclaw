@@ -1,9 +1,6 @@
 // Builds CLI runtime dispatch inputs for agent runner executions.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { clearCliSession } from "../../agents/cli-session.js";
@@ -31,14 +28,6 @@ import {
 import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../reply-payload.js";
 import { formatToolAggregate } from "../tool-meta.js";
 import { resolveAgentLifecycleTerminalMetadata } from "./agent-lifecycle-terminal.js";
-
-function isClaudeCliProvider(provider: string): boolean {
-  return normalizeLowercaseStringOrEmpty(provider) === "claude-cli";
-}
-
-function shouldBridgeCliAssistantTextToReasoning(provider: string): boolean {
-  return isClaudeCliProvider(provider);
-}
 
 function createAgentEventBridge<T>(params: {
   runId: string;
@@ -116,6 +105,38 @@ function createAssistantTextBridge(params: {
       }
       lastText = text;
       return text;
+    },
+  });
+}
+
+export type ReasoningTextPayload = {
+  text: string;
+  isReasoningSnapshot?: boolean;
+};
+
+function createReasoningTextBridge(params: {
+  runId: string;
+  suppressed?: boolean;
+  deliver?: (payload: ReasoningTextPayload) => Promise<void>;
+}) {
+  let lastText: string | undefined;
+  return createAgentEventBridge({
+    runId: params.runId,
+    suppressed: params.suppressed,
+    deliver: params.deliver,
+    read: (evt) => {
+      if (evt.stream !== "thinking") {
+        return undefined;
+      }
+      const text = typeof evt.data.text === "string" ? evt.data.text : undefined;
+      if (text === undefined || text === lastText) {
+        return undefined;
+      }
+      lastText = text;
+      return {
+        text,
+        ...(evt.data.isReasoningSnapshot === true ? { isReasoningSnapshot: true } : {}),
+      };
     },
   });
 }
@@ -342,7 +363,7 @@ type RunCliAgentWithLifecycleParams = {
   onAgentRunStart?: () => void;
   suppressAssistantBridge?: boolean;
   onAssistantText?: (text: string) => Promise<void>;
-  onReasoningText?: (text: string) => Promise<void>;
+  onReasoningText?: (payload: ReasoningTextPayload) => Promise<void>;
   onToolEvent?: (payload: CliToolEventPayload) => Promise<void>;
   onCommentaryText?: (payload: CommentaryTextPayload) => Promise<void>;
   onFastModeAutoProgress?: (payload: ReplyPayload) => Promise<void>;
@@ -450,12 +471,14 @@ async function runCliAgentWithLifecycleInternal(
     suppressed: params.suppressAssistantBridge,
     deliver: params.onAssistantText,
   });
-  const reasoningBridge = createAssistantTextBridge({
+  let finalReasoningText: string | undefined;
+  const reasoningBridge = createReasoningTextBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
-    deliver: shouldBridgeCliAssistantTextToReasoning(params.provider)
-      ? params.onReasoningText
-      : undefined,
+    deliver: async (payload) => {
+      finalReasoningText = normalizeOptionalString(payload.text);
+      await params.onReasoningText?.(payload);
+    },
   });
   const toolBridge = createToolEventBridge({
     runId: params.runId,
@@ -493,6 +516,16 @@ async function runCliAgentWithLifecycleInternal(
     await stopAgentEventBridges(bridges);
 
     const cliText = normalizeOptionalString(result.payloads?.[0]?.text);
+    const durableReasoningText = normalizeOptionalString(finalReasoningText);
+    const resultWithReasoning = durableReasoningText
+      ? {
+          ...result,
+          payloads: [
+            { text: durableReasoningText, isReasoning: true },
+            ...(result.payloads ?? []),
+          ],
+        }
+      : result;
     if (cliText) {
       emitAgentEvent({
         runId: params.runId,
@@ -518,7 +551,7 @@ async function runCliAgentWithLifecycleInternal(
       });
       lifecycleTerminalEmitted = true;
     }
-    return result;
+    return resultWithReasoning;
   } catch (err) {
     await stopAgentEventBridges(bridges);
     await params.onErrorBeforeLifecycle?.(err);

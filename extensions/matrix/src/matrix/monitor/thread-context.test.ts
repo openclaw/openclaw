@@ -23,6 +23,23 @@ describe("matrix thread context", () => {
     ).toBe("Thread starter body");
   });
 
+  it("truncates long thread starter bodies on code-point boundaries", () => {
+    const summary = summarizeMatrixThreadStarterEvent({
+      event_id: "$root",
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      origin_server_ts: Date.now(),
+      content: {
+        msgtype: "m.text",
+        // 496 "a" + astral emoji (surrogate pair at units 496-497) + tail.
+        // A raw slice(0, 497) would cut the pair and leave a lone high surrogate.
+        body: `${"a".repeat(496)}\u{1F600}bcd`,
+      },
+    } as MatrixRawEvent);
+    expect(summary).toBe(`${"a".repeat(496)}...`);
+    expect(summary && /[\uD800-\uDFFF]/.test(summary)).toBe(false);
+  });
+
   it("marks media-only thread starter events instead of returning bare filenames", () => {
     expect(
       summarizeMatrixThreadStarterEvent({

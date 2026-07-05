@@ -998,6 +998,17 @@ describe("web auto-reply connection", () => {
     });
 
     expect(capture.getLastOptions()?.shouldDebounce?.(msg)).toBe(true);
+    expect(
+      capture.getLastOptions()?.shouldDebounce?.(
+        createTestWebInboundMessage({
+          payload: {
+            body: "/stop\n\n[whatsapp attachment unavailable]",
+            commandBody: "/stop",
+          },
+          platform: { sendComposing, reply, sendMedia },
+        }),
+      ),
+    ).toBe(false);
     await onMessage(msg);
 
     expect(reply).toHaveBeenCalledWith("ok", undefined);

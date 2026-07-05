@@ -1,8 +1,10 @@
 // Context-engine registry owns engine registration, resolution, compatibility, and quarantine.
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { isStringOption } from "../utils/string-readers.js";
 import {
   clearPersistedContextEngineQuarantineForProcess,
   listPersistedContextEngineQuarantines,
@@ -101,9 +103,7 @@ type LegacyCompatKey = (typeof LEGACY_COMPAT_PARAMS)[number];
 type LegacyCompatParamMap = Partial<Record<LegacyCompatKey, unknown>>;
 
 function isSessionKeyCompatMethodName(value: PropertyKey): value is SessionKeyCompatMethodName {
-  return (
-    typeof value === "string" && (SESSION_KEY_COMPAT_METHODS as readonly string[]).includes(value)
-  );
+  return isStringOption(value, SESSION_KEY_COMPAT_METHODS);
 }
 
 function hasOwnLegacyCompatKey<K extends LegacyCompatKey>(
@@ -738,11 +738,9 @@ function contextEngineAbortError(methodParams: unknown): Error | undefined {
   if (reason instanceof Error) {
     return reason;
   }
-  const error = new Error(
+  return createAbortError(
     typeof reason === "string" && reason ? reason : "Context engine operation aborted.",
   );
-  error.name = "AbortError";
-  return error;
 }
 
 function isContextEngineAbortRejection(error: unknown, methodParams: unknown): boolean {

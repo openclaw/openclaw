@@ -297,6 +297,11 @@ export function toDiscordFileBlob(data: Blob | Uint8Array): Blob {
   return new Blob([arrayBuffer]);
 }
 
+export type DiscordSendProgress = (
+  result: { id: string; channel_id: string },
+  kind: "text" | "media",
+) => Promise<void> | void;
+
 async function sendDiscordText(
   rest: RequestClient,
   channelId: string,
@@ -310,6 +315,7 @@ async function sendDiscordText(
   silent?: boolean,
   suppressEmbeds?: boolean,
   maxChars?: number,
+  onResult?: DiscordSendProgress,
 ) {
   if (!text.trim()) {
     throw new Error("Message must be non-empty for Discord sends");
@@ -340,12 +346,14 @@ async function sendDiscordText(
   };
   if (chunks.length === 1) {
     const result = await sendChunk(chunks[0], true);
+    await onResult?.(result, "text");
     return { ...result, platformMessageIds: result.id ? [result.id] : [] };
   }
   const platformMessageIds: string[] = [];
   let last: { id: string; channel_id: string } | null = null;
   for (const [index, chunk] of chunks.entries()) {
     last = await sendChunk(chunk, index === 0);
+    await onResult?.(last, "text");
     if (last.id) {
       platformMessageIds.push(last.id);
     }
@@ -375,6 +383,7 @@ async function sendDiscordMedia(
   silent?: boolean,
   suppressEmbeds?: boolean,
   maxChars?: number,
+  onResult?: DiscordSendProgress,
 ) {
   return await sendDiscordMediaBatch(
     rest,
@@ -502,6 +511,7 @@ async function sendDiscordMediaBatch(
       () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
       "media",
     )) as { id: string; channel_id: string };
+    await onResult?.(res, "media");
     if (res.id) {
       platformMessageIds.push(res.id);
     }
@@ -523,6 +533,7 @@ async function sendDiscordMediaBatch(
       silent,
       suppressEmbeds,
       maxChars,
+      onResult,
     );
     for (const id of followup.platformMessageIds) {
       if (id) {

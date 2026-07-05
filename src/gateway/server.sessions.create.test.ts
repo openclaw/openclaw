@@ -90,7 +90,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   expect(header.id).toBe(created.payload?.sessionId);
 });
 
-test("sessions.create inherits parent runtime model selection when model is omitted", async () => {
+test("sessions.create inherits parent runtime model selection without stale context metadata", async () => {
   const { storePath } = await createSessionStoreDir();
   await writeSessionStore({
     entries: {
@@ -102,6 +102,29 @@ test("sessions.create inherits parent runtime model selection when model is omit
         modelProvider: "codex",
         model: "gpt-5.5",
         contextTokens: 272000,
+        inputTokens: 12000,
+        outputTokens: 340,
+        totalTokens: 12340,
+        totalTokensFresh: false,
+        contextBudgetStatus: {
+          schemaVersion: 1,
+          source: "pre-prompt-estimate",
+          updatedAt: 1,
+          provider: "codex",
+          model: "gpt-5.5",
+          route: "compact_then_truncate",
+          shouldCompact: true,
+          estimatedPromptTokens: 250000,
+          contextTokenBudget: 128000,
+          promptBudgetBeforeReserve: 112000,
+          reserveTokens: 16000,
+          effectiveReserveTokens: 16000,
+          remainingPromptBudgetTokens: 0,
+          overflowTokens: 138000,
+          toolResultReducibleChars: 5000,
+          messageCount: 12,
+          unwindowedMessageCount: 12,
+        },
         thinkingLevel: "off",
         fastMode: "auto",
         traceLevel: "debug",
@@ -121,6 +144,11 @@ test("sessions.create inherits parent runtime model selection when model is omit
       modelProvider?: string;
       model?: string;
       contextTokens?: number;
+      inputTokens?: number;
+      outputTokens?: number;
+      totalTokens?: number;
+      totalTokensFresh?: boolean;
+      contextBudgetStatus?: unknown;
       thinkingLevel?: string;
       fastMode?: string;
       traceLevel?: string;
@@ -142,7 +170,12 @@ test("sessions.create inherits parent runtime model selection when model is omit
   expect(created.payload?.entry?.agentRuntimeOverride).toBe("codex");
   expect(created.payload?.entry?.modelProvider).toBe("codex");
   expect(created.payload?.entry?.model).toBe("gpt-5.5");
-  expect(created.payload?.entry?.contextTokens).toBe(272000);
+  expect(created.payload?.entry?.contextTokens).toBeUndefined();
+  expect(created.payload?.entry?.inputTokens).toBeUndefined();
+  expect(created.payload?.entry?.outputTokens).toBeUndefined();
+  expect(created.payload?.entry?.totalTokens).toBeUndefined();
+  expect(created.payload?.entry?.totalTokensFresh).toBeUndefined();
+  expect(created.payload?.entry?.contextBudgetStatus).toBeUndefined();
   expect(created.payload?.entry?.thinkingLevel).toBe("off");
   expect(created.payload?.entry?.fastMode).toBe("auto");
   expect(created.payload?.entry?.traceLevel).toBe("debug");

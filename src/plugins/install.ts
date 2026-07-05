@@ -1,5 +1,5 @@
 // Installs plugins from package specs, local paths, and catalogs.
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { constants as fsConstants, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -7,6 +7,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { satisfiesPluginApiRange } from "../infra/clawhub.js";
+import { sha256HexPrefix } from "../infra/crypto-digest.js";
 import { packageNameMatchesId } from "../infra/install-safe-path.js";
 import {
   resolveNpmPackArchiveMetadata,
@@ -1838,7 +1839,7 @@ async function stageNpmPackArchiveInManagedRoot(params: {
 > {
   const archiveStoreDir = path.join(params.npmRoot, MANAGED_NPM_PACK_ARCHIVE_DIR);
   const identity = params.integrity ?? params.shasum ?? params.tarballName;
-  const identitySlug = createHash("sha256").update(identity).digest("hex").slice(0, 16);
+  const identitySlug = sha256HexPrefix(identity, 16);
   const packageSlug = safePluginInstallFileName(params.packageName) || "plugin";
   const versionSlug = safePluginInstallFileName(params.version ?? "pack") || "pack";
   const archiveFileName = `${packageSlug}-${versionSlug}-${identitySlug}.tgz`;
@@ -3093,6 +3094,12 @@ export async function installPluginFromNpmSpec(
   if (compatibilityError) {
     return compatibilityError;
   }
+  const npmInstallPolicySource = {
+    kind: "npm",
+    authority: params.trustedSourceLinkedOfficialInstall ? "official" : "third-party",
+    mutable: false,
+    network: true,
+  } as const;
   const driftResult = await resolveNpmIntegrityDriftWithDefaultMessage({
     spec,
     expectedIntegrity: params.expectedIntegrity,
@@ -3162,7 +3169,7 @@ export async function installPluginFromNpmSpec(
           packageName: parsedSpec.name,
           ...(expectedPluginId ? { pluginId: expectedPluginId } : {}),
           requestedSpecifier: spec,
-          source: { kind: "npm", authority: "third-party", mutable: false, network: true },
+          source: npmInstallPolicySource,
           sourcePath: policyMetadataPath,
           sourcePathKind: "file",
         }),
@@ -3187,7 +3194,7 @@ export async function installPluginFromNpmSpec(
     installPolicyRequest: {
       kind: "plugin-npm",
       requestedSpecifier: spec,
-      source: { kind: "npm", authority: "third-party", mutable: false, network: true },
+      source: npmInstallPolicySource,
     },
     extensionsDir: params.extensionsDir,
     npmDir: params.npmDir,

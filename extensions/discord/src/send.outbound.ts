@@ -9,6 +9,7 @@ import { resolveChunkMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chun
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
 import { createChannelMessage, createThread, type RequestClient } from "./internal/discord.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
@@ -29,6 +30,7 @@ import {
   sendDiscordMedia,
   sendDiscordMediaBatch,
   sendDiscordText,
+  type DiscordSendProgress,
   type DiscordSendComponents,
   type DiscordSendEmbeds,
 } from "./send.shared.js";
@@ -55,6 +57,8 @@ type DiscordSendOpts = {
   embeds?: DiscordSendEmbeds;
   silent?: boolean;
   suppressEmbeds?: boolean;
+  /** Persist each concrete platform send before any later chunk can fail. */
+  onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
 };
 
 type DiscordClientRequest = ReturnType<typeof createDiscordClient>["request"];
@@ -73,6 +77,7 @@ async function sendDiscordThreadTextChunks(params: {
   maxChars?: number;
   silent?: boolean;
   suppressEmbeds?: boolean;
+  onResult?: DiscordSendProgress;
 }): Promise<void> {
   for (const chunk of params.chunks) {
     await sendDiscordText(
@@ -88,6 +93,7 @@ async function sendDiscordThreadTextChunks(params: {
       params.silent,
       params.suppressEmbeds,
       params.maxChars,
+      params.onResult,
     );
   }
 }
@@ -106,7 +112,9 @@ const DISCORD_THREAD_NAME_LIMIT = 100;
 function deriveForumThreadName(text: string): string {
   const firstLine =
     normalizeOptionalString(text.split("\n").find((line) => normalizeOptionalString(line))) ?? "";
-  return firstLine.slice(0, DISCORD_THREAD_NAME_LIMIT) || new Date().toISOString().slice(0, 16);
+  return (
+    truncateUtf16Safe(firstLine, DISCORD_THREAD_NAME_LIMIT) || new Date().toISOString().slice(0, 16)
+  );
 }
 
 /** Forum/Media channels cannot receive regular messages; detect them here. */
@@ -257,6 +265,19 @@ export async function sendMessageDiscord(
     const messageId = threadRes.message?.id ?? threadId;
     const resultChannelId = threadRes.message?.channel_id ?? threadId;
     const remainingChunks = chunks.slice(1);
+    await opts.onDeliveryResult?.(
+      toDiscordSendResult(
+        {
+          id: messageId,
+          channel_id: resultChannelId,
+        },
+        channelId,
+        { kind: "text", threadId },
+      ),
+    );
+    const reportThreadResult: DiscordSendProgress = async (result, kind) => {
+      await opts.onDeliveryResult?.(toDiscordSendResult(result, threadId, { kind, threadId }));
+    };
 
     try {
       if (mediaUrls.length > 0) {
@@ -280,6 +301,7 @@ export async function sendMessageDiscord(
           opts.silent,
           suppressEmbeds,
           textLimit,
+          reportThreadResult,
         );
         await sendDiscordThreadTextChunks({
           rest,
@@ -291,6 +313,7 @@ export async function sendMessageDiscord(
           maxChars: textLimit,
           silent: opts.silent,
           suppressEmbeds,
+          onResult: reportThreadResult,
         });
       } else {
         await sendDiscordThreadTextChunks({
@@ -303,6 +326,7 @@ export async function sendMessageDiscord(
           maxChars: textLimit,
           silent: opts.silent,
           suppressEmbeds,
+          onResult: reportThreadResult,
         });
       }
     } catch (err) {
@@ -331,6 +355,14 @@ export async function sendMessageDiscord(
   }
 
   let result: DiscordChannelMessageResult;
+  const reportResult: DiscordSendProgress = async (progressResult, kind) => {
+    await opts.onDeliveryResult?.(
+      toDiscordSendResult(progressResult, channelId, {
+        kind,
+        replyToId: opts.replyTo,
+      }),
+    );
+  };
   try {
     if (mediaUrls.length > 1) {
       result = await sendDiscordMediaBatch(
@@ -373,6 +405,7 @@ export async function sendMessageDiscord(
         opts.silent,
         suppressEmbeds,
         textLimit,
+        reportResult,
       );
     } else {
       result = await sendDiscordText(
@@ -388,6 +421,7 @@ export async function sendMessageDiscord(
         opts.silent,
         suppressEmbeds,
         textLimit,
+        reportResult,
       );
     }
   } catch (err) {

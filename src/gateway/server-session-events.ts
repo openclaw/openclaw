@@ -14,7 +14,7 @@ import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
 } from "./server-chat.js";
-import { hasTrackedActiveSessionRun } from "./server-methods/session-active-runs.js";
+import { hasVisibleActiveSessionRun } from "./server-methods/session-active-runs.js";
 import { buildGatewaySessionEventFields } from "./session-event-payload.js";
 import { resolveSessionKeyForTranscriptFile } from "./session-transcript-key.js";
 import {
@@ -29,6 +29,26 @@ import {
 
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
+
+function readMessageIdempotencyKey(message: unknown): string | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const value = (message as Record<string, unknown>).idempotencyKey;
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function readMessageSenderIsOwner(message: unknown): boolean | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const openclaw = (message as Record<string, unknown>)["__openclaw"];
+  if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) {
+    return undefined;
+  }
+  const value = (openclaw as Record<string, unknown>).senderIsOwner;
+  return typeof value === "boolean" ? value : undefined;
+}
 
 function resolveSessionMessageBroadcastKeys(sessionKey: string, agentId?: string): string[] {
   // Global sessions can be subscribed through either the raw global key or the
@@ -159,10 +179,11 @@ async function handleTranscriptUpdateBroadcast(
     transcriptUsageMaxBytes: 64 * 1024,
   });
   const hasActiveRun = sessionRow
-    ? hasTrackedActiveSessionRun({
+    ? hasVisibleActiveSessionRun({
         context: params,
         requestedKey: sessionKey,
         canonicalKey: sessionRow.key,
+        sessionId: sessionRow.sessionId,
         ...(sessionRow.key === "global" && visibleAgentId ? { agentId: visibleAgentId } : {}),
         defaultAgentId: normalizeAgentId(resolveDefaultAgentId(getRuntimeConfig())),
       })
@@ -173,8 +194,11 @@ async function handleTranscriptUpdateBroadcast(
     includeSession: true,
     hasActiveRun,
   });
+  const idempotencyKey = readMessageIdempotencyKey(update.message);
+  const senderIsOwner = readMessageSenderIsOwner(update.message);
   const rawMessage = attachOpenClawTranscriptMeta(update.message, {
     ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
+    ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(messageSeq !== undefined ? { seq: messageSeq } : {}),
   });
   const message = projectChatDisplayMessage(rawMessage);
@@ -183,6 +207,7 @@ async function handleTranscriptUpdateBroadcast(
       "session.message",
       {
         sessionKey,
+        ...(senderIsOwner === undefined ? {} : { senderIsOwner }),
         ...(visibleAgentId ? { agentId: visibleAgentId } : {}),
         message,
         ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),

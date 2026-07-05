@@ -524,6 +524,49 @@ describe("task-registry", () => {
     });
   });
 
+  it("reuses an ACP run task when a derived flow id is linked before a duplicate create", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      configureInMemoryTaskStoresForLinkValidationTests();
+
+      const first = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:jarvis:main",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-acp-derived-flow-dedupe",
+        label: "original ACP task",
+        task: "Run ACP child",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+      const flow = createTaskFlowForTask({ task: first });
+      const linked = linkTaskToFlowById({
+        taskId: first.taskId,
+        flowId: flow.flowId,
+      });
+      expect(linked?.parentFlowId).toBe(flow.flowId);
+
+      const duplicateCreate = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:jarvis:main",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-acp-derived-flow-dedupe",
+        label: "late ACP mirror",
+        task: "Late mirror of the same ACP child",
+        status: "running",
+        deliveryStatus: "pending",
+        notifyPolicy: "silent",
+      });
+
+      expect(duplicateCreate.taskId).toBe(first.taskId);
+      expect(listTaskRecords().filter((task) => task.runId === first.runId)).toHaveLength(1);
+    });
+  });
+
   it("ignores late agent events for operator-cancelled tasks", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
@@ -570,6 +613,44 @@ describe("task-registry", () => {
         lastEventAt: 200,
         error: "Cancelled by operator.",
       });
+    });
+  });
+
+  it("clears terminal errors when explicitly updated without an error", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      const task = createTaskRecord({
+        runtime: "cron",
+        ownerKey: "system:cron:test",
+        scopeKind: "system",
+        runId: "run-terminal-error-clear",
+        task: "Recover cron task",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 100,
+      });
+
+      markTaskTerminalById({
+        taskId: task.taskId,
+        status: "failed",
+        endedAt: 200,
+        error: "backing session missing",
+      });
+      markTaskTerminalById({
+        taskId: task.taskId,
+        status: "succeeded",
+        endedAt: 250,
+        error: undefined,
+      });
+
+      const recoveredTask = getTaskById(task.taskId);
+      expect(recoveredTask).toMatchObject({
+        status: "succeeded",
+        endedAt: 250,
+      });
+      expect(recoveredTask).not.toHaveProperty("error");
     });
   });
 
@@ -3817,6 +3898,71 @@ describe("task-registry", () => {
         runtime: "cron",
         status: "cancelled",
         error: "Cancelled by operator.",
+      });
+    });
+  });
+
+  it("cancels stale cron tasks without an active runtime abort handle", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskRecord({
+        runtime: "cron",
+        sourceId: "daily-repost",
+        ownerKey: "",
+        scopeKind: "system",
+        runId: "cron:daily-repost:123",
+        task: "Daily repost",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+
+      const result = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      expectRecordFields(result, {
+        found: true,
+        cancelled: true,
+      });
+      expectRecordFields(result.task, {
+        taskId: task.taskId,
+        runtime: "cron",
+        status: "cancelled",
+        error: "Cancelled by operator.",
+      });
+    });
+  });
+
+  it("does not mark session-backed cron tasks cancelled without an active runtime abort handle", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskRecord({
+        runtime: "cron",
+        sourceId: "daily-repost",
+        ownerKey: "",
+        scopeKind: "system",
+        childSessionKey: "agent:main:cron:daily-repost",
+        runId: "cron:daily-repost:123",
+        task: "Daily repost",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+
+      const result = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      expectRecordFields(result, {
+        found: true,
+        cancelled: false,
+        reason: "Cron task has no active cancellation handle.",
+      });
+      expectRecordFields(result.task, {
+        taskId: task.taskId,
+        runtime: "cron",
+        status: "running",
       });
     });
   });

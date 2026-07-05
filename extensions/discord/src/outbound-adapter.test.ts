@@ -309,6 +309,16 @@ describe("discordOutbound", () => {
   });
 
   it("routes audioAsVoice payloads through the Discord voice send helper", async () => {
+    const onDeliveryResult = vi.fn();
+    hoisted.sendMessageDiscordMock.mockImplementation(
+      async (_to: unknown, _text: unknown, options: unknown) => {
+        const deliveryResult = { messageId: "msg-1", channelId: "ch-1" };
+        const onProgress = (options as { onDeliveryResult?: (result: unknown) => Promise<void> })
+          .onDeliveryResult;
+        await onProgress?.(deliveryResult);
+        return deliveryResult;
+      },
+    );
     const result = await discordOutbound.sendPayload?.({
       cfg: {},
       to: "channel:123456",
@@ -321,6 +331,7 @@ describe("discordOutbound", () => {
       accountId: "default",
       replyToId: "reply-1",
       replyToMode: "first",
+      onDeliveryResult,
     });
 
     const voiceCall = mockCall(hoisted.sendVoiceMessageDiscordMock, "sendVoiceMessageDiscord");
@@ -359,6 +370,11 @@ describe("discordOutbound", () => {
       messageId: "msg-1",
       channelId: "ch-1",
     });
+    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual([
+      "voice-1",
+      "msg-1",
+      "msg-1",
+    ]);
   });
 
   it("keeps captured replyTo on audioAsVoice sends when replyToMode is batched", async () => {

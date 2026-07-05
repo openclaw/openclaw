@@ -5,11 +5,17 @@ export type WizardSelectOption<T = string> = {
   hint?: string;
 };
 
+export type WizardPromptNavigation = {
+  canGoBack?: boolean;
+  canGoForward?: boolean;
+};
+
 export type WizardSelectParams<T = string> = {
   message: string;
   options: Array<WizardSelectOption<T>>;
   initialValue?: T;
   searchable?: boolean;
+  navigation?: WizardPromptNavigation;
 };
 
 export type WizardMultiSelectParams<T = string> = {
@@ -17,6 +23,7 @@ export type WizardMultiSelectParams<T = string> = {
   options: Array<WizardSelectOption<T>>;
   initialValues?: T[];
   searchable?: boolean;
+  navigation?: WizardPromptNavigation;
 };
 
 type WizardTextParams = {
@@ -27,11 +34,14 @@ type WizardTextParams = {
   // Render as a masked input. The entered value is never echoed to the
   // terminal — keeps secrets out of scrollback, transcripts, and screenshots.
   sensitive?: boolean;
+  navigation?: WizardPromptNavigation;
 };
 
 type WizardConfirmParams = {
   message: string;
   initialValue?: boolean;
+  layout?: "inline" | "vertical";
+  navigation?: WizardPromptNavigation;
 };
 
 export type WizardProgress = {
@@ -49,11 +59,19 @@ export type WizardPrompter = {
   text: (params: WizardTextParams) => Promise<string>;
   confirm: (params: WizardConfirmParams) => Promise<boolean>;
   progress: (label: string) => WizardProgress;
+  disableBackNavigation?: () => void;
 };
 
 export class WizardCancelledError extends Error {
   constructor(message = "wizard cancelled") {
     super(message);
     this.name = "WizardCancelledError";
+  }
+}
+
+export class WizardNavigationError extends Error {
+  constructor(readonly direction: "back" | "forward") {
+    super(`wizard navigate ${direction}`);
+    this.name = "WizardNavigationError";
   }
 }

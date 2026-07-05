@@ -104,7 +104,7 @@ fun ChatMarkdown(
   text: String,
   textColor: Color,
 ) {
-  val document = remember(text) { markdownParser.parse(text) as Document }
+  val document = remember(text) { parseChatMarkdown(text) }
   val inlineStyles =
     InlineStyles(inlineCodeBg = mobileCodeBg, inlineCodeColor = mobileCodeText, linkColor = mobileAccent, baseCallout = mobileCallout)
 
@@ -588,7 +588,7 @@ internal fun buildChatInlineMarkdown(
   text: String,
   linkColor: Color = Color.Blue,
 ): AnnotatedString {
-  val document = markdownParser.parse(text) as Document
+  val document = parseChatMarkdown(text)
   val paragraph = document.firstChild as? Paragraph ?: return AnnotatedString("")
   return buildInlineMarkdown(
     paragraph.firstChild,
@@ -600,6 +600,8 @@ internal fun buildChatInlineMarkdown(
     ),
   )
 }
+
+internal fun parseChatMarkdown(text: String): Document = markdownParser.parse(text) as Document
 
 private fun buildPlainText(start: Node?): String {
   val sb = StringBuilder()
