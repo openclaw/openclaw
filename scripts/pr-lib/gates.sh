@@ -391,6 +391,10 @@ prepare_gates() {
     if [ "$docs_only" = "true" ]; then
       release_pr_gates_lock
       gates_mode="docs_only"
+      previous_full_gates_head=""
+      remote_gates_provider=""
+      remote_gates_lease_id=""
+      remote_gates_run_url=""
       echo "Docs-only change detected with high confidence; skipping pnpm test."
     elif [ "$gates_remote_mode" = "testbox" ]; then
       # The full suite runs on a Blacksmith Testbox, so free the local lock

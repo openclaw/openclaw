@@ -328,6 +328,52 @@ describe("lease-retry gate stamp refresh", () => {
 });
 
 describe("prepare gate stamp transitions", () => {
+  it("clears remote stamps when fresh docs-only gates do not reuse prior proof", () => {
+    const { repoDir } = makeRetryRepo();
+    spawnSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: repoDir });
+    mkdirSync(join(repoDir, "docs"), { recursive: true });
+    writeFileSync(join(repoDir, "docs", "proof.md"), "fresh docs\n");
+    spawnSync("git", ["add", "docs/proof.md"], { cwd: repoDir });
+    spawnSync(
+      "git",
+      ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "docs"],
+      { cwd: repoDir },
+    );
+    writeFileSync(join(repoDir, ".local", "pr-meta.env"), "PR_AUTHOR=steipete\n");
+    writeFileSync(
+      join(repoDir, ".local", "gates.env"),
+      [
+        "LAST_VERIFIED_HEAD_SHA=deadbeef",
+        "FULL_GATES_HEAD_SHA=deadbeef",
+        "REMOTE_GATES_PROVIDER=blacksmith-testbox",
+        "REMOTE_GATES_LEASE_ID=tbx_stale",
+        "REMOTE_GATES_RUN_URL=https://example.test/runs/1",
+        "",
+      ].join("\n"),
+    );
+
+    const result = runGatesBash(
+      [
+        "enter_worktree() { :; }",
+        "checkout_prep_branch() { :; }",
+        "path_is_docsish() { return 0; }",
+        "changelog_required_for_changed_files() { return 1; }",
+        "prepare_local_gate_workspace() { :; }",
+        "run_quiet_logged() { :; }",
+        "release_pr_gates_lock() { :; }",
+        "prepare_gates 4242",
+        "cat .local/gates.env",
+      ].join("\n"),
+      { cwd: repoDir },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("GATES_MODE=docs_only");
+    expect(result.stdout).toContain("FULL_GATES_HEAD_SHA=''");
+    expect(result.stdout).toContain("REMOTE_GATES_LEASE_ID=''");
+    expect(result.stdout).not.toContain("tbx_stale");
+  });
+
   it("clears remote stamps when hosted exact-head gates replace remote proof", () => {
     const { repoDir } = makeRetryRepo();
     spawnSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: repoDir });
