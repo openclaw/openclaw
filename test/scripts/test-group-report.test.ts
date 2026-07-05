@@ -343,6 +343,62 @@ describe("scripts/test-group-report aggregation", () => {
     }
   });
 
+  it("continues allow-failures profiling after a config writes an empty JSON report", async () => {
+    const tempDir = makeTempDir();
+    try {
+      const result = await runReportPlans({
+        args: parseTestGroupReportArgs([
+          "--config",
+          "failed.config.ts",
+          "--config",
+          "passed.config.ts",
+          "--allow-failures",
+          "--no-rss",
+        ]),
+        logDir: path.join(tempDir, "logs"),
+        reportDir: path.join(tempDir, "reports"),
+        runPlans: [
+          { config: "failed.config.ts", forwardedArgs: [], label: "failed" },
+          { config: "passed.config.ts", forwardedArgs: [], label: "passed" },
+        ],
+        runVitestJsonReport: async (params: {
+          config: string;
+          label: string;
+          logPath: string;
+          reportPath: string;
+        }) => {
+          fs.mkdirSync(path.dirname(params.reportPath), { recursive: true });
+          fs.writeFileSync(
+            params.reportPath,
+            `${JSON.stringify({
+              testResults: params.label === "failed" ? [] : [{ name: "passed.test.ts" }],
+            })}\n`,
+            "utf8",
+          );
+          return {
+            config: params.config,
+            elapsedMs: 10,
+            label: params.label,
+            logPath: params.logPath,
+            maxRssBytes: null,
+            reportPath: params.reportPath,
+            status: params.label === "failed" ? 1 : 0,
+          };
+        },
+      });
+
+      expect(result.failed).toBe(true);
+      expect(result.exitCode).toBe(0);
+      expect(result.runs.map((run) => [run.label, run.status])).toStrictEqual([
+        ["failed", 1],
+        ["passed", 0],
+      ]);
+      expect(result.runEntries.map((entry) => entry.config)).toStrictEqual(["passed"]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("prints slow tests as soon as each config report completes", async () => {
     const tempDir = makeTempDir();
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});

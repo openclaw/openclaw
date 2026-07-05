@@ -20,6 +20,7 @@ import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 const DEEPSEEK_ERROR_MESSAGE = "429 deepseek rate limit";
+const COMPACTION_REMOVED_ERROR_MESSAGE = "current candidate model unavailable";
 type CurrentAttemptAssistantWithError = NonNullable<
   EmbeddedRunAttemptResult["currentAttemptAssistant"]
 > & { errorMessage: string };
@@ -84,6 +85,39 @@ function makeCrossProviderFallbackConfig() {
   });
 }
 
+function setupCompactionRemovedFallbackAttempt() {
+  mockedIsFailoverAssistantError.mockImplementation((...args: unknown[]) => {
+    const assistant = args[0];
+    return isCurrentAttemptAssistant(assistant) && assistant.provider === "anthropic";
+  });
+  mockedClassifyFailoverReason.mockReturnValue("model_not_found");
+  mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+    makeAttemptResult({
+      assistantTexts: [],
+      lastAssistant: makeAssistantMessageFixture({
+        stopReason: "error",
+        errorMessage: COMPACTION_REMOVED_ERROR_MESSAGE,
+        provider: "anthropic",
+        model: "test-model",
+        content: [],
+      }),
+      currentAttemptAssistant: undefined,
+    }),
+  );
+}
+
+function runCompactionRemovedFallbackAttempt() {
+  return runEmbeddedAgent({
+    ...overflowBaseRunParams,
+    runId: "run-compaction-fallback-error-context",
+    config: makeCrossProviderFallbackConfig(),
+    agentHarnessRuntimeOverride: "openclaw",
+    provider: "anthropic",
+    model: "test-model",
+    modelFallbacksOverride: ["deepseek/deepseek-chat"],
+  });
+}
+
 async function expectDeepseekFallbackError(
   promise: Promise<unknown>,
   getLastFormattedAssistant: () => unknown,
@@ -105,6 +139,8 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       provider: "deepseek",
       model: "deepseek-chat",
     });
+    setupCompactionRemovedFallbackAttempt();
+    await runCompactionRemovedFallbackAttempt().catch(() => undefined);
   });
 
   beforeEach(() => {
@@ -150,43 +186,18 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
 
   it("falls back to the session assistant when compaction removes the current attempt slice", async () => {
     const getLastFormattedAssistant = captureFormattedAssistant();
-    const sameCandidateErrorMessage = "429 current candidate rate limit";
-    mockedIsFailoverAssistantError.mockImplementation((...args: unknown[]) => {
-      const assistant = args[0];
-      return isCurrentAttemptAssistant(assistant) && assistant.provider === "anthropic";
-    });
-    mockedClassifyFailoverReason.mockReturnValue("rate_limit");
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        assistantTexts: [],
-        lastAssistant: makeAssistantMessageFixture({
-          stopReason: "error",
-          errorMessage: sameCandidateErrorMessage,
-          provider: "anthropic",
-          model: "test-model",
-          content: [],
-        }),
-        currentAttemptAssistant: undefined,
-      }),
-    );
-
-    const promise = runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      runId: "run-compaction-fallback-error-context",
-      config: makeCrossProviderFallbackConfig(),
-      agentHarnessRuntimeOverride: "openclaw",
-      provider: "anthropic",
-      model: "test-model",
-      modelFallbacksOverride: ["deepseek/deepseek-chat"],
-    });
+    setupCompactionRemovedFallbackAttempt();
+    const promise = runCompactionRemovedFallbackAttempt();
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
-    await expect(promise).rejects.toThrow(`anthropic/test-model: ${sameCandidateErrorMessage}`);
+    await expect(promise).rejects.toThrow(
+      `anthropic/test-model: ${COMPACTION_REMOVED_ERROR_MESSAGE}`,
+    );
     expect(mockedIsFailoverAssistantError).toHaveBeenCalledTimes(1);
     expect(getLastFormattedAssistant()).toMatchObject({
       provider: "anthropic",
       model: "test-model",
-      errorMessage: sameCandidateErrorMessage,
+      errorMessage: COMPACTION_REMOVED_ERROR_MESSAGE,
     });
   });
 
