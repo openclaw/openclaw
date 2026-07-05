@@ -555,8 +555,9 @@ export async function runGatewayUpdateCheck(params: {
   const persistedAvailable = shouldRunUpdateHints
     ? resolvePersistedUpdateAvailable(state, configuredChannel)
     : null;
+  const hasExtendedStableCheckMarker = state.lastAvailableTag?.trim() === "extended-stable";
   const shouldBypassSharedThrottle =
-    configuredChannel === "extended-stable" && persistedAvailable === null;
+    configuredChannel === "extended-stable" && !hasExtendedStableCheckMarker;
   if (shouldRunUpdateHints) {
     setUpdateAvailableCache({
       next: persistedAvailable,
@@ -609,6 +610,9 @@ export async function runGatewayUpdateCheck(params: {
   if (!resolved.version) {
     if (channel === "extended-stable") {
       clearPersistedAvailabilityForChannel(nextState, channel);
+      if (!nextState.lastAvailableVersion) {
+        nextState.lastAvailableTag = channel;
+      }
       setUpdateAvailableCache({
         next: null,
         onUpdateAvailableChange: params.onUpdateAvailableChange,
@@ -727,6 +731,9 @@ export async function runGatewayUpdateCheck(params: {
   } else {
     if (channel === "extended-stable") {
       clearPersistedAvailabilityForChannel(nextState, channel);
+      if (!nextState.lastAvailableVersion) {
+        nextState.lastAvailableTag = channel;
+      }
     } else {
       delete nextState.lastAvailableVersion;
       delete nextState.lastAvailableTag;

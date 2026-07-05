@@ -625,7 +625,7 @@ describe("update-startup", () => {
     });
   });
 
-  it("bypasses a recent non-newer extended-stable cache entry", async () => {
+  it("honors the shared throttle after a recent extended-stable check marker", async () => {
     writePersistedUpdateCheckState({
       lastCheckedAt: new Date(Date.now()).toISOString(),
       lastAvailableVersion: "1.0.0",
@@ -635,15 +635,8 @@ describe("update-startup", () => {
 
     await runExtendedStableUpdateCheck();
 
-    expect(resolveNpmChannelTag).toHaveBeenCalledWith({
-      channel: "extended-stable",
-      timeoutMs: 2500,
-    });
-    expect(getUpdateAvailable()).toEqual({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "extended-stable",
-    });
+    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
+    expect(getUpdateAvailable()).toBeNull();
   });
 
   it("emits update change callback when update state clears", async () => {
@@ -790,7 +783,7 @@ describe("update-startup", () => {
       lastNotifiedTag: "extended-stable",
     });
     expect(readPersistedUpdateCheckState()?.lastAvailableVersion).toBeUndefined();
-    expect(readPersistedUpdateCheckState()?.lastAvailableTag).toBeUndefined();
+    expect(readPersistedUpdateCheckState()?.lastAvailableTag).toBe("extended-stable");
     expectStableAutoRolloutStatePreserved();
   });
 
@@ -816,10 +809,13 @@ describe("update-startup", () => {
       expect(onUpdateAvailableChange).toHaveBeenCalledWith(null);
       expect(getUpdateAvailable()).toBeNull();
       expect(readPersistedUpdateCheckState()?.lastAvailableVersion).toBeUndefined();
-      expect(readPersistedUpdateCheckState()?.lastAvailableTag).toBeUndefined();
+      expect(readPersistedUpdateCheckState()?.lastAvailableTag).toBe("extended-stable");
       expectStableAutoRolloutStatePreserved();
       expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
       expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+
+      await runExtendedStableUpdateCheck({ log, onUpdateAvailableChange });
+      expect(resolveNpmChannelTag).toHaveBeenCalledTimes(2);
     },
   );
 
