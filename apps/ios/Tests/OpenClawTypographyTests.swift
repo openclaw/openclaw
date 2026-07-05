@@ -155,6 +155,7 @@ struct OpenClawTypographyTests {
             contentsOf: Self.sourceURL("Design/SettingsChannelsDestination.swift"),
             encoding: .utf8)
         let docs = try String(contentsOf: Self.sourceURL("Design/OpenClawDocsScreen.swift"), encoding: .utf8)
+        let chatTab = try String(contentsOf: Self.sourceURL("Design/ChatProTab.swift"), encoding: .utf8)
         let chatTypography = try String(
             contentsOf: Self.iosRootURL()
                 .deletingLastPathComponent()
@@ -171,6 +172,10 @@ struct OpenClawTypographyTests {
         #expect(proComponents.contains("Text(secondaryActionTitle)"))
         #expect(proComponents.contains("@Environment(\\.isEnabled)"))
         #expect(proComponents.contains(".animation(.easeOut(duration: 0.15), value: self.isEnabled)"))
+
+        #expect(chatTab.contains("Text(\"Export Transcript\")"))
+        #expect(chatTab.contains(".font(OpenClawType.body)"))
+        #expect(!chatTab.contains("Button(\"Export Transcript\")"))
 
         #expect(!quickSetup.contains("Button(\"Close\")"))
         #expect(quickSetup.contains("Text(\"Quick Setup\")"))
