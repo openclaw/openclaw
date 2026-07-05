@@ -12,7 +12,12 @@ import { extractShippedPluginInstallConfigRecords } from "../config/plugin-insta
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { normalizeUpdateChannel } from "../infra/update-channels.js";
+import {
+  loadExtendedStablePluginTargetContextFromRoot,
+  type ExtendedStablePluginTargetContext,
+} from "../plugins/extended-stable-plugin-target.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   withoutPluginInstallRecords,
@@ -260,6 +265,27 @@ export async function runPluginUpdateCommand(params: {
     }
   }
 
+  const officialPluginUpdateChannel = params.opts.all
+    ? (normalizeUpdateChannel(cfg.update?.channel) ?? undefined)
+    : undefined;
+  let extendedStableTargetContext: ExtendedStablePluginTargetContext | undefined;
+  if (pluginSelection.pluginIds.length > 0 && officialPluginUpdateChannel === "extended-stable") {
+    try {
+      const rootDir = resolveOpenClawPackageRootSync({
+        cwd: process.cwd(),
+        argv1: process.argv[1],
+        moduleUrl: import.meta.url,
+      });
+      if (!rootDir) {
+        throw new Error("OpenClaw package root not found");
+      }
+      extendedStableTargetContext = loadExtendedStablePluginTargetContextFromRoot({ rootDir });
+    } catch (error) {
+      defaultRuntime.error(`Could not load extended-stable plugin metadata: ${String(error)}`);
+      return defaultRuntime.exit(1);
+    }
+  }
+
   const pluginResult =
     pluginSelection.pluginIds.length > 0
       ? await updateNpmInstalledPlugins({
@@ -267,10 +293,9 @@ export async function runPluginUpdateCommand(params: {
           pluginIds: pluginSelection.pluginIds,
           specOverrides: pluginSelection.specOverrides,
           dryRun: params.opts.dryRun,
-          officialPluginUpdateChannel: params.opts.all
-            ? (normalizeUpdateChannel(cfg.update?.channel) ?? undefined)
-            : undefined,
+          officialPluginUpdateChannel,
           syncOfficialPluginInstalls: params.opts.all ? true : undefined,
+          extendedStableTargetContext,
           dangerouslyForceUnsafeInstall: params.opts.dangerouslyForceUnsafeInstall,
           ...resolveClawHubRiskAcknowledgementCliOptions({
             acknowledgeClawHubRisk: params.opts.acknowledgeClawHubRisk,

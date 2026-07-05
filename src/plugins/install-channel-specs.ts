@@ -50,6 +50,13 @@ export function resolveNpmInstallSpecsForUpdateChannel(params: {
   if (
     params.updateChannel === "extended-stable" &&
     params.officialPackageName &&
+    !params.extendedStableTargetContext
+  ) {
+    throw new Error("extended-stable official plugin targeting requires packaged metadata");
+  }
+  if (
+    params.updateChannel === "extended-stable" &&
+    params.officialPackageName &&
     params.extendedStableTargetContext
   ) {
     const decision = resolveExtendedStablePluginTarget({

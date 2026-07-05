@@ -72,4 +72,14 @@ describe("extended-stable npm install specs", () => {
       }),
     ).toEqual({ installSpec: "@openclaw/matrix", recordSpec: "@openclaw/matrix" });
   });
+
+  it("fails closed when an official extended-stable target has no packaged metadata", () => {
+    expect(() =>
+      resolveNpmInstallSpecsForUpdateChannel({
+        spec: "@openclaw/slack@latest",
+        updateChannel: "extended-stable",
+        officialPackageName: "@openclaw/slack",
+      }),
+    ).toThrow(/requires packaged metadata/u);
+  });
 });

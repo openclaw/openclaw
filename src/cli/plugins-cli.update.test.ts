@@ -9,6 +9,7 @@ import { hashConfigIncludeRaw } from "../config/includes.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
 import {
   loadConfig,
+  loadExtendedStablePluginTargetContextFromRoot,
   readConfigFileSnapshotForWrite,
   refreshPluginRegistry,
   registerPluginsCli,
@@ -1032,6 +1033,62 @@ describe("plugins cli update", () => {
     expect(updateParams.syncOfficialPluginInstalls).toBe(true);
     expect(updateParams.officialPluginUpdateChannel).toBe("beta");
     expect(updateParams.updateChannel).toBeUndefined();
+  });
+
+  it("loads packaged extended-stable targets for update --all", async () => {
+    const config = createTrackedPluginConfig({
+      pluginId: "codex",
+      spec: "@openclaw/codex",
+      resolvedName: "@openclaw/codex",
+    });
+    config.update = { channel: "extended-stable" };
+    const extendedStableTargetContext = {
+      installedCoreVersion: "2026.6.34",
+      support: { schemaVersion: 1 as const, plugins: [] },
+      cohort: {
+        schemaVersion: 1 as const,
+        releaseLine: "2026.6",
+        baselineVersion: "2026.6.21",
+      },
+      cohortPackageNames: new Set<string>(),
+    };
+    loadConfig.mockReturnValue(config);
+    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
+    loadExtendedStablePluginTargetContextFromRoot.mockReturnValue(extendedStableTargetContext);
+    updateNpmInstalledPlugins.mockResolvedValue({ config, changed: false, outcomes: [] });
+
+    await runPluginsCommand(["plugins", "update", "--all"]);
+
+    expect(loadExtendedStablePluginTargetContextFromRoot).toHaveBeenCalledWith({
+      rootDir: "/tmp/openclaw",
+    });
+    expect(updateNpmInstalledPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        officialPluginUpdateChannel: "extended-stable",
+        extendedStableTargetContext,
+      }),
+    );
+  });
+
+  it("fails update --all closed when packaged extended-stable metadata is unavailable", async () => {
+    const config = createTrackedPluginConfig({
+      pluginId: "codex",
+      spec: "@openclaw/codex",
+      resolvedName: "@openclaw/codex",
+    });
+    config.update = { channel: "extended-stable" };
+    loadConfig.mockReturnValue(config);
+    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
+    loadExtendedStablePluginTargetContextFromRoot.mockImplementation(() => {
+      throw new Error("cohort metadata missing");
+    });
+
+    await expect(runPluginsCommand(["plugins", "update", "--all"])).rejects.toThrow("__exit__:1");
+
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(runtimeErrors).toContainEqual(
+      expect.stringContaining("Could not load extended-stable plugin metadata"),
+    );
   });
 
   it("passes ClawHub risk acknowledgement to plugin updates", async () => {

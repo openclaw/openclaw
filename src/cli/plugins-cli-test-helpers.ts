@@ -23,6 +23,10 @@ type ResolveMarketplaceInstallShortcutFn =
   (typeof import("../plugins/marketplace.js"))["resolveMarketplaceInstallShortcut"];
 type UpdateNpmInstalledPluginsFn =
   (typeof import("../plugins/update.js"))["updateNpmInstalledPlugins"];
+type LoadExtendedStablePluginTargetContextFromRootFn =
+  (typeof import("../plugins/extended-stable-plugin-target.js"))["loadExtendedStablePluginTargetContextFromRoot"];
+type ResolveOpenClawPackageRootSyncFn =
+  (typeof import("../infra/openclaw-root.js"))["resolveOpenClawPackageRootSync"];
 type UpdateNpmInstalledHookPacksFn =
   (typeof import("../hooks/update.js"))["updateNpmInstalledHookPacks"];
 type PluginInstallRecordMap = Record<string, PluginInstallRecord>;
@@ -79,6 +83,11 @@ export const planPluginUninstall: UnknownMock = vi.fn();
 export const applyPluginUninstallDirectoryRemoval: AsyncUnknownMock = vi.fn();
 const uninstallPlugin: AsyncUnknownMock = vi.fn();
 export const updateNpmInstalledPlugins: Mock<UpdateNpmInstalledPluginsFn> = vi.fn();
+export const loadExtendedStablePluginTargetContextFromRoot: Mock<LoadExtendedStablePluginTargetContextFromRootFn> =
+  vi.fn();
+const resolveOpenClawPackageRootSync: Mock<ResolveOpenClawPackageRootSyncFn> = vi.fn(
+  () => "/tmp/openclaw",
+);
 export const updateNpmInstalledHookPacks: Mock<UpdateNpmInstalledHookPacksFn> = vi.fn();
 export const promptYesNo: AsyncUnknownMock = vi.fn();
 export const promptText: AsyncUnknownMock = vi.fn();
@@ -225,6 +234,26 @@ vi.mock("../config/paths.js", () => ({
   resolveIsNixMode: () => false,
   resolveStateDir: () => resolveStateDir(),
 }));
+
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/openclaw-root.js")>();
+  return {
+    ...actual,
+    resolveOpenClawPackageRootSync: (...args: Parameters<ResolveOpenClawPackageRootSyncFn>) =>
+      resolveOpenClawPackageRootSync(...args),
+  };
+});
+
+vi.mock("../plugins/extended-stable-plugin-target.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../plugins/extended-stable-plugin-target.js")>();
+  return {
+    ...actual,
+    loadExtendedStablePluginTargetContextFromRoot: (
+      ...args: Parameters<LoadExtendedStablePluginTargetContextFromRootFn>
+    ) => loadExtendedStablePluginTargetContextFromRoot(...args),
+  };
+});
 
 vi.mock("../plugins/marketplace.js", () => ({
   installPluginFromMarketplace: ((...args: Parameters<InstallPluginFromMarketplaceFn>) =>
@@ -730,6 +759,8 @@ export function resetPluginsCliTestState() {
   applyPluginUninstallDirectoryRemoval.mockReset();
   uninstallPlugin.mockReset();
   updateNpmInstalledPlugins.mockReset();
+  loadExtendedStablePluginTargetContextFromRoot.mockReset();
+  resolveOpenClawPackageRootSync.mockReset();
   updateNpmInstalledHookPacks.mockReset();
   promptText.mockReset();
   promptYesNo.mockReset();
@@ -867,6 +898,7 @@ export function resetPluginsCliTestState() {
     changed: false,
     config: {} as OpenClawConfig,
   });
+  resolveOpenClawPackageRootSync.mockReturnValue("/tmp/openclaw");
   updateNpmInstalledHookPacks.mockResolvedValue({
     outcomes: [],
     changed: false,
