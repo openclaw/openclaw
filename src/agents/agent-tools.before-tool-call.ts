@@ -91,6 +91,7 @@ export {
   isToolWrappedWithBeforeToolCallHook,
   setBeforeToolCallDiagnosticsEnabled,
 } from "./before-tool-call-metadata.js";
+import { GatewayClientRequestError } from "../gateway/client.js";
 import { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tools.js";
 import {
   getCodeModeExecBeforeHookMetadata,
@@ -927,12 +928,24 @@ async function requestPluginToolApproval(params: {
         params: params.baseParams,
       };
     }
+    // Distinguish gateway-rejection errors from transport failures so the
+    // agent isn't actively misdirected — a GatewayClientRequestError means
+    // the gateway is reachable and responded with a structured rejection
+    // (e.g. schema validation, INVALID_REQUEST). Everything else is a
+    // genuine transport/connectivity failure.
+    const gatewayUp =
+      err instanceof GatewayClientRequestError &&
+      typeof err.gatewayCode === "string" &&
+      err.gatewayCode.length > 0;
+    const reason = gatewayUp
+      ? `Plugin approval request rejected: ${String(err)}`
+      : "Plugin approval required (gateway unavailable)";
     log.warn(`plugin approval gateway request failed; blocking tool call: ${String(err)}`);
     return {
       blocked: true,
       kind: "failure",
       deniedReason: "plugin-approval",
-      reason: "Plugin approval required (gateway unavailable)",
+      reason,
       params: params.baseParams,
     };
   }
