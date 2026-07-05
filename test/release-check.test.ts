@@ -731,6 +731,12 @@ describe("collectMissingPackPaths", () => {
         join(packageRoot, "package.json"),
         `${JSON.stringify({ name: "openclaw", version: "2026.5.14-beta.3", dependencies: {} })}\n`,
       );
+      const releaseDir = join(packageRoot, "release");
+      mkdirSync(releaseDir, { recursive: true });
+      writeFileSync(
+        join(releaseDir, "extended-stable-plugin-support.json"),
+        readFileSync("release/extended-stable-plugin-support.json", "utf8"),
+      );
       writeFileSync(join(distDir, "typescript-compiler.js"), "x".repeat(6 * 1024 * 1024 + 1));
 
       expect(
