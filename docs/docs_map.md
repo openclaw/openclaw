@@ -6232,6 +6232,24 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Distribution
   - H2: Surface
 
+## plugins/reference/logbook.md
+
+- Route: /plugins/reference/logbook
+- Headings:
+  - H1: Logbook plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
+## plugins/reference/longcat.md
+
+- Route: /plugins/reference/longcat
+- Headings:
+  - H1: LongCat plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
 ## plugins/reference/matrix.md
 
 - Route: /plugins/reference/matrix
@@ -7531,6 +7549,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
   - H3: LM Studio not detected
   - H3: Authentication errors (HTTP 401)
+  - H2: Related
+
+## providers/longcat.md
+
+- Route: /providers/longcat
+- Headings:
+  - H2: Getting started
+  - H3: Non-interactive setup
+  - H2: Reasoning behavior
+  - H2: Pricing
+  - H2: Troubleshooting
   - H2: Related
 
 ## providers/minimax.md
