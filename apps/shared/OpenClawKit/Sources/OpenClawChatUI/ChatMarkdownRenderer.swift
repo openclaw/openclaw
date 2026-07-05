@@ -1,4 +1,5 @@
 import Foundation
+import Markdown
 import SwiftUI
 
 public enum ChatMarkdownVariant: String, CaseIterable, Sendable {
@@ -74,6 +75,7 @@ enum ChatMarkdownDisplayPreprocessor {
         let normalized = markdown.replacingOccurrences(of: "\r\n", with: "\n")
         let lines = normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         guard lines.count > 1 else { return normalized }
+        let codeLines = self.codeLineIndices(in: normalized)
 
         var output = ""
         for index in lines.indices {
@@ -83,7 +85,10 @@ enum ChatMarkdownDisplayPreprocessor {
                 continue
             }
 
-            if self.shouldPreserveSoftBreak(after: lines[index], before: lines[index + 1]) {
+            if !codeLines.contains(index),
+               !codeLines.contains(index + 1),
+               self.shouldPreserveSoftBreak(after: lines[index], before: lines[index + 1])
+            {
                 output += "  \n"
             } else {
                 output += "\n"
@@ -91,6 +96,26 @@ enum ChatMarkdownDisplayPreprocessor {
         }
 
         return output
+    }
+
+    private static func codeLineIndices(in markdown: String) -> Set<Int> {
+        guard markdown.contains("```")
+            || markdown.contains("~~~")
+            || markdown.hasPrefix("    ")
+            || markdown.contains("\n    ")
+        else { return [] }
+
+        var indices = Set<Int>()
+        func collect(from markup: any Markup) {
+            if markup is Markdown.CodeBlock, let range = markup.range {
+                indices.formUnion((range.lowerBound.line - 1)..<range.upperBound.line)
+            }
+            for child in markup.children {
+                collect(from: child)
+            }
+        }
+        collect(from: Document(parsing: markdown))
+        return indices
     }
 
     private static func shouldPreserveSoftBreak(after line: String, before nextLine: String) -> Bool {

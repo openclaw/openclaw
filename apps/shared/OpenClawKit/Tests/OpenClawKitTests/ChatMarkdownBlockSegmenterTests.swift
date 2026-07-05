@@ -96,7 +96,7 @@ struct ChatMarkdownBlockSegmenterTests {
         ])
     }
 
-    @Test func `indented opener dedents content by the same amount`() {
+    @Test func `top level indented fence remains native`() {
         let blocks = self.segments("  ```\n   code\n  ```")
         #expect(blocks == [
             .code(ChatCodeBlock(language: nil, code: " code", isComplete: true)),
@@ -184,6 +184,21 @@ struct ChatMarkdownBlockSegmenterTests {
         ])
     }
 
+    @Test func `top level indented table remains native`() {
+        let blocks = self.segments("  | a | b |\n  | - | - |\n  | 1 | 2 |")
+        #expect(blocks == [
+            .table(ChatMarkdownTable(
+                header: ["a", "b"],
+                alignments: [.leading, .leading],
+                rows: [["1", "2"]])),
+        ])
+    }
+
+    @Test func `list nested table stays on container aware prose path`() {
+        let markdown = "- item\n  | a | b |\n  | - | - |\n  | 1 | 2 |"
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
     @Test func `escaped pipe stays a literal cell character`() {
         let blocks = self.segments("| a\\|b | c |\n| - | - |\n| 1 | 2 |")
         #expect(blocks == [
@@ -201,6 +216,26 @@ struct ChatMarkdownBlockSegmenterTests {
                 header: ["a", "b"],
                 alignments: [.leading, .leading],
                 rows: [["1", ""], ["1", "2"]])),
+        ])
+    }
+
+    @Test func `adjacent pipes remain an empty gfm cell`() {
+        let blocks = self.segments("| a | b | c |\n| - | - | - |\n| 1 || 3 |")
+        #expect(blocks == [
+            .table(ChatMarkdownTable(
+                header: ["a", "b", "c"],
+                alignments: [.leading, .leading, .leading],
+                rows: [["1", "", "3"]])),
+        ])
+    }
+
+    @Test func `caret remains a literal gfm cell`() {
+        let blocks = self.segments("| a | b |\n| - | - |\n| ^ | value |")
+        #expect(blocks == [
+            .table(ChatMarkdownTable(
+                header: ["a", "b"],
+                alignments: [.leading, .leading],
+                rows: [["^", "value"]])),
         ])
     }
 
@@ -248,8 +283,8 @@ struct ChatMarkdownBlockSegmenterTests {
 
     @Test func `table body stops at empty list markers`() {
         for marker in ["-", "1."] {
-            let blocks = self.segments("| a | b |\n| - | - |\n| 1 | 2 |\n\(marker)")
-            #expect(blocks == [
+            let markdown = "| a | b |\n| - | - |\n| 1 | 2 |\n\(marker)"
+            #expect(self.segments(markdown) == [
                 .table(ChatMarkdownTable(
                     header: ["a", "b"],
                     alignments: [.leading, .leading],
@@ -313,5 +348,102 @@ struct ChatMarkdownBlockSegmenterTests {
         #expect(blocks == [
             .code(ChatCodeBlock(language: nil, code: "| a | b |\n| - | - |", isComplete: true)),
         ])
+    }
+
+    @Test func `nested list fence preserves its markdown container`() {
+        let markdown = "- item\n  ```swift\n  let value = 1\n  ```\n  continuation"
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
+    @Test func `native table does not escape indented fence`() {
+        let markdown = "- item\n  ```\n  | a | b |\n  | - | - |\n  ```"
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
+    @Test func `list marker inside top level fence stays code`() {
+        let blocks = self.segments("```markdown\n- item\n```")
+        #expect(blocks == [
+            .code(ChatCodeBlock(language: "markdown", code: "- item", isComplete: true)),
+        ])
+    }
+
+    @Test func `html block containing fence stays one prose document`() {
+        let markdown = "<div>\n```swift\nlet value = 1\n```\n</div>"
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
+    @Test func `blank line ends html block before top level fence`() {
+        let markdown = "<div>\nraw\n\n```swift\nlet value = 1\n```"
+        #expect(self.segments(markdown) == [
+            .prose("<div>\nraw"),
+            .code(ChatCodeBlock(language: "swift", code: "let value = 1", isComplete: true)),
+        ])
+    }
+
+    @Test func `type seven html tag does not interrupt paragraph`() {
+        let markdown = "text\n<span>\n```swift\nlet value = 1\n```"
+        #expect(self.segments(markdown) == [
+            .prose("text\n<span>"),
+            .code(ChatCodeBlock(language: "swift", code: "let value = 1", isComplete: true)),
+        ])
+    }
+
+    @Test func `type seven html tag does not interrupt indented paragraph continuation`() {
+        let markdown = "text\n    continuation\n<span>\n```swift\nlet value = 1\n```"
+        #expect(self.segments(markdown) == [
+            .prose("text\n    continuation\n<span>"),
+            .code(ChatCodeBlock(language: "swift", code: "let value = 1", isComplete: true)),
+        ])
+    }
+
+    @Test func `reference definitions preserve document scope across blocks`() {
+        let markdown = "[docs][d]\n\n```swift\nlet value = 1\n```\n\n[d]: https://example.com"
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
+    @Test func `multiline reference definitions preserve document scope`() {
+        let markdown = "[docs][d]\n\n```swift\nlet value = 1\n```\n\n[d]:\n  https://example.com"
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
+    @Test func `reference definitions inside containers preserve document scope`() {
+        let markdown = "[docs]\n\n```swift\nlet value = 1\n```\n\n> [docs]: https://example.com"
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
+    @Test func `multiline reference labels preserve document scope`() {
+        let markdown = "[docs]\n\n```swift\nlet value = 1\n```\n\n[\ndocs\n]: https://example.com"
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
+    @Test func `table after paragraph keeps inline header markdown`() {
+        let blocks = self.segments("intro\n| **a** | b\\|c |\n| - | - |\n| 1 | 2 |")
+        #expect(blocks == [
+            .prose("intro"),
+            .table(ChatMarkdownTable(
+                header: ["**a**", "b|c"],
+                alignments: [.leading, .leading],
+                rows: [["1", "2"]])),
+        ])
+    }
+
+    @Test func `oversized table stays raw prose`() {
+        let rows = Array(
+            repeating: "| value | value |",
+            count: ChatMarkdownBlockSegmenter.maxTableRows)
+        let markdown = (["| a | b |", "| - | - |"] + rows).joined(separator: "\n")
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
+    @Test func `table at the rendering bounds remains native`() {
+        let bodyRowCount = ChatMarkdownBlockSegmenter.maxTableRows - 1
+        let rows = Array(repeating: "| value | value |", count: bodyRowCount)
+        let markdown = (["| a | b |", "| - | - |"] + rows).joined(separator: "\n")
+        let blocks = self.segments(markdown)
+        guard case let .table(table) = blocks.first else {
+            Issue.record("expected bounded table")
+            return
+        }
+        #expect(table.rows.count == bodyRowCount)
     }
 }

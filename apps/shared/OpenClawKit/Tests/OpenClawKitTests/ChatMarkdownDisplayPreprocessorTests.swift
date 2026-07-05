@@ -64,6 +64,32 @@ struct ChatMarkdownDisplayPreprocessorTests {
         #expect(prepared == markdown)
     }
 
+    @Test func `does not alter fenced code kept on the prose path`() {
+        let markdown = """
+        [docs][d]
+
+        ```swift
+        let value = 1
+        ```
+
+        [d]: https://example.com
+        """
+
+        #expect(ChatMarkdownDisplayPreprocessor.preserveChatSoftBreaks(in: markdown) == markdown)
+    }
+
+    @Test func `does not alter nested fenced code`() {
+        let markdown = """
+        - item
+          ```swift
+          let value = 1
+          ```
+          continuation
+        """
+
+        #expect(ChatMarkdownDisplayPreprocessor.preserveChatSoftBreaks(in: markdown) == markdown)
+    }
+
     @Test func `converts plain pipe prose soft breaks`() {
         let markdown = """
         Use foo | bar
