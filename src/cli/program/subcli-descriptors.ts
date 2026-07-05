@@ -46,6 +46,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     parentDefaultHelp: true,
   },
   {
+    name: "exec-approvals",
+    description: "Manage exec approvals (alias for approvals)",
+    hasSubcommands: true,
+  },
+  {
     name: "exec-policy",
     description: "Show or synchronize requested exec policy with host approvals",
     hasSubcommands: true,

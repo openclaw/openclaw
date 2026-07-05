@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { collectClawHubPublishablePluginPackages } from "../scripts/lib/plugin-clawhub-release.ts";
 import {
   collectChangedExtensionIdsFromPaths,
+  collectPluginReleaseDependencyFreshnessErrors,
   collectPluginReleaseVersionFloorErrors,
   collectPublishablePluginPackages,
   collectPublishablePluginPackageErrors,
@@ -299,6 +300,42 @@ describe("collectPublishablePluginPackageErrors", () => {
       }),
     ).toEqual(["README.md must exist and contain package documentation."]);
   });
+
+  it("requires latest-release dependencies to name exact runtime dependencies", () => {
+    expect(
+      collectPublishablePluginPackageErrors({
+        extensionId: "codex",
+        packageDir: bundledPluginRoot("codex"),
+        readmeText: "# Codex\n",
+        packageJson: {
+          name: "@openclaw/codex",
+          version: "2026.6.11",
+          type: "module",
+          repository: {
+            type: "git",
+            url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+          },
+          dependencies: {
+            "@openai/codex": "0.142.5",
+          },
+          openclaw: {
+            extensions: ["./index.ts"],
+            ...externalPluginContract("2026.6.11"),
+            install: {
+              npmSpec: "@openclaw/codex",
+            },
+            release: {
+              publishToNpm: true,
+              requireLatestDependencies: ["@openai/codex", "@openai/codex", "missing"],
+            },
+          },
+        },
+      }),
+    ).toEqual([
+      'openclaw.release.requireLatestDependencies must not contain duplicate package names; found "@openai/codex".',
+      'openclaw.release.requireLatestDependencies must reference package.json dependencies or optionalDependencies; "missing" is not a runtime dependency.',
+    ]);
+  });
 });
 
 describe("collectPluginReleaseVersionFloorErrors", () => {
@@ -328,6 +365,58 @@ describe("collectPluginReleaseVersionFloorErrors", () => {
         },
       ]),
     ).toEqual([]);
+  });
+});
+
+describe("collectPluginReleaseDependencyFreshnessErrors", () => {
+  const plugin: PublishablePluginPackage = {
+    extensionId: "codex",
+    packageDir: "extensions/codex",
+    packageName: "@openclaw/codex",
+    version: "2026.6.11",
+    channel: "stable",
+    publishTag: "latest",
+    requiredLatestDependencies: [
+      {
+        packageName: "@openai/codex",
+        version: "0.139.0",
+      },
+    ],
+  };
+
+  it("rejects release dependencies older than the npm latest dist-tag", () => {
+    expect(collectPluginReleaseDependencyFreshnessErrors([plugin], () => "0.142.5")).toEqual([
+      '@openclaw/codex@2026.6.11: @openai/codex must match npm latest for release; found "0.139.0", latest is "0.142.5".',
+    ]);
+  });
+
+  it("accepts release dependencies matching the npm latest dist-tag", () => {
+    expect(
+      collectPluginReleaseDependencyFreshnessErrors(
+        [
+          {
+            ...plugin,
+            requiredLatestDependencies: [
+              {
+                packageName: "@openai/codex",
+                version: "0.142.5",
+              },
+            ],
+          },
+        ],
+        () => "0.142.5",
+      ),
+    ).toEqual([]);
+  });
+
+  it("fails closed when npm latest cannot be resolved", () => {
+    expect(
+      collectPluginReleaseDependencyFreshnessErrors([plugin], () => {
+        throw new Error("registry unavailable");
+      }),
+    ).toEqual([
+      "@openclaw/codex@2026.6.11: could not resolve npm latest for @openai/codex: registry unavailable",
+    ]);
   });
 });
 
@@ -400,6 +489,53 @@ describe("collectPublishablePluginPackages", () => {
         channel: "stable",
         publishTag: "latest",
         installNpmSpec: "@openclaw/demo-plugin",
+      },
+    ]);
+  });
+
+  it("collects exact release dependencies that must match npm latest", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
+    writePluginReadme(repoDir, "demo-plugin");
+    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
+      name: "@openclaw/demo-plugin",
+      version: "2026.4.10",
+      type: "module",
+      repository: {
+        type: "git",
+        url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+      },
+      dependencies: {
+        "demo-runtime": "1.2.3",
+      },
+      openclaw: {
+        extensions: ["./index.ts"],
+        ...externalPluginContract("2026.4.10"),
+        install: {
+          npmSpec: "@openclaw/demo-plugin",
+        },
+        release: {
+          publishToNpm: true,
+          requireLatestDependencies: ["demo-runtime"],
+        },
+      },
+    });
+
+    expect(collectPublishablePluginPackages(repoDir)).toEqual([
+      {
+        extensionId: "demo-plugin",
+        packageDir: "extensions/demo-plugin",
+        packageName: "@openclaw/demo-plugin",
+        version: "2026.4.10",
+        channel: "stable",
+        publishTag: "latest",
+        installNpmSpec: "@openclaw/demo-plugin",
+        requiredLatestDependencies: [
+          {
+            packageName: "demo-runtime",
+            version: "1.2.3",
+          },
+        ],
       },
     ]);
   });

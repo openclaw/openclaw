@@ -292,7 +292,15 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadLogsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["terminal.open", "terminal.input", "terminal.resize", "terminal.close"],
+    methods: [
+      "terminal.open",
+      "terminal.input",
+      "terminal.resize",
+      "terminal.close",
+      "terminal.attach",
+      "terminal.list",
+      "terminal.text",
+    ],
     loadHandlers: loadTerminalHandlers,
   }),
   ...createLazyCoreHandlers({

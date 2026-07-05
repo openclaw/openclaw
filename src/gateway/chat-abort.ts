@@ -61,6 +61,8 @@ export type ChatAbortControllerEntry = {
    * is active" must check `kind !== "agent"`, not just `.has(runId)`.
    */
   kind?: "chat-send" | "agent";
+  /** Side questions stay independent from main-turn TUI session stops. */
+  turnKind?: "main" | "btw";
 };
 
 export type RestartRecoveryCandidate = {
@@ -153,6 +155,7 @@ export function registerChatAbortController(params: {
   isAbortable?: (entry: ChatAbortControllerEntry) => boolean;
   onRemoved?: () => void;
   kind?: ChatAbortControllerEntry["kind"];
+  turnKind?: ChatAbortControllerEntry["turnKind"];
   lifecycleGeneration?: string;
   now?: number;
   expiresAtMs?: number;
@@ -219,6 +222,7 @@ export function registerChatAbortController(params: {
     onRemoved: params.onRemoved,
     projectSessionActive: true,
     kind: params.kind,
+    turnKind: params.turnKind,
   };
   params.chatAbortControllers.set(params.runId, entry);
   return { controller, registered: true, entry, cleanup };

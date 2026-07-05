@@ -441,8 +441,10 @@ export const fa: TranslationMap = {
     tabHint: "{agent} · {cwd}",
     exited: "exited",
     exitedCode: "exited ({code})",
+    detached: "جداشده",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
+    unavailable: "The terminal is not available on this gateway.",
   },
   tabs: {
     agents: "عامل‌ها",

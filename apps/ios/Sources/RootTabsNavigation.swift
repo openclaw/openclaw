@@ -49,6 +49,7 @@ extension RootTabs {
         case dreaming
         case usage
         case cron
+        case terminal
         case docs
         case settings
         case gateway
@@ -71,6 +72,7 @@ extension RootTabs {
             case .dreaming: "Dreaming"
             case .usage: "Usage"
             case .cron: "Cron Jobs"
+            case .terminal: "Terminal"
             case .docs: "Docs"
             case .settings: "Settings"
             case .gateway: "Settings / Gateway"
@@ -98,6 +100,7 @@ extension RootTabs {
             case .dreaming: "moon.stars"
             case .usage: "chart.bar.xaxis"
             case .cron: "timer"
+            case .terminal: "terminal"
             case .docs: "book"
             case .settings: "gearshape"
             case .gateway: "gearshape"
@@ -116,7 +119,7 @@ extension RootTabs {
                 .settings
             case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .dreaming,
                  .usage,
-                 .cron, .docs:
+                 .cron, .terminal, .docs:
                 .control
             }
         }
@@ -127,7 +130,7 @@ extension RootTabs {
                 .gateway
             case .chat, .talk, .overview, .activity, .agents, .workboard, .skillWorkshop, .instances, .sessions,
                  .dreaming,
-                 .usage, .cron, .settings, .docs:
+                 .usage, .cron, .terminal, .settings, .docs:
                 nil
             }
         }
@@ -198,7 +201,7 @@ extension RootTabs {
             true
         case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .dreaming,
              .usage,
-             .cron, .docs:
+             .cron, .terminal, .docs:
             false
         }
     }
@@ -283,6 +286,7 @@ extension RootTabs {
                 .dreaming,
                 .usage,
                 .cron,
+                .terminal,
             ]),
         SidebarGroup(
             title: "SETTINGS",

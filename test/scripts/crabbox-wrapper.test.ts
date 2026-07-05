@@ -116,7 +116,11 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
       '  deleted_cwd="$PWD"',
       "  cd / || exit 1",
       '  rm -rf "$deleted_cwd"',
-      "  deadline=100",
+      // Fail-safe only: the wrapper normally kills this child mid-loop. The
+      // deadline just has to outlast wrapper timer starvation under
+      // parallel-suite load, or the child exits 66 before the wrapper reacts
+      // and the test asserts on the wrong stderr message.
+      "  deadline=1000",
       '  while [ "$deadline" -gt 0 ] && [ ! -d "$deleted_cwd" ]; do',
       "    deadline=$((deadline - 1))",
       "    sleep 0.01",

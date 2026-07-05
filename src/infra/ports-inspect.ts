@@ -5,6 +5,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { buildPortHints } from "./ports-format.js";
 import { resolveLsofCommand } from "./ports-lsof.js";
+import { parseTcpEndpoint, parseWindowsNetstatListeners } from "./ports-netstat.js";
 import { probePortUsage } from "./ports-probe.js";
 import type {
   PortConnection,
@@ -74,37 +75,6 @@ function dedupePortListeners(listeners: PortListener[]): PortListener[] {
     seen.add(key);
     return true;
   });
-}
-
-function normalizeTcpHost(host: string): string {
-  const normalized = host.toLowerCase();
-  return normalized.startsWith("::ffff:") ? normalized.slice("::ffff:".length) : normalized;
-}
-
-function parseTcpPort(raw: string | undefined): number | null {
-  if (!raw || !/^\d+$/.test(raw)) {
-    return null;
-  }
-  const port = Number(raw);
-  return Number.isSafeInteger(port) && port >= 0 && port <= 65_535 ? port : null;
-}
-
-function parseTcpEndpoint(raw: string): { host: string; port: number } | null {
-  const endpoint = raw.trim();
-  const bracketMatch = endpoint.match(/^\[([^\]]+)\]:(\d+)$/);
-  if (bracketMatch) {
-    const port = parseTcpPort(bracketMatch[2]);
-    return port === null ? null : { host: normalizeTcpHost(bracketMatch[1]), port };
-  }
-  const lastColon = endpoint.lastIndexOf(":");
-  if (lastColon <= 0 || lastColon >= endpoint.length - 1) {
-    return null;
-  }
-  const port = parseTcpPort(endpoint.slice(lastColon + 1));
-  if (port === null) {
-    return null;
-  }
-  return { host: normalizeTcpHost(endpoint.slice(0, lastColon)), port };
 }
 
 function parseLsofTcpConnectionAddress(
@@ -434,33 +404,7 @@ async function readUnixListeners(
 }
 
 function parseNetstatListeners(output: string, port: number): PortListener[] {
-  const listeners: PortListener[] = [];
-  for (const rawLine of output.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line) {
-      continue;
-    }
-    if (!normalizeLowercaseStringOrEmpty(line).includes("listen")) {
-      continue;
-    }
-    const parts = line.split(/\s+/);
-    if (parts.length < 4) {
-      continue;
-    }
-    const localAddr = parts[1];
-    if (!localAddr || parseTcpEndpoint(localAddr)?.port !== port) {
-      continue;
-    }
-    const pidRaw = parts.at(-1);
-    const pid = parseStrictPositiveInteger(pidRaw);
-    const listener: PortListener = {};
-    if (pid !== undefined) {
-      listener.pid = pid;
-    }
-    listener.address = localAddr;
-    listeners.push(listener);
-  }
-  return listeners;
+  return parseWindowsNetstatListeners(output, port);
 }
 
 function parseNetstatConnections(output: string, port: number): PortConnection[] {
@@ -562,7 +506,7 @@ async function readWindowsNetstatEntries<T extends PortListener>(
   parse: (output: string, port: number) => T[],
 ): Promise<{ entries: T[]; detail?: string; errors: string[] }> {
   const errors: string[] = [];
-  const res = await runCommandSafe([getWindowsSystem32ExePath("netstat.exe"), "-ano", "-p", "tcp"]);
+  const res = await runCommandSafe([getWindowsSystem32ExePath("netstat.exe"), "-ano"]);
   if (res.code !== 0) {
     if (res.error) {
       errors.push(res.error);

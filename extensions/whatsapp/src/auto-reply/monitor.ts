@@ -267,7 +267,10 @@ export async function monitorWebChannel(
         if (normalized.quote?.id || normalized.quote?.body) {
           return false;
         }
-        return !isControlCommandMessage(normalized.payload.body, cfg);
+        return !isControlCommandMessage(
+          normalized.payload.commandBody ?? normalized.payload.body,
+          cfg,
+        );
       };
 
       let connection;
