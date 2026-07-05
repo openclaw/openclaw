@@ -1550,6 +1550,17 @@ describe("package artifact reuse", () => {
     }
   });
 
+  it("maps every supported Slack approval checkpoint scenario family", () => {
+    const workflow = readFileSync(MANTIS_SLACK_DESKTOP_SMOKE_WORKFLOW, "utf8");
+
+    expectTextToIncludeAll(workflow, [
+      'endswith("-exec-native")',
+      'endswith("-plugin-native")',
+      'startswith("slack-codex-")',
+      'expected_result="Slack approval checkpoint passes for $scenario_label"',
+    ]);
+  });
+
   it("fails Docker E2E release lanes when summary artifacts are missing", () => {
     const cases = [
       {
