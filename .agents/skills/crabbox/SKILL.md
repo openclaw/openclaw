@@ -69,6 +69,10 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
   tools to require an IMDSv2 token, prove the IAM credentials endpoint returns
   404, and verify remote `git rev-parse HEAD` equals the full reviewed PR head
   SHA. Bind the lease to that SHA; stop and rewarm when the head changes. Never
+  inherit Tailscale: unset every `CRABBOX_TAILSCALE*` override, force
+  `--network public --tailscale=false`, clear exit-node/LAN flags, and require
+  `crabbox inspect` to report public networking with no Tailscale state before
+  uploading any script. Never
   run PR code until trusted `scripts/crabbox-untrusted-bootstrap.sh` has
   installed the pinned Node/pnpm runtime; reject a changed PR `packageManager`
   pin before install. Never
@@ -96,7 +100,23 @@ env -u CRABBOX_AWS_INSTANCE_PROFILE \
   crabbox config show --json | \
   jq -e '.aws.instanceProfile == ""' >/dev/null
 env -u CRABBOX_AWS_INSTANCE_PROFILE \
-  crabbox warmup --provider aws --keep --timing-json
+  -u CRABBOX_TAILSCALE \
+  -u CRABBOX_TAILSCALE_AUTH_KEY \
+  -u CRABBOX_TAILSCALE_AUTH_KEY_ENV \
+  -u CRABBOX_TAILSCALE_EXIT_NODE \
+  -u CRABBOX_TAILSCALE_EXIT_NODE_ALLOW_LAN_ACCESS \
+  -u CRABBOX_TAILSCALE_HOSTNAME_TEMPLATE \
+  -u CRABBOX_TAILSCALE_TAGS \
+  crabbox warmup \
+  --provider aws \
+  --network public \
+  --tailscale=false \
+  --tailscale-exit-node= \
+  --tailscale-exit-node-allow-lan-access=false \
+  --keep \
+  --timing-json
+crabbox inspect --provider aws --id <cbx_id> --json | \
+  jq -e '.network == "public" and .tailscale == null' >/dev/null
 env -u CRABBOX_AWS_INSTANCE_PROFILE \
   CRABBOX_ENV_ALLOW=CI,NODE_OPTIONS \
   crabbox run \

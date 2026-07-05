@@ -292,7 +292,10 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
   trusted IMDS reports no IAM credentials, bind the lease to the reviewed head
   SHA, and never execute its local wrapper or config. Before fetching the PR,
   upload trusted `scripts/crabbox-untrusted-bootstrap.sh` from clean `main` to
-  install the pinned Node/pnpm runtime. Rewarm after any head change. Continue
+  install the pinned Node/pnpm runtime. Force public networking, disable and
+  unset inherited Tailscale/exit-node settings, and fail closed unless
+  `crabbox inspect` reports no Tailscale state before any script. Rewarm after
+  any head change. Continue
   review/editing while it hydrates, sync every run, reuse the lease, then stop
   it before handoff. Skip warmup for read-only triage and docs-only work.
 - Never mention release-note bookkeeping in review-only output. It is landing

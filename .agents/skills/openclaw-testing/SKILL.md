@@ -45,10 +45,23 @@ env -u CRABBOX_AWS_INSTANCE_PROFILE \
   crabbox config show --json | \
   jq -e '.aws.instanceProfile == ""' >/dev/null
 env -u CRABBOX_AWS_INSTANCE_PROFILE \
+  -u CRABBOX_TAILSCALE \
+  -u CRABBOX_TAILSCALE_AUTH_KEY \
+  -u CRABBOX_TAILSCALE_AUTH_KEY_ENV \
+  -u CRABBOX_TAILSCALE_EXIT_NODE \
+  -u CRABBOX_TAILSCALE_EXIT_NODE_ALLOW_LAN_ACCESS \
+  -u CRABBOX_TAILSCALE_HOSTNAME_TEMPLATE \
+  -u CRABBOX_TAILSCALE_TAGS \
   crabbox warmup \
   --provider aws \
+  --network public \
+  --tailscale=false \
+  --tailscale-exit-node= \
+  --tailscale-exit-node-allow-lan-access=false \
   --keep \
   --timing-json
+crabbox inspect --provider aws --id <cbx_id> --json | \
+  jq -e '.network == "public" and .tailscale == null' >/dev/null
 ```
 
 Bind the returned lease to one immutable reviewed head SHA; never repurpose a
@@ -147,6 +160,9 @@ commands.
   `aws.instanceProfile`. Before any install/test, use trusted absolute-path
   tools to require an IMDSv2 token, prove the IAM credentials endpoint returns
   404, and compare remote `git rev-parse HEAD` with the full reviewed head SHA.
+  Unset all `CRABBOX_TAILSCALE*` overrides, pass `--network public
+  --tailscale=false`, clear exit-node/LAN flags, then require `crabbox inspect`
+  to report `network=public` and no Tailscale state before uploading any script.
   Bootstrap Node 24 and the repository-pinned pnpm through trusted
   `scripts/crabbox-untrusted-bootstrap.sh` before `--fresh-pr`; reject a changed
   PR `packageManager` pin before install.

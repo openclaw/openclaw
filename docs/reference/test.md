@@ -46,6 +46,9 @@ runtime; reject a changed PR `packageManager` pin before install. If the broker
 cannot prove no role or no remote PR exists, use
 secretless fork CI. Do not use `hydrate-github`, `--no-sync`, or a
 credential-hydrated Testbox workflow.
+Unset all `CRABBOX_TAILSCALE*` overrides, force `--network public
+--tailscale=false`, clear exit-node/LAN flags, and require `crabbox inspect` to
+report public networking with no Tailscale state before uploading any script.
 
 ## Routine local order
 

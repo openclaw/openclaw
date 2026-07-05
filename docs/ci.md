@@ -627,6 +627,9 @@ reviewed PR head SHA. Bind the lease to that SHA and stop/rewarm on head change.
 Before `--fresh-pr`, upload trusted `scripts/crabbox-untrusted-bootstrap.sh`
 from clean `main` to install the pinned Node/pnpm runtime; reject a changed PR
 `packageManager` pin before install.
+Unset all `CRABBOX_TAILSCALE*` overrides, force `--network public
+--tailscale=false`, clear exit-node/LAN flags, and require `crabbox inspect` to
+report public networking with no Tailscale state before uploading any script.
 Owned AWS/Hetzner capacity also remains the fallback for Blacksmith outages,
 quota issues, or explicit owned-capacity testing.
 
