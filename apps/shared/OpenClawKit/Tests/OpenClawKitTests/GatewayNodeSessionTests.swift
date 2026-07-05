@@ -1358,7 +1358,7 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func `token mismatch does not retry stored device token for loopback prefix hostname`() async throws {
+    func `token mismatch does not retry stored device token for untrusted local hosts`() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -1379,15 +1379,6 @@ struct GatewayNodeSessionTests {
             role: "operator",
             token: "stored-device-token")
 
-        let connectError: [String: Any] = [
-            "code": GatewayConnectAuthDetailCode.authTokenMismatch.rawValue,
-            "message": "token mismatch",
-            "details": [
-                "canRetryWithDeviceToken": true,
-            ],
-        ]
-        let session = FakeGatewayWebSocketSession(connectError: connectError)
-        let gateway = GatewayNodeSession()
         let options = GatewayConnectOptions(
             role: "operator",
             scopes: ["operator.read"],
@@ -1399,33 +1390,49 @@ struct GatewayNodeSessionTests {
             clientDisplayName: "iOS Test",
             includeDeviceIdentity: true)
 
-        let url = try #require(URL(string: "ws://127.attacker.example:18789"))
+        let connectError: [String: Any] = [
+            "code": GatewayConnectAuthDetailCode.authTokenMismatch.rawValue,
+            "message": "token mismatch",
+            "details": [
+                "canRetryWithDeviceToken": true,
+            ],
+        ]
 
-        for _ in 0..<2 {
-            do {
-                try await gateway.connect(
-                    url: url,
-                    token: "shared-gateway-token",
-                    bootstrapToken: nil,
-                    password: nil,
-                    connectOptions: options,
-                    sessionBox: WebSocketSessionBox(session: session),
-                    onConnected: {},
-                    onDisconnected: { _ in },
-                    onInvoke: { req in
-                        BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
-                    })
-                Issue.record("connect unexpectedly succeeded")
-            } catch let error as GatewayConnectAuthError {
-                #expect(error.detail == .authTokenMismatch)
+        for rawURL in [
+            "ws://127.attacker.example:18789",
+            "ws://0.0.0.0:18789",
+            "ws://[::]:18789",
+        ] {
+            let session = FakeGatewayWebSocketSession(connectError: connectError)
+            let gateway = GatewayNodeSession()
+            let url = try #require(URL(string: rawURL))
+
+            for _ in 0..<2 {
+                do {
+                    try await gateway.connect(
+                        url: url,
+                        token: "shared-gateway-token",
+                        bootstrapToken: nil,
+                        password: nil,
+                        connectOptions: options,
+                        sessionBox: WebSocketSessionBox(session: session),
+                        onConnected: {},
+                        onDisconnected: { _ in },
+                        onInvoke: { req in
+                            BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+                        })
+                    Issue.record("connect unexpectedly succeeded")
+                } catch let error as GatewayConnectAuthError {
+                    #expect(error.detail == .authTokenMismatch)
+                }
             }
+
+            let retryAuth = try #require(session.latestTask()?.latestConnectAuth())
+            #expect(retryAuth["token"] as? String == "shared-gateway-token")
+            #expect(retryAuth["deviceToken"] == nil)
+
+            await gateway.disconnect()
         }
-
-        let retryAuth = try #require(session.latestTask()?.latestConnectAuth())
-        #expect(retryAuth["token"] as? String == "shared-gateway-token")
-        #expect(retryAuth["deviceToken"] == nil)
-
-        await gateway.disconnect()
     }
 
     @Test
