@@ -558,6 +558,7 @@ function buildSessionCostSummaryFromCacheEntry(params: {
   sessionFile: string;
   startMs: number;
   endMs: number;
+  dailyUtcOffsetMinutes?: number;
 }): SessionCostSummary | null {
   if (!params.entry.transcriptEntries) {
     return null;
@@ -617,7 +618,7 @@ function buildSessionCostSummaryFromCacheEntry(params: {
           (lastUserTimestamp !== undefined ? Math.max(0, ts - lastUserTimestamp) : undefined);
         if (latencyMs !== undefined && Number.isFinite(latencyMs) && latencyMs <= maxLatencyMs) {
           latencyValues.push(latencyMs);
-          const dayKey = formatDayKey(new Date(ts));
+          const dayKey = formatDayKey(new Date(ts), params.dailyUtcOffsetMinutes);
           const dailyLatencies = dailyLatencyMap.get(dayKey) ?? [];
           dailyLatencies.push(latencyMs);
           dailyLatencyMap.set(dayKey, dailyLatencies);
@@ -643,7 +644,7 @@ function buildSessionCostSummaryFromCacheEntry(params: {
 
     if (ts !== undefined) {
       const date = new Date(ts);
-      const dayKey = formatDayKey(date);
+      const dayKey = formatDayKey(date, params.dailyUtcOffsetMinutes);
       activityDatesSet.add(dayKey);
       const daily = dailyMessageMap.get(dayKey) ?? {
         date: dayKey,
@@ -702,7 +703,7 @@ function buildSessionCostSummaryFromCacheEntry(params: {
     addTotals(totals, usageTotals);
     if (ts !== undefined) {
       const date = new Date(ts);
-      const dayKey = formatDayKey(date);
+      const dayKey = formatDayKey(date, params.dailyUtcOffsetMinutes);
       const componentTokens =
         usageTotals.input + usageTotals.output + usageTotals.cacheRead + usageTotals.cacheWrite;
       const existingDaily = dailyMap.get(dayKey) ?? { tokens: 0, cost: 0 };
@@ -1786,6 +1787,7 @@ export async function loadSessionCostSummaryFromCache(params: {
   agentId?: string;
   startMs?: number;
   endMs?: number;
+  dailyUtcOffsetMinutes?: number;
   requestRefresh?: boolean;
   refreshMode?: "background" | "sync-when-empty";
 }): Promise<{ summary: SessionCostSummary | null; cacheStatus: UsageCacheStatus }> {
@@ -1850,6 +1852,27 @@ export async function loadSessionCostSummaryFromCache(params: {
   const refreshRunning =
     usageCostRefreshes.has(cachePath) || (await isUsageCostCacheRefreshRunning(cachePath));
   let summary = stale ? null : (entry?.sessionSummary ?? null);
+  // Persisted summaries use Gateway-local day keys. Request-scoped UTC/browser
+  // offsets must rebuild daily projections from the cached transcript entries.
+  const requiresDailyRebucket = params.dailyUtcOffsetMinutes !== undefined;
+  if (
+    summary &&
+    params.startMs !== undefined &&
+    params.endMs !== undefined &&
+    (requiresDailyRebucket ||
+      !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs))
+  ) {
+    summary = entry
+      ? buildSessionCostSummaryFromCacheEntry({
+          entry,
+          sessionId: params.sessionId,
+          sessionFile: params.sessionFile,
+          startMs: params.startMs,
+          endMs: params.endMs,
+          dailyUtcOffsetMinutes: params.dailyUtcOffsetMinutes,
+        })
+      : null;
+  }
   if (!summary && params.refreshMode === "sync-when-empty") {
     summary = await loadSessionCostSummary({
       sessionId: params.sessionId,
@@ -1859,33 +1882,8 @@ export async function loadSessionCostSummaryFromCache(params: {
       agentId: params.agentId,
       startMs: params.startMs,
       endMs: params.endMs,
+      dailyUtcOffsetMinutes: params.dailyUtcOffsetMinutes,
     });
-  }
-  if (
-    summary &&
-    params.startMs !== undefined &&
-    params.endMs !== undefined &&
-    !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs)
-  ) {
-    summary = entry
-      ? buildSessionCostSummaryFromCacheEntry({
-          entry,
-          sessionId: params.sessionId,
-          sessionFile: params.sessionFile,
-          startMs: params.startMs,
-          endMs: params.endMs,
-        })
-      : params.refreshMode === "sync-when-empty"
-        ? await loadSessionCostSummary({
-            sessionId: params.sessionId,
-            sessionEntry: params.sessionEntry,
-            sessionFile: params.sessionFile,
-            config: params.config,
-            agentId: params.agentId,
-            startMs: params.startMs,
-            endMs: params.endMs,
-          })
-        : null;
   }
   return {
     summary,
@@ -1911,6 +1909,7 @@ export async function loadSessionCostSummariesFromCache(params: {
   agentId?: string;
   startMs?: number;
   endMs?: number;
+  dailyUtcOffsetMinutes?: number;
   requestRefresh?: boolean;
 }): Promise<{ summaries: Array<SessionCostSummary | null>; cacheStatus: UsageCacheStatus }> {
   const cachePath = resolveUsageCostCachePath(params.agentId);
@@ -1929,6 +1928,7 @@ export async function loadSessionCostSummariesFromCache(params: {
   ]);
   const staleFiles = new Set<string>();
   let cachedFiles = 0;
+  const requiresDailyRebucket = params.dailyUtcOffsetMinutes !== undefined;
   const summaries = params.sessions.map((session, index) => {
     const stat = stats[index];
     const file = stat
@@ -1952,7 +1952,8 @@ export async function loadSessionCostSummariesFromCache(params: {
       summary &&
       params.startMs !== undefined &&
       params.endMs !== undefined &&
-      !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs)
+      (requiresDailyRebucket ||
+        !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs))
     ) {
       return entry
         ? buildSessionCostSummaryFromCacheEntry({
@@ -1961,6 +1962,7 @@ export async function loadSessionCostSummariesFromCache(params: {
             sessionFile: session.sessionFile,
             startMs: params.startMs,
             endMs: params.endMs,
+            dailyUtcOffsetMinutes: params.dailyUtcOffsetMinutes,
           })
         : null;
     }
@@ -2205,6 +2207,7 @@ export async function loadSessionCostSummary(params: {
   agentId?: string;
   startMs?: number;
   endMs?: number;
+  dailyUtcOffsetMinutes?: number;
 }): Promise<SessionCostSummary | null> {
   const sessionFile = resolveExistingUsageSessionFile(params);
   if (!sessionFile || !fs.existsSync(sessionFile)) {
@@ -2284,7 +2287,10 @@ export async function loadSessionCostSummary(params: {
             latencyMs <= MAX_LATENCY_MS
           ) {
             latencyValues.push(latencyMs);
-            const dayKey = formatDayKey(entry.timestamp ?? new Date(tsLocal));
+            const dayKey = formatDayKey(
+              entry.timestamp ?? new Date(tsLocal),
+              params.dailyUtcOffsetMinutes,
+            );
             const dailyLatencies = dailyLatencyMap.get(dayKey) ?? [];
             dailyLatencies.push(latencyMs);
             dailyLatencyMap.set(dayKey, dailyLatencies);
@@ -2309,7 +2315,7 @@ export async function loadSessionCostSummary(params: {
       }
 
       if (entry.timestamp) {
-        const dayKey = formatDayKey(entry.timestamp);
+        const dayKey = formatDayKey(entry.timestamp, params.dailyUtcOffsetMinutes);
         activityDatesSet.add(dayKey);
         const daily = dailyMessageMap.get(dayKey) ?? {
           date: dayKey,
@@ -2351,7 +2357,7 @@ export async function loadSessionCostSummary(params: {
       }
 
       if (entry.timestamp) {
-        const dayKey = formatDayKey(entry.timestamp);
+        const dayKey = formatDayKey(entry.timestamp, params.dailyUtcOffsetMinutes);
         const entryTokenTotals = computeUsageTokenTotals(entry.usage);
         // Preserve the legacy dailyBreakdown token basis until daily metrics are
         // refactored separately. The precise quarter-hour bucket below uses

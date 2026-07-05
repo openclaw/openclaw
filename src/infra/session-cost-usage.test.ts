@@ -584,6 +584,57 @@ describe("session cost usage", () => {
     });
   });
 
+  it("rebuckets cached session daily fields with the request timezone offset", async () => {
+    const root = await makeSessionCostRoot("cost-cache-request-offset");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-offset.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        {
+          type: "message",
+          timestamp: "2026-02-12T00:29:00.000Z",
+          message: { role: "user", content: "hello" },
+        },
+        {
+          type: "message",
+          timestamp: "2026-02-12T00:30:00.000Z",
+          message: {
+            role: "assistant",
+            provider: "openai",
+            model: "gpt-5.5",
+            usage: { input: 10, output: 5, totalTokens: 15, cost: { total: 0.00001 } },
+          },
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n"),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ sessionFiles: [sessionFile] });
+      const result = await loadSessionCostSummariesFromCache({
+        sessions: [{ sessionId: "sess-offset", sessionFile }],
+        agentId: "main",
+        startMs: Date.UTC(2026, 1, 11, 2),
+        endMs: Date.UTC(2026, 1, 12, 1, 59, 59, 999),
+        dailyUtcOffsetMinutes: -120,
+      });
+      const summary = requireValue(result.summaries[0], "offset session summary missing");
+
+      expect(summary.activityDates).toEqual(["2026-02-11"]);
+      expect(summary.dailyBreakdown).toEqual([{ date: "2026-02-11", tokens: 15, cost: 0.00001 }]);
+      expect(summary.dailyMessageCounts?.map((entry) => entry.date)).toEqual(["2026-02-11"]);
+      expect(summary.dailyLatency?.map((entry) => entry.date)).toEqual(["2026-02-11"]);
+      expect(summary.dailyModelUsage?.map((entry) => entry.date)).toEqual(["2026-02-11"]);
+      expect(new Set(summary.utcQuarterHourMessageCounts?.map((entry) => entry.date))).toEqual(
+        new Set(["2026-02-12"]),
+      );
+    });
+  });
+
   it("ignores compaction checkpoint transcript snapshots in daily totals and discovery", async () => {
     const root = await makeSessionCostRoot("cost-checkpoint");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -1728,6 +1779,49 @@ describe("session cost usage", () => {
       expect(summary.summary?.totalTokens).toBe(30);
       expect(summary.summary?.totalCost).toBeCloseTo(0.03, 5);
       expect(summary.cacheStatus.status).toBe("fresh");
+    });
+  });
+
+  it("preserves offset-aware synchronous fallback for aggregate-only cache entries", async () => {
+    const root = await makeSessionCostRoot("cost-cache-session-sync-offset");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-session-sync-offset.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-05T00:30:00.000Z",
+        message: {
+          role: "assistant",
+          usage: {
+            input: 10,
+            output: 20,
+            totalTokens: 30,
+            cost: { total: 0.03 },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache();
+      const summary = await loadSessionCostSummaryFromCache({
+        sessionId: "sess-cache-session-sync-offset",
+        sessionFile,
+        startMs: Date.UTC(2026, 1, 4, 2),
+        endMs: Date.UTC(2026, 1, 5, 1, 59, 59, 999),
+        dailyUtcOffsetMinutes: -120,
+        requestRefresh: false,
+        refreshMode: "sync-when-empty",
+      });
+
+      expect(summary.summary?.totalTokens).toBe(30);
+      expect(summary.summary?.dailyBreakdown).toEqual([
+        { date: "2026-02-04", tokens: 30, cost: 0.03 },
+      ]);
+      expect(summary.cacheStatus.status).toBe("partial");
     });
   });
 

@@ -978,6 +978,9 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
     const config = context.getRuntimeConfig();
     const { startMs, endMs } = dateRange.value;
+    const dailyUtcOffsetMinutes = resolveDayBucketUtcOffsetMinutes(
+      resolveDateInterpretation({ mode: p.mode, utcOffset: p.utcOffset }),
+    );
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
     const includeContextWeight = p.includeContextWeight ?? false;
     const specificKey = normalizeOptionalString(p.key) ?? null;
@@ -1245,6 +1248,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           agentId,
           startMs,
           endMs,
+          dailyUtcOffsetMinutes,
         }),
       })),
       limit: SESSIONS_USAGE_AGENT_LOAD_CONCURRENCY,
