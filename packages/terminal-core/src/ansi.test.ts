@@ -42,6 +42,7 @@ describe("terminal ansi helpers", () => {
       String.fromCharCode(0x9b) +
       "done";
     expect(sanitizeForLog(input)).toBe("warnnextlinedone");
+    expect(sanitizeForLog("\u009B31mred\u009B0m")).toBe("red");
   });
 
   it("measures wide graphemes by terminal cell width", () => {

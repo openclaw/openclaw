@@ -6,7 +6,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { stripAnsiForSanitization } from "../../packages/terminal-core/src/ansi.js";
 import {
   killProcessTree as killProcessTreeGracefully,
   type KillProcessTreeOptions,
@@ -263,7 +263,7 @@ export function detectRuntimeShell(): string | undefined {
 }
 
 export function sanitizeBinaryOutput(text: string): string {
-  const scrubbed = stripAnsi(text).replace(/[\p{Format}\p{Surrogate}]/gu, "");
+  const scrubbed = stripAnsiForSanitization(text).replace(/[\p{Format}\p{Surrogate}]/gu, "");
   if (!scrubbed) {
     return scrubbed;
   }

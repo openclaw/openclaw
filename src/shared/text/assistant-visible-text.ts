@@ -373,13 +373,43 @@ function isDanglingFunctionParameterParent(text: string, tag: ParsedToolCallTag)
   return nextTag?.tagName === "parameter" && !nextTag.isClose;
 }
 
+function consumeImmediateLineBreak(text: string, start: number): number | null {
+  if (text[start] === "\r" && text[start + 1] === "\n") {
+    return start + 2;
+  }
+  return text[start] === "\n" || text[start] === "\r" ? start + 1 : null;
+}
+
+function trimImmediateLineBreakBefore(text: string, start: number, end: number): number {
+  if (end > start && text[end - 1] === "\n") {
+    return end - (end - 2 >= start && text[end - 2] === "\r" ? 2 : 1);
+  }
+  return end > start && text[end - 1] === "\r" ? end - 1 : end;
+}
+
+function isLineStartAt(text: string, start: number): boolean {
+  let cursor = start - 1;
+  while (cursor >= 0 && (text[cursor] === " " || text[cursor] === "\t")) {
+    cursor -= 1;
+  }
+  return cursor < 0 || text[cursor] === "\n" || text[cursor] === "\r";
+}
+
+function isLineEndAfter(text: string, end: number): boolean {
+  let cursor = end;
+  while (cursor < text.length && (text[cursor] === " " || text[cursor] === "\t")) {
+    cursor += 1;
+  }
+  return cursor >= text.length || text[cursor] === "\n" || text[cursor] === "\r";
+}
+
 function unwrapStandaloneParameterTags(text: string): string {
   if (!/<\s*\/?\s*parameter\b/i.test(text)) {
     return text;
   }
 
   const codeRegions = findCodeRegions(text);
-  const openTags: Array<{ name: string; unwrap: boolean }> = [];
+  const openTags: Array<{ name: string; unwrap: boolean; trimBoundaryLineBreaks: boolean }> = [];
   let result = "";
   let lastIndex = 0;
 
@@ -397,7 +427,13 @@ function unwrapStandaloneParameterTags(text: string): string {
       if (openIndex !== -1) {
         const opening = openTags[openIndex];
         if (opening.unwrap) {
-          result += text.slice(lastIndex, idx);
+          const contentEnd =
+            opening.trimBoundaryLineBreaks &&
+            isLineStartAt(text, idx) &&
+            isLineEndAfter(text, tag.end)
+              ? trimImmediateLineBreakBefore(text, lastIndex, idx)
+              : idx;
+          result += text.slice(lastIndex, contentEnd);
           lastIndex = tag.end;
         }
         openTags.splice(openIndex);
@@ -412,11 +448,19 @@ function unwrapStandaloneParameterTags(text: string): string {
       isDanglingFunctionParameterParent(text, tag)
     ) {
       const unwrap = tag.tagName === "parameter" && openTags.length === 0;
+      let trimBoundaryLineBreaks = false;
       if (unwrap) {
         result += text.slice(lastIndex, idx);
         lastIndex = tag.end;
+        const contentStart = isLineStartAt(text, idx)
+          ? consumeImmediateLineBreak(text, lastIndex)
+          : null;
+        if (contentStart !== null) {
+          lastIndex = contentStart;
+          trimBoundaryLineBreaks = true;
+        }
       }
-      openTags.push({ name: tag.tagName, unwrap });
+      openTags.push({ name: tag.tagName, unwrap, trimBoundaryLineBreaks });
     }
     idx = Math.max(idx, tag.end - 1);
   }
