@@ -45,6 +45,7 @@ import {
   emitDynamicToolTerminalDiagnostic,
 } from "./dynamic-tool-diagnostics.js";
 import {
+  createCodexDynamicToolInFlightCoalescer,
   handleDynamicToolCallWithTimeout,
   resolveCodexToolAbortTerminalReason,
   resolveDynamicToolCallTimeoutMs,
@@ -426,6 +427,7 @@ export async function runCodexAppServerSideQuestion(
         : {}),
       config: params.cfg,
     });
+    const dynamicToolInFlightCoalescer = createCodexDynamicToolInFlightCoalescer();
     const registerRequestHandler = (targetClient: CodexAppServerClient) =>
       targetClient.addRequestHandler(async (request) => {
         if (!childThreadId || !turnId) {
@@ -485,13 +487,15 @@ export async function runCodexAppServerSideQuestion(
         };
         emitDynamicToolStartedDiagnostic(diagnosticContext);
         try {
-          const response = await handleDynamicToolCallWithTimeout({
-            call,
-            toolBridge,
-            signal: runAbortController.signal,
-            timeoutMs,
-            observeToolTerminal: sideRunParams.observeToolTerminal,
-          });
+          const response = await dynamicToolInFlightCoalescer.run(call, () =>
+            handleDynamicToolCallWithTimeout({
+              call,
+              toolBridge,
+              signal: runAbortController.signal,
+              timeoutMs,
+              observeToolTerminal: sideRunParams.observeToolTerminal,
+            }),
+          );
           emitDynamicToolTerminalDiagnostic({
             ...diagnosticContext,
             response,

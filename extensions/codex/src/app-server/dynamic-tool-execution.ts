@@ -56,6 +56,54 @@ type DynamicToolTimeoutDetails = {
   meta: Record<string, unknown>;
 };
 
+export type CodexDynamicToolInFlightCoalescer = {
+  run(
+    call: CodexDynamicToolCallParams,
+    execute: () => Promise<CodexDynamicToolRuntimeResponse>,
+  ): Promise<CodexDynamicToolRuntimeResponse>;
+};
+
+export function createCodexDynamicToolInFlightCoalescer(): CodexDynamicToolInFlightCoalescer {
+  const inFlight = new Map<string, Promise<CodexDynamicToolRuntimeResponse>>();
+  return {
+    run(call, execute) {
+      const key = buildDynamicToolInFlightKey(call);
+      const existing = inFlight.get(key);
+      if (existing) {
+        embeddedAgentLog.debug("joining in-flight Codex dynamic tool call", {
+          threadId: call.threadId,
+          turnId: call.turnId,
+          tool: call.tool,
+          toolCallId: call.callId,
+        });
+        return existing;
+      }
+
+      const entry = Promise.resolve().then(execute);
+      inFlight.set(key, entry);
+      const clearEntry = () => {
+        if (inFlight.get(key) === entry) {
+          inFlight.delete(key);
+        }
+      };
+      entry.then(clearEntry, clearEntry);
+      return entry;
+    },
+  };
+}
+
+export function buildDynamicToolInFlightKey(call: CodexDynamicToolCallParams): string {
+  // Exclude callId so same-turn duplicate deliveries share one external side effect.
+  // Callers still answer each app-server request with its own RPC response.
+  return stableStringifyJsonValue({
+    arguments: call.arguments ?? null,
+    namespace: call.namespace ?? null,
+    threadId: call.threadId,
+    tool: call.tool,
+    turnId: call.turnId,
+  });
+}
+
 function normalizeLogField(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -85,6 +133,19 @@ function readNumericTimeoutMs(value: unknown): number | undefined {
     }
   }
   return undefined;
+}
+
+function stableStringifyJsonValue(value: JsonValue): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringifyJsonValue).join(",")}]`;
+  }
+  const entries = Object.entries(value).toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries
+    .map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringifyJsonValue(entryValue)}`)
+    .join(",")}}`;
 }
 
 function formatDynamicToolTimeoutDetails(params: {

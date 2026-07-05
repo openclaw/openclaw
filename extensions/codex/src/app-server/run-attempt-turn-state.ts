@@ -18,6 +18,7 @@ import {
   resolveCodexNativeHookRelayTtlMs,
   CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS,
 } from "./native-hook-relay.js";
+import { createCodexDynamicToolInFlightCoalescer } from "./dynamic-tool-execution.js";
 import type {
   CodexServerNotification,
   CodexDynamicToolCallParams,
@@ -101,6 +102,9 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   // One execution promise per call id prevents duplicate delivery from
   // repeating non-idempotent computer input while the attempt remains active.
   const openClawDynamicToolExecutions = createCodexDynamicToolExecutionRegistry();
+  // Codex can issue equivalent calls under different ids while the first is
+  // pending. Share only that in-flight side effect; sequential calls still run.
+  const openClawDynamicToolInFlightCoalescer = createCodexDynamicToolInFlightCoalescer();
   const activeTurnItemIds = new Set<string>();
   const activeCompletionBlockerItemIds = new Set<string>();
   const activeFinalizationHookRunIds = new Set<string>();
@@ -195,6 +199,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     turnAttemptIdleTimeoutMs,
     pendingOpenClawDynamicToolCompletionIds,
     openClawDynamicToolExecutions,
+    openClawDynamicToolInFlightCoalescer,
     activeTurnItemIds,
     activeCompletionBlockerItemIds,
     activeFinalizationHookRunIds,

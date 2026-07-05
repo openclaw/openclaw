@@ -54,6 +54,7 @@ export function createCodexAttemptServerRequestController(
     turnIdRef,
     userInputBridgeRef,
     openClawDynamicToolExecutions,
+    openClawDynamicToolInFlightCoalescer,
     pendingOpenClawDynamicToolCompletionIds,
     postToolRawAssistantCompletionIdleTimeoutMs,
     turnWatches,
@@ -207,30 +208,32 @@ export function createCodexAttemptServerRequestController(
       });
       try {
         const { execution } = openClawDynamicToolExecutions.claim(call, () =>
-          handleDynamicToolCallWithTimeout({
-            call,
-            toolBridge,
-            signal: runAbortController.signal,
-            timeoutMs: dynamicToolTimeoutMs,
-            toolMeta,
-            toolCallOrdinal,
-            onAgentToolResult: params.onAgentToolResult,
-            observeToolTerminal: params.observeToolTerminal,
-            onFallbackSelected: () => {
-              if (toolCallOrdinal !== undefined) {
-                suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
-              }
-            },
-            onTimeout: () => {
-              trajectoryRecorder?.recordEvent("tool.timeout", {
-                threadId: call.threadId,
-                turnId: call.turnId,
-                toolCallId: call.callId,
-                name: call.tool,
-                timeoutMs: dynamicToolTimeoutMs,
-              });
-            },
-          }),
+          openClawDynamicToolInFlightCoalescer.run(call, () =>
+            handleDynamicToolCallWithTimeout({
+              call,
+              toolBridge,
+              signal: runAbortController.signal,
+              timeoutMs: dynamicToolTimeoutMs,
+              toolMeta,
+              toolCallOrdinal,
+              onAgentToolResult: params.onAgentToolResult,
+              observeToolTerminal: params.observeToolTerminal,
+              onFallbackSelected: () => {
+                if (toolCallOrdinal !== undefined) {
+                  suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
+                }
+              },
+              onTimeout: () => {
+                trajectoryRecorder?.recordEvent("tool.timeout", {
+                  threadId: call.threadId,
+                  turnId: call.turnId,
+                  toolCallId: call.callId,
+                  name: call.tool,
+                  timeoutMs: dynamicToolTimeoutMs,
+                });
+              },
+            }),
+          ),
         );
         const response = await execution;
         const protocolResponse = toCodexDynamicToolProtocolResponse(response);
