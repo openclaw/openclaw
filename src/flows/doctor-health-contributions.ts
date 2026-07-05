@@ -1367,7 +1367,7 @@ async function collectWriteConfigHealthFindings(
 
 function findNearestExistingParent(path: string): string {
   let candidate = path;
-  while (!fs.existsSync(candidate)) {
+  while (!pathEntryExists(candidate)) {
     const parent = nodePath.dirname(candidate);
     if (parent === candidate) {
       return candidate;
@@ -1375,6 +1375,18 @@ function findNearestExistingParent(path: string): string {
     candidate = parent;
   }
   return candidate;
+}
+
+function pathEntryExists(path: string): boolean {
+  if (fs.existsSync(path)) {
+    return true;
+  }
+  try {
+    fs.lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isDirectoryPath(path: string): boolean {
