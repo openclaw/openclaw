@@ -735,14 +735,19 @@ test("sessions.compact preserves legacy route fields when releasing post-compact
 test("sessions.compact maxLines releases queued post-compaction delegates after trim", async () => {
   resetTaskFlowRegistryForTests({ persist: false });
   const { dir } = await createSessionStoreDir();
-  const transcriptPath = path.join(dir, "sess-post-compaction-trim.jsonl");
-  const originalLines = buildSessionTranscriptLines("sess-post-compaction-trim", 120);
+  const sessionId = "sess-post-compaction-trim";
+  const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+  const originalLines = buildSessionTranscriptLines(sessionId, 120);
   await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
-  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-post-compaction-trim") } });
+  await writeSessionStore({
+    entries: { main: sessionStoreEntry(sessionId, { sessionFile: transcriptPath }) },
+  });
   stagePostCompactionDelegate("agent:main:main", {
     task: "rehydrate after maxLines compact",
     createdAt: Date.now(),
   });
+
+  const beforeEvents = peekSystemEvents("agent:main:main").length;
 
   const { ws } = await openClient();
   const compacted = await rpcReq<{ ok: true; key: string; compacted: boolean; kept?: number }>(
@@ -754,17 +759,25 @@ test("sessions.compact maxLines releases queued post-compaction delegates after 
   expect(compacted.ok).toBe(true);
   expect(compacted.payload?.compacted).toBe(true);
   expect(compacted.payload?.kept).toBe(50);
-  expect(stagedPostCompactionDelegateCount("agent:main:main")).toBe(0);
+  await vi.waitFor(() => {
+    expect(peekSystemEvents("agent:main:main").slice(beforeEvents)).toContainEqual(
+      expect.stringContaining("Queued 1 post-compaction delegate(s)"),
+    );
+    expect(stagedPostCompactionDelegateCount("agent:main:main")).toBe(0);
+  });
   ws.close();
   resetTaskFlowRegistryForTests({ persist: false });
 });
 
 test("sessions.compact skips post-compaction lifecycle when no delegates exist", async () => {
   const { dir } = await createSessionStoreDir();
-  const transcriptPath = path.join(dir, "sess-post-compaction-empty.jsonl");
-  const originalLines = buildSessionTranscriptLines("sess-post-compaction-empty", 120);
+  const sessionId = "sess-post-compaction-empty";
+  const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+  const originalLines = buildSessionTranscriptLines(sessionId, 120);
   await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
-  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-post-compaction-empty") } });
+  await writeSessionStore({
+    entries: { main: sessionStoreEntry(sessionId, { sessionFile: transcriptPath }) },
+  });
 
   const beforeEvents = peekSystemEvents("agent:main:main").length;
 
