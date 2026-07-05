@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
   replaceConfigFile: vi.fn(),
   promptYesNo: vi.fn(),
+  enablePluginInConfig: vi.fn(),
 }));
 
 vi.mock("../../infra/clawhub.js", async () => {
@@ -49,6 +50,10 @@ vi.mock("../../config/config.js", async () => {
 
 vi.mock("../../cli/prompt.js", () => ({
   promptYesNo: mocks.promptYesNo,
+}));
+
+vi.mock("../../plugins/enable.js", () => ({
+  enablePluginInConfig: mocks.enablePluginInConfig,
 }));
 
 vi.mock("../../wizard/clack-prompter.js", () => ({
@@ -112,6 +117,11 @@ beforeEach(() => {
   mocks.resolveManifestProviderAuthChoice.mockReturnValue(authChoice);
   mocks.resolveProviderInstallCatalogEntry.mockReturnValue(undefined);
   mocks.promptYesNo.mockResolvedValue(false);
+  mocks.enablePluginInConfig.mockImplementation((cfg: unknown, pluginId: string) => ({
+    config: cfg,
+    enabled: true,
+    pluginId,
+  }));
   mocks.fetchClawHubPromotion.mockResolvedValue(makePromotion());
 });
 
@@ -279,6 +289,20 @@ describe("promosClaimCommand", () => {
     );
     await expect(promosClaimCommand("spring-models", {}, makeRuntime())).rejects.toThrow(
       /not live/,
+    );
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("refuses to claim when the provider plugin is blocked by policy", async () => {
+    mocks.enablePluginInConfig.mockImplementation((cfg: unknown, pluginId: string) => ({
+      config: cfg,
+      enabled: false,
+      pluginId,
+      reason: "denylisted",
+    }));
+
+    await expect(promosClaimCommand("spring-models", {}, makeRuntime())).rejects.toThrow(
+      /plugin policy/,
     );
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });

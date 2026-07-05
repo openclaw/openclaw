@@ -12,6 +12,7 @@ import {
   fetchClawHubPromotion,
   type ClawHubPromotion,
 } from "../../infra/clawhub.js";
+import { enablePluginInConfig } from "../../plugins/enable.js";
 import { applyAuthChoiceLoadedPluginProvider } from "../../plugins/provider-auth-choice.js";
 import {
   resolveManifestProviderAuthChoice,
@@ -217,8 +218,22 @@ export async function promosClaimCommand(
   const registered: string[] = [];
   const skippedAliases: string[] = [];
   await updateConfig((cfg, context) => {
+    let base = cfg;
+    // The credential-reuse path skips the auth flow, which is where plugin
+    // enablement normally happens. Enable (or refuse) the provider plugin here
+    // so a claim never registers models the runtime cannot load under the
+    // user's plugin policy. Idempotent when the auth flow already enabled it.
+    if (catalogEntry) {
+      const enabled = enablePluginInConfig(base, catalogEntry.pluginId);
+      if (!enabled.enabled) {
+        throw new Error(
+          `The "${catalogEntry.pluginId}" plugin is blocked by your plugin policy (${enabled.reason ?? "disabled"}); cannot claim this promotion.`,
+        );
+      }
+      base = enabled.config;
+    }
     const models = {
-      ...cfg.agents?.defaults?.models,
+      ...base.agents?.defaults?.models,
     } as Record<string, AgentModelEntryConfig>;
     for (const model of promotion.models) {
       const target = resolvePromotionModelTarget(promotion, model.modelRef);
@@ -241,11 +256,11 @@ export async function promosClaimCommand(
       registered.push(key);
     }
     let next: OpenClawConfig = {
-      ...cfg,
+      ...base,
       agents: {
-        ...cfg.agents,
+        ...base.agents,
         defaults: {
-          ...cfg.agents?.defaults,
+          ...base.agents?.defaults,
           models,
         },
       },
