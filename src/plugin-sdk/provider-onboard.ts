@@ -289,7 +289,15 @@ function mergeOnboardProviderConfigs(
 ): Record<string, ModelProviderConfig> {
   const merged: Record<string, ModelProviderConfig> = { ...existingProviders };
   for (const [providerId, providerConfig] of Object.entries(patchProviders)) {
-    const existingProvider = existingProviders?.[providerId];
+    const existingProviderKey = findNormalizedProviderKey(existingProviders ?? {}, providerId);
+    const existingProvider = existingProviderKey
+      ? existingProviders?.[existingProviderKey]
+      : undefined;
+    if (existingProviderKey && existingProviderKey !== providerId) {
+      // The patch owns the canonical key; retaining its old case variant would
+      // leave two runtime candidates with conflicting auth and endpoint state.
+      delete merged[existingProviderKey];
+    }
     if (
       !isMergeableProviderConfig(existingProvider) ||
       !isMergeableProviderConfig(providerConfig)
