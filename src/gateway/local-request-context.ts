@@ -97,6 +97,7 @@ export function createLocalGatewayRequestContext(
     nodeRegistry: new NodeRegistry(),
     agentRunSeq: new Map(),
     chatAbortControllers: new Map(),
+    chatQueuedTurns: new Map(),
     chatAbortedRuns: new Map(),
     chatRunBuffers,
     chatDeltaSentAt,

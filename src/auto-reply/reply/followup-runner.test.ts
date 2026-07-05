@@ -618,6 +618,32 @@ function createQueuedRun(
 }
 
 describe("createFollowupRunner reply-lane admission", () => {
+  it("notifies queued owners after admission and before model execution", async () => {
+    const events: string[] = [];
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      events.push("run");
+      return { payloads: [], meta: {} };
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        queuedLifecycle: {
+          onAdmitted: () => events.push("admitted"),
+          onComplete: () => events.push("complete"),
+        },
+        run: { provider: "anthropic", model: "claude" },
+      }),
+    );
+
+    expect(events).toEqual(["admitted", "run", "complete"]);
+  });
+
   it("passes prepared media user turns to embedded runtime dispatch", async () => {
     const preparedUserTurnMessage = {
       role: "user",
@@ -888,6 +914,7 @@ describe("createFollowupRunner reply-lane admission", () => {
 
   it("preserves non-compaction preflight failures for queued followup runs", async () => {
     runPreflightCompactionIfNeededMock.mockRejectedValueOnce(new Error("session load failed"));
+    const onComplete = vi.fn();
     const runner = createFollowupRunner({
       typing: createMockTypingController(),
       typingMode: "instant",
@@ -906,12 +933,14 @@ describe("createFollowupRunner reply-lane admission", () => {
             model: "claude",
             sessionKey: "main",
           },
+          queuedLifecycle: { onComplete },
         }),
       ),
     ).rejects.toThrow("session load failed");
 
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
   });
 });
 

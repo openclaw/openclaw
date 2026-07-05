@@ -48,13 +48,14 @@ describe("refreshQueuedFollowupSession", () => {
     queue.summaryElisions.push({
       contextKey: "context",
       count: 2,
-      source: {
-        prompt: "elided summary",
-        enqueuedAt: Date.now(),
-        run: makeRun(),
-      },
-      sourceRefs: new WeakSet(),
-      allRoomEvents: false,
+      sources: [
+        {
+          prompt: "elided summary",
+          enqueuedAt: Date.now(),
+          run: makeRun(),
+        },
+      ],
+      sourceRefs: new WeakMap(),
     });
 
     refreshQueuedFollowupSession({
@@ -86,7 +87,7 @@ describe("refreshQueuedFollowupSession", () => {
       authProfileId: undefined,
       authProfileIdSource: undefined,
     });
-    expect(queue.summaryElisions[0]?.source.run).toEqual({
+    expect(queue.summaryElisions[0]?.sources[0]?.run).toEqual({
       ...makeRun(),
       provider: "openai",
       model: "gpt-4o",
@@ -145,13 +146,12 @@ describe("getFollowupQueue", () => {
       queue.summaryElisions.push({
         contextKey,
         count,
-        source: {
+        sources: Array.from({ length: count }, () => ({
           prompt: contextKey,
           enqueuedAt: Date.now(),
           run: makeRun(),
-        },
-        sourceRefs: new WeakSet(),
-        allRoomEvents: false,
+        })),
+        sourceRefs: new WeakMap(),
       });
     }
     queue.evictedSummaryCount = 5;
@@ -159,6 +159,7 @@ describe("getFollowupQueue", () => {
     const updated = getFollowupQueue(QUEUE_KEY, { mode: "followup", cap: 1 });
 
     expect(updated.summaryElisions.map((entry) => entry.contextKey)).toEqual(["newest"]);
-    expect(updated.evictedSummaryCount).toBe(10);
+    expect(updated.summaryElisions[0]?.sources).toHaveLength(1);
+    expect(updated.evictedSummaryCount).toBe(13);
   });
 });
