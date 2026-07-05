@@ -1951,6 +1951,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     "tool",
     "run",
     "settings",
+    "tab",
   ]);
 
   const registerSessionExtension = (
@@ -2260,6 +2261,24 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    const icon = normalizeOptionalHostHookString(descriptor.icon);
+    const tabPath = normalizeOptionalHostHookString(descriptor.path);
+    if (tabPath !== undefined && !tabPath.startsWith("/")) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `control UI descriptor path must start with "/": ${id}`,
+      });
+      return;
+    }
+    // Tab placement/order are projected to hello clients; keep junk values out.
+    const group =
+      descriptor.group === "control" || descriptor.group === "agent" ? descriptor.group : undefined;
+    const order =
+      typeof descriptor.order === "number" && Number.isFinite(descriptor.order)
+        ? descriptor.order
+        : undefined;
     (registry.controlUiDescriptors ??= []).push({
       pluginId: record.id,
       pluginName: record.name,
@@ -2273,6 +2292,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         ...(requiredScopes !== undefined
           ? { requiredScopes: requiredScopes as OperatorScope[] }
           : {}),
+        icon,
+        path: tabPath,
+        group,
+        order,
       },
       source: record.source,
       rootDir: record.rootDir,

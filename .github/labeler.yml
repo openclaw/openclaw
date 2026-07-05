@@ -36,6 +36,11 @@
       - any-glob-to-any-file:
           - "extensions/googlechat/**"
           - "docs/channels/googlechat.md"
+"plugin: logbook":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/logbook/**"
+          - "docs/plugins/logbook.md"
 "plugin: google-meet":
   - changed-files:
       - any-glob-to-any-file:

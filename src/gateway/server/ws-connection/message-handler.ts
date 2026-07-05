@@ -109,6 +109,7 @@ import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-to
 import { AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING, type AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
+import { listControlUiPluginTabs } from "../../control-ui-plugin-tabs.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
 import type { GatewayMethodRegistry } from "../../methods/registry.js";
@@ -2097,6 +2098,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           snapshot.stateVersion.health = getHealthVersion();
         }
         const helloOkAuthScopes = deviceToken ? deviceToken.scopes : scopes;
+        const controlUiTabs = listControlUiPluginTabs(helloOkAuthScopes);
         const helloOk = {
           type: "hello-ok",
           protocol: PROTOCOL_VERSION,
@@ -2106,6 +2108,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           },
           features: { methods: gatewayMethods, events },
           snapshot,
+          ...(controlUiTabs.length > 0 ? { controlUiTabs } : {}),
           ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
           auth: {
             role,
