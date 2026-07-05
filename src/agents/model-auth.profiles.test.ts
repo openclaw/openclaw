@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -13,6 +14,7 @@ import {
 } from "./auth-profiles/store.js";
 import type { OAuthCredential } from "./auth-profiles/types.js";
 import type { ClaudeCliCredential } from "./cli-credentials.js";
+import { resolveModelAuthLabel } from "./model-auth-label.js";
 import {
   createRuntimeProviderAuthLookup,
   getApiKeyForModel,
@@ -61,6 +63,18 @@ function testModelDefinition(id: string): Model {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 128_000,
     maxTokens: 8192,
+  };
+}
+
+function testModelConfig(id: string): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8192,
+    maxTokens: 4096,
   };
 }
 
@@ -1959,5 +1973,39 @@ describe("resolveApiKeyForProvider — per-entry apiKey as profile ID reference"
         },
       }),
     ).rejects.toThrow(/matched a stored profile but failed to resolve/);
+  });
+});
+
+describe("resolveModelAuthLabel — custom provider keys (#82020)", () => {
+  const sharedBaseUrl = "https://open.bigmodel.cn/api/coding/paas/v4";
+
+  it("labels zai-light models.json keys before shared ZAI env vars", async () => {
+    await withEnvAsync({ ZAI_API_KEY: "zai-env-key" }, async () => {
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            zai: {
+              api: "openai-completions",
+              baseUrl: sharedBaseUrl,
+              apiKey: "zai-api-key",
+              models: [],
+            },
+            "zai-light": {
+              api: "openai-completions",
+              baseUrl: sharedBaseUrl,
+              apiKey: "sk-light-only",
+              models: [testModelConfig("glm-5-turbo")],
+            },
+          },
+        },
+      };
+
+      const auth = await resolveApiKeyForProvider({ provider: "zai-light", cfg });
+      const label = resolveModelAuthLabel({ provider: "zai-light", cfg });
+
+      expect(auth.apiKey).toBe("sk-light-only");
+      expect(auth.source).toBe("models.json");
+      expect(label).toBe("api-key (models.json)");
+    });
   });
 });
