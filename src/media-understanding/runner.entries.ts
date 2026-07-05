@@ -402,8 +402,7 @@ function resolveEntryRunOptions(params: {
   maxChars?: number;
   timeoutMs: number;
   prompt: string;
-  promptIsExplicit: boolean;
-  language?: string;
+  hasConfiguredPrompt: boolean;
 } {
   const { capability, entry, cfg } = params;
   const maxBytes = resolveMaxBytes({ capability, entry, cfg, config: params.config });
@@ -417,15 +416,12 @@ function resolveEntryRunOptions(params: {
   const configuredPrompt =
     entry.prompt ?? params.config?.prompt ?? cfg.tools?.media?.[capability]?.prompt;
   const prompt = resolvePrompt(capability, configuredPrompt, maxChars);
-  const language =
-    entry.language ?? params.config?.language ?? cfg.tools?.media?.[capability]?.language;
   return {
     maxBytes,
     maxChars,
     timeoutMs,
     prompt,
-    promptIsExplicit: Boolean(configuredPrompt?.trim()),
-    language,
+    hasConfiguredPrompt: Boolean(configuredPrompt?.trim()),
   };
 }
 
@@ -445,7 +441,7 @@ function resolveMediaRequestOverrides(config: MediaUnderstandingConfig | undefin
 
 function resolveAudioProviderPrompt(params: {
   prompt: string;
-  promptIsExplicit: boolean;
+  hasConfiguredPrompt: boolean;
   language?: string;
 }): string | undefined {
   const language = params.language?.trim().toLowerCase();
@@ -456,7 +452,7 @@ function resolveAudioProviderPrompt(params: {
     language === "english" ||
     language.startsWith("en-") ||
     language.startsWith("en_");
-  if (params.promptIsExplicit || isEnglish) {
+  if (params.hasConfiguredPrompt || isEnglish) {
     return params.prompt;
   }
   // OpenAI-compatible transcription prompts guide style/context and should
@@ -763,13 +759,12 @@ export async function runProviderEntry(params: {
   }
   const providerId = normalizeMediaProviderId(providerIdRaw);
   const requestProviderId = normalizeMediaExecutionProviderId(providerIdRaw);
-  const { maxBytes, maxChars, timeoutMs, prompt, promptIsExplicit, language } =
-    resolveEntryRunOptions({
-      capability,
-      entry,
-      cfg,
-      config: params.config,
-    });
+  const { maxBytes, maxChars, timeoutMs, prompt, hasConfiguredPrompt } = resolveEntryRunOptions({
+    capability,
+    entry,
+    cfg,
+    config: params.config,
+  });
 
   if (capability === "image") {
     if (!params.agentDir) {
@@ -840,12 +835,16 @@ export async function runProviderEntry(params: {
       timeoutMs,
     });
     assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
-    const audioLanguage = requestOverrides.language ?? language;
+    const audioLanguage =
+      requestOverrides.language ??
+      entry.language ??
+      params.config?.language ??
+      cfg.tools?.media?.audio?.language;
     const audioPrompt =
       requestOverrides.prompt ??
       resolveAudioProviderPrompt({
         prompt,
-        promptIsExplicit,
+        hasConfiguredPrompt,
         language: audioLanguage,
       });
     const { auth, baseUrl, headers, request } = await resolveProviderExecutionContext({

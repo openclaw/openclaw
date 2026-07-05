@@ -452,11 +452,13 @@ describe("runCapability auto audio entries", () => {
       prompt: "Transcribe in Russian.",
       models: [{ provider: "openai", model: "whisper-1" }],
     });
-    await runCase({
-      enabled: true,
-      language: "en-US",
-      models: [{ provider: "openai", model: "whisper-1" }],
-    });
+    for (const language of ["en-US", "eng", "english"]) {
+      await runCase({
+        enabled: true,
+        language,
+        models: [{ provider: "openai", model: "whisper-1" }],
+      });
+    }
     await runCase({
       enabled: true,
       models: [{ provider: "openai", model: "whisper-1" }],
@@ -464,6 +466,8 @@ describe("runCapability auto audio entries", () => {
 
     expect(seenPrompts).toEqual([
       "Transcribe in Russian.",
+      "Transcribe the audio.",
+      "Transcribe the audio.",
       "Transcribe the audio.",
       "Transcribe the audio.",
     ]);
