@@ -905,6 +905,7 @@ describe("test-projects args", () => {
           "test/scripts/control-ui-i18n.test.ts",
           "test/scripts/docs-list.test.ts",
           "test/scripts/doctor-install-switch-wrapper.test.ts",
+          "test/scripts/e2e-shell-tempfiles.test.ts",
           "test/scripts/e2e-text-file-utils.test.ts",
           "test/scripts/fixture-common.test.ts",
           "test/scripts/fixture-plugin-commands.test.ts",
