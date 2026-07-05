@@ -4034,6 +4034,75 @@ describe("createTelegramBot", () => {
     expect(payload.SenderUsername).toBe("ada_bot");
   });
 
+  it("does not submit plugin-owned callback text when the handler declines the callback", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageReplyMarkupSpy.mockClear();
+    const handler = vi.fn(async () => ({ handled: false, submitText: "Ignore this" }));
+    registerPluginInteractiveHandler("smart-replies-plugin", {
+      channel: "telegram",
+      namespace: "openclaw-smart-replies",
+      handler,
+    } satisfies TelegramInteractiveHandlerRegistration);
+    setTelegramRuntime({
+      state: {
+        openKeyedStore: ((options) =>
+          createPluginStateKeyedStoreForTests(
+            "telegram",
+            options,
+          )) as TelegramRuntime["state"]["openKeyedStore"],
+        openSyncKeyedStore: ((options) =>
+          createPluginStateSyncKeyedStoreForTests(
+            "telegram",
+            options,
+          )) as TelegramRuntime["state"]["openSyncKeyedStore"],
+      },
+      channel: {},
+    } as TelegramRuntime);
+
+    try {
+      createTelegramBot({
+        token: "tok",
+        config: {
+          channels: {
+            telegram: {
+              dmPolicy: "open",
+              allowFrom: ["*"],
+            },
+          },
+        },
+      });
+      const callbackHandler = getOnHandler("callback_query") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-smart-reply-declined-submit",
+          data: "openclaw-smart-replies:v1:SWdub3JlIHRoaXM",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 9, type: "private" },
+            date: 1736380800,
+            message_id: 11,
+            text: "Pick a direction",
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+    } finally {
+      clearTelegramRuntime();
+    }
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    expect(payload.Body).toContain("callback_data: openclaw-smart-replies");
+    expect(payload.Body).not.toContain("Ignore this");
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+  });
+
   it("submits plugin-owned callback text in mention-required group topics", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
@@ -4195,18 +4264,24 @@ describe("createTelegramBot", () => {
     expect(payload.Body).toContain("Make Alice funnier");
   });
 
-  it("keeps plugin-owned callback buttons when submitted text processing fails", async () => {
+  it("releases plugin-owned callback dedupe when submitted text processing fails", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
     editMessageReplyMarkupSpy.mockClear();
+    let calls = 0;
     replySpy.mockImplementation(async (_ctx, opts) => {
+      calls += 1;
       await opts?.onReplyStart?.();
-      throw new Error("transient submit failure");
+      if (calls === 1) {
+        throw new Error("transient submit failure");
+      }
+      return undefined;
     });
+    const handler = vi.fn(async () => ({ handled: true, submitText: "Try this later" }));
     registerPluginInteractiveHandler("smart-replies-plugin", {
       channel: "telegram",
       namespace: "openclaw-smart-replies",
-      handler: async () => ({ handled: true, submitText: "Try this later" }),
+      handler,
     } satisfies TelegramInteractiveHandlerRegistration);
     setTelegramRuntime({
       state: {
@@ -4239,30 +4314,38 @@ describe("createTelegramBot", () => {
       const callbackHandler = getOnHandler("callback_query") as (
         ctx: Record<string, unknown>,
       ) => Promise<void>;
-
-      await expect(
-        callbackHandler({
-          callbackQuery: {
-            id: "cbq-smart-reply-submit-fail",
-            data: "openclaw-smart-replies:v1:VHJ5IHRoaXMgbGF0ZXI",
-            from: { id: 9, first_name: "Ada", username: "ada_bot" },
-            message: {
-              chat: { id: 9, type: "private" },
-              date: 1736380800,
-              message_id: 11,
-              text: "Pick a direction",
-            },
+      const createCallbackUpdate = (updateId: number) => ({
+        update_id: updateId,
+        callbackQuery: {
+          id: "cbq-smart-reply-submit-fail",
+          data: "openclaw-smart-replies:v1:VHJ5IHRoaXMgbGF0ZXI",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 9, type: "private" },
+            date: 1736380800,
+            message_id: 11,
+            text: "Pick a direction",
           },
-          me: { username: "openclaw_bot" },
-          getFile: async () => ({ download: async () => new Uint8Array() }),
-        }),
-      ).rejects.toThrow("transient submit failure");
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      await expect(callbackHandler(createCallbackUpdate(401))).rejects.toThrow(
+        "transient submit failure",
+      );
+      expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+
+      await callbackHandler(createCallbackUpdate(402));
     } finally {
       clearTelegramRuntime();
     }
 
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(replySpy).toHaveBeenCalledTimes(2);
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(9, 11, {
+      reply_markup: { inline_keyboard: [] },
+    });
   });
 
   it("passes false command auth to Telegram plugin callbacks for non-allowlisted group senders", async () => {

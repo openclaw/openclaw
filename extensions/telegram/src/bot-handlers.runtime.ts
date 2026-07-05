@@ -2746,10 +2746,14 @@ export const registerTelegramHandlers = ({
             await deleteCallbackMessage();
           },
         },
-      });
-      if (pluginCallback.handled) {
-        const submitText = resolvePluginCallbackSubmitText(pluginCallback.result?.submitText);
-        if (submitText) {
+        afterInvoke: async (result) => {
+          if (result?.handled === false) {
+            return;
+          }
+          const submitText = resolvePluginCallbackSubmitText(result?.submitText);
+          if (!submitText) {
+            return;
+          }
           const { ctx: syntheticCtx, message: syntheticMessage } =
             buildCallbackSyntheticTextContext({
               ctx,
@@ -2767,7 +2771,9 @@ export const registerTelegramHandlers = ({
           await clearCallbackButtons().catch((err: unknown) => {
             logVerbose(`telegram plugin callback button cleanup skipped: ${String(err)}`);
           });
-        }
+        },
+      });
+      if (pluginCallback.handled) {
         return;
       }
 

@@ -65,6 +65,7 @@ export async function dispatchPluginInteractiveHandler<
   dedupeId?: string;
   onMatched?: () => Promise<void> | void;
   invoke: (match: PluginInteractiveMatch<TRegistration>) => Promise<TResult> | TResult;
+  afterInvoke?: (result: TResult) => Promise<void> | void;
 }): Promise<InteractiveDispatchResult<TResult>> {
   const match = resolveLivePluginInteractiveNamespaceMatch(params.channel, params.data);
   if (!match) {
@@ -79,6 +80,7 @@ export async function dispatchPluginInteractiveHandler<
   try {
     await params.onMatched?.();
     const resolved = await params.invoke(match as PluginInteractiveMatch<TRegistration>);
+    await params.afterInvoke?.(resolved);
     if (dedupeKey) {
       commitPluginInteractiveCallbackDedupe(dedupeKey);
     }

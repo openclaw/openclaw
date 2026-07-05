@@ -91,6 +91,7 @@ export async function dispatchTelegramPluginInteractiveHandler(params: {
     deleteMessage: () => Promise<void>;
   };
   onMatched?: () => Promise<void> | void;
+  afterInvoke?: (result: TelegramInteractiveHandlerResult) => Promise<void> | void;
 }) {
   return await dispatchPluginInteractiveHandler<
     TelegramInteractiveHandlerRegistration,
@@ -100,6 +101,7 @@ export async function dispatchTelegramPluginInteractiveHandler(params: {
     data: params.data,
     dedupeId: params.callbackId,
     onMatched: params.onMatched,
+    afterInvoke: params.afterInvoke,
     invoke: ({ registration, namespace, payload }) => {
       const { callbackMessage, ...handlerContext } = params.ctx;
       return registration.handler({
