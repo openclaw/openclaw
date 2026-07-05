@@ -489,7 +489,21 @@ describe("sendMessage", () => {
   });
 
   it("preserves suppressed direct-send status", async () => {
-    mocks.deliverOutboundPayloads.mockResolvedValueOnce([]);
+    mocks.deliverOutboundPayloads.mockImplementationOnce(async (params: unknown) => {
+      const callbacks = params as {
+        onPayloadDeliveryOutcome?: (outcome: unknown) => void;
+      };
+      callbacks.onPayloadDeliveryOutcome?.({
+        index: 0,
+        status: "suppressed",
+        reason: "cancelled_by_message_sending_hook",
+        hookEffect: {
+          cancelReason: "owned-by-other-agent",
+          metadata: { unsafeForJson: 1n },
+        },
+      });
+      return [];
+    });
 
     const result = await sendMessage({
       cfg: {},
@@ -499,6 +513,14 @@ describe("sendMessage", () => {
     });
 
     expect(result.deliveryStatus).toBe("suppressed");
+    expect(result.payloadOutcomes).toEqual([
+      {
+        index: 0,
+        status: "suppressed",
+        reason: "cancelled_by_message_sending_hook",
+      },
+    ]);
+    expect(() => JSON.stringify(result)).not.toThrow();
   });
 
   it("does not throw best-effort direct send failures but reports the failure", async () => {

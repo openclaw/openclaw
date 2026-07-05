@@ -4,7 +4,8 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { deriveDurableFinalDeliveryRequirements } from "../../channels/message/capabilities.js";
 import {
   sendDurableMessageBatch,
-  type DurableMessageBatchSendResult,
+  serializeDurableMessagePayloadOutcomes,
+  type SerializedDurableMessagePayloadOutcome,
 } from "../../channels/message/runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
@@ -92,11 +93,6 @@ type MessageSendParams = {
   parseMode?: "HTML";
 };
 
-export type MessageSendPayloadOutcome =
-  | { index: number; status: "sent"; resultCount: number }
-  | { index: number; status: "suppressed"; reason: string }
-  | { index: number; status: "failed"; error: string; sentBeforeError: boolean; stage: string };
-
 export type MessageSendResult = {
   channel: string;
   to: string;
@@ -108,7 +104,7 @@ export type MessageSendResult = {
   /** Formatted send error when deliveryStatus is "failed" or "partial_failed". */
   error?: string;
   sentBeforeError?: boolean;
-  payloadOutcomes?: MessageSendPayloadOutcome[];
+  payloadOutcomes?: SerializedDurableMessagePayloadOutcome[];
   dryRun?: boolean;
 };
 
@@ -307,29 +303,6 @@ async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<st
   return randomIdempotencyKey();
 }
 
-function serializeMessageSendPayloadOutcomes(
-  outcomes: DurableMessageBatchSendResult["payloadOutcomes"],
-): MessageSendPayloadOutcome[] | undefined {
-  if (!outcomes || outcomes.length === 0) {
-    return undefined;
-  }
-  return outcomes.map((outcome): MessageSendPayloadOutcome => {
-    if (outcome.status === "sent") {
-      return { index: outcome.index, status: "sent", resultCount: outcome.results.length };
-    }
-    if (outcome.status === "suppressed") {
-      return { index: outcome.index, status: "suppressed", reason: outcome.reason };
-    }
-    return {
-      index: outcome.index,
-      status: "failed",
-      error: formatErrorMessage(outcome.error),
-      sentBeforeError: outcome.sentBeforeError,
-      stage: outcome.stage,
-    };
-  });
-}
-
 export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
   const cfg = await resolveMessageConfig(params.cfg);
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
@@ -441,7 +414,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       throw send.error;
     }
     const results = send.status === "sent" || send.status === "partial_failed" ? send.results : [];
-    const payloadOutcomes = serializeMessageSendPayloadOutcomes(send.payloadOutcomes);
+    const payloadOutcomes = serializeDurableMessagePayloadOutcomes(send.payloadOutcomes);
 
     return {
       channel,
