@@ -160,3 +160,22 @@ describe("LogbookService vision model selection", () => {
     });
   });
 });
+
+describe("LogbookService status", () => {
+  it("returns the capture-host timezone without exposing the state path", () => {
+    const { service, dataDir } = makeService({
+      nodes: [],
+      invoke: async () => framePayload,
+    });
+
+    try {
+      expect(service.status()).toMatchObject({
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      });
+      expect(service.status()).not.toHaveProperty("dataDir");
+    } finally {
+      service.stop();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+});

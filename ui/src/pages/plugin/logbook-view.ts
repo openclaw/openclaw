@@ -29,8 +29,8 @@ export type LogbookProps = {
   onRequestUpdate?: () => void;
 };
 
-function formatClock(ms: number): string {
-  return formatTimeMs(ms, { hour: "2-digit", minute: "2-digit" }, "");
+function formatClock(ms: number, timeZone: string): string {
+  return formatTimeMs(ms, { hour: "2-digit", minute: "2-digit", timeZone }, "");
 }
 
 function formatDurationMs(ms: number): string {
@@ -108,6 +108,7 @@ function renderCard(
   state: LogbookUiState,
   client: GatewayBrowserClient | null,
   card: LogbookCardPayload,
+  timeZone: string,
 ): TemplateResult {
   const expanded = state.expandedCardIds.has(card.id);
   const hue = categoryHue(card.category);
@@ -141,9 +142,8 @@ function renderCard(
         }}
       >
         <span class="logbook-card__time">
-          ${formatClock(card.startMs)}<span class="logbook-card__time-sep">–</span>${formatClock(
-            card.endMs,
-          )}
+          ${formatClock(card.startMs, timeZone)}<span class="logbook-card__time-sep">–</span
+          >${formatClock(card.endMs, timeZone)}
         </span>
         <span class="logbook-card__stripe" aria-hidden="true"></span>
         <span class="logbook-card__heading">
@@ -182,7 +182,7 @@ function renderCard(
                       ${card.distractions.map(
                         (distraction) => html`
                           <span class="logbook-card__distraction">
-                            ${formatClock(distraction.startMs)} · ${distraction.title}
+                            ${formatClock(distraction.startMs, timeZone)} · ${distraction.title}
                           </span>
                         `,
                       )}
@@ -321,6 +321,7 @@ export function renderLogbook(props: LogbookProps) {
   // until the first status response arrives.
   const todayKey = state.status?.today ?? localDayKey();
   const isToday = state.day === todayKey;
+  const status = state.status;
   const cards = state.timeline?.cards ?? [];
   return html`
     <section class="logbook">
@@ -401,7 +402,9 @@ export function renderLogbook(props: LogbookProps) {
                 </div>
               `
             : nothing}
-          ${cards.map((card) => renderCard(state, props.client, card))}
+          ${status
+            ? cards.map((card) => renderCard(state, props.client, card, status.timeZone))
+            : nothing}
         </div>
         <aside class="logbook__side">
           ${renderStats(state)} ${renderStandup(state, props.client)}

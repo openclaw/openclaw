@@ -18,7 +18,7 @@ export type LogbookStatusPayload = {
   visionModelSource: "config" | "media-defaults" | "missing";
   today: string;
   todayCards: number;
-  dataDir: string;
+  timeZone: string;
 };
 
 export type LogbookDistractionPayload = { startMs: number; endMs: number; title: string };

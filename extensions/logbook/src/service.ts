@@ -90,7 +90,7 @@ export type LogbookStatus = {
   visionModelSource: "config" | "media-defaults" | "missing";
   today: string;
   todayCards: number;
-  dataDir: string;
+  timeZone: string;
 };
 
 export class LogbookService {
@@ -677,7 +677,7 @@ export class LogbookService {
       visionModelSource: vision.source,
       today,
       todayCards: store.cardsForDay(today).length,
-      dataDir: this.deps.dataDir,
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     };
   }
 
