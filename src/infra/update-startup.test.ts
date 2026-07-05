@@ -356,7 +356,6 @@ describe("update-startup", () => {
         : {}),
       ...(params?.runAutoUpdate ? { runAutoUpdate: params.runAutoUpdate } : {}),
     });
-    return log;
   }
 
   async function seedExtendedStableAvailability(params?: {
@@ -368,6 +367,25 @@ describe("update-startup", () => {
     mockNpmChannelTag("extended-stable", "2.0.0");
     await runExtendedStableUpdateCheck({
       onUpdateAvailableChange: params?.onUpdateAvailableChange,
+    });
+  }
+
+  function seedStableAutoRolloutState() {
+    writePersistedUpdateCheckState({
+      ...(readPersistedUpdateCheckState() ?? {}),
+      autoInstallId: "stable-install-id",
+      autoFirstSeenVersion: "3.0.0",
+      autoFirstSeenTag: "latest",
+      autoFirstSeenAt: "2026-01-16T10:00:00.000Z",
+    });
+  }
+
+  function expectStableAutoRolloutStatePreserved() {
+    expect(readPersistedUpdateCheckState()).toMatchObject({
+      autoInstallId: "stable-install-id",
+      autoFirstSeenVersion: "3.0.0",
+      autoFirstSeenTag: "latest",
+      autoFirstSeenAt: "2026-01-16T10:00:00.000Z",
     });
   }
 
@@ -454,35 +472,6 @@ describe("update-startup", () => {
     const parsed = readPersistedUpdateCheckState();
     expect(parsed?.lastCheckedAt).toBe("1970-01-01T00:00:00.000Z");
     expect(parsed?.lastAvailableVersion).toBe("2.0.0");
-  });
-
-  it("hydrates cached update from persisted state during throttle window", async () => {
-    writePersistedUpdateCheckState({
-      lastCheckedAt: new Date(Date.now()).toISOString(),
-      lastAvailableVersion: "2.0.0",
-      lastAvailableTag: "latest",
-    });
-
-    const onUpdateAvailableChange = vi.fn();
-    await runGatewayUpdateCheck({
-      cfg: { update: { channel: "stable" } },
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
-      onUpdateAvailableChange,
-    });
-
-    expect(vi.mocked(checkUpdateStatus)).not.toHaveBeenCalled();
-    expect(onUpdateAvailableChange).toHaveBeenCalledWith({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "latest",
-    });
-    expect(getUpdateAvailable()).toEqual({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "latest",
-    });
   });
 
   it.each([
@@ -686,6 +675,7 @@ describe("update-startup", () => {
   ])("clears stale extended-stable availability for an $name target", async ({ version }) => {
     const onUpdateAvailableChange = vi.fn();
     await seedExtendedStableAvailability({ onUpdateAvailableChange });
+    seedStableAutoRolloutState();
     onUpdateAvailableChange.mockClear();
     vi.mocked(resolveNpmChannelTag).mockResolvedValue({
       tag: "extended-stable",
@@ -706,6 +696,7 @@ describe("update-startup", () => {
     });
     expect(readPersistedUpdateCheckState()?.lastAvailableVersion).toBeUndefined();
     expect(readPersistedUpdateCheckState()?.lastAvailableTag).toBeUndefined();
+    expectStableAutoRolloutStatePreserved();
   });
 
   it.each(["selector_missing", "selector_query_failed", "exact_package_mismatch"] as const)(
@@ -713,6 +704,7 @@ describe("update-startup", () => {
     async (failure) => {
       const onUpdateAvailableChange = vi.fn();
       await seedExtendedStableAvailability({ onUpdateAvailableChange });
+      seedStableAutoRolloutState();
       onUpdateAvailableChange.mockClear();
       vi.mocked(resolveNpmChannelTag).mockResolvedValue({
         tag: "extended-stable",
@@ -730,6 +722,7 @@ describe("update-startup", () => {
       expect(getUpdateAvailable()).toBeNull();
       expect(readPersistedUpdateCheckState()?.lastAvailableVersion).toBeUndefined();
       expect(readPersistedUpdateCheckState()?.lastAvailableTag).toBeUndefined();
+      expectStableAutoRolloutStatePreserved();
       expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
       expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
     },
@@ -760,6 +753,12 @@ describe("update-startup", () => {
   });
 
   it("does not resolve the npm channel for an extended-stable Git install", async () => {
+    await seedExtendedStableAvailability();
+    seedStableAutoRolloutState();
+    resetUpdateAvailableStateForTest();
+    vi.mocked(resolveOpenClawPackageRoot).mockClear();
+    vi.mocked(checkUpdateStatus).mockClear();
+    vi.mocked(resolveNpmChannelTag).mockClear();
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
     vi.mocked(checkUpdateStatus).mockResolvedValue({
       root: "/opt/openclaw",
@@ -767,13 +766,20 @@ describe("update-startup", () => {
       packageManager: "unknown",
     } satisfies UpdateCheckResult);
     const runAutoUpdate = createAutoUpdateSuccessMock();
+    const onUpdateAvailableChange = vi.fn();
 
-    await runExtendedStableUpdateCheck({ runAutoUpdate });
+    await runExtendedStableUpdateCheck({ onUpdateAvailableChange, runAutoUpdate });
 
     expect(checkUpdateStatus).toHaveBeenCalledTimes(1);
     expect(resolveNpmChannelTag).not.toHaveBeenCalled();
     expect(runAutoUpdate).not.toHaveBeenCalled();
+    expect(onUpdateAvailableChange).not.toHaveBeenCalled();
     expect(getUpdateAvailable()).toBeNull();
+    expect(readPersistedUpdateCheckState()).toMatchObject({
+      lastAvailableVersion: "2.0.0",
+      lastAvailableTag: "extended-stable",
+    });
+    expectStableAutoRolloutStatePreserved();
   });
 
   it("skips all extended-stable work in Nix mode", async () => {

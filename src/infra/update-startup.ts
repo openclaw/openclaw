@@ -484,6 +484,21 @@ function clearAutoState(nextState: UpdateCheckState): void {
   delete nextState.autoFirstSeenAt;
 }
 
+async function resolveStartupInstallStatus() {
+  const root = await resolveOpenClawPackageRoot({
+    moduleUrl: import.meta.url,
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+  });
+  const status = await checkUpdateStatus({
+    root,
+    timeoutMs: 2500,
+    fetchGit: false,
+    includeRegistry: false,
+  });
+  return { root, status };
+}
+
 export async function runGatewayUpdateCheck(params: {
   cfg: OpenClawConfig;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
@@ -519,6 +534,18 @@ export async function runGatewayUpdateCheck(params: {
     return;
   }
 
+  let installStatus: Awaited<ReturnType<typeof resolveStartupInstallStatus>> | undefined;
+  if (configuredChannel === "extended-stable") {
+    installStatus = await resolveStartupInstallStatus();
+    if (installStatus.status.installKind !== "package") {
+      setUpdateAvailableCache({
+        next: null,
+        onUpdateAvailableChange: params.onUpdateAvailableChange,
+      });
+      return;
+    }
+  }
+
   const state = await readState();
   const rawNow = Date.now();
   const now = resolveUpdateCheckNowMs(rawNow);
@@ -545,17 +572,8 @@ export async function runGatewayUpdateCheck(params: {
     }
   }
 
-  const root = await resolveOpenClawPackageRoot({
-    moduleUrl: import.meta.url,
-    argv1: process.argv[1],
-    cwd: process.cwd(),
-  });
-  const status = await checkUpdateStatus({
-    root,
-    timeoutMs: 2500,
-    fetchGit: false,
-    includeRegistry: false,
-  });
+  installStatus ??= await resolveStartupInstallStatus();
+  const { root, status } = installStatus;
 
   const nextState: UpdateCheckState = {
     ...state,
@@ -615,7 +633,7 @@ export async function runGatewayUpdateCheck(params: {
       nextState.lastNotifiedTag = tag;
     }
 
-    if (isAutoUpdateChannel && auto.enabled && autoDisabledByEnv) {
+    if (channel !== "extended-stable" && auto.enabled && autoDisabledByEnv) {
       params.log.info("auto-update disabled by OPENCLAW_NO_AUTO_UPDATE", {
         version: resolved.version,
         tag,
@@ -702,8 +720,8 @@ export async function runGatewayUpdateCheck(params: {
     } else {
       delete nextState.lastAvailableVersion;
       delete nextState.lastAvailableTag;
+      clearAutoState(nextState);
     }
-    clearAutoState(nextState);
     setUpdateAvailableCache({
       next: null,
       onUpdateAvailableChange: params.onUpdateAvailableChange,
