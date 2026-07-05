@@ -439,8 +439,12 @@ export function convertResponsesMessages<TApi extends Api>(
         }
 
         for (const block of msg.content) {
-          if (isImageBlock(block)) {
-            const image = block as { mimeType: string; data: string };
+          if (
+            block &&
+            typeof block === "object" &&
+            (block as unknown as Record<string, unknown>).type === "image"
+          ) {
+            const image = block as unknown as { mimeType: string; data: string };
             contentParts.push({
               type: "input_image",
               detail: "auto",
