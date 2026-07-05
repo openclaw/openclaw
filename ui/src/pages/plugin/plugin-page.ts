@@ -69,12 +69,14 @@ export class PluginPage extends LitElement {
 
   override willUpdate() {
     const key = this.tabKey();
+    const hasBundledDescriptor = this.tabInfo() !== undefined && key in BUNDLED_TAB_VIEWS;
     // Switching between plugin tabs reuses this element; the previous bundled
-    // view must stop its background polling before the next one renders.
-    if (this.bundledViewId !== null && this.bundledViewId !== key) {
+    // view must stop its background polling before the next one renders. A
+    // descriptor can also disappear in place after disablement or scope loss.
+    if (this.bundledViewId !== null && (this.bundledViewId !== key || !hasBundledDescriptor)) {
       this.stopBundledView();
     }
-    if (this.bundledViewId === null && key in BUNDLED_TAB_VIEWS) {
+    if (this.bundledViewId === null && hasBundledDescriptor) {
       this.bundledViewId = key;
       void BUNDLED_TAB_VIEWS[key]().then((view) => {
         if (this.bundledViewId === this.tabKey()) {
