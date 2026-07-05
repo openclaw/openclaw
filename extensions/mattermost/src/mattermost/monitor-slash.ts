@@ -77,6 +77,14 @@ function buildTriggerMap(commands: MattermostCommandSpec[]): Map<string, string>
   return triggerMap;
 }
 
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 function warnOnSuspiciousCallbackUrl(params: {
   runtime: RuntimeEnv;
   baseUrl: string;
@@ -157,6 +165,14 @@ export async function registerMattermostMonitorSlashCommands(params: {
       gatewayPort: slashGatewayPort,
       gatewayHost: params.cfg.gateway?.customBindHost ?? undefined,
     });
+
+    if (!isHttpsUrl(slashCallbackUrl)) {
+      const source = slashConfig.callbackUrl ? "explicit" : "derived";
+      params.runtime.error?.(
+        `mattermost: native slash commands require an HTTPS channels.mattermost.commands.callbackUrl; refusing ${source} callback ${slashCallbackUrl}`,
+      );
+      return;
+    }
 
     warnOnSuspiciousCallbackUrl({
       runtime: params.runtime,
