@@ -27,11 +27,6 @@ const fetchWithUndiciGuard = async (
 
 const MCP_HTTP_MAX_REDIRECTS = 20;
 const MCP_HTTP_MAX_TEXT_RESPONSE_BYTES = 1024 * 1024;
-const managedMcpResponseCleanupRegistry = new FinalizationRegistry<{
-  finalize: () => Promise<void>;
-}>((held) => {
-  void held.finalize();
-});
 
 function resolveFetchRequest(input: RequestInfo | URL, init?: RequestInit) {
   if (input instanceof Request) {
