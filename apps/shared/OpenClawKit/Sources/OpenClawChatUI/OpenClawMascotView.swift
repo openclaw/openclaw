@@ -3,10 +3,12 @@ import SwiftUI
 /// Animated OpenClaw mascot. Redraws the canonical 120x120 vector from
 /// `ui/public/favicon.svg` so individual parts (claws, antennae, eyes) can
 /// animate like the openclaw.ai hero mark; the bundled PNG asset cannot.
-struct OpenClawMascotView: View {
+public struct OpenClawMascotView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    var body: some View {
+    public init() {}
+
+    public var body: some View {
         if self.reduceMotion {
             OpenClawMascotCanvas(pose: .still)
         } else {
@@ -31,11 +33,11 @@ struct OpenClawMascotPose: Equatable {
 
     static func at(time: TimeInterval) -> OpenClawMascotPose {
         OpenClawMascotPose(
-            floatOffset: -2.5 * (1 - cos(2 * .pi * Self.cyclePhase(time, period: 4))),
-            antennaDegrees: -3 * sin(2 * .pi * Self.cyclePhase(time, period: 2)),
-            leftClawDegrees: Self.clawSnapDegrees(phase: Self.cyclePhase(time, period: 4)),
-            rightClawDegrees: Self.clawSnapDegrees(phase: Self.cyclePhase(time - 0.2, period: 4)),
-            eyeGlowOpacity: Self.blinkOpacity(phase: Self.cyclePhase(time, period: 3)))
+            floatOffset: -2.5 * (1 - cos(2 * .pi * self.cyclePhase(time, period: 4))),
+            antennaDegrees: -3 * sin(2 * .pi * self.cyclePhase(time, period: 2)),
+            leftClawDegrees: self.clawSnapDegrees(phase: self.cyclePhase(time, period: 4)),
+            rightClawDegrees: self.clawSnapDegrees(phase: self.cyclePhase(time - 0.2, period: 4)),
+            eyeGlowOpacity: self.blinkOpacity(phase: self.cyclePhase(time, period: 3)))
     }
 
     private static func cyclePhase(_ time: TimeInterval, period: TimeInterval) -> CGFloat {
@@ -49,9 +51,9 @@ struct OpenClawMascotPose: Equatable {
             return 0
         }
         if phase < 0.9 {
-            return -8 * Self.easeInOut((phase - 0.85) / 0.05)
+            return -8 * self.easeInOut((phase - 0.85) / 0.05)
         }
-        return -8 * (1 - Self.easeInOut((phase - 0.9) / 0.05))
+        return -8 * (1 - self.easeInOut((phase - 0.9) / 0.05))
     }
 
     private static func blinkOpacity(phase: CGFloat) -> CGFloat {
@@ -59,7 +61,7 @@ struct OpenClawMascotPose: Equatable {
         if phase < 0.9 {
             return 1
         }
-        let dip = phase < 0.95 ? Self.easeInOut((phase - 0.9) / 0.05) : 1 - Self.easeInOut((phase - 0.95) / 0.05)
+        let dip = phase < 0.95 ? self.easeInOut((phase - 0.9) / 0.05) : 1 - self.easeInOut((phase - 0.95) / 0.05)
         return 1 - 0.7 * dip
     }
 
@@ -148,44 +150,44 @@ private struct OpenClawMascotCanvas: View {
         context.translateBy(x: 0, y: pose.floatOffset)
 
         let bodyShading = GraphicsContext.Shading.linearGradient(
-            Gradient(colors: [Self.bodyColorTop, Self.bodyColorBottom]),
+            Gradient(colors: [self.bodyColorTop, self.bodyColorBottom]),
             startPoint: .zero,
             endPoint: CGPoint(x: 120, y: 120))
         let antennaStroke = StrokeStyle(lineWidth: 3, lineCap: .round)
 
         // Same paint order as favicon.svg: body, claws, antennae, eyes.
-        context.fill(Self.bodyPath, with: bodyShading)
-        Self.drawRotated(context: context, degrees: pose.leftClawDegrees, pivot: Self.leftClawPivot) {
-            $0.fill(Self.leftClawPath, with: bodyShading)
+        context.fill(self.bodyPath, with: bodyShading)
+        self.drawRotated(context: context, degrees: pose.leftClawDegrees, pivot: self.leftClawPivot) {
+            $0.fill(self.leftClawPath, with: bodyShading)
         }
-        Self.drawRotated(context: context, degrees: pose.rightClawDegrees, pivot: Self.rightClawPivot) {
-            $0.fill(Self.rightClawPath, with: bodyShading)
+        self.drawRotated(context: context, degrees: pose.rightClawDegrees, pivot: self.rightClawPivot) {
+            $0.fill(self.rightClawPath, with: bodyShading)
         }
-        Self.drawRotated(context: context, degrees: pose.antennaDegrees, pivot: Self.leftAntennaPivot) {
-            $0.stroke(Self.leftAntennaPath, with: .color(Self.bodyColorTop), style: antennaStroke)
+        self.drawRotated(context: context, degrees: pose.antennaDegrees, pivot: self.leftAntennaPivot) {
+            $0.stroke(self.leftAntennaPath, with: .color(self.bodyColorTop), style: antennaStroke)
         }
-        Self.drawRotated(context: context, degrees: pose.antennaDegrees, pivot: Self.rightAntennaPivot) {
-            $0.stroke(Self.rightAntennaPath, with: .color(Self.bodyColorTop), style: antennaStroke)
+        self.drawRotated(context: context, degrees: pose.antennaDegrees, pivot: self.rightAntennaPivot) {
+            $0.stroke(self.rightAntennaPath, with: .color(self.bodyColorTop), style: antennaStroke)
         }
 
-        context.fill(Path(ellipseIn: CGRect(x: 39, y: 29, width: 12, height: 12)), with: .color(Self.eyeColor))
-        context.fill(Path(ellipseIn: CGRect(x: 69, y: 29, width: 12, height: 12)), with: .color(Self.eyeColor))
+        context.fill(Path(ellipseIn: CGRect(x: 39, y: 29, width: 12, height: 12)), with: .color(self.eyeColor))
+        context.fill(Path(ellipseIn: CGRect(x: 69, y: 29, width: 12, height: 12)), with: .color(self.eyeColor))
         var glowContext = context
         glowContext.opacity = pose.eyeGlowOpacity
         glowContext.fill(
             Path(ellipseIn: CGRect(x: 43.5, y: 31.5, width: 5, height: 5)),
-            with: .color(Self.eyeGlowColor))
+            with: .color(self.eyeGlowColor))
         glowContext.fill(
             Path(ellipseIn: CGRect(x: 73.5, y: 31.5, width: 5, height: 5)),
-            with: .color(Self.eyeGlowColor))
+            with: .color(self.eyeGlowColor))
     }
 
     private static func drawRotated(
         context: GraphicsContext,
         degrees: CGFloat,
         pivot: CGPoint,
-        draw: (inout GraphicsContext) -> Void,
-    ) {
+        draw: (inout GraphicsContext) -> Void)
+    {
         var rotated = context
         rotated.translateBy(x: pivot.x, y: pivot.y)
         rotated.rotate(by: .degrees(degrees))

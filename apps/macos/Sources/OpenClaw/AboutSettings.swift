@@ -1,3 +1,4 @@
+import OpenClawChatUI
 import SwiftUI
 
 struct AboutSettings: View {
@@ -8,20 +9,18 @@ struct AboutSettings: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            let appIcon = NSApplication.shared.applicationIconImage ?? CritterIconRenderer.makeIcon(blink: 0)
             Button {
                 if let url = URL(string: "https://github.com/openclaw/openclaw") {
                     NSWorkspace.shared.open(url)
                 }
             } label: {
-                Image(nsImage: appIcon)
-                    .resizable()
+                OpenClawMascotView()
                     .frame(width: 160, height: 160)
-                    .cornerRadius(24)
                     .shadow(color: self.iconHover ? .accentColor.opacity(0.25) : .clear, radius: 10)
                     .scaleEffect(self.iconHover ? 1.05 : 1.0)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("OpenClaw on GitHub")
             .focusable(false)
             .pointingHandCursor()
             .onHover { hover in
