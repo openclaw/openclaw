@@ -2050,35 +2050,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Advanced"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Exact VAD"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Lead-in"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
       "text": "Model"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Pause before send"
     },
     {
       "count": 1,
@@ -2093,13 +2065,6 @@
       "name": "label",
       "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
       "text": "Ash"
-    },
-    {
-      "count": 3,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Auto"
     },
     {
       "count": 1,
@@ -2123,14 +2088,7 @@
       "text": "Coral"
     },
     {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Custom"
-    },
-    {
-      "count": 3,
+      "count": 2,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
@@ -2148,17 +2106,10 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Gateway relay"
-    },
-    {
-      "count": 2,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
       "text": "High"
     },
     {
-      "count": 2,
+      "count": 1,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
@@ -2172,39 +2123,11 @@
       "text": "Marin"
     },
     {
-      "count": 2,
+      "count": 1,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
       "text": "Medium"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Minimal"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Provider"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Provider WebSocket"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Reasoning"
     },
     {
       "count": 1,
@@ -2232,13 +2155,6 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Transport"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
       "text": "Verse"
     },
     {
@@ -2247,13 +2163,6 @@
       "name": "label",
       "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
       "text": "Voice"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "WebRTC"
     },
     {
       "count": 1,
@@ -2373,20 +2282,6 @@
       "name": "label",
       "path": "ui/src/pages/chat/components/chat-tool-cards.ts",
       "text": "Tool output"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/realtime-talk-catalog.ts",
-      "text": "Google"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/realtime-talk-catalog.ts",
-      "text": "OpenAI"
     },
     {
       "count": 1,
