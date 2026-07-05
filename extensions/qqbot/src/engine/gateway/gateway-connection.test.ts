@@ -127,6 +127,45 @@ describe("GatewayConnection disconnect status", () => {
     await started;
   });
 
+  it("ignores a stale close from a superseded socket after a server-driven reconnect", async () => {
+    const onDisconnected = vi.fn();
+    const staleWs = new FakeWebSocket();
+    const replacementWs = new FakeWebSocket();
+    createQQWSClientMock.mockResolvedValueOnce(staleWs).mockResolvedValueOnce(replacementWs);
+    const controller = new AbortController();
+    const connection = new GatewayConnection({
+      account: makeAccount(),
+      abortSignal: controller.signal,
+      cfg: {},
+      runtime: {} as GatewayPluginRuntime,
+      adapters: {} as EngineAdapters,
+      handleMessage: async () => {},
+      onDisconnected,
+    });
+    const started = connection.start();
+    await vi.waitFor(() => {
+      expect(createQQWSClientMock).toHaveBeenCalledTimes(1);
+    });
+
+    // Server asks for a reconnect: the old socket is torn down and a
+    // replacement is scheduled, then becomes live.
+    staleWs.emit("open");
+    staleWs.emit("message", JSON.stringify({ op: 7 }));
+    await vi.advanceTimersByTimeAsync(1_100);
+    await vi.waitFor(() => {
+      expect(createQQWSClientMock).toHaveBeenCalledTimes(2);
+    });
+    replacementWs.emit("open");
+
+    // The superseded socket's close arrives late; it must not regress
+    // the live replacement's status.
+    staleWs.emit("close", 1000, Buffer.from(""));
+
+    expect(onDisconnected).not.toHaveBeenCalled();
+    controller.abort();
+    await started;
+  });
+
   it("does not report a disconnect for the close caused by an intentional abort", async () => {
     const onDisconnected = vi.fn();
     const { ws, controller, started } = await startConnection({ onDisconnected });

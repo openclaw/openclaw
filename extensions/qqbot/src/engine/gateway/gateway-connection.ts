@@ -279,6 +279,13 @@ export class GatewayConnection {
       // ---- WebSocket: close ----
       ws.on("close", (code, reason) => {
         log?.info(`WebSocket closed: ${code} ${reason.toString()}`);
+        // A superseded socket (torn down by a server-driven RECONNECT /
+        // INVALID_SESSION) can emit its close after the replacement is
+        // live; reacting again would tear down the new socket and
+        // regress the connected status.
+        if (this.currentWs !== null && this.currentWs !== ws) {
+          return;
+        }
         this.isConnecting = false;
         this.handleClose(code);
       });
