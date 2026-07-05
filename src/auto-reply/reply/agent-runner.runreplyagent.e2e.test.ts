@@ -12,7 +12,10 @@ import {
 } from "../../infra/heartbeat-run-scope.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
-import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
+import {
+  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+} from "./agent-runner-failure-copy.js";
 import {
   enqueueFollowupRun,
   refreshQueuedFollowupSession,
@@ -1404,6 +1407,62 @@ describe("runReplyAgent typing (heartbeat)", () => {
       text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
       isError: true,
     });
+  });
+
+  it.each([
+    {
+      label: "silent token",
+      payload: { text: "NO_REPLY" },
+      opts: undefined,
+      expectedText: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+    },
+    {
+      label: "heartbeat acknowledgement",
+      payload: { text: "HEARTBEAT_OK" },
+      opts: { isHeartbeat: true as const },
+      expectedText: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+    },
+    {
+      label: "reasoning-only output",
+      payload: { text: "internal reasoning", isReasoning: true },
+      opts: undefined,
+      expectedText: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+    },
+    {
+      label: "commentary-only output",
+      payload: { text: "internal commentary", isCommentary: true },
+      opts: undefined,
+      expectedText: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+    },
+    {
+      label: "directive-only output",
+      payload: { text: "[[reply_to_current]]" },
+      opts: undefined,
+      expectedText: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+    },
+  ])("replaces filtered $label after a terminal failure", async (testCase) => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [testCase.payload],
+      meta: {
+        error: {
+          kind: "tool_result_mismatch",
+          message: "Agent run reached a terminal error before visible reply delivery.",
+        },
+      },
+    });
+    const { run } = createMinimalRun({
+      opts: testCase.opts,
+      runOverrides: {
+        config: { channels: { whatsapp: { replyToMode: "first" } } },
+      },
+    });
+
+    const result = await run();
+    const payloads = Array.isArray(result) ? result : [result];
+    const failure = payloads.find((payload) => payload?.isError === true);
+
+    expect(failure?.text).toBe(testCase.expectedText);
+    expect(failure?.replyToId).toBe("msg");
   });
 
   it.each([

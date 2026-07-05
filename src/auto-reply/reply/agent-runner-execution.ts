@@ -3529,22 +3529,18 @@ async function runAgentTurnWithFallbackInternal(
       }
     }
   }
-  const terminalFailurePayload =
-    terminalRunFailed &&
-    !runResult?.payloads?.some(
-      (p) => !p.isReasoning && hasOutboundReplyContent(p, { trimText: true }),
-    )
-      ? markAgentRunFailureReplyPayload({
-          text: resolveExternalRunFailureTextForConversation({
-            text: params.isHeartbeat
-              ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
-              : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-            sessionCtx: params.sessionCtx,
-            isGenericRunnerFailure: true,
-            cfg: params.followupRun.run.config,
-          }),
-        })
-      : undefined;
+  const terminalFailurePayload = terminalRunFailed
+    ? markAgentRunFailureReplyPayload({
+        text: resolveExternalRunFailureTextForConversation({
+          text: params.isHeartbeat
+            ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
+            : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+          sessionCtx: params.sessionCtx,
+          isGenericRunnerFailure: true,
+          cfg: params.followupRun.run.config,
+        }),
+      })
+    : undefined;
 
   return {
     kind: "success",
