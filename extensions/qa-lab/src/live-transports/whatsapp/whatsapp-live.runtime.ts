@@ -189,10 +189,8 @@ type WhatsAppQaMessageSendMode =
     };
 
 type WhatsAppQaGateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
-type WhatsAppQaGatewayRuntime = Pick<
-  WhatsAppQaGateway,
-  "call" | "logs" | "restart" | "token" | "workspaceDir" | "wsUrl"
->;
+type WhatsAppQaGatewayRuntime = Pick<WhatsAppQaGateway, "call" | "restart" | "workspaceDir"> &
+  Partial<Pick<WhatsAppQaGateway, "logs" | "token" | "wsUrl">>;
 type WhatsAppQaGatewayCallContext = {
   gateway: Pick<WhatsAppQaGatewayRuntime, "call">;
   gatewayTarget: string;
@@ -2979,12 +2977,13 @@ async function callWhatsAppGatewaySendConcurrently(
 ) {
   // Each QA RPC client serializes its own requests. Separate clients preserve
   // real Gateway overlap so this probe reaches the shared WhatsApp socket concurrently.
+  const connection = resolveWhatsAppGatewayRpcConnection(context.gateway);
   const clients = await Promise.all(
     sends.map(() =>
       startQaGatewayRpcClient({
-        logs: context.gateway.logs,
-        token: context.gateway.token,
-        wsUrl: context.gateway.wsUrl,
+        logs: connection.logs,
+        token: connection.token,
+        wsUrl: connection.wsUrl,
       }),
     ),
   );
@@ -2999,6 +2998,17 @@ async function callWhatsAppGatewaySendConcurrently(
   } finally {
     await Promise.all(clients.map((client) => client.stop()));
   }
+}
+
+function resolveWhatsAppGatewayRpcConnection(gateway: WhatsAppQaGatewayRuntime) {
+  if (!gateway.logs || !gateway.token || !gateway.wsUrl) {
+    throw new Error("WhatsApp concurrent Gateway probe requires a live RPC connection.");
+  }
+  return {
+    logs: gateway.logs,
+    token: gateway.token,
+    wsUrl: gateway.wsUrl,
+  };
 }
 
 async function callWhatsAppGatewayPoll(
