@@ -2757,6 +2757,9 @@ describe("doctor health contributions", () => {
     it("skips a read-only existing config when its directory is writable", async () => {
       const configPath = "/tmp/openclaw-home/openclaw.json";
       vi.spyOn(fs, "existsSync").mockImplementation((path) => path === configPath);
+      vi.spyOn(fs, "statSync").mockReturnValue({
+        isDirectory: () => true,
+      } as fs.Stats);
       const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
 
       await expect(
@@ -2778,6 +2781,9 @@ describe("doctor health contributions", () => {
     it("reports an unwritable config directory for an existing config", async () => {
       const configPath = "/tmp/openclaw-home/openclaw.json";
       vi.spyOn(fs, "existsSync").mockImplementation((path) => path === configPath);
+      vi.spyOn(fs, "statSync").mockReturnValue({
+        isDirectory: () => true,
+      } as fs.Stats);
       vi.spyOn(fs, "accessSync").mockImplementation(() => {
         throw new Error("EACCES");
       });
@@ -2850,6 +2856,36 @@ describe("doctor health contributions", () => {
           }),
         ],
       });
+    });
+
+    it("reports an existing file that blocks the config directory path", async () => {
+      vi.spyOn(fs, "existsSync").mockImplementation((path) => path === "/tmp/openclaw-home");
+      vi.spyOn(fs, "statSync").mockReturnValue({
+        isDirectory: () => false,
+      } as fs.Stats);
+      const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+
+      await expect(
+        runDoctorLintChecks(
+          {
+            cfg: {},
+            mode: "lint" as const,
+            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            configPath: "/tmp/openclaw-home/openclaw.json",
+          },
+          { checks: [check], onlyIds: ["core/doctor/write-config"] },
+        ),
+      ).resolves.toMatchObject({
+        findings: [
+          expect.objectContaining({
+            checkId: "core/doctor/write-config",
+            path: "/tmp/openclaw-home",
+            target: "/tmp/openclaw-home",
+            requirement: "config-directory-path",
+          }),
+        ],
+      });
+      expect(accessSpy).not.toHaveBeenCalled();
     });
   });
 

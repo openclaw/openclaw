@@ -1334,6 +1334,18 @@ async function collectWriteConfigHealthFindings(
   const existingParent = configPathExists
     ? configDirectory
     : findNearestExistingParent(configDirectory);
+  if (!isDirectoryPath(existingParent)) {
+    findings.push({
+      checkId: "core/doctor/write-config",
+      severity: "warning",
+      message: "Doctor cannot create the config directory because a path component is a file.",
+      path: existingParent,
+      target: configDirectory,
+      requirement: "config-directory-path",
+      fixHint: "Move the file blocking the config directory path before running doctor --fix.",
+    });
+    return findings;
+  }
   try {
     fs.accessSync(existingParent, fs.constants.W_OK);
   } catch {
@@ -1363,6 +1375,14 @@ function findNearestExistingParent(path: string): string {
     candidate = parent;
   }
   return candidate;
+}
+
+function isDirectoryPath(path: string): boolean {
+  try {
+    return fs.statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 async function runWorkspaceSuggestionsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
