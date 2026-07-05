@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "vitest";
 import {
   diagnose,
+  inspectCodexBinding,
   inspectInstalledCodex,
   inspectMemory,
   inspectNativeHookRelayRecords,
@@ -55,6 +56,14 @@ test("inspectInstalledCodex detects missing runtime directory", () => {
 
   assert.equal(result.exists, false);
   assert.equal(result.persistsNativeHookRelayGeneration, false);
+});
+
+test("inspectCodexBinding tolerates missing session directory", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aerith-openclaw-home-"));
+
+  const result = inspectCodexBinding(dir);
+
+  assert.deepEqual(result, []);
 });
 
 test("diagnose reports oversized memory and missing installed runtime", async () => {
