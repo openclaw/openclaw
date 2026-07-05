@@ -159,18 +159,22 @@ internal interface ChatCacheDao {
 }
 
 @Database(
-  entities = [CachedSessionEntity::class, CachedMessageEntity::class],
-  version = 1,
+  entities = [CachedSessionEntity::class, CachedMessageEntity::class, OutboxCommandEntity::class],
+  version = 2,
   exportSchema = false,
 )
 internal abstract class ChatCacheDatabase : RoomDatabase() {
   abstract fun dao(): ChatCacheDao
 
+  abstract fun outboxDao(): ChatOutboxDao
+
   companion object {
     fun open(context: Context): ChatCacheDatabase =
       Room
         .databaseBuilder(context, ChatCacheDatabase::class.java, CHAT_TRANSCRIPT_CACHE_DB_NAME)
-        // The cache is disposable by contract: any schema bump drops and rebuilds instead of migrating.
+        // Established contract: any schema bump drops and rebuilds instead of migrating. Cached
+        // transcripts are disposable; the outbox loses at most a handful of unsent commands at a
+        // release boundary, which is acceptable versus carrying migrations for this store.
         .fallbackToDestructiveMigration(dropAllTables = true)
         .build()
   }
@@ -183,8 +187,6 @@ internal abstract class ChatCacheDatabase : RoomDatabase() {
 class RoomChatTranscriptCache internal constructor(
   private val database: ChatCacheDatabase,
 ) : ChatTranscriptCache {
-  constructor(context: Context) : this(database = ChatCacheDatabase.open(context))
-
   private val json = Json
   private val textPartsSerializer = ListSerializer(String.serializer())
 

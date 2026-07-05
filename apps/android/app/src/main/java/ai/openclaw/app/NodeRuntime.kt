@@ -1,12 +1,15 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.ChatCacheDatabase
 import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.chat.RoomChatCommandOutbox
 import ai.openclaw.app.chat.RoomChatTranscriptCache
 import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthStore
@@ -840,8 +843,14 @@ class NodeRuntime(
     }
   }
 
+  // One Room handle owns both chat stores (disposable transcript cache + durable command outbox).
+  private val chatCacheDatabase: ChatCacheDatabase = ChatCacheDatabase.open(appContext)
+
   private val chatTranscriptCache: RoomChatTranscriptCache =
-    RoomChatTranscriptCache(context = appContext)
+    RoomChatTranscriptCache(database = chatCacheDatabase)
+
+  private val chatCommandOutbox: RoomChatCommandOutbox =
+    RoomChatCommandOutbox(database = chatCacheDatabase)
 
   private val chat: ChatController =
     ChatController(
@@ -850,6 +859,7 @@ class NodeRuntime(
       json = json,
       transcriptCache = chatTranscriptCache,
       cacheScope = ::chatCacheScope,
+      commandOutbox = chatCommandOutbox,
     ).also {
       it.applyMainSessionKey(_mainSessionKey.value)
     }
@@ -1268,14 +1278,16 @@ class NodeRuntime(
   fun setGatewayPassword(value: String) = prefs.setGatewayPassword(value)
 
   /** Clears setup credentials plus paired device tokens for both Android gateway roles. */
-  fun resetGatewaySetupAuth() {
+  suspend fun resetGatewaySetupAuth() {
     prefs.clearGatewaySetupAuth()
     val deviceId = identityStore.loadOrCreate().deviceId
     deviceAuthStore.clearToken(deviceId, "node")
     deviceAuthStore.clearToken(deviceId, "operator")
     // A pairing/auth reset can precede pairing a different gateway principal at the same
-    // endpoint id; purge offline transcripts so they cannot surface under the new pairing.
-    scope.launch { runCatching { chatTranscriptCache.clearAll() } }
+    // endpoint id. The purge must complete before pairing continues: queued commands are
+    // replayed on reconnect, so an async purge could flush stale rows to the new principal.
+    runCatching { chatTranscriptCache.clearAll() }
+    runCatching { chatCommandOutbox.clearAll() }
   }
 
   /** Persists onboarding state; callers decide whether runtime startup is needed first. */
@@ -1310,6 +1322,11 @@ class NodeRuntime(
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
   val pendingRunCount: StateFlow<Int> = chat.pendingRunCount
   val chatCommands: StateFlow<List<ChatCommandEntry>> = chat.commands
+  val chatOutboxItems: StateFlow<List<ChatOutboxItem>> = chat.outboxItems
+
+  fun retryChatOutboxCommand(id: String) = chat.retryOutboxCommand(id)
+
+  fun deleteChatOutboxCommand(id: String) = chat.deleteOutboxCommand(id)
 
   init {
     if (prefs.voiceWakeMode.value != VoiceWakeMode.Off) {

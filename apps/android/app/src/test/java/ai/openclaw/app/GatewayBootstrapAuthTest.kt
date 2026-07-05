@@ -604,7 +604,7 @@ class GatewayBootstrapAuthTest {
     authStore.saveToken(deviceId, "node", "stale-node-token")
     authStore.saveToken(deviceId, "operator", "stale-operator-token")
 
-    runtime.resetGatewaySetupAuth()
+    runBlocking { runtime.resetGatewaySetupAuth() }
 
     assertNull(prefs.loadGatewayToken())
     assertNull(prefs.loadGatewayBootstrapToken())

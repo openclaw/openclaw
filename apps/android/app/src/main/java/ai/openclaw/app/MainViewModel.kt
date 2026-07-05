@@ -2,6 +2,7 @@ package ai.openclaw.app
 
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
@@ -215,6 +216,7 @@ class MainViewModel(
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }
   val pendingRunCount: StateFlow<Int> = runtimeState(initial = 0) { it.pendingRunCount }
   val chatCommands: StateFlow<List<ChatCommandEntry>> = runtimeState(initial = emptyList<ChatCommandEntry>()) { it.chatCommands }
+  val chatOutboxItems: StateFlow<List<ChatOutboxItem>> = runtimeState(initial = emptyList()) { it.chatOutboxItems }
   val execApprovals: StateFlow<List<GatewayExecApprovalSummary>> = runtimeState(initial = emptyList()) { it.execApprovals }
   val execApprovalsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.execApprovalsRefreshing }
   val execApprovalsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.execApprovalsErrorText }
@@ -297,7 +299,7 @@ class MainViewModel(
   }
 
   /** Clears setup credentials without starting the runtime just to discard first-run pairing auth. */
-  private fun resetGatewaySetupAuth() {
+  private suspend fun resetGatewaySetupAuth() {
     runtimeRef.value?.resetGatewaySetupAuth() ?: resetGatewaySetupAuthWithoutRuntime()
   }
 
@@ -613,6 +615,14 @@ class MainViewModel(
 
   fun refreshChatCommands() {
     ensureRuntime().refreshChatCommands()
+  }
+
+  fun retryChatOutboxCommand(id: String) {
+    ensureRuntime().retryChatOutboxCommand(id)
+  }
+
+  fun deleteChatOutboxCommand(id: String) {
+    ensureRuntime().deleteChatOutboxCommand(id)
   }
 
   fun sendChat(
