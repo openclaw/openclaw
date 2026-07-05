@@ -32,6 +32,7 @@ import {
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -74,6 +75,7 @@ import {
   isMediaSizeLimitError,
   isRecoverableMediaGroupError,
   resolveInboundMediaFileId,
+  TelegramBotApiFileTooLargeError,
 } from "./bot-handlers.media.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type {
@@ -221,6 +223,10 @@ export const registerTelegramHandlers = ({
     token: opts.token,
     transport: telegramTransport,
   });
+  const mediaRuntimeWithAbort = {
+    ...mediaRuntimeOptions,
+    abortSignal: opts.fetchAbortSignal,
+  };
   const DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
   const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS =
@@ -257,7 +263,7 @@ export const registerTelegramHandlers = ({
   type PromptContextMessageSelection = ReadonlyMap<string, "include" | "exclude">;
 
   const mediaGroupBuffer = new Map<string, BufferedMediaGroupEntry>();
-  const mediaGroupProcessingByKey = new Map<string, Promise<void>>();
+  const mediaGroupProcessingQueue = new KeyedAsyncQueue();
   const messageCache = createTelegramMessageCache({
     scope: resolveTelegramMessageCacheScope(telegramDeps.resolveStorePath(cfg.session?.store)),
   });
@@ -278,20 +284,16 @@ export const registerTelegramHandlers = ({
     timer: ReturnType<typeof setTimeout>;
   };
   const textFragmentBuffer = new Map<string, TextFragmentEntry>();
-  const textFragmentProcessingByKey = new Map<string, Promise<void>>();
+  const textFragmentProcessingQueue = new KeyedAsyncQueue();
 
   const queueBufferedProcessing = async (
-    processingByKey: Map<string, Promise<void>>,
+    queue: KeyedAsyncQueue,
     key: string,
     task: () => Promise<void>,
   ) => {
-    const previous = processingByKey.get(key) ?? Promise.resolve();
-    const current = previous.then(task).catch(() => undefined);
-    processingByKey.set(key, current);
-    await current;
-    if (processingByKey.get(key) === current) {
-      processingByKey.delete(key);
-    }
+    await queue.enqueue(key, async () => {
+      await task().catch(() => undefined);
+    });
   };
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
@@ -1039,7 +1041,7 @@ export const registerTelegramHandlers = ({
           media = await resolveMedia({
             ctx,
             maxBytes: mediaMaxBytes,
-            ...mediaRuntimeOptions,
+            ...mediaRuntimeWithAbort,
           });
         } catch (mediaErr) {
           if (!isRecoverableMediaGroupError(mediaErr)) {
@@ -1173,7 +1175,7 @@ export const registerTelegramHandlers = ({
   };
 
   const queueTextFragmentFlush = async (entry: TextFragmentEntry) => {
-    await queueBufferedProcessing(textFragmentProcessingByKey, entry.key, async () => {
+    await queueBufferedProcessing(textFragmentProcessingQueue, entry.key, async () => {
       await flushTextFragments(entry);
     });
   };
@@ -1423,7 +1425,7 @@ export const registerTelegramHandlers = ({
               getFile: async () => await bot.api.getFile(replyFileId),
             },
             maxBytes: mediaMaxBytes,
-            ...mediaRuntimeOptions,
+            ...mediaRuntimeWithAbort,
           });
           mediaRef = media
             ? {
@@ -2248,7 +2250,7 @@ export const registerTelegramHandlers = ({
         );
         existing.timer = setTimeout(() => {
           mediaGroupBuffer.delete(mediaGroupKey);
-          void queueBufferedProcessing(mediaGroupProcessingByKey, mediaGroupKey, async () => {
+          void queueBufferedProcessing(mediaGroupProcessingQueue, mediaGroupKey, async () => {
             await processMediaGroup(existing);
           });
         }, mediaGroupTimeoutMs);
@@ -2276,7 +2278,7 @@ export const registerTelegramHandlers = ({
           ),
           timer: setTimeout(() => {
             mediaGroupBuffer.delete(mediaGroupKey);
-            void queueBufferedProcessing(mediaGroupProcessingByKey, mediaGroupKey, async () => {
+            void queueBufferedProcessing(mediaGroupProcessingQueue, mediaGroupKey, async () => {
               await processMediaGroup(entry);
             });
           }, mediaGroupTimeoutMs),
@@ -2311,12 +2313,15 @@ export const registerTelegramHandlers = ({
       media = await resolveMedia({
         ctx,
         maxBytes: mediaMaxBytes,
-        ...mediaRuntimeOptions,
+        ...mediaRuntimeWithAbort,
       });
     } catch (mediaErr) {
       if (isMediaSizeLimitError(mediaErr)) {
         if (sendOversizeWarning) {
-          const limitMb = Math.round(mediaMaxBytes / (1024 * 1024));
+          const limitMb =
+            mediaErr instanceof TelegramBotApiFileTooLargeError
+              ? Math.min(mediaErr.limitMb, Math.round(mediaMaxBytes / (1024 * 1024)))
+              : Math.round(mediaMaxBytes / (1024 * 1024));
           await withTelegramApiErrorLogging({
             operation: "sendMessage",
             runtime,

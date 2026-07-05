@@ -70,6 +70,33 @@ Paperclip agents that connect through the `openclaw_gateway` adapter use the sam
 
 </Note>
 
+## Pair a mobile device
+
+An already paired administrator can create the iOS/Android connection QR without
+opening a terminal:
+
+<Steps>
+  <Step title="Open mobile pairing">
+    Select **Nodes**, then click **Pair mobile device** in the **Devices** card.
+  </Step>
+  <Step title="Connect the phone">
+    In the OpenClaw mobile app, open **Settings** → **Gateway** and scan the QR
+    code. You can copy and paste the setup code instead.
+  </Step>
+  <Step title="Confirm the connection">
+    The official iOS/Android app connects automatically. If **Devices** shows a
+    pending request, review its role and scopes before approving it.
+  </Step>
+</Steps>
+
+Creating a setup code requires `operator.admin`; the button is disabled for
+sessions without it. A setup code contains a short-lived bootstrap credential,
+so treat the QR and copied code like a password while they are valid. For remote
+pairing, the Gateway must resolve to `wss://` (for example, through Tailscale
+Serve/Funnel); plain `ws://` is limited to loopback and private LAN addresses.
+See [Pairing](/channels/pairing#pair-from-the-control-ui-recommended) for the
+full security and fallback details.
+
 ## Personal identity (browser-local)
 
 The Control UI supports a per-browser personal identity (display name and avatar) attached to outgoing messages for attribution in shared sessions. It lives in browser storage, is scoped to the current browser profile, and is not synced to other devices or persisted server-side beyond the normal transcript authorship metadata on messages you actually send. Clearing site data or switching browsers resets it to empty.
@@ -114,14 +141,14 @@ Imported themes are stored only in the current browser profile. They are not wri
     - Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`).
     - Channel probe refreshes keep the previous snapshot visible while slow provider checks finish, and partial snapshots are labeled when a probe or audit exceeds its UI budget.
     - Instances: presence list + refresh (`system-presence`).
-    - Sessions: list configured-agent sessions by default, fall back from stale unconfigured agent session keys, and apply per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`).
+    - Sessions: list configured-agent sessions by default, pin frequent sessions, rename them, archive or restore inactive sessions, fall back from stale unconfigured agent session keys, and apply per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`). Pinned sessions sort above recent unpinned sessions; archived sessions live in the Sessions page's archived view and keep their transcripts.
     - Dreams: dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`).
 
   </Accordion>
   <Accordion title="Cron, skills, nodes, exec approvals">
     - Cron jobs: list/add/edit/run/enable/disable + run history (`cron.*`).
     - Skills: status, enable/disable, install, API key updates (`skills.*`).
-    - Nodes: list + caps (`node.list`).
+    - Nodes: list + caps (`node.list`), create mobile setup codes, and approve device pairing (`device.pair.*`).
     - Exec approvals: edit gateway or node allowlists + ask policy for `exec host=gateway/node` (`exec.approvals.*`).
 
   </Accordion>
@@ -180,6 +207,18 @@ The Activity tab is an ephemeral browser-local observer for live tool activity. 
 
 Activity entries keep only sanitized summaries and redacted, truncated output previews. Tool argument values are not stored in Activity state; the UI shows that arguments are hidden and records only the argument field count. The in-memory list follows the current browser tab, survives navigation within the Control UI, and resets on page reload, session switch, or **Clear**.
 
+## Operator terminal
+
+The dockable operator terminal is disabled by default. To enable it, set `gateway.terminal.enabled: true` and restart the Gateway. The terminal requires an `operator.admin` connection and opens a host PTY in the active agent workspace. New tabs follow the currently selected chat agent.
+
+<Warning>
+The terminal is an unconfined host shell and inherits the Gateway process environment. Enable it only for trusted operator deployments. OpenClaw refuses terminal sessions for agents with `sandbox.mode: "all"`; changing an active agent to that mode closes its existing and in-flight terminal sessions.
+</Warning>
+
+Use **Ctrl + backtick** to toggle the dock. The layout supports bottom and right docking, resizes with the browser viewport, and keeps multiple shell tabs. See [Gateway configuration](/gateway/configuration-reference#gateway) for `gateway.terminal.enabled` and the optional `gateway.terminal.shell` override.
+
+Sessions survive disconnects: a page reload, laptop sleep, or network blip detaches the session on the Gateway instead of killing it, and the same browser tab reattaches on reconnect with recent output replayed. Detached sessions are killed after `gateway.terminal.detachedSessionTimeoutSeconds` (default 300 seconds; `0` restores kill-on-disconnect). `terminal.list` shows attachable sessions, `terminal.attach` adopts one (tmux-style take-over), and `terminal.text` reads a session's recent output as plain text without attaching — an agent/tooling affordance.
+
 ## Chat behavior
 
 <AccordionGroup>
@@ -194,7 +233,8 @@ Activity entries keep only sanitized summaries and redacted, truncated output pr
     - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the canonical transcript replaces those local messages once the Gateway history catches up.
     - Live `chat` events are delivery state, while `chat.history` is rebuilt from the durable session transcript. After tool-final events the Control UI reloads history and merges only a small optimistic tail; the transcript boundary is documented in [WebChat](/web/webchat).
     - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
-    - The sidebar lists recent sessions with a New Session action, an All Sessions link, and a session search button that opens the full session picker (scoped by the selected agent, with search and pagination). Switching agents shows only sessions tied to that agent and falls back to that agent's main session when it has no saved dashboard sessions yet.
+    - The sidebar lists recent sessions with a New Session action, an All Sessions link, and a session search button that opens the full session picker (scoped by the selected agent, with search and pagination). A new dashboard session asynchronously gets a concise generated title from its first non-command message; explicit names are never replaced. Set `agents.defaults.utilityModel` (or `agents.list[].utilityModel`) to route this separate model call to a lower-cost model. Switching agents shows only sessions tied to that agent and falls back to that agent's main session when it has no saved dashboard sessions yet.
+    - Each session-picker row can rename, pin, or archive the session. An active run and an agent's main session cannot be archived. Archiving the currently selected session switches Chat back to that agent's main session.
     - On desktop widths, chat controls stay on one compact row and collapse while scrolling down the transcript; scrolling up, returning to the top, or reaching the bottom restores the controls.
     - Consecutive duplicate text-only messages render as one bubble with a count badge. Messages that carry images, attachments, tool output, or canvas previews are left uncollapsed.
     - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.

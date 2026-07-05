@@ -1918,6 +1918,7 @@ describe("startGatewayPostAttachRuntime", () => {
       lifecycleUnsub: null,
       chatRunState: createChatRunState(),
       chatAbortControllers: new Map(),
+      chatQueuedTurns: new Map(),
       removeChatRun: vi.fn(),
       agentRunSeq: new Map(),
       nodeSendToSession: vi.fn(),

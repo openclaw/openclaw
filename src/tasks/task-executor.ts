@@ -91,10 +91,7 @@ function ensureSingleTaskFlow(params: {
   }
 }
 
-type TaskRunCreateParams = DetachedTaskCreateParams;
-type RunningTaskRunCreateParams = DetachedRunningTaskCreateParams;
-
-export function createQueuedTaskRun(params: TaskRunCreateParams): TaskRecord | null {
+export function createQueuedTaskRun(params: DetachedTaskCreateParams): TaskRecord | null {
   const task = createTaskRecord({
     ...params,
     status: "queued",
@@ -112,7 +109,7 @@ export function getFlowTaskSummary(flowId: string): TaskRegistrySummary {
   return summarizeTaskRecords(listTasksForFlowId(flowId));
 }
 
-export function createRunningTaskRun(params: RunningTaskRunCreateParams): TaskRecord | null {
+export function createRunningTaskRun(params: DetachedRunningTaskCreateParams): TaskRecord | null {
   const task = createTaskRecord({
     ...params,
     status: "running",

@@ -425,16 +425,14 @@ export async function processMessage(params: {
   const senderGroup = inboundPolicy.resolveSenderGroup(
     sender.e164 ?? (conversationKind === "group" ? undefined : conversationId),
   );
+  const commandBody = params.msg.payload.commandBody ?? params.msg.payload.body;
   const dmRouteTarget = resolveWhatsAppDmRouteTarget({
     msg: params.msg,
     senderE164: sender.e164 ?? undefined,
     normalizeE164,
   });
-  const shouldCheckCommandAuth = shouldComputeCommandAuthorized(
-    params.msg.payload.body,
-    params.cfg,
-  );
-  const isTextCommand = isControlCommandMessage(params.msg.payload.body, params.cfg);
+  const shouldCheckCommandAuth = shouldComputeCommandAuthorized(commandBody, params.cfg);
+  const isTextCommand = isControlCommandMessage(commandBody, params.cfg);
   const commandAuthorized = shouldCheckCommandAuth
     ? await resolveWhatsAppCommandAuthorized({
         cfg: params.cfg,
@@ -448,13 +446,13 @@ export async function processMessage(params: {
         kind: "text-slash",
         source: "text",
         authorized: Boolean(commandAuthorized),
-        body: params.msg.payload.body,
+        body: commandBody,
       }
     : {
         kind: "normal",
         source: "message",
         authorized: false,
-        body: params.msg.payload.body,
+        body: commandBody,
       };
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg: params.cfg,
@@ -488,14 +486,14 @@ export async function processMessage(params: {
   const ctxPayload = await buildWhatsAppInboundContext({
     bodyForAgent: msgForAgent.payload.body,
     combinedBody,
-    commandBody: params.msg.payload.body,
+    commandBody,
     commandAuthorized,
     commandTurn,
     groupHistory: visibleGroupHistory,
     groupMemberRoster: params.groupMemberNames.get(params.groupHistoryKey),
     groupSystemPrompt: conversationSystemPrompt,
     msg: params.msg,
-    rawBody: params.msg.payload.body,
+    rawBody: commandBody,
     route: params.route,
     sender: {
       id: getPrimaryIdentityId(sender) ?? undefined,

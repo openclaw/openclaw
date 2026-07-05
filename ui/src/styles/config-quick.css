@@ -8,31 +8,64 @@
   width: 100%;
 }
 
-/* Logs opt into a fill-height chain so the log stream, not the page, owns
-   desktop scrolling. Other settings routes keep the default `.content` scroll.
+.content-header + .settings-workspace {
+  margin-top: 20px;
+}
 
-   The chain works because the entire ancestor stack is converted to flex
-   columns so the workspace can take the remaining viewport after the
-   `.content-header` breadcrumb without triggering `.content`'s overflow scroll. */
-.content--logs {
-  display: flex;
-  flex-direction: column;
+.settings-workspace__body > * + * {
+  margin-top: 20px;
+}
+
+.content:has(openclaw-logs-page) {
   overflow: hidden;
 }
 
-.content--logs .settings-workspace {
-  flex: 1 1 auto;
-  min-height: 0;
+.content:has(openclaw-logs-page) > openclaw-router-outlet {
   display: flex;
   flex-direction: column;
-  height: auto;
+  margin-top: 0;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
 }
 
-.content--logs .settings-workspace__body {
+openclaw-logs-page {
+  display: contents;
+}
+
+.content:has(openclaw-logs-page) .content-header {
+  flex: 0 0 auto;
+}
+
+.settings-workspace--fill-height {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+.settings-workspace--fill-height > .settings-section-nav {
+  flex: 0 0 auto;
+}
+
+.settings-workspace--fill-height > .settings-workspace__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-workspace--fill-height .logs-card {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-workspace--fill-height .log-stream {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
 }
 
 .settings-section-nav {

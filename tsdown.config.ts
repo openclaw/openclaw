@@ -455,7 +455,6 @@ function buildMediaCoreDistEntries(): Record<string, string> {
     "media-source-url": "packages/media-core/src/media-source-url.ts",
     mime: "packages/media-core/src/mime.ts",
     "read-byte-stream-with-limit": "packages/media-core/src/read-byte-stream-with-limit.ts",
-    "read-response-with-limit": "packages/media-core/src/read-response-with-limit.ts",
   };
 }
 

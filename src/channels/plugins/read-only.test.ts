@@ -34,8 +34,9 @@ function pluginIds(plugins: ReturnType<typeof listReadOnlyChannelPluginsForConfi
   return plugins.map((entry) => entry.id);
 }
 
-function normalizeModulePathForTest(modulePath: string): string {
-  return modulePath.replace(/\\/g, "/");
+function modulePathEndsWith(modulePath: string, suffix: string): boolean {
+  const normalized = modulePath.startsWith("file:") ? fileURLToPath(modulePath) : modulePath;
+  return normalized.replace(/\\/g, "/").endsWith(suffix);
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
@@ -161,8 +162,8 @@ vi.mock("../../plugins/plugin-module-loader-cache.js", async (importOriginal) =>
       const actualLoader = actual.getCachedPluginModuleLoader(params);
       return ((modulePath: string) => {
         if (
-          modulePath.endsWith("/plugins/loader.js") ||
-          modulePath.endsWith("/plugins/loader.ts")
+          modulePathEndsWith(modulePath, "/plugins/loader.js") ||
+          modulePathEndsWith(modulePath, "/plugins/loader.ts")
         ) {
           return { loadOpenClawPlugins };
         }
@@ -551,8 +552,8 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       moduleLoaderParams.some(
         (entry) =>
           entry.tryNative === true &&
-          (normalizeModulePathForTest(entry.modulePath).endsWith("/plugins/loader.js") ||
-            normalizeModulePathForTest(entry.modulePath).endsWith("/plugins/loader.ts")),
+          (modulePathEndsWith(entry.modulePath, "/plugins/loader.js") ||
+            modulePathEndsWith(entry.modulePath, "/plugins/loader.ts")),
       ),
     ).toBe(true);
   });

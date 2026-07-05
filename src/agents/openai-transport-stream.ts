@@ -4,7 +4,7 @@
  * Handles Chat Completions, Responses, Azure variants, tool-call replay, reasoning events, and
  * provider-specific payload policy before converting SDK streams into OpenClaw assistant events.
  */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import OpenAI, { AzureOpenAI } from "openai";
@@ -21,6 +21,7 @@ import type {
   ResponseReasoningItem,
 } from "openai/resources/responses/responses.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
+import { sha256Hex, sha256HexPrefix } from "../infra/crypto-digest.js";
 import { getEnvApiKey } from "../llm/env-api-keys.js";
 import { calculateCost } from "../llm/model-utils.js";
 import { resolveAzureDeploymentNameFromMap } from "../llm/providers/azure-deployment-map.js";
@@ -1023,7 +1024,7 @@ export function resolveAzureOpenAIApiVersion(env = process.env): string {
 }
 
 function shortHash(value: string): string {
-  return createHash("sha256").update(value).digest("hex").slice(0, 16);
+  return sha256HexPrefix(value, 16);
 }
 
 function normalizeResponsesReplayItemId(
@@ -1385,20 +1386,18 @@ function buildOpenAIStrictToolDowngradeDiagnosticKey(
   diagnostics: ReturnType<typeof findOpenAIStrictToolProjectionDiagnostics>,
   context: { transport: "responses" | "completions"; model: OpenAIModeModel },
 ): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify({
-        transport: context.transport,
-        provider: context.model.provider ?? null,
-        model: context.model.id ?? null,
-        diagnostics: diagnostics.map((entry) => ({
-          toolIndex: entry.toolIndex,
-          toolName: entry.toolName ?? null,
-          violations: entry.violations,
-        })),
-      }),
-    )
-    .digest("hex");
+  return sha256Hex(
+    JSON.stringify({
+      transport: context.transport,
+      provider: context.model.provider ?? null,
+      model: context.model.id ?? null,
+      diagnostics: diagnostics.map((entry) => ({
+        toolIndex: entry.toolIndex,
+        toolName: entry.toolName ?? null,
+        violations: entry.violations,
+      })),
+    }),
+  );
 }
 
 function shouldLogOpenAIStrictToolDowngradeDiagnostic(

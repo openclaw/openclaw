@@ -131,6 +131,16 @@ function adaptOutboundBridgeContext<
   };
 }
 
+function hasRenderedPresentationBlocks(channelData: Record<string, unknown> | undefined): boolean {
+  return Object.values(channelData ?? {}).some((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return false;
+    }
+    const blocks = (value as Record<string, unknown>).presentationBlocks;
+    return Array.isArray(blocks) && blocks.length > 0;
+  });
+}
+
 function resolvePayloadReceiptKind(
   ctx: ChannelMessageSendPayloadContext<unknown>,
 ): MessageReceiptPartKind {
@@ -143,11 +153,17 @@ function resolvePayloadReceiptKind(
   if (ctx.mediaUrl || ctx.payload.mediaUrl || ctx.payload.mediaUrls?.length) {
     return "media";
   }
+  const hasPortablePresentation = Boolean(
+    ctx.payload.presentation?.title || ctx.payload.presentation?.blocks?.length,
+  );
+  if (hasPortablePresentation || hasRenderedPresentationBlocks(ctx.payload.channelData)) {
+    return "card";
+  }
+  if (ctx.payload.interactive) {
+    return "card";
+  }
   if (ctx.payload.text?.trim() || ctx.text.trim()) {
     return "text";
-  }
-  if (ctx.payload.presentation?.blocks?.length || ctx.payload.interactive) {
-    return "card";
   }
   return "unknown";
 }

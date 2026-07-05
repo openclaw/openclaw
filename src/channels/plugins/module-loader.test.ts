@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isJavaScriptModulePath } from "../../plugins/native-module-require.js";
@@ -36,6 +36,11 @@ function requireCreateJitiCall(
     throw new Error("expected createJiti call");
   }
   return call as [string, { tryNative?: boolean }];
+}
+
+function normalizeModuleLoaderTarget(target: string): string {
+  const targetPath = target.startsWith("file:") ? fileURLToPath(target) : target;
+  return fs.realpathSync.native(targetPath);
 }
 
 describe("channel plugin module loader helpers", () => {
@@ -80,7 +85,7 @@ describe("channel plugin module loader helpers", () => {
   it("loads TypeScript channel plugin modules through Jiti when native loading is unavailable", async () => {
     const loadWithJiti = vi.fn((target: string) => ({
       loadedBy: "jiti",
-      target,
+      target: normalizeModuleLoaderTarget(target),
     }));
     const createJiti = vi.fn(
       (_filename: string, _options: { tryNative?: boolean }) => loadWithJiti,
@@ -102,10 +107,7 @@ describe("channel plugin module loader helpers", () => {
     const modulePath = path.join(rootDir, "extensions", "demo", "index.ts");
     fs.mkdirSync(path.dirname(modulePath), { recursive: true });
     fs.writeFileSync(modulePath, 'throw new Error("native source load failed");\n', "utf8");
-    const expectedJitiTarget =
-      process.platform === "win32"
-        ? pathToFileURL(modulePath).href
-        : fs.realpathSync.native(modulePath);
+    const expectedJitiTarget = fs.realpathSync.native(modulePath);
 
     try {
       expect(
@@ -121,7 +123,9 @@ describe("channel plugin module loader helpers", () => {
       const [loaderFilename, loaderOptions] = requireCreateJitiCall(createJiti);
       expect(loaderFilename).toContain("module-loader.ts");
       expect(loaderOptions.tryNative).toBe(false);
-      expect(loadWithJiti).toHaveBeenCalledWith(expectedJitiTarget);
+      expect(normalizeModuleLoaderTarget(loadWithJiti.mock.calls[0]?.[0] ?? "")).toBe(
+        fs.realpathSync.native(modulePath),
+      );
     } finally {
       for (const [extension, hook] of sourceHooks) {
         if (hook) {

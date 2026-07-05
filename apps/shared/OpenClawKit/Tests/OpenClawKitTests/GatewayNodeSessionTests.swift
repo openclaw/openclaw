@@ -917,6 +917,13 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
+    func `gateway request timeout zero disables the client deadline`() {
+        #expect(GatewayChannelActor.resolveRequestTimeoutMs(0, defaultMs: 15000) == nil)
+        #expect(GatewayChannelActor.resolveRequestTimeoutMs(nil, defaultMs: 15000) == 15000)
+        #expect(GatewayChannelActor.resolveRequestTimeoutMs(30000, defaultMs: 15000) == 30000)
+    }
+
+    @Test
     func `emits synthetic seq gap after reconnect snapshot`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()

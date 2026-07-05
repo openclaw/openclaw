@@ -3,10 +3,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  readResponseTextSnippet,
-  readResponseWithLimit,
-} from "@openclaw/media-core/read-response-with-limit";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -14,6 +10,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sha256Base64, sha256Hex as digestSha256Hex } from "./crypto-digest.js";
+import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";

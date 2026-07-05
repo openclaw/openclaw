@@ -86,6 +86,7 @@ export type WhatsAppInboundGroupContext = {
 
 export type WhatsAppInboundPayload = {
   body: string;
+  commandBody?: string;
   media?: {
     path?: string;
     type?: string;

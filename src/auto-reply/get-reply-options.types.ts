@@ -43,7 +43,14 @@ export type QueuedReplyDeliveryCorrelation = {
 
 /** Lifecycle hooks for queued follow-up replies. */
 export type QueuedReplyLifecycle = {
-  onEnqueued?: () => void;
+  /** Stable cancellation owner used to keep collect-mode batches authorization-safe. */
+  ownerKey?: string;
+  /** Return false when the external owner rejects this queue identity. */
+  onEnqueued?: () => boolean | void;
+  /** Retires this source's cancellation ownership while retaining its live identity. */
+  onCancellationRetired?: () => void;
+  /** Called after the queued turn owns the reply lane, before model/tool execution. */
+  onAdmitted?: () => void;
   onComplete?: () => void;
 };
 

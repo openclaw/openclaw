@@ -1,7 +1,7 @@
 /**
  * Gateway config reload handler tests.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigWriteNotification } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { consumeGatewaySigusr1RestartIntent } from "../infra/restart.js";
@@ -225,6 +225,15 @@ function createReloadHandlersForTest(
   });
   return { ...handlers, cron, heartbeatRunner, setState, stopExitWatchers };
 }
+
+// Other gateway test helpers (test-helpers.mocks.ts, test-helpers.server.ts)
+// set OPENCLAW_SKIP_CHANNELS / OPENCLAW_SKIP_PROVIDERS at module load. When a
+// shared vitest worker imports those helpers before this file runs, the leaked
+// env routes reloads into the skip branch and channel restarts never fire.
+beforeEach(() => {
+  delete process.env.OPENCLAW_SKIP_CHANNELS;
+  delete process.env.OPENCLAW_SKIP_PROVIDERS;
+});
 
 afterEach(() => {
   vi.useRealTimers();
@@ -1392,6 +1401,8 @@ describe("gateway Gmail hot reload handlers", () => {
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
       sharedGatewaySessionGenerationState: { current: undefined, required: null },
       clients: [],
+      reconcileTerminalSessions: vi.fn(),
+      commitTerminalConfig: vi.fn(),
     });
     const registeredWriteListener = writeListenerRef.current;
     if (!registeredWriteListener) {
@@ -1502,6 +1513,8 @@ describe("gateway Gmail hot reload handlers", () => {
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
       sharedGatewaySessionGenerationState: { current: undefined, required: null },
       clients: [],
+      reconcileTerminalSessions: vi.fn(),
+      commitTerminalConfig: vi.fn(),
     });
     const registeredWriteListener = writeListenerRef.current;
     if (!registeredWriteListener) {
@@ -1611,6 +1624,8 @@ describe("gateway Gmail hot reload handlers", () => {
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
       sharedGatewaySessionGenerationState: { current: undefined, required: null },
       clients: [],
+      reconcileTerminalSessions: vi.fn(),
+      commitTerminalConfig: vi.fn(),
     });
     const registeredWriteListener = writeListenerRef.current;
     if (!registeredWriteListener) {
