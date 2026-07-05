@@ -24,10 +24,14 @@ async function startLoopbackIrcServer(): Promise<LoopbackIrcServer> {
         buffer = buffer.slice(idx + 1);
         idx = buffer.indexOf("\n");
         lines.push(line);
-        if (line.startsWith("USER ")) socket.write(":server 001 bot :welcome\r\n");
+        if (line.startsWith("USER ")) {
+          socket.write(":server 001 bot :welcome\r\n");
+        }
       }
     });
-    socket.on("close", () => sockets.delete(socket));
+    socket.on("close", () => {
+      sockets.delete(socket);
+    });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -38,8 +42,12 @@ async function startLoopbackIrcServer(): Promise<LoopbackIrcServer> {
     port: address.port,
     lines,
     close: async () => {
-      for (const socket of sockets) socket.destroy();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve) => {
+        server.close(resolve);
+      });
     },
   };
 }
