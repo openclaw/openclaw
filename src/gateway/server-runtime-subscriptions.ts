@@ -1,6 +1,7 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
+import type { SubsystemLogger } from "../logging/subsystem.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
@@ -18,6 +19,7 @@ import type {
 
 /** Register gateway runtime event subscriptions and return unsubscribe handles. */
 export function startGatewayEventSubscriptions(params: {
+  log: SubsystemLogger;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   broadcastToConnIds: (
     event: string,
@@ -234,7 +236,15 @@ export function startGatewayEventSubscriptions(params: {
         }
       }
     }
-    void getAgentEventHandler().then((handler) => handler(evt));
+    void getAgentEventHandler()
+      .then((handler) => handler(evt))
+      .catch((err: unknown) => {
+        params.log.warn("Failed to handle agent event: lazy handler load rejected", {
+          runId: evt.runId,
+          stream: evt.stream,
+          error: err,
+        });
+      });
   });
 
   const heartbeatUnsub = onHeartbeatEvent((evt) => {
@@ -242,11 +252,25 @@ export function startGatewayEventSubscriptions(params: {
   });
 
   const transcriptUnsub = onInternalSessionTranscriptUpdate((evt) => {
-    void getTranscriptUpdateHandler().then((handler) => handler(evt));
+    void getTranscriptUpdateHandler()
+      .then((handler) => handler(evt))
+      .catch((err: unknown) => {
+        params.log.warn("Failed to handle transcript update: lazy handler load rejected", {
+          sessionKey: evt.sessionKey,
+          error: err,
+        });
+      });
   });
 
   const lifecycleUnsub = onSessionLifecycleEvent((evt) => {
-    void getLifecycleEventHandler().then((handler) => handler(evt));
+    void getLifecycleEventHandler()
+      .then((handler) => handler(evt))
+      .catch((err: unknown) => {
+        params.log.warn("Failed to handle lifecycle event: lazy handler load rejected", {
+          sessionKey: evt.sessionKey,
+          error: err,
+        });
+      });
   });
 
   return {
