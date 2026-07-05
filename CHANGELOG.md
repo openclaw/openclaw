@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Slack progress indicators:** use Slack's native assistant thread status and rotating loading messages by default while keeping acknowledgement reactions static; lifecycle reaction updates now require `messages.statusReactions.enabled: true`.
 - **Control UI Talk controls:** keep voice, model, and sensitivity in the composer while moving provider, transport, VAD timing, and reasoning defaults to Settings → Communications → Talk.
 - **Logbook work journal:** add a disabled-by-default bundled plugin that turns paired-node screen snapshots into a private timeline, daily standup, and timeline-grounded Q&A in a plugin-contributed Control UI tab. (#99930)
 - **Control UI message context:** reveal per-message token, context, and model details from the timestamp on hover or activation instead of showing a separate Context button.
@@ -16,6 +17,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **Diffs rendering:** render viewer and image output from one SSR preload, preserve language-pack highlighting through hydration, normalize language hints case-insensitively, skip identical before/after inputs with an explicit `changed` result, report truthful file-render and input errors, cache hash-pinned viewer runtimes, and prefer canonical file settings over stale aliases. (#100487)
+- **Control UI approval prompts:** keep stale resolve failures and busy-state cleanup from leaking across newer approvals or Gateway reconnects. (#98394) Thanks @haruaiclone-droid.
 - **Agent empty replies:** surface a visible failure when a completed interactive turn has no deliverable reply, including queued follow-ups, while preserving explicit silence, pending continuations, and committed side effects. (#100456) Thanks @mushuiyu886.
 - **Child process output safety:** prevent stdout/stderr pipe failures from crashing agent exec sessions, local TUI shell commands, and bounded process execution. (#100407, #100406, #100410) Thanks @cxbAsDev.
 - **Background refresh isolation:** keep remote skill-bin refreshes running when one node fails, and contain periodic subagent-sweeper failures without hiding errors from direct callers. (#100393, #100390) Thanks @cxbAsDev.
@@ -30,6 +32,9 @@ Docs: https://docs.openclaw.ai
 - **Plugin approval diagnostics:** distinguish request validation rejections, expired wait decisions, and unavailable Gateways while keeping approval failures fail-closed. (#100337) Thanks @tzy-17.
 - **IRC Unicode messages:** split outbound PRIVMSG payloads on UTF-16 code-point boundaries so emoji cannot be cut into lone surrogates. (#96572) Thanks @llagy009.
 - **OpenAI realtime voice greetings:** prevent server VAD from creating a second outbound greeting while an explicit greeting response owns the turn, without disabling caller interruption. (#86285) Thanks @giodl73-repo.
+- **Realtime voice tools:** filter malformed tool names at each OpenAI, Azure, and Google realtime payload boundary while preserving provider-specific valid names. (#89175) Thanks @vincentkoc.
+- **Discord voice status:** treat Discord error 10065 as a normal disconnected state while preserving unrelated REST failures. (#90969) Thanks @asock.
+- **Discord voice accounts:** isolate `@discordjs/voice` connections by Discord account and recover auto-join when gateway readiness predates listener registration. (#87530) Thanks @geekhuashan.
 - **iOS Voice Wake cleanup:** avoid initializing the microphone audio pipeline while disabling inactive Voice Wake, preventing simulator launch aborts and unnecessary audio setup.
 - **Cron duration validation:** reject positive durations that truncate below one millisecond instead of silently scheduling a zero-duration interval. (#100311) Thanks @qingminglong.
 - **Skill workshop proposals:** preserve the terminal newline in generated proposal Markdown while still rejecting blank raw content. (#100293) Thanks @anyech.

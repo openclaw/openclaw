@@ -37,6 +37,7 @@ import type {
 import { renderSessionDetailPanel } from "./view-details.ts";
 import {
   renderCostBreakdownCompact,
+  renderCostWindowComparison,
   renderDailyChartCompact,
   renderFilterChips,
   renderSessionsCard,
@@ -322,6 +323,10 @@ export function renderUsage(props: UsageProps) {
   const insightAggregates = insightsUseVisiblePage
     ? buildAggregatesFromSessions(aggregateSessions)
     : activeAggregates;
+  // Cost windows use range-wide daily totals; filtered pages need exact scoped data.
+  const costWindowComparison = hasAggregateFilters
+    ? nothing
+    : renderCostWindowComparison(data.costDaily, filters.startDate, filters.endDate);
 
   // Filter daily chart data if sessions are selected
   const filteredDaily =
@@ -792,6 +797,9 @@ export function renderUsage(props: UsageProps) {
               insightAggregates,
               insightStats,
               hasMissingCost,
+              // Day totals are exact daily buckets; category rollups remain full-session totals.
+              // Hide shares instead of mixing those scopes into percentages above 100%.
+              filters.selectedDays.length === 0,
               buildPeakErrorHours(aggregateSessions, filters.timeZone),
               displaySessionCount,
               totalSessions,
@@ -806,6 +814,7 @@ export function renderUsage(props: UsageProps) {
             <div class="usage-grid">
               <div class="usage-grid-column">
                 <div class="card usage-left-card">
+                  ${costWindowComparison}
                   ${renderDailyChartCompact(
                     filteredDaily,
                     filters.selectedDays,

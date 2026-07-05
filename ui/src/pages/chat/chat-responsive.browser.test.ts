@@ -177,7 +177,8 @@ function composerControlsHtml() {
       <div class="chat-composer-model-control">
         <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
           <summary class="chat-controls__inline-select-trigger" data-chat-composer-model="true" aria-label="Chat model">
-            <span class="chat-controls__inline-select-label">Default model · Off</span>
+            <span class="chat-controls__inline-select-label">Default model</span>
+            <span class="chat-controls__effort-chip">Off</span>
             <span class="chat-controls__inline-select-icon">${iconSvg()}</span>
           </summary>
           <div class="chat-controls__inline-select-menu chat-controls__inline-select-menu--combined">
@@ -186,6 +187,7 @@ function composerControlsHtml() {
               <button class="chat-controls__inline-select-option chat-controls__combined-model-option">gpt-5.5</button>
               <button class="chat-controls__inline-select-option chat-controls__combined-model-option">claude-sonnet-4-6</button>
             </div>
+            <div class="chat-controls__reasoning-panel">Reasoning</div>
           </div>
         </details>
       </div>
@@ -334,8 +336,10 @@ function chatHtml(
             <div class="agent-chat__toolbar">
               <div class="agent-chat__toolbar-left">
                 <button class="agent-chat__input-btn">${iconSvg()}</button>
-                <button class="agent-chat__input-btn">${iconSvg()}</button>
-                <button class="agent-chat__input-btn">${iconSvg()}</button>
+                <div class="agent-chat__talk-group">
+                  <button class="agent-chat__input-btn agent-chat__talk-toggle">${iconSvg()}</button>
+                  <button class="agent-chat__input-btn agent-chat__talk-caret">${iconSvg()}</button>
+                </div>
                 <span class="agent-chat__token-count">8</span>
               </div>
               ${composerControlsHtml()}
@@ -803,6 +807,29 @@ describeBrowserLayout("chat responsive browser layout", () => {
       await closeBrowserPage(page);
     }
   });
+
+  it.each([
+    [320, 568],
+    [375, 812],
+    [667, 375],
+    [768, 500],
+  ] as const)(
+    "keeps the composer model menu inside the mobile viewport at %sx%s",
+    async (width, height) => {
+      const page = await openFixture(width, height);
+      try {
+        await page.locator('[data-chat-composer-model="true"]').click();
+        const menu = await getBoundingBox(page, ".chat-controls__inline-select-menu--combined");
+        const reasoning = await getBoundingBox(page, ".chat-controls__reasoning-panel");
+        expect(menu.x).toBeGreaterThanOrEqual(0);
+        expect(menu.x + menu.width).toBeLessThanOrEqual(width + 1);
+        expect(reasoning.x).toBeGreaterThanOrEqual(0);
+        expect(reasoning.x + reasoning.width).toBeLessThanOrEqual(width + 1);
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
 
   it.each([
     [320, 568],

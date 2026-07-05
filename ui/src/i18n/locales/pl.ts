@@ -1213,6 +1213,14 @@ export const pl: TranslationMap = {
       byType: "Według typu",
       tokensTitle: "Dzienne użycie tokenów",
       costTitle: "Dzienny koszt",
+      compressedScaleHint: "Skala pierwiastkowa zachowuje widoczność dni o niskim użyciu.",
+    },
+    costWindows: {
+      title: "Okresy kosztów",
+      subtitle: "Okresy kalendarzowe kończące się {date}",
+      selectedRange: "Wybrany zakres",
+      lastDays: "Ostatnie {count} dni",
+      perDay: "/ dzień",
     },
     breakdown: {
       output: "Wyjście",
@@ -1260,6 +1268,7 @@ export const pl: TranslationMap = {
       cached: "z pamięci podręcznej",
       prompt: "prompt",
       calls: "wywołania",
+      costShare: "{percent}% kosztu",
       topModels: "Najpopularniejsze modele",
       topProviders: "Najpopularniejsi dostawcy",
       topTools: "Najpopularniejsze narzędzia",
@@ -1519,7 +1528,7 @@ export const pl: TranslationMap = {
       badge: "Wygasł",
     },
     composer: {
-      placeholder: "Message {name} (Enter to send)",
+      placeholder: "Message {name}",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",

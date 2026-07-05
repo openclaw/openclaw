@@ -4539,6 +4539,21 @@
       "translated": "جاهز"
     },
     {
+      "id": "native.apple.e5524d5756a62744",
+      "source": "Unable to Export Transcript",
+      "translated": "تعذّر تصدير النص"
+    },
+    {
+      "id": "native.apple.942d6a10fd90d6e3",
+      "source": "OK",
+      "translated": "موافق"
+    },
+    {
+      "id": "native.apple.3548c8d1ab43e85e",
+      "source": "OpenClaw could not prepare the Markdown file.",
+      "translated": "تعذّر على OpenClaw إعداد ملف Markdown."
+    },
+    {
       "id": "native.apple.202b97e93b938049",
       "source": "What would you like to work on?",
       "translated": "ما الذي ترغب في العمل عليه؟"
@@ -4552,6 +4567,16 @@
       "id": "native.apple.d19c9577e0fdfea7",
       "source": "Opens Settings / Gateway",
       "translated": "يفتح Settings / Gateway"
+    },
+    {
+      "id": "native.apple.ced228bb4d20a726",
+      "source": "Export Transcript",
+      "translated": "تصدير النص"
+    },
+    {
+      "id": "native.apple.940e1f943750c94b",
+      "source": "Chat actions",
+      "translated": "إجراءات المحادثة"
     },
     {
       "id": "native.apple.b635acd93246d67b",

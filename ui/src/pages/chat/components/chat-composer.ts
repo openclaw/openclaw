@@ -2000,49 +2000,55 @@ export function renderChatComposer(props: ChatComposerProps) {
             </button>
           </openclaw-tooltip>
 
-          ${props.onToggleRealtimeTalk
+          ${props.onToggleRealtimeTalk || props.onToggleRealtimeTalkOptions
             ? html`
-                <openclaw-tooltip
-                  .content=${props.realtimeTalkActive
-                    ? t("chat.composer.stopTalk")
-                    : t("chat.composer.startTalk")}
-                >
-                  <button
-                    class="agent-chat__input-btn ${props.realtimeTalkActive
-                      ? "agent-chat__input-btn--talk"
-                      : ""}"
-                    @click=${props.onToggleRealtimeTalk}
-                    aria-label=${props.realtimeTalkActive
-                      ? t("chat.composer.stopTalk")
-                      : t("chat.composer.startTalk")}
-                    ?disabled=${!canCompose && !props.realtimeTalkActive}
-                  >
-                    ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
-                    <span class="agent-chat__control-label"
-                      >${props.realtimeTalkActive
-                        ? t("chat.composer.stopTalk")
-                        : t("chat.composer.startTalk")}</span
-                    >
-                  </button>
-                </openclaw-tooltip>
-              `
-            : nothing}
-          ${props.onToggleRealtimeTalkOptions
-            ? html`
-                <openclaw-tooltip content="Talk settings">
-                  <button
-                    class="agent-chat__input-btn ${props.realtimeTalkOptionsOpen
-                      ? "agent-chat__input-btn--talk"
-                      : ""}"
-                    @click=${props.onToggleRealtimeTalkOptions}
-                    aria-label="Talk settings"
-                    aria-expanded=${props.realtimeTalkOptionsOpen ? "true" : "false"}
-                    ?disabled=${!canCompose || props.realtimeTalkActive}
-                  >
-                    ${icons.settings}
-                    <span class="agent-chat__control-label">Talk settings</span>
-                  </button>
-                </openclaw-tooltip>
+                <div class="agent-chat__talk-group">
+                  ${props.onToggleRealtimeTalk
+                    ? html`
+                        <openclaw-tooltip
+                          .content=${props.realtimeTalkActive
+                            ? t("chat.composer.stopTalk")
+                            : t("chat.composer.startTalk")}
+                        >
+                          <button
+                            class="agent-chat__input-btn agent-chat__talk-toggle ${props.realtimeTalkActive
+                              ? "agent-chat__input-btn--talk"
+                              : ""}"
+                            @click=${props.onToggleRealtimeTalk}
+                            aria-label=${props.realtimeTalkActive
+                              ? t("chat.composer.stopTalk")
+                              : t("chat.composer.startTalk")}
+                            ?disabled=${!canCompose && !props.realtimeTalkActive}
+                          >
+                            ${props.realtimeTalkActive ? icons.volume2 : icons.mic}
+                            <span class="agent-chat__control-label"
+                              >${props.realtimeTalkActive
+                                ? t("chat.composer.stopTalk")
+                                : t("chat.composer.startTalk")}</span
+                            >
+                          </button>
+                        </openclaw-tooltip>
+                      `
+                    : nothing}
+                  ${props.onToggleRealtimeTalkOptions
+                    ? html`
+                        <openclaw-tooltip content="Talk settings">
+                          <button
+                            class="agent-chat__input-btn agent-chat__talk-caret ${props.realtimeTalkOptionsOpen
+                              ? "agent-chat__input-btn--open"
+                              : ""}"
+                            @click=${props.onToggleRealtimeTalkOptions}
+                            aria-label="Talk settings"
+                            aria-expanded=${props.realtimeTalkOptionsOpen ? "true" : "false"}
+                            ?disabled=${!canCompose || props.realtimeTalkActive}
+                          >
+                            ${icons.chevronDown}
+                            <span class="agent-chat__control-label">Talk settings</span>
+                          </button>
+                        </openclaw-tooltip>
+                      `
+                    : nothing}
+                </div>
               `
             : nothing}
           ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
