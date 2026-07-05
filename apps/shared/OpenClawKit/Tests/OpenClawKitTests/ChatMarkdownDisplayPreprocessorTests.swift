@@ -12,7 +12,12 @@ struct ChatMarkdownDisplayPreprocessorTests {
 
         let prepared = ChatMarkdownDisplayPreprocessor.preserveChatSoftBreaks(in: markdown)
 
-        #expect(prepared == "alpha\u{20}\u{20}\nbeta\u{20}\u{20}\ngamma")
+        #expect(
+            prepared == """
+            alpha  
+            beta  
+            gamma
+            """)
         #expect(try self.renderedCharacters(prepared) == "alpha\nbeta\ngamma")
     }
 
@@ -29,42 +34,20 @@ struct ChatMarkdownDisplayPreprocessorTests {
     }
 
     @Test func `does not duplicate existing hard breaks`() {
-        let markdown = "alpha\u{20}\u{20}\nbeta\\\ngamma"
+        let markdown = """
+        alpha  
+        beta\\
+        gamma
+        """
 
         let prepared = ChatMarkdownDisplayPreprocessor.preserveChatSoftBreaks(in: markdown)
 
         #expect(prepared == markdown)
     }
 
-    @Test func `preserves fenced code blocks`() {
-        let markdown = """
-        ```swift
-        alpha
-        beta
-        ```
-        after
-        next
-        """
-
-        let prepared = ChatMarkdownDisplayPreprocessor.preserveChatSoftBreaks(in: markdown)
-
-        #expect(prepared == "```swift\nalpha\nbeta\n```\nafter\u{20}\u{20}\nnext")
-    }
-
-    @Test func `keeps fence like code content inside active fence`() {
-        let markdown = """
-        ```text
-        ``` not a close
-        still code
-        ```
-        after
-        next
-        """
-
-        let prepared = ChatMarkdownDisplayPreprocessor.preserveChatSoftBreaks(in: markdown)
-
-        #expect(prepared == "```text\n``` not a close\nstill code\n```\nafter\u{20}\u{20}\nnext")
-    }
+    // Fenced code and table handling moved to ChatMarkdownBlockSegmenter,
+    // which strips those blocks before prose reaches this preprocessor; see
+    // ChatMarkdownBlockSegmenterTests.
 
     @Test func `preserves block markdown structure`() {
         let markdown = """
@@ -81,16 +64,30 @@ struct ChatMarkdownDisplayPreprocessorTests {
         #expect(prepared == markdown)
     }
 
-    @Test func `preserves table like markdown rows`() {
+    @Test func `does not alter fenced code kept on the prose path`() {
         let markdown = """
-        A | B
-        --- | ---
-        1 | 2
+        [docs][d]
+
+        ```swift
+        let value = 1
+        ```
+
+        [d]: https://example.com
         """
 
-        let prepared = ChatMarkdownDisplayPreprocessor.preserveChatSoftBreaks(in: markdown)
+        #expect(ChatMarkdownDisplayPreprocessor.preserveChatSoftBreaks(in: markdown) == markdown)
+    }
 
-        #expect(prepared == markdown)
+    @Test func `does not alter nested fenced code`() {
+        let markdown = """
+        - item
+          ```swift
+          let value = 1
+          ```
+          continuation
+        """
+
+        #expect(ChatMarkdownDisplayPreprocessor.preserveChatSoftBreaks(in: markdown) == markdown)
     }
 
     @Test func `converts plain pipe prose soft breaks`() {
@@ -101,7 +98,11 @@ struct ChatMarkdownDisplayPreprocessorTests {
 
         let prepared = ChatMarkdownDisplayPreprocessor.preserveChatSoftBreaks(in: markdown)
 
-        #expect(prepared == "Use foo | bar\u{20}\u{20}\nthen continue")
+        #expect(
+            prepared == """
+            Use foo | bar  
+            then continue
+            """)
     }
 
     private func renderedCharacters(_ markdown: String) throws -> String {
