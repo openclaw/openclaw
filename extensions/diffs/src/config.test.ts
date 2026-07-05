@@ -264,7 +264,9 @@ describe("resolveDiffsPluginDefaults", () => {
       },
     };
     const validatedAliasOnly = validate(aliasOnly);
-    expect(validatedAliasOnly.ok).toBe(true);
+    if (!validatedAliasOnly.ok) {
+      throw new Error("Expected alias-only config to pass manifest validation.");
+    }
     expectFields(resolveDiffsPluginDefaults(validatedAliasOnly.value), {
       fileFormat: "pdf",
       fileQuality: "hq",
@@ -278,7 +280,9 @@ describe("resolveDiffsPluginDefaults", () => {
       },
     };
     const validatedQualityOnly = validate(qualityOnly);
-    expect(validatedQualityOnly.ok).toBe(true);
+    if (!validatedQualityOnly.ok) {
+      throw new Error("Expected quality-only config to pass manifest validation.");
+    }
     expectFields(resolveDiffsPluginDefaults(validatedQualityOnly.value), {
       fileQuality: "hq",
       fileScale: 2.5,
