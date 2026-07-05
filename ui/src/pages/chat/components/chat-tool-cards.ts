@@ -23,6 +23,20 @@ import type { SidebarContent } from "./chat-sidebar.ts";
 
 type FullMessageRequest = NonNullable<SidebarContent["fullMessageRequest"]>;
 
+export function shouldToggleSelectableDisclosure(event: MouseEvent): boolean {
+  if (event.detail === 0) {
+    return true;
+  }
+  const target = event.currentTarget;
+  const selection = window.getSelection();
+  if (!(target instanceof Node) || !selection || selection.isCollapsed) {
+    return true;
+  }
+  return ![selection.anchorNode, selection.focusNode].some(
+    (node) => node !== null && target.contains(node),
+  );
+}
+
 function formatToolOutputForSidebar(text: string): string {
   if (isMarkdownBlockArtText(text)) {
     return "```\n" + text + "\n```";
@@ -266,17 +280,16 @@ function renderCollapsedToolSummary(params: {
       class="chat-tool-msg-summary ${isError ? "chat-tool-msg-summary--error" : ""}"
       type="button"
       aria-expanded=${String(expanded)}
-      @click=${() => onToggleExpanded()}
+      @click=${(event: MouseEvent) => {
+        if (shouldToggleSelectableDisclosure(event)) {
+          onToggleExpanded();
+        }
+      }}
     >
       <span class="chat-tool-msg-summary__icon">${icon}</span>
       <span class="chat-tool-msg-summary__label">${displayLabel}</span>
       ${displayName
         ? html`<span class="chat-tool-msg-summary__names">${displayName}</span>`
-        : nothing}
-      ${isError
-        ? html`<span class="chat-tool-msg-summary__error-badge" aria-label="Tool returned an error"
-            >${icons.x}<span>Error</span></span
-          >`
         : nothing}
     </button>
   `;
@@ -412,11 +425,6 @@ export function renderExpandedToolCardContent(
         <div class="chat-tool-card__title">
           <span class="chat-tool-card__icon">${renderToolIcon(display.icon)}</span>
           <span>${display.label}</span>
-          ${isError
-            ? html`<span class="chat-tool-card__status-badge" role="status"
-                >${icons.x}<span>Error</span></span
-              >`
-            : nothing}
         </div>
         ${canOpenSidebar
           ? html`
@@ -449,7 +457,12 @@ export function renderExpandedToolCardContent(
               label: isError ? "Tool error" : "Tool output",
               text: card.outputText!,
             })
-        : nothing}
+        : isError
+          ? renderToolDataBlock({
+              label: "Tool error",
+              text: "No output — tool failed.",
+            })
+          : nothing}
     </div>
   `;
 }

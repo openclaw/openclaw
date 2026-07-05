@@ -190,7 +190,7 @@ export function resolveChatFastModeSelectState(
     activeRow?.modelProvider?.trim().toLowerCase() ??
     defaultProvider?.trim().toLowerCase() ??
     null;
-  const currentOverride =
+  const configuredOverride =
     activeRow?.fastMode === "auto"
       ? "auto"
       : activeRow?.fastMode === true
@@ -198,8 +198,19 @@ export function resolveChatFastModeSelectState(
         : activeRow?.fastMode === false
           ? "off"
           : "";
+  const isOpenAI = effectiveProvider === "openai";
+  const effectiveOpenAIMode = activeRow?.effectiveFastMode ?? activeRow?.fastMode;
+  // OpenAI exposes one optional priority tier. Keep legacy auto unselected so
+  // either binary choice replaces it instead of implying the wrong tier.
+  const currentOverride = isOpenAI
+    ? effectiveOpenAIMode === true
+      ? "on"
+      : effectiveOpenAIMode === "auto"
+        ? "auto"
+        : "off"
+    : configuredOverride;
   const supported = Boolean(
-    (effectiveProvider && FAST_MODE_PROVIDER_IDS.has(effectiveProvider)) || currentOverride,
+    (effectiveProvider && FAST_MODE_PROVIDER_IDS.has(effectiveProvider)) || configuredOverride,
   );
   return {
     currentOverride,
@@ -211,12 +222,17 @@ export function resolveChatFastModeSelectState(
       Boolean(input.activeRunId) ||
       input.stream !== null ||
       !input.gatewayAvailable,
-    options: [
-      { value: "", label: "Default" },
-      { value: "on", label: "Fast" },
-      { value: "off", label: "Standard" },
-      { value: "auto", label: "Auto" },
-    ],
+    options: isOpenAI
+      ? [
+          { value: "off", label: "Standard" },
+          { value: "on", label: "Fast" },
+        ]
+      : [
+          { value: "", label: "Default" },
+          { value: "on", label: "Fast" },
+          { value: "off", label: "Standard" },
+          { value: "auto", label: "Auto" },
+        ],
     supported,
   };
 }

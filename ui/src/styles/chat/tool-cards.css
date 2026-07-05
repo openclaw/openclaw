@@ -26,7 +26,7 @@
   font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   color: var(--muted);
-  user-select: none;
+  user-select: text;
   list-style: none;
   border: 0;
   border-radius: var(--radius-sm);
@@ -114,34 +114,6 @@
 .chat-tool-msg-summary--error .chat-tool-msg-summary__icon,
 .chat-tool-msg-summary--error .chat-tool-msg-summary__label {
   color: var(--destructive, var(--danger, #c0392b));
-}
-
-.chat-tool-msg-summary__error-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  box-sizing: border-box;
-  padding: 1px 6px;
-  margin-left: auto;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--destructive, var(--danger, #c0392b)) 14%, transparent);
-  color: var(--destructive, var(--danger, #c0392b));
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  line-height: 1.4;
-  flex-shrink: 0;
-}
-
-.chat-tool-msg-summary__error-badge svg {
-  width: 10px;
-  height: 10px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 2px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 /* ── Expanded tool row body ── */
@@ -259,32 +231,6 @@
   stroke: currentColor;
   fill: none;
   stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.chat-tool-card__status-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 1px 6px;
-  margin-left: 6px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--destructive, var(--danger, #c0392b)) 14%, transparent);
-  color: var(--destructive, var(--danger, #c0392b));
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  line-height: 1.4;
-}
-
-.chat-tool-card__status-badge svg {
-  width: 10px;
-  height: 10px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 2px;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -581,6 +527,7 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
+  user-select: text;
   transition: background 150ms ease;
 }
 
@@ -593,8 +540,7 @@
   color: var(--destructive, var(--danger, #c0392b));
 }
 
-.chat-activity-group__icon,
-.chat-activity-group__badge {
+.chat-activity-group__icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -609,8 +555,7 @@
   color: inherit;
 }
 
-.chat-activity-group__icon svg,
-.chat-activity-group__badge svg {
+.chat-activity-group__icon svg {
   width: 14px;
   height: 14px;
   fill: none;
@@ -636,19 +581,6 @@
   line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.chat-activity-group__badge {
-  gap: 3px;
-  padding: 2px 6px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--destructive, var(--danger, #c0392b)) 14%, transparent);
-  color: var(--destructive, var(--danger, #c0392b));
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  line-height: 1;
-  text-transform: uppercase;
 }
 
 /* Left rule groups the rows without wrapping them in another card. */

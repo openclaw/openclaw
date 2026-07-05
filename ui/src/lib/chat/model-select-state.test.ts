@@ -7,6 +7,7 @@ import {
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../../test-helpers/chat-model.ts";
 import {
+  resolveChatFastModeSelectState,
   resolveChatModelOverrideValue,
   resolveChatModelSelectState,
 } from "./model-select-state.ts";
@@ -25,7 +26,68 @@ function createChatModelState(
   };
 }
 
+function resolveFastModeState(params: {
+  provider: string;
+  fastMode?: boolean | "auto";
+  effectiveFastMode?: boolean | "auto";
+}) {
+  const sessionsResult = createSessionsListResult({
+    model: "model",
+    modelProvider: params.provider,
+  });
+  sessionsResult.sessions[0] = {
+    ...sessionsResult.sessions[0],
+    ...(params.fastMode === undefined ? {} : { fastMode: params.fastMode }),
+    ...(params.effectiveFastMode === undefined
+      ? {}
+      : { effectiveFastMode: params.effectiveFastMode }),
+  };
+  return resolveChatFastModeSelectState({
+    activeRunId: null,
+    catalog: [],
+    connected: true,
+    currentModelOverride: `${params.provider}/model`,
+    gatewayAvailable: true,
+    loading: false,
+    sending: false,
+    sessionKey: "main",
+    sessionsResult,
+    stream: null,
+  });
+}
+
 describe("chat-model-select-state", () => {
+  it("offers only Standard and Fast for OpenAI models", () => {
+    expect(resolveFastModeState({ provider: "openai" })).toMatchObject({
+      currentOverride: "off",
+      options: [
+        { value: "off", label: "Standard" },
+        { value: "on", label: "Fast" },
+      ],
+      supported: true,
+    });
+    expect(resolveFastModeState({ provider: "openai", fastMode: true }).currentOverride).toBe("on");
+    expect(
+      resolveFastModeState({ provider: "openai", effectiveFastMode: true }).currentOverride,
+    ).toBe("on");
+    expect(resolveFastModeState({ provider: "openai", fastMode: "auto" }).currentOverride).toBe(
+      "auto",
+    );
+  });
+
+  it("keeps inherited and auto choices for other fast-mode providers", () => {
+    expect(resolveFastModeState({ provider: "anthropic", fastMode: "auto" })).toMatchObject({
+      currentOverride: "auto",
+      options: [
+        { value: "", label: "Default" },
+        { value: "on", label: "Fast" },
+        { value: "off", label: "Standard" },
+        { value: "auto", label: "Auto" },
+      ],
+      supported: true,
+    });
+  });
+
   it("uses the server-qualified value when the active session provider is present", () => {
     const state = createChatModelState({
       chatModelCatalog: createModelCatalog(DEEPSEEK_CHAT_MODEL),
