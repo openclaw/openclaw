@@ -1284,7 +1284,8 @@ describe("sanitizeChatHistoryMessages", () => {
       { redactInlineMedia: true },
     );
 
-    expect(projected.content).toEqual([
+    expect(projected).toBeDefined();
+    expect(projected!.content).toEqual([
       {
         type: "input_image",
         omitted: true,

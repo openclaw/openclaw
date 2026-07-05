@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-// Live proof: chat history sanitization redacts data URLs on input_image/image blocks.
+// Projection-level proof for chat history inline-media redaction shapes.
+// Real gateway endpoint proof lives in
+// src/gateway/server-methods/chat-history-inline-media-redaction-request.test.ts
+// (real WS `chat.history` + `chat.message.get` over on-disk transcripts).
 // Run: node --import tsx scripts/proof-chat-history-sanitize-input-image.mjs
 import assert from "node:assert/strict";
 import path from "node:path";
