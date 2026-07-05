@@ -6,6 +6,7 @@ import type { RouteId } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
+import { pluginTabKey } from "./route.ts";
 
 /**
  * Bundled plugin tab views ship with the Control UI and render natively; every
@@ -22,8 +23,9 @@ type BundledPluginTabView = {
   stop: (host: object) => void;
 };
 
+// Keyed by pluginId/tabId: tab ids are only unique within their plugin.
 const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
-  logbook: async () => {
+  "logbook/logbook": async () => {
     const [view, controller] = await Promise.all([
       import("./logbook-view.ts"),
       import("./logbook-controller.ts"),
@@ -37,6 +39,7 @@ export class PluginPage extends LitElement {
     return this;
   }
 
+  @property({ attribute: false }) pluginId = "";
   @property({ attribute: false }) tabId = "";
 
   @consume({ context: applicationContext, subscribe: false })
@@ -60,16 +63,21 @@ export class PluginPage extends LitElement {
     super.disconnectedCallback();
   }
 
+  private tabKey(): string {
+    return pluginTabKey({ pluginId: this.pluginId, id: this.tabId });
+  }
+
   override willUpdate() {
+    const key = this.tabKey();
     // Switching between plugin tabs reuses this element; the previous bundled
     // view must stop its background polling before the next one renders.
-    if (this.bundledViewId !== null && this.bundledViewId !== this.tabId) {
+    if (this.bundledViewId !== null && this.bundledViewId !== key) {
       this.stopBundledView();
     }
-    if (this.bundledViewId === null && this.tabId in BUNDLED_TAB_VIEWS) {
-      this.bundledViewId = this.tabId;
-      void BUNDLED_TAB_VIEWS[this.tabId]().then((view) => {
-        if (this.bundledViewId === this.tabId) {
+    if (this.bundledViewId === null && key in BUNDLED_TAB_VIEWS) {
+      this.bundledViewId = key;
+      void BUNDLED_TAB_VIEWS[key]().then((view) => {
+        if (this.bundledViewId === this.tabKey()) {
           this.bundledView = view;
         }
       });
@@ -84,7 +92,7 @@ export class PluginPage extends LitElement {
 
   private tabInfo(): GatewayControlUiPluginTab | undefined {
     const tabs = this.context?.gateway.snapshot.hello?.controlUiTabs ?? [];
-    return tabs.find((tab) => tab.id === this.tabId);
+    return tabs.find((tab) => tab.pluginId === this.pluginId && tab.id === this.tabId);
   }
 
   override render() {
@@ -95,7 +103,7 @@ export class PluginPage extends LitElement {
     // Only advertised tabs render: hello omits descriptors whose plugin is
     // inactive or whose required scopes the connection lacks.
     const info = this.tabInfo();
-    if (info && this.tabId in BUNDLED_TAB_VIEWS) {
+    if (info && this.tabKey() in BUNDLED_TAB_VIEWS) {
       if (!this.bundledView) {
         return nothing;
       }

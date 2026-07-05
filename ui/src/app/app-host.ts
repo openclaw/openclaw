@@ -26,6 +26,7 @@ import { searchForSession } from "../lib/sessions/index.ts";
 import { resolveAgentIdFromSessionKey } from "../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
+import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import {
   applicationContext,
@@ -605,10 +606,10 @@ class OpenClawShell extends LitElement {
       return nothing;
     }
     const activeRoute = this.routeState.routeId ?? "chat";
-    // Plugin tabs share one route; the id in the search picks the active item.
+    // Plugin tabs share one route; the search picks the active item.
     const activePluginTabId =
       activeRoute === "plugin"
-        ? (new URLSearchParams(this.routeState.location?.search).get("id")?.trim() ?? "")
+        ? pluginTabKey(pluginTabRefFromSearch(this.routeState.location?.search ?? ""))
         : "";
     const navDrawerOpen = this.navDrawerOpen && !this.onboarding;
     const navCollapsed = this.navCollapsed && !navDrawerOpen;
