@@ -24,10 +24,13 @@ function jsonResponse(body: unknown, status = 200) {
 
 describe("parseClawHubPromotion", () => {
   it("parses a full promotion payload", () => {
-    const parsed = parseClawHubPromotion(validPromotion);
+    const parsed = parseClawHubPromotion({
+      ...validPromotion,
+      pluginNames: ["@openclaw/openrouter-provider"],
+    });
     expect(parsed.slug).toBe("spring-models");
     expect(parsed.models[0]?.suggestedDefault).toBe(true);
-    expect(parsed.pluginNames).toBeUndefined();
+    expect(parsed.pluginNames).toEqual(["@openclaw/openrouter-provider"]);
   });
 
   it("rejects payloads without models", () => {
@@ -59,6 +62,15 @@ describe("parseClawHubPromotion", () => {
 
   it("rejects non-numeric windows", () => {
     expect(() => parseClawHubPromotion({ ...validPromotion, endsAt: "soon" })).toThrow(/endsAt/);
+  });
+
+  it("rejects plugin values that are not package names", () => {
+    expect(() =>
+      parseClawHubPromotion({
+        ...validPromotion,
+        pluginNames: ["@openclaw/openrouter-provider@latest"],
+      }),
+    ).toThrow(/pluginNames/);
   });
 });
 

@@ -1,7 +1,11 @@
 /** Lists active ClawHub promotional model offers. */
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import { fetchClawHubPromotions, type ClawHubPromotion } from "../../infra/clawhub.js";
+import {
+  ClawHubRequestError,
+  fetchClawHubPromotions,
+  type ClawHubPromotion,
+} from "../../infra/clawhub.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 function formatWindowEnd(promotion: ClawHubPromotion): string {
@@ -13,7 +17,20 @@ function formatWindowEnd(promotion: ClawHubPromotion): string {
 }
 
 export async function promosListCommand(opts: { json?: boolean }, runtime: RuntimeEnv) {
-  const promotions = await fetchClawHubPromotions();
+  let promotions: ClawHubPromotion[];
+  try {
+    promotions = await fetchClawHubPromotions();
+  } catch (error) {
+    if (!(error instanceof ClawHubRequestError) || error.status !== 404) {
+      throw error;
+    }
+    runtime.log(
+      opts.json
+        ? JSON.stringify({ promotions: [] }, null, 2)
+        : "Promotions are not available from ClawHub yet.",
+    );
+    return;
+  }
   if (opts.json) {
     runtime.log(JSON.stringify({ promotions }, null, 2));
     return;

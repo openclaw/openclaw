@@ -13,12 +13,16 @@ import {
   type ClawHubPromotion,
 } from "../../infra/clawhub.js";
 import { enablePluginInConfig } from "../../plugins/enable.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { applyAuthChoiceLoadedPluginProvider } from "../../plugins/provider-auth-choice.js";
 import {
   resolveManifestProviderAuthChoice,
   type ProviderAuthChoiceMetadata,
 } from "../../plugins/provider-auth-choices.js";
-import { resolveProviderInstallCatalogEntry } from "../../plugins/provider-install-catalog.js";
+import {
+  resolveProviderInstallCatalogEntry,
+  type ProviderInstallCatalogEntry,
+} from "../../plugins/provider-install-catalog.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
@@ -56,6 +60,7 @@ async function fetchLivePromotion(slug: string): Promise<ClawHubPromotion> {
     if (error instanceof ClawHubRequestError && error.status === 404) {
       throw new Error(
         `Promotion "${slug}" was not found or is not live. See ${formatCliCommand("openclaw promos list")}.`,
+        { cause: error },
       );
     }
     throw error;
@@ -82,7 +87,35 @@ function requireLiveWindow(promotion: ClawHubPromotion) {
 // catalog for providers that would need a plugin install. The source matters:
 // only manifest-resolved choices may take the credential-reuse shortcut,
 // because install-catalog choices still need their plugin installed.
-type ResolvedAuthChoice = { entry: ProviderAuthChoiceMetadata; installed: boolean };
+type ResolvedAuthChoice = {
+  entry: ProviderAuthChoiceMetadata;
+  installed: boolean;
+  packageNames: string[];
+};
+
+function resolveManifestPluginPackageNames(pluginId: string, cfg: OpenClawConfig): string[] {
+  const snapshot = loadManifestMetadataSnapshot({ config: cfg });
+  return [
+    ...new Set(
+      snapshot.manifestRegistry.plugins
+        .filter((plugin) => plugin.id === pluginId)
+        .map((plugin) => plugin.packageName?.trim())
+        .filter((name): name is string => Boolean(name)),
+    ),
+  ];
+}
+
+function resolveCatalogPluginPackageNames(entry: ProviderInstallCatalogEntry): string[] {
+  const npmPackage =
+    entry.installSource?.npm?.expectedPackageName ?? entry.installSource?.npm?.packageName;
+  return [
+    ...new Set(
+      [npmPackage, entry.installSource?.clawhub?.packageName].filter((name): name is string =>
+        Boolean(name),
+      ),
+    ),
+  ];
+}
 
 function resolveAuthChoice(
   promotion: ClawHubPromotion,
@@ -97,12 +130,13 @@ function resolveAuthChoice(
     config: cfg,
     includeUntrustedWorkspacePlugins: false,
   });
-  const entry =
-    manifestEntry ??
-    resolveProviderInstallCatalogEntry(authChoiceId, {
-      config: cfg,
-      includeUntrustedWorkspacePlugins: false,
-    });
+  const catalogEntry = manifestEntry
+    ? undefined
+    : resolveProviderInstallCatalogEntry(authChoiceId, {
+        config: cfg,
+        includeUntrustedWorkspacePlugins: false,
+      });
+  const entry = manifestEntry ?? catalogEntry;
   if (!entry) {
     throw new Error(
       `Promotion "${promotion.slug}" requires auth choice "${authChoiceId}", which this OpenClaw version does not know. Update OpenClaw and retry.`,
@@ -113,7 +147,37 @@ function resolveAuthChoice(
       `Promotion "${promotion.slug}" declares provider "${provider}" but its auth choice belongs to "${entry.providerId}"; refusing to configure it.`,
     );
   }
-  return { entry, installed: Boolean(manifestEntry) };
+  const packageNames = manifestEntry
+    ? resolveManifestPluginPackageNames(manifestEntry.pluginId, cfg)
+    : catalogEntry
+      ? resolveCatalogPluginPackageNames(catalogEntry)
+      : [];
+  return {
+    entry,
+    installed: Boolean(manifestEntry),
+    packageNames,
+  };
+}
+
+function requirePromotionPlugins(
+  promotion: ClawHubPromotion,
+  authChoice: ResolvedAuthChoice | undefined,
+): void {
+  const declared = promotion.pluginNames ?? [];
+  if (declared.length === 0) {
+    return;
+  }
+  const knownPackages = new Set(authChoice?.packageNames ?? []);
+  const unsupported = declared.filter((name) => !knownPackages.has(name));
+  if (unsupported.length === 0) {
+    return;
+  }
+  const authChoiceLabel = authChoice
+    ? `auth choice "${authChoice.entry.choiceId}"`
+    : "a missing auth choice";
+  throw new Error(
+    `Promotion "${promotion.slug}" requires plugin package "${unsupported[0]}", but ${authChoiceLabel} does not provide it in this OpenClaw version. Update OpenClaw and retry.`,
+  );
 }
 
 type ConfigSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshot>>;
@@ -217,6 +281,7 @@ export async function promosClaimCommand(
     provider,
     snapshot.runtimeConfig ?? snapshot.config,
   );
+  requirePromotionPlugins(promotion, authChoice);
 
   await ensureProviderAuth({ promotion, provider, authChoice, snapshot, opts, runtime });
 

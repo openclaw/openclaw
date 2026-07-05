@@ -14,6 +14,7 @@ vi.mock("../../infra/clawhub.js", async () => {
   };
 });
 
+const { ClawHubRequestError } = await import("../../infra/clawhub.js");
 const { promosListCommand } = await import("./list.js");
 
 function makeRuntime() {
@@ -65,6 +66,28 @@ describe("promosListCommand", () => {
     await promosListCommand({}, runtime);
 
     expect(lines.join("\n")).toContain("No active promotions");
+  });
+
+  it("reports a friendly unavailable state when the promotions route is not deployed", async () => {
+    mocks.fetchClawHubPromotions.mockRejectedValue(
+      new ClawHubRequestError({ path: "/api/v1/promotions", status: 404, body: "not found" }),
+    );
+    const { runtime, lines } = makeRuntime();
+
+    await promosListCommand({}, runtime);
+
+    expect(lines).toEqual(["Promotions are not available from ClawHub yet."]);
+  });
+
+  it("preserves the JSON shape when the promotions route is not deployed", async () => {
+    mocks.fetchClawHubPromotions.mockRejectedValue(
+      new ClawHubRequestError({ path: "/api/v1/promotions", status: 404, body: "not found" }),
+    );
+    const { runtime, lines } = makeRuntime();
+
+    await promosListCommand({ json: true }, runtime);
+
+    expect(JSON.parse(lines.join("\n"))).toEqual({ promotions: [] });
   });
 
   it("strips terminal control sequences from remote promotion text", async () => {

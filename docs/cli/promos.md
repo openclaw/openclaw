@@ -37,9 +37,10 @@ payload.
 Claims a live promotion:
 
 1. Fetches the promotion from ClawHub and verifies it is inside its window.
-2. Validates the promotion's provider and auth choice against your installed
-   OpenClaw version. Unknown ids are refused — a promotion can never make the
-   CLI run anything it does not already know how to do.
+2. Validates the promotion's provider, auth choice, and declared plugin packages
+   against your installed OpenClaw version. Unknown ids or package mismatches are
+   refused — a promotion can never make the CLI run anything it does not already
+   know how to do.
 3. Reuses your existing provider credentials when you have them. Otherwise it
    walks the provider's normal auth flow (printing the promotion's signup URL
    for a free key first). `--api-key <key>` completes API-key auth without

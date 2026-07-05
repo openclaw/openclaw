@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   applyAuthChoiceLoadedPluginProvider: vi.fn(),
   resolveManifestProviderAuthChoice: vi.fn(),
   resolveProviderInstallCatalogEntry: vi.fn(),
+  loadManifestMetadataSnapshot: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
   replaceConfigFile: vi.fn(),
   promptYesNo: vi.fn(),
@@ -38,6 +39,10 @@ vi.mock("../../plugins/provider-auth-choices.js", () => ({
 
 vi.mock("../../plugins/provider-install-catalog.js", () => ({
   resolveProviderInstallCatalogEntry: mocks.resolveProviderInstallCatalogEntry,
+}));
+
+vi.mock("../../plugins/manifest-contract-eligibility.js", () => ({
+  loadManifestMetadataSnapshot: mocks.loadManifestMetadataSnapshot,
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -126,6 +131,11 @@ beforeEach(() => {
   mocks.hasAvailableAuthForProvider.mockResolvedValue(true);
   mocks.resolveManifestProviderAuthChoice.mockReturnValue(authChoice);
   mocks.resolveProviderInstallCatalogEntry.mockReturnValue(undefined);
+  mocks.loadManifestMetadataSnapshot.mockReturnValue({
+    manifestRegistry: {
+      plugins: [{ id: "openrouter", packageName: "@openclaw/openrouter-provider" }],
+    },
+  });
   mocks.promptYesNo.mockResolvedValue(false);
   mocks.enablePluginInConfig.mockImplementation((cfg: unknown, pluginId: string) => ({
     config: cfg,
@@ -276,6 +286,29 @@ describe("promosClaimCommand", () => {
     );
   });
 
+  it("accepts a declared plugin package owned by the resolved auth choice", async () => {
+    mocks.fetchClawHubPromotion.mockResolvedValue(
+      makePromotion({ pluginNames: ["@openclaw/openrouter-provider"] }),
+    );
+
+    await promosClaimCommand("spring-models", {}, makeRuntime());
+
+    expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a declared plugin package not owned by the resolved auth choice", async () => {
+    mocks.fetchClawHubPromotion.mockResolvedValue(
+      makePromotion({ pluginNames: ["@openclaw/other-provider"] }),
+    );
+
+    await expect(promosClaimCommand("spring-models", {}, makeRuntime())).rejects.toThrow(
+      /requires plugin package/,
+    );
+    expect(mocks.hasAvailableAuthForProvider).not.toHaveBeenCalled();
+    expect(mocks.enablePluginInConfig).not.toHaveBeenCalled();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
   it("refuses models outside the promotion's provider", async () => {
     mocks.fetchClawHubPromotion.mockResolvedValue(
       makePromotion({ models: [{ modelRef: "sneaky-provider/model" }] }),
@@ -313,7 +346,15 @@ describe("promosClaimCommand", () => {
   it("runs the install path when the auth choice is not installed, even with existing auth", async () => {
     // Existing env credentials must not shortcut past a required plugin install.
     mocks.resolveManifestProviderAuthChoice.mockReturnValue(undefined);
-    mocks.resolveProviderInstallCatalogEntry.mockReturnValue(authChoice);
+    mocks.resolveProviderInstallCatalogEntry.mockReturnValue({
+      ...authChoice,
+      installSource: {
+        npm: { packageName: "@openclaw/openrouter-provider" },
+      },
+    });
+    mocks.fetchClawHubPromotion.mockResolvedValue(
+      makePromotion({ pluginNames: ["@openclaw/openrouter-provider"] }),
+    );
     mocks.hasAvailableAuthForProvider.mockResolvedValue(true);
     mocks.applyAuthChoiceLoadedPluginProvider.mockResolvedValue({ config: {} });
 
@@ -339,12 +380,16 @@ describe("promosClaimCommand", () => {
   });
 
   it("maps 404 responses to a friendly not-found error", async () => {
-    mocks.fetchClawHubPromotion.mockRejectedValue(
-      new ClawHubRequestError({ path: "/api/v1/promotions/nope", status: 404, body: "not found" }),
-    );
+    const requestError = new ClawHubRequestError({
+      path: "/api/v1/promotions/nope",
+      status: 404,
+      body: "not found",
+    });
+    mocks.fetchClawHubPromotion.mockRejectedValue(requestError);
 
-    await expect(promosClaimCommand("nope", {}, makeRuntime())).rejects.toThrow(
-      /not found or is not live/,
-    );
+    await expect(promosClaimCommand("nope", {}, makeRuntime())).rejects.toMatchObject({
+      message: expect.stringMatching(/not found or is not live/),
+      cause: requestError,
+    });
   });
 });

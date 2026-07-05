@@ -11,6 +11,7 @@ import {
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sha256Base64, sha256Hex as digestSha256Hex } from "./crypto-digest.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
+import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
@@ -1771,7 +1772,7 @@ function parseClawHubPromotionModel(value: unknown, context: string): ClawHubPro
 // into copy-paste CLI commands; anything else would be a shell-injection path.
 const CLAWHUB_PROMOTION_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
-// Safe identifier grammar for provider ids, auth choice ids, and plugin names.
+// Safe identifier grammar for provider ids and auth choice ids.
 const CLAWHUB_PROMOTION_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9._@/-]*$/;
 
 export function parseClawHubPromotion(value: unknown): ClawHubPromotion {
@@ -1821,9 +1822,10 @@ export function parseClawHubPromotion(value: unknown): ClawHubPromotion {
   const pluginNames = optionalStringArrayField(value, "pluginNames", context);
   if (pluginNames && pluginNames.length > 0) {
     for (const name of pluginNames) {
-      if (!CLAWHUB_PROMOTION_IDENTIFIER_RE.test(name)) {
+      const parsed = parseRegistryNpmSpec(name);
+      if (!parsed || parsed.selectorKind !== "none" || parsed.name !== name) {
         throw new Error(
-          `Malformed ClawHub ${context}: pluginNames contains unsupported characters.`,
+          `Malformed ClawHub ${context}: pluginNames must contain npm package names.`,
         );
       }
     }
