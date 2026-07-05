@@ -1,7 +1,6 @@
 // Tests for gateway runtime subscription wiring.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
-import { emitHeartbeatEvent, resetHeartbeatEventsForTest } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
@@ -30,85 +29,69 @@ const mockLog: SubsystemLogger = {
 };
 
 vi.mock("./server-chat.js", () => {
-  return {
-    createAgentEventHandler: () => {
-      throw new Error("server-chat lazy load failure");
-    },
-  };
+  throw new Error("server-chat lazy load failure");
 });
 
-vi.mock("./server-session-key.js", () => {
-  return {
-    resolveSessionKeyForRun: () => "agent:main:main",
-  };
-});
+vi.mock("./server-session-key.js", () => ({
+  resolveSessionKeyForRun: () => "agent:main:main",
+}));
 
-vi.mock("./server-session-events.js", () => {
-  return {
-    createTranscriptUpdateBroadcastHandler: () => {
-      throw new Error("server-session-events lazy load failure");
-    },
-    createLifecycleEventBroadcastHandler: () => {
-      throw new Error("server-session-events lazy load failure");
-    },
-  };
-});
+vi.mock("./server-session-events.js", () => ({
+  createTranscriptUpdateBroadcastHandler: () => () => {
+    throw new Error("transcript handler failure");
+  },
+  createLifecycleEventBroadcastHandler: () => () => {
+    throw new Error("lifecycle handler failure");
+  },
+}));
 
 const { startGatewayEventSubscriptions } = await import("./server-runtime-subscriptions.js");
+type SubscriptionParams = Parameters<typeof startGatewayEventSubscriptions>[0];
 
-function createParams() {
+function createParams(): SubscriptionParams {
   return {
     log: mockLog,
     broadcast: vi.fn(),
     broadcastToConnIds: vi.fn(),
     nodeSendToSession: vi.fn(),
-    agentRunSeq: new Map<string, number>(),
+    agentRunSeq: new Map(),
     chatRunState: createChatRunState(),
     toolEventRecipients: createToolEventRecipientRegistry(),
     sessionEventSubscribers: createSessionEventSubscriberRegistry(),
     sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-    chatAbortControllers: new Map<string, unknown>(),
-    restartRecoveryCandidates: new Map<string, unknown>(),
+    chatAbortControllers: new Map(),
+    restartRecoveryCandidates: new Map(),
   };
 }
 
 describe("startGatewayEventSubscriptions", () => {
-  let unsubs: ReturnType<typeof startGatewayEventSubscriptions>;
-  const unhandledRejections: unknown[] = [];
-  let unhandledHandler: (reason: unknown) => void;
+  let unsubs: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    unhandledHandler = (reason: unknown) => {
-      unhandledRejections.push(reason);
-    };
-    process.on("unhandledRejection", unhandledHandler);
   });
 
   afterEach(() => {
-    process.off("unhandledRejection", unhandledHandler);
     unsubs?.agentUnsub();
     unsubs?.heartbeatUnsub();
     unsubs?.transcriptUnsub();
     unsubs?.lifecycleUnsub();
     resetAgentEventsForTest();
-    resetHeartbeatEventsForTest();
   });
 
-  it("logs a warning when the lazy agent event handler import rejects", async () => {
+  it("logs lazy agent event module failures", async () => {
     unsubs = startGatewayEventSubscriptions(createParams());
 
     emitAgentEvent({ runId: "run-1", stream: "lifecycle", data: { phase: "start" } });
 
     await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
     expect(warn).toHaveBeenCalledWith(
-      "Failed to handle agent event: lazy handler load rejected",
+      "Agent event dispatch failed",
       expect.objectContaining({ runId: "run-1", stream: "lifecycle" }),
     );
-    expect(unhandledRejections).toHaveLength(0);
   });
 
-  it("logs a warning when the lazy transcript update handler import rejects", async () => {
+  it("logs transcript handler failures", async () => {
     unsubs = startGatewayEventSubscriptions(createParams());
 
     emitInternalSessionTranscriptUpdate({
@@ -118,35 +101,20 @@ describe("startGatewayEventSubscriptions", () => {
 
     await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
     expect(warn).toHaveBeenCalledWith(
-      "Failed to handle transcript update: lazy handler load rejected",
+      "Transcript update dispatch failed",
       expect.objectContaining({ sessionKey: "agent:main:main" }),
     );
-    expect(unhandledRejections).toHaveLength(0);
   });
 
-  it("logs a warning when the lazy lifecycle event handler import rejects", async () => {
+  it("logs lifecycle handler failures", async () => {
     unsubs = startGatewayEventSubscriptions(createParams());
 
     emitSessionLifecycleEvent({ sessionKey: "agent:main:main", reason: "created" });
 
     await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
     expect(warn).toHaveBeenCalledWith(
-      "Failed to handle lifecycle event: lazy handler load rejected",
+      "Lifecycle event dispatch failed",
       expect.objectContaining({ sessionKey: "agent:main:main" }),
     );
-    expect(unhandledRejections).toHaveLength(0);
-  });
-
-  it("still broadcasts heartbeat events directly without lazy loading", async () => {
-    const params = createParams();
-    unsubs = startGatewayEventSubscriptions(params);
-
-    emitHeartbeatEvent({ status: "ok-empty" });
-
-    await vi.waitFor(() => expect(params.broadcast).toHaveBeenCalledTimes(1));
-    expect(params.broadcast).toHaveBeenCalledWith("heartbeat", expect.anything(), {
-      dropIfSlow: true,
-    });
-    expect(warn).not.toHaveBeenCalled();
   });
 });

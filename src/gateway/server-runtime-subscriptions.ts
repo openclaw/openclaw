@@ -17,6 +17,21 @@ import type {
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 
+function dispatchEventHandler<TEvent>(params: {
+  loadHandler: () => Promise<(event: TEvent) => unknown>;
+  event: TEvent;
+  log: SubsystemLogger;
+  failureMessage: string;
+  context: Record<string, unknown>;
+}) {
+  void params
+    .loadHandler()
+    .then((handler) => handler(params.event))
+    .catch((error: unknown) => {
+      params.log.warn(params.failureMessage, { ...params.context, error });
+    });
+}
+
 /** Register gateway runtime event subscriptions and return unsubscribe handles. */
 export function startGatewayEventSubscriptions(params: {
   log: SubsystemLogger;
@@ -236,15 +251,13 @@ export function startGatewayEventSubscriptions(params: {
         }
       }
     }
-    void getAgentEventHandler()
-      .then((handler) => handler(evt))
-      .catch((err: unknown) => {
-        params.log.warn("Failed to handle agent event: lazy handler load rejected", {
-          runId: evt.runId,
-          stream: evt.stream,
-          error: err,
-        });
-      });
+    dispatchEventHandler({
+      loadHandler: getAgentEventHandler,
+      event: evt,
+      log: params.log,
+      failureMessage: "Agent event dispatch failed",
+      context: { runId: evt.runId, stream: evt.stream },
+    });
   });
 
   const heartbeatUnsub = onHeartbeatEvent((evt) => {
@@ -252,25 +265,23 @@ export function startGatewayEventSubscriptions(params: {
   });
 
   const transcriptUnsub = onInternalSessionTranscriptUpdate((evt) => {
-    void getTranscriptUpdateHandler()
-      .then((handler) => handler(evt))
-      .catch((err: unknown) => {
-        params.log.warn("Failed to handle transcript update: lazy handler load rejected", {
-          sessionKey: evt.sessionKey,
-          error: err,
-        });
-      });
+    dispatchEventHandler({
+      loadHandler: getTranscriptUpdateHandler,
+      event: evt,
+      log: params.log,
+      failureMessage: "Transcript update dispatch failed",
+      context: { sessionKey: evt.sessionKey },
+    });
   });
 
   const lifecycleUnsub = onSessionLifecycleEvent((evt) => {
-    void getLifecycleEventHandler()
-      .then((handler) => handler(evt))
-      .catch((err: unknown) => {
-        params.log.warn("Failed to handle lifecycle event: lazy handler load rejected", {
-          sessionKey: evt.sessionKey,
-          error: err,
-        });
-      });
+    dispatchEventHandler({
+      loadHandler: getLifecycleEventHandler,
+      event: evt,
+      log: params.log,
+      failureMessage: "Lifecycle event dispatch failed",
+      context: { sessionKey: evt.sessionKey },
+    });
   });
 
   return {
