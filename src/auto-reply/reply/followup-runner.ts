@@ -373,7 +373,7 @@ export function createFollowupRunner(params: {
     queued: FollowupRun,
     resolvedRun: { provider: string; modelId: string },
     options: { kind?: ReplyDispatchKind; mirror?: boolean; runId?: string } = {},
-  ) => {
+  ): Promise<boolean> => {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
     const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
@@ -392,27 +392,29 @@ export function createFollowupRunner(params: {
     );
 
     if (sendablePayloads.length === 0) {
-      return;
+      return false;
     }
 
     if (!shouldRouteToOriginating && !opts?.onBlockReply) {
       defaultRuntime.error?.(
         "followup queue: completed with payloads but no origin route or visible dispatcher is available",
       );
-      return;
+      return false;
     }
 
+    let deliveredAnyPayload = false;
     let crossChannelRouteFailureNeedsNotice = false;
     let routedAnyCrossChannelPayloadToOrigin = false;
     const replyKind = options.kind ?? "final";
-    const sendDispatcherPayload = async (payload: ReplyPayload) => {
+    const sendDispatcherPayload = async (payload: ReplyPayload): Promise<boolean> => {
       if (!opts?.onBlockReply) {
-        return;
+        return false;
       }
       if (deliveryPlan.isSilentPayload(payload)) {
-        return;
+        return false;
       }
       await opts.onBlockReply(payload);
+      return true;
     };
     for (const payload of sendablePayloads) {
       const providerRoute = deliveryPlan.resolveFollowupRoute({
@@ -473,14 +475,15 @@ export function createFollowupRunner(params: {
           });
           if (opts?.onBlockReply) {
             if (origin && origin === provider) {
-              await sendDispatcherPayload(payload);
+              deliveredAnyPayload = (await sendDispatcherPayload(payload)) || deliveredAnyPayload;
             } else {
               crossChannelRouteFailureNeedsNotice = true;
             }
           } else {
             defaultRuntime.error?.(`followup queue: route-reply failed: ${errorMsg}`);
           }
-        } else {
+        } else if (!result.suppressed) {
+          deliveredAnyPayload = true;
           const provider = resolveOriginMessageProvider({
             provider: queued.run.messageProvider,
           });
@@ -492,7 +495,7 @@ export function createFollowupRunner(params: {
           }
         }
       } else if (deliveryRoute === "dispatcher") {
-        await sendDispatcherPayload(payload);
+        deliveredAnyPayload = (await sendDispatcherPayload(payload)) || deliveredAnyPayload;
       }
     }
     if (
@@ -502,16 +505,18 @@ export function createFollowupRunner(params: {
     ) {
       if (queued.currentInboundEventKind === "room_event") {
         logVerbose("followup queue: cross-channel failure notice suppressed for room_event");
-        return;
+        return deliveredAnyPayload;
       }
-      await sendDispatcherPayload({
-        text:
-          "Follow-up completed, but OpenClaw could not deliver it to the originating " +
-          "channel. The reply content was not forwarded to this channel to avoid " +
-          "cross-channel misdelivery.",
-        isError: true,
-      });
+      deliveredAnyPayload =
+        (await sendDispatcherPayload({
+          text:
+            "Follow-up completed, but OpenClaw could not deliver it to the originating " +
+            "channel. The reply content was not forwarded to this channel to avoid " +
+            "cross-channel misdelivery.",
+          isError: true,
+        })) || deliveredAnyPayload;
     }
+    return deliveredAnyPayload;
   };
 
   return async (queued: FollowupRun) => {
@@ -669,9 +674,9 @@ export function createFollowupRunner(params: {
       // bypasses the outer dispatcher that normally enforces sendPolicy.
       const sendRunPayloads: typeof sendFollowupPayloads = async (...args) => {
         if (sendPolicyDenied) {
-          return;
+          return false;
         }
-        await sendFollowupPayloads(...args);
+        return sendFollowupPayloads(...args);
       };
       const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
@@ -717,12 +722,12 @@ export function createFollowupRunner(params: {
         if (noticePayloads.length === 0) {
           return;
         }
-        await sendRunPayloads(noticePayloads, effectiveQueued, resolvedRun, {
-          kind: "block",
-          mirror: false,
-          runId,
-        });
-        didSendCompactionNoticePayload = true;
+        didSendCompactionNoticePayload =
+          (await sendRunPayloads(noticePayloads, effectiveQueued, resolvedRun, {
+            kind: "block",
+            mirror: false,
+            runId,
+          })) || didSendCompactionNoticePayload;
       };
       const notifyPreflightCompaction = shouldNotifyUserAboutCompaction(runtimeConfig)
         ? async (phase: CompactionNoticePhase) => {
