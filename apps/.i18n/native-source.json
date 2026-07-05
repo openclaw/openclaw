@@ -20115,7 +20115,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 709,
+      "line": 710,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "Running tools…",
       "surface": "apple",
@@ -20123,7 +20123,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 717,
+      "line": 718,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "\\(display.emoji) \\(display.label)",
       "surface": "apple",
