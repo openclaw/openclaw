@@ -667,4 +667,61 @@ describe("resolveSessionAuthProfileOverride", () => {
       expect(sessionStore[sessionKey]?.pinnedAt).toBeUndefined();
     });
   });
+
+  it("threads the requested model into cooldown checks so a model-scoped cooldown does not evict an otherwise-usable profile", async () => {
+    await withAuthState(async (state) => {
+      const agentDir = state.agentDir();
+      await fs.mkdir(agentDir, { recursive: true });
+      authStoreMocks.state.hasSource = true;
+      authStoreMocks.state.store = createAuthStoreWithProfiles({
+        profiles: {
+          [TEST_PRIMARY_PROFILE_ID]: {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-primary",
+          },
+          [TEST_SECONDARY_PROFILE_ID]: {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-secondary",
+          },
+        },
+        order: {
+          openai: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID],
+        },
+      });
+      // Only report cooldown for the primary profile when the caller asks
+      // about "gpt-other" - a different model than the one being requested.
+      authStoreMocks.isProfileInCooldown.mockImplementation(
+        (_store: AuthProfileStore, profileId: string, _now?: number, forModel?: string) =>
+          profileId === TEST_PRIMARY_PROFILE_ID && forModel === "gpt-other",
+      );
+
+      const sessionEntry: SessionEntry = {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+      };
+      const sessionStore = { "agent:main:main": sessionEntry };
+
+      const resolved = await resolveSessionAuthProfileOverride({
+        cfg: {} as OpenClawConfig,
+        provider: "openai",
+        agentDir,
+        sessionEntry,
+        sessionStore,
+        sessionKey: "agent:main:main",
+        storePath: undefined,
+        isNewSession: true,
+        model: "gpt-mine",
+      });
+
+      expect(resolved).toBe(TEST_PRIMARY_PROFILE_ID);
+      expect(authStoreMocks.isProfileInCooldown).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.any(String),
+        undefined,
+        "gpt-mine",
+      );
+    });
+  });
 });
