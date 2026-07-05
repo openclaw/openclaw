@@ -8,7 +8,8 @@ import { SettingsManager } from "../../src/agents/sessions/settings-manager.js";
 import { ModelRegistry } from "../../src/agents/sessions/model-registry.js";
 import { AuthStorage } from "../../src/agents/sessions/auth-storage.js";
 import { createExtensionRuntime } from "../../src/agents/sessions/extensions/loader.js";
-import type { LoadExtensionsResult, ResourceLoader } from "../../src/agents/sessions/extensions/types.js";
+import type { LoadExtensionsResult } from "../../src/agents/sessions/extensions/types.js";
+import type { ResourceLoader } from "../../src/agents/sessions/resource-loader.js";
 
 const testModel = {
   id: "test-model",
@@ -53,11 +54,11 @@ const { session } = await createAgentSession({
 // Capture stderr so the proof output is self-contained.
 const originalStderrWrite = process.stderr.write.bind(process.stderr);
 const stderrChunks: string[] = [];
-process.stderr.write = ((chunk: string | Uint8Array, ...args: unknown[]) => {
+process.stderr.write = (chunk: string | Uint8Array, ...args: unknown[]) => {
   const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
   stderrChunks.push(text);
   return originalStderrWrite(chunk, ...(args as never[]));
-}) as typeof process.stderr.write;
+};
 
 // Force the session abort() promise to reject to exercise the defensive catch.
 const originalAbort = session.abort.bind(session);
@@ -66,7 +67,7 @@ const originalAbort = session.abort.bind(session);
   throw new Error("simulated abort rejection");
 };
 
-const runner = (session as { currentExtensionRunner?: { abortFn?: () => void } }).currentExtensionRunner;
+const runner = (session as unknown as { currentExtensionRunner?: { abortFn?: () => void } }).currentExtensionRunner;
 if (!runner?.abortFn) {
   throw new Error("extension runner abortFn was not bound");
 }
@@ -77,7 +78,9 @@ console.log("Calling extension runtime abort callback with a rejecting session.a
 runner.abortFn();
 
 // Wait for the microtask queue to drain so the .catch() handler runs.
-await new Promise((resolve) => setTimeout(resolve, 100));
+await new Promise((resolve) => {
+  setTimeout(resolve, 100);
+});
 
 process.stderr.write = originalStderrWrite;
 

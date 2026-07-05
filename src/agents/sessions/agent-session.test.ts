@@ -2,8 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "./auth-storage.js";
 import { createExtensionRuntime } from "./extensions/loader.js";
-import type { LoadExtensionsResult, ResourceLoader } from "./extensions/types.js";
+import type { LoadExtensionsResult } from "./extensions/types.js";
 import { ModelRegistry } from "./model-registry.js";
+import type { ResourceLoader } from "./resource-loader.js";
 import { createAgentSession } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
@@ -47,11 +48,11 @@ describe("AgentSession", () => {
   beforeEach(() => {
     originalStderrWrite = process.stderr.write.bind(process.stderr);
     stderrChunks.length = 0;
-    process.stderr.write = ((chunk: string | Uint8Array, ...args: unknown[]) => {
+    process.stderr.write = (chunk: string | Uint8Array, ...args: unknown[]) => {
       const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
       stderrChunks.push(text);
       return originalStderrWrite(chunk, ...(args as never[]));
-    }) as typeof process.stderr.write;
+    };
   });
 
   afterEach(() => {
@@ -67,7 +68,7 @@ describe("AgentSession", () => {
       modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
     });
 
-    const runner = (session as { currentExtensionRunner?: { abortFn?: () => void } })
+    const runner = (session as unknown as { currentExtensionRunner?: { abortFn?: () => void } })
       .currentExtensionRunner;
     expect(runner?.abortFn).toBeTypeOf("function");
 
@@ -81,7 +82,9 @@ describe("AgentSession", () => {
     runner!.abortFn!();
 
     // Wait for the fire-and-forget promise catch handler to run.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
 
     const stderr = stderrChunks.join("");
     expect(stderr).toContain(
