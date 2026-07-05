@@ -9,7 +9,19 @@ import JSON5 from "json5";
 import { deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
 
 type RestoreEntry = { key: string; value: string | undefined };
+type InstallTestEnvOptions =
+  | { mode?: "live-aware"; loadProfileEnv?: boolean }
+  | { mode: "hermetic" };
 
+const LIVE_TEST_TRIGGER_ENV_KEYS = ["LIVE", "OPENCLAW_LIVE_TEST", "OPENCLAW_LIVE_GATEWAY"] as const;
+const HERMETIC_TEST_ENV_KEYS = [
+  ...LIVE_TEST_TRIGGER_ENV_KEYS,
+  "OPENCLAW_LIVE_USE_REAL_HOME",
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
+  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+  "OPENCLAW_HOME",
+] as const;
 const LIVE_EXTERNAL_AUTH_DIRS = [".claude/backups", ".gemini", ".minimax"] as const;
 const LIVE_EXTERNAL_AUTH_FILES = [
   ".claude.json",
@@ -149,6 +161,7 @@ function loadProfileEnv(homeDir = os.homedir()): void {
 
 function resolveRestoreEntries(): RestoreEntry[] {
   return [
+    ...HERMETIC_TEST_ENV_KEYS.map((key) => ({ key, value: process.env[key] })),
     { key: "OPENCLAW_TEST_FAST", value: process.env.OPENCLAW_TEST_FAST },
     {
       key: "OPENCLAW_STRICT_FAST_REPLY_CONFIG",
@@ -170,11 +183,6 @@ function resolveRestoreEntries(): RestoreEntry[] {
     { key: "XDG_CACHE_HOME", value: process.env.XDG_CACHE_HOME },
     { key: "OPENCLAW_STATE_DIR", value: process.env.OPENCLAW_STATE_DIR },
     { key: "OPENCLAW_CONFIG_PATH", value: process.env.OPENCLAW_CONFIG_PATH },
-    { key: "OPENCLAW_BUNDLED_PLUGINS_DIR", value: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR },
-    {
-      key: "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
-      value: process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR,
-    },
     { key: "OPENCLAW_GATEWAY_PORT", value: process.env.OPENCLAW_GATEWAY_PORT },
     { key: "OPENCLAW_BRIDGE_ENABLED", value: process.env.OPENCLAW_BRIDGE_ENABLED },
     { key: "OPENCLAW_BRIDGE_HOST", value: process.env.OPENCLAW_BRIDGE_HOST },
@@ -212,16 +220,6 @@ function createIsolatedTestHome(restore: RestoreEntry[]): {
   // Prefer deriving state dir from HOME so nested tests that change HOME also isolate correctly.
   deleteTestEnvValue("OPENCLAW_STATE_DIR");
   deleteTestEnvValue("OPENCLAW_AGENT_DIR");
-  // Deterministic bundled-plugin discovery: built checkouts prefer dist/extensions,
-  // which excludes externalized official plugins (e.g. qwen) whose manifests drive
-  // endpoint classification. Pin discovery to the source tree so tests behave like
-  // CI (no dist) regardless of local build state. Discovery tests manage this env
-  // themselves per case.
-  setTestEnvValue("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
-  setTestEnvValue(
-    "OPENCLAW_BUNDLED_PLUGINS_DIR",
-    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "extensions"),
-  );
   // Prefer test-controlled ports over developer overrides (avoid port collisions across tests/workers).
   deleteTestEnvValue("OPENCLAW_GATEWAY_PORT");
   deleteTestEnvValue("OPENCLAW_BRIDGE_ENABLED");
@@ -433,19 +431,18 @@ function stageLiveTestState(params: {
   restoreClaudeConfigFromBackupIfNeeded(params.tempHome);
 }
 
-export function installTestEnv(options?: { loadProfileEnv?: boolean }): {
+export function installTestEnv(options?: InstallTestEnvOptions): {
   cleanup: () => void;
   tempHome: string;
 } {
-  const live =
-    process.env.LIVE === "1" ||
-    process.env.OPENCLAW_LIVE_TEST === "1" ||
-    process.env.OPENCLAW_LIVE_GATEWAY === "1";
-  const allowRealHome = isTruthyEnvValue(process.env.OPENCLAW_LIVE_USE_REAL_HOME);
+  const hermetic = options?.mode === "hermetic";
+  const live = !hermetic && LIVE_TEST_TRIGGER_ENV_KEYS.some((key) => process.env[key] === "1");
+  const allowRealHome = !hermetic && isTruthyEnvValue(process.env.OPENCLAW_LIVE_USE_REAL_HOME);
   const realHome = process.env.HOME ?? os.homedir();
   const liveEnvSnapshot = { ...process.env };
 
-  const shouldLoadProfileEnv = options?.loadProfileEnv ?? (live || allowRealHome);
+  const requestedProfileLoad = options?.mode === "hermetic" ? false : options?.loadProfileEnv;
+  const shouldLoadProfileEnv = requestedProfileLoad ?? (live || allowRealHome);
   if (shouldLoadProfileEnv) {
     loadProfileEnv(realHome);
   }
@@ -457,14 +454,25 @@ export function installTestEnv(options?: { loadProfileEnv?: boolean }): {
   const restore = resolveRestoreEntries();
   const testEnv = createIsolatedTestHome(restore);
 
-  if (live) {
+  if (hermetic) {
+    for (const key of HERMETIC_TEST_ENV_KEYS) {
+      deleteTestEnvValue(key);
+    }
+    // Keep non-isolated workers on this checkout's manifests, never a caller's
+    // staged plugin tree or a sibling worktree resolved through shared node_modules.
+    setTestEnvValue("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
+    setTestEnvValue(
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "extensions"),
+    );
+  } else if (live) {
     stageLiveTestState({ env: liveEnvSnapshot, realHome, tempHome: testEnv.tempHome });
   }
 
   return testEnv;
 }
 
-export function withIsolatedTestHome(options?: { loadProfileEnv?: boolean }): {
+export function withIsolatedTestHome(options?: InstallTestEnvOptions): {
   cleanup: () => void;
   tempHome: string;
 } {

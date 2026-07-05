@@ -19,6 +19,8 @@ import {
 } from "./vitest/vitest.unit-fast-paths.mjs";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 
+const ENV_ISOLATION_SETUP_PATH = /[\\/]test[\\/]setup\.env\.ts$/u;
+
 function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable<T["test"]> {
   if (!config.test) {
     throw new Error("expected unit-fast vitest test config");
@@ -108,7 +110,7 @@ describe("unit-fast vitest lane", () => {
     expect(testConfig.runner).toBeUndefined();
     // Env isolation only: the fast shards install the isolated test home but
     // must not pull in the shared setup's module mocks.
-    expect(testConfig.setupFiles).toStrictEqual([expect.stringMatching(/test\/setup\.env\.ts$/u)]);
+    expect(testConfig.setupFiles).toStrictEqual([expect.stringMatching(ENV_ISOLATION_SETUP_PATH)]);
     expect(testConfig.include).toContain(
       "src/agents/agent-tools.deferred-followup-guidance.test.ts",
     );
@@ -212,9 +214,7 @@ describe("unit-fast vitest lane", () => {
     expect(timerConfig.include).toEqual(unitFastTimerTestFiles);
     expect(timerConfig.fileParallelism).toBe(false);
     expect(timerConfig.maxWorkers).toBe(1);
-    expect(timerConfig.setupFiles).toStrictEqual([
-      expect.stringMatching(/test\/setup\.env\.ts$/u),
-    ]);
+    expect(timerConfig.setupFiles).toStrictEqual([expect.stringMatching(ENV_ISOLATION_SETUP_PATH)]);
   });
 
   it("keeps broad audit candidates separate from automatically routed unit-fast tests", () => {

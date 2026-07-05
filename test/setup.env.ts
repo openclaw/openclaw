@@ -4,7 +4,7 @@
 // sees the developer's real ~/.openclaw (e.g. an openclaw.json key the branch
 // schema rejects deterministically fails schema-reading tests locally while CI
 // stays green).
-import { withIsolatedTestHome } from "./test-env.js";
+import { installTestEnv } from "./test-env.js";
 
 process.env.VITEST = "true";
 
@@ -17,7 +17,9 @@ const globalState = globalThis as typeof globalThis & {
 };
 
 if (!globalState[ENV_ISOLATION_SETUP]) {
-  const testEnv = withIsolatedTestHome();
+  // unit-fast is never a live lane, even when its parent shell exports live flags.
+  // Hermetic mode prevents real or staged credentials/config from entering the worker.
+  const testEnv = installTestEnv({ mode: "hermetic" });
   const handle: EnvIsolationHandle = {
     cleanup: () => {
       testEnv.cleanup();
