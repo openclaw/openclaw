@@ -2073,6 +2073,7 @@ describe("runAgentTurnWithFallback", () => {
       fallbackExhausted: true,
       fallbackProvider: probe.provider,
       fallbackModel: probe.model,
+      runResult: exhaustedResult,
     });
     expect(activeSessionStore[sessionKey]).toMatchObject({
       providerOverride: probe.fallbackProvider,
@@ -2140,7 +2141,7 @@ describe("runAgentTurnWithFallback", () => {
       }),
     );
 
-    expect(result.kind).toBe("success");
+    expect(result).toMatchObject({ kind: "success", runResult: terminalErrorResult });
     expect(retainFailureUntilCompleteMock).toHaveBeenCalledTimes(1);
     expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
     const lifecycleEvents = emitAgentEvent.mock.calls
@@ -2165,6 +2166,66 @@ describe("runAgentTurnWithFallback", () => {
       ),
     ).toBe(false);
     expect(JSON.stringify(lifecycleEvents)).not.toContain("raw provider detail");
+  });
+
+  it.each([
+    {
+      label: "exhausted",
+      outcome: "exhausted" as const,
+      attempts: [{ error: "missing tool result" }],
+      isHeartbeat: false,
+      expectedText: GENERIC_RUN_FAILURE_TEXT,
+    },
+    {
+      label: "completed",
+      outcome: "completed" as const,
+      attempts: [],
+      isHeartbeat: false,
+      expectedText: GENERIC_RUN_FAILURE_TEXT,
+    },
+    {
+      label: "heartbeat",
+      outcome: "completed" as const,
+      attempts: [],
+      isHeartbeat: true,
+      expectedText: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+    },
+  ])("surfaces an empty $label terminal result through the normal reply path", async (testCase) => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        error: {
+          kind: "tool_result_mismatch",
+          message: "Agent run reached a terminal error before reply delivery.",
+        },
+      },
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      outcome: testCase.outcome,
+      result: await params.run("anthropic", "claude"),
+      provider: "anthropic",
+      model: "claude",
+      attempts: testCase.attempts,
+    }));
+    const { replyOperation, failMock } = createMockReplyOperation();
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ replyOperation }),
+      isHeartbeat: testCase.isHeartbeat,
+    });
+
+    expect(result).toMatchObject({
+      kind: "success",
+      terminalFailurePayload: {
+        text: testCase.expectedText,
+        isError: true,
+      },
+      runResult: {
+        payloads: [],
+      },
+    });
+    expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
   });
 
   it("reports exhausted CLI results without a success lifecycle terminal", async () => {

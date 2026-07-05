@@ -1774,6 +1774,7 @@ export async function runReplyAgent(params: {
       fallbackAttempts,
       directlySentBlockKeys,
       directlySentBlockPayloads,
+      terminalFailurePayload,
     } = runOutcome;
     const { autoCompactionCount } = runOutcome;
     let { didLogHeartbeatStrip } = runOutcome;
@@ -1991,6 +1992,13 @@ export async function runReplyAgent(params: {
     const committedMessagingToolSourceReplyDelivery =
       runResult.didDeliverSourceReplyViaMessageTool === true ||
       hasVisibleAgentPayload({ payloads: runResult.messagingToolSourceReplyPayloads });
+    if (
+      terminalFailurePayload &&
+      !successfulSideEffectDelivery &&
+      !committedMessagingToolSourceReplyDelivery
+    ) {
+      payloadArray.push(terminalFailurePayload);
+    }
     if (
       opts?.sourceReplyDeliveryMode === "message_tool_only" &&
       committedMessagingToolSourceReplyDelivery
