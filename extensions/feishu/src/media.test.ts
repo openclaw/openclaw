@@ -548,7 +548,9 @@ describe("sendMediaFeishu msg_type routing", () => {
   });
 
   it("falls back to top-level file sends for thrown withdrawn reply errors", async () => {
-    messageReplyMock.mockRejectedValueOnce(Object.assign(new Error("request failed"), { code: 230011 }));
+    messageReplyMock.mockRejectedValueOnce(
+      Object.assign(new Error("request failed"), { code: 230011 }),
+    );
     messageCreateMock.mockResolvedValueOnce({
       code: 0,
       data: { message_id: "msg_file_fallback" },
