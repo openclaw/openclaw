@@ -21,7 +21,7 @@ This directory owns local tooling, script wrappers, and generated-artifact helpe
 ## PR Prepare Gates
 
 - `scripts/pr prepare-gates` holds the heavy-check lock for its whole local gate block (`scripts/pr-gates-lock.mjs`), so concurrent gate runs across `.worktrees` queue as units instead of dying on child lock timeouts or vitest no-output watchdog kills.
-- `OPENCLAW_PR_GATES_REMOTE=testbox` runs the full-suite `pnpm test` gate on a Blacksmith Testbox through `scripts/crabbox-wrapper.mjs` (same delegation as `check:changed`); `pnpm build`/`pnpm check` stay local. The `tbx_` lease id and Actions run URL land in `.local/gates.env` (`REMOTE_GATES_*`) and `.local/prep.md`. Use it when a loaded host makes the local 88-shard run stall-kill; default stays local.
+- `OPENCLAW_PR_GATES_REMOTE=testbox` runs the full-suite `pnpm test` gate on a Blacksmith Testbox through `scripts/crabbox-wrapper.mjs` (same delegation as `check:changed`); `pnpm build`/`pnpm check` stay local. The `tbx_` lease id and Actions run URL land in `.local/gates.env` (`REMOTE_GATES_*`) and `.local/prep.md`. Use it for reviewed trusted code when a loaded host makes the local 88-shard run stall-kill; contributor/fork code stays on secretless CI or sanitized AWS unless a maintainer explicitly approves credentialed execution.
 
 ## Generated Outputs
 

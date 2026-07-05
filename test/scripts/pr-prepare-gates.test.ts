@@ -76,6 +76,54 @@ function spawnGateLockHolder(repoDir: string, statusFile: string, env: NodeJS.Pr
   return child;
 }
 
+function makeRetryRepo(): { repoDir: string; stubBin: string; headSha: string } {
+  const dir = makeTempDir("openclaw-pr-gates-retry-");
+  const repoDir = join(dir, "repo");
+  mkdirSync(repoDir);
+  for (const args of [
+    ["init", "-q"],
+    [
+      "-c",
+      "user.name=t",
+      "-c",
+      "user.email=t@example.com",
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "retry head",
+    ],
+  ]) {
+    const result = spawnSync("git", args, { cwd: repoDir, encoding: "utf8" });
+    expect(result.status).toBe(0);
+  }
+  mkdirSync(join(repoDir, ".local"));
+
+  const stubBin = join(dir, "bin");
+  mkdirSync(stubBin);
+  writeFileSync(join(stubBin, "pnpm"), "#!/bin/sh\nexit 0\n");
+  chmodSync(join(stubBin, "pnpm"), 0o755);
+  // Route the crabbox wrapper to a canned timing report; everything else
+  // (the gate lock helper) still needs the real node.
+  writeFileSync(
+    join(stubBin, "node"),
+    [
+      "#!/bin/sh",
+      'case "$2" in',
+      `run) printf '{"provider":"blacksmith-testbox","leaseId":"tbx_retry","exitCode":0,"runStatus":"succeeded","actionsRunUrl":"https://example.test/runs/7"}\\n' >&2; exit 0;;`,
+      `*) exec '${process.execPath}' "$@";;`,
+      "esac",
+    ].join("\n"),
+  );
+  chmodSync(join(stubBin, "node"), 0o755);
+
+  const headSha = spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd: repoDir,
+    encoding: "utf8",
+  }).stdout.trim();
+  return { repoDir, stubBin, headSha };
+}
+
 async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -178,7 +226,7 @@ describe("remote testbox gate delegation", () => {
         "--blacksmith-ref main " +
         "--idle-timeout 90m --ttl 240m --timing-json " +
         "--label pr-424242-gates " +
-        "-- env CI=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false corepack pnpm test",
+        "-- env CI=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=install corepack pnpm test",
     );
   });
 
@@ -189,17 +237,22 @@ describe("remote testbox gate delegation", () => {
       log,
       [
         "provider=blacksmith-testbox id=tbx_first sync=delegated auth=blacksmith",
+        "GitHub Actions run: https://github.com/openclaw/openclaw/actions/runs/1234",
         '{"not":"a stamp"}',
         "not json at all",
         '{"provider":"blacksmith-testbox","leaseId":"tbx_first","exitCode":1,"runStatus":"failed"}',
-        '{"provider":"blacksmith-testbox","leaseId":"tbx_final","exitCode":0,"runStatus":"passed","actionsRunUrl":"https://github.com/openclaw/openclaw/actions/runs/1"}',
+        '{"provider":"blacksmith-testbox","leaseId":"tbx_final","exitCode":0,"runStatus":"passed"}',
         "",
       ].join("\n"),
     );
 
-    const result = runGatesBash(`require_remote_testbox_gate_stamp '${log}' | jq -r .leaseId`);
+    const result = runGatesBash(
+      `require_remote_testbox_gate_stamp '${log}' | jq -r '[.leaseId, .actionsRunUrl] | @tsv'`,
+    );
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("tbx_final");
+    expect(result.stdout.trim()).toBe(
+      "tbx_final\thttps://github.com/openclaw/openclaw/actions/runs/1234",
+    );
   });
 
   it("fails when the gate log has no successful stamp", () => {
@@ -217,54 +270,6 @@ describe("remote testbox gate delegation", () => {
 });
 
 describe("lease-retry gate stamp refresh", () => {
-  function makeRetryRepo(): { repoDir: string; stubBin: string; headSha: string } {
-    const dir = makeTempDir("openclaw-pr-gates-retry-");
-    const repoDir = join(dir, "repo");
-    mkdirSync(repoDir);
-    for (const args of [
-      ["init", "-q"],
-      [
-        "-c",
-        "user.name=t",
-        "-c",
-        "user.email=t@example.com",
-        "commit",
-        "-q",
-        "--allow-empty",
-        "-m",
-        "retry head",
-      ],
-    ]) {
-      const result = spawnSync("git", args, { cwd: repoDir, encoding: "utf8" });
-      expect(result.status).toBe(0);
-    }
-    mkdirSync(join(repoDir, ".local"));
-
-    const stubBin = join(dir, "bin");
-    mkdirSync(stubBin);
-    writeFileSync(join(stubBin, "pnpm"), "#!/bin/sh\nexit 0\n");
-    chmodSync(join(stubBin, "pnpm"), 0o755);
-    // Route the crabbox wrapper to a canned timing report; everything else
-    // (the gate lock helper) still needs the real node.
-    writeFileSync(
-      join(stubBin, "node"),
-      [
-        "#!/bin/sh",
-        'case "$2" in',
-        `run) printf '{"provider":"blacksmith-testbox","leaseId":"tbx_retry","exitCode":0,"runStatus":"succeeded","actionsRunUrl":"https://example.test/runs/7"}\\n' >&2; exit 0;;`,
-        `*) exec '${process.execPath}' "$@";;`,
-        "esac",
-      ].join("\n"),
-    );
-    chmodSync(join(stubBin, "node"), 0o755);
-
-    const headSha = spawnSync("git", ["rev-parse", "HEAD"], {
-      cwd: repoDir,
-      encoding: "utf8",
-    }).stdout.trim();
-    return { repoDir, stubBin, headSha };
-  }
-
   it("rewrites gates.env with the fresh remote stamp for the rebased head", () => {
     const { repoDir, stubBin, headSha } = makeRetryRepo();
     const result = runGatesBash(
@@ -316,6 +321,50 @@ describe("lease-retry gate stamp refresh", () => {
     expect(result.stdout).toContain("GATES_MODE=full");
     expect(result.stdout).toContain("REMOTE_GATES_LEASE_ID=''");
     expect(result.stdout).toContain(`FULL_GATES_HEAD_SHA=${headSha}`);
+    expect(result.stdout).not.toContain("tbx_stale");
+  });
+});
+
+describe("prepare gate stamp transitions", () => {
+  it("clears remote stamps when hosted exact-head gates replace remote proof", () => {
+    const { repoDir } = makeRetryRepo();
+    spawnSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: repoDir });
+    writeFileSync(join(repoDir, "changed.ts"), "export {};\n");
+    spawnSync("git", ["add", "changed.ts"], { cwd: repoDir });
+    spawnSync(
+      "git",
+      ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "change"],
+      { cwd: repoDir },
+    );
+    writeFileSync(join(repoDir, ".local", "pr-meta.env"), "PR_AUTHOR=steipete\n");
+    writeFileSync(
+      join(repoDir, ".local", "gates.env"),
+      [
+        "LAST_VERIFIED_HEAD_SHA=deadbeef",
+        "FULL_GATES_HEAD_SHA=deadbeef",
+        "REMOTE_GATES_PROVIDER=blacksmith-testbox",
+        "REMOTE_GATES_LEASE_ID=tbx_stale",
+        "REMOTE_GATES_RUN_URL=https://example.test/runs/1",
+        "",
+      ].join("\n"),
+    );
+
+    const result = runGatesBash(
+      [
+        "enter_worktree() { :; }",
+        "checkout_prep_branch() { :; }",
+        "path_is_docsish() { return 1; }",
+        "changelog_required_for_changed_files() { return 1; }",
+        "run_hosted_prepare_gates() { :; }",
+        "prepare_gates 4242",
+        "cat .local/gates.env",
+      ].join("\n"),
+      { cwd: repoDir, env: { OPENCLAW_TESTBOX: "1" } },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("GATES_MODE=hosted_exact_head");
+    expect(result.stdout).toContain("REMOTE_GATES_LEASE_ID=''");
     expect(result.stdout).not.toContain("tbx_stale");
   });
 });

@@ -60,7 +60,11 @@ acquire_pr_gates_lock() {
   PR_GATES_LOCK_STATUS_FILE=$(mktemp)
   rm -f "$PR_GATES_LOCK_STATUS_FILE"
   # Use the canonical helper: the PR branch under test may predate it.
-  node "$script_parent_dir/pr-gates-lock.mjs" --status-file "$PR_GATES_LOCK_STATUS_FILE" &
+  local scripts_dir="${script_parent_dir:-}"
+  if [ -z "$scripts_dir" ]; then
+    scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+  fi
+  node "$scripts_dir/pr-gates-lock.mjs" --status-file "$PR_GATES_LOCK_STATUS_FILE" &
   PR_GATES_LOCK_PID=$!
   while [ ! -s "$PR_GATES_LOCK_STATUS_FILE" ]; do
     if ! kill -0 "$PR_GATES_LOCK_PID" 2>/dev/null; then
@@ -108,7 +112,7 @@ run_remote_testbox_full_test_gate() {
     --ttl 240m \
     --timing-json \
     --label "$lease_label" \
-    -- env CI=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false corepack pnpm test
+    -- env CI=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=install corepack pnpm test
 }
 
 read_remote_testbox_gate_stamp() {
@@ -122,6 +126,15 @@ read_remote_testbox_gate_stamp() {
   ' "$log_file" | tail -n 1
 }
 
+read_remote_testbox_gate_run_url() {
+  # The delegated timing report currently omits actionsRunUrl, while the same
+  # run prints the canonical Actions URL as a separate line.
+  local log_file="$1"
+  jq -Rr '
+    try capture("(?<url>https://github\\.com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/actions/runs/[0-9]+)").url catch empty
+  ' "$log_file" | tail -n 1
+}
+
 require_remote_testbox_gate_stamp() {
   # Runs inside $(...): report to stderr and fail the substitution so set -e
   # aborts the caller with the message visible.
@@ -131,6 +144,11 @@ require_remote_testbox_gate_stamp() {
   if [ -z "$stamp" ]; then
     echo "Remote testbox gate passed but no successful blacksmith-testbox timing stamp was found in $log_file." >&2
     return 1
+  fi
+  local actions_run_url
+  actions_run_url=$(read_remote_testbox_gate_run_url "$log_file")
+  if [ -n "$actions_run_url" ] && [ "$(printf '%s\n' "$stamp" | jq -r '.actionsRunUrl // empty')" = "" ]; then
+    stamp=$(printf '%s\n' "$stamp" | jq -c --arg actionsRunUrl "$actions_run_url" '. + {actionsRunUrl: $actionsRunUrl}')
   fi
   printf '%s\n' "$stamp"
 }
@@ -337,6 +355,9 @@ prepare_gates() {
 
   if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
     gates_mode="hosted_exact_head"
+    remote_gates_provider=""
+    remote_gates_lease_id=""
+    remote_gates_run_url=""
     if [ "$changelog_only" = "true" ]; then
       run_quiet_logged "git diff --check" ".local/gates-diff-check.log" git diff --check origin/main...HEAD
     fi
