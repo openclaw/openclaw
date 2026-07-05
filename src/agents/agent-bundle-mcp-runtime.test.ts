@@ -584,6 +584,18 @@ describe("session MCP runtime", () => {
     expect(dynamicRefValidator(1).valid).toBe(false);
   });
 
+  it("attributes draft-2020-12 compiler failures to the MCP schema", () => {
+    expect(() =>
+      createBundleMcpJsonSchemaValidator().getValidator({
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        properties: {
+          value: { type: "string", pattern: "[" },
+        },
+      }),
+    ).toThrow("Invalid MCP draft-2020-12 JSON Schema: Invalid regular expression");
+  });
+
   it("compiles draft-2020-12 patterns with redundant unicode-invalid escapes", () => {
     const validator = createBundleMcpJsonSchemaValidator().getValidator({
       $schema: "https://json-schema.org/draft/2020-12/schema",
