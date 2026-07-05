@@ -98,9 +98,11 @@ export function execDockerRaw(
       }
     }
 
+    child.stdout?.on("error", () => {});
     child.stdout?.on("data", (chunk) => {
       stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
+    child.stderr?.on("error", () => {});
     child.stderr?.on("data", (chunk) => {
       stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
@@ -134,7 +136,7 @@ export function execDockerRaw(
       const stdout = Buffer.concat(stdoutChunks);
       const stderr = Buffer.concat(stderrChunks);
       if (aborted || signal?.aborted) {
-      reject(createAbortError("Aborted"));
+        reject(createAbortError("Aborted"));
         return;
       }
       const exitCode = code ?? 0;
