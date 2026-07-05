@@ -314,7 +314,7 @@ function loadAllowlist(rootDir, fsImpl) {
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
-    throw new Error(`${ALLOWLIST_FILE} is not valid JSON: ${String(error)}`);
+    throw new Error(`${ALLOWLIST_FILE} is not valid JSON: ${String(error)}`, { cause: error });
   }
   for (const client of ["ios", "android"]) {
     if (typeof parsed[client] !== "object" || parsed[client] === null) {
