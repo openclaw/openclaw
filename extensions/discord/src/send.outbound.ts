@@ -359,7 +359,7 @@ export async function sendMessageDiscord(
     await opts.onDeliveryResult?.(
       toDiscordSendResult(progressResult, channelId, {
         kind,
-        replyToId: opts.replyTo,
+        replyToId: typeof opts.replyTo === "string" ? opts.replyTo : undefined,
       }),
     );
   };
@@ -384,6 +384,7 @@ export async function sendMessageDiscord(
         opts.silent,
         suppressEmbeds,
         textLimit,
+        reportResult,
       );
     } else if (mediaUrls.length === 1) {
       result = await sendDiscordMedia(

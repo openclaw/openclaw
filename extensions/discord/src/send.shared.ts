@@ -404,6 +404,7 @@ async function sendDiscordMedia(
     silent,
     suppressEmbeds,
     maxChars,
+    onResult,
   );
 }
 
@@ -467,6 +468,7 @@ async function sendDiscordMediaBatch(
   silent?: boolean,
   suppressEmbeds?: boolean,
   maxChars?: number,
+  onResult?: DiscordSendProgress,
 ) {
   const normalizedMediaUrls = normalizeStringEntries(mediaUrls);
   if (normalizedMediaUrls.length === 0) {
