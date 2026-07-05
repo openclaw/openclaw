@@ -762,9 +762,9 @@ export function createChannelIngressQueue<
     ).rows;
     let recovered = 0;
     for (const row of claimedRows) {
-      const claim = claimedRecord<TPayload, TMetadata>(row);
-      if (claim === null) {
-        await runOpenClawStateWriteTransaction(
+      const claimRec = claimedRecord<TPayload, TMetadata>(row);
+      if (claimRec === null) {
+        runOpenClawStateWriteTransaction(
           (tx) => {
             executeSqliteQuerySync(
               tx.db,
@@ -786,10 +786,10 @@ export function createChannelIngressQueue<
         recovered += 1;
         continue;
       }
-      if (recoverOptions?.shouldRecover && !(await recoverOptions.shouldRecover(claim))) {
+      if (recoverOptions?.shouldRecover && !(await recoverOptions.shouldRecover(claimRec))) {
         continue;
       }
-      if (await releaseClaimIfStillStale(claim, { cutoff, releasedAt: current })) {
+      if (await releaseClaimIfStillStale(claimRec, { cutoff, releasedAt: current })) {
         recovered += 1;
       }
     }
