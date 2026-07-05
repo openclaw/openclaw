@@ -47,10 +47,9 @@ function createDiscordUnknownPayloadResult(target: string) {
 function resolveDiscordDeliveryOptions(
   ctx: DiscordOutboundPayloadContext,
   sendContext: DiscordPayloadSendContext,
-  options?: { replyTo?: string },
 ) {
   return {
-    replyTo: options?.replyTo ?? sendContext.resolveReplyTo(),
+    replyTo: sendContext.resolveReplyTo(),
     accountId: ctx.accountId ?? undefined,
     silent: ctx.silent ?? undefined,
     cfg: ctx.cfg,
@@ -60,10 +59,9 @@ function resolveDiscordDeliveryOptions(
 function resolveDiscordFormattedDeliveryOptions(
   ctx: DiscordOutboundPayloadContext,
   sendContext: DiscordPayloadSendContext,
-  options?: { replyTo?: string },
 ) {
   return {
-    ...resolveDiscordDeliveryOptions(ctx, sendContext, options),
+    ...resolveDiscordDeliveryOptions(ctx, sendContext),
     ...sendContext.formatting,
   };
 }
@@ -99,7 +97,7 @@ export async function sendDiscordOutboundPayload(params: {
     // Capture before helper calls consume implicit single-use reply targets.
     const voiceReplyTo = sendContext.resolveReplyTo();
     let deliveredVoice = false;
-    let lastResult;
+    let lastResult: Awaited<ReturnType<DiscordPayloadSendContext["send"]>>;
     try {
       lastResult = await sendContext.withRetry(
         async () =>
@@ -109,7 +107,6 @@ export async function sendDiscordOutboundPayload(params: {
           }),
       );
       deliveredVoice = true;
-      await ctx.onDeliveryResult?.(attachChannelToResult("discord", lastResult));
     } catch (err) {
       const supplement = getReplyPayloadTtsSupplement(payload);
       const visibleFallbackText = payload.text?.trim() ? payload.text : undefined;
@@ -134,6 +131,9 @@ export async function sendDiscordOutboundPayload(params: {
             }),
         );
       }
+    }
+    if (deliveredVoice) {
+      await ctx.onDeliveryResult?.(attachChannelToResult("discord", lastResult));
     }
     if (deliveredVoice && payload.text?.trim()) {
       lastResult = await sendContext.withRetry(

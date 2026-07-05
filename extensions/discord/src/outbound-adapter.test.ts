@@ -484,6 +484,28 @@ describe("discordOutbound", () => {
     });
   });
 
+  it("does not treat delivery progress failures as voice delivery failures", async () => {
+    await expect(
+      discordOutbound.sendPayload?.({
+        cfg: {},
+        to: "channel:123456",
+        text: "",
+        payload: {
+          text: "voice note",
+          mediaUrls: ["https://example.com/voice.ogg"],
+          audioAsVoice: true,
+        },
+        accountId: "default",
+        onDeliveryResult: async () => {
+          throw new Error("progress unavailable");
+        },
+      }),
+    ).rejects.toThrow("progress unavailable");
+
+    expect(hoisted.sendVoiceMessageDiscordMock).toHaveBeenCalledOnce();
+    expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
+  });
+
   it("keeps replyToId on every internal audioAsVoice send when replyToMode is all", async () => {
     await discordOutbound.sendPayload?.({
       cfg: {},
