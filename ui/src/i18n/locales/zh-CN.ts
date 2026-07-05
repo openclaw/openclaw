@@ -1424,6 +1424,7 @@ export const zh_CN: TranslationMap = {
         summary: "会话上下文使用情况：{used} / {limit}（{pct}%）",
         contextWindow: "上下文窗口",
         latestRunTokens: "最新运行令牌",
+        estimatedCost: "预估成本",
       },
       dismissTalkError: "忽略 Talk 错误",
       startTalk: "开始 Talk",

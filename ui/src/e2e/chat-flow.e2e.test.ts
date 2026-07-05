@@ -252,6 +252,23 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     });
     const page = await context.newPage();
     await installMockGateway(page, {
+      historyMessages: [
+        { role: "user", content: "Show current usage", timestamp: Date.now() - 1_000 },
+        {
+          role: "assistant",
+          content: "Usage ready.",
+          cost: {
+            input: 0.003456,
+            output: 0.018,
+            cacheRead: 0.0015,
+            cacheWrite: 0.0005,
+            total: 0.023456,
+          },
+          model: "gpt-5.5",
+          provider: "openai",
+          timestamp: Date.now(),
+        },
+      ],
       methodResponses: {
         "sessions.list": {
           count: 1,
@@ -264,10 +281,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           sessions: [
             {
               contextTokens: 200_000,
+              estimatedCostUsd: 0.023456,
               inputTokens: 757_300,
               key: "main",
               kind: "direct",
               model: "gpt-5.5",
+              modelProvider: "openai",
               outputTokens: 42_300,
               totalTokens: 46_000,
               updatedAt: Date.now(),
@@ -289,6 +308,14 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await expect.poll(() => popover.textContent()).toContain("46k / 200k · 23%");
       await expect.poll(() => popover.textContent()).toContain("757.3k");
       await expect.poll(() => popover.textContent()).toContain("42.3k");
+      await expect.poll(() => popover.textContent()).toContain("Est. cost");
+      await expect.poll(() => popover.textContent()).toContain("$0.023");
+      await expect.poll(() => popover.textContent()).toContain("Cost by Type");
+      await expect.poll(() => popover.textContent()).toContain("$0.0035");
+      await expect.poll(() => popover.textContent()).toContain("$0.018");
+      await expect.poll(() => popover.textContent()).toContain("$0.0015");
+      await expect.poll(() => popover.textContent()).toContain("$0.0005");
+      await expect.poll(() => popover.textContent()).toContain("openai");
       await expect.poll(() => popover.textContent()).toContain("gpt-5.5");
 
       await page.keyboard.press("Escape");

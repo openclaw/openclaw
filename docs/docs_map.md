@@ -4821,6 +4821,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /platforms/android
 - Headings:
   - H2: Support snapshot
+  - H2: Mirror and control Android from a remote Mac
+  - H3: Before you begin
+  - H3: Enable ADB over TCP
+  - H3: Allow only the controller Mac
+  - H3: Connect and start mirroring
+  - H3: Troubleshooting
   - H2: Connection runbook
   - H3: Prerequisites
   - H3: 1. Start the Gateway

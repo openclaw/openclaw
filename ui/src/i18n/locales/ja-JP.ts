@@ -1467,6 +1467,7 @@ export const ja_JP: TranslationMap = {
         summary: "セッションのコンテキスト使用量: {used}/{limit} ({pct}%)",
         contextWindow: "コンテキストウィンドウ",
         latestRunTokens: "最新実行のトークン",
+        estimatedCost: "推定コスト",
       },
       dismissTalkError: "Talkエラーを閉じる",
       startTalk: "Start Talk",

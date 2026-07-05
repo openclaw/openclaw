@@ -1461,6 +1461,7 @@ export const id: TranslationMap = {
         summary: "Penggunaan konteks sesi: {used} dari {limit} ({pct}%)",
         contextWindow: "Jendela konteks",
         latestRunTokens: "Token eksekusi terbaru",
+        estimatedCost: "Perk. biaya",
       },
       dismissTalkError: "Tutup error Talk",
       startTalk: "Start Talk",
