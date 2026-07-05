@@ -2370,6 +2370,9 @@ async function runAgentTurnWithFallbackInternal(
                     await params.opts.onPartialReply({ text: textForTyping });
                   },
                   onReasoningText: createCliReasoningStreamBridge(params.opts?.onReasoningStream),
+                  onReasoningProgress: async (payload) => {
+                    await params.opts?.onReasoningProgress?.(payload);
+                  },
                   onToolEvent: async (payload) => {
                     await cliToolSummaryTracker.noteToolEvent(payload);
                     if (payload.phase === "result") {

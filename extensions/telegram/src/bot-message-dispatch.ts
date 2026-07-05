@@ -394,6 +394,19 @@ function formatTelegramProgressLine(text: string): string {
     : formatProgressAsMarkdownCode(text);
 }
 
+function buildTelegramThinkingProgressLine(progressTokens: number): ChannelProgressDraftLine {
+  const label = `Thinking… (~${Math.round(progressTokens)} tokens)`;
+  const text = `🧠 ${label}`;
+  return {
+    id: "reasoning:token-progress",
+    kind: "item",
+    icon: "🧠",
+    label,
+    text,
+    prefix: false,
+  };
+}
+
 function escapeTelegramProgressHtml(text: string): string {
   return text
     .replaceAll("&", "&amp;")
@@ -2631,6 +2644,15 @@ export const dispatchTelegramMessage = async ({
                             await pushStreamReasoningProgress(payload);
                           })
                       : undefined,
+                  onReasoningProgress: answerLane.stream
+                    ? (payload) =>
+                        enqueueDraftLaneEvent(async () => {
+                          await pushStreamToolProgress(
+                            buildTelegramThinkingProgressLine(payload.progressTokens),
+                            { startImmediately: true },
+                          );
+                        })
+                    : undefined,
                   onAssistantMessageStart: answerLane.stream
                     ? () =>
                         enqueueDraftLaneEvent(async () => {

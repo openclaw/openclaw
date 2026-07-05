@@ -1023,6 +1023,9 @@ export function createFollowupRunner(params: {
                   onAgentRunStart: () => opts?.onAgentRunStart?.(runId),
                   suppressAssistantBridge: run.silentExpected,
                   onReasoningText: createCliReasoningStreamBridge(opts?.onReasoningStream),
+                  onReasoningProgress: async (payload) => {
+                    await opts?.onReasoningProgress?.(payload);
+                  },
                   onToolEvent: async (payload) => {
                     await cliToolSummaryTracker.noteToolEvent(payload);
                     if (payload.phase === "result") {
