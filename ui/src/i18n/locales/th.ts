@@ -1195,6 +1195,14 @@ export const th: TranslationMap = {
       byType: "ตามประเภท",
       tokensTitle: "การใช้โทเค็นรายวัน",
       costTitle: "ค่าใช้จ่ายรายวัน",
+      compressedScaleHint: "Square-root scale keeps low-usage days visible.",
+    },
+    costWindows: {
+      title: "Cost Windows",
+      subtitle: "Calendar windows ending {date}",
+      selectedRange: "Selected Range",
+      lastDays: "Last {count} days",
+      perDay: "/ day",
     },
     breakdown: {
       output: "เอาต์พุต",
@@ -1240,6 +1248,7 @@ export const th: TranslationMap = {
       cached: "แคชแล้ว",
       prompt: "พรอมป์ต์",
       calls: "การเรียก",
+      costShare: "{percent}% of cost",
       topModels: "โมเดลยอดนิยม",
       topProviders: "ผู้ให้บริการยอดนิยม",
       topTools: "Tool ยอดนิยม",

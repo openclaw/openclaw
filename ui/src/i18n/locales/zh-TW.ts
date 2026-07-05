@@ -1194,6 +1194,14 @@ export const zh_TW: TranslationMap = {
       byType: "依類型",
       tokensTitle: "每日 Token 使用量",
       costTitle: "每日成本",
+      compressedScaleHint: "Square-root scale keeps low-usage days visible.",
+    },
+    costWindows: {
+      title: "Cost Windows",
+      subtitle: "Calendar windows ending {date}",
+      selectedRange: "Selected Range",
+      lastDays: "Last {count} days",
+      perDay: "/ day",
     },
     breakdown: {
       output: "輸出",
@@ -1239,6 +1247,7 @@ export const zh_TW: TranslationMap = {
       cached: "已快取",
       prompt: "提示",
       calls: "呼叫",
+      costShare: "{percent}% of cost",
       topModels: "熱門模型",
       topProviders: "熱門提供者",
       topTools: "熱門工具",

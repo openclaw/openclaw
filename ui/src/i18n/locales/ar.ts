@@ -1201,6 +1201,14 @@ export const ar: TranslationMap = {
       byType: "حسب النوع",
       tokensTitle: "استخدام الرموز اليومي",
       costTitle: "التكلفة اليومية",
+      compressedScaleHint: "Square-root scale keeps low-usage days visible.",
+    },
+    costWindows: {
+      title: "Cost Windows",
+      subtitle: "Calendar windows ending {date}",
+      selectedRange: "Selected Range",
+      lastDays: "Last {count} days",
+      perDay: "/ day",
     },
     breakdown: {
       output: "المخرجات",
@@ -1247,6 +1255,7 @@ export const ar: TranslationMap = {
       cached: "مخزن مؤقتًا",
       prompt: "المطالبة",
       calls: "الاستدعاءات",
+      costShare: "{percent}% of cost",
       topModels: "أهم النماذج",
       topProviders: "أهم المزودين",
       topTools: "أهم الأدوات",

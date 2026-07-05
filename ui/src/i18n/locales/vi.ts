@@ -1206,6 +1206,14 @@ export const vi: TranslationMap = {
       byType: "Theo loại",
       tokensTitle: "Mức sử dụng token hằng ngày",
       costTitle: "Chi phí hằng ngày",
+      compressedScaleHint: "Square-root scale keeps low-usage days visible.",
+    },
+    costWindows: {
+      title: "Cost Windows",
+      subtitle: "Calendar windows ending {date}",
+      selectedRange: "Selected Range",
+      lastDays: "Last {count} days",
+      perDay: "/ day",
     },
     breakdown: {
       output: "Đầu ra",
@@ -1253,6 +1261,7 @@ export const vi: TranslationMap = {
       cached: "đã lưu đệm",
       prompt: "prompt",
       calls: "lượt gọi",
+      costShare: "{percent}% of cost",
       topModels: "Mô hình hàng đầu",
       topProviders: "Nhà cung cấp hàng đầu",
       topTools: "Công cụ hàng đầu",

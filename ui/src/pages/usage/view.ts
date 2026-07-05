@@ -37,6 +37,7 @@ import type {
 import { renderSessionDetailPanel } from "./view-details.ts";
 import {
   renderCostBreakdownCompact,
+  renderCostWindowComparison,
   renderDailyChartCompact,
   renderFilterChips,
   renderSessionsCard,
@@ -792,6 +793,9 @@ export function renderUsage(props: UsageProps) {
               insightAggregates,
               insightStats,
               hasMissingCost,
+              // Day totals are exact daily buckets; category rollups remain full-session totals.
+              // Hide shares instead of mixing those scopes into percentages above 100%.
+              filters.selectedDays.length === 0,
               buildPeakErrorHours(aggregateSessions, filters.timeZone),
               displaySessionCount,
               totalSessions,
@@ -806,6 +810,7 @@ export function renderUsage(props: UsageProps) {
             <div class="usage-grid">
               <div class="usage-grid-column">
                 <div class="card usage-left-card">
+                  ${renderCostWindowComparison(data.costDaily, filters.startDate, filters.endDate)}
                   ${renderDailyChartCompact(
                     filteredDaily,
                     filters.selectedDays,

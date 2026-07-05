@@ -1214,6 +1214,14 @@ export const uk: TranslationMap = {
       byType: "За типом",
       tokensTitle: "Щоденне використання токенів",
       costTitle: "Щоденна вартість",
+      compressedScaleHint: "Square-root scale keeps low-usage days visible.",
+    },
+    costWindows: {
+      title: "Cost Windows",
+      subtitle: "Calendar windows ending {date}",
+      selectedRange: "Selected Range",
+      lastDays: "Last {count} days",
+      perDay: "/ day",
     },
     breakdown: {
       output: "Вивід",
@@ -1260,6 +1268,7 @@ export const uk: TranslationMap = {
       cached: "кешовано",
       prompt: "запит",
       calls: "виклики",
+      costShare: "{percent}% of cost",
       topModels: "Найпопулярніші моделі",
       topProviders: "Найпопулярніші провайдери",
       topTools: "Найпопулярніші інструменти",

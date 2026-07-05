@@ -1213,6 +1213,14 @@ export const nl: TranslationMap = {
       byType: "Op type",
       tokensTitle: "Dagelijks tokengebruik",
       costTitle: "Dagelijkse kosten",
+      compressedScaleHint: "Square-root scale keeps low-usage days visible.",
+    },
+    costWindows: {
+      title: "Cost Windows",
+      subtitle: "Calendar windows ending {date}",
+      selectedRange: "Selected Range",
+      lastDays: "Last {count} days",
+      perDay: "/ day",
     },
     breakdown: {
       output: "Output",
@@ -1259,6 +1267,7 @@ export const nl: TranslationMap = {
       cached: "gecached",
       prompt: "prompt",
       calls: "aanroepen",
+      costShare: "{percent}% of cost",
       topModels: "Topmodellen",
       topProviders: "Topproviders",
       topTools: "Toptools",

@@ -1213,6 +1213,14 @@ export const ja_JP: TranslationMap = {
       byType: "種類別",
       tokensTitle: "日別トークン使用量",
       costTitle: "日別コスト",
+      compressedScaleHint: "Square-root scale keeps low-usage days visible.",
+    },
+    costWindows: {
+      title: "Cost Windows",
+      subtitle: "Calendar windows ending {date}",
+      selectedRange: "Selected Range",
+      lastDays: "Last {count} days",
+      perDay: "/ day",
     },
     breakdown: {
       output: "出力",
@@ -1260,6 +1268,7 @@ export const ja_JP: TranslationMap = {
       cached: "キャッシュ済み",
       prompt: "プロンプト",
       calls: "呼び出し",
+      costShare: "{percent}% of cost",
       topModels: "上位モデル",
       topProviders: "上位プロバイダー",
       topTools: "上位ツール",

@@ -1213,6 +1213,14 @@ export const tr: TranslationMap = {
       byType: "Türe Göre",
       tokensTitle: "Günlük Token Kullanımı",
       costTitle: "Günlük Maliyet",
+      compressedScaleHint: "Square-root scale keeps low-usage days visible.",
+    },
+    costWindows: {
+      title: "Cost Windows",
+      subtitle: "Calendar windows ending {date}",
+      selectedRange: "Selected Range",
+      lastDays: "Last {count} days",
+      perDay: "/ day",
     },
     breakdown: {
       output: "Çıktı",
@@ -1260,6 +1268,7 @@ export const tr: TranslationMap = {
       cached: "önbellekten",
       prompt: "istem",
       calls: "çağrı",
+      costShare: "{percent}% of cost",
       topModels: "En Çok Kullanılan Modeller",
       topProviders: "En Çok Kullanılan Sağlayıcılar",
       topTools: "En Çok Kullanılan Araçlar",

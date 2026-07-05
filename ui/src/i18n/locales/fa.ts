@@ -1209,6 +1209,14 @@ export const fa: TranslationMap = {
       byType: "بر اساس نوع",
       tokensTitle: "مصرف روزانه توکن",
       costTitle: "هزینه روزانه",
+      compressedScaleHint: "Square-root scale keeps low-usage days visible.",
+    },
+    costWindows: {
+      title: "Cost Windows",
+      subtitle: "Calendar windows ending {date}",
+      selectedRange: "Selected Range",
+      lastDays: "Last {count} days",
+      perDay: "/ day",
     },
     breakdown: {
       output: "خروجی",
@@ -1256,6 +1264,7 @@ export const fa: TranslationMap = {
       cached: "کش‌شده",
       prompt: "پرامپت",
       calls: "فراخوانی‌ها",
+      costShare: "{percent}% of cost",
       topModels: "مدل‌های برتر",
       topProviders: "ارائه‌دهنده‌های برتر",
       topTools: "ابزارهای برتر",
