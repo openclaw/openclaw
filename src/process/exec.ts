@@ -612,6 +612,7 @@ export async function runCommandWithTimeout(
       child.stdin.end();
     }
 
+    child.stdout?.on("error", () => {});
     child.stdout?.on("data", (d) => {
       appendPreservedOutputLines({
         capture: stdoutCapture,
@@ -624,6 +625,7 @@ export async function runCommandWithTimeout(
       appendCapturedOutput(stdoutCapture, d, maxOutputBytes);
       armNoOutputTimer();
     });
+    child.stderr?.on("error", () => {});
     child.stderr?.on("data", (d) => {
       appendPreservedOutputLines({
         capture: stderrCapture,

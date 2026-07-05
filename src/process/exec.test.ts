@@ -346,6 +346,21 @@ describe("runCommandWithTimeout", () => {
     },
   );
 
+  it("swallows stdout and stderr stream errors without rejecting", async () => {
+    await loadExecModules({ mockSpawn: true });
+    const child = createKilledChild();
+    spawnMock.mockReturnValue(child);
+    const resultPromise = runCommandWithTimeout(createSilentIdleArgv(), { timeoutMs: 2_000 });
+    child.stdout?.emit("error", new Error("stdout read failed"));
+    child.stderr?.emit("error", new Error("stderr read failed"));
+    child.emit("exit", 0, null);
+    child.emit("close", 0, null);
+    await expect(resultPromise).resolves.toMatchObject({
+      code: 0,
+      termination: "exit",
+    });
+  });
+
   it("preserves matching output lines even when the tail capture truncates them", async () => {
     await loadExecModules();
     const result = await runCommandWithTimeout(
