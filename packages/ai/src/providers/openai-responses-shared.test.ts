@@ -784,39 +784,40 @@ describe("convertResponsesMessages", () => {
   });
 
   describe("multimodal image extraction — canonical and non-canonical shapes", () => {
-    const visionModel = { ...nativeOpenAIModel, input: ["text", "image"] };
-    const makeVisionContext = (toolContent: Array<Record<string, unknown>>) => ({
-      systemPrompt: "system",
-      messages: [
-        {
-          role: "assistant" as const,
-          api: nativeOpenAIModel.api,
-          provider: nativeOpenAIModel.provider,
-          model: nativeOpenAIModel.id,
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    const visionModel = { ...nativeOpenAIModel, input: ["text", "image"] as ("text" | "image")[] };
+    const makeVisionContext = (toolContent: Array<Record<string, unknown>>) =>
+      ({
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant" as const,
+            api: nativeOpenAIModel.api,
+            provider: nativeOpenAIModel.provider,
+            model: nativeOpenAIModel.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse" as const,
+            timestamp: 1,
+            content: [
+              { type: "toolCall" as const, id: "call_img", name: "screenshot", arguments: {} },
+            ],
           },
-          stopReason: "toolUse" as const,
-          timestamp: 1,
-          content: [
-            { type: "toolCall" as const, id: "call_img", name: "screenshot", arguments: {} },
-          ],
-        },
-        {
-          role: "toolResult" as const,
-          toolCallId: "call_img",
-          toolName: "screenshot",
-          content: toolContent,
-          isError: false,
-          timestamp: 2,
-        },
-      ],
-    });
+          {
+            role: "toolResult" as const,
+            toolCallId: "call_img",
+            toolName: "screenshot",
+            content: toolContent,
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      }) as unknown as Context;
 
     it("extracts canonical type:image with data + mimeType", () => {
       const input = convertResponsesMessages(
