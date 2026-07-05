@@ -1,70 +1,52 @@
 import { describe, expect, it } from "vitest";
-import { summarizeToolErrorForAbort } from "./tool-error-summary.js";
+import {
+  createToolValidationErrorSummary,
+  readToolValidationErrorSummary,
+  summarizeToolValidationError,
+} from "./tool-error-summary.js";
 
-// Mirrors the throw shape from validateToolArguments (packages/llm-core/src/validation.ts):
-// a human-readable header + bullet detail, then a full echo of the model arguments.
-function validationError(toolName: string, details: string, args: unknown): string {
-  return `Validation failed for tool "${toolName}":\n${details}\n\nReceived arguments:\n${JSON.stringify(args, null, 2)}`;
-}
-
-describe("summarizeToolErrorForAbort", () => {
-  it("summarizes a tool-call validation failure to one line", () => {
-    const summary = summarizeToolErrorForAbort({
-      toolName: "edit",
-      error: validationError("edit", "  - edits: must have required properties edits", {
-        path: "secret.txt",
-        contents: "leaked",
-      }),
-    });
-
-    expect(summary).toBe("edit tool validation failed: edits: must have required properties edits");
-  });
-
-  it("never leaks the echoed model arguments", () => {
-    const summary = summarizeToolErrorForAbort({
-      toolName: "edit",
-      error: validationError("edit", "  - edits: must have required properties edits", {
-        apiKey: "sk-should-not-appear",
-      }),
-    });
-
-    expect(summary).not.toContain("Received arguments");
-    expect(summary).not.toContain("sk-should-not-appear");
-  });
-
-  it("joins multiple validation issues", () => {
-    const summary = summarizeToolErrorForAbort({
-      toolName: "edit",
-      error: validationError(
-        "edit",
-        "  - edits: must have required properties edits\n  - path: must be string",
-        {},
-      ),
-    });
-
-    expect(summary).toBe(
-      "edit tool validation failed: edits: must have required properties edits; path: must be string",
+describe("createToolValidationErrorSummary", () => {
+  it("builds a static summary without validator details", () => {
+    expect(createToolValidationErrorSummary("edit")).toBe(
+      "edit tool validation failed: invalid arguments",
+    );
+    expect(createToolValidationErrorSummary(" custom   tool ")).toBe(
+      "custom tool tool validation failed: invalid arguments",
     );
   });
 
-  it("summarizes a non-validation tool error generically", () => {
-    expect(summarizeToolErrorForAbort({ toolName: "browser", error: "tab not found" })).toBe(
-      "browser tool failed: tab not found",
+  it("rejects unsafe or oversized tool names", () => {
+    expect(createToolValidationErrorSummary("edit\nsecret")).toBeUndefined();
+    expect(createToolValidationErrorSummary("x".repeat(200))).toBeUndefined();
+  });
+});
+
+describe("summarizeToolValidationError", () => {
+  it("accepts only a boundary-prepared summary", () => {
+    expect(
+      summarizeToolValidationError({
+        toolName: "edit",
+        validationErrorSummary: "edit tool validation failed: invalid arguments",
+        error:
+          'Validation failed for tool "edit":\n  - secret-field: rejected-secret\n\nReceived arguments:\n{}',
+      }),
+    ).toBe("edit tool validation failed: invalid arguments");
+    expect(
+      summarizeToolValidationError({
+        toolName: "edit",
+        error:
+          'Validation failed for tool "edit":\n  - secret-field: rejected-secret\n\nReceived arguments:\n{}',
+      }),
+    ).toBeUndefined();
+  });
+});
+
+describe("readToolValidationErrorSummary", () => {
+  it("accepts generated summaries and rejects unsafe boundary values", () => {
+    expect(readToolValidationErrorSummary("edit tool validation failed: path: invalid")).toBe(
+      "edit tool validation failed: path: invalid",
     );
-  });
-
-  it("returns undefined when there is no error text", () => {
-    expect(summarizeToolErrorForAbort({ toolName: "edit" })).toBeUndefined();
-    expect(summarizeToolErrorForAbort({ toolName: "edit", error: "   " })).toBeUndefined();
-  });
-
-  it("truncates an overly long detail", () => {
-    const summary = summarizeToolErrorForAbort({
-      toolName: "edit",
-      error: validationError("edit", `  - edits: ${"x".repeat(400)}`, {}),
-    });
-
-    expect(summary?.length).toBeLessThanOrEqual(160);
-    expect(summary?.endsWith("…")).toBe(true);
+    expect(readToolValidationErrorSummary("edit failed\nsecret")).toBeUndefined();
+    expect(readToolValidationErrorSummary(`edit failed: ${"x".repeat(200)}`)).toBeUndefined();
   });
 });

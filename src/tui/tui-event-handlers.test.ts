@@ -360,6 +360,21 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     );
   });
 
+  it("sanitizes untrusted abort diagnostics before rendering", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-hostile" },
+    });
+
+    handleChatEvent({
+      runId: "run-hostile",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+      errorMessage: "edit failed\u001b[31m\nsecret",
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledWith("run aborted: edit failed secret");
+  });
+
   it("falls back to a bare abort line when there is no summary", () => {
     const { state, chatLog, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: "run-plain" },

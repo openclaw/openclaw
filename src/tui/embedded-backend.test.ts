@@ -1286,7 +1286,7 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
-  it("carries the lifecycle tool-error summary onto the aborted chat event", async () => {
+  it("retains the latest tool validation summary for an aborted chat event", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const pending = deferred<{
       payloads: Array<{ text: string }>;
@@ -1308,11 +1308,18 @@ describe("EmbeddedTuiBackend", () => {
 
     registeredListener?.({
       runId: "run-validation-loop",
+      stream: "tool",
+      data: {
+        phase: "result",
+        toolErrorSummary: "edit tool validation failed: edits: must have required properties edits",
+      },
+    });
+    registeredListener?.({
+      runId: "run-validation-loop",
       stream: "lifecycle",
       data: {
         phase: "end",
         aborted: true,
-        toolErrorSummary: "edit tool validation failed: edits: must have required properties edits",
       },
     });
     await flushMicrotasks();
@@ -1324,6 +1331,47 @@ describe("EmbeddedTuiBackend", () => {
         sessionKey: "agent:main:main",
         state: "aborted",
         errorMessage: "edit tool validation failed: edits: must have required properties edits",
+      },
+    });
+  });
+
+  it("drops unsafe lifecycle tool-error summaries", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockImplementationOnce(() => pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "open the page",
+      runId: "run-unsafe-abort",
+    });
+
+    registeredListener?.({
+      runId: "run-unsafe-abort",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        aborted: true,
+        toolErrorSummary: "browser failed\nsecret output",
+      },
+    });
+    await flushMicrotasks();
+
+    expect(events).toContainEqual({
+      event: "chat",
+      payload: {
+        runId: "run-unsafe-abort",
+        sessionKey: "agent:main:main",
+        state: "aborted",
       },
     });
   });

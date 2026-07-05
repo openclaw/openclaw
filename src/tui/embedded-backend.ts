@@ -16,6 +16,7 @@ import {
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
 import { ensureRuntimePluginsLoaded } from "../agents/runtime-plugins.js";
+import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { parseGoalCommand } from "../auto-reply/reply/commands-goal.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -102,6 +103,7 @@ type LocalRunState = {
   finishing: boolean;
   lifecycleEnded: boolean;
   lifecycleStopReason?: string;
+  toolErrorSummary?: string;
   finalSent: boolean;
   registered: boolean;
   queuedRunReady: Promise<void>;
@@ -1020,11 +1022,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
     run.registered = true;
     run.lastBroadcastText = undefined;
+    const diagnostic = errorMessage ?? run.toolErrorSummary;
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
       state: "aborted",
-      ...(errorMessage ? { errorMessage } : {}),
+      ...(diagnostic ? { errorMessage: diagnostic } : {}),
     });
   }
 
@@ -1089,6 +1092,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
       data: evt.data,
     });
 
+    if (evt.stream === "tool" && evt.data?.phase === "result") {
+      run.toolErrorSummary = readToolValidationErrorSummary(evt.data.toolErrorSummary);
+    }
+
     const assistantLiveChatInput =
       evt.stream === "assistant" ? resolveAssistantLiveChatInput(evt.data) : undefined;
     if (
@@ -1111,9 +1118,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
     const phase = lifecyclePhase;
     const aborted = evt.data?.aborted === true || run.controller.signal.aborted;
-    // Last tool failure carried on the lifecycle metadata; shown on the abort line.
-    const toolErrorSummary =
-      typeof evt.data?.toolErrorSummary === "string" ? evt.data.toolErrorSummary : undefined;
+    const toolErrorSummary = readToolValidationErrorSummary(evt.data?.toolErrorSummary);
     if (phase === "finishing") {
       run.finishing = true;
       run.markQueuedRunReady();

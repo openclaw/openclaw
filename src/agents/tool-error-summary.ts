@@ -11,6 +11,7 @@ export type ToolErrorSummary = {
   meta?: string;
   errorCode?: string;
   error?: string;
+  validationErrorSummary?: string;
   timedOut?: boolean;
   middlewareError?: boolean;
   mutatingAction?: boolean;
@@ -27,36 +28,46 @@ export function isExecLikeToolName(toolName: string): boolean {
 
 const MAX_ABORT_SUMMARY_LENGTH = 160;
 
+function hasUnsafeSummaryCharacter(value: string): boolean {
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Accepts only the compact single-line diagnostic produced below. */
+export function readToolValidationErrorSummary(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const summary = value.trim();
+  if (!summary || summary.length > MAX_ABORT_SUMMARY_LENGTH || hasUnsafeSummaryCharacter(summary)) {
+    return undefined;
+  }
+  return summary;
+}
+
+/** Builds a static diagnostic from typed pre-execution validation provenance. */
+export function createToolValidationErrorSummary(toolName: string): string | undefined {
+  if (hasUnsafeSummaryCharacter(toolName)) {
+    return undefined;
+  }
+  const normalizedToolName = toolName.replace(/\s+/g, " ").trim();
+  if (!normalizedToolName) {
+    return undefined;
+  }
+  return readToolValidationErrorSummary(
+    `${normalizedToolName} tool validation failed: invalid arguments`,
+  );
+}
+
 /**
- * One-line, argument-free summary of the last tool failure for the TUI abort line.
- * Cuts at the `Received arguments:` marker that validateToolArguments
- * (packages/llm-core/src/validation.ts) appends, so raw model args never reach the screen.
+ * Returns only a boundary-prepared validation summary. Raw validator messages
+ * stay private because paths and custom messages can contain model input.
  */
-export function summarizeToolErrorForAbort(summary: ToolErrorSummary): string | undefined {
-  const raw = summary.error?.trim();
-  if (!raw) {
-    return undefined;
-  }
-  const argsMarker = raw.indexOf("Received arguments:");
-  const body = (argsMarker >= 0 ? raw.slice(0, argsMarker) : raw).trim();
-  const isValidation = body.startsWith("Validation failed for tool");
-  const bulletDetails = body
-    .split("\n")
-    .map((line) => /^\s*-\s+(.+)$/.exec(line)?.[1])
-    .filter((detail): detail is string => detail !== undefined);
-  const detailSource =
-    bulletDetails.length > 0
-      ? bulletDetails.join("; ")
-      : isValidation
-        ? body.split("\n").slice(1).join(" ")
-        : body;
-  const detail = detailSource.replace(/\s+/g, " ").trim();
-  if (!detail) {
-    return undefined;
-  }
-  const verb = isValidation ? "validation failed" : "failed";
-  const label = `${summary.toolName.trim() || "tool"} tool ${verb}: ${detail}`;
-  return label.length > MAX_ABORT_SUMMARY_LENGTH
-    ? `${label.slice(0, MAX_ABORT_SUMMARY_LENGTH - 1)}…`
-    : label;
+export function summarizeToolValidationError(summary: ToolErrorSummary): string | undefined {
+  return readToolValidationErrorSummary(summary.validationErrorSummary);
 }
