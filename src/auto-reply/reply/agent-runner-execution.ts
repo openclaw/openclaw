@@ -237,21 +237,43 @@ export async function releaseQueuedCompactionCompletion(params: {
     sessionKey: params.sessionKey,
   });
   const refreshedSessionEntry = resolved.existing ?? sessionEntry;
+  await releasePostCompactionDelegatesAfterCompaction({
+    activeSessionStore: params.activeSessionStore,
+    compactionCount: compactionId,
+    followupRun: params.followupRun,
+    sessionEntry: refreshedSessionEntry,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    traceparent: params.traceparent,
+  });
+}
+
+export async function releasePostCompactionDelegatesAfterCompaction(params: {
+  activeSessionStore: Record<string, SessionEntry>;
+  compactionCount: number | undefined;
+  followupRun: FollowupRun;
+  sessionEntry: SessionEntry;
+  sessionKey: string;
+  storePath?: string;
+  traceparent?: string;
+}): Promise<void> {
   const { dispatchPostCompactionDelegates } =
     await import("./post-compaction-delegate-dispatch.js");
-  // Recovery parity with the auto-compaction path (agent-runner.ts finally):
+  // Shared by volitional and Gateway manual compaction: the transcript has
+  // already rotated, so staged post-compaction delegates must be released now
+  // without re-running session accounting.
   // dispatchPostCompactionDelegates pushes delegates that failed both the
   // delivery enqueue and the internal re-persist onto this array. Re-stage the
-  // survivors below so a double persistence failure does not silently drop the
-  // volitional request_compaction recovery work (I2).
+  // survivors below so a double persistence failure does not silently drop
+  // compaction recovery work.
   const postCompactionDelegatesToPreserve: SessionPostCompactionDelegate[] = [];
   const dispatchResult = await dispatchPostCompactionDelegates({
     cfg: params.followupRun.run.config,
-    compactionCount: compactionId,
+    compactionCount: params.compactionCount,
     followupRun: params.followupRun,
     postCompactionDelegatesToPreserve,
     releaseTraceparent: params.traceparent,
-    sessionEntry: refreshedSessionEntry,
+    sessionEntry: params.sessionEntry,
     sessionKey: params.sessionKey,
     sessionStore: params.activeSessionStore,
     storePath: params.storePath,
@@ -265,7 +287,7 @@ export async function releaseQueuedCompactionCompletion(params: {
     await import("../../infra/continuation-tracer.js");
   emitContinuationCompactionReleasedSpan({
     releasedCount: dispatchResult.queuedDelegates,
-    compactionId,
+    compactionId: params.compactionCount,
     traceparent: params.traceparent,
     log: (message) => logVerbose(message),
   });

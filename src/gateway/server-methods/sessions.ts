@@ -45,6 +45,7 @@ import {
   waitForEmbeddedAgentRunEnd,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
+import type { FollowupRun } from "../../auto-reply/reply/queue.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
@@ -77,6 +78,7 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import {
@@ -147,6 +149,48 @@ import type {
 import { assertValidParams } from "./validation.js";
 
 const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
+const log = createSubsystemLogger("gateway/sessions");
+
+function buildManualCompactionReleaseFollowupRun(params: {
+  cfg: OpenClawConfig;
+  entry: SessionEntry;
+  model: { provider: string; model: string };
+  sessionFile: string;
+  sessionId: string;
+  sessionKey: string;
+  targetAgentId: string;
+  workspaceDir: string;
+}): FollowupRun {
+  const deliveryContext = params.entry.deliveryContext;
+  const messageProvider = deliveryContext?.channel ?? params.entry.lastChannel;
+  const cwd = normalizeOptionalString(params.entry.spawnedCwd);
+  return {
+    prompt: "",
+    enqueuedAt: Date.now(),
+    ...(deliveryContext?.channel ? { originatingChannel: deliveryContext.channel } : {}),
+    ...(deliveryContext?.to ? { originatingTo: deliveryContext.to } : {}),
+    ...(deliveryContext?.accountId ? { originatingAccountId: deliveryContext.accountId } : {}),
+    ...(deliveryContext?.threadId !== undefined
+      ? { originatingThreadId: deliveryContext.threadId }
+      : {}),
+    run: {
+      agentId: params.targetAgentId,
+      agentDir: params.workspaceDir,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionFile: params.sessionFile,
+      workspaceDir: params.workspaceDir,
+      ...(cwd ? { cwd } : {}),
+      config: params.cfg,
+      provider: params.model.provider,
+      model: params.model.model,
+      ...(messageProvider ? { messageProvider } : {}),
+      ...(deliveryContext?.accountId ? { agentAccountId: deliveryContext.accountId } : {}),
+      timeoutMs: 0,
+      blockReplyBreak: "message_end",
+    },
+  };
+}
 
 function filterSessionStoreToConfiguredAgents(
   cfg: OpenClawConfig,
@@ -2953,6 +2997,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           }
           if (result.ok && result.compacted) {
             let persisted: boolean;
+            let releaseSessionEntry: SessionEntry | undefined;
+            let releaseSessionStore: Record<string, SessionEntry> | undefined;
             try {
               persisted = await updateSessionStore(storePath, (store) => {
                 const entryToUpdate = store[compactTarget.primaryKey];
@@ -2988,6 +3034,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
                   delete entryToUpdate.totalTokens;
                   delete entryToUpdate.totalTokensFresh;
                 }
+                releaseSessionEntry = entryToUpdate;
+                releaseSessionStore = store;
                 return true;
               });
             } catch (err) {
@@ -3005,6 +3053,38 @@ export const sessionsHandlers: GatewayRequestHandlers = {
                 }),
               );
               return;
+            }
+            if (releaseSessionEntry && releaseSessionStore) {
+              const releaseFollowupRun = buildManualCompactionReleaseFollowupRun({
+                cfg,
+                entry: releaseSessionEntry,
+                model: resolvedModel,
+                sessionFile: releaseSessionEntry.sessionFile ?? filePath,
+                sessionId: releaseSessionEntry.sessionId,
+                sessionKey: target.canonicalKey,
+                targetAgentId: target.agentId,
+                workspaceDir,
+              });
+              try {
+                const { releasePostCompactionDelegatesAfterCompaction } =
+                  await import("../../auto-reply/reply/agent-runner-execution.js");
+                await releasePostCompactionDelegatesAfterCompaction({
+                  activeSessionStore: releaseSessionStore,
+                  compactionCount: releaseSessionEntry.compactionCount ?? 0,
+                  followupRun: releaseFollowupRun,
+                  sessionEntry: releaseSessionEntry,
+                  sessionKey: target.canonicalKey,
+                  storePath,
+                });
+              } catch (err) {
+                // Manual compaction already succeeded and the session store now
+                // points at the rotated transcript. Match request_compaction's
+                // tolerant release semantics so post-compaction maintenance
+                // cannot turn a successful compaction into a failed RPC.
+                log.warn(
+                  `[sessions.compact:post-compaction-release-failed] session=${target.canonicalKey} reason=${formatErrorMessage(err)}`,
+                );
+              }
             }
           }
 

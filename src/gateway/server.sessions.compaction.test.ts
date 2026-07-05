@@ -5,11 +5,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import {
+  stagePostCompactionDelegate,
+  stagedPostCompactionDelegateCount,
+} from "../auto-reply/continuation-delegate-store.js";
 import type { SessionCompactionCheckpoint } from "../config/sessions.js";
 import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
+import { resetTaskFlowRegistryForTests } from "../tasks/task-flow-registry.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -633,6 +638,48 @@ test("sessions.compact records terminal Codex native compaction", async () => {
   expect(store["agent:main:main"]?.totalTokensFresh).toBeUndefined();
 
   ws.close();
+});
+
+test("sessions.compact releases queued post-compaction delegates after manual compaction", async () => {
+  resetTaskFlowRegistryForTests({ persist: false });
+  const { dir, storePath } = await createSessionStoreDir();
+  await fs.writeFile(
+    path.join(dir, "sess-post-compaction.jsonl"),
+    `${JSON.stringify({ role: "user", content: "hello delegates" })}\n`,
+    "utf-8",
+  );
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-post-compaction", {
+        deliveryContext: {
+          channel: "webchat",
+          to: "webchat:user-123",
+        },
+      }),
+    },
+  });
+  stagePostCompactionDelegate("agent:main:main", {
+    task: "rehydrate after dashboard compact",
+    createdAt: Date.now(),
+  });
+  expect(stagedPostCompactionDelegateCount("agent:main:main")).toBe(1);
+
+  const { ws } = await openClient();
+  const compacted = await rpcReq<{ ok: true; key: string; compacted: boolean }>(
+    ws,
+    "sessions.compact",
+    { key: "main" },
+  );
+
+  expectMainCompactionResult(compacted, true);
+  expect(stagedPostCompactionDelegateCount("agent:main:main")).toBe(0);
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { compactionCount?: number }
+  >;
+  expect(store["agent:main:main"]?.compactionCount).toBe(1);
+  ws.close();
+  resetTaskFlowRegistryForTests({ persist: false });
 });
 
 test("sessions.compact emits a terminal operation event when persistence fails", async () => {
