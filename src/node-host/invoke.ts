@@ -230,7 +230,16 @@ function truncateOutput(raw: string, maxChars: number): { text: string; truncate
   if (raw.length <= maxChars) {
     return { text: raw, truncated: false };
   }
-  return { text: `... (truncated) ${raw.slice(raw.length - maxChars)}`, truncated: true };
+  // Slice may split a surrogate pair; skip the leading lone low surrogate
+  // so downstream serializers (strict UTF-8, JSON) don't reject the output.
+  let tail = raw.slice(raw.length - maxChars);
+  if (tail.length > 0) {
+    const firstCode = tail.charCodeAt(0);
+    if (firstCode >= 0xdc00 && firstCode <= 0xdfff) {
+      tail = tail.slice(1);
+    }
+  }
+  return { text: `... (truncated) ${tail}`, truncated: true };
 }
 
 export function decodeCapturedOutputBuffer(params: {
