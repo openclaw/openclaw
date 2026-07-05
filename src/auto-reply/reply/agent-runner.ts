@@ -53,6 +53,7 @@ import { generateChainId } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
+import { sanitizeInboundSystemTags } from "../../security/system-tags.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
@@ -162,6 +163,10 @@ import type { TypingController } from "./typing.js";
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 const RESTART_LIFECYCLE_REPLY_TEXT =
   "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
+
+function sanitizeDelegateEchoForTrustedSystemEvent(value: string): string {
+  return sanitizeInboundSystemTags(value);
+}
 
 function scheduleFollowupDrainAfterReplyOperationClear(params: {
   operation: ReplyOperation;
@@ -2795,8 +2800,9 @@ export async function runReplyAgent(replyParams: {
           : {}),
         ...(effectiveContinuationSignal.model ? { model: effectiveContinuationSignal.model } : {}),
       });
+      const taskEcho = sanitizeDelegateEchoForTrustedSystemEvent(effectiveContinuationSignal.task);
       enqueueSystemEvent(
-        `[continuation:delegate-staged-post-compaction] Bracket delegate staged for post-compaction release: ${effectiveContinuationSignal.task}`,
+        `[continuation:delegate-staged-post-compaction] Bracket delegate staged for post-compaction release: ${taskEcho}`,
         { sessionKey, trusted: true },
       );
     } else if (effectiveContinuationSignal && sessionKey) {
@@ -3047,30 +3053,36 @@ export async function runReplyAgent(replyParams: {
                     }
                     dispatchSpan.setStatus("OK");
                   }
+                  const taskEcho = sanitizeDelegateEchoForTrustedSystemEvent(task);
                   enqueueSystemEvent(
-                    `[continuation:delegate-spawned] Spawned turn ${plannedHop}/${maxChainLength}: ${task}`,
+                    `[continuation:delegate-spawned] Spawned turn ${plannedHop}/${maxChainLength}: ${taskEcho}`,
                     { sessionKey, trusted: true },
                   );
                   return true;
                 }
                 const reasonText = spawnResult.error ?? "delegation was not accepted.";
+                const reasonEcho = sanitizeDelegateEchoForTrustedSystemEvent(reasonText);
+                const taskEcho = sanitizeDelegateEchoForTrustedSystemEvent(task);
                 defaultRuntime.log(
                   `DELEGATE spawn rejected (${spawnResult.status}) for session ${sessionKey} reason=${reasonText}`,
                 );
                 dispatchSpan?.setStatus("ERROR", reasonText);
                 enqueueSystemEvent(
-                  `[continuation] DELEGATE spawn ${spawnResult.status}: ${reasonText} Use sessions_spawn manually. Original task: ${task}`,
+                  `[continuation] DELEGATE spawn ${spawnResult.status}: ${reasonEcho} Use sessions_spawn manually. Original task: ${taskEcho}`,
                   { sessionKey, trusted: true },
                 );
                 return false;
               } catch (err) {
+                const errorMessage = String(err);
+                const errorEcho = sanitizeDelegateEchoForTrustedSystemEvent(errorMessage);
+                const taskEcho = sanitizeDelegateEchoForTrustedSystemEvent(task);
                 dispatchSpan?.recordException(err);
-                dispatchSpan?.setStatus("ERROR", String(err));
+                dispatchSpan?.setStatus("ERROR", errorMessage);
                 defaultRuntime.log(
-                  `DELEGATE spawn failed for session ${sessionKey}: ${String(err)}`,
+                  `DELEGATE spawn failed for session ${sessionKey}: ${errorMessage}`,
                 );
                 enqueueSystemEvent(
-                  `[continuation] DELEGATE spawn failed: ${String(err)}. Original task: ${task}`,
+                  `[continuation] DELEGATE spawn failed: ${errorEcho}. Original task: ${taskEcho}`,
                   { sessionKey, trusted: true },
                 );
                 return false;
