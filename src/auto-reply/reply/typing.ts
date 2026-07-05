@@ -166,6 +166,7 @@ export function createTypingController(params: {
   const typingLoop = createTypingKeepaliveLoop({
     intervalMs: typingIntervalMs,
     onTick: triggerTyping,
+    onError: (err) => log?.(`typing keepalive tick failed: ${String(err)}`),
   });
 
   const ensureStart = async () => {

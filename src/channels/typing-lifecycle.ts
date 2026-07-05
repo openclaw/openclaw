@@ -12,6 +12,7 @@ type TypingKeepaliveLoop = {
 export function createTypingKeepaliveLoop(params: {
   intervalMs: number;
   onTick: AsyncTick;
+  onError?: (err: unknown) => void;
 }): TypingKeepaliveLoop {
   let timer: ReturnType<typeof setInterval> | undefined;
   let tickInFlight = false;
@@ -24,6 +25,8 @@ export function createTypingKeepaliveLoop(params: {
     tickInFlight = true;
     try {
       await params.onTick();
+    } catch (err) {
+      params.onError?.(err);
     } finally {
       tickInFlight = false;
     }

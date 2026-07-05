@@ -63,6 +63,7 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
   const keepaliveLoop = createTypingKeepaliveLoop({
     intervalMs: keepaliveIntervalMs,
     onTick: fireStart,
+    onError: params.onStartError,
   });
 
   const startTtlTimer = () => {
