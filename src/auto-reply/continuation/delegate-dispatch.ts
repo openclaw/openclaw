@@ -154,6 +154,7 @@ function armHedgeTimer(
     persistChainState?: (chainState: ChainState) => void | Promise<void>;
     persistBeforeTerminalCommit?: boolean;
     recoverRunningDelegates?: boolean;
+    queuedCreatedAtOrBefore?: number;
     includeRunningUpdatedAtOrBefore?: number;
     inheritedSilent?: boolean;
     inheritedWake?: boolean;
@@ -199,6 +200,9 @@ function armHedgeTimer(
         ? { persistBeforeTerminalCommit: true }
         : {}),
       ...(params.recoverRunningDelegates ? { recoverRunningDelegates: true } : {}),
+      ...(params.queuedCreatedAtOrBefore !== undefined
+        ? { queuedCreatedAtOrBefore: params.queuedCreatedAtOrBefore }
+        : {}),
       ...(params.includeRunningUpdatedAtOrBefore !== undefined
         ? { includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore }
         : {}),
@@ -308,6 +312,7 @@ export async function dispatchToolDelegates(params: {
    */
   loadFreshChainState?: () => ChainState;
   recoverRunningDelegates?: boolean;
+  queuedCreatedAtOrBefore?: number;
   includeRunningUpdatedAtOrBefore?: number;
   /**
    * Dispatch queued delegates immediately even if their `delayMs` has not
@@ -368,6 +373,7 @@ export async function dispatchToolDelegates(params: {
   const ignoreDelay = params.dispatchQueuedRegardlessOfDelay === true || foldWithoutPersist;
   const toolDelegates = consumePendingDelegates(sessionKey, {
     includeRunning: params.recoverRunningDelegates === true,
+    queuedCreatedAtOrBefore: params.queuedCreatedAtOrBefore,
     includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore,
     ignoreDelay,
   });
@@ -375,7 +381,9 @@ export async function dispatchToolDelegates(params: {
   // Arm (or re-arm) a hedge timer for any unmatured queued delegates so they
   // still fire in fully-quiet channels where no further response-finalize
   // arrives. The hedge re-invokes this function; idempotent per sessionKey.
-  const soonestUnmaturedDueAt = peekSoonestUnmaturedDelegateDueAt(sessionKey);
+  const soonestUnmaturedDueAt = peekSoonestUnmaturedDelegateDueAt(sessionKey, {
+    queuedCreatedAtOrBefore: params.queuedCreatedAtOrBefore,
+  });
   if (soonestUnmaturedDueAt !== undefined) {
     annotateQueuedDelegatesInheritedPolicy(sessionKey, {
       ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
@@ -391,6 +399,9 @@ export async function dispatchToolDelegates(params: {
       persistChainState: params.persistChainState,
       ...(params.persistBeforeTerminalCommit ? { persistBeforeTerminalCommit: true } : {}),
       ...(params.recoverRunningDelegates ? { recoverRunningDelegates: true } : {}),
+      ...(params.queuedCreatedAtOrBefore !== undefined
+        ? { queuedCreatedAtOrBefore: params.queuedCreatedAtOrBefore }
+        : {}),
       ...(params.includeRunningUpdatedAtOrBefore !== undefined
         ? { includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore }
         : {}),
@@ -823,6 +834,13 @@ export async function recoverPendingContinuationDelegates(
     maxChainLength?: number;
     /** Override the session-store path used to load persisted chain budgets. */
     storePath?: string;
+    /**
+     * Startup recovery owns only rows that were already queued when recovery was
+     * armed. Rows created later belong to the live post-response drain/hedge.
+     */
+    queuedCreatedAtOrBefore?: number;
+    /** Exclude running rows claimed after recovery was armed. */
+    includeRunningUpdatedAtOrBefore?: number;
   } = {},
 ): Promise<{ sessions: number; dispatched: number; rejected: number }> {
   const runtimeConfig = resolveContinuationRuntimeConfig();
@@ -832,8 +850,11 @@ export async function recoverPendingContinuationDelegates(
   if (!runtimeConfig.enabled) {
     return { sessions: 0, dispatched: 0, rejected: 0 };
   }
-  const sessionKeys = listPendingDelegateSessionKeysForRecovery();
-  const includeRunningUpdatedAtOrBefore = Date.now();
+  const includeRunningUpdatedAtOrBefore = params.includeRunningUpdatedAtOrBefore ?? Date.now();
+  const sessionKeys = listPendingDelegateSessionKeysForRecovery({
+    queuedCreatedAtOrBefore: params.queuedCreatedAtOrBefore,
+    includeRunningUpdatedAtOrBefore,
+  });
   const storeByPath = new Map<string, Record<string, SessionEntry>>();
   const runtimeConfigSnapshot = getRuntimeConfig();
   let dispatched = 0;
@@ -903,6 +924,7 @@ export async function recoverPendingContinuationDelegates(
         ctx: { ...params.ctx, sessionKey },
         maxChainLength: params.maxChainLength ?? runtimeConfig.maxChainLength,
         recoverRunningDelegates: true,
+        queuedCreatedAtOrBefore: params.queuedCreatedAtOrBefore,
         includeRunningUpdatedAtOrBefore,
         // Recovery rebuilds chain cost from the persisted child entry, which is
         // stale when the settle-time chain-cost persist failed; apply the

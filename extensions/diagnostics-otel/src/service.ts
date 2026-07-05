@@ -2167,6 +2167,23 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const firstTrustedSpanContextForTraceId = (traceId: string): SpanContext | undefined => {
         return trustedSpanContextsByTraceId.get(traceId);
       };
+      const rememberTrustedRootSpanContext = (
+        traceContext: DiagnosticTraceContext | undefined,
+        span: ReturnType<typeof tracer.startSpan>,
+      ): void => {
+        if (!traceContext || traceContext.parentSpanId) {
+          return;
+        }
+        const spanContext = span.spanContext();
+        if (!spanContext.traceId || trustedSpanContextsByTraceId.has(traceContext.traceId)) {
+          return;
+        }
+        // Key by the OpenClaw diagnostic traceId, not the OTEL traceId the SDK
+        // may allocate for a root span. Later continuation events carry the
+        // diagnostic id, so this is the only stable lookup key for logical
+        // same-trace parenting when parentSpanId has no direct registration.
+        trustedSpanContextsByTraceId.set(traceContext.traceId, spanContext);
+      };
       const internalOrTrustedParentContext = (
         evt: DiagnosticEventPayload,
         metadata: DiagnosticEventMetadata,
@@ -2272,19 +2289,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (spanId) {
           activeTrustedSpans.set(spanId, span);
         }
-        // Eagerly capture the OTEL span context for trusted spans whose
-        // logical trace context is itself a root (no carried parentSpanId).
-        // Sibling/child runs that arrive later with an unresolved
-        // parentSpanId can then fall back to this canonical anchor; runs
-        // that carry their own external parentSpanId are intentionally
-        // excluded so unrelated siblings do not cross-parent through a
-        // shared logical traceId.
-        if (traceContext && !traceContext.parentSpanId) {
-          const spanContext = span.spanContext();
-          if (spanContext.traceId && !trustedSpanContextsByTraceId.has(spanContext.traceId)) {
-            trustedSpanContextsByTraceId.set(spanContext.traceId, spanContext);
-          }
-        }
+        rememberTrustedRootSpanContext(traceContext, span);
         return span;
       };
       const trackInternalOrTrustedSpan = (
@@ -2297,12 +2302,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (spanId) {
           activeTrustedSpans.set(spanId, span);
         }
-        if (traceContext && !traceContext.parentSpanId) {
-          const spanContext = span.spanContext();
-          if (spanContext.traceId && !trustedSpanContextsByTraceId.has(spanContext.traceId)) {
-            trustedSpanContextsByTraceId.set(spanContext.traceId, spanContext);
-          }
-        }
+        rememberTrustedRootSpanContext(traceContext, span);
         return span;
       };
       const takeTrackedTrustedSpan = (

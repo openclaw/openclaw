@@ -1860,6 +1860,33 @@ describe("recoverPendingContinuationDelegates", () => {
     expect(mockFlows.get("flow-1")?.status).toBe("running");
   });
 
+  it("does not replay queued delegates created after recovery was armed", async () => {
+    const sessionKey = "agent:main:startup-live-queued-race";
+    vi.setSystemTime(new Date("2026-07-04T12:00:00.000Z"));
+    enqueuePendingDelegate(sessionKey, { task: "pre-start recovery row" });
+    const recoveryArmedAt = Date.now();
+    vi.setSystemTime(new Date(recoveryArmedAt + 1));
+    enqueuePendingDelegate(sessionKey, { task: "live request row", delayMs: 60_000 });
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: { sessionId: "session-child", continuationChainCount: 0 },
+    });
+
+    const recovered = await recoverPendingContinuationDelegates({
+      queuedCreatedAtOrBefore: recoveryArmedAt,
+      includeRunningUpdatedAtOrBefore: recoveryArmedAt,
+    });
+
+    expect(recovered).toMatchObject({ sessions: 1, dispatched: 1, rejected: 0 });
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({ task: expect.stringContaining("pre-start recovery row") }),
+      expect.objectContaining({ agentSessionKey: sessionKey }),
+    );
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "succeeded" });
+    expect(mockFlows.get("flow-2")).toMatchObject({ status: "queued" });
+    expect(hasLiveContinuationTimerRefs(sessionKey)).toBe(false);
+  });
+
   it("enforces the cost cap against the persisted child chain cost on recovery (#1144)", async () => {
     // The finding: a delayed delegate queued under a child session is re-driven
     // on restart by recoverPendingContinuationDelegates, which derives the chain

@@ -5155,6 +5155,73 @@ describe("diagnostics-otel service", () => {
       await service.stop?.(ctx);
     });
 
+    test("keys logical trace fallback by diagnostic trace id when OTEL root trace differs", async () => {
+      const service = createDiagnosticsOtelService();
+      const ctx = createTraceOnlyContext(OTEL_TEST_ENDPOINT);
+      const originalStartSpan = telemetryState.tracer.startSpan.getMockImplementation();
+      const otelRootTraceId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+      if (!originalStartSpan) {
+        throw new Error("expected startSpan mock implementation");
+      }
+      telemetryState.tracer.startSpan.mockImplementationOnce((name, opts, parentCtx) => {
+        const span = originalStartSpan(name, opts, parentCtx);
+        span.spanContext.mockReturnValue({
+          traceId: otelRootTraceId,
+          spanId: CHILD_SPAN_ID,
+          traceFlags: 1,
+        });
+        return span;
+      });
+      await service.start(ctx);
+
+      emitTrustedDiagnosticEvent({
+        type: "run.started",
+        runId: "run-logical-root-otel-trace-mismatch",
+        provider: "openai",
+        model: "gpt-5.5",
+        trace: {
+          traceId: TRACE_ID,
+          spanId: CHILD_SPAN_ID,
+          traceFlags: "01",
+        },
+      });
+      await flushDiagnosticEvents();
+      telemetryState.tracer.startSpan.mockClear();
+      telemetryState.tracer.setSpanContext.mockClear();
+
+      emitTrustedDiagnosticEvent({
+        type: "run.started",
+        runId: "run-logical-child-otel-trace-mismatch",
+        provider: "openai",
+        model: "gpt-5.5",
+        trace: {
+          traceId: TRACE_ID,
+          spanId: TOOL_SPAN_ID,
+          parentSpanId: SPAN_ID,
+          traceFlags: "01",
+        },
+      });
+      await flushDiagnosticEvents();
+
+      expect(telemetryState.tracer.setSpanContext).toHaveBeenCalledWith(
+        {},
+        expect.objectContaining({
+          traceId: otelRootTraceId,
+          spanId: CHILD_SPAN_ID,
+        }),
+      );
+      expect(startedSpanCall("openclaw.run")?.[2]).toEqual(
+        expect.objectContaining({
+          spanContext: expect.objectContaining({
+            traceId: otelRootTraceId,
+            spanId: CHILD_SPAN_ID,
+          }),
+        }),
+      );
+
+      await service.stop?.(ctx);
+    });
+
     test("prefers carried remote traceparent span ids over logical trace fallback", async () => {
       const service = createDiagnosticsOtelService();
       const ctx = createTraceOnlyContext(OTEL_TEST_ENDPOINT);
