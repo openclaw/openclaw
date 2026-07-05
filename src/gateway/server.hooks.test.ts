@@ -172,9 +172,10 @@ describe("gateway server hooks", () => {
       const agentEvents = await waitForSystemEvent();
       expect(agentEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
       const firstCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        job?: { payload?: { externalContentSource?: string } };
+        job?: { delivery?: { mode?: string }; payload?: { externalContentSource?: string } };
       };
       expect(firstCall?.job?.payload?.externalContentSource).toBe("webhook");
+      expect(firstCall?.job?.delivery?.mode).toBe("none");
       drainSystemEvents(resolveMainKey());
 
       mockIsolatedRunOkOnce();
@@ -315,6 +316,45 @@ describe("gateway server hooks", () => {
       expect(targetEvents.some((event) => event.includes("Hook Email: done"))).toBe(true);
       expect(peekSystemEventEntries(resolveMainKey())).toEqual([]);
       drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
+    });
+  });
+
+  test("uses explicit hook delivery target only when channel and recipient are supplied", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const implicit = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Implicit",
+      });
+      expect(implicit.status).toBe(200);
+      await waitForSystemEvent();
+      const implicitCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        job?: { delivery?: { mode?: string; channel?: string; to?: string } };
+      };
+      expect(implicitCall?.job?.delivery).toEqual({ mode: "none" });
+      drainSystemEvents(resolveMainKey());
+
+      mockIsolatedRunOkOnce();
+      const explicit = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Explicit",
+        channel: "telegram",
+        to: "123456",
+      });
+      expect(explicit.status).toBe(200);
+      await waitForSystemEvent();
+      const explicitCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        job?: { delivery?: { mode?: string; channel?: string; to?: string } };
+      };
+      expect(explicitCall?.job?.delivery).toEqual({
+        mode: "announce",
+        channel: "telegram",
+        to: "123456",
+      });
+      drainSystemEvents(resolveMainKey());
     });
   });
 

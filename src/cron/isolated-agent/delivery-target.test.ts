@@ -752,6 +752,23 @@ describe("resolveDeliveryTarget", () => {
     expect(result.threadId).toBe(1008013);
   });
 
+  it("keeps Telegram delivery target validation strict when no recipient is supplied", async () => {
+    setMainSessionEntry(undefined);
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "telegram",
+      to: undefined,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected missing Telegram delivery target to fail");
+    }
+    expect(result.channel).toBe("telegram");
+    expect(result.to).toBeUndefined();
+    expect(result.error.message).toContain("Telegram requires target");
+  });
+
   it("prefers explicit telegram :topic: targets over session-derived threadId", async () => {
     setLastSessionEntry({
       sessionId: "sess-telegram-topic",

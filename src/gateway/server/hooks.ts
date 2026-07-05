@@ -37,6 +37,10 @@ function shouldAnnounceHookRunResult(params: {
   );
 }
 
+function hasExplicitHookDeliveryTarget(value: HookAgentDispatchPayload): boolean {
+  return Boolean(value.channel && value.channel !== "last" && value.to);
+}
+
 export function createGatewayHooksRequestHandler(params: {
   deps: CliDeps;
   getHooksConfig: () => HooksConfigResolved | null;
@@ -61,13 +65,14 @@ export function createGatewayHooksRequestHandler(params: {
     const jobId = randomUUID();
     const runId = randomUUID();
     const now = Date.now();
-    const delivery = value.deliver
-      ? {
-          mode: "announce" as const,
-          channel: value.channel,
-          to: value.to,
-        }
-      : { mode: "none" as const };
+    const delivery =
+      value.deliver && hasExplicitHookDeliveryTarget(value)
+        ? {
+            mode: "announce" as const,
+            channel: value.channel,
+            to: value.to,
+          }
+        : { mode: "none" as const };
     const job: CronJob = {
       id: jobId,
       agentId: value.agentId,
