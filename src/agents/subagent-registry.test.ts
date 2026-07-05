@@ -2681,7 +2681,6 @@ describe("subagent registry seam flow", () => {
           runtime: "subagent",
           sessionKey: childSessionKey,
           status: "succeeded",
-          startedAt,
           endedAt: completedAt,
           lastEventAt: completedAt,
           progressSummary: "durable final result",
@@ -2757,7 +2756,6 @@ describe("subagent registry seam flow", () => {
           runtime: "subagent",
           sessionKey: childSessionKey,
           status: "succeeded",
-          startedAt: originalStartedAt,
           endedAt: completedAt,
           lastEventAt: completedAt,
           progressSummary: "replacement completed",
@@ -3689,7 +3687,11 @@ describe("subagent registry seam flow", () => {
         await new Promise<void>((resolve) => {
           releaseTimingWrite = resolve;
         });
-        const current = mocks.loadSessionStore(scope.storePath, { clone: false })[scope.sessionKey];
+        const store = mocks.loadSessionStore(scope.storePath, { clone: false }) as Record<
+          string,
+          SessionEntry
+        >;
+        const current = store[scope.sessionKey];
         const patch = await update(current, { existingEntry: { ...current } });
         if (patch) {
           mocks.updateSessionStore(scope.storePath, () => {});
