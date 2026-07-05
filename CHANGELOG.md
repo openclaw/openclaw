@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **Control UI terminal rendering:** adopt the shared `@openclaw/libterminal` browser lifecycle and add Nerd Font fallbacks so icon-enabled shell listings render their glyphs when a compatible local font is installed.
+- **Control UI chat history:** hide redundant channel-final delivery mirrors when the preceding app-server assistant reply already shows the same text.
 - **ClawRouter auth profiles:** resolve credential-scoped catalog models during agent runs when the proxy key is stored in an auth profile, and document plugin and model allowlists.
 - **Telegram durability:** recover stalled ingress claims, retry restart-dropped media, survive transient polling errors, dead-letter poison updates, preserve forwarded rich text, route plugin callbacks correctly, keep progress updates in one stable multi-line window, map self-hosted Bot API container paths through trusted host roots, and fall back safely when Telegram rejects rich final replies. (#97118, #98102, #98735, #98775, #98776, #97174, #98907, #91984, #98786) Thanks @vincentkoc, @luoyanglang, @DaveArcher18, @obviyus, @goldmar, @Marvinthebored, @Dizesales, and @shakkernerd.
 - **Cross-channel inbound media:** preserve captions and expose unavailable-attachment notices when WhatsApp, LINE, Signal, iMessage, Microsoft Teams, Feishu, Mattermost, or Zalo cannot materialize inbound media, instead of dispatching phantom placeholders or dropping media-only turns. (#100092)
