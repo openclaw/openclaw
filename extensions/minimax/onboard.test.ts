@@ -100,6 +100,28 @@ describe("minimax onboard", () => {
     ]);
   });
 
+  it("preserves models from a non-canonical provider key", () => {
+    const cfg = applyMinimaxApiConfig({
+      models: {
+        providers: {
+          MiniMax: {
+            baseUrl: "https://api.minimax.io/anthropic",
+            api: "anthropic-messages",
+            timeoutSeconds: 900,
+            models: [buildMinimaxApiModelDefinition("MiniMax-M2.7")],
+          },
+        },
+      },
+    });
+
+    expect(Object.keys(cfg.models?.providers ?? {})).toEqual(["minimax"]);
+    expect(cfg.models?.providers?.minimax?.timeoutSeconds).toBe(900);
+    expect(cfg.models?.providers?.minimax?.models.map((model) => model.id)).toEqual([
+      "MiniMax-M2.7",
+      "MiniMax-M3",
+    ]);
+  });
+
   it("preserves other providers when adding minimax", () => {
     const cfg = applyMinimaxApiConfig({
       models: {

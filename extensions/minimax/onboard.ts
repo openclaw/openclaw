@@ -1,4 +1,6 @@
 // Minimax setup module handles plugin onboarding behavior.
+
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   applyAgentDefaultModelPrimary,
   applyOnboardAuthAgentModelsAndProviders,
@@ -23,7 +25,12 @@ function applyMinimaxApiProviderConfigWithBaseUrl(
   params: MinimaxApiProviderConfigParams,
 ): OpenClawConfig {
   const providers = { ...cfg.models?.providers } as Record<string, ModelProviderConfig>;
-  const existingProvider = providers[params.providerId];
+  const normalizedProviderId = normalizeProviderId(params.providerId);
+  const existingProvider =
+    providers[params.providerId] ??
+    Object.entries(providers).find(
+      ([providerId]) => normalizeProviderId(providerId) === normalizedProviderId,
+    )?.[1];
   const existingModels = existingProvider?.models ?? [];
   const apiModel = buildMinimaxApiModelDefinition(params.modelId);
   const hasApiModel = existingModels.some((model) => model.id === params.modelId);
