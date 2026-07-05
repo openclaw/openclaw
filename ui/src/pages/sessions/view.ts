@@ -484,7 +484,8 @@ function sessionDetailItems(params: {
 }
 
 const NEW_GROUP_OPTION = "__new-group__";
-const SESSION_DRAG_MIME = "text/plain";
+// Private MIME so stray text/file drags never become sessions.patch calls.
+const SESSION_DRAG_MIME = "application/x-openclaw-session-key";
 
 function sessionsTableColumnCount(props: SessionsProps): number {
   return props.groupBy === "category" ? 15 : 14;
@@ -549,8 +550,13 @@ function categoryDropHandlers(props: SessionsProps, category: string | null) {
   if (props.groupBy !== "category") {
     return { dragover: nothing, dragleave: nothing, drop: nothing } as const;
   }
+  const carriesSessionKey = (event: DragEvent) =>
+    event.dataTransfer?.types.includes(SESSION_DRAG_MIME) === true;
   return {
     dragover: (event: DragEvent) => {
+      if (!carriesSessionKey(event)) {
+        return;
+      }
       event.preventDefault();
       if (event.dataTransfer) {
         event.dataTransfer.dropEffect = "move";
@@ -559,6 +565,9 @@ function categoryDropHandlers(props: SessionsProps, category: string | null) {
     },
     dragleave: (event: DragEvent) => setDropTargetActive(event, false),
     drop: (event: DragEvent) => {
+      if (!carriesSessionKey(event)) {
+        return;
+      }
       event.preventDefault();
       setDropTargetActive(event, false);
       const key = event.dataTransfer?.getData(SESSION_DRAG_MIME);

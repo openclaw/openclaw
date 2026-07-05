@@ -224,11 +224,21 @@ describe("sessions view", () => {
     if (!headerRow) {
       throw new Error("Expected group header row");
     }
-    const drop = new Event("drop", { bubbles: true, cancelable: true });
-    Object.defineProperty(drop, "dataTransfer", {
-      value: { getData: () => "agent:main:main" },
+    const dropWithPayload = (types: string[], data: Record<string, string>) => {
+      const drop = new Event("drop", { bubbles: true, cancelable: true });
+      Object.defineProperty(drop, "dataTransfer", {
+        value: { types, getData: (type: string) => data[type] ?? "" },
+      });
+      headerRow.dispatchEvent(drop);
+    };
+
+    // Generic text drags (e.g. selected page text) must not trigger patches.
+    dropWithPayload(["text/plain"], { "text/plain": "not-a-session" });
+    expect(onAssignCategory).toHaveBeenCalledTimes(1);
+
+    dropWithPayload(["application/x-openclaw-session-key"], {
+      "application/x-openclaw-session-key": "agent:main:main",
     });
-    headerRow.dispatchEvent(drop);
     expect(onAssignCategory).toHaveBeenCalledWith("agent:main:main", "Research");
   });
 

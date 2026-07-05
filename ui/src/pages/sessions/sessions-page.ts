@@ -542,8 +542,14 @@ export class SessionsPage extends LitElement {
   }
 
   private assignCategory(key: string, category: string | null) {
+    // Only patch keys that exist in the current result; sessions.patch would
+    // otherwise create a store entry for arbitrary dropped text.
+    const session = this.result?.sessions.find((row) => row.key === key);
+    if (!session) {
+      return;
+    }
     // Dropping a row onto its own section is a no-op; skip the patch round-trip.
-    const current = this.result?.sessions.find((row) => row.key === key)?.category?.trim() || null;
+    const current = session.category?.trim() || null;
     if (current === category) {
       return;
     }
