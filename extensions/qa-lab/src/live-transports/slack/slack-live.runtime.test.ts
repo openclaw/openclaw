@@ -38,6 +38,11 @@ describe("Slack live QA runtime helpers", () => {
     ).toThrow("OPENCLAW_QA_SLACK channelId must be a Slack id like C123 or U123.");
   });
 
+  it("canonicalizes the SUT account before config and approval routing", () => {
+    expect(testing.resolveSlackQaSutAccountId(" QA-SUT ")).toBe("qa-sut");
+    expect(testing.resolveSlackQaSutAccountId()).toBe("sut");
+  });
+
   it("parses Convex credential payloads", () => {
     expect(
       testing.parseSlackQaCredentialPayload({

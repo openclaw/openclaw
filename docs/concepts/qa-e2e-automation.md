@@ -625,9 +625,9 @@ Scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts`):
 
 The Codex approval scenarios require an `openai/*` or `codex/*` `--model`, the
 normal live model credentials, and Codex auth or API-key auth accepted by the Codex plugin.
-Their Slack report and summary approval entries include the Codex app-server
-method, selected Codex model key, final Codex turn status, and operation-marker
-verification alongside the redacted Slack approval metadata.
+The Slack report includes the Codex app-server method, selected Codex model key,
+final Codex turn status, and operation-marker verification alongside the
+redacted Slack approval metadata.
 
 Output artifacts:
 

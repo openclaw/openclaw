@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createSlackWebClient, createSlackWriteClient } from "@openclaw/slack/api.js";
 import type { WebClient } from "@slack/web-api";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -97,6 +98,10 @@ function assertSlackCodexApprovalModelSupported(modelRef: string) {
   throw new Error(
     `Slack Codex approval scenarios require an openai/* or codex/* model; received "${modelRef}".`,
   );
+}
+
+function resolveSlackQaSutAccountId(value?: string) {
+  return normalizeAccountId(value?.trim() || "sut");
 }
 
 type SlackQaMessageScenarioRun = {
@@ -2325,7 +2330,7 @@ export async function runSlackQaLive(params: {
   );
   const primaryModel = params.primaryModel?.trim() || defaultQaModelForMode(providerMode);
   const alternateModel = params.alternateModel?.trim() || defaultQaModelForMode(providerMode, true);
-  const sutAccountId = params.sutAccountId?.trim() || "sut";
+  const sutAccountId = resolveSlackQaSutAccountId(params.sutAccountId);
   const scenarios = findScenario(params.scenarioIds);
   if (scenarios.some((scenario) => scenario.configOverrides?.codexApproval === true)) {
     assertSlackCodexApprovalModelSupported(primaryModel);
@@ -2743,6 +2748,7 @@ export const testing = {
   resolveSlackQaReadyTimeoutMs,
   resolveSlackApprovalCheckpointConfig,
   resolveApprovalDecision,
+  resolveSlackQaSutAccountId,
   resolveSlackQaRuntimeEnv,
   SLACK_QA_STANDARD_SCENARIO_IDS,
   toSlackQaScenarioArtifactResults,
