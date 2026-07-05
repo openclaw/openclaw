@@ -1425,6 +1425,13 @@ export const en: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      contextUsage: {
+        title: "Context usage details",
+        open: "Open context usage details",
+        summary: "Session context usage: {used} of {limit} ({pct}%)",
+        contextWindow: "Context window",
+        latestRunTokens: "Latest run tokens",
+      },
       dismissTalkError: "Dismiss Talk error",
       startTalk: "Start Talk",
       stillListening: "Still listening",

@@ -1421,6 +1421,13 @@ export const hi: TranslationMap = {
       placeholderWithAttachments: "संदेश जोड़ें या और छवियाँ पेस्ट करें...",
       placeholderDisconnected: "चैट शुरू करने के लिए gateway से कनेक्ट करें...",
       attachFile: "फ़ाइल संलग्न करें",
+      contextUsage: {
+        title: "Session usage",
+        open: "Open session usage details",
+        summary: "Session context usage: {used} of {limit} ({pct}%)",
+        contextWindow: "Context window",
+        latestRunTokens: "Latest run tokens",
+      },
       dismissTalkError: "Talk त्रुटि खारिज करें",
       startTalk: "Talk शुरू करें",
       stillListening: "अभी भी सुन रहा है",

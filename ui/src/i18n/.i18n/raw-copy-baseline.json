@@ -1101,14 +1101,14 @@
       "text": "Default"
     },
     {
-      "count": 1,
+      "count": 2,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/lib/chat/model-select-state.ts",
       "text": "Fast"
     },
     {
-      "count": 1,
+      "count": 2,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/lib/chat/model-select-state.ts",
@@ -1956,13 +1956,6 @@
     },
     {
       "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-message.ts",
-      "text": "Tool returned an error"
-    },
-    {
-      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-message.ts",
@@ -1974,13 +1967,6 @@
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-message.ts",
       "text": "Context"
-    },
-    {
-      "count": 2,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message.ts",
-      "text": "Error"
     },
     {
       "count": 2,
@@ -2369,24 +2355,17 @@
     },
     {
       "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-tool-cards.ts",
-      "text": "Tool returned an error"
-    },
-    {
-      "count": 2,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-tool-cards.ts",
-      "text": "Error"
-    },
-    {
-      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-tool-cards.ts",
       "text": "Raw details"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/components/chat-tool-cards.ts",
+      "text": "Tool error"
     },
     {
       "count": 1,
@@ -2415,6 +2394,13 @@
       "name": "label",
       "path": "ui/src/pages/chat/realtime-talk-catalog.ts",
       "text": "OpenAI"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/config/config-page.ts",
+      "text": "Settings view"
     },
     {
       "count": 1,
@@ -2659,21 +2645,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "Avatar is browser-local"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
       "text": "Avatar text / emoji"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Bootstrap Context"
     },
     {
       "count": 1,
@@ -2687,14 +2659,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "Choose a built-in profile to replace the current custom values."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Choose how much workspace context OpenClaw injects into each run. These profiles do not change your model, tools, channels, or theme."
+      "text": "Choose how much workspace context OpenClaw injects into each run. Profiles only change bootstrap size and follow-up reinjection — never your model, tools, channels, or theme."
     },
     {
       "count": 1,
@@ -2744,13 +2709,6 @@
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
       "text": "Custom"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Custom bootstrap settings are active."
     },
     {
       "count": 1,
@@ -2827,21 +2785,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "Profiles only change bootstrap size and follow-up reinjection behavior."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
       "text": "Roundness"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Save Profile writes it as the default. Apply Now writes it and reloads the current session."
     },
     {
       "count": 1,
@@ -2904,20 +2848,6 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "Bootstrap Per File"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Bootstrap Total"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/quick.ts",
       "text": "Claw"
     },
     {
@@ -2933,13 +2863,6 @@
       "name": "label",
       "path": "ui/src/pages/config/quick.ts",
       "text": "Default"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Follow-up Turns"
     },
     {
       "count": 1,
@@ -3206,13 +3129,6 @@
       "name": "text",
       "path": "ui/src/pages/config/view.ts",
       "text": "Push notifications"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/view.ts",
-      "text": "Quick Settings"
     },
     {
       "count": 1,
