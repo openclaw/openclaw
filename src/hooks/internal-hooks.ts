@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { TaskFlowStatus, TaskFlowSyncMode } from "../tasks/task-flow-registry.types.js";
 import type {
   InternalHookEvent,
   InternalHookEventType,
@@ -174,6 +175,53 @@ export type SessionPatchHookEvent = InternalHookEvent & {
   type: "session";
   action: "patch";
   context: SessionPatchHookContext;
+};
+
+export type TaskFlowHookSnapshot = {
+  flowId: string;
+  syncMode: TaskFlowSyncMode;
+  ownerKey: string;
+  status: TaskFlowStatus;
+  goal: string;
+  revision: number;
+  createdAt: number;
+  updatedAt: number;
+  currentStep?: string;
+  controllerId?: string;
+  endedAt?: number;
+};
+
+export type TaskFlowCreatedHookContext = {
+  flow: TaskFlowHookSnapshot;
+};
+
+export type TaskFlowCreatedHookEvent = InternalHookEvent & {
+  type: "task";
+  action: "flow:created";
+  context: TaskFlowCreatedHookContext;
+};
+
+export type TaskFlowTransitionHookContext = {
+  flow: TaskFlowHookSnapshot;
+  previousStatus: TaskFlowStatus;
+  durationMs: number;
+};
+
+export type TaskFlowTransitionHookEvent = InternalHookEvent & {
+  type: "task";
+  action: "flow:transition";
+  context: TaskFlowTransitionHookContext;
+};
+
+export type TaskFlowDeletedHookContext = {
+  flowId: string;
+  previous: TaskFlowHookSnapshot;
+};
+
+export type TaskFlowDeletedHookEvent = InternalHookEvent & {
+  type: "task";
+  action: "flow:deleted";
+  context: TaskFlowDeletedHookContext;
 };
 
 /**
@@ -459,4 +507,38 @@ export function isSessionPatchEvent(event: InternalHookEvent): event is SessionP
     typeof context.sessionEntry === "object" &&
     context.sessionEntry !== null
   );
+}
+
+export function isTaskFlowCreatedEvent(
+  event: InternalHookEvent,
+): event is TaskFlowCreatedHookEvent {
+  if (!isHookEventTypeAndAction(event, "task", "flow:created")) {
+    return false;
+  }
+  const context = getHookContext<TaskFlowCreatedHookContext>(event);
+  return typeof context?.flow?.flowId === "string";
+}
+
+export function isTaskFlowTransitionEvent(
+  event: InternalHookEvent,
+): event is TaskFlowTransitionHookEvent {
+  if (!isHookEventTypeAndAction(event, "task", "flow:transition")) {
+    return false;
+  }
+  const context = getHookContext<TaskFlowTransitionHookContext>(event);
+  return (
+    typeof context?.flow?.flowId === "string" &&
+    typeof context.previousStatus === "string" &&
+    typeof context.durationMs === "number"
+  );
+}
+
+export function isTaskFlowDeletedEvent(
+  event: InternalHookEvent,
+): event is TaskFlowDeletedHookEvent {
+  if (!isHookEventTypeAndAction(event, "task", "flow:deleted")) {
+    return false;
+  }
+  const context = getHookContext<TaskFlowDeletedHookContext>(event);
+  return typeof context?.flowId === "string" && typeof context.previous?.flowId === "string";
 }
