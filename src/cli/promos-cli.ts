@@ -30,6 +30,9 @@ export function registerPromosCli(program: Command) {
     .command("claim")
     .description("Claim a promotion: set up provider auth and register its models")
     .argument("<slug>", "Promotion slug from `openclaw promos list`")
+    // Credential-on-argv matches the shipped `onboard --<provider>-api-key` /
+    // `onboard --token` non-interactive contract (AGENTS.md: public API). The
+    // no-argv alternative is the provider's env var, detected as existing auth.
     .option("--api-key <key>", "Provider API key for non-interactive setup")
     .option("--set-default", "Set the promotion's suggested model as default without asking", false)
     .action(async (slug: string, opts: { apiKey?: string; setDefault?: boolean }) => {

@@ -43,7 +43,10 @@ Claims a live promotion:
 3. Reuses your existing provider credentials when you have them. Otherwise it
    walks the provider's normal auth flow (printing the promotion's signup URL
    for a free key first). `--api-key <key>` completes API-key auth without
-   prompts.
+   prompts, matching the `openclaw onboard` non-interactive flags; to keep the
+   key off the command line, export the provider's environment variable
+   instead (for example `OPENROUTER_API_KEY`) — existing env credentials are
+   detected automatically and no flag is needed.
 4. Registers the promotion's models with their aliases. Existing aliases are
    never overwritten.
 5. Offers to set the promotion's suggested model as your default —
