@@ -500,21 +500,22 @@ async function runSetupWizardOnce(
     await prompter.note(t("wizard.setup.quickstartOnlyLocal"), t("wizard.setup.quickstartTitle"));
     flow = "advanced";
   }
-  const useAgentAssistedSetup =
+  const canUseAgentAssistedSetupForConfig = async (config: OpenClawConfig): Promise<boolean> =>
     flow === "quickstart" &&
-    baseConfig.gateway?.mode !== "remote" &&
+    config.gateway?.mode !== "remote" &&
     !hasExplicitFullWizardIntent(opts) &&
     (await canUseAgentAssistedGatewayPolicy(
-      baseConfig,
+      config,
       () =>
         onboardHelpers.resolveControlUiLinks({
-          port: resolveGatewayPort(baseConfig),
-          bind: baseConfig.gateway?.bind,
-          customBindHost: baseConfig.gateway?.customBindHost,
-          basePath: baseConfig.gateway?.controlUi?.basePath,
-          tlsEnabled: baseConfig.gateway?.tls?.enabled === true,
+          port: resolveGatewayPort(config),
+          bind: config.gateway?.bind,
+          customBindHost: config.gateway?.customBindHost,
+          basePath: config.gateway?.controlUi?.basePath,
+          tlsEnabled: config.gateway?.tls?.enabled === true,
         }).wsUrl,
     ));
+  let useAgentAssistedSetup = await canUseAgentAssistedSetupForConfig(baseConfig);
 
   if (snapshot.exists && !useAgentAssistedSetup) {
     await prompter.note(
@@ -898,6 +899,7 @@ async function runSetupWizardOnce(
         pendingPluginInstallMigrationBaseConfig = baseConfig;
         quickstartGateway = resolveQuickstartGatewayDefaults(baseConfig);
         localPort = resolveGatewayPort(baseConfig);
+        useAgentAssistedSetup = await canUseAgentAssistedSetupForConfig(baseConfig);
         if (!opts.agentId && baseConfig.agents?.list?.length) {
           setupAgentId = resolveDefaultAgentId(baseConfig);
         }

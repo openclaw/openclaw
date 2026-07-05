@@ -1257,7 +1257,7 @@ describe("runSetupWizard", () => {
     vi.clearAllMocks();
   });
 
-  it("uses Gateway defaults imported by a selected migration", async () => {
+  it("uses imported Gateway defaults without an ineligible assisted handoff", async () => {
     const migratedConfig = {
       gateway: {
         port: 24680,
@@ -1266,6 +1266,9 @@ describe("runSetupWizard", () => {
         auth: {
           mode: "token" as const,
           token: "migration-token", // pragma: allowlist secret
+          rateLimit: {
+            exemptLoopback: false,
+          },
         },
         tailscale: {
           mode: "serve" as const,
@@ -1312,12 +1315,24 @@ describe("runSetupWizard", () => {
     ]);
     hasRunnableLocalAgent.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     configureGatewayForSetup.mockClear();
+    finishAgentAssistedSetup.mockClear();
 
     const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) =>
       message === "How do you want to set up this agent?" ? "codex" : "quickstart",
     ) as unknown as WizardPrompter["select"];
 
-    await runSetupWizard({ acceptRisk: true }, createRuntime(), buildWizardPrompter({ select }));
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      createRuntime(),
+      buildWizardPrompter({ select }),
+    );
 
     expect(configureGatewayForSetup).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1336,6 +1351,7 @@ describe("runSetupWizard", () => {
         },
       }),
     );
+    expect(finishAgentAssistedSetup).not.toHaveBeenCalled();
   });
 
   it("routes explicit migration flags directly into migration import", async () => {
