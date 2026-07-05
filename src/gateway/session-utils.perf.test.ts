@@ -50,6 +50,7 @@ describe("listSessionsFromStore resolver cache", () => {
       for (let i = 0; i < rowCount; i++) {
         const tuple = tuples[i % tuples.length];
         store[`agent:default:webchat:dm:${i}`] = {
+          sessionId: `session-${i}`,
           updatedAt: now - i,
           modelProvider: tuple.modelProvider,
           model: tuple.model,
