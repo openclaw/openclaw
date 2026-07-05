@@ -413,11 +413,11 @@ function isQaGatewayChildProcessTreeAlive(child: ChildProcess) {
     process.kill(-child.pid, 0);
     return true;
   } catch (error) {
-    if (isProcessAlreadyExitedError(error)) {
-      return false;
+    if (!isProcessAlreadyExitedError(error) && !hasChildExited(child)) {
+      return true;
     }
-    return !hasChildExited(child);
   }
+  return false;
 }
 
 type QaGatewayTaskkillRunner = typeof spawnSync;
@@ -498,7 +498,10 @@ async function stopQaGatewayChildProcessTree(
     return;
   }
   signalQaGatewayChildProcessTree(child, "SIGKILL");
-  await waitForQaGatewayChildExit(child, opts?.forceTimeoutMs ?? 2_000);
+  const stopped = await waitForQaGatewayChildExit(child, opts?.forceTimeoutMs ?? 2_000);
+  if (!stopped) {
+    throw new Error("qa gateway process tree remained alive after forced shutdown");
+  }
 }
 
 function isQaModelProviderConfig(value: unknown): value is ModelProviderConfig {
