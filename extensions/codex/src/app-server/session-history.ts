@@ -17,12 +17,7 @@ import {
 import { sanitizeCodexHistoryImagePayloads } from "./image-payload-sanitizer.js";
 
 function isMissingFileError(error: unknown): boolean {
-  return Boolean(
-    error &&
-    typeof error === "object" &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "ENOENT",
-  );
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
 }
 
 export type CodexMirroredSessionHistoryTarget = {
@@ -61,6 +56,7 @@ export async function readCodexMirroredSessionHistoryMessages(
       "codex mirrored history",
     );
   } catch (error) {
+    // A new Codex session can be read before its transcript exists; other failures still warn.
     if (isMissingFileError(error)) {
       return [];
     }

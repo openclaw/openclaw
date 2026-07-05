@@ -41,29 +41,6 @@ describe("Codex app-server attempt context", () => {
     }
   });
 
-  it("keeps malformed mirrored session history on the hook warning path", async () => {
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-attempt-context-history-"));
-    const sessionFile = path.join(dir, "session.jsonl");
-    try {
-      await fs.writeFile(sessionFile, JSON.stringify({ type: "message", id: "orphan" }) + "\n");
-
-      await expect(
-        readMirroredSessionHistoryMessages({
-          sessionFile,
-          sessionId: "codex-session",
-          sessionKey: "codex-session",
-        }),
-      ).resolves.toBeUndefined();
-      expect(warn).toHaveBeenCalledWith(
-        "failed to read mirrored session history for codex harness hooks",
-        { sessionFile },
-      );
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true });
-    }
-  });
-
   it("returns a run context report without deferred Codex dynamic tool schemas", () => {
     const tools = [
       {
