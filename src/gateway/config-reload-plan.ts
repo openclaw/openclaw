@@ -80,6 +80,12 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "diagnostics.stuckSessionWarnMs", kind: "none" },
   { prefix: "diagnostics.stuckSessionAbortMs", kind: "none" },
   { prefix: "diagnostics.memoryPressureSnapshot", kind: "hot" },
+  // Visible-reply policy is consulted for every dispatched source turn. It
+  // must refresh the runtime snapshot immediately so direct Codex/Telegram
+  // chats stop exposing the message-tool-only contract after operators switch
+  // back to automatic replies.
+  { prefix: "messages.visibleReplies", kind: "hot" },
+  { prefix: "messages.groupChat.visibleReplies", kind: "hot" },
   { prefix: "hooks.gmail", kind: "hot", actions: ["restart-gmail-watcher"] },
   { prefix: "hooks", kind: "hot", actions: ["reload-hooks"] },
   {

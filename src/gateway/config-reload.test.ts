@@ -476,6 +476,18 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toStrictEqual([]);
   });
 
+  it("hot-reloads visible reply mode changes", () => {
+    const changedPaths = ["messages.visibleReplies", "messages.groupChat.visibleReplies"];
+    const plan = buildGatewayReloadPlan(changedPaths);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartReasons).toStrictEqual([]);
+    expect(plan.hotReasons).toStrictEqual(changedPaths);
+    expect(plan.noopPaths).toStrictEqual([]);
+    expect(resolveConfigReloadMetadata("messages.visibleReplies").kind).toBe("hot");
+    expect(resolveConfigReloadMetadata("messages.groupChat.visibleReplies").kind).toBe("hot");
+  });
+
   it("hot-reloads auth cooldown changes without a gateway restart", () => {
     const changedPaths = [
       "auth.cooldowns.billingBackoffHours",
@@ -808,6 +820,31 @@ describe("startGatewayConfigReloader", () => {
     expect(harness.onConfigChange.mock.calls[0]?.[1]).toBe(nextConfig);
     expect(harness.onConfigApplied).toHaveBeenCalledTimes(1);
     expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    await harness.reloader.stop();
+  });
+
+  it("runs hot reload when visible reply mode changes", async () => {
+    const initialConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      messages: { visibleReplies: "message_tool" },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      messages: { visibleReplies: "automatic" },
+    };
+    const readSnapshot = vi.fn(async () =>
+      makeSnapshot({ config: nextConfig, hash: "visible-replies" }),
+    );
+    const harness = createReloaderHarness(readSnapshot, { initialConfig });
+
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(harness.onConfigChange).toHaveBeenCalledTimes(1);
+    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+    expect(harness.onHotReload.mock.calls[0]?.[0].hotReasons).toEqual(["messages.visibleReplies"]);
+    expect(harness.onConfigApplied).toHaveBeenCalledTimes(1);
     expect(harness.onRestart).not.toHaveBeenCalled();
     await harness.reloader.stop();
   });

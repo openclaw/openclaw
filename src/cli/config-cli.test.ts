@@ -64,6 +64,8 @@ vi.mock("../gateway/config-reload-plan.js", () => ({
         (changedPath.startsWith("agents.list.") ||
           changedPath.startsWith("agents.defaults.models.") ||
           changedPath.startsWith("models.") ||
+          changedPath === "messages.visibleReplies" ||
+          changedPath === "messages.groupChat.visibleReplies" ||
           changedPath.startsWith("plugins.")),
     );
     restartReasons.push(
@@ -1191,8 +1193,7 @@ describe("config cli", () => {
           issues: [
             {
               path: "update.channel",
-              message:
-                'Invalid input (allowed: "stable", "extended-stable", "beta", "dev")',
+              message: 'Invalid input (allowed: "stable", "extended-stable", "beta", "dev")',
               allowedValues: ["stable", "extended-stable", "beta", "dev"],
               allowedValuesHiddenCount: 0,
             },
@@ -3602,6 +3603,28 @@ describe("config cli", () => {
 
       expectLogIncludes("Updated models.providers.openai.agentRuntime.id");
       expectLogIncludes("Change will apply without restarting the gateway.");
+      expectLogExcludes("Restart the gateway to apply.");
+    });
+
+    it("prints a hot-reload hint for visible reply mode changes", async () => {
+      const resolved: OpenClawConfig = {
+        messages: {
+          visibleReplies: "message_tool",
+        },
+      };
+      setSnapshot(resolved, withRuntimeDefaults(resolved));
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "messages.visibleReplies",
+        '"automatic"',
+        "--strict-json",
+      ]);
+
+      expectLogIncludes("Updated messages.visibleReplies");
+      expectLogIncludes("Change will apply without restarting the gateway.");
+      expectLogExcludes("No gateway restart needed.");
       expectLogExcludes("Restart the gateway to apply.");
     });
 
