@@ -5,7 +5,10 @@ import {
   emptyBoundedChildOutput,
   formatBoundedChildOutput,
 } from "./bounded-child-output.js";
-import { getTailscaleDnsName } from "./webhook/tailscale.js";
+import {
+  cleanupTailscaleExposureRoute,
+  getTailscaleDnsName,
+} from "./webhook/tailscale.js";
 
 const NGROK_LOG_BUFFER_MAX_CHARS = 16_384;
 
@@ -247,7 +250,7 @@ export async function startTailscaleTunnel(config: {
           publicUrl,
           provider: `tailscale-${config.mode}`,
           stop: async () => {
-            await stopTailscaleTunnel(config.mode, path);
+            await cleanupTailscaleExposureRoute({ mode: config.mode, path });
           },
         });
       } else {
@@ -260,31 +263,6 @@ export async function startTailscaleTunnel(config: {
     proc.on("error", (err) => {
       clearTimeout(timeout);
       reject(err);
-    });
-  });
-}
-
-/**
- * Stop a Tailscale serve/funnel tunnel.
- */
-async function stopTailscaleTunnel(mode: "serve" | "funnel", path: string): Promise<void> {
-  return new Promise((resolve) => {
-    const proc = spawn("tailscale", [mode, "off", path], {
-      stdio: "ignore",
-    });
-
-    const timeout = setTimeout(() => {
-      proc.kill("SIGKILL");
-      resolve();
-    }, 5000);
-
-    proc.on("close", () => {
-      clearTimeout(timeout);
-      resolve();
-    });
-    proc.on("error", () => {
-      clearTimeout(timeout);
-      resolve();
     });
   });
 }
