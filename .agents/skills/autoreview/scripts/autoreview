@@ -195,8 +195,14 @@ def subprocess_env(extra: dict[str, str] | None) -> dict[str, str] | None:
     return merged
 
 
-def safe_git_env() -> dict[str, str]:
-    return {
+def safe_git_env(repo: Path) -> dict[str, str]:
+    platform_keys = ("COMSPEC", "PATHEXT", "SYSTEMROOT", "TEMP", "TMP", "TMPDIR", "WINDIR")
+    env = {
+        key: os.environ[key]
+        for key in platform_keys
+        if key in os.environ
+    }
+    env.update({
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_SYSTEM": os.devnull,
@@ -205,8 +211,9 @@ def safe_git_env() -> dict[str, str]:
         "HOME": os.environ.get("HOME", str(Path.home())),
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
-        "PATH": os.pathsep.join(DEFAULT_ENGINE_PATHS),
-    }
+        "PATH": safe_engine_path(repo),
+    })
+    return env
 
 
 def safe_engine_path(repo: Path, extra_paths: list[Path] | None = None) -> str:
@@ -571,7 +578,7 @@ def git(repo: Path, *args: str, check: bool = True) -> str:
         [resolve_command("git", repo), "--no-optional-locks", *SAFE_GIT_CONFIG_ARGS, *args],
         repo,
         check=check,
-        env=safe_git_env(),
+        env=safe_git_env(repo),
     ).stdout
 
 
@@ -592,7 +599,7 @@ def repo_root() -> Path:
         errors=SUBPROCESS_TEXT_ERRORS,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env=safe_git_env(),
+        env=safe_git_env(unsafe_root),
     )
     if result.returncode != 0:
         raise SystemExit("autoreview must run inside a git repository")
@@ -721,6 +728,15 @@ def bounded(text: str, limit: int = 180_000) -> str:
     return text[:limit] + f"\n\n[truncated at {limit} characters]\n"
 
 
+def ensure_reviewer_input_complete(reviewer: argparse.Namespace, input_truncated: bool) -> None:
+    tools_disabled = reviewer.engine == "pi" or not reviewer.tools
+    if tools_disabled and input_truncated:
+        raise SystemExit(
+            f"{reviewer.engine} engine refused truncated review input because its tools are disabled; "
+            "reduce the change/input size or choose a repository-confined reviewer"
+        )
+
+
 def bounded_field(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
@@ -737,20 +753,24 @@ def read_prefix(path: Path, limit: int) -> tuple[bytes, bool]:
     return data[:limit], len(data) > limit
 
 
-def read_text(path: Path, limit: int = MAX_BUNDLE_TEXT_BYTES) -> str:
+def read_text_with_status(path: Path, limit: int = MAX_BUNDLE_TEXT_BYTES) -> tuple[str, bool]:
     try:
         data, truncated = read_prefix(path, limit)
     except SystemExit as exc:
-        return f"[unreadable: {exc}]"
+        return f"[unreadable: {exc}]", False
     if b"\0" in data:
-        return "[binary file omitted]"
+        return "[binary file omitted]", False
     text = data.decode("utf-8", errors="replace")
     if len(text) > limit:
         text = text[:limit]
         truncated = True
     if truncated:
-        return text + f"\n\n[truncated at {limit} characters]\n"
-    return text
+        return text + f"\n\n[truncated at {limit} characters]\n", True
+    return text, False
+
+
+def read_text(path: Path, limit: int = MAX_BUNDLE_TEXT_BYTES) -> str:
+    return read_text_with_status(path, limit)[0]
 
 
 def path_has_sensitive_part(rel: str | Path) -> bool:
@@ -845,7 +865,7 @@ def local_status(repo: Path, untracked: list[str]) -> str:
     return "\n".join(lines)
 
 
-def local_bundle(repo: Path) -> str:
+def local_bundle(repo: Path) -> tuple[str, bool]:
     staged_patch = git(repo, "diff", *SAFE_DIFF_FLAGS, "--cached", "--patch")
     unstaged_patch = git(repo, "diff", *SAFE_DIFF_FLAGS, "--patch")
     untracked = safe_untracked_files(repo)
@@ -861,15 +881,18 @@ def local_bundle(repo: Path) -> str:
         git(repo, "diff", *SAFE_DIFF_FLAGS, "--stat"),
         bounded(unstaged_patch),
     ]
+    input_truncated = len(staged_patch) > 180_000 or len(unstaged_patch) > 180_000
     if untracked:
         parts.append("# Untracked Files")
         for rel in untracked:
             path = repo / rel
-            parts.append(f"## {rel}\n{read_text(path)}")
-    return "\n\n".join(parts)
+            content, truncated = read_text_with_status(path)
+            input_truncated = input_truncated or truncated
+            parts.append(f"## {rel}\n{content}")
+    return "\n\n".join(parts), input_truncated
 
 
-def branch_bundle(repo: Path, base_ref: str) -> str:
+def branch_bundle(repo: Path, base_ref: str) -> tuple[str, bool]:
     base_ref = validate_git_ref(repo, base_ref, "base")
     branch_patch = git(
         repo,
@@ -893,10 +916,10 @@ def branch_bundle(repo: Path, base_ref: str) -> str:
             ),
             bounded(branch_patch),
         ]
-    )
+    ), len(branch_patch) > 180_000
 
 
-def commit_bundle(repo: Path, commit_ref: str) -> str:
+def commit_bundle(repo: Path, commit_ref: str) -> tuple[str, bool]:
     commit_ref = validate_git_ref(repo, commit_ref, "commit")
     commit_patch = git(
         repo,
@@ -922,7 +945,7 @@ def commit_bundle(repo: Path, commit_ref: str) -> str:
             ),
             bounded(commit_patch),
         ]
-    )
+    ), len(commit_patch) > 180_000
 
 
 def review_paths(repo: Path, target: str, target_ref: str | None, commit_ref: str) -> set[str]:
@@ -962,7 +985,7 @@ def review_paths(repo: Path, target: str, target_ref: str | None, commit_ref: st
     return names
 
 
-def validate_evidence_file(repo: Path, raw_path: str, label: str) -> tuple[Path, str]:
+def validate_evidence_file(repo: Path, raw_path: str, label: str) -> tuple[Path, str, bool]:
     original = Path(raw_path)
     if original.is_absolute() or ".." in original.parts or not original.parts:
         raise SystemExit(f"{label} must be a repo-relative path: {raw_path}")
@@ -978,28 +1001,32 @@ def validate_evidence_file(repo: Path, raw_path: str, label: str) -> tuple[Path,
     risk = file_bundle_risk(repo, path, rel)
     if risk:
         raise SystemExit(f"refusing to include unsafe {label}: {rel} ({risk})")
-    content = read_text(path)
+    content, truncated = read_text_with_status(path)
     require_no_secret_values(f"{label} {rel}", content)
-    return path, content
+    return path, content, truncated
 
 
-def load_extra_prompt(args: argparse.Namespace, repo: Path) -> str:
+def load_extra_prompt(args: argparse.Namespace, repo: Path) -> tuple[str, bool]:
     chunks: list[str] = []
+    input_truncated = False
     for value in args.prompt or []:
         require_no_secret_values("--prompt", value)
         chunks.append(value)
     for path in args.prompt_file or []:
-        _, content = validate_evidence_file(repo, path, "--prompt-file")
+        _, content, truncated = validate_evidence_file(repo, path, "--prompt-file")
+        input_truncated = input_truncated or truncated
         chunks.append(content)
-    return "\n\n".join(chunks)
+    return "\n\n".join(chunks), input_truncated
 
 
-def load_datasets(args: argparse.Namespace, repo: Path) -> str:
+def load_datasets(args: argparse.Namespace, repo: Path) -> tuple[str, bool]:
     chunks: list[str] = []
+    input_truncated = False
     for spec in args.dataset or []:
-        path, content = validate_evidence_file(repo, spec, "--dataset")
+        path, content, truncated = validate_evidence_file(repo, spec, "--dataset")
+        input_truncated = input_truncated or truncated
         chunks.append(f"# Dataset: {path.relative_to(repo.resolve())}\n{content}")
-    return "\n\n".join(chunks)
+    return "\n\n".join(chunks), input_truncated
 
 
 def review_scope_policy() -> str:
@@ -3318,7 +3345,15 @@ def reviewer_label(args: argparse.Namespace) -> str:
     return " ".join(parts)
 
 
-def run_reviewer(args: argparse.Namespace, repo: Path, prompt: str, changed_paths: set[str], required: list[str]) -> dict[str, Any]:
+def run_reviewer(
+    args: argparse.Namespace,
+    repo: Path,
+    prompt: str,
+    changed_paths: set[str],
+    required: list[str],
+    input_truncated: bool = False,
+) -> dict[str, Any]:
+    ensure_reviewer_input_complete(args, input_truncated)
     attempts = 3 if args.engine == "cursor" else 1
     for attempt in range(1, attempts + 1):
         raw = run_engine(args, repo, prompt)
@@ -3364,12 +3399,19 @@ def merge_panel_reports(reports: list[tuple[str, dict[str, Any]]]) -> dict[str, 
     }
 
 
-def run_panel(args: argparse.Namespace, reviewers: list[argparse.Namespace], repo: Path, prompt: str, changed_paths: set[str]) -> dict[str, Any]:
+def run_panel(
+    args: argparse.Namespace,
+    reviewers: list[argparse.Namespace],
+    repo: Path,
+    prompt: str,
+    changed_paths: set[str],
+    input_truncated: bool,
+) -> dict[str, Any]:
     reports: list[tuple[str, dict[str, Any]]] = []
     failures: list[str] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(reviewers)) as executor:
         future_by_label = {
-            executor.submit(run_reviewer, reviewer, repo, prompt, changed_paths, []): reviewer_label(reviewer)
+            executor.submit(run_reviewer, reviewer, repo, prompt, changed_paths, [], input_truncated): reviewer_label(reviewer)
             for reviewer in reviewers
         }
         for future in concurrent.futures.as_completed(future_by_label):
@@ -3680,20 +3722,23 @@ def main() -> int:
         return 0
 
     if target == "local":
-        bundle = local_bundle(repo)
+        bundle, bundle_truncated = local_bundle(repo)
     elif target == "branch":
         assert target_ref
-        bundle = branch_bundle(repo, target_ref)
+        bundle, bundle_truncated = branch_bundle(repo, target_ref)
     else:
-        bundle = commit_bundle(repo, args.commit)
+        bundle, bundle_truncated = commit_bundle(repo, args.commit)
         target_ref = args.commit
+    extra_prompt, prompt_truncated = load_extra_prompt(args, repo)
+    datasets, datasets_truncated = load_datasets(args, repo)
+    input_truncated = bundle_truncated or prompt_truncated or datasets_truncated
     prompt = build_prompt(
         repo,
         target,
         target_ref,
         bundle,
-        load_extra_prompt(args, repo),
-        load_datasets(args, repo),
+        extra_prompt,
+        datasets,
     )
     changed_paths = review_paths(repo, target, target_ref, args.commit)
     print(f"bundle: {len(prompt)} chars")
@@ -3703,10 +3748,17 @@ def main() -> int:
         tests_proc = start_parallel_tests(args.parallel_tests, repo, args.parallel_tests_shell)
     try:
         if len(reviewers) == 1:
-            report = run_reviewer(reviewers[0], repo, prompt, changed_paths, args.require_finding)
+            report = run_reviewer(
+                reviewers[0],
+                repo,
+                prompt,
+                changed_paths,
+                args.require_finding,
+                input_truncated,
+            )
             label = "autoreview"
         else:
-            report = run_panel(args, reviewers, repo, prompt, changed_paths)
+            report = run_panel(args, reviewers, repo, prompt, changed_paths, input_truncated)
             label = "autoreview panel"
         if args.json_output:
             Path(args.json_output).write_text(json.dumps(report, indent=2) + "\n")

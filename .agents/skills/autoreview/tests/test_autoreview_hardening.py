@@ -67,9 +67,10 @@ class AutoreviewHardeningTests(unittest.TestCase):
             repo = init_repo(Path(tempdir))
             (repo / "image.bin").write_bytes(b"\x89PNG\r\n\0binary-content")
 
-            bundle = self.helper["local_bundle"](repo)
+            bundle, truncated = self.helper["local_bundle"](repo)
 
             self.assertIn("## image.bin\n[binary file omitted]", bundle)
+            self.assertFalse(truncated)
 
     def test_branch_bundle_rejects_unsafe_or_unknown_base_before_diff(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -100,6 +101,55 @@ class AutoreviewHardeningTests(unittest.TestCase):
         bounded = self.helper["bounded"]("x" * 25, 10)
 
         self.assertEqual(bounded, "x" * 10 + "\n\n[truncated at 10 characters]\n")
+
+    def test_pi_refuses_truncated_review_input(self) -> None:
+        reviewer = argparse.Namespace(engine="pi", tools=True)
+
+        with self.assertRaisesRegex(SystemExit, "pi engine refused truncated review input"):
+            self.helper["ensure_reviewer_input_complete"](
+                reviewer,
+                True,
+            )
+
+        self.helper["ensure_reviewer_input_complete"](
+            reviewer,
+            False,
+        )
+        self.helper["ensure_reviewer_input_complete"](
+            argparse.Namespace(engine="codex", tools=True),
+            True,
+        )
+        with self.assertRaisesRegex(SystemExit, "claude engine refused truncated review input"):
+            self.helper["ensure_reviewer_input_complete"](
+                argparse.Namespace(engine="claude", tools=False),
+                True,
+            )
+
+    def test_safe_git_env_preserves_trusted_platform_and_helper_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            repo_bin = repo / "bin"
+            trusted_bin = root / "trusted-bin"
+            repo_bin.mkdir()
+            trusted_bin.mkdir()
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "PATH": os.pathsep.join((str(repo_bin), str(trusted_bin))),
+                    "SYSTEMROOT": "C:\\Windows",
+                    "GIT_DIR": str(repo / ".git"),
+                    "OPENAI_API_KEY": "must-not-reach-git",
+                },
+                clear=False,
+            ):
+                env = self.helper["safe_git_env"](repo)
+
+        self.assertNotIn(str(repo_bin.resolve()), env["PATH"].split(os.pathsep))
+        self.assertIn(str(trusted_bin.resolve()), env["PATH"].split(os.pathsep))
+        self.assertEqual(env["SYSTEMROOT"], "C:\\Windows")
+        self.assertNotIn("GIT_DIR", env)
+        self.assertNotIn("OPENAI_API_KEY", env)
 
     def test_read_text_truncates_without_scanning_tail(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -212,9 +262,10 @@ class AutoreviewHardeningTests(unittest.TestCase):
             evidence = repo / "evidence.txt"
             evidence.write_text("x" * 600_000, encoding="utf-8")
 
-            _, content = self.helper["validate_evidence_file"](repo, "evidence.txt", "--dataset")
+            _, content, truncated = self.helper["validate_evidence_file"](repo, "evidence.txt", "--dataset")
 
             self.assertIn("[truncated at 180000 characters]", content)
+            self.assertTrue(truncated)
 
     def test_copilot_allows_web_fetch_only_when_web_search_is_enabled(self) -> None:
         captured: list[list[str]] = []
