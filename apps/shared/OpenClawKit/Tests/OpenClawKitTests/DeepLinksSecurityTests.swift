@@ -21,8 +21,9 @@ private func setupCode(from payload: String) -> String {
         #expect(DeepLinkParser.parse(url) == .dashboard)
     }
 
-    @Test func gatewayDeepLinkUsesTlsDefaultPortWhenPortMissing() {
-        let url = URL(string: "openclaw://gateway?host=gateway.example.com&tls=1&token=abc")!
+    @Test func gatewayDeepLinkUsesTlsDefaultPortWhenPortMissing() throws {
+        let url = try #require(URL(
+            string: "openclaw://gateway?host=gateway.example.com&tls=1&token=abc"))
         #expect(
             DeepLinkParser.parse(url) == .gateway(
                 .init(
@@ -34,9 +35,23 @@ private func setupCode(from payload: String) -> String {
                     password: nil)))
     }
 
-    @Test func gatewayDeepLinkPreservesExplicitTlsPort() {
-        let url = URL(
-            string: "openclaw://gateway?host=gateway.example.com&port=18789&tls=1&token=abc")!
+    @Test func gatewayDeepLinkUsesPlaintextDefaultPortWhenPortMissing() throws {
+        let url = try #require(URL(
+            string: "openclaw://gateway?host=127.0.0.1&tls=0&token=abc"))
+        #expect(
+            DeepLinkParser.parse(url) == .gateway(
+                .init(
+                    host: "127.0.0.1",
+                    port: 18789,
+                    tls: false,
+                    bootstrapToken: nil,
+                    token: "abc",
+                    password: nil)))
+    }
+
+    @Test func gatewayDeepLinkPreservesExplicitTlsPort() throws {
+        let url = try #require(URL(
+            string: "openclaw://gateway?host=gateway.example.com&port=18789&tls=1&token=abc"))
         #expect(
             DeepLinkParser.parse(url) == .gateway(
                 .init(
