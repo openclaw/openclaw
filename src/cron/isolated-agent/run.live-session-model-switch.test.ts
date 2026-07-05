@@ -71,6 +71,10 @@ function requireEmbeddedAgentCall(index: number): {
   model?: string;
   authProfileId?: string;
   authProfileIdSource?: string;
+  suppressNextUserMessagePersistence?: boolean;
+  userTurnTranscriptRecorder?: {
+    markRuntimePersisted: (message: { role: "user"; content: string }) => void;
+  };
 } {
   const call = runEmbeddedAgentMock.mock.calls[index]?.[0] as
     | {
@@ -78,6 +82,10 @@ function requireEmbeddedAgentCall(index: number): {
         model?: string;
         authProfileId?: string;
         authProfileIdSource?: string;
+        suppressNextUserMessagePersistence?: boolean;
+        userTurnTranscriptRecorder?: {
+          markRuntimePersisted: (message: { role: "user"; content: string }) => void;
+        };
       }
     | undefined;
   if (!call) {
@@ -203,14 +211,18 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
       attempts: [],
     }));
     runEmbeddedAgentMock
-      .mockRejectedValueOnce(
-        new LiveSessionModelSwitchError({
+      .mockImplementationOnce(async (request) => {
+        request.userTurnTranscriptRecorder?.markRuntimePersisted({
+          role: "user",
+          content: "run task",
+        });
+        throw new LiveSessionModelSwitchError({
           provider: "anthropic",
           model: "claude-sonnet-4-6",
           authProfileId: "profile-b",
           authProfileIdSource: "user",
-        }),
-      )
+        });
+      })
       .mockResolvedValueOnce({
         payloads: [{ text: "task complete" }],
         meta: {
@@ -231,6 +243,10 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
     expect(retryParams.model).toBe("claude-sonnet-4-6");
     expect(retryParams.authProfileId).toBe("profile-b");
     expect(retryParams.authProfileIdSource).toBe("user");
+    const firstParams = requireEmbeddedAgentCall(0);
+    expect(retryParams.userTurnTranscriptRecorder).toBe(firstParams.userTurnTranscriptRecorder);
+    expect(firstParams.suppressNextUserMessagePersistence).toBe(false);
+    expect(retryParams.suppressNextUserMessagePersistence).toBe(true);
     expect(cronSession.sessionEntry.authProfileOverride).toBe("profile-b");
     expect(cronSession.sessionEntry.authProfileOverrideSource).toBe("user");
   });

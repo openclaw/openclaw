@@ -231,6 +231,7 @@ type FollowupRuntimeMetadata = Pick<
   | "currentInboundAudio"
   | "currentInboundContext"
   | "abortSignal"
+  | "queueAbortSignal"
   | "deliveryCorrelations"
   | "queuedLifecycle"
 >;
@@ -253,7 +254,11 @@ function hasRuntimeOnlyFollowupMetadata(item: FollowupRun): boolean {
 }
 
 function combineAbortSignals(items: readonly FollowupRun[]): AbortSignal | undefined {
-  const signals = items.flatMap((item) => (item.abortSignal ? [item.abortSignal] : []));
+  const signals = items.flatMap((item) =>
+    [item.abortSignal, item.queueAbortSignal].filter(
+      (signal): signal is AbortSignal => signal !== undefined,
+    ),
+  );
   if (signals.length === 0) {
     return undefined;
   }
@@ -290,6 +295,7 @@ function collectRuntimeMetadata(
       ? singletonOwner
       : items.find(hasCurrentTurnRuntimeMetadata);
   const abortSignal = singletonOwner?.abortSignal ?? combineAbortSignals(candidates);
+  const queueAbortSignal = singletonOwner?.queueAbortSignal;
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
   const lifecycleSource = singletonOwner ?? items.find((item) => item.queuedLifecycle);
   return {
@@ -297,6 +303,7 @@ function collectRuntimeMetadata(
     currentInboundAudio: currentTurnSource?.currentInboundAudio,
     currentInboundContext: currentTurnSource?.currentInboundContext,
     abortSignal,
+    queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
     queuedLifecycle:
       singletonOwner?.queuedLifecycle ??
@@ -314,6 +321,7 @@ type FollowupQueueSummaryState = {
     count: number;
     source: FollowupRun;
     sourceRefs: WeakSet<FollowupRun>;
+    allRoomEvents: boolean;
   }>;
   evictedSummaryCount: number;
 };
@@ -501,6 +509,7 @@ function resolveOverflowSummarySourceGroup(queue: {
 export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupRun {
   return {
     prompt: source.prompt,
+    queueAbortSignal: source.queueAbortSignal,
     transcriptPrompt: source.transcriptPrompt,
     messageId: source.messageId,
     summaryLine: source.summaryLine,
@@ -513,12 +522,23 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     originatingReplyToId: source.originatingReplyToId,
     originatingReplyToMode: source.originatingReplyToMode,
     originatingChatType: source.originatingChatType,
+    ...(source.currentInboundEventKind === "room_event"
+      ? { currentInboundEventKind: "room_event" }
+      : {}),
     run: source.run,
   };
 }
 
+function resolveOverflowSummaryInboundEventKind(sources: FollowupRun[]): "room_event" | undefined {
+  return sources.length > 0 &&
+    sources.every((source) => source.currentInboundEventKind === "room_event")
+    ? "room_event"
+    : undefined;
+}
+
 async function runSyntheticOverflowSummary(params: {
   source: FollowupRun;
+  sources: FollowupRun[];
   prompt: string;
   runFollowup: (run: FollowupRun) => Promise<void>;
 }): Promise<void> {
@@ -579,14 +599,17 @@ async function runSyntheticOverflowSummary(params: {
     beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
     errorContext: "followup overflow summary transcript",
   });
+  const currentInboundEventKind = resolveOverflowSummaryInboundEventKind(params.sources);
   await params.runFollowup({
     prompt: params.prompt,
+    queueAbortSignal: params.source.queueAbortSignal,
     transcriptPrompt: params.prompt,
     messageId: params.source.messageId,
     userTurnTranscriptRecorder,
     run: params.source.run,
     enqueuedAt: Date.now(),
     ...resolveOriginRoutingMetadata([params.source]),
+    ...(currentInboundEventKind ? { currentInboundEventKind } : {}),
   });
 }
 
@@ -629,6 +652,7 @@ async function drainElidedOverflowSummary(params: {
     async () => {
       await runSyntheticOverflowSummary({
         source,
+        sources: entry.allRoomEvents ? [entry.source, ...retainedSources] : [],
         prompt,
         runFollowup: params.runFollowup,
       });
@@ -678,6 +702,7 @@ async function drainOverflowSummaryGroup(params: {
   await runQueueSummaryDelivery(params.queue, delivery, async () => {
     await runSyntheticOverflowSummary({
       source,
+      sources: delivery.sources,
       prompt: delivery.prompt,
       runFollowup: params.runFollowup,
     });

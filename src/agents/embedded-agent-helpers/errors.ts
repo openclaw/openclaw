@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../llm/types.js";
+import { isConfiguredContextSizeOverflowError } from "../../llm/utils/overflow.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   extractLeadingHttpStatus,
@@ -131,6 +132,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     hasContextWindow && (lower.includes("ran out of room") || lower.includes("ran out of space"));
   return (
     lower.includes("request_too_large") ||
+    isConfiguredContextSizeOverflowError(errorMessage) ||
     (lower.includes("invalid_argument") && lower.includes("maximum number of tokens")) ||
     lower.includes("request exceeds the maximum size") ||
     lower.includes("context length exceeded") ||
@@ -731,7 +733,10 @@ function toReasonClassification(reason: FailoverReason): FailoverClassification 
 function failoverReasonFromClassification(
   classification: FailoverClassification | null,
 ): FailoverReason | null {
-  return classification?.kind === "reason" ? classification.reason : null;
+  if (!classification) {
+    return null;
+  }
+  return classification.kind === "reason" ? classification.reason : "context_overflow";
 }
 
 export function isTransientHttpError(raw: string): boolean {

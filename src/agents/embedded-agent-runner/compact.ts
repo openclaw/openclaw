@@ -83,6 +83,7 @@ import {
   isRealConversationMessage,
 } from "../compaction-real-conversation.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
+import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
@@ -867,6 +868,45 @@ async function compactEmbeddedAgentSessionDirectOnce(
       });
 
     const runAbortController = new AbortController();
+    const spawnWorkspaceDir =
+      effectiveCwd !== effectiveWorkspace
+        ? resolvedWorkspace
+        : resolveAttemptSpawnWorkspaceDir({
+            sandbox,
+            resolvedWorkspace,
+          });
+    const runtimeCapabilityProfile = resolveConversationCapabilityProfile({
+      config: params.config,
+      sessionKey: sandboxSessionKey,
+      runSessionKey:
+        params.sessionKey && params.sessionKey !== sandboxSessionKey
+          ? params.sessionKey
+          : undefined,
+      sessionId: params.sessionId,
+      runId: params.runId,
+      agentDir,
+      agentAccountId: params.agentAccountId,
+      messageProvider: resolvedMessageProvider,
+      chatType: params.chatType,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+      modelProvider: model.provider,
+      modelId,
+      modelApi: model.api,
+      modelContextWindowTokens: contextTokenBudget,
+      workspaceDir: effectiveWorkspace,
+      cwd: effectiveCwd,
+      spawnWorkspaceDir,
+      skillsSnapshot: skillsSnapshotForRun,
+      sandboxToolPolicy: sandbox?.tools,
+    });
     const toolsRaw = createOpenClawCodingTools({
       exec: {
         ...params.execOverrides,
@@ -875,6 +915,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       },
       sandbox,
       messageProvider: resolvedMessageProvider,
+      chatType: params.chatType,
       agentAccountId: params.agentAccountId,
       sessionKey: sandboxSessionKey,
       runSessionKey:
@@ -896,13 +937,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       agentDir,
       cwd: effectiveCwd,
       workspaceDir: effectiveWorkspace,
-      spawnWorkspaceDir:
-        effectiveCwd !== effectiveWorkspace
-          ? resolvedWorkspace
-          : resolveAttemptSpawnWorkspaceDir({
-              sandbox,
-              resolvedWorkspace,
-            }),
+      spawnWorkspaceDir,
       config: params.config,
       abortSignal: runAbortController.signal,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -912,6 +947,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       modelApi: model.api,
       modelContextWindowTokens: contextTokenBudget,
       skillsSnapshot: skillsSnapshotForRun,
+      conversationCapabilityProfile: runtimeCapabilityProfile,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config, undefined, {
         workspaceDir: effectiveWorkspace,
       }),
@@ -956,26 +992,10 @@ async function compactEmbeddedAgentSessionDirectOnce(
     const filteredBundledTools = applyFinalEffectiveToolPolicy({
       bundledTools: [...(bundleMcpRuntime?.tools ?? []), ...(bundleLspRuntime?.tools ?? [])],
       config: params.config,
-      sandboxToolPolicy: sandbox?.tools,
-      sessionKey: sandboxSessionKey,
-      // Intentionally omit explicit agentId: the core tools just built with
-      // createOpenClawCodingTools(...) also omit it, so both paths resolve
-      // agentId the same way via resolveAgentIdFromSessionKey(sessionKey).
-      // Passing effectiveSkillAgentId here would diverge from the core-tool
-      // policy for legacy/non-agent session keys where the two sources fall
-      // back to different ids.
-      modelProvider: model.provider,
-      modelId,
-      messageProvider: resolvedMessageProvider,
-      agentAccountId: params.agentAccountId,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      spawnedBy: params.spawnedBy,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
+      // The same profile constructed the core tool set above, so core and
+      // bundled tools cannot disagree about policy inputs (agentId included:
+      // both resolve it from the session key inside the profile).
+      conversationCapabilityProfile: runtimeCapabilityProfile,
       warn: (message) => log.warn(message),
     });
     const normalizableBundledToolProjection = filterProviderNormalizableTools(filteredBundledTools);

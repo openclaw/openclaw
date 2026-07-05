@@ -10,6 +10,7 @@ describe("provider-usage.shared", () => {
   });
 
   it.each([
+    { value: "clawrouter", expected: "clawrouter" },
     { value: "deepseek", expected: "deepseek" },
     { value: "zai", expected: "zai" },
     { value: "z-ai", expected: undefined },

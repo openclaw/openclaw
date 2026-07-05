@@ -55,9 +55,9 @@ To reduce that, OpenClaw treats `auth-profiles.json` as a **token sink**:
 - external CLI reuse is provider-specific: Codex CLI can bootstrap an empty
   `openai:default` profile, but once OpenClaw has a local OAuth profile,
   the local refresh token is canonical. If that local refresh token is rejected,
-  OpenClaw can use a usable same-account Codex CLI token as a runtime-only
-  fallback; other integrations can remain externally managed and re-read their
-  CLI auth store
+  OpenClaw reports the managed profile for re-authentication instead of using
+  Codex CLI token material as a sibling runtime fallback. Other integrations can
+  remain externally managed and re-read their CLI auth store
 - status and startup paths that already know the configured provider set scope
   external CLI discovery to that set, so an unrelated CLI login store is not
   probed for a single-provider setup
@@ -166,11 +166,12 @@ At runtime:
   the secondary agent store
 - exception: some external CLI credentials stay externally managed; OpenClaw
   re-reads those CLI auth stores instead of spending copied refresh tokens.
-  Codex CLI bootstrap is intentionally narrower: it seeds an empty
-  `openai:default` profile, then OpenClaw-owned refreshes keep the local
-  profile canonical. If the local Codex refresh fails and Codex CLI has a
-  usable token for the same account, OpenClaw may use that token for the current
-  runtime request without writing it back to `auth-profiles.json`.
+  Codex CLI bootstrap is intentionally narrower: it can seed an empty
+  `openai:default` or explicitly requested OpenAI profile only before OpenClaw
+  owns OAuth for the provider. After that, OpenClaw-owned refreshes keep local
+  profiles canonical and discovery does not add Codex CLI auth in any sibling
+  slot. If a managed refresh fails, OpenClaw reports the affected profile for
+  re-authentication instead of returning external CLI token material.
 
 The refresh flow is automatic; you generally don't need to manage tokens manually.
 

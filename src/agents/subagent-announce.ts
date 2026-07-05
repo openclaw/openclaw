@@ -597,7 +597,7 @@ export async function runSubagentAnnounceFlow(params: {
       signal: params.signal,
     });
     params.onDeliveryResult?.(delivery);
-    didAnnounce = delivery.delivered;
+    didAnnounce = delivery.delivered || delivery.terminal === true;
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
       defaultRuntime.log(
         `[warn] Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,

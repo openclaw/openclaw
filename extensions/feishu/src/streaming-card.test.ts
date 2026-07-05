@@ -187,6 +187,37 @@ describe("FeishuStreamingSession", () => {
     });
   });
 
+  it("handles a rejected scheduled flush update", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_500);
+    const updateBodies: string[] = [];
+    mockFetches(updateBodies);
+    const log = vi.fn();
+    const session = new FeishuStreamingSession(
+      {} as never,
+      { appId: "app_rejected_pending_flush", appSecret: "secret" },
+      log,
+    );
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_rejected_flush",
+        messageId: "om_rejected_flush",
+        sequence: 1,
+        currentText: "hello",
+        sentText: "hello",
+        hasNote: false,
+      },
+      lastUpdateTime: 1_500,
+    });
+
+    await session.update("hello small");
+    vi.spyOn(session, "update").mockRejectedValueOnce(new Error("flush exploded"));
+    await vi.advanceTimersByTimeAsync(160);
+
+    expect(log).toHaveBeenCalledWith("Scheduled flush update failed: Error: flush exploded");
+    expect(updateBodies).toHaveLength(0);
+  });
+
   it("pushes natural-boundary updates immediately inside the throttle window", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(2_000);

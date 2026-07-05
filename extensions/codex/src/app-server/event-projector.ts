@@ -150,6 +150,13 @@ export class CodexAppServerEventProjector {
   private readonly assistantTextByItem = new Map<string, string>();
   private readonly assistantItemOrder: string[] = [];
   private readonly assistantPhaseByItem = new Map<string, string>();
+  private latestCompletedItemId: string | undefined;
+  private latestCompletedTerminalAssistantItemId: string | undefined;
+  private latestTerminalAssistantCandidateItemId: string | undefined;
+  private latestTerminalAssistantCandidateSuperseded = false;
+  private latestTerminalAssistantCandidateCanReleaseAfterToolHandoff = false;
+  private terminalAssistantCandidateEarlierActiveItemIds = new Set<string>();
+  private pendingRawTerminalAssistantEchoItemId: string | undefined;
   private readonly lastCommentaryProgressTextByItem = new Map<string, string>();
   // Codex emits each typed item completion before its matching raw response item.
   // Pair by protocol order because contributors may rewrite only the typed text.
@@ -220,8 +227,57 @@ export class CodexAppServerEventProjector {
   }
 
   hasCompletedTerminalAssistantText(): boolean {
+    const latestCompletedItemId = this.latestCompletedTerminalAssistantItemId;
+    if (!latestCompletedItemId) {
+      return false;
+    }
     const finalItem = this.resolveFinalAssistantTextItem();
-    return finalItem !== undefined && this.completedItemIds.has(finalItem.itemId);
+    return (
+      this.latestCompletedItemId === latestCompletedItemId &&
+      finalItem?.itemId === latestCompletedItemId &&
+      this.completedItemIds.has(latestCompletedItemId)
+    );
+  }
+
+  getLatestTerminalAssistantCandidate(): { itemId: string; hasText: boolean } | undefined {
+    const itemId = this.latestTerminalAssistantCandidateItemId;
+    if (!itemId) {
+      return undefined;
+    }
+    const text = this.assistantTextByItem.get(itemId)?.trim();
+    return {
+      itemId,
+      hasText: Boolean(text && !this.toolProgressTexts.has(text)),
+    };
+  }
+
+  hasLatestTerminalAssistantCandidateText(): boolean {
+    return (
+      !this.latestTerminalAssistantCandidateSuperseded &&
+      this.getLatestTerminalAssistantCandidate()?.hasText === true
+    );
+  }
+
+  canReleaseLatestTerminalAssistantAfterToolHandoff(): boolean {
+    return (
+      this.latestTerminalAssistantCandidateCanReleaseAfterToolHandoff &&
+      this.hasLatestTerminalAssistantCandidateText()
+    );
+  }
+
+  /** Restores a completed final item after only the enclosing turn timeout fired. */
+  recoverCompletedTerminalAssistantAfterTurnWatchTimeout(): boolean {
+    if (
+      !this.aborted ||
+      this.promptError !== "codex app-server attempt timed out" ||
+      !this.hasCompletedTerminalAssistantText()
+    ) {
+      return false;
+    }
+    this.aborted = false;
+    this.promptError = undefined;
+    this.promptErrorSource = null;
+    return true;
   }
 
   /** Resolves the shared model-order position for a native tool item. */
@@ -511,10 +567,17 @@ export class CodexAppServerEventProjector {
     if (!delta) {
       return;
     }
+    if (itemId !== this.pendingRawTerminalAssistantEchoItemId) {
+      this.pendingRawTerminalAssistantEchoItemId = undefined;
+    }
     this.rememberAssistantPhase(readItem(params.item));
     const phase = readString(params, "phase");
     if (phase) {
       this.assistantPhaseByItem.set(itemId, phase);
+    }
+    const isCommentary = this.isCommentaryAssistantItem(itemId);
+    if (!isCommentary && itemId !== this.latestTerminalAssistantCandidateItemId) {
+      this.markTerminalAssistantCandidateSupersededBy();
     }
     if (!this.assistantStarted) {
       this.assistantStarted = true;
@@ -523,7 +586,7 @@ export class CodexAppServerEventProjector {
     this.rememberAssistantItem(itemId);
     const text = `${this.assistantTextByItem.get(itemId) ?? ""}${delta}`;
     this.assistantTextByItem.set(itemId, text);
-    if (this.isCommentaryAssistantItem(itemId)) {
+    if (isCommentary) {
       this.emitCommentaryProgress({ itemId, text });
     } else {
       const knownFinalAnswer = this.shouldStreamAssistantPartial(itemId);
@@ -636,9 +699,24 @@ export class CodexAppServerEventProjector {
   private async handleItemStarted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
     const itemId = item?.id ?? readString(params, "itemId") ?? readString(params, "id");
+    if (
+      item?.type === "agentMessage" &&
+      itemId &&
+      itemId !== this.pendingRawTerminalAssistantEchoItemId
+    ) {
+      this.pendingRawTerminalAssistantEchoItemId = undefined;
+    }
     this.rememberAssistantPhase(item);
     if (itemId) {
       this.activeItemIds.add(itemId);
+      if (itemId !== this.latestTerminalAssistantCandidateItemId) {
+        this.markTerminalAssistantCandidateSupersededBy(itemId, {
+          preserveEarlierActiveItem: true,
+        });
+        if (this.latestTerminalAssistantCandidateSuperseded) {
+          this.pendingRawTerminalAssistantEchoItemId = undefined;
+        }
+      }
     }
     this.recordNativeToolOutcome(item);
     if (item?.type === "contextCompaction" && itemId) {
@@ -684,11 +762,31 @@ export class CodexAppServerEventProjector {
     this.recordNativeToolOutcome(item);
     this.clearTerminalPresentationForNativeItem(item);
     const itemId = item?.id ?? readString(params, "itemId") ?? readString(params, "id");
+    if (
+      item?.type === "agentMessage" &&
+      itemId &&
+      itemId !== this.pendingRawTerminalAssistantEchoItemId
+    ) {
+      this.pendingRawTerminalAssistantEchoItemId = undefined;
+    }
     if (itemId) {
       this.activeItemIds.delete(itemId);
       this.completedItemIds.add(itemId);
+      this.latestCompletedItemId = itemId;
     }
     this.rememberAssistantPhase(item);
+    if (item?.type === "agentMessage" && !this.isCommentaryAssistantItem(item.id)) {
+      this.latestCompletedTerminalAssistantItemId = item.id;
+      this.markLatestTerminalAssistantCandidate(item.id);
+      this.pendingRawTerminalAssistantEchoItemId = item.id;
+    } else if (itemId) {
+      this.markTerminalAssistantCandidateSupersededBy(itemId, {
+        preserveEarlierActiveItem: true,
+      });
+      if (this.latestTerminalAssistantCandidateSuperseded) {
+        this.pendingRawTerminalAssistantEchoItemId = undefined;
+      }
+    }
     if (item?.type === "agentMessage" && typeof item.text === "string") {
       this.rememberAssistantItem(item.id);
       this.assistantTextByItem.set(item.id, item.text);
@@ -952,20 +1050,60 @@ export class CodexAppServerEventProjector {
     if (!item) {
       return;
     }
+    const role = readString(item, "role");
+    const phase = readString(item, "phase");
+    const rawItemId = readString(item, "id");
+    const candidateWasSupersededBeforeRaw = this.latestTerminalAssistantCandidateSuperseded;
+    const pendingTerminalAssistantEchoItemId = this.pendingRawTerminalAssistantEchoItemId;
+    const isPendingTerminalAssistantEcho =
+      role === "assistant" &&
+      phase !== "commentary" &&
+      pendingTerminalAssistantEchoItemId !== undefined &&
+      (rawItemId === undefined || rawItemId === pendingTerminalAssistantEchoItemId);
+    if (pendingTerminalAssistantEchoItemId !== undefined && !isPendingTerminalAssistantEcho) {
+      this.pendingRawTerminalAssistantEchoItemId = undefined;
+    }
+    if (!isPendingTerminalAssistantEcho) {
+      this.latestCompletedItemId = undefined;
+      this.markTerminalAssistantCandidateSupersededBy(rawItemId);
+    }
     await this.recordRawGeneratedImageMedia(item);
-    if (readString(item, "role") !== "assistant") {
+    if (role !== "assistant") {
       return;
     }
-    const phase = readString(item, "phase");
     if (phase === "commentary" && this.pendingRawCommentaryEchoes > 0) {
       this.pendingRawCommentaryEchoes -= 1;
       return;
     }
     const text = extractRawAssistantText(item);
+    if (isPendingTerminalAssistantEcho) {
+      const typedItemId = pendingTerminalAssistantEchoItemId;
+      this.pendingRawTerminalAssistantEchoItemId = undefined;
+      // Contributors may rewrite the typed completion without rewriting its raw echo.
+      if (this.assistantTextByItem.get(typedItemId)?.trim() || !text) {
+        return;
+      }
+      this.rememberAssistantItem(typedItemId);
+      this.assistantTextByItem.set(typedItemId, text);
+      return;
+    }
     if (!text) {
       return;
     }
-    const itemId = readString(item, "id") ?? `raw-assistant-${this.assistantItemOrder.length + 1}`;
+    const itemId = rawItemId ?? `raw-assistant-${this.assistantItemOrder.length + 1}`;
+    const isIdlessTerminalAssistantAfterCompletedWork =
+      candidateWasSupersededBeforeRaw &&
+      rawItemId === undefined &&
+      pendingTerminalAssistantEchoItemId === undefined &&
+      this.activeItemIds.size === 0;
+    if (
+      phase !== "commentary" &&
+      candidateWasSupersededBeforeRaw &&
+      itemId !== this.streamedPartialAssistantItemId &&
+      !isIdlessTerminalAssistantAfterCompletedWork
+    ) {
+      return;
+    }
     if (phase) {
       this.assistantPhaseByItem.set(itemId, phase);
     }
@@ -973,7 +1111,43 @@ export class CodexAppServerEventProjector {
     this.assistantTextByItem.set(itemId, text);
     if (phase === "commentary") {
       this.emitCommentaryProgress({ itemId, text });
+    } else {
+      this.markLatestTerminalAssistantCandidate(itemId, {
+        canReleaseAfterToolHandoff: isIdlessTerminalAssistantAfterCompletedWork,
+      });
     }
+  }
+
+  private markLatestTerminalAssistantCandidate(
+    itemId: string,
+    options?: { canReleaseAfterToolHandoff?: boolean },
+  ): void {
+    this.latestTerminalAssistantCandidateItemId = itemId;
+    this.latestTerminalAssistantCandidateSuperseded = false;
+    this.latestTerminalAssistantCandidateCanReleaseAfterToolHandoff =
+      options?.canReleaseAfterToolHandoff === true;
+    this.terminalAssistantCandidateEarlierActiveItemIds = new Set(this.activeItemIds);
+  }
+
+  private markTerminalAssistantCandidateSupersededBy(
+    itemId?: string,
+    options?: { preserveEarlierActiveItem?: boolean },
+  ): void {
+    if (!this.latestTerminalAssistantCandidateItemId) {
+      return;
+    }
+    // Preserve app-server ordering where an item already active at assistant
+    // completion reports its delayed completion afterward. Only new work proves
+    // the candidate stale; origin/main has an integration test for this order.
+    if (itemId && this.terminalAssistantCandidateEarlierActiveItemIds.has(itemId)) {
+      if (!options?.preserveEarlierActiveItem) {
+        this.terminalAssistantCandidateEarlierActiveItemIds.delete(itemId);
+      }
+      return;
+    }
+    this.latestTerminalAssistantCandidateSuperseded = true;
+    this.latestTerminalAssistantCandidateCanReleaseAfterToolHandoff = false;
+    this.terminalAssistantCandidateEarlierActiveItemIds.clear();
   }
 
   private recordNativeGeneratedMedia(item: CodexThreadItem | undefined): void {

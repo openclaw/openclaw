@@ -609,6 +609,7 @@ export function installSessionToolResultGuard(
     onUserMessagePersisted?: (
       message: Extract<AgentMessage, { role: "user" }>,
     ) => void | Promise<void>;
+    onUserMessageBlocked?: (message: Extract<AgentMessage, { role: "user" }>) => void;
     onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
     withCompactionPersistence?: (
       append: () => string,
@@ -838,6 +839,9 @@ export function installSessionToolResultGuard(
     const transformedMessage = persistMessage(nextMessage);
     const finalWrite = applyBeforeWriteHook(transformedMessage);
     if (!finalWrite) {
+      if (isUserAgentMessage(transformedMessage)) {
+        opts?.onUserMessageBlocked?.(transformedMessage);
+      }
       return undefined;
     }
     const finalMessage = finalWrite.message;

@@ -727,6 +727,61 @@ test("sessions.changed mutation events include sendPolicy metadata", async () =>
   });
 });
 
+test("sessions.changed mutation events include session management metadata", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "discord:group:dev": sessionStoreEntry("sess-dev", { pinnedAt: 10 }),
+    },
+  });
+
+  const archived = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    archived: true,
+  });
+  expectChangedBroadcast(archived.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    archived: true,
+    archivedAt: expect.any(Number),
+    pinned: false,
+    pinnedAt: null,
+  });
+
+  const restored = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    archived: false,
+  });
+  expectChangedBroadcast(restored.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    archived: false,
+    archivedAt: null,
+  });
+
+  const pinned = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    pinned: true,
+  });
+  expectChangedBroadcast(pinned.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    pinned: true,
+    pinnedAt: expect.any(Number),
+  });
+
+  const unpinned = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    pinned: false,
+  });
+  expectChangedBroadcast(unpinned.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    pinned: false,
+    pinnedAt: null,
+  });
+});
+
 test("sessions.patch scopes selected global mutations and events to the requested agent", async () => {
   const globalStores = await createConfiguredGlobalAgentSessionStore({ writePrimeStore: true });
 

@@ -1,16 +1,18 @@
 ---
-summary: "Stable, beta, and dev channels: semantics, switching, pinning, and tagging"
+summary: "Stable, extended-stable, beta, and dev channels: semantics, switching, pinning, and tagging"
 read_when:
-  - You want to switch between stable/beta/dev
+  - You want to switch between stable/extended-stable/beta/dev
   - You want to pin a specific version, tag, or SHA
   - You are tagging or publishing prereleases
 title: "Release channels"
 sidebarTitle: "Release Channels"
 ---
 
-OpenClaw ships three update channels:
+OpenClaw ships four update channels:
 
 - **stable**: npm dist-tag `latest`. Recommended for most users.
+- **extended-stable**: npm dist-tag `extended-stable`. A net-new, trailing
+  supported-month package channel. It is foreground-only in this release.
 - **beta**: npm dist-tag `beta` when it is current; if beta is missing or older than
   the latest stable release, the update flow falls back to `latest`.
 - **dev**: moving head of `main` (git). npm dist-tag: `dev` (when published).
@@ -27,6 +29,7 @@ installs.
 
 ```bash
 openclaw update --channel stable
+openclaw update --channel extended-stable
 openclaw update --channel beta
 openclaw update --channel dev
 ```
@@ -35,6 +38,10 @@ openclaw update --channel dev
 install method:
 
 - **`stable`** (package installs): updates via npm dist-tag `latest`.
+- **`extended-stable`** (package installs only): resolves the public npm
+  `extended-stable` selector, verifies the exact selected package version, and
+  installs that exact version. Resolution fails closed with no fallback to
+  `latest`, `beta`, or `dev`.
 - **`beta`** (package installs): prefers npm dist-tag `beta`, but falls back to
   `latest` when `beta` is missing or older than the current stable tag.
 - **`stable`** (git installs): checks out the latest stable git tag, excluding
@@ -43,6 +50,8 @@ install method:
   suffixes.
 - **`beta`** (git installs): prefers the latest beta git tag, but falls back to
   the latest stable git tag when beta is missing or older.
+- **`extended-stable`** (git installs): unsupported. OpenClaw leaves the
+  checkout unchanged and asks you to use a package installation.
 - **`dev`**: ensures a git checkout (default `~/openclaw`, or
   `$OPENCLAW_HOME/openclaw` when `OPENCLAW_HOME` is set; override with
   `OPENCLAW_GIT_DIR`), switches to `main`, rebases on upstream, builds, and
@@ -85,6 +94,9 @@ Notes:
   checkout as your persistent install.
 - Downgrade protection: if the target version is older than your current version,
   OpenClaw prompts for confirmation (skip with `--yes`).
+- Extended-stable always uses its verified exact package target. It is not a
+  one-off alias for `--tag extended-stable`, and `--tag` cannot be combined
+  with an effective extended-stable channel.
 - `--channel beta` is different from `--tag beta`: the channel flow can fall back
   to stable/latest when beta is missing or older, while `--tag beta` targets the
   raw `beta` dist-tag for that one run.
@@ -110,6 +122,9 @@ sources:
 
 - `dev` prefers bundled plugins from the git checkout.
 - `stable` and `beta` restore npm-installed plugin packages.
+- `extended-stable` currently uses the existing stable/latest plugin line after
+  the core package succeeds. Official plugin `@extended-stable` selectors are
+  not queried yet.
 - npm-installed plugins are updated after the core update completes.
 
 ## Checking current status
@@ -132,6 +147,7 @@ source (config, git tag, git branch, or default).
 - Keep tags immutable: never move or reuse a tag.
 - npm dist-tags remain the source of truth for npm installs:
   - `latest` -> stable
+  - `extended-stable` -> trailing supported-month package release
   - `beta` -> candidate build or beta-first stable build
   - `dev` -> main snapshot (optional)
 

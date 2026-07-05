@@ -369,6 +369,27 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
+  if ("archived" in patch) {
+    if (patch.archived === true) {
+      // Archived sessions leave the active quick-access set in the same write.
+      next.archivedAt ??= now;
+      delete next.pinnedAt;
+    } else {
+      delete next.archivedAt;
+    }
+  }
+
+  if ("pinned" in patch) {
+    if (patch.pinned === true) {
+      if (next.archivedAt !== undefined) {
+        return invalid("cannot pin an archived session; restore it first");
+      }
+      next.pinnedAt ??= now;
+    } else {
+      delete next.pinnedAt;
+    }
+  }
+
   if ("thinkingLevel" in patch) {
     const raw = patch.thinkingLevel;
     if (raw === null) {

@@ -160,6 +160,15 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
   ];
 }
 
+export function resolveExternalPackageAliasesForVite(): ControlUiViteAlias[] {
+  return [
+    {
+      find: "@openclaw/uirouter",
+      replacement: path.join(repoRoot, "node_modules", "@openclaw", "uirouter", "dist", "index.js"),
+    },
+  ];
+}
+
 export function resolveTsconfigPathAliasesForVite(): ControlUiViteAlias[] {
   const raw = fs.readFileSync(path.join(repoRoot, "tsconfig.json"), "utf8");
   const parsed = JSON.parse(raw) as {
@@ -184,7 +193,7 @@ function normalizeViteImporterPath(importer: string): string {
 }
 
 export function controlUiBrowserOnlySharedModuleAliases(): Plugin {
-  const browserRedactPath = path.join(here, "src/ui/browser-redact.ts");
+  const browserRedactPath = path.join(here, "src/lib/browser-redact.ts");
   const sharedRedactImporters = new Set([
     path.join(repoRoot, "src/agents/tool-display-common.ts"),
     path.join(repoRoot, "src/agents/tool-display-exec.ts"),
@@ -213,7 +222,7 @@ function controlUiServiceWorkerBuildIdPlugin(buildId: string): Plugin {
     closeBundle() {
       const swPath = path.join(outDir, "sw.js");
       const publicSwPath = path.join(here, "public/sw.js");
-      const source = fs.readFileSync(fs.existsSync(swPath) ? swPath : publicSwPath, "utf8");
+      const source = fs.readFileSync(publicSwPath, "utf8");
       const placeholder = '"__OPENCLAW_CONTROL_UI_BUILD_ID__"';
       const updated = source.replace(placeholder, JSON.stringify(buildId));
       if (updated === source) {
@@ -228,7 +237,8 @@ function controlUiServiceWorkerBuildIdPlugin(buildId: string): Plugin {
 export default function controlUiViteConfig(): UserConfig {
   const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
   const base = envBase ? normalizeBase(envBase) : "./";
-  const bootstrapConfigPath = base === "./" ? "/control-ui-config.json" : `${base}control-ui-config.json`;
+  const bootstrapConfigPath =
+    base === "./" ? "/control-ui-config.json" : `${base}control-ui-config.json`;
   const controlUiBuildId = resolveControlUiBuildId();
   return {
     base,
@@ -247,6 +257,7 @@ export default function controlUiViteConfig(): UserConfig {
     resolve: {
       alias: [
         { find: "json5", replacement: json5EsmPath },
+        ...resolveExternalPackageAliasesForVite(),
         ...resolveSourcePackageAliasesForVite(),
         ...resolveTsconfigPathAliasesForVite(),
       ],

@@ -116,12 +116,6 @@ import {
   resolveProcessToolScopeKey,
   resolveToolLoopDetectionConfig,
 } from "../../agent-tools.js";
-import {
-  resolveEffectiveToolPolicy,
-  resolveGroupToolPolicy,
-  resolveInheritedToolPolicyForSession,
-  resolveSubagentToolPolicyForSession,
-} from "../../agent-tools.policy.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import {
@@ -155,6 +149,10 @@ import {
   createCodeModeTools,
   resolveCodeModeConfig,
 } from "../../code-mode.js";
+import {
+  resolveConversationCapabilityProfile,
+  type ResolvedConversationCapabilityProfile,
+} from "../../conversation-capability-profile.js";
 import { resolveUserTimezone } from "../../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
@@ -208,10 +206,6 @@ import { createAgentSession, SessionManager } from "../../sessions/index.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { detectRuntimeShell } from "../../shell-utils.js";
 import { buildActiveSubagentSystemPromptAddition } from "../../subagent-active-context.js";
-import {
-  isSubagentEnvelopeSession,
-  resolveSubagentCapabilityStore,
-} from "../../subagent-capabilities.js";
 import {
   ackPendingAgentSteeringItems,
   leasePendingAgentSteeringItems,
@@ -339,6 +333,7 @@ import {
 } from "../tool-result-context-guard.js";
 import {
   resolveLiveToolResultMaxChars,
+  resolveLiveToolResultAggregateMaxChars,
   createToolResultPromptProjectionState,
   truncateOversizedToolResultsInMessages,
   type ToolResultPromptProjectionState,
@@ -538,7 +533,7 @@ export {
 };
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
-const PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER = 4;
+const aggregateToolResultPressureWarnings = new Set<string>();
 
 function pluginMetadataSnapshotCoversProvider(
   snapshot: PluginMetadataSnapshot | undefined,
@@ -725,67 +720,23 @@ function removeTrailingMidTurnPrecheckAssistantError(params: {
 }
 
 function collectAttemptExplicitToolAllowlistSources(params: {
-  config?: EmbeddedRunAttemptParams["config"];
-  sessionKey?: string;
-  sandboxSessionKey?: string;
-  agentId?: string;
-  modelProvider?: string;
-  modelId?: string;
-  messageProvider?: string;
-  agentAccountId?: string | null;
-  groupId?: string | null;
-  groupChannel?: string | null;
-  groupSpace?: string | null;
-  spawnedBy?: string | null;
-  senderId?: string | null;
-  senderName?: string | null;
-  senderUsername?: string | null;
-  senderE164?: string | null;
-  sandboxToolPolicy?: { allow?: string[]; deny?: string[] };
+  // The attempt's single resolved profile: keeps these allowlist *sources*
+  // in lockstep with the policy that actually constructed and filtered the
+  // run's tools, instead of re-resolving with divergent session inputs.
+  capabilityProfile: ResolvedConversationCapabilityProfile;
   toolsAllow?: string[];
 }) {
-  const { agentId, globalPolicy, globalProviderPolicy, agentPolicy, agentProviderPolicy } =
-    resolveEffectiveToolPolicy({
-      config: params.config,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      modelProvider: params.modelProvider,
-      modelId: params.modelId,
-    });
-  const groupPolicy = resolveGroupToolPolicy({
-    config: params.config,
-    sessionKey: params.sessionKey,
-    spawnedBy: params.spawnedBy,
-    messageProvider: params.messageProvider,
-    groupId: params.groupId,
-    groupChannel: params.groupChannel,
-    groupSpace: params.groupSpace,
-    accountId: params.agentAccountId,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
-  const subagentStore = resolveSubagentCapabilityStore(params.sandboxSessionKey, {
-    cfg: params.config,
-  });
-  const subagentPolicy =
-    params.sandboxSessionKey &&
-    isSubagentEnvelopeSession(params.sandboxSessionKey, {
-      cfg: params.config,
-      store: subagentStore,
-    })
-      ? resolveSubagentToolPolicyForSession(params.config, params.sandboxSessionKey, {
-          store: subagentStore,
-        })
-      : undefined;
-  const inheritedToolPolicy = resolveInheritedToolPolicyForSession(
-    params.config,
-    params.sandboxSessionKey,
-    {
-      store: subagentStore,
-    },
-  );
+  const {
+    agentId,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    groupPolicy,
+    sandboxPolicy,
+    subagentPolicy,
+    inheritedToolPolicy,
+  } = params.capabilityProfile.policy;
   return collectExplicitToolAllowlistSources([
     { label: "tools.allow", allow: globalPolicy?.allow },
     { label: "tools.byProvider.allow", allow: globalProviderPolicy?.allow },
@@ -798,7 +749,7 @@ function collectAttemptExplicitToolAllowlistSources(params: {
       allow: agentProviderPolicy?.allow,
     },
     { label: "group tools.allow", allow: groupPolicy?.allow },
-    { label: "sandbox tools.allow", allow: params.sandboxToolPolicy?.allow },
+    { label: "sandbox tools.allow", allow: sandboxPolicy?.allow },
     { label: "subagent tools.allow", allow: subagentPolicy?.allow },
     { label: "inherited tools.allow", allow: inheritedToolPolicy?.allow },
     { label: "runtime toolsAllow", allow: params.toolsAllow, enforceWhenToolsDisabled: true },
@@ -1254,6 +1205,58 @@ export async function runEmbeddedAttempt(
         : undefined;
     const toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjection[] = [];
     const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
+    const spawnWorkspaceDir =
+      effectiveCwd !== effectiveWorkspace
+        ? resolvedWorkspace
+        : resolveAttemptSpawnWorkspaceDir({
+            sandbox,
+            resolvedWorkspace,
+          });
+    const runtimeCapabilityProfile = resolveConversationCapabilityProfile({
+      config: toolSearchRuntimeConfig,
+      sessionKey: sandboxSessionKey,
+      runSessionKey:
+        params.sessionKey && params.sessionKey !== sandboxSessionKey
+          ? params.sessionKey
+          : undefined,
+      sessionId: params.sessionId,
+      runId: params.runId,
+      agentId: sessionAgentId,
+      agentDir,
+      agentAccountId: params.agentAccountId,
+      messageProvider: resolveAttemptToolPolicyMessageProvider(params),
+      messageChannel: params.messageChannel,
+      chatType: params.chatType,
+      messageTo: params.messageTo,
+      messageThreadId: params.messageThreadId,
+      currentChannelId: params.currentChannelId,
+      currentMessagingTarget: params.currentMessagingTarget,
+      currentThreadTs: params.currentThreadTs,
+      currentMessageId: params.currentMessageId,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      memberRoleIds: params.memberRoleIds,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+      modelProvider: params.provider,
+      modelId: params.modelId,
+      modelApi: params.model.api,
+      modelContextWindowTokens: params.model.contextWindow,
+      modelHasVision: params.model.input?.includes("image") ?? false,
+      workspaceDir: effectiveWorkspace,
+      cwd: effectiveCwd,
+      spawnWorkspaceDir,
+      isCanonicalWorkspace: params.isCanonicalWorkspace,
+      promptMode: params.promptMode,
+      skillsSnapshot: skillsSnapshotForRun,
+      sandboxToolPolicy: sandbox?.tools,
+      runtimeToolAllowlist: effectiveToolsAllow,
+    });
     const toolsRaw = !shouldConstructTools
       ? []
       : (() => {
@@ -1261,6 +1264,7 @@ export async function runEmbeddedAttempt(
             agentId: sessionAgentId,
             ...buildEmbeddedAttemptToolRunContext({ ...params, trace: runTrace }),
             messageChannel: params.messageChannel,
+            chatType: params.chatType,
             exec: {
               ...params.execOverrides,
               config: params.config,
@@ -1301,13 +1305,7 @@ export async function runEmbeddedAttempt(
             workspaceDir: effectiveWorkspace,
             // Runtime cwd can point at a task repo while bootstrap/persona files stay in the
             // agent workspace. Spawned subagents inherit the real agent workspace, not task cwd.
-            spawnWorkspaceDir:
-              effectiveCwd !== effectiveWorkspace
-                ? resolvedWorkspace
-                : resolveAttemptSpawnWorkspaceDir({
-                    sandbox,
-                    resolvedWorkspace,
-                  }),
+            spawnWorkspaceDir,
             config: toolSearchRuntimeConfig,
             abortSignal: runAbortController.signal,
             modelProvider: params.provider,
@@ -1350,6 +1348,7 @@ export async function runEmbeddedAttempt(
             onToolOutcome: params.onToolOutcome,
             allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
             skillsSnapshot: skillsSnapshotForRun,
+            conversationCapabilityProfile: runtimeCapabilityProfile,
             onYield: (message) => {
               yieldDetected = true;
               yieldMessage = message;
@@ -1593,21 +1592,7 @@ export async function runEmbeddedAttempt(
     const filteredBundledTools = applyFinalEffectiveToolPolicy({
       bundledTools: allowedBundledTools,
       config: params.config,
-      sandboxToolPolicy: sandbox?.tools,
-      sessionKey: sandboxSessionKey,
-      agentId: sessionAgentId,
-      modelProvider: params.provider,
-      modelId: params.modelId,
-      messageProvider: resolveAttemptToolPolicyMessageProvider(params),
-      agentAccountId: params.agentAccountId,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      spawnedBy: params.spawnedBy,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
+      conversationCapabilityProfile: runtimeCapabilityProfile,
       warn: (message) => log.warn(message),
     });
     const normalizedBundledTools =
@@ -1780,23 +1765,7 @@ export async function runEmbeddedAttempt(
       toolSearch.catalogRegistered;
     prepStages.mark("bundle-tools");
     const explicitToolAllowlistSources = collectAttemptExplicitToolAllowlistSources({
-      config: params.config,
-      sessionKey: params.sessionKey,
-      sandboxSessionKey,
-      agentId: sessionAgentId,
-      modelProvider: params.provider,
-      modelId: params.modelId,
-      messageProvider: resolveAttemptToolPolicyMessageProvider(params),
-      agentAccountId: params.agentAccountId,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      spawnedBy: params.spawnedBy,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-      sandboxToolPolicy: sandbox?.tools,
+      capabilityProfile: runtimeCapabilityProfile,
       toolsAllow: params.toolsAllow,
     });
     const toolSearchRunPlan = buildToolSearchRunPlan({
@@ -2215,6 +2184,9 @@ export async function runEmbeddedAttempt(
           sessionLockController.withOwnedSessionFileWrite(append, validateAppend),
         onUserMessagePersisted: (message) => {
           params.onUserMessagePersisted?.(message);
+        },
+        onUserMessageBlocked: () => {
+          params.userTurnTranscriptRecorder?.markBlocked();
         },
         onAssistantErrorMessagePersisted: (message) => {
           params.onAssistantErrorMessagePersisted?.(message);
@@ -3718,6 +3690,9 @@ export async function runEmbeddedAttempt(
             toolCallId: toolParams.toolCallId,
             args: toolParams.input,
             replaySafe: replaySafeTools.has(toolParams.tool as never),
+            hideFromChannelProgress:
+              "hideFromChannelProgress" in toolParams.tool &&
+              toolParams.tool.hideFromChannelProgress === true,
             execute: async () =>
               await toolParams.tool.execute(
                 toolParams.toolCallId,
@@ -3765,6 +3740,7 @@ export async function runEmbeddedAttempt(
         cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
       } = {
         kind: "embedded",
+        runId: params.runId,
         queueMessage: async (text: string, options) => {
           if (options?.steeringMode) {
             activeSession.agent.steeringMode = options.steeringMode;
@@ -4237,25 +4213,49 @@ export async function runEmbeddedAttempt(
             cfg: params.config,
             agentId: sessionAgentId,
           });
+          const promptToolResultAggregateMaxChars = resolveLiveToolResultAggregateMaxChars({
+            contextWindowTokens: contextTokenBudget,
+            perResultMaxChars: promptToolResultMaxChars,
+          });
           let promptHistoryMessages = activeSession.messages;
           const promptToolResultTruncation = truncateOversizedToolResultsInMessages(
             activeSession.messages,
             contextTokenBudget,
             promptToolResultMaxChars,
-            promptToolResultMaxChars * PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER,
+            promptToolResultAggregateMaxChars,
             toolResultPromptProjectionState,
           );
-          if (promptToolResultTruncation.messages !== activeSession.messages) {
+          const promptHistoryChanged =
+            promptToolResultTruncation.messages !== activeSession.messages;
+          const { aggregatePressureEngaged } = promptToolResultTruncation;
+          if (promptHistoryChanged) {
             promptHistoryMessages = promptToolResultTruncation.messages;
-            log.info(
+          }
+          if (promptHistoryChanged || aggregatePressureEngaged) {
+            const sessionLogKey = params.sessionKey ?? params.sessionId ?? "unknown";
+            const truncationLog =
               `[tool-result-truncation] Truncated ${promptToolResultTruncation.truncatedCount} ` +
-                `tool result(s) for prompt history ` +
-                `(maxChars=${promptToolResultMaxChars} ` +
-                `aggregateBudgetChars=${
-                  promptToolResultMaxChars * PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER
-                }) ` +
-                `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
-            );
+              `tool result(s) for prompt history ` +
+              `(maxChars=${promptToolResultMaxChars} ` +
+              `aggregateBudgetChars=${promptToolResultAggregateMaxChars} ` +
+              `aggregate=${promptToolResultTruncation.aggregateTruncatedCount}) ` +
+              `sessionKey=${sessionLogKey}`;
+            if (aggregatePressureEngaged) {
+              if (!aggregateToolResultPressureWarnings.has(sessionLogKey)) {
+                aggregateToolResultPressureWarnings.add(sessionLogKey);
+                log.warn(
+                  `${truncationLog}; aggregate tool-result pressure detected, compaction has been requested; consider /compact or /new if pressure persists`,
+                );
+              }
+              // Compaction and aggregate truncation both target about half the window;
+              // compact-then-truncate prevents re-hitting the same cap on the next turn.
+              preflightRecovery = { route: "compact_then_truncate" };
+              promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
+              promptErrorSource = "precheck";
+              skipPromptSubmission = true;
+            } else {
+              log.info(truncationLog);
+            }
           }
 
           const promptSubmission = resolveRuntimeContextPromptParts({
@@ -4803,7 +4803,7 @@ export async function runEmbeddedAttempt(
                     messages,
                     contextTokenBudget,
                     promptToolResultMaxChars,
-                    promptToolResultMaxChars * PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER,
+                    promptToolResultAggregateMaxChars,
                     toolResultPromptProjectionState,
                   );
                   return providerPromptHistoryTruncation.messages !== messages

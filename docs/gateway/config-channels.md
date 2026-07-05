@@ -218,6 +218,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         dnsResultOrder: "ipv4first",
       },
       apiRoot: "https://api.telegram.org",
+      trustedLocalFileRoots: ["/srv/telegram-bot-api-data"],
       proxy: "socks5://localhost:9050",
       webhookUrl: "https://example.com/telegram-webhook",
       webhookSecret: "secret",
@@ -229,6 +230,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 - Bot token: `channels.telegram.botToken` or `channels.telegram.tokenFile` (regular file only; symlinks rejected), with `TELEGRAM_BOT_TOKEN` as fallback for the default account.
 - `apiRoot` is the Telegram Bot API root only. Use `https://api.telegram.org` or your self-hosted/proxy root, not `https://api.telegram.org/bot<TOKEN>`; `openclaw doctor --fix` removes an accidental trailing `/bot<TOKEN>` suffix.
+- For a self-hosted Bot API server in `--local` mode, `trustedLocalFileRoots` lists host paths OpenClaw may read. Mount the server data volume on the OpenClaw host and configure either its data root or per-token directory; container paths under `/var/lib/telegram-bot-api` are mapped into those roots. Other absolute paths remain rejected.
 - Optional `channels.telegram.defaultAccount` overrides default account selection when it matches a configured account id.
 - In multi-account setups (2+ account ids), set an explicit default (`channels.telegram.defaultAccount` or `channels.telegram.accounts.default`) to avoid fallback routing; `openclaw doctor` warns when this is missing or invalid.
 - `configWrites: false` blocks Telegram-initiated config writes (supergroup ID migrations, `/config set|unset`).

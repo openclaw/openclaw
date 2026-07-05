@@ -280,22 +280,10 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 }
 ```
 
-    Group history context defaults to `mention-only`: prior group messages are
-    included only when they were addressed to the bot, are replies to the bot,
-    or are the bot's own messages. Set `includeGroupHistoryContext: "recent"` to
-    include recent room history for trusted groups. Set
-    `includeGroupHistoryContext: "none"` to send no prior Telegram group history
-    with the next turn.
-
-```json5
-{
-  channels: {
-    telegram: {
-      includeGroupHistoryContext: "recent",
-    },
-  },
-}
-```
+    Group history context is always on for groups and bounded by
+    `historyLimit`. Set `channels.telegram.historyLimit: 0` to disable the
+    Telegram group history window. The retired `includeGroupHistoryContext`
+    key is removed by `openclaw doctor --fix`.
 
     Getting the group chat ID:
 
@@ -507,7 +495,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
        - `/pair approve` when there is only one pending request
        - `/pair approve latest` for most recent
 
-    The setup code carries a short-lived bootstrap token. Built-in setup-code bootstrap is node-only: the first connect creates a pending node request, and after approval the Gateway returns a durable node token with `scopes: []`. It does not return a handed-off operator token; operator access requires a separate approved operator pairing or token flow.
+    The setup code carries a short-lived bootstrap token. Built-in setup-code bootstrap returns a durable node token with `scopes: []` plus a bounded operator handoff token for trusted mobile onboarding. That operator token can read setup-time native configuration, but it does not grant pairing mutation scopes or `operator.admin`.
 
     If a device retries with changed auth details (for example role/scopes/public key), the previous pending request is superseded and the new request uses a different `requestId`. Re-run `/pair pending` before approving.
 
@@ -1105,7 +1093,7 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 - threading/replies: `replyToMode`
 - streaming: `streaming` (preview), `streaming.preview.toolProgress`, `blockStreaming`
 - formatting/delivery: `textChunkLimit`, `chunkMode`, `richMessages`, `linkPreview`, `responsePrefix`
-- media/network: `mediaMaxMb`, `mediaGroupFlushMs`, `timeoutSeconds`, `pollingStallThresholdMs`, `retry`, `network.autoSelectFamily`, `network.dangerouslyAllowPrivateNetwork`, `proxy`
+- media/network: `mediaMaxMb`, `mediaGroupFlushMs`, `timeoutSeconds`, `pollingStallThresholdMs`, `retry`, `network.autoSelectFamily`, `network.dangerouslyAllowPrivateNetwork`, `proxy`, `trustedLocalFileRoots`
 - custom API root: `apiRoot` (Bot API root only; do not include `/bot<TOKEN>`)
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`
 - actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|sticker`

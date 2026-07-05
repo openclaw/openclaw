@@ -1,17 +1,11 @@
 {
-  "fallbackKeys": [
-    "chat.commentaryLabel",
-    "chat.commentaryToggle",
-    "chat.pairingQrExpired.badge",
-    "chat.pairingQrExpired.reason",
-    "chat.pairingQrExpired.title"
-  ],
-  "generatedAt": "2026-07-01T10:12:09.276Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-07-04T21:23:56.409Z",
   "locale": "hi",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "234bc2c00f309d086f9b545f11736fafab8d3f127c441d839695beeee014a53d",
-  "totalKeys": 1421,
-  "translatedKeys": 1416,
+  "sourceHash": "1437172eaecf40feed27c9801bbff868ddc17fbc0769cf1a8d9208f8b3341013",
+  "totalKeys": 1463,
+  "translatedKeys": 1463,
   "workflow": 1
 }

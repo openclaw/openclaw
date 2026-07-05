@@ -42,6 +42,15 @@ const CATALOGS = [
         "Sent to OpenClaw.",
       ],
       "apps/ios/Sources/Design/SettingsChannelsDestination.swift": ["Logout"],
+      "apps/ios/Sources/Design/ChatProTab.swift": [
+        "Check OpenClaw status",
+        "Help me start a realtime voice session from this phone.",
+        "Help me start voice chat",
+        "Show me which phone controls and device capabilities are available right now.",
+        "Summarize the current OpenClaw status and tell me what needs attention.",
+        "What can I control here?",
+        "What would you like to work on?",
+      ],
       "apps/ios/Sources/Gateway/GatewayProblemView.swift": ["Done"],
       "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift": [
         "Close",

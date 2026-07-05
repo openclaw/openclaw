@@ -23,6 +23,14 @@ run_hosted_prepare_gates() {
   run_quiet_logged "exact-head hosted CI/Testbox gates" ".local/gates-hosted-checks.log" node "${args[@]}"
 }
 
+pin_worktree_bundled_plugins_dir() {
+  # Nested .worktrees/<pr> checkouts resolve vitest tooling from the primary
+  # checkout's node_modules; pin bundled plugin discovery to this worktree so
+  # PR branches without the openclaw-root node_modules-boundary fix still test
+  # their own extensions instead of the primary checkout's stale trees.
+  export OPENCLAW_BUNDLED_PLUGINS_DIR="${OPENCLAW_BUNDLED_PLUGINS_DIR:-$PWD/extensions}"
+}
+
 run_prepare_push_retry_gates() {
   local docs_only="${1:-false}"
 
@@ -32,6 +40,7 @@ run_prepare_push_retry_gates() {
     return 1
   fi
 
+  pin_worktree_bundled_plugins_dir
   bootstrap_deps_if_needed
   run_quiet_logged "pnpm build (lease-retry)" ".local/lease-retry-build.log" pnpm build
   run_quiet_logged "pnpm check (lease-retry)" ".local/lease-retry-check.log" pnpm check
@@ -140,6 +149,7 @@ prepare_gates() {
     gates_mode="reused_docs_only"
     echo "Docs/changelog-only delta since last verified head $previous_last_verified_head; reusing prior gates."
   else
+    pin_worktree_bundled_plugins_dir
     bootstrap_deps_if_needed
     run_quiet_logged "pnpm build" ".local/gates-build.log" pnpm build
     run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check

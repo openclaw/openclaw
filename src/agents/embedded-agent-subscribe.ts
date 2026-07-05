@@ -1350,6 +1350,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       toolCallId: string;
       args: unknown;
       replaySafe?: boolean;
+      hideFromChannelProgress?: boolean;
       execute: () => Promise<T>;
     }): Promise<T> => {
       await handleToolExecutionStart(ctx, {
@@ -1358,6 +1359,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         toolCallId: toolParams.toolCallId,
         args: toolParams.args,
         replaySafe: toolParams.replaySafe,
+        hideFromChannelProgress: toolParams.hideFromChannelProgress,
       } as never);
       try {
         const result = await toolParams.execute();
@@ -1368,6 +1370,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
           isError: false,
           executionStarted: true,
           result,
+          hideFromChannelProgress: toolParams.hideFromChannelProgress,
         } as never);
         return result;
       } catch (error) {
@@ -1378,6 +1381,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
           isError: true,
           executionStarted: true,
           result: buildToolLifecycleErrorResult(error),
+          hideFromChannelProgress: toolParams.hideFromChannelProgress,
         } as never);
         throw error;
       }

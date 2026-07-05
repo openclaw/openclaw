@@ -1176,6 +1176,9 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       job: expect.objectContaining({ id: "fatal-error-payload" }),
       agentSessionKey: "agent:default:cron:message-tool-policy",
       sessionId: "test-session-id",
+      lifecycleRevision: "test-lifecycle-revision",
+      sessionUpdatedAt: expect.any(Number),
+      beforeSessionDelete: expect.any(Function),
       retireReason: "cron-delete-after-run-fatal-error",
     });
     expectDeliveryFields(result.delivery, {
@@ -1212,6 +1215,9 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       }),
       agentSessionKey: "agent:default:cron:message-tool-policy",
       sessionId: "test-session-id",
+      lifecycleRevision: "test-lifecycle-revision",
+      sessionUpdatedAt: expect.any(Number),
+      beforeSessionDelete: expect.any(Function),
       retireReason: "cron-delete-after-run-fatal-error",
     });
   });

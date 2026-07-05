@@ -2,6 +2,7 @@
 import http from "node:http";
 import { URL } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -14,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createWebhookInFlightLimiter,
+  normalizeWebhookPath,
   WEBHOOK_BODY_READ_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import {
@@ -46,9 +48,6 @@ const WEBHOOK_BODY_TIMEOUT_MS = WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs;
 const MISSING_REMOTE_ADDRESS_IN_FLIGHT_KEY = "__voice_call_no_remote__";
 const STREAM_DISCONNECT_HANGUP_GRACE_MS = 2000;
 const TRANSCRIPT_LOG_MAX_CHARS = 200;
-
-type RealtimeTranscriptionRuntime = typeof import("./realtime-transcription.runtime.js");
-type ResponseGeneratorModule = typeof import("./response-generator.js");
 type Logger = {
   info: (message: string) => void;
   warn: (message: string) => void;
@@ -56,18 +55,13 @@ type Logger = {
   debug?: (message: string) => void;
 };
 
-let realtimeTranscriptionRuntimePromise: Promise<RealtimeTranscriptionRuntime> | undefined;
-let responseGeneratorModulePromise: Promise<ResponseGeneratorModule> | undefined;
+const loadRealtimeTranscriptionRuntime = createLazyRuntimeModule(
+  () => import("./realtime-transcription.runtime.js"),
+);
 
-function loadRealtimeTranscriptionRuntime(): Promise<RealtimeTranscriptionRuntime> {
-  realtimeTranscriptionRuntimePromise ??= import("./realtime-transcription.runtime.js");
-  return realtimeTranscriptionRuntimePromise;
-}
-
-function loadResponseGeneratorModule(): Promise<ResponseGeneratorModule> {
-  responseGeneratorModulePromise ??= import("./response-generator.js");
-  return responseGeneratorModulePromise;
-}
+const loadResponseGeneratorModule = createLazyRuntimeModule(
+  () => import("./response-generator.js"),
+);
 
 type WebhookHeaderGateResult =
   | { ok: true }
@@ -638,23 +632,8 @@ export class VoiceCallWebhookServer {
     }
   }
 
-  private normalizeWebhookPathForMatch(pathname: string): string {
-    const trimmed = pathname.trim();
-    if (!trimmed) {
-      return "/";
-    }
-    const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-    if (prefixed === "/") {
-      return prefixed;
-    }
-    return prefixed.endsWith("/") ? prefixed.slice(0, -1) : prefixed;
-  }
-
   private isWebhookPathMatch(requestPath: string, configuredPath: string): boolean {
-    return (
-      this.normalizeWebhookPathForMatch(requestPath) ===
-      this.normalizeWebhookPathForMatch(configuredPath)
-    );
+    return normalizeWebhookPath(requestPath) === normalizeWebhookPath(configuredPath);
   }
 
   /**
@@ -920,8 +899,8 @@ export class VoiceCallWebhookServer {
       if (!pattern) {
         return false;
       }
-      const normalizedPattern = this.normalizeWebhookPathForMatch(pattern);
-      const normalizedPathname = this.normalizeWebhookPathForMatch(pathname);
+      const normalizedPattern = normalizeWebhookPath(pattern);
+      const normalizedPathname = normalizeWebhookPath(pathname);
       if (normalizedPattern === "/") {
         return true;
       }

@@ -6,8 +6,8 @@
  */
 
 import type { Server } from "node:http";
-import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { toErrorObject } from "../../../infra/errors.js";
+import { readResponseWithLimit } from "../../../infra/http-body.js";
 import {
   generateOAuthState,
   generatePKCE,

@@ -351,9 +351,11 @@ type IMessageInboundDispatchDecision = {
   senderNormalized: string;
   route: ReturnType<typeof resolveAgentRoute>;
   bodyText: string;
+  agentBodyText?: string;
   createdAt?: number;
   replyContext: IMessageReplyContext | null;
   effectiveWasMentioned: boolean;
+  groupRequireMention: boolean;
   commandAuthorized: boolean;
   hasControlCommand: boolean;
   // Forwarded as ctxPayload.GroupSystemPrompt for group messages. Resolved
@@ -855,6 +857,7 @@ export async function resolveIMessageInboundDecision(params: {
     createdAt,
     replyContext: filteredReplyContext,
     effectiveWasMentioned,
+    groupRequireMention: requireMention,
     commandAuthorized,
     hasControlCommand: hasControlCommandInMessage,
     groupSystemPrompt,
@@ -928,7 +931,7 @@ export async function buildIMessageInboundContext(params: {
     channel: "iMessage",
     from: fromLabel,
     timestamp: decision.createdAt,
-    body: `${decision.bodyText}${replySuffix}`,
+    body: `${decision.agentBodyText ?? decision.bodyText}${replySuffix}`,
     chatType: decision.isGroup ? "group" : "direct",
     sender: { name: decision.senderNormalized, id: decision.sender },
     previousTimestamp: params.previousTimestamp,
@@ -1026,7 +1029,7 @@ export async function buildIMessageInboundContext(params: {
     },
     message: {
       body: combinedBody,
-      bodyForAgent: decision.bodyText,
+      bodyForAgent: decision.agentBodyText ?? decision.bodyText,
       inboundHistory,
       rawBody: decision.bodyText,
       commandBody: decision.bodyText,
@@ -1042,6 +1045,7 @@ export async function buildIMessageInboundContext(params: {
     },
     extra: {
       GroupSubject: decision.isGroup ? (params.message.chat_name ?? undefined) : undefined,
+      GroupRequireMention: decision.isGroup ? decision.groupRequireMention : undefined,
       GroupMembers: decision.isGroup
         ? (params.message.participants ?? []).filter(Boolean).join(", ")
         : undefined,

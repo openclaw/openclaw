@@ -2,6 +2,8 @@
 import { Worker } from "node:worker_threads";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 
+export const TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER = "openclaw.telegram-ingress-worker";
+
 export type TelegramIngressWorkerMessage =
   | {
       type: "poll-start";
@@ -87,7 +89,7 @@ export type TelegramIngressWorkerFactory = (
 export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (options) => {
   const listeners = new Set<(message: TelegramIngressWorkerMessage) => void>();
   const worker = new Worker(new URL("./telegram-ingress-worker.runtime.js", import.meta.url), {
-    workerData: options,
+    workerData: { ...options, runtime: TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER },
   });
   const taskPromise = new Promise<void>((resolve, reject) => {
     worker.once("error", reject);

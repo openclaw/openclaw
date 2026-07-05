@@ -60,8 +60,13 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: Sources
-    resources:
+      - path: Resources/Licenses
+        type: folder
+        buildPhase: resources
+      - path: Sources/Fonts
+        buildPhase: resources
       - path: Resources/Localizable.xcstrings
+        buildPhase: resources
     dependencies:
       - target: OpenClawShareExtension
         embed: true
@@ -149,6 +154,7 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         UIBackgroundModes:
           - audio
+          - location
           - remote-notification
         BGTaskSchedulerPermittedIdentifiers:
           - "$(OPENCLAW_APP_BUNDLE_ID).bgrefresh"
@@ -167,11 +173,19 @@ targets:
         NSLocationAlwaysAndWhenInUseUsageDescription: OpenClaw can share your location in the background when you enable Always.
         NSMicrophoneUsageDescription: OpenClaw uses the microphone for realtime chat, voice wake, and push-to-talk.
         NSMotionUsageDescription: OpenClaw may use motion data to support device-aware interactions and automations.
-        NSPhotoLibraryUsageDescription: OpenClaw needs photo library access when you choose existing photos to share with your assistant.
+        NSPhotoLibraryUsageDescription: OpenClaw lets your assistant read photos you allow and lets you choose photos to share.
+        PHPhotoLibraryPreventAutomaticLimitedAccessAlert: true
         NSRemindersFullAccessUsageDescription: OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access.
         NSSpeechRecognitionUsageDescription: OpenClaw uses on-device speech recognition for talk mode and voice wake.
         NSSupportsLiveActivities: true
         ITSAppUsesNonExemptEncryption: false
+        UIAppFonts:
+          - RedHatDisplay[wght].ttf
+          - Inter[opsz,wght].ttf
+          - Inter-Italic[opsz,wght].ttf
+          - JetBrainsMono-Regular.ttf
+          - JetBrainsMono-Medium.ttf
+          - JetBrainsMono-SemiBold.ttf
         OpenClawPushMode: "$(OPENCLAW_PUSH_MODE)"
         OpenClawPushRelayBaseURL: "$(OPENCLAW_PUSH_RELAY_BASE_URL)"
         UISupportedInterfaceOrientations:
@@ -187,8 +201,8 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: ShareExtension
-    resources:
       - path: Resources/Localizable.xcstrings
+        buildPhase: resources
     dependencies:
       - package: OpenClawKit
       - sdk: AppIntents.framework
@@ -231,8 +245,10 @@ targets:
     sources:
       - path: ActivityWidget
       - path: Sources/LiveActivity/OpenClawActivityAttributes.swift
-    resources:
+      - path: Sources/Fonts
+        buildPhase: resources
       - path: Resources/Localizable.xcstrings
+        buildPhase: resources
     dependencies:
       - sdk: WidgetKit.framework
       - sdk: ActivityKit.framework
@@ -254,6 +270,13 @@ targets:
         CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
         CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         NSSupportsLiveActivities: true
+        UIAppFonts:
+          - RedHatDisplay[wght].ttf
+          - Inter[opsz,wght].ttf
+          - Inter-Italic[opsz,wght].ttf
+          - JetBrainsMono-Regular.ttf
+          - JetBrainsMono-Medium.ttf
+          - JetBrainsMono-SemiBold.ttf
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
 
@@ -265,8 +288,10 @@ targets:
       - path: WatchApp
         excludes:
           - Info.plist
-    resources:
+      - path: Sources/Fonts
+        buildPhase: resources
       - path: Resources/Localizable.xcstrings
+        buildPhase: resources
     dependencies:
       - sdk: AppIntents.framework
       - sdk: WatchConnectivity.framework
@@ -297,6 +322,13 @@ targets:
         CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         WKCompanionAppBundleIdentifier: "$(OPENCLAW_APP_BUNDLE_ID)"
         WKApplication: true
+        UIAppFonts:
+          - RedHatDisplay[wght].ttf
+          - Inter[opsz,wght].ttf
+          - Inter-Italic[opsz,wght].ttf
+          - JetBrainsMono-Regular.ttf
+          - JetBrainsMono-Medium.ttf
+          - JetBrainsMono-SemiBold.ttf
 
   OpenClawTests:
     type: bundle.unit-test

@@ -131,10 +131,12 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     }
 
     func compactSession(sessionKey: String) async throws {
-        _ = try await GatewayConnection.shared.request(
+        let response = try await GatewayConnection.shared.request(
             method: "sessions.compact",
             params: ["key": AnyCodable(sessionKey)],
-            timeoutMs: 10000)
+            timeoutMs: 0,
+            retryTransportFailures: false)
+        try OpenClawSessionsCompactResponse.requireSuccess(from: response)
     }
 
     func setActiveSessionKey(_ sessionKey: String) async throws {

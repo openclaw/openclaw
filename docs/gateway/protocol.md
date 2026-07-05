@@ -169,10 +169,11 @@ operator token:
 ```
 
 The operator handoff is intentionally bounded so QR onboarding can start the
-mobile operator loop without granting `operator.admin` or `operator.pairing`.
-It does include `operator.talk.secrets` so the native client can read the Talk
-configuration it needs after bootstrap. Broader admin and pairing scopes require
-a separate approved operator pairing or token flow. Clients should persist
+mobile operator loop and complete native setup without granting pairing
+mutation scopes or `operator.admin`. It includes `operator.talk.secrets` so the
+native client can read the Talk configuration it needs after bootstrap. Broader
+pairing and admin access requires a separate approved operator pairing or token
+flow. Clients should persist
 `hello-ok.auth.deviceTokens` only
 when the connect used bootstrap auth on trusted transport such as `wss://` or
 loopback/local pairing.
@@ -378,8 +379,18 @@ enumeration of `src/gateway/server-methods/*.ts`.
 
   </Accordion>
 
+  <Accordion title="Operator terminal">
+    - `terminal.open` starts a host PTY for an explicit `agentId` or the default agent and returns the resolved agent, working directory, shell, and confinement state.
+    - `terminal.input`, `terminal.resize`, and `terminal.close` operate only on sessions owned by the calling connection.
+    - `terminal.data` and `terminal.exit` events stream only to the connection that owns the session.
+    - Sessions whose connection drops are detached, not killed: they stay reattachable for `gateway.terminal.detachedSessionTimeoutSeconds` (default 300; `0` restores kill-on-disconnect) while recent output accumulates in a bounded server-side buffer.
+    - `terminal.list` returns attachable sessions; `terminal.attach` rebinds a live-or-detached session to the calling connection and returns the replay buffer (tmux-style take-over — a previous live owner receives `terminal.exit` with reason `detached`); `terminal.text` reads the buffer as plain text without attaching.
+    - Every terminal method requires `operator.admin`; `gateway.terminal.enabled` must be explicitly true. Fully sandboxed agents are refused, and an agent policy change closes existing and in-flight PTYs, detached ones included.
+
+  </Accordion>
+
   <Accordion title="Talk and TTS">
-    - `talk.catalog` returns the read-only Talk provider catalog for speech, streaming transcription, and realtime voice. It includes provider ids, labels, configured state, exposed model/voice ids, canonical modes, transports, brain strategies, and realtime audio/capability flags without returning provider secrets or mutating global config.
+    - `talk.catalog` returns the read-only Talk provider catalog for speech, streaming transcription, and realtime voice. It includes canonical provider ids, registry aliases, labels, configured state, an optional group-level `ready` result, exposed model/voice ids, canonical modes, transports, brain strategies, and realtime audio/capability flags without returning provider secrets or mutating global config. Current Gateways set `ready` after applying runtime provider selection; clients should treat its absence as unverified for compatibility with older Gateways.
     - `talk.config` returns the effective Talk config payload; `includeSecrets` requires `operator.talk.secrets` (or `operator.admin`).
     - `talk.session.create` creates a Gateway-owned Talk session for `realtime/gateway-relay`, `transcription/gateway-relay`, or `stt-tts/managed-room`. For `stt-tts/managed-room`, `operator.write` callers that pass `sessionKey` must also pass `spawnedBy` for scoped session-key visibility; unscoped `sessionKey` creation and `brain: "direct-tools"` require `operator.admin`.
     - `talk.session.join` validates a managed-room session token, emits `session.ready` or `session.replaced` events as needed, and returns room/session metadata plus recent Talk events without the plaintext token or stored token hash.
@@ -454,9 +465,13 @@ enumeration of `src/gateway/server-methods/*.ts`.
 
   <Accordion title="Device pairing and device tokens">
     - `device.pair.list` returns pending and approved paired devices.
+    - `device.pair.setupCode` creates a mobile setup code and, by default, a PNG QR data URL. It requires `operator.admin` and is intentionally omitted from advertised discovery. The result includes `setupCode`, optional `qrDataUrl`, `gatewayUrl`, the non-secret `auth` label, and `urlSource`.
     - `device.pair.approve`, `device.pair.reject`, and `device.pair.remove` manage device-pairing records.
     - `device.token.rotate` rotates a paired device token within its approved role and caller scope bounds.
     - `device.token.revoke` revokes a paired device token within its approved role and caller scope bounds.
+
+    The setup code embeds a short-lived bootstrap credential. Clients must not
+    log or persist it beyond the pairing flow.
 
   </Accordion>
 
@@ -731,8 +746,8 @@ rather than the pre-handshake defaults.
 - Built-in setup-code bootstrap returns the primary node
   `hello-ok.auth.deviceToken` plus a bounded operator token in
   `hello-ok.auth.deviceTokens` for trusted mobile handoff. The operator token
-  includes `operator.talk.secrets` for native Talk configuration reads and
-  excludes `operator.admin` and `operator.pairing`.
+  includes `operator.talk.secrets` for native Talk configuration reads, but
+  excludes pairing mutation scopes and `operator.admin`.
 - While a non-baseline setup-code bootstrap is waiting for approval, `PAIRING_REQUIRED`
   details include `recommendedNextStep: "wait_then_retry"`, `retryable: true`,
   and `pauseReconnect: false`. Clients should keep reconnecting with the same
