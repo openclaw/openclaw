@@ -16,12 +16,7 @@ vi.mock("../tlon-api.js", () => ({
 const mockReadRemoteMediaBuffer = vi.mocked(readRemoteMediaBuffer);
 const mockUploadFile = vi.mocked(uploadFile);
 
-async function setupSuccessfulUpload(params?: {
-  sourceUrl?: string;
-  contentType?: string;
-  uploadedUrl?: string;
-}) {
-  const sourceUrl = params?.sourceUrl ?? "https://example.com/image.png";
+async function setupSuccessfulUpload(params?: { contentType?: string; uploadedUrl?: string }) {
   const contentType = params?.contentType ?? "image/png";
   const buffer = Buffer.from("fake-image");
   mockReadRemoteMediaBuffer.mockResolvedValue({
@@ -122,7 +117,6 @@ describe("uploadImageFromUrl", () => {
 
   it("extracts filename from URL path", async () => {
     await setupSuccessfulUpload({
-      sourceUrl: "https://example.com/path/to/my-image.jpg",
       contentType: "image/jpeg",
     });
     mockUploadFile.mockResolvedValue({ url: "https://memex.tlon.network/uploaded.jpg" });
@@ -134,7 +128,6 @@ describe("uploadImageFromUrl", () => {
 
   it("uses default filename when URL has no path", async () => {
     await setupSuccessfulUpload({
-      sourceUrl: "https://example.com/",
       contentType: "image/png",
     });
     mockUploadFile.mockResolvedValue({ url: "https://memex.tlon.network/uploaded.png" });

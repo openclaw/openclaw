@@ -30,7 +30,7 @@ export async function uploadImageFromUrl(imageUrl: string): Promise<string> {
     });
 
     const contentType = fetched.contentType || "image/png";
-    const blob = new Blob([fetched.buffer], { type: contentType });
+    const blob = new Blob([new Uint8Array(fetched.buffer)], { type: contentType });
 
     // Extract filename from URL or use a default
     const urlPath = new URL(imageUrl).pathname;
