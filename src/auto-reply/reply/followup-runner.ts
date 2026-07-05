@@ -1464,8 +1464,19 @@ export function createFollowupRunner(params: {
           "run_failed",
           new Error("empty interactive follow-up produced no visible payload"),
         );
+        const deliveryPayloads = resolveFollowupDeliveryPayloads({
+          cfg: runtimeConfig,
+          payloads: [payload],
+          messageProvider: run.messageProvider,
+          originatingAccountId: queued.originatingAccountId ?? run.agentAccountId,
+          originatingChannel: queued.originatingChannel,
+          originatingChatType: queued.originatingChatType,
+          originatingReplyToMode: queued.originatingReplyToMode,
+          originatingTo: queued.originatingTo,
+          originatingThreadId: queued.originatingThreadId,
+        });
         await sendRunPayloads(
-          [payload],
+          deliveryPayloads,
           effectiveQueued,
           {
             provider: providerUsed,
