@@ -236,7 +236,25 @@ describe("Slack live QA runtime helpers", () => {
         appServerMethod: "item/fileChange/requestApproval",
         token: "SLACK_QA_CODEX_FILE_APPROVAL_ABC123",
       }),
-    ).toContain("outside the workspace");
+    ).toContain("Do not ask for approval in chat");
+    expect(testing.resolveCodexFileApprovalTargetPath("MARKER")).toMatch(
+      /\.openclaw-qa-codex-file-approval-marker\.txt$/u,
+    );
+  });
+
+  it("reads the accepted asynchronous Gateway agent run id", () => {
+    expect(
+      testing.readAcceptedAgentRunId({
+        runId: "run-123",
+        status: "accepted",
+      }),
+    ).toBe("run-123");
+    expect(() =>
+      testing.readAcceptedAgentRunId({
+        runId: "run-123",
+        status: "started",
+      }),
+    ).toThrow("instead of accepted");
   });
 
   it("matches pending Codex plugin approvals by id, route, and Slack turn source", () => {
@@ -286,6 +304,52 @@ describe("Slack live QA runtime helpers", () => {
         sutAccountId: "sut",
       }),
     ).toBeUndefined();
+  });
+
+  it("matches resolved Codex approvals without pending-only marker text", () => {
+    expect(
+      testing.matchesSlackApprovalResolvedUpdate({
+        actionValues: [],
+        approvalKind: "plugin",
+        decision: "allow-once",
+        extraTextMatches: ["openclaw-codex-app-server", "Codex app-server file approval"],
+        text: [
+          "Plugin approval: Allowed once",
+          "Codex app-server file approval",
+          "Plugin: openclaw-codex-app-server",
+        ].join("\n"),
+      }),
+    ).toBe(true);
+    expect(
+      testing.matchesSlackApprovalResolvedUpdate({
+        actionValues: ["/approve plugin:abc allow-once"],
+        approvalKind: "plugin",
+        decision: "allow-once",
+        extraTextMatches: ["Codex app-server file approval"],
+        text: "Plugin approval: Allowed once\nCodex app-server file approval",
+      }),
+    ).toBe(false);
+  });
+
+  it("matches pending Codex approvals by stable renderer fields without marker text", () => {
+    expect(
+      testing.matchesSlackApprovalPromptText({
+        approvalKind: "plugin",
+        extraTextMatches: ["openclaw-codex-app-server", "Codex app-server command approval"],
+        text: [
+          "Plugin approval required",
+          "Codex app-server command approval",
+          "Plugin: openclaw-codex-app-server",
+        ].join("\n"),
+      }),
+    ).toBe(true);
+    expect(
+      testing.matchesSlackApprovalPromptText({
+        approvalKind: "plugin",
+        extraTextMatches: ["Codex app-server file approval"],
+        text: "Plugin approval required\nCodex app-server command approval",
+      }),
+    ).toBe(false);
   });
 
   it("builds approval checkpoint message evidence from Slack blocks", () => {

@@ -1,6 +1,7 @@
 // Qa Lab plugin module implements slack live behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { createSlackWebClient, createSlackWriteClient } from "@openclaw/slack/api.js";
 import type { WebClient } from "@slack/web-api";
@@ -1158,7 +1159,7 @@ async function waitForSlackApprovalPrompt(params: {
   scenarioTitle: string;
   sutIdentity: SlackAuthIdentity;
   timeoutMs: number;
-  token: string;
+  token?: string;
   extraTextMatches?: string[];
 }) {
   const startedAt = Date.now();
@@ -1176,20 +1177,19 @@ async function waitForSlackApprovalPrompt(params: {
       }
       const text = getSlackMessageSearchText(message);
       const actionValues = collectSlackActionValues(message.blocks);
-      const hasHeading = text.includes(
-        resolveApprovalHeading({ approvalKind: params.approvalKind, state: "pending" }),
-      );
-      const hasToken = text.includes(params.token);
-      const hasExtraMatches = (params.extraTextMatches ?? []).every((match) =>
-        text.includes(match),
-      );
+      const matchedScenario = matchesSlackApprovalPromptText({
+        approvalKind: params.approvalKind,
+        extraTextMatches: params.extraTextMatches,
+        text,
+        token: params.token,
+      });
       const observedKey = `${message.ts}:${message.text ?? ""}:${actionValues.join("|")}`;
-      if (hasHeading || hasToken || hasSlackNativeApprovalActions({ ...params, actionValues })) {
+      if (matchedScenario || hasSlackNativeApprovalActions({ ...params, actionValues })) {
         if (!seenObservedMessages.has(observedKey)) {
           seenObservedMessages.add(observedKey);
           pushObservedApprovalMessage({
             channelId: params.channelId,
-            matchedScenario: hasHeading && hasToken,
+            matchedScenario,
             message,
             observedMessages: params.observedMessages,
             scenarioId: params.scenarioId,
@@ -1197,7 +1197,7 @@ async function waitForSlackApprovalPrompt(params: {
           });
         }
       }
-      if (!hasHeading || !hasToken || !hasExtraMatches) {
+      if (!matchedScenario) {
         continue;
       }
       if (
@@ -1236,6 +1236,21 @@ async function waitForSlackApprovalPrompt(params: {
   );
 }
 
+function matchesSlackApprovalPromptText(params: {
+  approvalKind: SlackQaApprovalKind;
+  extraTextMatches?: string[];
+  text: string;
+  token?: string;
+}) {
+  return (
+    params.text.includes(
+      resolveApprovalHeading({ approvalKind: params.approvalKind, state: "pending" }),
+    ) &&
+    (!params.token || params.text.includes(params.token)) &&
+    (params.extraTextMatches ?? []).every((match) => params.text.includes(match))
+  );
+}
+
 async function waitForSlackApprovalResolvedUpdate(params: {
   approvalKind: SlackQaApprovalKind;
   channelId: string;
@@ -1248,7 +1263,8 @@ async function waitForSlackApprovalResolvedUpdate(params: {
   scenarioTitle: string;
   sutIdentity: SlackAuthIdentity;
   timeoutMs: number;
-  token: string;
+  token?: string;
+  extraTextMatches?: string[];
 }) {
   const startedAt = Date.now();
   const seenObservedMessages = new Set<string>();
@@ -1262,29 +1278,27 @@ async function waitForSlackApprovalResolvedUpdate(params: {
     if (message && isSutSlackMessage(message, params.sutIdentity)) {
       const text = getSlackMessageSearchText(message);
       const actionValues = collectSlackActionValues(message.blocks);
+      const matchedScenario = matchesSlackApprovalResolvedUpdate({
+        actionValues,
+        approvalKind: params.approvalKind,
+        decision: params.decision,
+        extraTextMatches: params.extraTextMatches,
+        text,
+        token: params.token,
+      });
       const observedKey = `${message.ts}:${message.text ?? ""}:${actionValues.join("|")}`;
       if (!seenObservedMessages.has(observedKey)) {
         seenObservedMessages.add(observedKey);
         pushObservedApprovalMessage({
           channelId: params.channelId,
-          matchedScenario: text.includes(params.token),
+          matchedScenario,
           message,
           observedMessages: params.observedMessages,
           scenarioId: params.scenarioId,
           scenarioTitle: params.scenarioTitle,
         });
       }
-      if (
-        text.includes(
-          resolveApprovalHeading({
-            approvalKind: params.approvalKind,
-            decision: params.decision,
-            state: "resolved",
-          }),
-        ) &&
-        text.includes(params.token) &&
-        !actionValues.some((value) => value.includes("/approve"))
-      ) {
+      if (matchedScenario) {
         return {
           actionValues,
           message,
@@ -1298,6 +1312,28 @@ async function waitForSlackApprovalResolvedUpdate(params: {
   }
   throw new Error(
     `timed out after ${params.timeoutMs}ms waiting for Slack ${params.approvalKind} approval resolution update`,
+  );
+}
+
+function matchesSlackApprovalResolvedUpdate(params: {
+  actionValues: string[];
+  approvalKind: SlackQaApprovalKind;
+  decision: SlackQaApprovalDecision;
+  extraTextMatches?: string[];
+  text: string;
+  token?: string;
+}) {
+  return (
+    params.text.includes(
+      resolveApprovalHeading({
+        approvalKind: params.approvalKind,
+        decision: params.decision,
+        state: "resolved",
+      }),
+    ) &&
+    (!params.token || params.text.includes(params.token)) &&
+    (params.extraTextMatches ?? []).every((match) => params.text.includes(match)) &&
+    !params.actionValues.some((value) => value.includes("/approve"))
   );
 }
 
@@ -1616,29 +1652,26 @@ function buildCodexApprovalInstruction(params: {
       `After the command succeeds, reply exactly ${params.token} and nothing else.`,
     ].join("\n");
   }
-  const targetPath = path.join(
-    "/tmp",
-    `openclaw-qa-codex-file-approval-${params.token.toLowerCase()}.txt`,
-  );
+  const targetPath = resolveCodexFileApprovalTargetPath(params.token);
   return [
     "Slack QA Codex file approval scenario.",
     `Marker: ${params.token}`,
     "Use apply_patch exactly once to create this file outside the workspace.",
     `Target file: ${targetPath}`,
     `File contents: ${params.token}`,
-    "Request approval for the file change before applying the patch.",
+    "Invoke apply_patch now. Do not ask for approval in chat; the harness will resolve the native tool approval.",
     `After the file change succeeds, reply exactly ${params.token} and nothing else.`,
   ].join("\n");
 }
 
-function readStartedAgentRunId(result: unknown) {
+function readAcceptedAgentRunId(result: unknown) {
   const started =
     typeof result === "object" && result !== null
       ? (result as { runId?: unknown; status?: unknown })
       : null;
-  if (started?.status !== "started") {
+  if (started?.status !== "accepted") {
     throw new Error(
-      `Codex agent run status was ${formatApprovalResultValue(started?.status)} instead of started`,
+      `Codex agent run status was ${formatApprovalResultValue(started?.status)} instead of accepted`,
     );
   }
   if (typeof started.runId !== "string" || started.runId.trim().length === 0) {
@@ -1648,9 +1681,11 @@ function readStartedAgentRunId(result: unknown) {
 }
 
 function readAgentWaitStatus(result: unknown) {
-  return typeof result === "object" && result !== null
-    ? String((result as { status?: unknown }).status ?? "unknown")
-    : "unknown";
+  if (typeof result !== "object" || result === null) {
+    return "unknown";
+  }
+  const status = (result as { status?: unknown }).status;
+  return typeof status === "string" && status.trim() ? status : "unknown";
 }
 
 function findPendingCodexPluginApprovalRecord(params: {
@@ -1755,7 +1790,7 @@ async function startCodexApprovalAgentRun(params: {
       timeoutMs: SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
     },
   );
-  return { runId: readStartedAgentRunId(result), sessionKey };
+  return { runId: readAcceptedAgentRunId(result), sessionKey };
 }
 
 function buildCodexApprovalSessionKey(params: {
@@ -1792,6 +1827,33 @@ async function runSlackCodexApprovalScenario(params: {
   scenario: SlackQaScenarioDefinition;
   sutAccountId: string;
 }) {
+  if (params.run.appServerMethod !== "item/fileChange/requestApproval") {
+    return await runSlackCodexApprovalScenarioInner(params);
+  }
+  const targetPath = resolveCodexFileApprovalTargetPath(params.run.token);
+  // The probe must remain outside Codex's workspace roots, and every exit path
+  // must remove the approved write so live QA never leaves host state behind.
+  await fs.rm(targetPath, { force: true });
+  try {
+    return await runSlackCodexApprovalScenarioInner(params);
+  } finally {
+    await fs.rm(targetPath, { force: true });
+  }
+}
+
+function resolveCodexFileApprovalTargetPath(token: string) {
+  return path.join(os.homedir(), `.openclaw-qa-codex-file-approval-${token.toLowerCase()}.txt`);
+}
+
+async function runSlackCodexApprovalScenarioInner(params: {
+  channelId: string;
+  context: Omit<SlackQaScenarioContext, "sentTs">;
+  observedMessages: SlackObservedMessage[];
+  primaryModel: string;
+  run: SlackQaCodexApprovalScenarioRun;
+  scenario: SlackQaScenarioDefinition;
+  sutAccountId: string;
+}) {
   const requestStartedAt = new Date();
   const oldestTs = ((requestStartedAt.getTime() - 5_000) / 1_000).toFixed(6);
   const codexRun = await startCodexApprovalAgentRun({
@@ -1818,7 +1880,6 @@ async function runSlackCodexApprovalScenario(params: {
     scenarioTitle: params.scenario.title,
     sutIdentity: params.context.sutIdentity,
     timeoutMs: params.scenario.timeoutMs,
-    token: params.run.token,
   });
   const approvalId = pending.approvalId;
   if (!approvalId) {
@@ -1871,7 +1932,7 @@ async function runSlackCodexApprovalScenario(params: {
     scenarioTitle: params.scenario.title,
     sutIdentity: params.context.sutIdentity,
     timeoutMs: params.scenario.timeoutMs,
-    token: params.run.token,
+    extraTextMatches: ["openclaw-codex-app-server", expectedTitle],
   });
   const resolvedCheckpoint = await writeSlackApprovalCheckpoint({
     approvalId,
@@ -2592,8 +2653,12 @@ export const testing = {
   findPendingCodexPluginApprovalRecord,
   findScenario,
   isSlackChannelReadyForQa,
+  matchesSlackApprovalResolvedUpdate,
+  matchesSlackApprovalPromptText,
   parseSlackQaCredentialPayload,
   preserveSlackGatewayDebugArtifacts,
+  readAcceptedAgentRunId,
+  resolveCodexFileApprovalTargetPath,
   resolveSlackChannelReadySince,
   resolveSlackQaReadyTimeoutMs,
   resolveSlackApprovalCheckpointConfig,
