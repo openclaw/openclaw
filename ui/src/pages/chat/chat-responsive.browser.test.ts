@@ -1125,11 +1125,13 @@ describeBrowserLayout("chat responsive browser layout", () => {
       const page = await openFixture(width, height, { composerAttachment: true });
       try {
         await expectNoHorizontalOverflow(page);
+        const header = await getBoundingBox(page, ".agent-chat__composer-header");
         const input = await getBoundingBox(page, ".agent-chat__input");
         const preview = await getBoundingBox(page, ".chat-attachments-preview");
         const attachment = await getBoundingBox(page, ".chat-attachment-thumb");
 
         expect(attachment.x - input.x).toBeGreaterThanOrEqual(9.5);
+        expect(attachment.y - (header.y + header.height)).toBeGreaterThanOrEqual(9.5);
         expect(preview.x).toBeGreaterThanOrEqual(input.x);
         expect(preview.x + preview.width).toBeLessThanOrEqual(input.x + input.width + 1);
       } finally {
