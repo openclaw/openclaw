@@ -86,6 +86,8 @@ export default defineToolPlugin({
   tool result. Full tool results can include advanced fields such as a public
   `terminalSummary` for forced terminal replies when the model fails to produce
   its own final answer.
+- For custom tool results, `openclaw/plugin-sdk/tool-results` exports
+  `textResult` and `jsonResult`.
 - `terminalResultFallback` is optional tool metadata for cases where raw tool
   output has a known safe terminal presentation. Omit it unless the tool owns
   that safety contract; the shared fallback can still redact, truncate, and

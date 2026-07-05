@@ -744,11 +744,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await abortActive();
         break;
       case "stop":
-        if (hasTrackedAbortTarget()) {
-          await abortActive({ preferActive: true });
-          break;
-        }
-        await sendMessage(raw);
+        // Queued client runs can terminalize before the followup executes, so
+        // local run ids are not a complete stop target inventory.
+        await abortActive({ preferActive: true });
         break;
       case "settings":
         openSettings();
@@ -780,18 +778,15 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       state.activeChatRunId || state.pendingChatRunId || state.pendingOptimisticUserMessage,
     );
     if (
-      hasTrackedAbortTarget() &&
-      (isSlashStopCommand(text) || (busy && isChatStopCommandText(text)))
+      isSlashStopCommand(text) ||
+      (hasTrackedAbortTarget() && busy && isChatStopCommandText(text))
     ) {
       await abortActive({ preferActive: true });
       return;
     }
-    if (
-      !isBtw &&
-      (state.pendingChatRunId ||
-        state.pendingOptimisticUserMessage ||
-        (opts.local !== true && state.activeChatRunId))
-    ) {
+    // The Gateway owns queue policy. TUI only serializes pending RPC admission;
+    // an already-active run must not suppress steer/followup/collect/interrupt.
+    if (!isBtw && (state.pendingOptimisticUserMessage || state.pendingChatRunId)) {
       addBlockedChatSubmitNotice(chatLog);
       tui.requestRender();
       return;
@@ -914,7 +909,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (isBtw) {
         forgetLocalBtwRunId?.(runId);
       }
-      if (!isBtw && state.activeChatRunId) {
+      if (!isBtw && state.activeChatRunId && state.activeChatRunId === runId) {
         forgetLocalRunId?.(state.activeChatRunId);
       }
       if (!isBtw) {
@@ -923,7 +918,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (!isBtw) {
         state.pendingOptimisticUserMessage = false;
         state.pendingChatRunId = null;
-        state.activeChatRunId = null;
+        // Only clear the failed send's ownership. A queued run may have
+        // terminalized or handed ownership off while the RPC was pending.
+        if (state.activeChatRunId === runId) {
+          state.activeChatRunId = null;
+        }
         if (state.pendingSubmitDraft?.runId === runId) {
           state.pendingSubmitDraft = null;
         }

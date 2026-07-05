@@ -2754,6 +2754,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Precedence
   - H2: Per-session overrides
   - H2: Scope and guarantees
+  - H2: Queued-turn cancellation
   - H2: Troubleshooting
   - H2: Related
 
