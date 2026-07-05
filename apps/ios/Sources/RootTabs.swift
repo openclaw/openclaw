@@ -203,7 +203,7 @@ struct RootTabs: View {
             SettingsProTab(
                 initialRoute: self.selectedSettingsRoute,
                 onRouteChange: self.handleSettingsRouteChange,
-                handlesGatewaySetupRequests: true)
+                gatewaySetupRequestID: self.handledGatewaySetupRequestID)
                 .id(self.settingsTabViewID)
                 .tabItem { Label("Settings", systemImage: "gearshape.fill") }
                 .tag(AppTab.settings)
@@ -513,14 +513,14 @@ struct RootTabs: View {
                     ownsNavigationStack: false,
                     navigateToRoute: self.pushSidebarSettingsRoute,
                     onRouteChange: self.handleSettingsRouteChange,
-                    handlesGatewaySetupRequests: true)
+                    gatewaySetupRequestID: self.handledGatewaySetupRequestID)
             } else {
                 SettingsProTab(
                     headerLeadingAction: self.sidebarHeaderLeadingAction,
                     ownsNavigationStack: false,
                     navigateToRoute: self.pushSidebarSettingsRoute,
                     onRouteChange: self.handleSettingsRouteChange,
-                    handlesGatewaySetupRequests: true)
+                    gatewaySetupRequestID: self.handledGatewaySetupRequestID)
             }
         case .gateway:
             SettingsProTab(
@@ -529,7 +529,7 @@ struct RootTabs: View {
                 ownsNavigationStack: false,
                 navigateToRoute: self.pushSidebarSettingsRoute,
                 onRouteChange: self.handleSettingsRouteChange,
-                handlesGatewaySetupRequests: true)
+                gatewaySetupRequestID: self.handledGatewaySetupRequestID)
         }
     }
 
@@ -1296,11 +1296,12 @@ extension RootTabs {
     private func maybeOpenSettingsForGatewaySetup() {
         let requestID = self.appModel.gatewaySetupRequestID
         guard requestID != 0, requestID != self.handledGatewaySetupRequestID else { return }
-        self.handledGatewaySetupRequestID = requestID
         self.showOnboarding = false
         self.presentedSheet = nil
         self.didAutoOpenSettings = true
         self.selectSidebarDestination(.gateway)
+        // Publish only to the routed canonical Settings view; embedded Settings views keep ID 0.
+        self.handledGatewaySetupRequestID = requestID
         self.requestLocalNetworkAccess(reason: "gateway_setup_deeplink")
     }
 

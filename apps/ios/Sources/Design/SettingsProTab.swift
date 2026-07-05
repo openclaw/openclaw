@@ -69,7 +69,7 @@ struct SettingsProTab: View {
     let ownsNavigationStack: Bool
     let navigateToRoute: ((SettingsRoute) -> Void)?
     let onRouteChange: ((SettingsRoute?) -> Void)?
-    let handlesGatewaySetupRequests: Bool
+    let gatewaySetupRequestID: Int
 
     init(
         initialRoute: SettingsRoute? = nil,
@@ -78,7 +78,7 @@ struct SettingsProTab: View {
         ownsNavigationStack: Bool = true,
         navigateToRoute: ((SettingsRoute) -> Void)? = nil,
         onRouteChange: ((SettingsRoute?) -> Void)? = nil,
-        handlesGatewaySetupRequests: Bool = false)
+        gatewaySetupRequestID: Int = 0)
     {
         self.initialRoute = initialRoute
         self.directRoute = directRoute
@@ -86,7 +86,7 @@ struct SettingsProTab: View {
         self.ownsNavigationStack = ownsNavigationStack
         self.navigateToRoute = navigateToRoute
         self.onRouteChange = onRouteChange
-        self.handlesGatewaySetupRequests = handlesGatewaySetupRequests
+        self.gatewaySetupRequestID = gatewaySetupRequestID
     }
 
     var body: some View {
@@ -135,11 +135,11 @@ struct SettingsProTab: View {
 
     private func settingsLifecycle(_ content: some View) -> some View {
         content
-            .task {
+            .task(id: self.gatewaySetupRequestID) {
                 self.previousLocationModeRaw = self.locationModeRaw
                 self.syncSettingsState()
                 self.refreshNotificationSettings()
-                if self.handlesGatewaySetupRequests {
+                if self.gatewaySetupRequestID != 0 {
                     self.applyPendingGatewaySetupLinkIfNeeded()
                 }
                 self.applyInitialRouteIfNeeded()
@@ -176,13 +176,6 @@ struct SettingsProTab: View {
             }
             .onChange(of: self.defaultShareInstruction) { _, newValue in
                 ShareToAgentSettings.saveDefaultInstruction(newValue)
-            }
-            .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
-                guard self.handlesGatewaySetupRequests else { return }
-                // A non-gateway sidebar Settings view is replaced during routing; its replacement
-                // consumes in `.task` so staged state cannot disappear with the old view.
-                guard self.ownsNavigationStack || self.directRoute == .gateway else { return }
-                self.applyPendingGatewaySetupLinkIfNeeded()
             }
             .onChange(of: self.onboardingRequestID) { _, _ in
                 // Root-owned resets leave Settings mounted behind onboarding.
