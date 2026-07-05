@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -47,8 +46,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 
@@ -268,24 +265,20 @@ private fun TopStatusBar(
     Row(
       modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp),
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(10.dp),
+      horizontalArrangement = Arrangement.SpaceBetween,
     ) {
       Text(
         text = "OpenClaw",
-        modifier = Modifier.weight(0.78f),
         style = mobileTitle2,
         color = mobileText,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
       )
       Surface(
-        modifier = Modifier.weight(1.22f),
         shape = RoundedCornerShape(999.dp),
         color = chipBg,
         border = androidx.compose.foundation.BorderStroke(1.dp, chipBorder),
       ) {
         Row(
-          modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 5.dp),
+          modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
           horizontalArrangement = Arrangement.spacedBy(6.dp),
           verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -298,11 +291,9 @@ private fun TopStatusBar(
           }
           Text(
             text = statusText.trim().ifEmpty { "Offline" },
-            modifier = Modifier.weight(1f),
             style = mobileCaption1,
             color = chipText,
             maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
           )
         }
       }
@@ -357,17 +348,12 @@ private fun BottomTabBar(
               Icon(
                 imageVector = tab.icon,
                 contentDescription = tab.label,
-                modifier = Modifier.size(21.dp),
                 tint = if (active) mobileAccent else mobileTextTertiary,
               )
               Text(
                 text = tab.label,
-                modifier = Modifier.fillMaxWidth(),
                 color = if (active) mobileAccent else mobileTextSecondary,
                 style = mobileCaption2.copy(fontWeight = if (active) FontWeight.Bold else FontWeight.Medium),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
               )
             }
           }
