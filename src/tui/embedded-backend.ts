@@ -322,7 +322,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     defaultRuntime.log = silentRuntime.log;
     defaultRuntime.error = silentRuntime.error;
     this.unsubscribe = onAgentEvent((evt) => {
-      void this.handleAgentEvent(evt);
+      void this.handleAgentEvent(evt).catch(() => {});
     });
     // Local mode never runs gateway startup; canonicalize orphaned keys once here.
     this.ready = (async () => {
