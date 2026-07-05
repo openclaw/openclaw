@@ -1740,12 +1740,21 @@ export type ClawHubPromotion = {
   launchPageUrl?: string;
 };
 
+// Shell-safe contract for provider/model refs: they are echoed into
+// copy-paste CLI commands, so whitespace and shell metacharacters must fail
+// parsing rather than reach a terminal.
+const CLAWHUB_PROMOTION_MODEL_REF_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
+
 function parseClawHubPromotionModel(value: unknown, context: string): ClawHubPromotionModel {
   if (!isJsonObject(value)) {
     throw new Error(`Malformed ClawHub ${context}: expected each model to be an object.`);
   }
+  const modelRef = requiredStringField(value, "modelRef", context);
+  if (!CLAWHUB_PROMOTION_MODEL_REF_RE.test(modelRef)) {
+    throw new Error(`Malformed ClawHub ${context}: modelRef contains unsupported characters.`);
+  }
   const model: ClawHubPromotionModel = {
-    modelRef: requiredStringField(value, "modelRef", context),
+    modelRef,
   };
   const alias = optionalStringField(value, "alias", context);
   if (alias) {

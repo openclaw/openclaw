@@ -1,5 +1,5 @@
-import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 /** Claims a ClawHub promotion: configures provider auth and registers its models. */
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { hasAvailableAuthForProvider } from "../../agents/model-auth.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { promptYesNo } from "../../cli/prompt.js";
@@ -128,7 +128,12 @@ async function ensureProviderAuth(params: {
 }): Promise<void> {
   const { promotion, provider, catalogEntry, snapshot, opts, runtime } = params;
   const runtimeConfig = snapshot.runtimeConfig ?? snapshot.config;
-  if (await hasAvailableAuthForProvider({ provider, cfg: runtimeConfig })) {
+  const apiKey = opts.apiKey?.trim();
+  // Any working provider auth is deliberately sufficient: the promotion's
+  // authChoiceId describes how to set up auth when none exists, not an
+  // exclusivity requirement. An explicit --api-key overrides reuse because the
+  // user asked for that specific key to be stored.
+  if (!apiKey && (await hasAvailableAuthForProvider({ provider, cfg: runtimeConfig }))) {
     runtime.log(`Using your existing ${provider} credentials.`);
     return;
   }
@@ -140,7 +145,6 @@ async function ensureProviderAuth(params: {
   if (promotion.signupUrl) {
     runtime.log(`Get a free key for this promotion: ${sanitizeTerminalText(promotion.signupUrl)}`);
   }
-  const apiKey = opts.apiKey?.trim();
   if (apiKey && !catalogEntry.optionKey) {
     throw new Error(
       `Auth choice "${catalogEntry.choiceId}" does not accept --api-key; run without it to authenticate interactively.`,
