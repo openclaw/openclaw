@@ -35,7 +35,7 @@ describe("canonicalizeActTargetIds", () => {
   });
 
   it("leaves an absent targetId unset so dispatch falls back to the request tab", () => {
-    const action = { kind: "click", ref: "1" } as const;
+    const action: Parameters<typeof canonicalizeActTargetIds>[0] = { kind: "click", ref: "1" };
     expect(canonicalizeActTargetIds(action, tab)).toBeNull();
     expect(action.targetId).toBeUndefined();
   });
