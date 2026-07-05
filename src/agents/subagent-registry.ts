@@ -1394,6 +1394,8 @@ async function sweepSubagentRuns() {
     if (subagentRuns.size === 0) {
       stopSweeper();
     }
+  } catch (err) {
+    log.warn(`subagent run sweep failed: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     sweepInProgress = false;
   }
