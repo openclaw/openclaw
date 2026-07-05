@@ -69,7 +69,7 @@ const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
 ]);
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 
-function resolveStatusChannelFeatureLine(params: {
+export function resolveStatusChannelFeatureLine(params: {
   cfg: OpenClawConfig;
   statusChannel: string;
   statusAccountId?: string;

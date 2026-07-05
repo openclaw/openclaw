@@ -1910,6 +1910,61 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.sessionFile).toContain("active-run-session.jsonl");
   });
 
+  it("does not treat unavailable Anthropic context as transcript prompt usage", async () => {
+    const sessionFile = path.join(rootDir, "unavailable-context-session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({
+        message: {
+          role: "assistant",
+          content: "small answer",
+          usage: {
+            input: 12,
+            output: 15_104,
+            cacheRead: 819_661,
+            cacheWrite: 93_130,
+            contextUsage: { state: "unavailable" },
+            totalTokens: 927_907,
+          },
+        },
+      })}\n`,
+      "utf8",
+    );
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
+
   it("keeps preflight compaction conservative for content appended after latest usage", async () => {
     const sessionFile = path.join(rootDir, "post-usage-tail-session.jsonl");
     await fs.writeFile(

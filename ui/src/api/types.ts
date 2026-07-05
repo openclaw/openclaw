@@ -469,7 +469,10 @@ export type GatewaySessionRow = {
   spawnedBy?: string;
   kind: "cron" | "direct" | "group" | "global" | "unknown";
   label?: string;
+  /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
+  category?: string;
   displayName?: string;
+  channel?: string;
   surface?: string;
   subject?: string;
   room?: string;

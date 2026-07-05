@@ -6,6 +6,7 @@ import {
   applySubagentWaitOutcome,
   buildCompactAnnounceStatsLine,
   buildChildCompletionFindings,
+  dedupeLatestChildCompletionRows,
   readSubagentOutput,
 } from "./subagent-announce-output.js";
 
@@ -62,6 +63,22 @@ function sessionsYieldTurn(message = "Waiting for subagent completion.") {
     },
   ];
 }
+
+describe("dedupeLatestChildCompletionRows", () => {
+  it("prefers the newer generation when child runs share a creation timestamp", () => {
+    const childSessionKey = "agent:main:subagent:reused";
+    const older = {
+      runId: "run-older",
+      generation: 1,
+      childSessionKey,
+      task: "older",
+      createdAt: 1_000,
+    };
+    const newer = { ...older, runId: "run-newer", generation: 2, task: "newer" };
+
+    expect(dedupeLatestChildCompletionRows([older, newer])).toStrictEqual([newer]);
+  });
+});
 
 describe("buildCompactAnnounceStatsLine", () => {
   afterEach(() => {

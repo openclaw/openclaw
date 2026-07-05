@@ -930,6 +930,9 @@ export class OpenClawTerminalPanel extends LitElement {
       border-radius: 6px;
       padding: 0;
     }
+    .tp-new {
+      align-self: center;
+    }
     .tp-tab__close:hover,
     .tp-new:hover,
     .tp-icon:hover {
@@ -956,6 +959,9 @@ export class OpenClawTerminalPanel extends LitElement {
       position: absolute;
       inset: 0;
       padding: 6px 8px;
+      /* ghostty-web focuses this contenteditable host while drawing its own
+         cursor on canvas; hide the otherwise duplicated browser caret. */
+      caret-color: transparent;
     }
     .tp-empty,
     .tp-error {

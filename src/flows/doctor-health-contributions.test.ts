@@ -5,6 +5,7 @@ import nodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
+import "./doctor-tool-result-cap-advice.js";
 import {
   createDoctorHealthContribution,
   resolveDoctorContributionHealthChecks,
@@ -657,6 +658,7 @@ describe("doctor health contributions", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -1558,12 +1560,22 @@ describe("doctor health contributions", () => {
       mode: "lint",
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     } as const;
-    const checks = [toolResultCapCheck!];
+    const detect = vi.fn(async () => [
+      {
+        checkId: "core/doctor/tool-result-cap",
+        severity: "warning" as const,
+        message: "Configured tool result cap overrides the model-window default.",
+        path: "agents.defaults.contextLimits.toolResultMaxChars",
+      },
+    ]);
+    // This case owns lint selection; the real cap detector is exercised below.
+    const checks = [{ ...toolResultCapCheck!, detect }];
 
     await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
       checksRun: 0,
       checksSkipped: 1,
     });
+    expect(detect).not.toHaveBeenCalled();
     await expect(
       runDoctorLintChecks(ctx, { checks, includeAllChecks: true }),
     ).resolves.toMatchObject({
@@ -1582,6 +1594,7 @@ describe("doctor health contributions", () => {
       checksRun: 1,
       checksSkipped: 0,
     });
+    expect(detect).toHaveBeenCalledTimes(2);
   });
 
   it("keeps stale plugin-runtime symlinks opt-in for structured lint selection", async () => {
@@ -1741,17 +1754,21 @@ describe("doctor health contributions", () => {
     expect(stateIntegrityCheck).toMatchObject({ defaultEnabled: false });
     expect(stateIntegrityCheck).toBeDefined();
 
+    const detect = vi.fn(async () => []);
+
     const ctx = {
       cfg: {},
       mode: "lint",
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     } as const;
-    const checks = [stateIntegrityCheck!];
+    // Selection behavior does not need the real state-integrity filesystem scan.
+    const checks = [{ ...stateIntegrityCheck!, detect }];
 
     await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
       checksRun: 0,
       checksSkipped: 1,
     });
+    expect(detect).not.toHaveBeenCalled();
     await expect(
       runDoctorLintChecks(ctx, { checks, includeAllChecks: true }),
     ).resolves.toMatchObject({
@@ -1764,6 +1781,7 @@ describe("doctor health contributions", () => {
       checksRun: 1,
       checksSkipped: 0,
     });
+    expect(detect).toHaveBeenCalledTimes(2);
   });
 
   it("collects memory-search notes as structured findings", async () => {
@@ -2684,6 +2702,260 @@ describe("doctor health contributions", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  describe("write-config lint findings", () => {
+    const writeConfigContribution = requireDoctorContribution("doctor:write-config");
+    const check = writeConfigContribution.healthChecks[0] as HealthCheck & {
+      defaultEnabled?: boolean;
+    };
+
+    it("keeps write-config lint opt-in for structured findings", async () => {
+      expect(writeConfigContribution.healthCheckIds).toEqual(["core/doctor/write-config"]);
+      expect(check.defaultEnabled).toBe(false);
+
+      const ctx = {
+        cfg: {},
+        mode: "lint" as const,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        configPath: "/tmp/fake-openclaw.json",
+      };
+
+      await expect(runDoctorLintChecks(ctx, { checks: [check] })).resolves.toMatchObject({
+        checksRun: 0,
+        checksSkipped: 1,
+        findings: [],
+      });
+    });
+
+    it("reports Nix immutable config mode when selected", async () => {
+      vi.stubEnv("OPENCLAW_NIX_MODE", "1");
+
+      await expect(
+        runDoctorLintChecks(
+          {
+            cfg: {},
+            mode: "lint" as const,
+            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            configPath: "/tmp/fake-openclaw.json",
+          },
+          { checks: [check], onlyIds: ["core/doctor/write-config"] },
+        ),
+      ).resolves.toMatchObject({
+        checksRun: 1,
+        checksSkipped: 0,
+        findings: [
+          expect.objectContaining({
+            checkId: "core/doctor/write-config",
+            path: "/tmp/fake-openclaw.json",
+            requirement: "mutable-config-write-path",
+          }),
+        ],
+      });
+    });
+
+    it("skips a read-only existing config when its directory is writable", async () => {
+      const configPath = "/tmp/openclaw-home/openclaw.json";
+      vi.spyOn(fs, "existsSync").mockImplementation((path) => path === configPath);
+      vi.spyOn(fs, "statSync").mockReturnValue({
+        isDirectory: () => true,
+      } as fs.Stats);
+      const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+
+      await expect(
+        runDoctorLintChecks(
+          {
+            cfg: {},
+            mode: "lint" as const,
+            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            configPath,
+          },
+          { checks: [check], onlyIds: ["core/doctor/write-config"] },
+        ),
+      ).resolves.toMatchObject({
+        findings: [],
+      });
+      expect(accessSpy).toHaveBeenCalledWith(
+        "/tmp/openclaw-home",
+        fs.constants.W_OK | fs.constants.X_OK,
+      );
+    });
+
+    it("reports an unwritable config directory for an existing config", async () => {
+      const configPath = "/tmp/openclaw-home/openclaw.json";
+      vi.spyOn(fs, "existsSync").mockImplementation((path) => path === configPath);
+      vi.spyOn(fs, "statSync").mockReturnValue({
+        isDirectory: () => true,
+      } as fs.Stats);
+      vi.spyOn(fs, "accessSync").mockImplementation(() => {
+        throw new Error("EACCES");
+      });
+
+      await expect(
+        runDoctorLintChecks(
+          {
+            cfg: {},
+            mode: "lint" as const,
+            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            configPath,
+          },
+          { checks: [check], onlyIds: ["core/doctor/write-config"] },
+        ),
+      ).resolves.toMatchObject({
+        findings: [
+          expect.objectContaining({
+            checkId: "core/doctor/write-config",
+            path: "/tmp/openclaw-home",
+            target: configPath,
+            requirement: "writable-config-directory",
+          }),
+        ],
+      });
+    });
+
+    it("skips a missing config directory when an existing ancestor is writable", async () => {
+      vi.spyOn(fs, "existsSync").mockImplementation((path) => path === "/tmp");
+      const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+
+      await expect(
+        runDoctorLintChecks(
+          {
+            cfg: {},
+            mode: "lint" as const,
+            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            configPath: "/tmp/openclaw-home/openclaw.json",
+          },
+          { checks: [check], onlyIds: ["core/doctor/write-config"] },
+        ),
+      ).resolves.toMatchObject({
+        findings: [],
+      });
+      expect(accessSpy).toHaveBeenCalledWith("/tmp", fs.constants.W_OK | fs.constants.X_OK);
+    });
+
+    it("reports an unwritable existing parent when the config file is missing", async () => {
+      vi.spyOn(fs, "existsSync").mockImplementation((path) => path === "/tmp");
+      vi.spyOn(fs, "accessSync").mockImplementation(() => {
+        throw new Error("EACCES");
+      });
+
+      await expect(
+        runDoctorLintChecks(
+          {
+            cfg: {},
+            mode: "lint" as const,
+            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            configPath: "/tmp/openclaw-home/openclaw.json",
+          },
+          { checks: [check], onlyIds: ["core/doctor/write-config"] },
+        ),
+      ).resolves.toMatchObject({
+        findings: [
+          expect.objectContaining({
+            checkId: "core/doctor/write-config",
+            path: "/tmp",
+            target: "/tmp/openclaw-home",
+            requirement: "writable-config-directory",
+          }),
+        ],
+      });
+    });
+
+    it("reports an existing parent without search permission", async () => {
+      vi.spyOn(fs, "existsSync").mockImplementation((path) => path === "/tmp");
+      vi.spyOn(fs, "accessSync").mockImplementation((_path, mode) => {
+        if (mode === (fs.constants.W_OK | fs.constants.X_OK)) {
+          throw new Error("EACCES");
+        }
+      });
+
+      await expect(
+        runDoctorLintChecks(
+          {
+            cfg: {},
+            mode: "lint" as const,
+            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            configPath: "/tmp/openclaw-home/openclaw.json",
+          },
+          { checks: [check], onlyIds: ["core/doctor/write-config"] },
+        ),
+      ).resolves.toMatchObject({
+        findings: [
+          expect.objectContaining({
+            checkId: "core/doctor/write-config",
+            path: "/tmp",
+            target: "/tmp/openclaw-home",
+            requirement: "writable-config-directory",
+          }),
+        ],
+      });
+    });
+
+    it("reports an existing file that blocks the config directory path", async () => {
+      vi.spyOn(fs, "existsSync").mockImplementation((path) => path === "/tmp/openclaw-home");
+      vi.spyOn(fs, "statSync").mockReturnValue({
+        isDirectory: () => false,
+      } as fs.Stats);
+      const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+
+      await expect(
+        runDoctorLintChecks(
+          {
+            cfg: {},
+            mode: "lint" as const,
+            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            configPath: "/tmp/openclaw-home/openclaw.json",
+          },
+          { checks: [check], onlyIds: ["core/doctor/write-config"] },
+        ),
+      ).resolves.toMatchObject({
+        findings: [
+          expect.objectContaining({
+            checkId: "core/doctor/write-config",
+            path: "/tmp/openclaw-home",
+            target: "/tmp/openclaw-home",
+            requirement: "config-directory-path",
+          }),
+        ],
+      });
+      expect(accessSpy).not.toHaveBeenCalled();
+    });
+
+    it("reports a dangling symlink that blocks the config directory path", async () => {
+      vi.spyOn(fs, "existsSync").mockImplementation((path) => path === "/tmp");
+      vi.spyOn(fs, "lstatSync").mockImplementation((path) => {
+        if (path === "/tmp/openclaw-home") {
+          return { isDirectory: () => false } as fs.Stats;
+        }
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+      vi.spyOn(fs, "statSync").mockImplementation(() => {
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+      const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+
+      await expect(
+        runDoctorLintChecks(
+          {
+            cfg: {},
+            mode: "lint" as const,
+            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            configPath: "/tmp/openclaw-home/openclaw.json",
+          },
+          { checks: [check], onlyIds: ["core/doctor/write-config"] },
+        ),
+      ).resolves.toMatchObject({
+        findings: [
+          expect.objectContaining({
+            checkId: "core/doctor/write-config",
+            path: "/tmp/openclaw-home",
+            target: "/tmp/openclaw-home",
+            requirement: "config-directory-path",
+          }),
+        ],
+      });
+      expect(accessSpy).not.toHaveBeenCalled();
+    });
   });
 
   describe("config size drops during update", () => {

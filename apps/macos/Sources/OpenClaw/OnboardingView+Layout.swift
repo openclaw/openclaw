@@ -4,9 +4,11 @@ import SwiftUI
 extension OnboardingView {
     var body: some View {
         VStack(spacing: 0) {
-            GlowingOpenClawIcon(size: 130, glowIntensity: 0.28)
-                .offset(y: 10)
-                .frame(height: 145)
+            // Chat-heavy pages shrink the mascot so the content gets the room.
+            GlowingOpenClawIcon(size: self.heroSize)
+                .offset(y: self.usesCompactHero ? 4 : 10)
+                .frame(height: self.heroFrameHeight)
+                .animation(.spring(response: 0.45, dampingFraction: 0.85), value: self.usesCompactHero)
 
             GeometryReader { _ in
                 HStack(spacing: 0) {
@@ -23,6 +25,7 @@ extension OnboardingView {
                 .clipped()
             }
             .frame(height: self.contentHeight)
+            .animation(.spring(response: 0.45, dampingFraction: 0.85), value: self.usesCompactHero)
 
             Spacer(minLength: 0)
             self.navigationBar
@@ -51,15 +54,10 @@ extension OnboardingView {
             guard installed else { return }
             self.updateMonitoring(for: self.activePageIndex)
         }
-        .onChange(of: onboardingWizard.isComplete) { _, newValue in
-            guard newValue, self.activePageIndex == self.wizardPageIndex else { return }
-            self.handleNext()
-        }
         .onDisappear {
             self.onboardingVisible = false
             self.stopPermissionMonitoring()
             self.stopDiscovery()
-            Task { await self.onboardingWizard.cancelIfRunning() }
         }
         .task {
             await self.refreshPerms()
@@ -91,8 +89,8 @@ extension OnboardingView {
 
     var navigationBar: some View {
         let connectionLockIndex = pageOrder.firstIndex(of: connectionPageIndex)
-        let wizardLockIndex = wizardPageOrderIndex
         let cliLockIndex = pageOrder.firstIndex(of: cliPageIndex)
+        let aiLockIndex = pageOrder.firstIndex(of: aiPageIndex)
         return HStack(spacing: 20) {
             ZStack(alignment: .leading) {
                 Button(action: {}, label: {
@@ -110,7 +108,7 @@ extension OnboardingView {
                     .buttonStyle(.plain)
                     .foregroundColor(.secondary)
                     .opacity(0.8)
-                    .disabled(self.installingCLI)
+                    .disabled(self.installingCLI || self.aiSetup.isBusy)
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 }
             }
@@ -120,12 +118,19 @@ extension OnboardingView {
 
             HStack(spacing: 8) {
                 ForEach(0..<self.pageCount, id: \.self) { index in
-                    let isInstallLocked = self.installingCLI && index != self.currentPage
+                    let isInstallLocked = (self.installingCLI || self.aiSetup.isBusy) &&
+                        index != self.currentPage
                     let isConnectionLocked = self.isConnectionSelectionBlocking &&
                         index > (connectionLockIndex ?? 0)
                     let isCLILocked = cliLockIndex != nil && !self.cliInstalled && index > (cliLockIndex ?? 0)
-                    let isWizardLocked = wizardLockIndex != nil && !self.onboardingWizard
-                        .isComplete && index > (wizardLockIndex ?? 0)
+                    // Dots must honor the same setup gate as Next: no jumping
+                    // past the AI page before a candidate passed its live test.
+                    let isAILocked = aiLockIndex != nil &&
+                        self.state.connectionMode != .unconfigured &&
+                        !self.aiSetup.connected &&
+                        index > (aiLockIndex ?? 0)
+                    let isLocked = isInstallLocked || isConnectionLocked || isCLILocked ||
+                        isAILocked
                     Button {
                         withAnimation { self.currentPage = index }
                     } label: {
@@ -134,8 +139,8 @@ extension OnboardingView {
                             .frame(width: 8, height: 8)
                     }
                     .buttonStyle(.plain)
-                    .disabled(isInstallLocked || isConnectionLocked || isCLILocked || isWizardLocked)
-                    .opacity(isInstallLocked || isConnectionLocked || isCLILocked || isWizardLocked ? 0.3 : 1)
+                    .disabled(isLocked)
+                    .opacity(isLocked ? 0.3 : 1)
                 }
             }
 

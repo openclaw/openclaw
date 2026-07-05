@@ -125,20 +125,46 @@ openclaw-chat-page {
   flex-shrink: 0;
 }
 
-/* Context usage ring - compact dial in the composer toolbar */
+/* Context usage instrument - compact dial with an on-demand session readout. */
+.context-usage {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  color: var(--ctx-color, var(--muted));
+}
+
+.context-usage details {
+  display: inline-flex;
+}
+
 .context-ring {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   height: 24px;
   padding: 0 7px;
-  flex-shrink: 0;
   border-radius: var(--radius-full);
-  color: var(--ctx-color, var(--muted));
+  color: currentColor;
   font-size: 11px;
   line-height: 1;
+  list-style: none;
+  cursor: pointer;
   user-select: none;
   animation: fade-in 0.2s var(--ease-out);
+  transition:
+    color 150ms ease-out,
+    background 150ms ease-out;
+}
+
+.context-ring::-webkit-details-marker {
+  display: none;
+}
+
+.context-ring:hover,
+.context-usage details[open] .context-ring {
+  background: var(--ctx-bg, color-mix(in srgb, var(--muted) 8%, transparent));
 }
 
 .context-ring--warning {
@@ -168,6 +194,113 @@ openclaw-chat-page {
 .context-ring__pct {
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
+}
+
+.context-usage__popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 70;
+  width: min(340px, calc(100vw - 42px));
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--popover) 96%, var(--card));
+  color: var(--popover-foreground);
+  box-shadow: 0 20px 56px rgba(0, 0, 0, 0.28);
+  animation: fade-in 150ms var(--ease-out);
+}
+
+.context-usage__header,
+.context-usage__model {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.context-usage__title,
+.context-usage__section-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.context-usage__context-value {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.context-usage__bar {
+  height: 5px;
+  margin: 12px 0 15px;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--muted) 22%, transparent);
+}
+
+.context-usage__bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ctx-color, var(--accent));
+  box-shadow: 0 0 12px color-mix(in srgb, var(--ctx-color, var(--accent)) 46%, transparent);
+}
+
+.context-usage__section-label {
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.context-usage__stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 10px 0 0;
+}
+
+.context-usage__stats div {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+}
+
+.context-usage__stats dt {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.context-usage__stats dd {
+  margin: 4px 0 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+}
+
+.context-usage__model {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.context-usage__model strong {
+  max-width: 70%;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .context-ring__action {
@@ -1500,6 +1633,25 @@ openclaw-chat-page {
     bottom: auto;
     max-height: min(28vh, 88px);
     margin-bottom: 6px;
+  }
+}
+
+@media (max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  /* Backdrop-filter contains fixed descendants; lift it and the landscape scroll clip while open. */
+  .agent-chat__input:has(.context-usage details[open]) {
+    overflow: visible;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .context-usage__popover {
+    position: fixed;
+    left: max(12px, var(--safe-area-left));
+    right: max(12px, var(--safe-area-right));
+    bottom: calc(96px + var(--safe-area-bottom));
+    width: auto;
+    max-height: calc(100vh - 116px - var(--safe-area-bottom));
+    overflow-y: auto;
   }
 }
 

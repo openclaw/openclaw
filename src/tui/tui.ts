@@ -18,6 +18,7 @@ import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js"
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
@@ -45,6 +46,7 @@ import { createEventHandlers } from "./tui-event-handlers.js";
 import {
   formatGoalFooter,
   formatRemoteConnectionHostFooter,
+  sanitizeRenderableText,
   formatTokens,
 } from "./tui-formatters.js";
 import {
@@ -55,12 +57,14 @@ import {
 } from "./tui-last-session.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
+import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import {
   createEditorSubmitHandler,
   createSubmitBurstCoalescer,
   shouldEnableWindowsGitBashPasteFallback,
+  type TuiSubmitAction,
 } from "./tui-submit.js";
 import type {
   AgentSummary,
@@ -606,12 +610,14 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     },
     set currentAgentId(value) {
       currentAgentId = value;
+      pluginApprovals?.sessionChanged();
     },
     get currentSessionKey() {
       return currentSessionKey;
     },
     set currentSessionKey(value) {
       currentSessionKey = value;
+      pluginApprovals?.sessionChanged();
     },
     get currentSessionId() {
       return currentSessionId;
@@ -1259,6 +1265,15 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   const { openOverlay, closeOverlay } = createOverlayHandlers(tui, editor);
+  const pluginApprovals = createTuiPluginApprovalController({
+    client,
+    chatLog,
+    getAgentId: () => currentAgentId,
+    getSessionKey: () => currentSessionKey,
+    openOverlay,
+    closeOverlay,
+    requestRender: () => tui.requestRender(),
+  });
   const btw = {
     showResult: (params: { question: string; text: string; isError?: boolean }) => {
       chatLog.showBtw(params);
@@ -1293,7 +1308,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     setActivityStatus,
     clearLocalRunIds,
     rememberSessionKey: rememberCurrentSessionKey,
-    emptySessionInfoDefaults,
   });
   const {
     refreshAgents,
@@ -1302,7 +1316,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     applySessionMutationResult,
     loadHistory,
     setSession,
-    setEmptySession,
     abortActive,
   } = sessionActions;
 
@@ -1353,6 +1366,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       exitReason: result?.exitReason ?? "exit",
       ...(result?.crestodianMessage ? { crestodianMessage: result.crestodianMessage } : {}),
     };
+    pluginApprovals?.dispose();
     const hardExitTimer = setTimeout(
       forceExit,
       resolveTuiShutdownHardExitMs({ localMode: isLocalMode }),
@@ -1398,7 +1412,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       applySessionMutationResult,
       loadHistory,
       setSession,
-      setEmptySession,
       refreshAgents,
       abortActive,
       setActivityStatus,
@@ -1432,11 +1445,17 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     addBlockedChatSubmitNotice(chatLog);
     tui.requestRender();
   };
+  const notifySubmitError = (action: TuiSubmitAction, error: unknown) => {
+    const message = sanitizeRenderableText(formatErrorMessage(error));
+    chatLog.addSystem(`${action} submit failed: ${message}`);
+    tui.requestRender();
+  };
   const submitHandler = createEditorSubmitHandler({
     editor,
     handleCommand,
     sendMessage,
     handleBangLine: runLocalShellLine,
+    onSubmitError: notifySubmitError,
     canSubmitMessage: canSubmitChatMessage,
     onBlockedMessageSubmit: notifyBlockedChatSubmit,
   });
@@ -1529,6 +1548,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   });
 
   client.onEvent = (evt) => {
+    pluginApprovals?.handleEvent(evt.event, evt.payload);
     if (evt.event === "chat") {
       handleChatEvent(evt.payload);
     }
@@ -1562,6 +1582,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       await restoreRememberedSession();
       updateHeader();
       updateAutocompleteProvider();
+      try {
+        await pluginApprovals?.refresh();
+      } catch (err) {
+        chatLog.addSystem(`plugin approval refresh failed: ${String(err)}`);
+      }
       await loadHistory();
       setConnectionStatus(
         isLocalMode ? "local ready" : reconnected ? "gateway reconnected" : "gateway connected",
@@ -1614,6 +1639,13 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
 
   client.onGap = (info) => {
     setConnectionStatus(`event gap: expected ${info.expected}, got ${info.received}`, 5000);
+    void (async () => {
+      try {
+        await pluginApprovals?.refresh();
+      } catch (err) {
+        chatLog.addSystem(`plugin approval refresh failed: ${String(err)}`);
+      }
+    })();
     tui.requestRender();
   };
 
@@ -1639,6 +1671,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   client.start();
   await new Promise<void>((resolve) => {
     const finish = () => {
+      pluginApprovals?.dispose();
       if (isLocalMode) {
         setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
       }

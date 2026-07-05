@@ -1,5 +1,6 @@
 // Verifies local shell process handling for TUI local mode.
 import { EventEmitter } from "node:events";
+import type { OverlayHandle } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 
@@ -13,6 +14,17 @@ const createSelector = () => {
   return selector;
 };
 
+function createOverlayHandle(): OverlayHandle {
+  return {
+    hide: vi.fn(),
+    setHidden: vi.fn(),
+    isHidden: vi.fn(() => false),
+    focus: vi.fn(),
+    unfocus: vi.fn(),
+    isFocused: vi.fn(() => true),
+  };
+}
+
 function createShellHarness(params?: {
   spawnCommand?: typeof import("node:child_process").spawn;
   env?: Record<string, string>;
@@ -25,7 +37,8 @@ function createShellHarness(params?: {
     },
   };
   const tui = { requestRender: vi.fn() };
-  const openOverlay = vi.fn();
+  const overlayHandle = createOverlayHandle();
+  const openOverlay = vi.fn(() => overlayHandle);
   const closeOverlay = vi.fn();
   let lastSelector: ReturnType<typeof createSelector> | null = null;
   const createSelectorSpy = vi.fn(() => {
@@ -46,6 +59,8 @@ function createShellHarness(params?: {
   return {
     messages,
     openOverlay,
+    overlayHandle,
+    closeOverlay,
     createSelectorSpy,
     spawnCommand,
     runLocalShellLine,
@@ -79,6 +94,7 @@ describe("createLocalShellRunner", () => {
     expect(harness.messages).toContain("local shell: not enabled for this session");
     expect(harness.createSelectorSpy).toHaveBeenCalledTimes(1);
     expect(harness.spawnCommand).not.toHaveBeenCalled();
+    expect(harness.closeOverlay).toHaveBeenCalledWith(harness.overlayHandle);
   });
 
   it("sets OPENCLAW_SHELL when running local shell commands", async () => {
