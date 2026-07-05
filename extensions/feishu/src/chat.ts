@@ -1,18 +1,12 @@
 // Feishu plugin module implements chat behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
+import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuChatSchema, type FeishuChatParams } from "./chat-schema.js";
 import { formatFeishuApiError } from "./comment-shared.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
-
-function json(data: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-    details: data,
-  };
-}
 
 function readChatPageSize(params: Record<string, unknown>): number | undefined {
   return readPositiveIntegerParam(params, "page_size", {

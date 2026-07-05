@@ -209,50 +209,54 @@ describe("createNodesTool screen_record duration guardrails", () => {
     expect(schema.properties?.invokeTimeoutMs).toMatchObject({ type: "integer", minimum: 1 });
   });
 
-  it("clamps screen_record durationMs argument to 300000 before gateway invoke", async () => {
+  it.each(["screen_record", "camera_clip"])(
+    "clamps %s to the tool duration limit and budgets both timeout layers",
+    async (action) => {
+      gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+      nodesCameraMocks.parseCameraClipPayload.mockReturnValue({
+        base64: "ZmFrZQ==",
+        format: "mp4",
+        durationMs: 300_000,
+        hasAudio: true,
+      });
+      nodesCameraMocks.writeCameraClipPayloadToFile.mockResolvedValue("/tmp/clip.mp4");
+      const tool = createNodesTool();
+
+      await tool.execute(`call-${action}`, {
+        action,
+        node: "macbook",
+        durationMs: 900_000,
+      });
+
+      const call = gatewayMocks.callGatewayTool.mock.calls[0] as
+        | [string, unknown, { params?: { durationMs?: unknown }; timeoutMs?: unknown }]
+        | undefined;
+      expect(call?.[0]).toBe("node.invoke");
+      expect(call?.[1]).toStrictEqual({ timeoutMs: 360_000 });
+      expect(call?.[2].params?.durationMs).toBe(300_000);
+      expect(call?.[2].timeoutMs).toBe(330_000);
+    },
+  );
+
+  it("preserves independent explicit transport and node invoke timeouts", async () => {
+    gatewayMocks.readGatewayCallOptions.mockReturnValueOnce({ timeoutMs: 5_000 });
     gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
     const tool = createNodesTool();
 
-    await tool.execute("call-1", {
+    await tool.execute("call-explicit-timeout", {
       action: "screen_record",
       node: "macbook",
-      durationMs: 900_000,
-    });
-
-    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
-    const call = gatewayMocks.callGatewayTool.mock.calls[0] as
-      | [string, unknown, { params?: { durationMs?: unknown } }]
-      | undefined;
-    if (!call) {
-      throw new Error("expected callGatewayTool to be called");
-    }
-    expect(call[0]).toBe("node.invoke");
-    expect(call[1]).toStrictEqual({});
-    expect(call[2].params?.durationMs).toBe(300_000);
-  });
-
-  it("clamps camera_clip durationMs argument to 300000 before gateway invoke", async () => {
-    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
-    nodesCameraMocks.parseCameraClipPayload.mockReturnValue({
-      base64: "ZmFrZQ==",
-      format: "mp4",
-      durationMs: 300_000,
-      hasAudio: true,
-    });
-    nodesCameraMocks.writeCameraClipPayloadToFile.mockResolvedValue("/tmp/clip.mp4");
-    const tool = createNodesTool();
-
-    await tool.execute("call-clip", {
-      action: "camera_clip",
-      node: "macbook",
-      durationMs: 900_000,
+      durationMs: 60_000,
+      timeoutMs: 5_000,
+      invokeTimeoutMs: 10_000,
     });
 
     const call = gatewayMocks.callGatewayTool.mock.calls[0] as
-      | [string, unknown, { params?: { durationMs?: unknown } }]
+      | [string, unknown, { timeoutMs?: unknown }]
       | undefined;
     expect(call?.[0]).toBe("node.invoke");
-    expect(call?.[2].params?.durationMs).toBe(300_000);
+    expect(call?.[1]).toStrictEqual({ timeoutMs: 5_000 });
+    expect(call?.[2].timeoutMs).toBe(10_000);
   });
 
   it.each([

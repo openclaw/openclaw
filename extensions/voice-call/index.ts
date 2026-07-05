@@ -3,6 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import {
   definePluginEntry,
@@ -710,11 +711,6 @@ export default definePluginEntry({
       parameters: VoiceCallToolSchema,
       async execute(_toolCallId, params) {
         const rawParams = asParamRecord(params);
-        const json = (payload: unknown) => ({
-          content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
-          details: payload,
-        });
-
         try {
           const rt = await ensureRuntime();
 

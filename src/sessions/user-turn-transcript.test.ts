@@ -220,6 +220,31 @@ describe("user turn transcript persistence", () => {
       ).toBe(blocked);
     });
 
+    it("preserves runtime multimodal content while merging prepared metadata", () => {
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "canonical image caption", timestamp: 123 },
+        target: { transcriptPath: "/tmp/session.jsonl" },
+      });
+      const runtimeContent = [
+        { type: "text", text: "canonical image caption" },
+        { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+      ];
+
+      expect(
+        mergePreparedUserTurnMessageForRuntime({
+          runtimeMessage: castAgentMessage({
+            role: "user",
+            content: runtimeContent,
+          }),
+          preparedMessage: recorder.message,
+        }),
+      ).toMatchObject({
+        role: "user",
+        content: runtimeContent,
+        timestamp: 123,
+      });
+    });
+
     it("does not apply prepared user metadata to assistant messages", () => {
       const recorder = createUserTurnTranscriptRecorder({
         input: { text: "display prompt" },
@@ -498,6 +523,45 @@ describe("user turn transcript persistence", () => {
           role: "user",
           content: "hello from fallback",
           idempotencyKey: "chat-run-1:user",
+        }),
+      ]);
+    });
+
+    it("notifies once after fallback user-turn persistence", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-notify-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+      const persistedMessages: unknown[] = [];
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "#35676 Keśava: No wtf",
+          timestamp: 123,
+          idempotencyKey: "chat-run-ambient:user",
+        },
+        target: {
+          transcriptPath,
+          sessionId: "session-1",
+          sessionKey: "main",
+          cwd: dir,
+        },
+        updateMode: "none",
+        onMessagePersisted: (message) => {
+          persistedMessages.push(message);
+        },
+      });
+
+      await recorder.persistFallback();
+      await recorder.persistFallback();
+
+      expect(persistedMessages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "#35676 Keśava: No wtf",
+        }),
+      ]);
+      expect(readTranscriptMessages(transcriptPath)).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "#35676 Keśava: No wtf",
         }),
       ]);
     });

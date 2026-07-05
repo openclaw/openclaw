@@ -357,9 +357,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         self.state = AppStateStore.shared
+        if let state {
+            MacNodeModeCoordinator.prepareNodeIdentityProfile(
+                isExistingInstallation: state.onboardingSeen || state.connectionMode != .unconfigured)
+        }
         AppActivationPolicy.apply(showDockIcon: self.state?.showDockIcon ?? false)
         if let state {
-            Task { await ConnectionModeCoordinator.shared.apply(mode: state.connectionMode, paused: state.isPaused) }
+            Task {
+                // Validate PATH selection before local startup. Existing installs may not
+                // have the validation cache yet, and a stale external CLI must not win.
+                if state.connectionMode == .local {
+                    _ = await CLIInstaller.status()
+                }
+                await ConnectionModeCoordinator.shared.apply(
+                    mode: state.connectionMode,
+                    paused: state.isPaused)
+            }
         }
         TerminationSignalWatcher.shared.start()
         NodePairingApprovalPrompter.shared.start()
@@ -419,7 +432,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func scheduleFirstRunOnboardingIfNeeded() {
-        if AppStateStore.shared.connectionMode != .unconfigured {
+        if AppStateStore.shared.connectionMode != .unconfigured,
+           AppStateStore.shared.onboardingSeen
+        {
             OnboardingController.markComplete()
             return
         }

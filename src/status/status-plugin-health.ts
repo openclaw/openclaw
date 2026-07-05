@@ -224,7 +224,9 @@ function formatCount(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-export function formatCompactPluginHealthLine(snapshot: StatusPluginHealthSnapshot): string {
+export function formatCompactPluginHealthLine(snapshot: StatusPluginHealthSnapshot):
+  | string
+  | undefined {
   const loadErrors = snapshot.plugins.filter((plugin) => plugin.status === "error").length;
   const dependencyIssues = snapshot.plugins.filter(hasDependencyIssue).length;
   const diagnosticErrors = countProblemDiagnostics(getReportableDiagnostics(snapshot)).errors;
@@ -243,7 +245,7 @@ export function formatCompactPluginHealthLine(snapshot: StatusPluginHealthSnapsh
     diagnosticErrors > 0 ? formatCount(diagnosticErrors, "diagnostic error") : null,
   ].filter((part): part is string => Boolean(part));
 
-  return parts.length === 0 ? "🔌 Plugins: OK" : `⚠️ Plugins: ${parts.join(" · ")}`;
+  return parts.length === 0 ? undefined : `⚠️ Plugins: ${parts.join(" · ")}`;
 }
 
 function formatPluginList(ids: readonly string[], limit: number): string {
@@ -323,7 +325,7 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
       byLocale(left.configuredId, right.configuredId) || byLocale(left.source, right.source),
   );
   const lines = [
-    formatCompactPluginHealthLine(snapshot),
+    formatCompactPluginHealthLine(snapshot) ?? "🔌 Plugins: OK",
     `Loaded: ${loaded.length}${loaded.length > 0 ? ` (${formatPluginList(loaded, 8)})` : ""}`,
     `Disabled: ${disabled}`,
   ];

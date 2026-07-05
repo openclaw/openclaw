@@ -30,6 +30,12 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { isEmbeddedMode } from "../infra/embedded-mode.js";
+import { getEmbeddedPluginApprovalBroker } from "../infra/embedded-plugin-approval-broker.js";
+import {
+  describeNativePluginApprovalClientSetup,
+  resolveApprovalInitiatingSurfaceState,
+} from "../infra/exec-approval-surface.js";
 import {
   DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
@@ -123,6 +129,8 @@ export type HookContext = {
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   runId?: string;
+  /** Device-scoped operator session allowed to review approvals initiated by this run. */
+  approvalReviewerDeviceId?: string;
   trace?: DiagnosticTraceContext;
   channelId?: string;
   /** Originating channel for approval delivery routing; mirrors exec approval turn-source fields. */
@@ -643,6 +651,43 @@ function notifyPluginApprovalResolution(
   }
 }
 
+function buildPluginApprovalFailureReason(params: {
+  fallbackReason: string;
+  ctx?: HookContext;
+}): string {
+  const turnSourceChannel = params.ctx?.turnSourceChannel;
+  if (!turnSourceChannel?.trim()) {
+    return params.fallbackReason;
+  }
+  const nativePluginSurface = resolveApprovalInitiatingSurfaceState({
+    channel: turnSourceChannel,
+    accountId: params.ctx?.turnSourceAccountId,
+    cfg: params.ctx?.config,
+    approvalKind: "plugin",
+  });
+  const setupText = describeNativePluginApprovalClientSetup({
+    channel: nativePluginSurface.channel,
+    channelLabel: nativePluginSurface.channelLabel,
+    accountId: nativePluginSurface.accountId,
+  });
+  if (!setupText) {
+    return params.fallbackReason;
+  }
+  const nativeDeliverySurface =
+    nativePluginSurface.kind === "disabled"
+      ? nativePluginSurface
+      : resolveApprovalInitiatingSurfaceState({
+          channel: turnSourceChannel,
+          accountId: params.ctx?.turnSourceAccountId,
+          cfg: params.ctx?.config,
+          approvalKind: "exec",
+        });
+  if (nativeDeliverySurface.kind !== "disabled") {
+    return params.fallbackReason;
+  }
+  return `${params.fallbackReason}\n\n${setupText}`;
+}
+
 async function requestPluginToolApproval(params: {
   approval: PluginApprovalRequest;
   toolName: string;
@@ -656,10 +701,75 @@ async function requestPluginToolApproval(params: {
   const timeoutMs = resolvePluginToolApprovalTimeoutMs(approval);
   const gatewayTimeoutMs = resolvePluginToolApprovalGatewayTimeoutMs(timeoutMs);
   try {
+    const embeddedApprovalBroker = isEmbeddedMode() ? getEmbeddedPluginApprovalBroker() : null;
+    if (embeddedApprovalBroker) {
+      const result = await embeddedApprovalBroker.request({
+        request: {
+          pluginId: approval.pluginId,
+          title: approval.title,
+          description: approval.description,
+          severity: approval.severity,
+          allowedDecisions: approval.allowedDecisions,
+          toolName: params.toolName,
+          toolCallId: params.toolCallId,
+          agentId: params.ctx?.agentId,
+          sessionKey: params.ctx?.sessionKey,
+          turnSourceChannel: params.ctx?.turnSourceChannel,
+          turnSourceTo: params.ctx?.turnSourceTo,
+          turnSourceAccountId: params.ctx?.turnSourceAccountId,
+          turnSourceThreadId: params.ctx?.turnSourceThreadId,
+        },
+        timeoutMs,
+        signal: params.signal,
+      });
+      const decision = result.decision;
+      const resolution: PluginApprovalResolution =
+        decision === PluginApprovalResolutions.ALLOW_ONCE ||
+        decision === PluginApprovalResolutions.ALLOW_ALWAYS ||
+        decision === PluginApprovalResolutions.DENY
+          ? decision
+          : PluginApprovalResolutions.TIMEOUT;
+      notifyPluginApprovalResolution(approval, resolution);
+      if (
+        decision === PluginApprovalResolutions.ALLOW_ONCE ||
+        decision === PluginApprovalResolutions.ALLOW_ALWAYS
+      ) {
+        return {
+          blocked: false,
+          params: mergeParamsWithApprovalOverrides(params.baseParams, params.overrideParams),
+          approvalResolution: resolution,
+        };
+      }
+      if (decision === PluginApprovalResolutions.DENY) {
+        return {
+          blocked: true,
+          kind: "failure",
+          deniedReason: "plugin-approval",
+          reason: "Denied by user",
+          params: params.baseParams,
+        };
+      }
+      if (approval.timeoutBehavior === "allow") {
+        return {
+          blocked: false,
+          params: mergeParamsWithApprovalOverrides(params.baseParams, params.overrideParams),
+          approvalResolution: resolution,
+        };
+      }
+      return {
+        blocked: true,
+        kind: "failure",
+        deniedReason: "plugin-approval",
+        reason: "Approval timed out",
+        params: params.baseParams,
+      };
+    }
+
     const requestResult: {
       id?: string;
       status?: string;
       decision?: string | null;
+      deliveryRoute?: string;
     } = await callGatewayTool(
       "plugin.approval.request",
       // Buffer beyond the approval timeout so the gateway can clean up
@@ -675,6 +785,9 @@ async function requestPluginToolApproval(params: {
         toolCallId: params.toolCallId,
         agentId: params.ctx?.agentId,
         sessionKey: params.ctx?.sessionKey,
+        ...(params.ctx?.approvalReviewerDeviceId
+          ? { approvalReviewerDeviceIds: [params.ctx.approvalReviewerDeviceId] }
+          : {}),
         turnSourceChannel: params.ctx?.turnSourceChannel,
         turnSourceTo: params.ctx?.turnSourceTo,
         turnSourceAccountId: params.ctx?.turnSourceAccountId,
@@ -705,7 +818,10 @@ async function requestPluginToolApproval(params: {
           blocked: true,
           kind: "failure",
           deniedReason: "plugin-approval",
-          reason: "Plugin approval unavailable (no approval route)",
+          reason: buildPluginApprovalFailureReason({
+            fallbackReason: "Plugin approval unavailable (no approval route)",
+            ctx: params.ctx,
+          }),
           params: params.baseParams,
         };
       }
@@ -779,11 +895,18 @@ async function requestPluginToolApproval(params: {
         approvalResolution: resolution,
       };
     }
+    const timeoutReason =
+      requestResult?.deliveryRoute === "turn-source"
+        ? buildPluginApprovalFailureReason({
+            fallbackReason: "Approval timed out",
+            ctx: params.ctx,
+          })
+        : "Approval timed out";
     return {
       blocked: true,
       kind: "failure",
       deniedReason: "plugin-approval",
-      reason: "Approval timed out",
+      reason: timeoutReason,
       params: params.baseParams,
     };
   } catch (err) {

@@ -92,14 +92,14 @@ struct OpenClawWatchApp: App {
         }
     }
 
-    private func sendChatMessage(_ text: String) {
-        guard let receiver else { return }
+    private func sendChatMessage(_ text: String) -> String? {
+        guard let receiver else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty else { return nil }
         guard self.inboxStore.hasGatewayTaggedAppSnapshot else {
             self.inboxStore.markAppCommandBlocked(.sendChat, reason: "refreshing iPhone state")
             self.refreshAppSnapshot()
-            return
+            return nil
         }
         let message = self.inboxStore.makeAppCommand(.sendChat, text: trimmed)
         self.inboxStore.markAppCommandSending(.sendChat)
@@ -109,6 +109,7 @@ struct OpenClawWatchApp: App {
             try? await Task.sleep(nanoseconds: 900_000_000)
             self.refreshAppSnapshot()
         }
+        return message.commandId
     }
 
     private func refreshExecApprovalReview(force: Bool = false) {

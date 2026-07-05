@@ -7,6 +7,7 @@ import OSLog
 struct IOSGatewayChatTransport: OpenClawChatTransport {
     static let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "ios.chat.transport")
     static let defaultChatSendTimeoutMs = 30000
+    static let compactionRequestTimeoutSeconds = 0
     private let gateway: GatewayNodeSession
 
     private struct CreateSessionParams: Codable {
@@ -37,6 +38,12 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         var attachments: [OpenClawChatAttachmentPayload]?
         var timeoutMs: Int
         var idempotencyKey: String
+    }
+
+    private struct CommandsListRequestParams: Codable {
+        var scope: String
+        var includeArgs: Bool
+        var agentId: String?
     }
 
     private struct AgentWaitParams: Codable {
@@ -92,6 +99,22 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             timeoutMs: self.defaultChatSendTimeoutMs,
             idempotencyKey: idempotencyKey)
         return try self.encodeParams(params)
+    }
+
+    static func makeCommandsListParamsJSON(sessionKey: String? = nil) throws -> String {
+        try self.encodeParams(CommandsListRequestParams(
+            scope: "text",
+            includeArgs: true,
+            agentId: self.agentID(fromSessionKey: sessionKey)))
+    }
+
+    static func agentID(fromSessionKey sessionKey: String?) -> String? {
+        let parts = (sessionKey ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count >= 3, parts[0].lowercased() == "agent" else { return nil }
+        let agentID = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return agentID.isEmpty ? nil : agentID
     }
 
     static func decodeAgentWaitCompletion(_ data: Data, fallbackRunId: String) throws -> AgentWaitCompletion {
@@ -183,13 +206,28 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
 
     func compactSession(sessionKey: String) async throws {
         let json = try Self.makeSessionKeyParamsJSON(sessionKey)
-        _ = try await self.gateway.request(method: "sessions.compact", paramsJSON: json, timeoutSeconds: 10)
+        let response = try await self.gateway.request(
+            method: "sessions.compact",
+            paramsJSON: json,
+            timeoutSeconds: Self.compactionRequestTimeoutSeconds)
+        try OpenClawSessionsCompactResponse.requireSuccess(from: response)
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
         let json = try Self.makeHistoryParamsJSON(sessionKey: sessionKey)
         let res = try await self.gateway.request(method: "chat.history", paramsJSON: json, timeoutSeconds: 15)
         return try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: res)
+    }
+
+    var supportsSlashCommandCatalog: Bool {
+        true
+    }
+
+    func listCommands(sessionKey: String) async throws -> [OpenClawChatCommandChoice] {
+        let json = try Self.makeCommandsListParamsJSON(sessionKey: sessionKey)
+        let res = try await self.gateway.request(method: "commands.list", paramsJSON: json, timeoutSeconds: 15)
+        let decoded = try JSONDecoder().decode(CommandsListResult.self, from: res)
+        return decoded.commands.map(Self.mapCommandChoice)
     }
 
     func sendMessage(
@@ -222,6 +260,37 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             GatewayDiagnostics.log("chat.send failed error=\(error.localizedDescription)")
             throw error
         }
+    }
+
+    private static func mapCommandChoice(_ entry: CommandEntry) -> OpenClawChatCommandChoice {
+        let sourceValue = (entry.source.value as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let source: OpenClawChatCommandChoice.Source = switch sourceValue {
+        case "native":
+            .command
+        case "skill":
+            .skill
+        case "plugin":
+            .plugin
+        default:
+            .unknown
+        }
+        let aliases = (entry.textaliases ?? [])
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let id = [
+            source.rawValue,
+            entry.name.trimmingCharacters(in: .whitespacesAndNewlines),
+            aliases.first ?? "",
+        ].joined(separator: ":")
+        return OpenClawChatCommandChoice(
+            id: id,
+            name: entry.name,
+            textAliases: aliases,
+            description: entry.description,
+            source: source,
+            acceptsArgs: entry.acceptsargs)
     }
 
     func waitForRunCompletion(runId rawRunId: String, timeoutMs: Int) async -> Bool {

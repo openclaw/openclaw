@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { generateOAuthState } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 
 const PROVIDER_ID = "openrouter";
@@ -43,10 +44,6 @@ type OpenRouterOAuthLoginOptions = {
   fetchImpl?: typeof fetch;
   waitForCallback?: typeof waitForOpenRouterOAuthCallback;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;

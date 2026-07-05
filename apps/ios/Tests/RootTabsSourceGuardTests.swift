@@ -84,7 +84,7 @@ struct RootTabsSourceGuardTests {
         #expect(talkRange.lowerBound < controlRange.lowerBound)
         #expect(controlRange.lowerBound < agentRange.lowerBound)
         #expect(agentRange.lowerBound < settingsRange.lowerBound)
-        #expect(phoneTabContent.matches(of: /PhoneTabSettingsHost \{/).count == 3)
+        #expect(phoneTabContent.matches(of: /PhoneTabSettingsHost(?:\([^\n]+\))? \{/).count == 3)
     }
 
     @Test func `sidebar keeps navigation model destination only`() throws {
@@ -191,6 +191,7 @@ struct RootTabsSourceGuardTests {
 
     @Test func `iOS 26 chrome uses native glass while content cards stay quiet`() throws {
         let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let appSource = try String(contentsOf: Self.openClawAppSourceURL(), encoding: .utf8)
         let componentsSource = try String(contentsOf: Self.proComponentsSourceURL(), encoding: .utf8)
         let cardSurface = try Self.extract(
             componentsSource,
@@ -198,6 +199,8 @@ struct RootTabsSourceGuardTests {
             to: "struct ProIconBadge: View")
 
         #expect(rootSource.contains(".openClawTabBarBehavior()"))
+        #expect(appSource.contains(".preferredColorScheme(self.appearanceModel.preference.colorScheme)"))
+        #expect(!appSource.contains("overrideUserInterfaceStyle"))
         #expect(componentsSource.contains("content.tabBarMinimizeBehavior(.onScrollDown)"))
         #expect(componentsSource.contains(".buttonStyle(.glassProminent)"))
         #expect(componentsSource.contains(".buttonStyle(.glass)"))
@@ -239,8 +242,11 @@ struct RootTabsSourceGuardTests {
             settingsSource,
             from: "func settingsListRow(",
             to: "func destination(for route:")
-
-        #expect(gatewayStatus.contains("HStack(spacing: 6)"))
+        let appearanceScreen = try Self.extract(
+            settingsSource,
+            from: "private struct AppearanceSettingsScreen: View",
+            to: "extension SettingsProTab")
+        #expect(gatewayStatus.contains("OpenClawStatusBadge(label: self.title, tone: self.tone)"))
         #expect(!gatewayStatus.contains("ProCapsule("))
         #expect(!gatewayStatus.contains("Capsule()"))
         #expect(agentDestinationsSource.contains("List {"))
@@ -255,12 +261,14 @@ struct RootTabsSourceGuardTests {
         #expect(!talkSource.contains("conversationCard"))
         #expect(!talkSource.contains("voiceModeCard"))
         #expect(!talkSource.contains("statusChip"))
-        #expect(settingsList.contains("Section(\"Device\")"))
+        #expect(settingsList.contains("Text(\"Device\")"))
+        #expect(settingsList.contains(".font(OpenClawType.captionSemiBold)"))
         #expect(!settingsList.contains("ProCard("))
         #expect(settingsRow.contains("NavigationLink(value: route)"))
         #expect(!settingsRow.contains("chevron.right"))
-        #expect(settingsSource.contains("settings-appearance-menu"))
-        #expect(!settingsSource.contains(".pickerStyle(.segmented)"))
+        #expect(settingsSource.contains("settings-appearance-row"))
+        #expect(appearanceScreen.contains("AppearanceSettingsScreen"))
+        #expect(!appearanceScreen.contains(".pickerStyle(.segmented)"))
         #expect(!overviewSource.contains("ProCapsule("))
         #expect(overviewSource.contains("value: self.gatewayConnectionText"))
         #expect(overviewSource.contains("switch self.gatewayDisplayState"))
@@ -275,14 +283,14 @@ struct RootTabsSourceGuardTests {
         let aboutDestination = try Self.extract(
             settingsSource,
             from: "var aboutDestination: some View",
-            to: "func gatewayActionButton(")
+            to: "func toggleCard(")
         let diagnosticsDestination = try Self.extract(
             settingsSource,
             from: "var diagnosticsDestination: some View",
             to: "var privacyDestination: some View")
 
         #expect(!aboutDestination.contains("detailStatusCard("))
-        #expect(aboutDestination.contains("self.detailListCard"))
+        #expect(aboutDestination.contains("detailListCard"))
         #expect(aboutDestination.contains("self.detailRow(\"OpenClaw app version\""))
         #expect(aboutDestination.contains("self.detailRow(\"Device\", value: DeviceInfoHelper.deviceFamily())"))
         #expect(aboutDestination
@@ -317,7 +325,9 @@ struct RootTabsSourceGuardTests {
         #expect(docsSource.contains("if !self.usesNativeNavigationChrome"))
         #expect(overviewSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(overviewSource.matches(of: /if !self\.usesNativeNavigationChrome/).count == 2)
-        #expect(chatSource.contains("OpenClawAdaptiveHeaderRow("))
+        #expect(chatSource.contains(".navigationTitle(self.headerDisplayTitle)"))
+        #expect(chatSource.contains("OpenClawSidebarRevealButton(action: headerLeadingAction)"))
+        #expect(!chatSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(agentOverviewSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(settingsSource.contains("ToolbarItem(placement: .topBarLeading)"))
     }
@@ -383,7 +393,7 @@ struct RootTabsSourceGuardTests {
         #expect(!source.contains("phoneDetailBackAction"))
         #expect(!source.contains(".navigationBarBackButtonHidden(true)"))
         #expect(!source.contains(".toolbar(.hidden, for: .navigationBar)"))
-        #expect(source.matches(of: /usesNativeNavigationChrome: true/).count == 6)
+        #expect(source.matches(of: /usesNativeNavigationChrome: true/).count == 7)
         #expect(!source.contains("directRoute: .agents"))
         #expect(!source.contains("Image(systemName: \"gearshape\")"))
         #expect(!source.contains("self.metric(label:"))
@@ -418,6 +428,20 @@ struct RootTabsSourceGuardTests {
         #expect(!source.contains("supportsGatewayContract"))
         #expect(!source.contains("Compact mobile queue control"))
         #expect(!source.contains("Multi-column queue control"))
+    }
+
+    @Test func `workboard dismisses card sheet before opening chat`() throws {
+        let source = try String(contentsOf: Self.iPadWorkboardScreenSourceURL(), encoding: .utf8)
+        let openFunction = try Self.extract(
+            source,
+            from: "private func open(_ card: IPadWorkboardCard)",
+            to: "private func replace(_ card: IPadWorkboardCard)")
+        let dismiss = try #require(openFunction.range(of: "self.presentedSheet = nil"))
+        let focus = try #require(openFunction.range(of: "self.appModel.openChat(sessionKey: sessionKey)"))
+        let route = try #require(openFunction.range(of: "self.openChat()"))
+
+        #expect(dismiss.lowerBound < focus.lowerBound)
+        #expect(focus.lowerBound < route.lowerBound)
     }
 
     @Test func `workboard create action surfaces unavailable reasons`() throws {
@@ -658,7 +682,7 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.matches(of: /openSettings: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count >= 2)
         #expect(rootSource.matches(of: /openVoiceSettings: \{ openSettingsRoute\(\.voice\) \}/).count == 1)
         #expect(rootSource.matches(of: /openVoiceSettings: \{ self\.selectSettingsRoute\(\.voice\) \}/).count == 1)
-        #expect(rootSource.matches(of: /gatewayAction: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count == 1)
+        #expect(rootSource.matches(of: /gatewayAction: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count == 2)
         #expect(!rootSource.contains("showGatewayActions"))
         #expect(!rootSource.contains("gatewayActionsDialog"))
         #expect(overviewSource.contains("Button(action: self.openSettings)"))
@@ -672,7 +696,6 @@ struct RootTabsSourceGuardTests {
         #expect(chatSource.contains("let openSettings: (() -> Void)?"))
         #expect(chatSource.contains("private var connectionStatusButton: some View"))
         #expect(chatSource.contains(".buttonStyle(.plain)"))
-        #expect(chatSource.contains(".contentShape(Circle())"))
         #expect(chatSource.contains(".accessibilityIdentifier(\"chat-gateway-status\")"))
         #expect(chatSource.contains("composerChrome: .clean"))
         #expect(docsSource.contains("let gatewayAction: (() -> Void)?"))
@@ -813,6 +836,36 @@ struct RootTabsSourceGuardTests {
         #expect(controllerSource.contains("trustRotatedGatewayCertificate(from problem: GatewayConnectionProblem)"))
     }
 
+    @Test func `setup route probes yield to newer manual actions`() throws {
+        let onboardingSource = try String(contentsOf: Self.onboardingWizardSourceURL(), encoding: .utf8)
+        let actionsSource = try String(contentsOf: Self.settingsProTabActionsSourceURL(), encoding: .utf8)
+        let sectionsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
+
+        let welcomeStep = try Self.extract(
+            onboardingSource,
+            from: "private var welcomeStep: some View",
+            to: "@ViewBuilder\n    private var modeStep")
+        #expect(welcomeStep.contains("self.openQRScannerFromOnboarding()"))
+        #expect(welcomeStep.contains("self.invalidateSetupAttempt()"))
+
+        let onboardingManualConnect = try Self.extract(
+            onboardingSource,
+            from: "private func connectManual(setupAttemptID: UUID? = nil) async",
+            to: "private func connectCurrentManualGateway")
+        #expect(onboardingManualConnect.contains("guard self.setupAttemptID == setupAttemptID else { return }"))
+        #expect(onboardingManualConnect.contains("self.invalidateSetupAttempt()"))
+        #expect(onboardingSource.contains("await self.connectManual(setupAttemptID: attemptID)"))
+
+        let settingsManualConnect = try Self.extract(
+            actionsSource,
+            from: "func connectManual(setupAttemptID: UUID? = nil) async",
+            to: "func preflightGateway")
+        #expect(settingsManualConnect.contains("guard self.setupAttemptID == setupAttemptID else { return }"))
+        #expect(settingsManualConnect.contains("self.invalidateGatewaySetupAttempt()"))
+        #expect(actionsSource.contains("await self.connectManual(setupAttemptID: attemptID)"))
+        #expect(sectionsSource.contains(".disabled(self.setupAttemptID != nil)"))
+    }
+
     @Test func `local network access is requested from visible gateway flows`() throws {
         let appSource = try String(contentsOf: Self.openClawAppSourceURL(), encoding: .utf8)
         let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
@@ -859,12 +912,10 @@ struct RootTabsSourceGuardTests {
     @Test func `native chat uses gateway transport`() throws {
         let chatSource = try String(contentsOf: Self.chatProTabSourceURL(), encoding: .utf8)
         let channelsSource = try String(contentsOf: Self.channelsSourceURL(), encoding: .utf8)
-        let settingsSectionsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
         let appModelSource = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
 
         #expect(chatSource.matches(of: /self\.appModel\.makeChatTransport\(\)/).count == 2)
         #expect(appModelSource.contains("return IOSGatewayChatTransport(gateway: self.operatorSession)"))
-        #expect(settingsSectionsSource.contains("Connected services and message routing"))
         #expect(channelsSource.contains("\"clickclack\": SettingsChannelFallbackMetadata"))
         #expect(channelsSource.contains("label: \"ClickClack\""))
         #expect(channelsSource.contains("Self-hosted chat bot routing."))

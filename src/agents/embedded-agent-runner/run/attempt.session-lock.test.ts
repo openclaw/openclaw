@@ -16,6 +16,7 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../../../config/sessions/transcript.js";
+import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../../shared/transcript-only-openclaw-assistant.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
   SessionWriteLockStaleError,
@@ -2602,7 +2603,7 @@ describe("embedded attempt session lock lifecycle", () => {
           message: {
             role: "assistant",
             content: [{ type: "text", text: "first-turn delivery" }],
-            api: "openai-responses",
+            api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
             provider: "openclaw",
             model: "delivery-mirror",
             usage: {
@@ -4060,6 +4061,36 @@ describe("embedded attempt session lock lifecycle", () => {
 
     expect(events).toEqual(["init-release", "write", "held-release", "reacquire-release"]);
     expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(3);
+  });
+
+  it("releases a prompt reacquire that resolves after controller disposal", async () => {
+    const releaseInitial = vi.fn(async () => {});
+    const releaseLate = vi.fn(async () => {});
+    let resolveReacquiredLock!: (lock: { release(): Promise<void> }) => void;
+    const reacquiredLock = new Promise<{ release(): Promise<void> }>((resolve) => {
+      resolveReacquiredLock = resolve;
+    });
+    const acquireSessionWriteLockLocal = vi
+      .fn()
+      .mockResolvedValueOnce({ release: releaseInitial })
+      .mockImplementationOnce(async () => await reacquiredLock);
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions,
+    });
+
+    await controller.releaseForPrompt();
+    const reacquire = controller.reacquireAfterPrompt();
+    await waitUntil(
+      () => acquireSessionWriteLockLocal.mock.calls.length === 2,
+      "expected prompt cleanup to begin reacquiring the session lock",
+    );
+    await controller.dispose();
+    resolveReacquiredLock({ release: releaseLate });
+    await reacquire;
+
+    expect(releaseInitial).toHaveBeenCalledTimes(1);
+    expect(releaseLate).toHaveBeenCalledTimes(1);
   });
 
   it("takeHeldLockAfterRetainedIdle does not self-deadlock when called from inside active write scope (#95915)", async () => {

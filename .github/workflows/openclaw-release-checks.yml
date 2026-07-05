@@ -137,8 +137,8 @@ jobs:
               tideclaw_alpha_check=true
             fi
           fi
-          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release-ci/[0-9a-f]{12}-[0-9]+$ ]] && [[ "${tideclaw_alpha_check}" != "true" ]]; then
-            echo "Release checks must be dispatched from main, release/YYYY.M.PATCH, a Full Release Validation release-ci/<sha>-<timestamp> ref, or a Tideclaw alpha branch for alpha prereleases." >&2
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release-ci/[0-9a-f]{12}-[0-9]+$ ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/extended-stable/[0-9]{4}\.([1-9]|1[0-2])\.33$ ]] && [[ "${tideclaw_alpha_check}" != "true" ]]; then
+            echo "Release checks must be dispatched from main, release/YYYY.M.PATCH, extended-stable/YYYY.M.33, a Full Release Validation release-ci/<sha>-<timestamp> ref, or a Tideclaw alpha branch for alpha prereleases." >&2
             exit 1
           fi
 

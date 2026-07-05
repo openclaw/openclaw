@@ -1064,44 +1064,6 @@ details.usage-filter-select summary::-webkit-details-marker,
   font-size: 12px; /* was 8px */
 }
 
-.daily-bar-tooltip {
-  position: absolute;
-  left: 50%;
-  bottom: calc(100% + 8px);
-  transform: translate(-50%, 4px);
-  width: max-content;
-  max-width: 220px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--popover);
-  color: var(--popover-foreground);
-  box-shadow: var(--shadow-md);
-  opacity: 0;
-  pointer-events: none;
-  transition:
-    opacity 0.18s var(--ease-out),
-    transform 0.18s var(--ease-out);
-  z-index: 2;
-  font-size: 12px; /* was 11px */
-}
-
-.daily-bar-wrapper:hover .daily-bar-tooltip {
-  opacity: 1;
-  transform: translate(-50%, 0);
-}
-
-.daily-bar-tooltip--floating {
-  position: fixed;
-  left: 0;
-  top: 0;
-  bottom: auto;
-  transform: none;
-  max-width: min(220px, calc(100vw - 16px));
-  opacity: 1;
-  z-index: 1000;
-}
-
 .cost-breakdown-bar {
   display: flex;
   width: 100%;
@@ -1571,7 +1533,6 @@ details.usage-filter-select summary::-webkit-details-marker,
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
-:root[data-theme-mode="light"] .daily-bar-tooltip,
 :root[data-theme-mode="light"] .usage-filter-popover,
 :root[data-theme-mode="light"] .usage-export-popover {
   box-shadow: var(--shadow-md);

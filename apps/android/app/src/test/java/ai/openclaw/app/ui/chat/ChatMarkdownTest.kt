@@ -1,6 +1,11 @@
 package ai.openclaw.app.ui.chat
 
 import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.font.FontStyle
+import org.commonmark.node.BlockQuote
+import org.commonmark.node.BulletList
+import org.commonmark.node.Emphasis
+import org.commonmark.node.Paragraph
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -55,6 +60,30 @@ class ChatMarkdownTest {
 
     assertEquals("No link here", annotated.text)
     assertTrue(annotated.getLinkAnnotations(0, annotated.length).isEmpty())
+  }
+
+  @Test
+  fun leadingListsAndQuotesParseAsBlockMarkdown() {
+    assertTrue(parseChatMarkdown("- first\n- second").firstChild is BulletList)
+    assertTrue(parseChatMarkdown("> quoted").firstChild is BlockQuote)
+  }
+
+  @Test
+  fun underscoreEmphasisRendersAsItalicText() {
+    val document = parseChatMarkdown("_important_")
+    val paragraph = document.firstChild as Paragraph
+
+    assertTrue(paragraph.firstChild is Emphasis)
+    val annotated = buildChatInlineMarkdown("_important_")
+    assertEquals("important", annotated.text)
+    val emphasis =
+      annotated.spanStyles
+        .single()
+        .item
+    assertEquals(
+      FontStyle.Italic,
+      emphasis.fontStyle,
+    )
   }
 
   @Test

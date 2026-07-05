@@ -6,7 +6,12 @@ import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createCrestodianTestRuntime } from "./crestodian.test-helpers.js";
-import { executeCrestodianOperation, parseCrestodianOperation } from "./operations.js";
+import {
+  describeCrestodianPersistentOperation,
+  executeCrestodianOperation,
+  isPersistentCrestodianOperation,
+  parseCrestodianOperation,
+} from "./operations.js";
 
 type TestConfig = Record<string, unknown>;
 
@@ -96,6 +101,9 @@ const mockConfig = vi.hoisted(() => {
     },
     currentConfig() {
       return cloneConfig();
+    },
+    setConfig(config: TestConfig) {
+      state.config = structuredClone(config);
     },
     readConfigFileSnapshot: vi.fn(async () => snapshot()),
     mutateConfigFile: vi.fn(
@@ -278,6 +286,75 @@ describe("parseCrestodianOperation", () => {
       kind: "plugin-uninstall",
       pluginId: "openclaw-demo",
     });
+  });
+
+  it("parses config read and schema lookups", () => {
+    expect(parseCrestodianOperation("config get gateway.port")).toEqual({
+      kind: "config-get",
+      path: "gateway.port",
+    });
+    expect(parseCrestodianOperation("config schema channels.telegram")).toEqual({
+      kind: "config-schema",
+      path: "channels.telegram",
+    });
+    expect(parseCrestodianOperation("config schema")).toEqual({ kind: "config-schema" });
+    // Read-only: no approval gate.
+    expect(isPersistentCrestodianOperation({ kind: "config-get", path: "gateway.port" })).toBe(
+      false,
+    );
+    expect(isPersistentCrestodianOperation({ kind: "config-schema" })).toBe(false);
+  });
+
+  it("redacts sensitive config values using their complete paths", async () => {
+    mockConfig.setConfig({
+      models: {
+        providers: {
+          local: {
+            localService: {
+              env: { HF_HOME: "/private/model-cache" },
+            },
+          },
+        },
+      },
+    });
+    const { runtime, lines } = createCrestodianTestRuntime();
+
+    await executeCrestodianOperation(
+      { kind: "config-get", path: "models.providers.local.localService" },
+      runtime,
+    );
+
+    expect(lines.join("\n")).toContain('"HF_HOME": "<redacted>"');
+    expect(lines.join("\n")).not.toContain("/private/model-cache");
+    expect(
+      describeCrestodianPersistentOperation({
+        kind: "config-set",
+        path: "models.providers.local.localService.env.HF_HOME",
+        value: "/private/model-cache",
+      }),
+    ).toBe("set config models.providers.local.localService.env.HF_HOME to <redacted>");
+  });
+
+  it("parses channel listing and connect requests", () => {
+    expect(parseCrestodianOperation("channels")).toEqual({ kind: "channel-list" });
+    expect(parseCrestodianOperation("list channels")).toEqual({ kind: "channel-list" });
+    expect(parseCrestodianOperation("connect telegram")).toEqual({
+      kind: "channel-setup",
+      channel: "telegram",
+    });
+    expect(parseCrestodianOperation("connect to WhatsApp")).toEqual({
+      kind: "channel-setup",
+      channel: "whatsapp",
+    });
+    expect(parseCrestodianOperation("link discord channel")).toEqual({
+      kind: "channel-setup",
+      channel: "discord",
+    });
+    // Channel setup is persistent: it writes channel config after the wizard.
+    expect(isPersistentCrestodianOperation({ kind: "channel-setup", channel: "telegram" })).toBe(
+      true,
+    );
+    expect(isPersistentCrestodianOperation({ kind: "channel-list" })).toBe(false);
   });
 
   it("parses agent creation requests", () => {
@@ -541,15 +618,21 @@ describe("parseCrestodianOperation", () => {
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     vi.stubEnv("OPENAI_API_KEY", "test-key");
     const { runtime, lines } = createCrestodianTestRuntime();
+    const applySetup = vi.fn(async () => ({
+      configPath: path.join(tempDir, "openclaw.json"),
+      lines: ["Workspace: /tmp/work", "Default model: openai/gpt-5.5"],
+    }));
 
     const plan = await executeCrestodianOperation(
       { kind: "setup", workspace: "/tmp/work" },
       runtime,
+      { deps: { applySetup } },
     );
     expectRecordFields(plan as unknown as Record<string, unknown>, {
       applied: false,
     });
     expect(lines.join("\n")).toContain("Model choice: openai/gpt-5.5 (OPENAI_API_KEY).");
+    expect(applySetup).not.toHaveBeenCalled();
 
     const result = await executeCrestodianOperation(
       { kind: "setup", workspace: "/tmp/work" },
@@ -557,16 +640,17 @@ describe("parseCrestodianOperation", () => {
       {
         approved: true,
         auditDetails: { rescue: true },
+        deps: { applySetup },
       },
     );
     expect(result.applied).toBe(true);
 
     expect(lines.join("\n")).toContain("[crestodian] done: crestodian.setup");
-    const config = requireRecord(mockConfig.currentConfig(), "current config");
-    const agents = requireRecord(config.agents, "agents config");
-    expectRecordFields(requireRecord(agents.defaults, "agent defaults"), {
+    expect(applySetup).toHaveBeenCalledWith({
       workspace: "/tmp/work",
-      model: { primary: "openai/gpt-5.5" },
+      model: "openai/gpt-5.5",
+      surface: "cli",
+      runtime,
     });
     const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
     const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());

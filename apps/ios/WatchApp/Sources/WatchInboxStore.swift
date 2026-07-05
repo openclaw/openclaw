@@ -9,6 +9,7 @@ enum WatchPayloadType: String, Codable, Equatable {
     case appSnapshot = "watch.app.snapshot"
     case appSnapshotRequest = "watch.app.snapshotRequest"
     case appCommand = "watch.app.command"
+    case chatCompletion = "watch.chat.completion"
     case execApprovalPrompt = "watch.execApproval.prompt"
     case execApprovalResolve = "watch.execApproval.resolve"
     case execApprovalResolved = "watch.execApproval.resolved"
@@ -105,6 +106,12 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
     var snapshotId: String?
 }
 
+struct WatchChatCompletionMessage: Codable, Equatable {
+    var commandId: String
+    var replyText: String
+    var sentAtMs: Int?
+}
+
 struct WatchChatItem: Codable, Equatable, Identifiable {
     var id: String
     var role: String
@@ -147,6 +154,7 @@ struct WatchNotifyMessage {
     var sentAtMs: Int?
     var promptId: String?
     var sessionKey: String?
+    var gatewayStableID: String?
     var kind: String?
     var details: String?
     var expiresAtMs: Int?
@@ -177,6 +185,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         var lastDeliveryKey: String?
         var promptId: String?
         var sessionKey: String?
+        var gatewayStableID: String?
         var kind: String?
         var details: String?
         var expiresAtMs: Int?
@@ -206,6 +215,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
     var updatedAt: Date?
     var promptId: String?
     var sessionKey: String?
+    var gatewayStableID: String?
     var kind: String?
     var details: String?
     var expiresAtMs: Int?
@@ -222,6 +232,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
     var appSnapshotUpdatedAt: Date?
     var appSnapshotStatusText: String?
     var appCommandStatusText: String?
+    var chatCompletion: WatchChatCompletionMessage?
     var greetingTextOverride: String?
     var isExecApprovalReviewLoading = false
     var execApprovalReviewStatusText: String?
@@ -353,6 +364,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         self.updatedAt = Date()
         self.promptId = message.promptId
         self.sessionKey = message.sessionKey
+        self.gatewayStableID = message.gatewayStableID
         self.kind = message.kind
         self.details = message.details
         self.expiresAtMs = message.expiresAtMs
@@ -443,6 +455,10 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         self.appSnapshotUpdatedAt = Date()
         self.appSnapshotStatusText = nil
         self.persistState()
+    }
+
+    func consume(chatCompletion message: WatchChatCompletionMessage) {
+        self.chatCompletion = message
     }
 
     func markAppSnapshotRequestStarted() {
@@ -664,6 +680,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         self.lastDeliveryKey = state.lastDeliveryKey
         self.promptId = state.promptId
         self.sessionKey = state.sessionKey
+        self.gatewayStableID = state.gatewayStableID
         self.kind = state.kind
         self.details = state.details
         self.expiresAtMs = state.expiresAtMs
@@ -692,6 +709,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
             lastDeliveryKey: lastDeliveryKey,
             promptId: promptId,
             sessionKey: sessionKey,
+            gatewayStableID: gatewayStableID,
             kind: kind,
             details: details,
             expiresAtMs: expiresAtMs,
@@ -749,6 +767,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
             actionId: action.id,
             actionLabel: action.label,
             sessionKey: self.sessionKey,
+            gatewayStableID: self.gatewayStableID,
             note: nil,
             sentAtMs: Self.nowMs())
     }
