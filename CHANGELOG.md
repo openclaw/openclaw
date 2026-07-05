@@ -7,7 +7,6 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 ### Fixes
-
 - **Message delivery status:** report failed and partially failed best-effort channel delivery instead of returning a success-shaped message-tool result. (#99928) Thanks @masatohoshino.
 - **WhatsApp credential recovery:** restore malformed primary auth state from a valid backup during startup. (#99070) Thanks @LeonidasLux.
 - **WhatsApp quoted replies:** preserve bot-authored outbound quote metadata so replies to those messages keep their reply bubble in WhatsApp Desktop. (#94879) Thanks @Bartok9.
@@ -17,6 +16,7 @@ Docs: https://docs.openclaw.ai
 - **Plugin module identity:** keep OpenClaw package chunks on Node's native module graph when jiti transforms plugin entries, preventing duplicate evaluation and class identity drift. (#88384) Thanks @vincentkoc.
 - **iMessage group warnings:** suppress the false drop-all startup warning when an effective group sender allowlist can admit groups, and point true empty-allowlist configurations at the correct remedy. (#100046)
 - **Control UI mobile login:** keep Gateway recovery guidance visible after connection failures, make the disconnected gate scroll safely on constrained screens, and improve mobile keyboard and tap-target behavior. (#100208)
+- **TUI abort diagnostics:** show sanitized tool argument-validation summaries for aborted runs in both Gateway and local TUI modes without exposing raw model arguments. (#91002) Thanks @wsyjh8.
 
 ## 2026.7.1
 
@@ -63,7 +63,6 @@ Docs: https://docs.openclaw.ai
 - **Telegram durability:** recover stalled ingress claims, retry restart-dropped media, survive transient polling errors, dead-letter poison updates, preserve forwarded rich text, route plugin callbacks correctly, keep progress updates in one stable multi-line window, map self-hosted Bot API container paths through trusted host roots, and fall back safely when Telegram rejects rich final replies. (#97118, #98102, #98735, #98775, #98776, #97174, #98907, #91984, #98786) Thanks @vincentkoc, @luoyanglang, @DaveArcher18, @obviyus, @goldmar, @Marvinthebored, @Dizesales, and @shakkernerd.
 - **Cross-channel inbound media:** preserve captions and expose unavailable-attachment notices when WhatsApp, LINE, Signal, iMessage, Microsoft Teams, Feishu, Mattermost, or Zalo cannot materialize inbound media, instead of dispatching phantom placeholders or dropping media-only turns. (#100092)
 - **Agent and context reliability:** preserve runtime overrides, steered subagent tasks, fallback tool-call hints, and legacy reseed attachments; soft-resume CLI sessions across prompt-only drift; improve harness-aware context estimation and compaction prechecks; time out silent local streams; recover mid-stream failures; and cap Gateway run-cache growth. (#92237, #77539, #99851, #99839, #99822, #97928, #97861, #98525, #95430, #77973) Thanks @sercada, @amittell, @obviyus, @liuhao1024, @yetval, @osolmaz, @lzyyzznl, @vincentkoc, @alexelgier, and @fede-kamel.
-- **TUI abort diagnostics:** show sanitized tool argument-validation summaries for aborted runs in both Gateway and local TUI modes without exposing raw model arguments. (#91002) Thanks @wsyjh8.
 - **Provider and network safety:** bound oversized or malformed responses across Moonshot, MiniMax, Anthropic OAuth, Discord, Matrix, SMS, browser, update, embeddings, Tlön, and Inworld paths. (#96502, #96322, #96644, #97693, #97662, #97999, #98455, #98508, #98554, #98496, #98660) Thanks @hugenshen, @cursoragent, @lsr911, @solodmd, @Alix-007, @wings1029, @lzyyzznl, @sunlit-deng, @vincentkoc, and @Pandah97.
 - **Channel delivery and routing:** keep Slack replies in the active thread, preserve account-bound delivery routes, apply response prefixes, suppress internal traces and unwanted fallback replies, and retain WeChat session routing for opaque account ids. (#97168, #98240, #89949, #93639, #97989, #80928, #93686) Thanks @LiuwqGit, @gorkem2020, @yetval, @wangwllu, @ZengWen-DT, @alexuser, @UnClouded77, @zhangguiping-xydt, @htkillermax-gif, and @vincentkoc.
 - **Cron correctness:** preserve provider and model selections on timeouts, retain startup catch-up deferrals, keep action-required output, clear blank thinking overrides, and preserve provider-owned daily-reset sessions. (#95943, #94022, #93810, #96393, #96293, #98356) Thanks @ZengWen-DT, @cursoragent, @luke-renjoy, @RichChen01, @vincentkoc, @yetval, @snowzlmbot, @nz365guy, and @takamasa-aiso.
