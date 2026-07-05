@@ -148,7 +148,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 220,
       sidebarPinnedRoutes: ["overview", "workboard", "agents"],
       sidebarMoreExpanded: false,
-      recentSessionsCollapsed: false,
       borderRadius: 50,
       textScale: 100,
       sessionsByGateway: {
@@ -285,7 +284,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 220,
       sidebarPinnedRoutes: ["overview", "workboard", "agents"],
       sidebarMoreExpanded: false,
-      recentSessionsCollapsed: false,
       borderRadius: 50,
       textScale: 100,
       sessionsByGateway: {
@@ -296,65 +294,6 @@ describe("loadSettings default gateway URL derivation", () => {
       },
     });
     expect(sessionStorage.length).toBe(1);
-  });
-
-  it("persists recent sessions collapse state across save and load", () => {
-    setTestLocation({
-      protocol: "https:",
-      host: "gateway.example:8443",
-      pathname: "/",
-    });
-
-    const gwUrl = expectedGatewayUrl("");
-    saveSettings({
-      gatewayUrl: gwUrl,
-      token: "",
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-      theme: "claw",
-      themeMode: "system",
-      chatShowThinking: true,
-      chatShowToolCalls: true,
-      chatAutoScroll: "near-bottom",
-      splitRatio: 0.6,
-      navCollapsed: false,
-      navWidth: 220,
-      sidebarPinnedRoutes: ["overview", "workboard", "agents"],
-      sidebarMoreExpanded: false,
-      recentSessionsCollapsed: true,
-      borderRadius: 50,
-      textScale: 100,
-    });
-
-    expect(loadSettings().recentSessionsCollapsed).toBe(true);
-
-    saveSettings({
-      gatewayUrl: gwUrl,
-      token: "",
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-      theme: "claw",
-      themeMode: "system",
-      chatShowThinking: true,
-      chatShowToolCalls: true,
-      chatAutoScroll: "near-bottom",
-      splitRatio: 0.6,
-      navCollapsed: false,
-      navWidth: 220,
-      sidebarPinnedRoutes: ["overview", "workboard", "agents"],
-      sidebarMoreExpanded: false,
-      recentSessionsCollapsed: false,
-      borderRadius: 50,
-      textScale: 100,
-    });
-
-    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
-    const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}") as Record<
-      string,
-      unknown
-    >;
-    expect(persisted.recentSessionsCollapsed).toBe(false);
-    expect(loadSettings().recentSessionsCollapsed).toBe(false);
   });
 
   it("persists sidebar customization across save and load, normalizing bad values", () => {
@@ -380,7 +319,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 220,
       sidebarPinnedRoutes: ["sessions", "cron"],
       sidebarMoreExpanded: true,
-      recentSessionsCollapsed: false,
       borderRadius: 50,
       textScale: 100,
     });
@@ -398,7 +336,7 @@ describe("loadSettings default gateway URL derivation", () => {
     persisted.sidebarMoreExpanded = "yes";
     localStorage.setItem(scopedKey, JSON.stringify(persisted));
 
-    expect(loadSettings().sidebarPinnedRoutes).toEqual(["overview", "workboard", "agents"]);
+    expect(loadSettings().sidebarPinnedRoutes).toEqual(["overview"]);
     expect(loadSettings().sidebarMoreExpanded).toBe(false);
   });
 

@@ -34,7 +34,6 @@ export type ApplicationNavigationPreferencesSnapshot = {
   navCollapsed: boolean;
   sidebarPinnedRoutes: readonly SidebarNavRoute[];
   sidebarMoreExpanded: boolean;
-  recentSessionsCollapsed: boolean;
 };
 
 export type ApplicationNavigationPreferences = {

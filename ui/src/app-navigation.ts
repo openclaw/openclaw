@@ -29,10 +29,10 @@ export const SIDEBAR_NAV_ROUTES = [
 
 export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
 
+// Sessions are the sidebar's core content; Overview is the only page pinned by
+// default. Users pin more via the customize menu.
 export const DEFAULT_SIDEBAR_PINNED_ROUTES = [
   "overview",
-  "workboard",
-  "agents",
 ] as const satisfies readonly SidebarNavRoute[];
 
 /**

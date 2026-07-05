@@ -306,7 +306,6 @@ class OpenClawShell extends LitElement {
   @state() private navCollapsed = false;
   @state() private sidebarPinnedRoutes: readonly SidebarNavRoute[] = [];
   @state() private sidebarMoreExpanded = false;
-  @state() private recentSessionsCollapsed = false;
   @state() private navDrawerOpen = false;
   @state() private gatewayConnected = false;
   @state() private terminalAvailable = false;
@@ -599,7 +598,6 @@ class OpenClawShell extends LitElement {
     this.navCollapsed = snapshot.navCollapsed;
     this.sidebarPinnedRoutes = snapshot.sidebarPinnedRoutes;
     this.sidebarMoreExpanded = snapshot.sidebarMoreExpanded;
-    this.recentSessionsCollapsed = snapshot.recentSessionsCollapsed;
   };
 
   override render() {
@@ -673,7 +671,6 @@ class OpenClawShell extends LitElement {
             hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null)}
             .sidebarPinnedRoutes=${this.sidebarPinnedRoutes}
             .sidebarMoreExpanded=${this.sidebarMoreExpanded}
-            .recentSessionsCollapsed=${this.recentSessionsCollapsed}
             .themeMode=${context.theme.mode}
             .onToggleMore=${() =>
               context.navigation.update({
@@ -681,10 +678,6 @@ class OpenClawShell extends LitElement {
               })}
             .onUpdatePinnedRoutes=${(routes: SidebarNavRoute[]) =>
               context.navigation.update({ sidebarPinnedRoutes: routes })}
-            .onToggleRecentSessions=${() =>
-              context.navigation.update({
-                recentSessionsCollapsed: !context.navigation.snapshot.recentSessionsCollapsed,
-              })}
             .onPairMobile=${() => void context.overlays.openDevicePairSetup()}
             .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
               this.navigate(routeId, options)}
