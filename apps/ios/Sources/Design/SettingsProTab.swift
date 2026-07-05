@@ -44,11 +44,15 @@ struct SettingsProTab: View {
     @State var selectedAgentPickerId = ""
     @State var gatewayToken = ""
     @State var gatewayPassword = ""
+    @State var gatewayCredentialFieldStableID: String?
     @State var manualGatewayPortText = ""
     @State var setupStatusText: String?
     @State var setupAttemptID: UUID?
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
     @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
+    @State var scannerResultHandoff = QRScannerResultHandoff()
+    @State var scannerScanID: UInt64 = 0
+    @State var pendingTargetSuppression = GatewayPendingTargetSuppression()
     @State var defaultShareInstruction = ""
     @State var showQRScanner = false
     @State var scannerError: String?
@@ -71,6 +75,7 @@ struct SettingsProTab: View {
     @State private var navigationPath: [SettingsRoute] = []
     let initialRoute: SettingsRoute?
     let directRoute: SettingsRoute?
+    let acceptsGatewaySetupRequests: Bool
     let headerLeadingAction: OpenClawSidebarHeaderAction?
     let ownsNavigationStack: Bool
     let navigateToRoute: ((SettingsRoute) -> Void)?
@@ -81,6 +86,7 @@ struct SettingsProTab: View {
     init(
         initialRoute: SettingsRoute? = nil,
         directRoute: SettingsRoute? = nil,
+        acceptsGatewaySetupRequests: Bool = false,
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
         ownsNavigationStack: Bool = true,
         navigateToRoute: ((SettingsRoute) -> Void)? = nil,
@@ -90,6 +96,7 @@ struct SettingsProTab: View {
     {
         self.initialRoute = initialRoute
         self.directRoute = directRoute
+        self.acceptsGatewaySetupRequests = acceptsGatewaySetupRequests
         self.headerLeadingAction = headerLeadingAction
         self.ownsNavigationStack = ownsNavigationStack
         self.navigateToRoute = navigateToRoute
@@ -155,6 +162,10 @@ struct SettingsProTab: View {
                 self.applyInitialRouteIfNeeded()
                 self.notifyRouteChange()
             }
+            .onDisappear {
+                self.scannerResultHandoff.cancel()
+                self.pendingTargetSuppression.resumeAutoConnect(controller: self.gatewayController)
+            }
             .onChange(of: self.gatewaySetupRequest?.id) { _, _ in
                 self.applyGatewaySetupRequestIfNeeded()
             }
@@ -176,19 +187,17 @@ struct SettingsProTab: View {
                     self.selectedAgentPickerId = newValue
                 }
             }
-            .onChange(of: self.gatewayToken) { _, newValue in
-                self.persistGatewayToken(newValue)
-            }
-            .onChange(of: self.gatewayPassword) { _, newValue in
-                self.persistGatewayPassword(newValue)
-            }
             .onChange(of: self.setupCode) { _, newValue in
                 if !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    self.stagedGatewaySetupLink = nil
+                    self.clearStagedGatewaySetupLink()
                 }
             }
             .onChange(of: self.defaultShareInstruction) { _, newValue in
                 ShareToAgentSettings.saveDefaultInstruction(newValue)
+            }
+            .onChange(of: self.acceptsGatewaySetupRequests) { _, acceptsRequests in
+                guard acceptsRequests else { return }
+                self.applyGatewaySetupRequestIfNeeded()
             }
             .onChange(of: self.onboardingRequestID) { _, _ in
                 // Root-owned resets leave Settings mounted behind onboarding.
@@ -202,46 +211,52 @@ struct SettingsProTab: View {
     }
 
     private func settingsModalPresentation(_ content: some View) -> some View {
-        content
+        let scanID = self.scannerScanID
+        return content
             .sheet(isPresented: self.$showTalkIssueDetails) {
                 if let issue = self.appModel.talkMode.gatewayTalkCurrentFallbackIssue {
                     TalkRuntimeIssueDetailsSheet(issue: issue)
                 }
             }
-            .sheet(isPresented: self.$showQRScanner) {
-                NavigationStack {
-                    QRScannerView(
-                        onGatewayLink: { link in
-                            self.handleScannedGatewayLink(link)
-                        },
-                        onSetupCode: { code in
-                            self.handleScannedSetupCode(code)
-                        },
-                        onError: { error in
-                            self.showQRScanner = false
-                            self.setupStatusText = "Scanner error: \(error)"
-                            self.scannerError = error
-                        },
-                        onDismiss: {
-                            self.showQRScanner = false
-                        })
-                        .ignoresSafeArea()
-                        .navigationTitle("Scan QR Code")
-                        .navigationBarTitleDisplayMode(.inline)
-                        .font(OpenClawType.body)
-                        .toolbar {
-                            ToolbarItem(placement: .topBarLeading) {
-                                Button {
-                                    self.showQRScanner = false
-                                } label: {
-                                    Text("Cancel")
-                                        .font(OpenClawType.subheadSemiBold)
+            .sheet(
+                isPresented: self.$showQRScanner,
+                onDismiss: {
+                    self.processQueuedScannerResult()
+                },
+                content: {
+                    NavigationStack {
+                        QRScannerView(
+                            onResult: { result in
+                                self.queueScannedResult(result, scanID: scanID)
+                            },
+                            onError: { error in
+                                guard self.scannerResultHandoff.isActive(scanID: scanID) else { return }
+                                self.showQRScanner = false
+                                self.setupStatusText = "Scanner error: \(error)"
+                                self.scannerError = error
+                            },
+                            onDismiss: {
+                                guard self.scannerResultHandoff.isActive(scanID: scanID) else { return }
+                                self.showQRScanner = false
+                            })
+                            .ignoresSafeArea()
+                            .navigationTitle("Scan QR Code")
+                            .navigationBarTitleDisplayMode(.inline)
+                            .font(OpenClawType.body)
+                            .toolbar {
+                                ToolbarItem(placement: .topBarLeading) {
+                                    Button {
+                                        self.scannerResultHandoff.cancel()
+                                        self.showQRScanner = false
+                                    } label: {
+                                        Text("Cancel")
+                                            .font(OpenClawType.subheadSemiBold)
+                                    }
+                                    .font(OpenClawType.subheadSemiBold)
                                 }
-                                .font(OpenClawType.subheadSemiBold)
                             }
-                        }
-                }
-            }
+                    }
+                })
             .sheet(isPresented: self.$showNotificationRelayDisclosure) {
                 HostedPushRelayDisclosureSheet(
                     message: self.notificationRelayDisclosureMessage,
@@ -279,6 +294,7 @@ struct SettingsProTab: View {
     }
 
     private func applyGatewaySetupRequestIfNeeded() {
+        guard self.acceptsGatewaySetupRequests else { return }
         guard let gatewaySetupRequest else { return }
         self.applyGatewaySetupLink(gatewaySetupRequest.link)
         self.onGatewaySetupRequestHandled?(gatewaySetupRequest.id)

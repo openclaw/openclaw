@@ -398,6 +398,14 @@ function isOpenAIRealtimeMaxSessionDurationError(detail: string): boolean {
   );
 }
 
+function readRealtimeErrorEventId(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const eventId = (error as Record<string, unknown>).event_id;
+  return typeof eventId === "string" ? eventId : undefined;
+}
+
 function base64ToBuffer(b64: string): Buffer {
   return Buffer.from(b64, "base64");
 }
@@ -419,8 +427,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private responseStartTimestamp: number | null = null;
   private responseActive = false;
   private responseCreateInFlight = false;
+  private manualResponseCreateEventId: string | null = null;
   private responseCancelInFlight = false;
+  private manualResponseCancelEventId: string | null = null;
   private responseCreatePending = false;
+  private autoRespondSuppressedForManualResponse = false;
   private continuingToolCallIds = new Set<string>();
   private latestMediaTimestamp = 0;
   private lastAssistantItemId: string | null = null;
@@ -835,8 +846,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   private buildGaSessionUpdate(): RealtimeGaSessionUpdate {
     const cfg = this.config;
-    const autoRespondToAudio = cfg.autoRespondToAudio ?? true;
-    const interruptResponseOnInputAudio = cfg.interruptResponseOnInputAudio ?? autoRespondToAudio;
     return {
       type: "session.update",
       session: {
@@ -849,14 +858,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
             format: this.resolveRealtimeAudioFormat(),
             noise_reduction: null,
             transcription: { model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL },
-            turn_detection: {
-              type: "server_vad",
-              threshold: cfg.vadThreshold ?? 0.5,
-              prefix_padding_ms: cfg.prefixPaddingMs ?? 300,
-              silence_duration_ms: cfg.silenceDurationMs ?? 500,
-              create_response: autoRespondToAudio,
-              interrupt_response: interruptResponseOnInputAudio,
-            },
+            turn_detection: this.buildTurnDetectionConfig({ includeInterruptResponse: true }),
           },
           output: {
             format: this.resolveRealtimeAudioFormat(),
@@ -890,13 +892,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         input_audio_format: format,
         output_audio_format: format,
         input_audio_transcription: { model: "whisper-1" },
-        turn_detection: {
-          type: "server_vad",
-          threshold: cfg.vadThreshold ?? 0.5,
-          prefix_padding_ms: cfg.prefixPaddingMs ?? 300,
-          silence_duration_ms: cfg.silenceDurationMs ?? 500,
-          create_response: cfg.autoRespondToAudio ?? true,
-        },
+        turn_detection: this.buildTurnDetectionConfig(),
         temperature: cfg.temperature ?? 0.8,
         ...(cfg.tools && cfg.tools.length > 0
           ? {
@@ -906,6 +902,41 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           : {}),
       },
     };
+  }
+
+  private buildTurnDetectionConfig(options?: {
+    createResponse?: boolean;
+    includeInterruptResponse?: boolean;
+  }): RealtimeTurnDetectionConfig {
+    const configuredAutoResponse = this.config.autoRespondToAudio ?? true;
+    return {
+      type: "server_vad",
+      threshold: this.config.vadThreshold ?? 0.5,
+      prefix_padding_ms: this.config.prefixPaddingMs ?? 300,
+      silence_duration_ms: this.config.silenceDurationMs ?? 500,
+      create_response: options?.createResponse ?? configuredAutoResponse,
+      ...(options?.includeInterruptResponse
+        ? {
+            interrupt_response: this.config.interruptResponseOnInputAudio ?? configuredAutoResponse,
+          }
+        : {}),
+    };
+  }
+
+  private sendAutoResponseSessionUpdate(createResponse: boolean): void {
+    const azureDeployment = this.usesAzureDeploymentRealtimeApi();
+    const turnDetection = this.buildTurnDetectionConfig({
+      createResponse,
+      includeInterruptResponse: !azureDeployment,
+    });
+    if (azureDeployment) {
+      this.sendEvent({ type: "session.update", session: { turn_detection: turnDetection } });
+      return;
+    }
+    this.sendEvent({
+      type: "session.update",
+      session: { type: "realtime", audio: { input: { turn_detection: turnDetection } } },
+    });
   }
 
   private resolveRealtimeAudioFormat(): OpenAIRealtimeAudioFormatConfig {
@@ -950,9 +981,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
       case "session.updated":
         this.sessionConfigured = true;
-        for (const chunk of this.pendingAudio.splice(0)) {
-          this.sendAudio(chunk);
-        }
         if (this.activeConnectionReason) {
           this.config.onEvent?.({
             direction: "server",
@@ -964,6 +992,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         if (!this.sessionReadyFired) {
           this.sessionReadyFired = true;
           this.config.onReady?.();
+        }
+        for (const chunk of this.pendingAudio.splice(0)) {
+          this.sendAudio(chunk);
         }
         return;
 
@@ -1035,8 +1066,14 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       case "response.done":
         this.responseActive = false;
         this.responseCreateInFlight = false;
+        this.manualResponseCreateEventId = null;
         this.responseCancelInFlight = false;
-        this.flushPendingResponseCreate();
+        this.manualResponseCancelEventId = null;
+        if (this.responseCreatePending) {
+          this.flushPendingResponseCreate();
+        } else {
+          this.restoreAutoRespondAfterManualResponse();
+        }
         return;
 
       case "response.function_call_arguments.delta": {
@@ -1082,17 +1119,44 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
       case "error": {
         const detail = readRealtimeErrorDetail(event.error);
-        if (detail.startsWith(OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX)) {
+        const rejectsManualResponseCreate =
+          this.manualResponseCreateEventId !== null &&
+          readRealtimeErrorEventId(event.error) === this.manualResponseCreateEventId;
+        if (
+          rejectsManualResponseCreate &&
+          detail.startsWith(OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX)
+        ) {
           this.responseActive = true;
           this.responseCreateInFlight = false;
+          this.manualResponseCreateEventId = null;
           this.responseCreatePending = true;
           return;
         }
+        const rejectsManualResponseCancel =
+          this.manualResponseCancelEventId !== null &&
+          readRealtimeErrorEventId(event.error) === this.manualResponseCancelEventId;
         if (detail === OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR) {
+          if (!rejectsManualResponseCancel) {
+            return;
+          }
           this.responseActive = false;
           this.responseCancelInFlight = false;
-          this.flushPendingResponseCreate();
+          this.manualResponseCancelEventId = null;
+          if (this.responseCreatePending) {
+            this.flushPendingResponseCreate();
+          } else {
+            this.restoreAutoRespondAfterManualResponse();
+          }
           return;
+        }
+        if (rejectsManualResponseCreate) {
+          this.responseCreateInFlight = false;
+          this.manualResponseCreateEventId = null;
+          if (this.responseCreatePending) {
+            this.flushPendingResponseCreate();
+          } else {
+            this.restoreAutoRespondAfterManualResponse();
+          }
         }
         this.config.onError?.(new Error(detail));
       }
@@ -1133,7 +1197,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.responseActive &&
       !this.responseCancelInFlight
     ) {
-      this.sendEvent({ type: "response.cancel" }, "reason=barge-in");
+      const eventId = `openclaw-response-cancel-${randomUUID()}`;
+      this.manualResponseCancelEventId = eventId;
+      this.sendEvent({ type: "response.cancel", event_id: eventId }, "reason=barge-in");
       this.responseCancelInFlight = true;
     }
     if (shouldInterruptProvider) {
@@ -1196,7 +1262,30 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
     this.responseCreatePending = false;
     this.responseCreateInFlight = true;
-    this.sendEvent({ type: "response.create" });
+    this.suppressAutoRespondForManualResponse();
+    const eventId = `openclaw-response-create-${randomUUID()}`;
+    // Realtime errors can describe unrelated client events. Keep this id until
+    // the manual turn settles so only its rejection may release VAD suppression.
+    this.manualResponseCreateEventId = eventId;
+    this.sendEvent({ type: "response.create", event_id: eventId });
+  }
+
+  private suppressAutoRespondForManualResponse(): void {
+    if (this.config.autoRespondToAudio === false || this.autoRespondSuppressedForManualResponse) {
+      return;
+    }
+    // Manual response.create owns this turn. Keep VAD events and interruption active,
+    // but prevent a second server-owned response until all queued manual work finishes.
+    this.autoRespondSuppressedForManualResponse = true;
+    this.sendAutoResponseSessionUpdate(false);
+  }
+
+  private restoreAutoRespondAfterManualResponse(): void {
+    if (!this.autoRespondSuppressedForManualResponse) {
+      return;
+    }
+    this.autoRespondSuppressedForManualResponse = false;
+    this.sendAutoResponseSessionUpdate(true);
   }
 
   private flushPendingResponseCreate(): void {
@@ -1212,8 +1301,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.responseStartTimestamp = null;
     this.responseActive = false;
     this.responseCreateInFlight = false;
+    this.manualResponseCreateEventId = null;
     this.responseCancelInFlight = false;
+    this.manualResponseCancelEventId = null;
     this.responseCreatePending = false;
+    this.autoRespondSuppressedForManualResponse = false;
     this.continuingToolCallIds.clear();
     this.lastAssistantItemId = null;
     this.toolCallBuffers.clear();

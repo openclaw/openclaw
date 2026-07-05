@@ -93,9 +93,10 @@ enum WatchMessageKind: String, Codable, Equatable {
     case quickReply
 }
 
-struct WatchExecApprovalResolveEvent: Equatable {
+struct WatchExecApprovalResolveEvent: Codable, Equatable {
     var replyId: String
     var approvalId: String
+    var gatewayStableID: String?
     var decision: OpenClawWatchExecApprovalDecision
     var sentAtMs: Int?
     var transport: String

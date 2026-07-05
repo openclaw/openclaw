@@ -7134,6 +7134,36 @@
       "translated": "मोड चयन पर वापस जाएँ"
     },
     {
+      "id": "native.apple.4014217851d06190",
+      "source": "Plaintext (local network)",
+      "translated": "सादा टेक्स्ट (स्थानीय नेटवर्क)"
+    },
+    {
+      "id": "native.apple.cf616b515da5bc19",
+      "source": "Security",
+      "translated": "सुरक्षा"
+    },
+    {
+      "id": "native.apple.db7b52a1bbc6fac5",
+      "source": "Use Manual Setup",
+      "translated": "मैन्युअल सेटअप का उपयोग करें"
+    },
+    {
+      "id": "native.apple.7dbdf9a439f64f08",
+      "source": "Setup Link",
+      "translated": "सेटअप लिंक"
+    },
+    {
+      "id": "native.apple.6bfb611862fb1687",
+      "source": "Plaintext may expose credentials. Continue only if you trust this local network and host.",
+      "translated": "सादा टेक्स्ट क्रेडेंशियल्स को उजागर कर सकता है। केवल तभी जारी रखें जब आप इस स्थानीय नेटवर्क और होस्ट पर भरोसा करते हों।"
+    },
+    {
+      "id": "native.apple.3329c7f367f10c78",
+      "source": "Review this endpoint. Credentials are applied only after you tap Connect.",
+      "translated": "इस एंडपॉइंट की समीक्षा करें। क्रेडेंशियल्स केवल तब लागू होते हैं जब आप Connect पर टैप करते हैं।"
+    },
+    {
       "id": "native.apple.2f00ef4bc35ecb8d",
       "source": "No gateways found yet.",
       "translated": "अभी तक कोई gateway नहीं मिला।"

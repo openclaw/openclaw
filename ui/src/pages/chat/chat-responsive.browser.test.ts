@@ -535,6 +535,46 @@ describeBrowserLayout("chat responsive browser layout", () => {
     }
   });
 
+  it("reveals message context on timestamp hover and keeps click-to-open", async () => {
+    if (!realChatServer) {
+      throw new Error("Expected the Control UI server to be ready");
+    }
+    const page = await openBrowserPage(1366, 900);
+    try {
+      await installMockGateway(page, {
+        assistantName: "Claw",
+        historyMessages: [
+          {
+            content: [{ text: "Context hover regression fixture.", type: "text" }],
+            model: "openai/gpt-5.5",
+            role: "assistant",
+            timestamp: Date.UTC(2026, 6, 5, 9, 51),
+            usage: { cacheRead: 2_400, input: 19_600, output: 126 },
+          },
+        ],
+      });
+      await page.goto(`${realChatServer.baseUrl}chat`);
+      await page.getByText("Context hover regression fixture.").waitFor({ timeout: 10_000 });
+
+      const details = page.locator("details.msg-meta");
+      const context = page.locator(".msg-meta__details");
+      expect(await context.isVisible()).toBe(false);
+
+      await page.locator(".msg-meta__summary").hover();
+      expect(await context.isVisible()).toBe(true);
+
+      await page.mouse.move(0, 0);
+      expect(await context.isVisible()).toBe(false);
+
+      await page.locator(".msg-meta__summary").click();
+      await page.mouse.move(0, 0);
+      expect(await details.getAttribute("open")).toBe("");
+      expect(await context.isVisible()).toBe(true);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it.each([
     [1120, 740],
     [1366, 900],

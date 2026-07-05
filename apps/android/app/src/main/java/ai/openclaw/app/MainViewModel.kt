@@ -5,6 +5,7 @@ import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.chat.deleteChatTranscriptCacheDatabase
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayEndpoint
@@ -306,6 +307,8 @@ class MainViewModel(
     val deviceAuthStore = DeviceAuthStore(prefs)
     deviceAuthStore.clearToken(deviceId, "node")
     deviceAuthStore.clearToken(deviceId, "operator")
+    // No runtime means no open Room handle, so the cache file can be deleted directly.
+    deleteChatTranscriptCacheDatabase(nodeApp)
   }
 
   internal fun saveGatewayConfigAndConnect(plan: GatewayConnectPlan) {

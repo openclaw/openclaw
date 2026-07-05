@@ -8,6 +8,7 @@ import {
   mockedEnsureRuntimePluginsLoaded,
   mockedResolveModelAsync,
   mockedRunEmbeddedAttempt,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -44,6 +45,7 @@ function firstAttemptInput(): Record<string, unknown> {
 describe("runEmbeddedAgent usage reporting", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
   });
 
   beforeEach(() => {

@@ -7134,6 +7134,36 @@
       "translated": "العودة إلى اختيار الوضع"
     },
     {
+      "id": "native.apple.4014217851d06190",
+      "source": "Plaintext (local network)",
+      "translated": "نص عادي (الشبكة المحلية)"
+    },
+    {
+      "id": "native.apple.cf616b515da5bc19",
+      "source": "Security",
+      "translated": "الأمان"
+    },
+    {
+      "id": "native.apple.db7b52a1bbc6fac5",
+      "source": "Use Manual Setup",
+      "translated": "استخدام الإعداد اليدوي"
+    },
+    {
+      "id": "native.apple.7dbdf9a439f64f08",
+      "source": "Setup Link",
+      "translated": "رابط الإعداد"
+    },
+    {
+      "id": "native.apple.6bfb611862fb1687",
+      "source": "Plaintext may expose credentials. Continue only if you trust this local network and host.",
+      "translated": "قد يكشف النص العادي بيانات الاعتماد. تابع فقط إذا كنت تثق بهذه الشبكة المحلية وهذا المضيف."
+    },
+    {
+      "id": "native.apple.3329c7f367f10c78",
+      "source": "Review this endpoint. Credentials are applied only after you tap Connect.",
+      "translated": "راجع نقطة النهاية هذه. لا تُطبَّق بيانات الاعتماد إلا بعد النقر على اتصال."
+    },
+    {
       "id": "native.apple.2f00ef4bc35ecb8d",
       "source": "No gateways found yet.",
       "translated": "لم يتم العثور على أي بوابات بعد."

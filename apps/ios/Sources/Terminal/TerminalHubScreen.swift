@@ -23,7 +23,7 @@ struct TerminalHubScreen: View {
 
     var body: some View {
         let config = self.appModel.activeGatewayConnectConfig
-        let storedOperatorToken = config == nil ? nil : Self.storedOperatorToken()
+        let storedOperatorToken = Self.storedOperatorToken(config: config)
         ZStack {
             OpenClawProBackground()
             if let url = Self.terminalURL(config: config) {
@@ -105,7 +105,9 @@ struct TerminalHubScreen: View {
     /// (the same mechanism the macOS Dashboard window uses), so the token never
     /// appears in the page URL, WebKit history, or gateway request logs.
     static func terminalAuthUserScript(config: GatewayConnectConfig?) -> String? {
-        self.terminalAuthUserScript(config: config, storedOperatorToken: self.storedOperatorToken())
+        self.terminalAuthUserScript(
+            config: config,
+            storedOperatorToken: self.storedOperatorToken(config: config))
     }
 
     static func terminalAuthUserScript(
@@ -160,9 +162,17 @@ struct TerminalHubScreen: View {
         return hasher.finalize()
     }
 
-    private static func storedOperatorToken() -> String? {
+    private static func storedOperatorToken(config: GatewayConnectConfig?) -> String? {
+        guard let config else { return nil }
+        // Endpoint handoffs may explicitly suppress device-token reuse; every auth surface
+        // must honor that boundary or a stale token can override the supplied password.
+        guard config.nodeOptions.allowStoredDeviceAuth else { return nil }
+        let gatewayID = config.nodeOptions.deviceAuthGatewayID ?? config.effectiveStableID
         let identity = DeviceIdentityStore.loadOrCreate()
-        return DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "operator")?
+        return DeviceAuthStore.loadToken(
+            deviceId: identity.deviceId,
+            role: "operator",
+            gatewayID: gatewayID)?
             .token
     }
 
@@ -201,7 +211,7 @@ private struct TerminalWebView: UIViewRepresentable {
         // Ephemeral store: credentials arrive per load via the auth user
         // script; nothing needs to persist across loads.
         config.websiteDataStore = .nonPersistent()
-        if let authScript = self.authScript {
+        if let authScript {
             config.userContentController.addUserScript(WKUserScript(
                 source: authScript,
                 injectionTime: .atDocumentStart,

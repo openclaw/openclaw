@@ -13,6 +13,10 @@ import {
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
+  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+} from "./agent-runner-failure-copy.js";
+import {
   enqueueFollowupRun,
   refreshQueuedFollowupSession,
   scheduleFollowupDrain,
@@ -1357,6 +1361,132 @@ describe("runReplyAgent typing (heartbeat)", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("drains pending tool delivery before returning an empty terminal-run failure", async () => {
+    let markToolResultStarted = () => {};
+    const toolResultStarted = new Promise<void>((resolve) => {
+      markToolResultStarted = resolve;
+    });
+    let releaseToolResult = () => {};
+    const toolResultReleased = new Promise<void>((resolve) => {
+      releaseToolResult = resolve;
+    });
+    let toolResultDelivered = false;
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      void params.onToolResult?.({ text: "late tool result" });
+      return {
+        payloads: [],
+        meta: {
+          error: {
+            kind: "tool_result_mismatch",
+            message: "Agent run reached a terminal error before reply delivery.",
+          },
+        },
+      };
+    });
+    const { run } = createMinimalRun({
+      opts: {
+        onToolResult: async () => {
+          markToolResultStarted();
+          await toolResultReleased;
+          toolResultDelivered = true;
+        },
+      },
+    });
+
+    const pendingResult = run();
+    await toolResultStarted;
+    expect(toolResultDelivered).toBe(false);
+    releaseToolResult();
+    const result = await pendingResult;
+    const payload = Array.isArray(result) ? result[0] : result;
+
+    expect(toolResultDelivered).toBe(true);
+    expect(payload).toMatchObject({
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isError: true,
+    });
+  });
+
+  it.each([
+    {
+      label: "silent token",
+      payload: { text: "NO_REPLY" },
+      opts: undefined,
+      expectedText: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+    },
+    {
+      label: "heartbeat acknowledgement",
+      payload: { text: "HEARTBEAT_OK" },
+      opts: { isHeartbeat: true as const },
+      expectedText: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+    },
+    {
+      label: "reasoning-only output",
+      payload: { text: "internal reasoning", isReasoning: true },
+      opts: undefined,
+      expectedText: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+    },
+    {
+      label: "commentary-only output",
+      payload: { text: "internal commentary", isCommentary: true },
+      opts: undefined,
+      expectedText: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+    },
+    {
+      label: "directive-only output",
+      payload: { text: "[[reply_to_current]]" },
+      opts: undefined,
+      expectedText: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+    },
+  ])("replaces filtered $label after a terminal failure", async (testCase) => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [testCase.payload],
+      meta: {
+        error: {
+          kind: "tool_result_mismatch",
+          message: "Agent run reached a terminal error before visible reply delivery.",
+        },
+      },
+    });
+    const { run } = createMinimalRun({
+      opts: testCase.opts,
+      runOverrides: {
+        config: { channels: { whatsapp: { replyToMode: "first" } } },
+      },
+    });
+
+    const result = await run();
+    const payloads = Array.isArray(result) ? result : [result];
+    const failure = payloads.find((payload) => payload?.isError === true);
+
+    expect(failure?.text).toBe(testCase.expectedText);
+    expect(failure?.replyToId).toBe("msg");
+  });
+
+  it.each([
+    { label: "message-tool", delivery: { didSendViaMessagingTool: true } },
+    {
+      label: "source-reply",
+      delivery: { didDeliverSourceReplyViaMessageTool: true },
+    },
+  ])("does not duplicate an empty terminal failure after $label delivery", async ({ delivery }) => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        error: {
+          kind: "tool_result_mismatch",
+          message: "Agent run reached a terminal error after delivery.",
+        },
+      },
+      ...delivery,
+    });
+
+    const { run } = createMinimalRun();
+    const result = await run();
+
+    expect(result).toBeUndefined();
   });
 
   it("does not persist active fallback state for internal subagent announce fallback", async () => {

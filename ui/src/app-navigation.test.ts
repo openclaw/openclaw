@@ -15,6 +15,7 @@ import {
   routeIdFromPath,
   type RouteId,
 } from "./app-routes.ts";
+import { pluginTabKey, pluginTabRefFromSearch, pluginTabSearch } from "./pages/plugin/route.ts";
 
 /** All route identifiers derived from visible groups plus routed settings slices. */
 const ALL_ROUTES: RouteId[] = Array.from(
@@ -241,6 +242,27 @@ describe("inferBasePathFromPathname", () => {
   it("handles index.html suffix", () => {
     expect(inferBasePathFromPathname("/index.html")).toBe("");
     expect(inferBasePathFromPathname("/ui/index.html")).toBe("/ui");
+  });
+});
+
+describe("plugin tabs route", () => {
+  it("round-trips the shared /plugin route", () => {
+    expect(pathForRoute("plugin", "")).toBe("/plugin");
+    expect(routeIdFromPath("/plugin", "")).toBe("plugin");
+    // The tab id travels in the search, not the pathname.
+    expect(routeIdFromPath("/plugin/logbook", "")).toBeNull();
+  });
+
+  it("round-trips a namespaced tab reference through the search", () => {
+    const ref = { pluginId: "logbook", id: "logbook" };
+    expect(pluginTabRefFromSearch(pluginTabSearch(ref))).toEqual(ref);
+    expect(pluginTabKey(ref)).toBe("logbook/logbook");
+    // Distinct plugins with the same local tab id stay distinct.
+    expect(pluginTabKey({ pluginId: "other", id: "logbook" })).not.toBe(pluginTabKey(ref));
+  });
+
+  it("stays out of the static sidebar sections", () => {
+    expect(SIDEBAR_SECTIONS.flatMap((g) => g.routes)).not.toContain("plugin");
   });
 });
 

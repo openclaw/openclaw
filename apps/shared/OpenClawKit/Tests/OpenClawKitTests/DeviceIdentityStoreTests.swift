@@ -5,6 +5,154 @@ import Testing
 
 @Suite(.serialized)
 struct DeviceIdentityStoreTests {
+    @Test(.stateDirectoryIsolated)
+    func `device auth store reports failed durable writes`() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let blocker = tempDir.appendingPathComponent("not-a-directory", isDirectory: false)
+        try Data().write(to: blocker)
+        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
+        setenv("OPENCLAW_STATE_DIR", blocker.path, 1)
+        defer {
+            if let previousStateDir {
+                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
+            } else {
+                unsetenv("OPENCLAW_STATE_DIR")
+            }
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+
+        let compatibleEntry: DeviceAuthEntry = DeviceAuthStore.storeToken(
+            deviceId: "unwritable-device",
+            role: "node",
+            token: "must-not-be-acknowledged")
+        let stored = DeviceAuthStore.storeTokenResult(
+            deviceId: "unwritable-device",
+            role: "node",
+            token: "must-not-be-acknowledged")
+
+        #expect(compatibleEntry.token == "must-not-be-acknowledged")
+        #expect(!stored.persisted)
+        #expect(DeviceAuthStore.loadToken(deviceId: "unwritable-device", role: "node") == nil)
+    }
+
+    @Test(.stateDirectoryIsolated)
+    func `device auth tokens are isolated by gateway owner`() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
+        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
+        defer {
+            if let previousStateDir {
+                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
+            } else {
+                unsetenv("OPENCLAW_STATE_DIR")
+            }
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+
+        let deviceID = "test-device"
+        _ = DeviceAuthStore.storeToken(deviceId: deviceID, role: "node", token: "legacy-token")
+        #expect(DeviceAuthStore.loadToken(deviceId: deviceID, role: "node", gatewayID: "gateway-a") == nil)
+
+        _ = DeviceAuthStore.storeToken(
+            deviceId: deviceID,
+            role: "node",
+            token: "gateway-a-token",
+            gatewayID: "gateway-a")
+        _ = DeviceAuthStore.storeToken(
+            deviceId: deviceID,
+            role: "node",
+            token: "gateway-b-token",
+            gatewayID: "gateway-b")
+
+        #expect(DeviceAuthStore.loadToken(deviceId: deviceID, role: "node")?.token == "legacy-token")
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: deviceID,
+            role: "node",
+            gatewayID: "gateway-a")?.token == "gateway-a-token")
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: deviceID,
+            role: "node",
+            gatewayID: "gateway-b")?.token == "gateway-b-token")
+
+        DeviceAuthStore.clearToken(deviceId: deviceID, role: "node", gatewayID: "gateway-b")
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: deviceID,
+            role: "node",
+            gatewayID: "gateway-a")?.token == "gateway-a-token")
+        #expect(DeviceAuthStore.loadToken(deviceId: deviceID, role: "node", gatewayID: "gateway-b") == nil)
+
+        DeviceAuthStore.clearToken(deviceId: deviceID, role: "node")
+        #expect(DeviceAuthStore.loadToken(deviceId: deviceID, role: "node") == nil)
+        #expect(DeviceAuthStore.loadToken(deviceId: deviceID, role: "node", gatewayID: "gateway-a") == nil)
+    }
+
+    @Test(.stateDirectoryIsolated)
+    func `legacy device auth migration claims only the proven role`() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
+        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
+        defer {
+            if let previousStateDir {
+                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
+            } else {
+                unsetenv("OPENCLAW_STATE_DIR")
+            }
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+
+        let deviceID = "legacy-device"
+        _ = DeviceAuthStore.storeToken(
+            deviceId: deviceID,
+            role: "node",
+            token: "legacy-node-token")
+        _ = DeviceAuthStore.storeToken(
+            deviceId: deviceID,
+            role: "operator",
+            token: "legacy-operator-token")
+
+        #expect(DeviceAuthStore.migrateUnscopedToken(
+            deviceId: deviceID,
+            role: "node",
+            toGatewayID: "trusted-gateway"))
+        #expect(DeviceAuthStore.loadToken(deviceId: deviceID, role: "node") == nil)
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: deviceID,
+            role: "node",
+            gatewayID: "trusted-gateway")?.token == "legacy-node-token")
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: deviceID,
+            role: "operator",
+            gatewayID: "trusted-gateway") == nil)
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: deviceID,
+            role: "operator")?.token == "legacy-operator-token")
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: deviceID,
+            role: "node",
+            gatewayID: "other-gateway") == nil)
+        #expect(!DeviceAuthStore.migrateUnscopedToken(
+            deviceId: deviceID,
+            role: "node",
+            toGatewayID: "other-gateway"))
+
+        _ = DeviceAuthStore.storeToken(
+            deviceId: deviceID,
+            role: "node",
+            token: "ambiguous-legacy-token")
+        #expect(DeviceAuthStore.discardUnscopedTokens(deviceId: deviceID) == 2)
+        #expect(DeviceAuthStore.loadToken(deviceId: deviceID, role: "node") == nil)
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: deviceID,
+            role: "node",
+            gatewayID: "trusted-gateway")?.token == "legacy-node-token")
+    }
+
     @Test
     func `state directory override wins over shared app group storage`() {
         let tempDir = FileManager.default.temporaryDirectory
@@ -48,7 +196,7 @@ struct DeviceIdentityStoreTests {
         #expect(!FileManager.default.fileExists(atPath: sharedDeviceURL.path))
     }
 
-    @Test
+    @Test(.stateDirectoryIsolated)
     func `secondary profiles use separate identity and auth files`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

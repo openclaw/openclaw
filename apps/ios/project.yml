@@ -372,6 +372,8 @@ targets:
       - path: Tests
         excludes:
           - Logic
+      - path: WatchApp/Sources/WatchDeferredPayloadOrdering.swift
+        group: WatchApp/Sources
     dependencies:
       - target: OpenClaw
       - package: Swabble
