@@ -456,64 +456,68 @@ describe("preemptive-compaction", () => {
     expect(result.shouldCompact).toBe(false);
   });
 
-  it("estimates CJK tool results with the accurate token ratio", () => {
-    // CJK characters should be counted as ~1 token per char, not ~2 tokens per char.
-    // 80k CJK chars should estimate ~80k tokens, not ~160k.
-    const cjkToolResult = "中文工具返回结果 ".repeat(8000); // ~80k chars, >50% CJK
-    const messages = [makeToolResultMessage(cjkToolResult)];
-
-    const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
-      messages,
+  it("estimates CJK tool results at roughly one token per character", () => {
+    const cjkText = "中".repeat(85_000);
+    const toolResultTokens = estimateLlmBoundaryTokenPressure({
+      messages: [makeToolResultMessage(cjkText)],
       systemPrompt: "sys",
-      prompt: "continue with analysis",
+      prompt: "continue",
     });
-
-    // estimateStringChars inflates CJK count; ÷4 yields the accurate token estimate.
-    // With the old /2 ratio this would have been ~160k tokens and triggered false overflow.
-    expect(estimatedPromptTokens).toBeLessThan(120_000);
-
+    const assistantTokens = estimateLlmBoundaryTokenPressure({
+      messages: [makeAssistantHistory(cjkText)],
+      systemPrompt: "sys",
+      prompt: "continue",
+    });
     const result = shouldPreemptivelyCompactBeforePrompt({
-      messages,
+      messages: [makeToolResultMessage(cjkText)],
       systemPrompt: "sys",
       prompt: "continue",
       contextTokenBudget: 128_000,
       reserveTokens: 20_000,
     });
 
-    expect(result.estimatedPromptTokens).toBeLessThan(120_000);
+    expect(toolResultTokens).toBeGreaterThanOrEqual(assistantTokens);
+    expect(toolResultTokens - assistantTokens).toBeLessThanOrEqual(5);
+    expect(result.estimatedPromptTokens).toBe(toolResultTokens);
     expect(result.promptBudgetBeforeReserve).toBeGreaterThan(result.estimatedPromptTokens);
     expect(result.route).toBe("fits");
     expect(result.shouldCompact).toBe(false);
     expect(result.overflowTokens).toBe(0);
   });
 
-  it("handles mixed CJK + Latin tool results without false overflow", () => {
-    const mixedContent = "English part. ".repeat(1000) + "中文部分内容 ".repeat(5000);
-    const messages = [makeToolResultMessage(mixedContent)];
-
-    const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
-      messages,
-      systemPrompt: "sys",
-      prompt: "continue",
-    });
-
-    // CJK is the majority, so the accurate /4 ratio applies.
-    expect(estimatedPromptTokens).toBeLessThan(60_000);
-
+  it("avoids false overflow when CJK is less than half of a tool result", () => {
+    const mixedContent = "中".repeat(40_000) + "a".repeat(60_000);
     const result = shouldPreemptivelyCompactBeforePrompt({
-      messages,
+      messages: [makeToolResultMessage(mixedContent)],
       systemPrompt: "sys",
       prompt: "continue",
-      contextTokenBudget: 64_000,
-      reserveTokens: 10_000,
+      contextTokenBudget: 100_000,
+      reserveTokens: 20_000,
     });
 
+    expect(result.estimatedPromptTokens).toBeLessThan(result.promptBudgetBeforeReserve);
     expect(result.route).toBe("fits");
     expect(result.shouldCompact).toBe(false);
   });
 
+  it("keeps mixed-script estimates monotonic across the former CJK cutoff", () => {
+    const estimate = (cjkChars: number) =>
+      estimateLlmBoundaryTokenPressure({
+        messages: [makeToolResultMessage("中".repeat(cjkChars) + "a".repeat(10_000 - cjkChars))],
+        systemPrompt: "sys",
+        prompt: "continue",
+      });
+
+    const belowCutoff = estimate(4_999);
+    const atCutoff = estimate(5_000);
+    const aboveCutoff = estimate(5_001);
+
+    expect(atCutoff).toBeGreaterThanOrEqual(belowCutoff);
+    expect(aboveCutoff).toBeGreaterThanOrEqual(atCutoff);
+    expect(aboveCutoff - belowCutoff).toBeLessThanOrEqual(2);
+  });
+
   it("keeps the conservative ratio for non-CJK tool results", () => {
-    // Non-CJK tool results should still use the conservative 2 chars/token ratio.
     const latinText = "alpha beta gamma delta epsilon ".repeat(1000);
     const toolResultTokens = estimateLlmBoundaryTokenPressure({
       messages: [makeToolResultMessage(latinText)],
@@ -526,14 +530,11 @@ describe("preemptive-compaction", () => {
       prompt: "continue",
     });
 
-    // Tool-result estimate should be roughly 2x the normal-text estimate for the same Latin payload.
     expect(toolResultTokens).toBeGreaterThan(assistantTokens * 1.5);
     expect(toolResultTokens).toBeLessThan(assistantTokens * 2.5);
   });
 
   it("applies the CJK-aware ratio to JSON tool-result payloads", () => {
-    // A JSON payload that is mostly CJK should use the /4 ratio instead of /2,
-    // avoiding false overflow for CJK-heavy structured tool results.
     const cjkPayload = {
       summary: "中文内容".repeat(5_000),
       note: "更多中文文本".repeat(2_000),
@@ -546,7 +547,6 @@ describe("preemptive-compaction", () => {
       prompt: "continue",
     });
 
-    // With the old /2 ratio this would have estimated ~120k tokens.
     expect(estimatedPromptTokens).toBeLessThan(90_000);
 
     const result = shouldPreemptivelyCompactBeforePrompt({
@@ -563,39 +563,19 @@ describe("preemptive-compaction", () => {
   });
 
   it("does not throw when tool-result content cannot be serialized", () => {
-    // Non-array content that JSON.stringify cannot handle should still complete
-    // precheck estimation instead of interrupting the turn.
     const circular: Record<string, unknown> = { self: undefined };
     circular.self = circular;
-
-    expect(() =>
-      estimateLlmBoundaryTokenPressure({
-        messages: [
-          {
-            role: "toolResult",
-            toolCallId: "call_circular",
-            toolName: "bad_tool",
-            content: circular,
-            isError: false,
-            timestamp: timestamp++,
-          } as unknown as AgentMessage,
-        ],
-        systemPrompt: "sys",
-        prompt: "continue",
-      }),
-    ).not.toThrow();
+    const message = {
+      role: "toolResult",
+      toolCallId: "call_circular",
+      toolName: "bad_tool",
+      content: circular,
+      isError: false,
+      timestamp: timestamp++,
+    } as unknown as AgentMessage;
 
     const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [
-        {
-          role: "toolResult",
-          toolCallId: "call_circular",
-          toolName: "bad_tool",
-          content: circular,
-          isError: false,
-          timestamp: timestamp++,
-        } as unknown as AgentMessage,
-      ],
+      messages: [message],
       systemPrompt: "sys",
       prompt: "continue",
       contextTokenBudget: 128_000,
