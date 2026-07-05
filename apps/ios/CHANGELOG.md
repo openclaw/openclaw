@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Debug builds now use separate app, extension, widget, and Watch identifiers plus a distinct debug icon, so they can remain installed beside release builds.
 - Animated the OpenClaw mascot (float, blink, antenna wiggle, claw snaps) across onboarding, sidebar, and command center, matching openclaw.ai.
 
 ## 2026.6.11 - 2026-07-01

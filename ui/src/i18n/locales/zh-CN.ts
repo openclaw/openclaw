@@ -1398,6 +1398,13 @@ export const zh_CN: TranslationMap = {
       placeholderWithAttachments: "添加消息或继续粘贴图片...",
       placeholderDisconnected: "连接到 Gateway 后开始聊天...",
       attachFile: "附加文件",
+      contextUsage: {
+        title: "上下文使用详情",
+        open: "打开上下文使用详情",
+        summary: "会话上下文使用情况：{used} / {limit}（{pct}%）",
+        contextWindow: "上下文窗口",
+        latestRunTokens: "最新运行令牌",
+      },
       dismissTalkError: "忽略 Talk 错误",
       startTalk: "开始 Talk",
       stillListening: "仍在聆听",

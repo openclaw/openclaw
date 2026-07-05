@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import { resolvePathEnvKey, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const CRABBOX_METADATA_PROBE_TIMEOUT_MS = 5_000;
 const ignoreRepoBinary = process.env.OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY === "1";
 const repoLocal = ignoreRepoBinary ? null : resolveCrabboxBinary(process.env, process.platform);
 const pathLocal = resolvePathBinary("crabbox", process.env, process.platform);
@@ -361,7 +362,7 @@ function checkedOutput(command, commandArgs) {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-    timeout: 5_000,
+    timeout: resolveMetadataProbeTimeoutMs(process.env),
     killSignal: "SIGKILL",
   });
   const timedOut = result.error?.name === "Error" && result.signal === "SIGKILL";
@@ -3467,7 +3468,7 @@ const child = spawn(childInvocation.command, childInvocation.args, {
   env: childEnv,
   windowsVerbatimArguments: childInvocation.windowsVerbatimArguments,
 });
-const childKillGraceMs = 5_000;
+const childKillGraceMs = resolveChildKillGraceMs(process.env);
 let childForceKillTimer;
 let childTreeShutdownStarted = false;
 if (fullCheckout) {
@@ -3603,4 +3604,20 @@ async function waitForChildTreeExit(childProcess, timeoutMs) {
     });
   }
   return !childProcessTreeIsAlive(childProcess);
+}
+
+function resolveChildKillGraceMs(env) {
+  if (!env.VITEST || !env.OPENCLAW_TEST_CRABBOX_CHILD_KILL_GRACE_MS) {
+    return 5_000;
+  }
+  const value = Number.parseInt(env.OPENCLAW_TEST_CRABBOX_CHILD_KILL_GRACE_MS, 10);
+  return Number.isFinite(value) && value >= 0 ? value : 5_000;
+}
+
+function resolveMetadataProbeTimeoutMs(env) {
+  if (!env.VITEST || !env.OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS) {
+    return CRABBOX_METADATA_PROBE_TIMEOUT_MS;
+  }
+  const value = Number.parseInt(env.OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS, 10);
+  return Number.isFinite(value) && value > 0 ? value : CRABBOX_METADATA_PROBE_TIMEOUT_MS;
 }

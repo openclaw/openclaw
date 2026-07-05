@@ -826,6 +826,7 @@ export async function runSubagentAnnounceFlow(params: {
   continuationTargetSessionKeys?: string[];
   continuationFanoutMode?: "tree" | "all";
   traceparent?: string;
+  onBeforeDeleteChildSession?: () => boolean;
 }): Promise<boolean> {
   let didAnnounce = false;
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
@@ -2056,7 +2057,7 @@ export async function runSubagentAnnounceFlow(params: {
         // Best-effort
       }
     }
-    if (shouldDeleteChildSession) {
+    if (shouldDeleteChildSession && (params.onBeforeDeleteChildSession?.() ?? true)) {
       await deleteSubagentSessionForCleanup({
         callGateway: subagentAnnounceDeps.callGateway,
         childSessionKey: params.childSessionKey,

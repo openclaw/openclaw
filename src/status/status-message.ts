@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveContextTokensForModel } from "../agents/context.js";
+import { resolveCronStyleNow } from "../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveExtraParams } from "../agents/embedded-agent-runner/extra-params.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
@@ -620,6 +621,10 @@ function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
 
 export function buildStatusMessage(args: StatusArgs): string {
   const now = args.now ?? Date.now();
+  // Derive the live wall clock here so both /status and session_status expose
+  // the same configured timezone without duplicating formatting at each caller.
+  const timeLine =
+    args.timeLine ?? (args.config ? resolveCronStyleNow(args.config, now).timeLine : undefined);
   const entry = args.sessionEntry;
   const selectionConfig = {
     agents: {
@@ -1170,7 +1175,7 @@ export function buildStatusMessage(args: StatusArgs): string {
 
   return [
     versionLine,
-    args.timeLine,
+    timeLine,
     args.uptimeLine,
     ...modelLines,
     configuredFallbacksLine,

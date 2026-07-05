@@ -3,6 +3,7 @@
  */
 import fs from "node:fs/promises";
 import os from "node:os";
+import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -213,7 +214,6 @@ import {
   prependAgentSteeringPrompt,
   releasePendingAgentSteeringItems,
 } from "../../subagent-registry.js";
-import { ensureSystemPromptCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import {
@@ -1293,6 +1293,7 @@ export async function runEmbeddedAttempt(
       : (() => {
           const allTools = createOpenClawCodingTools({
             agentId: sessionAgentId,
+            ...(params.crestodianTool ? { crestodianTool: params.crestodianTool } : {}),
             ...buildEmbeddedAttemptToolRunContext({ ...params, trace: runTrace }),
             messageChannel: params.messageChannel,
             chatType: params.chatType,
@@ -1689,6 +1690,7 @@ export async function runEmbeddedAttempt(
       sessionKey: sandboxSessionKey,
       sessionId: params.sessionId,
       runId: params.runId,
+      approvalReviewerDeviceId: params.approvalReviewerDeviceId,
       channelId: params.currentChannelId,
       trace: runTrace,
       loopDetection: resolveToolLoopDetectionConfig({
@@ -4228,6 +4230,7 @@ export async function runEmbeddedAttempt(
           }
         }
         const promptForModelBeforeRuntimeContextSplit = effectivePrompt;
+        const promptForRuntimeContextBeforeAnnotation = promptForRuntimeContextSplit;
         if (!isRawModelRun) {
           promptForRuntimeContextSplit = annotateInterSessionPromptText(
             promptForRuntimeContextSplit,
@@ -4308,6 +4311,16 @@ export async function runEmbeddedAttempt(
             modelPrompt: hasPromptBuildContext
               ? promptForModelBeforeRuntimeContextSplit
               : undefined,
+            modelPromptBuildContext:
+              hasPromptBuildContext && effectiveTranscriptPrompt !== undefined
+                ? {
+                    promptBeforeHooks: promptBeforePromptBuildHooks,
+                    transcriptPromptBeforeTransforms: effectiveTranscriptPrompt,
+                    promptBeforeAnnotation: promptForRuntimeContextBeforeAnnotation,
+                    prependContext: promptBuildPrependContext ?? "",
+                    appendContext: promptBuildAppendContext ?? "",
+                  }
+                : undefined,
             emptyTranscriptMode: params.suppressNextUserMessagePersistence
               ? "model-prompt"
               : "runtime-event",

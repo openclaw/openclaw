@@ -745,4 +745,26 @@ describe("GatewayChatClient", () => {
       scope: "text",
     });
   });
+
+  it("lists and resolves plugin approvals through the gateway", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const pending = [{ id: "plugin:skill-1" }];
+    const request = vi.fn().mockResolvedValueOnce(pending).mockResolvedValueOnce({ ok: true });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    await expect(client.listPluginApprovals()).resolves.toEqual(pending);
+    await expect(client.resolvePluginApproval("plugin:skill-1", "allow-once")).resolves.toEqual({
+      ok: true,
+    });
+
+    expect(request).toHaveBeenNthCalledWith(1, "plugin.approval.list", {});
+    expect(request).toHaveBeenNthCalledWith(2, "plugin.approval.resolve", {
+      id: "plugin:skill-1",
+      decision: "allow-once",
+    });
+  });
 });

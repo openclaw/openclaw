@@ -18,8 +18,10 @@ import {
   resolveFullSuiteVitestEnv,
   resolveReportArtifactDirs,
   resolveReportRunSpecs,
+  resolveReportVitestArgs,
   resolveRunPlanConcurrency,
   resolveRunPlans,
+  runReportPlans,
   signalTestGroupReportChild,
   spawnText,
 } from "../../scripts/test-group-report.mjs";
@@ -249,7 +251,7 @@ describe("scripts/test-group-report aggregation", () => {
     }
   });
 
-  it("fails allow-failures runs that produce no JSON report", () => {
+  it("fails when every allow-failures run produces no JSON report", () => {
     const tempDir = makeTempDir();
     const missingConfig = path.join(tempDir, "missing-vitest.config.ts");
     const output = path.join(tempDir, "group-report.json");
@@ -277,6 +279,125 @@ describe("scripts/test-group-report aggregation", () => {
       expect(result.stderr).toContain("[test-group-report] missing JSON report for failed config");
       expect(fs.existsSync(output)).toBe(false);
     } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("continues allow-failures profiling after a config exits without JSON", async () => {
+    const tempDir = makeTempDir();
+    const reportDir = path.join(tempDir, "reports");
+    const calls: string[] = [];
+    try {
+      const result = await runReportPlans({
+        args: parseTestGroupReportArgs([
+          "--config",
+          "failed.config.ts",
+          "--config",
+          "passed.config.ts",
+          "--allow-failures",
+          "--no-rss",
+        ]),
+        logDir: path.join(tempDir, "logs"),
+        reportDir,
+        runPlans: [
+          { config: "failed.config.ts", forwardedArgs: [], label: "failed" },
+          { config: "passed.config.ts", forwardedArgs: [], label: "passed" },
+        ],
+        runVitestJsonReport: async (params: {
+          config: string;
+          label: string;
+          logPath: string;
+          reportPath: string;
+        }) => {
+          calls.push(params.label);
+          if (params.label === "passed") {
+            fs.mkdirSync(path.dirname(params.reportPath), { recursive: true });
+            fs.writeFileSync(
+              params.reportPath,
+              `${JSON.stringify({ testResults: [{ name: "passed.test.ts" }] })}\n`,
+              "utf8",
+            );
+          }
+          return {
+            config: params.config,
+            elapsedMs: 10,
+            label: params.label,
+            logPath: params.logPath,
+            maxRssBytes: null,
+            reportPath: params.reportPath,
+            status: params.label === "failed" ? 1 : 0,
+          };
+        },
+      });
+
+      expect(calls).toStrictEqual(["failed", "passed"]);
+      expect(result.failed).toBe(true);
+      expect(result.exitCode).toBe(0);
+      expect(result.runs.map((run) => [run.label, run.status])).toStrictEqual([
+        ["failed", 1],
+        ["passed", 0],
+      ]);
+      expect(result.runEntries.map((entry) => entry.config)).toStrictEqual(["passed"]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prints slow tests as soon as each config report completes", async () => {
+    const tempDir = makeTempDir();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await runReportPlans({
+        args: parseTestGroupReportArgs([
+          "--config",
+          "slow.config.ts",
+          "--max-test-ms",
+          "1000",
+          "--no-rss",
+        ]),
+        logDir: path.join(tempDir, "logs"),
+        reportDir: path.join(tempDir, "reports"),
+        runPlans: [{ config: "slow.config.ts", forwardedArgs: [], label: "slow" }],
+        runVitestJsonReport: async (params: {
+          config: string;
+          label: string;
+          logPath: string;
+          reportPath: string;
+        }) => {
+          fs.mkdirSync(path.dirname(params.reportPath), { recursive: true });
+          fs.writeFileSync(
+            params.reportPath,
+            `${JSON.stringify({
+              testResults: [
+                {
+                  name: path.join(process.cwd(), "src", "slow.test.ts"),
+                  assertionResults: [
+                    { duration: 1250, fullName: "finishes eventually", status: "passed" },
+                  ],
+                },
+              ],
+            })}\n`,
+            "utf8",
+          );
+          return {
+            config: params.config,
+            elapsedMs: 10,
+            label: params.label,
+            logPath: params.logPath,
+            maxRssBytes: null,
+            reportPath: params.reportPath,
+            status: 0,
+          };
+        },
+      });
+
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "slow-test config=slow duration=1250.0ms file=src/slow.test.ts name=finishes eventually",
+        ),
+      );
+    } finally {
+      logSpy.mockRestore();
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
@@ -627,9 +748,10 @@ describe("scripts/test-group-report arg parsing", () => {
       ["--kill-grace-ms", ["100", "200"]],
       ["--concurrency", ["2", "3"]],
     ]) {
-      const args = flag === "--compare"
-        ? [flag, values[0], values[1], flag, values[2], values[3]]
-        : [flag, values[0], flag, values[1]];
+      const args =
+        flag === "--compare"
+          ? [flag, values[0], values[1], flag, values[2], values[3]]
+          : [flag, values[0], flag, values[1]];
       expect(() => parseTestGroupReportArgs(args)).toThrow(`${flag} was provided more than once`);
     }
     expect(parseTestGroupReportArgs(["--config", "a.ts", "--config", "b.ts"]).configs).toEqual([
@@ -920,7 +1042,7 @@ describe("scripts/test-group-report child process guard", () => {
         "  setTimeout(() => {",
         `    fs.writeFileSync(${JSON.stringify(cleanupPath)}, "clean");`,
         "    process.exit(0);",
-        "  }, 75);",
+        "  }, 25);",
         "});",
         `fs.writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
         "setInterval(() => {}, 1000);",
@@ -936,8 +1058,8 @@ describe("scripts/test-group-report child process guard", () => {
       const runPromise = spawnText(process.execPath, ["--eval", parentScript], {
         cwd: process.cwd(),
         env: process.env,
-        killGraceMs: 1_000,
-        timeoutMs: 1_000,
+        killGraceMs: 250,
+        timeoutMs: 250,
       });
 
       await waitForFile(readyPath, 2_000);
@@ -950,7 +1072,7 @@ describe("scripts/test-group-report child process guard", () => {
         timedOut: true,
       });
       expect(fs.readFileSync(cleanupPath, "utf8")).toBe("clean");
-      expect(Date.now() - startedAt).toBeLessThan(1_700);
+      expect(Date.now() - startedAt).toBeLessThan(900);
       await waitForDead(childPid, 2_000);
     } finally {
       if (childPid !== undefined && isProcessAlive(childPid)) {
@@ -1057,6 +1179,25 @@ describe("scripts/test-group-report child process guard", () => {
 });
 
 describe("scripts/test-group-report run plans", () => {
+  it("isolates full-suite duration reports by default", () => {
+    expect(resolveReportVitestArgs(parseTestGroupReportArgs(["--full-suite"]))).toEqual([
+      "--isolate=true",
+    ]);
+    expect(
+      resolveReportVitestArgs(parseTestGroupReportArgs(["--full-suite", "--", "--maxWorkers=1"])),
+    ).toEqual(["--maxWorkers=1", "--isolate=true"]);
+  });
+
+  it("preserves explicit full-suite isolation choices and explicit-config defaults", () => {
+    expect(
+      resolveReportVitestArgs(parseTestGroupReportArgs(["--full-suite", "--", "--no-isolate"])),
+    ).toEqual(["--no-isolate"]);
+    expect(
+      resolveReportVitestArgs(parseTestGroupReportArgs(["--full-suite", "--", "--isolate=false"])),
+    ).toEqual(["--isolate=false"]);
+    expect(resolveReportVitestArgs(parseTestGroupReportArgs(["--config", "a.ts"]))).toEqual([]);
+  });
+
   it("caps Vitest workers for full-suite profiling by default", () => {
     expect(resolveFullSuiteVitestEnv(parseTestGroupReportArgs(["--full-suite"]), {})).toEqual({
       OPENCLAW_VITEST_MAX_WORKERS: "2",
@@ -1113,6 +1254,7 @@ describe("scripts/test-group-report run plans", () => {
       path.join("/repo", "node_modules", ".experimental-vitest-cache", "0-a.ts"),
       path.join("/repo", "node_modules", ".experimental-vitest-cache", "1-b.ts"),
     ]);
+    expect(specs.map((spec) => spec.vitestArgs)).toEqual([[], []]);
   });
 
   it("uses leaf configs for full-suite profiling without requiring parallel env", () => {

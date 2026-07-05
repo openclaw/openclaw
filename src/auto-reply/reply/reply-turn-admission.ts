@@ -69,12 +69,21 @@ export async function admitReplyTurn(params: {
   waitForActive?: boolean;
   retainLifecycleAdmissionOnActive?: boolean;
   onLifecycleInterrupt?: () => void;
+  onFollowupAdmissionWaitChange?: (waiting: boolean) => void;
 }): Promise<ReplyTurnAdmission> {
   let sessionId = params.sessionId;
   let expectedSessionId = params.expectedSessionId;
   const waitTimeoutMs =
     params.waitTimeoutMs ??
     (params.kind === "queued_followup" ? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS : undefined);
+  const waitForFollowupAdmission = async <T>(wait: () => Promise<T>): Promise<T> => {
+    params.onFollowupAdmissionWaitChange?.(true);
+    try {
+      return await wait();
+    } finally {
+      params.onFollowupAdmissionWaitChange?.(false);
+    }
+  };
   while (true) {
     if (isAbortSignalAborted(params.upstreamAbortSignal)) {
       return { status: "skipped", reason: "aborted" };
@@ -214,10 +223,12 @@ export async function admitReplyTurn(params: {
         if (params.kind === "heartbeat") {
           return { status: "skipped", reason: "active-run" };
         }
-        const followupAdmission = await waitForReplyRunFollowupAdmission(
-          params.sessionKey,
-          waitTimeoutMs ?? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-          { signal: params.upstreamAbortSignal },
+        const followupAdmission = await waitForFollowupAdmission(() =>
+          waitForReplyRunFollowupAdmission(
+            params.sessionKey,
+            waitTimeoutMs ?? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+            { signal: params.upstreamAbortSignal },
+          ),
         );
         if (!followupAdmission.settled) {
           return {

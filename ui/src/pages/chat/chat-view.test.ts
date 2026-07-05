@@ -1961,6 +1961,92 @@ describe("chat composer IME composition", () => {
   });
 });
 
+describe("chat composer sizing", () => {
+  it("sizes restored drafts after the rendered value is committed", async () => {
+    const container = renderChatView({ draft: "A restored long draft" });
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    ) as HTMLTextAreaElement;
+    Object.defineProperties(textarea, {
+      scrollHeight: { configurable: true, value: 180 },
+      clientHeight: { configurable: true, value: 150 },
+    });
+    document.body.append(container);
+
+    await Promise.resolve();
+
+    expect(textarea.style.height).toBe("150px");
+    expect(textarea.style.overflowY).toBe("auto");
+    container.remove();
+  });
+
+  it("shows the textarea scrollbar only when the draft overflows", () => {
+    const container = renderChatView({});
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    ) as HTMLTextAreaElement;
+    let scrollHeight = 42;
+    let clientHeight = 42;
+    Object.defineProperties(textarea, {
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+      clientHeight: { configurable: true, get: () => clientHeight },
+    });
+
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+
+    expect(textarea.style.height).toBe("42px");
+    expect(textarea.style.overflowY).toBe("hidden");
+
+    scrollHeight = 180;
+    clientHeight = 150;
+    textarea.value = "A long draft";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+
+    expect(textarea.style.height).toBe("150px");
+    expect(textarea.style.overflowY).toBe("auto");
+  });
+
+  it("rechecks overflow when responsive layout changes the textarea height", () => {
+    let resizeCallback: ResizeObserverCallback | undefined;
+    class TestResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallback = callback;
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+      takeRecords(): ResizeObserverEntry[] {
+        return [];
+      }
+    }
+    vi.stubGlobal("ResizeObserver", TestResizeObserver);
+    const container = renderChatView({});
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    ) as HTMLTextAreaElement;
+    let scrollHeight = 42;
+    let clientHeight = 42;
+    Object.defineProperties(textarea, {
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+      clientHeight: { configurable: true, get: () => clientHeight },
+    });
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    expect(textarea.style.overflowY).toBe("hidden");
+
+    scrollHeight = 120;
+    clientHeight = 56;
+    resizeCallback?.([], {} as ResizeObserver);
+
+    expect(textarea.style.overflowY).toBe("auto");
+  });
+});
+
 describe("chat slash menu accessibility", () => {
   function inputDraft(container: HTMLElement, value: string) {
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");

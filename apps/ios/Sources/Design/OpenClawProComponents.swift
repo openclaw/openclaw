@@ -1,3 +1,4 @@
+import OpenClawChatUI
 import SwiftUI
 
 enum OpenClawProMetric {

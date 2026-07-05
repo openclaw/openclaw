@@ -892,6 +892,7 @@ describe("test-projects args", () => {
         includePatterns: [
           "src/scripts/docs-link-audit.test.ts",
           "src/scripts/sync-plugin-versions.test.ts",
+          "test/e2e/qa-lab/runtime/gateway-mcp-real-transports.test.ts",
           "test/helpers/temp-dir.test.ts",
           "test/scripts/android-pin-version.test.ts",
           "test/scripts/bench-cli-startup.test.ts",
@@ -904,6 +905,7 @@ describe("test-projects args", () => {
           "test/scripts/control-ui-i18n.test.ts",
           "test/scripts/docs-list.test.ts",
           "test/scripts/doctor-install-switch-wrapper.test.ts",
+          "test/scripts/e2e-shell-tempfiles.test.ts",
           "test/scripts/e2e-text-file-utils.test.ts",
           "test/scripts/fixture-common.test.ts",
           "test/scripts/fixture-plugin-commands.test.ts",
@@ -914,6 +916,7 @@ describe("test-projects args", () => {
           "test/scripts/kitchen-sink-rpc-walk.test.ts",
           "test/scripts/native-app-i18n.test.ts",
           "test/scripts/onboard-config-fixtures.test.ts",
+          "test/scripts/package-git-fixture.test.ts",
           "test/scripts/parallels-lib-helpers.test.ts",
           "test/scripts/parallels-package-log-progress-extract.test.ts",
           "test/scripts/parallels-smoke-model.test.ts",

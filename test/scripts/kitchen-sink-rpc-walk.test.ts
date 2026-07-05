@@ -70,6 +70,7 @@ import {
   resolveWindowsSystem32Path,
   resolveWindowsTaskkillPath,
 } from "../../scripts/lib/windows-taskkill.mjs";
+import { formatGatewayClientRequestErrorJson } from "../../src/gateway/call.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
@@ -1144,6 +1145,10 @@ await runCommand(process.execPath, [${JSON.stringify(scriptPath)}], {
     try {
       runner = spawn(process.execPath, [runnerPath], {
         cwd: process.cwd(),
+        env: {
+          ...process.env,
+          OPENCLAW_TEST_KITCHEN_SINK_PARENT_SIGNAL_KILL_GRACE_MS: "100",
+        },
         stdio: ["ignore", "ignore", "pipe"],
       });
       await waitFor(() => existsSync(readyPath) && existsSync(grandchildPidPath));
@@ -1380,7 +1385,6 @@ describe("kitchen-sink RPC command catalog assertions", () => {
   });
 
   it("reconstructs typed request failures from gateway CLI JSON", async () => {
-    const { formatGatewayClientRequestErrorJson } = await import("../../src/gateway/call.js");
     const payload = formatGatewayClientRequestErrorJson(
       Object.assign(new Error("unauthorized role: operator"), {
         name: "GatewayClientRequestError",

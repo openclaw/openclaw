@@ -435,6 +435,8 @@ describe("config cli", () => {
   useHermeticOpenclawEnv();
   beforeAll(async () => {
     ({ registerConfigCli } = await import("./config-cli.js"));
+    const { resolveConfigSecretTargetByPath } = await import("../secrets/target-registry.js");
+    resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
     sharedProgram = new Command();
     sharedProgram.exitOverride();
     registerConfigCli(sharedProgram);

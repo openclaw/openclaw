@@ -76,7 +76,6 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
     onUserAvatarChange: vi.fn(),
     configObject: {},
     onSelectPreset: vi.fn(),
-    onAdvancedSettings: vi.fn(),
     connected: true,
     gatewayUrl: "ws://localhost:18789",
     assistantName: "OpenClaw",
@@ -127,11 +126,10 @@ describe("renderQuickSettings", () => {
       "qs-card--model",
       "qs-card--channels",
       "qs-card--security",
-      "qs-card--personal",
       "qs-card--appearance",
+      "qs-card--personal",
       "qs-card--automations",
     ]);
-    expect(container.querySelectorAll(".qs-side-stack .qs-card")).toHaveLength(2);
     expect(container.querySelectorAll(".qs-card--span-all")).toHaveLength(1);
   });
 
@@ -140,13 +138,9 @@ describe("renderQuickSettings", () => {
 
     render(renderQuickSettings(createProps({ configObject: {} })), container);
 
-    const stat = Array.from(container.querySelectorAll<HTMLElement>(".qs-profile-stat")).find(
-      (candidate) =>
-        candidate.querySelector(".qs-profile-stat__label")?.textContent?.trim() ===
-        "Bootstrap Per File",
-    );
-    expect(stat?.querySelector(".qs-profile-stat__value")?.textContent?.trim()).toBe(
-      "20,000 chars",
+    const summary = container.querySelector(".qs-profiles__summary-values");
+    expect(summary?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "20,000 chars per file · 60,000 chars total · Every turn",
     );
   });
 

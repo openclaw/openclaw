@@ -192,6 +192,7 @@ async function collectConfiguredChannelStartupWarnings(params: {
     params.cfg,
     process.env,
     params.activationSourceConfig,
+    { manifestRecords: manifestRegistry.plugins },
   );
   const blockerWarnings = blockerModule
     .collectConfiguredChannelPluginBlockerWarnings(hits)

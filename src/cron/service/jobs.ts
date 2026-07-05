@@ -963,12 +963,17 @@ function applyAgentTurnToolsAllowPatch(
 ): void {
   if (Array.isArray(patch.toolsAllow)) {
     payload.toolsAllow = patch.toolsAllow;
-    // Same-kind edits keep the marker only when the default list is unchanged;
-    // kind replacements carry the cron-tool-stamped marker into persistence.
-    if (
-      patch.toolsAllowIsDefault === true &&
-      (!existing || (existing.toolsAllowIsDefault === true && toolsAllowEqual(existing, patch)))
-    ) {
+    // Same-kind edits keep the marker whenever the default-stamped list is
+    // unchanged — even when the patch omits toolsAllowIsDefault, because the
+    // cron tool's model-facing schema never sends it. Dropping the marker on an
+    // echoed list silently reclassifies "default" as an explicit restriction,
+    // which fail-closes the next run on CLI backends that cannot enforce
+    // runtime toolsAllow. Kind replacements (no existing payload) still require
+    // the cron-tool-stamped marker on the patch itself.
+    const keepDefaultMarker = existing
+      ? existing.toolsAllowIsDefault === true && toolsAllowEqual(existing, patch)
+      : patch.toolsAllowIsDefault === true;
+    if (keepDefaultMarker) {
       payload.toolsAllowIsDefault = true;
     } else {
       delete payload.toolsAllowIsDefault;

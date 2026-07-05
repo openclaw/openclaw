@@ -1,6 +1,6 @@
-// Keep the runtime class on the package specifier so built agent-core shares
-// constructor identity with @openclaw/llm-core; source types keep SDK d.ts bundled.
-import { EventStream as LlmEventStream } from "@openclaw/llm-core";
+// Keep the runtime class on the public package specifier so OpenClaw and
+// external consumers share one constructor identity.
+import { EventStream as LlmEventStream } from "@openclaw/ai/event-stream";
 import type {
   AssistantMessage,
   AssistantMessageEvent,

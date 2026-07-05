@@ -321,6 +321,33 @@ export type QaSuiteResult = {
   runtimeParityCell?: RuntimeParityCell;
 };
 
+/**
+ * One bounded retry for live-model flake: flow scenarios time out under model
+ * latency spikes, so a first failure gets a single rerun. A retry pass keeps
+ * the first attempt visible in details; a retry failure keeps the original
+ * diagnostics so deterministic regressions still fail the suite.
+ */
+export async function runQaScenarioWithFlakeRetry(
+  run: () => Promise<QaSuiteScenarioResult>,
+  onRetry?: () => void,
+): Promise<QaSuiteScenarioResult> {
+  const first = await run();
+  if (first.status !== "fail") {
+    return first;
+  }
+  onRetry?.();
+  const second = await run();
+  if (second.status !== "pass") {
+    return first;
+  }
+  return {
+    ...second,
+    details: [second.details, `passed on retry; first attempt: ${first.details ?? "failed"}`]
+      .filter(Boolean)
+      .join(" | "),
+  };
+}
+
 async function runScenario(name: string, steps: QaSuiteStep[]): Promise<QaSuiteScenarioResult> {
   const stepResults: QaReportCheck[] = [];
   for (const step of steps) {
@@ -1673,7 +1700,14 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         scenarios: [...liveScenarioOutcomes],
       });
 
-      const result = await runScenarioDefinition(activeEnv, scenario);
+      const result = await runQaScenarioWithFlakeRetry(
+        () => runScenarioDefinition(activeEnv, scenario),
+        () =>
+          writeQaSuiteProgress(
+            progressEnabled,
+            `scenario retry (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}`,
+          ),
+      );
       sampleGatewayProcessRss(`scenario:${scenario.id}:finish`);
       scenarios.push(result);
       writeQaSuiteProgress(

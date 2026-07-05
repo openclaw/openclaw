@@ -145,6 +145,8 @@ protocol WatchMessagingServicing: AnyObject, Sendable {
         _ message: OpenClawWatchExecApprovalSnapshotMessage) async throws -> WatchNotificationSendResult
     func syncAppSnapshot(
         _ message: OpenClawWatchAppSnapshotMessage) async throws -> WatchNotificationSendResult
+    func sendChatCompletion(
+        _ message: OpenClawWatchChatCompletionMessage) async throws -> WatchNotificationSendResult
 }
 
 extension CameraController: CameraServicing {}

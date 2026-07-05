@@ -131,6 +131,12 @@ export type RunCliAgentParams = {
   approvalReviewerDeviceId?: string;
   /** Runtime tool allow-list. CLI harnesses fail closed when this is set. */
   toolsAllow?: string[];
+  /**
+   * Ring-zero Crestodian tool served over a dedicated stdio MCP server; set
+   * only by the Crestodian agent runner. Replaces the normal bundle MCP
+   * surface for the run — the harness still owns its native tools.
+   */
+  crestodianTool?: import("../tools/crestodian-tool.js").CrestodianToolOptions;
   disableTools?: boolean;
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
