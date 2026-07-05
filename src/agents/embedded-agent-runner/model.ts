@@ -113,6 +113,8 @@ const STATIC_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   normalizeProviderTransportWithPlugin: () => undefined,
 };
 
+const LEGACY_OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+
 const SKIP_AGENT_DISCOVERY_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   // skipAgentDiscovery is the lean path used before agent discovery/models.json has run.
   ...TARGET_PROVIDER_RUNTIME_HOOKS,
@@ -1928,6 +1930,9 @@ function buildMissingProviderModelRegistrationHint(params: {
   const agentRuntimeId = configuredEntry.agentRuntime?.id;
   if (agentRuntimeId) {
     return `Found agents.defaults.models["${agentModelKey}"] bound to the "${agentRuntimeId}" agent runtime. Models served by an agent runtime come from that runtime and its linked account, not from models.providers["${params.provider}"].models[] — registering it there will not make it usable. Confirm "${params.modelId}" is still offered by the "${agentRuntimeId}" runtime and switch agents.defaults.model.primary to a currently available model (run \`openclaw models list --provider ${params.provider}\` to list them). See https://docs.openclaw.ai/concepts/model-providers.`;
+  }
+  if (normalizeProviderId(params.provider) === LEGACY_OPENAI_CODEX_PROVIDER_ID) {
+    return `Found agents.defaults.models["${agentModelKey}"], but "${params.provider}" is a legacy Codex provider id. Do not add models.providers["${params.provider}"] without baseUrl; current config validation rejects that legacy provider overlay. Run \`openclaw doctor --fix\`, then check \`openclaw models status\` and re-authenticate with \`openclaw models auth login --provider openai\` if no OpenAI/Codex OAuth profile is available. Use the repaired openai/${params.modelId} route with Codex runtime metadata. See https://docs.openclaw.ai/concepts/model-providers.`;
   }
   const providerConfig = findNormalizedProviderValue(
     params.cfg?.models?.providers,

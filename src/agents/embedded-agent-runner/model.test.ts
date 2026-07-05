@@ -2855,6 +2855,30 @@ describe("resolveModel", () => {
     );
   });
 
+  it("points legacy openai-codex configured models at migration and auth recovery", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai-codex/gpt-5.4": {
+              contextWindow: 1_050_000,
+              maxOutputTokens: 128_000,
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await resolveModelAsync("openai-codex", "gpt-5.4", "/tmp/agent", cfg, {
+      runtimeHooks: createRuntimeHooks(),
+      skipAgentDiscovery: true,
+    });
+
+    expect(result.error).toBe(
+      'Unknown model: openai-codex/gpt-5.4. Found agents.defaults.models["openai-codex/gpt-5.4"], but "openai-codex" is a legacy Codex provider id. Do not add models.providers["openai-codex"] without baseUrl; current config validation rejects that legacy provider overlay. Run `openclaw doctor --fix`, then check `openclaw models status` and re-authenticate with `openclaw models auth login --provider openai` if no OpenAI/Codex OAuth profile is available. Use the repaired openai/gpt-5.4 route with Codex runtime metadata. See https://docs.openclaw.ai/concepts/model-providers.',
+    );
+  });
+
   it("repairs stale text-only Foundry fallback rows for GPT-family models", () => {
     const cfg = {
       models: {
