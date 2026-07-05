@@ -88,6 +88,7 @@ type BonjourAdvertiserDeps = {
 };
 
 const WATCHDOG_INTERVAL_MS = 5_000;
+const ADVERTISE_DRAIN_TIMEOUT_MS = 250;
 const REPAIR_DEBOUNCE_MS = 30_000;
 const CONFLICT_SETTLE_MS = 30_000;
 // Real-world LAN announce phase typically takes 12-13s on Mac/iOS networks. The
@@ -114,6 +115,8 @@ const defaultLogger = {
 
 const CIAO_MODULE_ID = "@homebridge/ciao";
 const CIAO_WINDOWS_SHELL_COMMANDS = new Set(['arp -a | findstr /C:"---"']);
+const nativeSetTimeout = globalThis.setTimeout;
+const nativeClearTimeout = globalThis.clearTimeout;
 let ciaoExecHidePatchDepth = 0;
 let restoreCiaoExecHidePatchOnce: (() => void) | null = null;
 
@@ -551,6 +554,9 @@ export async function startGatewayBonjourAdvertiser(
       err: unknown,
       action: "failed" | "threw",
     ) {
+      if (stopped) {
+        return;
+      }
       const classification = classifyCiaoProcessError(err);
       if (classification) {
         logger.warn(
@@ -567,17 +573,47 @@ export async function startGatewayBonjourAdvertiser(
       );
     }
 
+    async function drainAdvertiseTasks() {
+      while (advertiseTasks.size > 0) {
+        const tasks = Array.from(advertiseTasks);
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        const settled = await Promise.race([
+          Promise.allSettled(tasks).then(() => true),
+          new Promise<boolean>((resolve) => {
+            timeout = nativeSetTimeout(() => resolve(false), ADVERTISE_DRAIN_TIMEOUT_MS);
+            timeout.unref?.();
+          }),
+        ]);
+        if (timeout) {
+          nativeClearTimeout(timeout);
+        }
+        if (!settled) {
+          break;
+        }
+      }
+    }
+
+    function trackAdvertiseTask(task: Promise<void>) {
+      advertiseTasks.add(task);
+      void task.finally(() => {
+        advertiseTasks.delete(task);
+      });
+    }
+
     function startAdvertising(services: Array<{ label: string; svc: BonjourService }>) {
       for (const { label, svc } of services) {
         try {
-          void svc
+          const task = svc
             .advertise()
             .then(() => {
-              logger.info(`bonjour: advertised ${serviceSummary(label, svc)}`);
+              if (!stopped) {
+                logger.info(`bonjour: advertised ${serviceSummary(label, svc)}`);
+              }
             })
             .catch((err: unknown) => {
               handleAdvertiseFailure(label, svc, err, "failed");
             });
+          trackAdvertiseTask(task);
         } catch (err) {
           handleAdvertiseFailure(label, svc, err, "threw");
         }
@@ -593,6 +629,7 @@ export async function startGatewayBonjourAdvertiser(
     let stopped = false;
     let recreatePromise: Promise<void> | null = null;
     let disabled = false;
+    const advertiseTasks = new Set<Promise<void>>();
     let consecutiveRestarts = 0;
     let consecutiveStuckStateRestarts = 0;
     const restartTimestamps: number[] = [];
@@ -751,15 +788,20 @@ export async function startGatewayBonjourAdvertiser(
           )})`,
         );
         try {
-          void svc.advertise().catch((err: unknown) => {
-            logger.warn(
-              `bonjour: watchdog re-advertise failed (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
-            );
+          const task = svc.advertise().catch((err: unknown) => {
+            if (!stopped) {
+              logger.warn(
+                `bonjour: watchdog re-advertise failed (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
+              );
+            }
           });
+          trackAdvertiseTask(task);
         } catch (err) {
-          logger.warn(
-            `bonjour: watchdog re-advertise threw (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
-          );
+          if (!stopped) {
+            logger.warn(
+              `bonjour: watchdog re-advertise threw (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
+            );
+          }
         }
       }
     }, WATCHDOG_INTERVAL_MS);
@@ -775,6 +817,7 @@ export async function startGatewayBonjourAdvertiser(
           // ignore
         }
         await stopCycle(cycle, { shutdownResponder: true });
+        await drainAdvertiseTasks();
         restoreConsoleLog();
         restoreCiaoExecHidePatch();
         cleanupProcessHandlers();

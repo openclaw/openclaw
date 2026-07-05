@@ -141,16 +141,45 @@ describe("gateway bonjour advertiser", () => {
     txt?: unknown;
   };
 
-  const prevEnv = { ...process.env };
+  const prevEnv = {
+    FLY_APP_NAME: process.env.FLY_APP_NAME,
+    FLY_MACHINE_ID: process.env.FLY_MACHINE_ID,
+    NODE_ENV: process.env.NODE_ENV,
+    OPENCLAW_DISABLE_BONJOUR: process.env.OPENCLAW_DISABLE_BONJOUR,
+    OPENCLAW_MDNS_HOSTNAME: process.env.OPENCLAW_MDNS_HOSTNAME,
+    VITEST: process.env.VITEST,
+  };
 
   afterEach(() => {
-    for (const key of Object.keys(process.env)) {
-      if (!(key in prevEnv)) {
-        delete process.env[key];
-      }
+    if (prevEnv.FLY_APP_NAME === undefined) {
+      delete process.env.FLY_APP_NAME;
+    } else {
+      process.env.FLY_APP_NAME = prevEnv.FLY_APP_NAME;
     }
-    for (const [key, value] of Object.entries(prevEnv)) {
-      process.env[key] = value;
+    if (prevEnv.FLY_MACHINE_ID === undefined) {
+      delete process.env.FLY_MACHINE_ID;
+    } else {
+      process.env.FLY_MACHINE_ID = prevEnv.FLY_MACHINE_ID;
+    }
+    if (prevEnv.NODE_ENV === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = prevEnv.NODE_ENV;
+    }
+    if (prevEnv.OPENCLAW_DISABLE_BONJOUR === undefined) {
+      delete process.env.OPENCLAW_DISABLE_BONJOUR;
+    } else {
+      process.env.OPENCLAW_DISABLE_BONJOUR = prevEnv.OPENCLAW_DISABLE_BONJOUR;
+    }
+    if (prevEnv.OPENCLAW_MDNS_HOSTNAME === undefined) {
+      delete process.env.OPENCLAW_MDNS_HOSTNAME;
+    } else {
+      process.env.OPENCLAW_MDNS_HOSTNAME = prevEnv.OPENCLAW_MDNS_HOSTNAME;
+    }
+    if (prevEnv.VITEST === undefined) {
+      delete process.env.VITEST;
+    } else {
+      process.env.VITEST = prevEnv.VITEST;
     }
 
     createService.mockClear();
@@ -215,6 +244,41 @@ describe("gateway bonjour advertiser", () => {
     await started.stop();
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(shutdown).toHaveBeenCalledTimes(1);
+  });
+
+  it("drains in-flight advertise work during stop without late success logs", async () => {
+    enableAdvertiserUnitMode();
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    let resolveAdvertise = () => {};
+    const advertise = vi.fn().mockImplementation(
+      async () =>
+        await new Promise<void>((resolve) => {
+          resolveAdvertise = resolve;
+        }),
+    );
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    let stopSettled = false;
+    const stopPromise = started.stop().then(() => {
+      stopSettled = true;
+    });
+    await Promise.resolve();
+
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(stopSettled).toBe(false);
+    expect(logger.info).not.toHaveBeenCalledWith(expect.stringContaining("advertised"));
+
+    resolveAdvertise();
+    await stopPromise;
+
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(logger.info).not.toHaveBeenCalledWith(expect.stringContaining("advertised"));
   });
 
   it("omits cliPath and sshPort in minimal mode", async () => {
