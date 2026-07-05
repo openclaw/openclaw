@@ -374,6 +374,9 @@ private func runWizard(client: GatewayWizardClient, opts: WizardCliOptions) asyn
                 print("Wizard complete.")
                 return
             }
+            if let error = nextResult.error, !opts.json {
+                fputs("wizard: \(error)\n", stderr)
+            }
 
             if let step = nextResult.step {
                 let answer = try promptAnswer(for: step)

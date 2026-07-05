@@ -306,6 +306,7 @@ describe("sendMessage", () => {
 
     const deliveryParams = expectDeliveryCallFields({
       queuePolicy: "required",
+      requireUnknownSendReconciliation: true,
       mediaAccess,
     });
     expectRecordFields(

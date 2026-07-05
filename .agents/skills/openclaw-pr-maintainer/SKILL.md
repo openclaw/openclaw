@@ -279,12 +279,32 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
 
 ## Follow PR review and landing hygiene
 
+- At the start of code-changing or landing work that will need tests or heavy
+  proof, classify source trust and pre-warm the safe backend through `$crabbox`
+  in the background. Trusted maintainer code defaults to Blacksmith Testbox;
+  contributor/fork code stays untrusted unless a maintainer explicitly approves
+  credentialed execution after review; it uses secretless fork CI or
+  sanitized direct AWS Crabbox with `CRABBOX_ENV_ALLOW=CI`,
+  `--no-hydrate`, and a fresh temporary remote `HOME`, never the
+  credential-hydrated Testbox workflow or a previously hydrated lease. Launch
+  an installed trusted Crabbox binary from clean trusted `main`, fetch the PR
+  with `--fresh-pr`, unset and reject any resolved AWS instance profile, verify
+  trusted IMDS reports no IAM credentials, bind the lease to the reviewed head
+  SHA, and never execute its local wrapper or config. Upload trusted
+  `scripts/crabbox-untrusted-bootstrap.sh` from clean `main` alongside
+  `--fresh-pr`; it installs the pinned Node/pnpm runtime before executing PR
+  code. Force public networking, disable and
+  unset inherited Tailscale/exit-node settings, and fail closed unless
+  `crabbox inspect` reports no Tailscale state before any script. Rewarm after
+  any head change. Continue
+  review/editing while it hydrates, sync every run, reuse the lease, then stop
+  it before handoff. Skip warmup for read-only triage and docs-only work.
 - Never mention release-note bookkeeping in review-only output. It is landing
   or release-generation mechanics, not a correctness finding.
 - If bot review conversations exist on your PR, address them and resolve them yourself once fixed.
 - Leave a review conversation unresolved only when reviewer or maintainer judgment is still needed.
 - Before landing any PR with non-trivial code changes, run `$autoreview` until no accepted/actionable findings remain, unless equivalent manual review already covered it, the change is trivial/docs-only, or the user opts out.
-- When an agent is landing or merging a PR targeting `main`, use only the repo-native `scripts/pr` wrapper: run `scripts/pr review-init <PR>`, follow its emitted checkout/guard guidance, initialize and complete review artifacts with `scripts/pr review-artifacts-init <PR>`, validate them with `scripts/pr review-validate-artifacts <PR>`, then run `scripts/pr prepare-run <PR>` and `scripts/pr merge-run <PR>`.
+- When an agent is landing or merging a PR targeting `main`, use only the repo-native `scripts/pr` wrapper: run `scripts/pr review-init <PR>`, follow its emitted checkout/guard guidance, initialize and complete review artifacts with `scripts/pr review-artifacts-init <PR>`, validate them with `scripts/pr review-validate-artifacts <PR>`, then run `OPENCLAW_TESTBOX=1 scripts/pr prepare-run <PR>` and `scripts/pr merge-run <PR>`. The Testbox flag is mandatory for agents: it verifies exact-head hosted CI/Testbox instead of running full `pnpm` gates locally.
 - Use `scripts/committer "<msg>" <file...>` for scoped commits instead of manual `git add` and `git commit`.
 - Keep commit messages concise and action-oriented.
 - Group related changes; avoid bundling unrelated refactors.

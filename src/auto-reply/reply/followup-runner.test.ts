@@ -734,6 +734,50 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(call.sessionFile).toBe("/tmp/post-compact.jsonl");
   });
 
+  it("marks only the delivery-dependent follow-up admission wait", async () => {
+    const waitChanges: boolean[] = [];
+    const active = createReplyOperationForTest({
+      sessionKey: "main",
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    let releaseBarrier = () => {};
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    const pending = runner(
+      createQueuedRun({
+        onFollowupAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
+        run: {
+          sessionId: "queued-session",
+          sessionKey: "main",
+          provider: "anthropic",
+          model: "claude",
+        },
+      }),
+    );
+    await Promise.resolve();
+    expect(waitChanges).toEqual([]);
+
+    active.completeWithAfterClearBarrier(barrier);
+    await vi.waitFor(() => {
+      expect(waitChanges).toEqual([true]);
+    });
+
+    releaseBarrier();
+    await pending;
+    expect(waitChanges).toEqual([true, false]);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
   it("uses an admission session hint while refreshing the queued session file", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
