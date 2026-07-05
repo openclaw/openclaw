@@ -17,6 +17,17 @@ import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { AgentRunTimeoutPhase } from "../run-timeout-attribution.js";
 import type { ContextUsage } from "../usage.js";
 
+export type BlockReplyFlushContext =
+  | {
+      /** Boundary that requested the flush. */
+      reason: "tool_start" | "message_end" | "terminal";
+    }
+  | {
+      /** Pre-compaction delivery is safe only for a completed assistant attempt. */
+      reason: "pre_compaction";
+      attemptAccepted: boolean;
+    };
+
 export type EmbeddedAgentMeta = {
   sessionId: string;
   sessionFile?: string;

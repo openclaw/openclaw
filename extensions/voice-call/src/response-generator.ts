@@ -31,10 +31,14 @@ export type VoiceResponseParams = {
   transcript: Array<{ speaker: "user" | "bot"; text: string }>;
   /** Latest user message */
   userMessage: string;
+  /** Delivers completed reply blocks while post-turn work is still running. */
+  onEarlyText?: (text: string) => Promise<boolean>;
 };
 
 export type VoiceResponseResult = {
   text: string | null;
+  /** Whether the complete response was handed to the transport before compaction. */
+  deliveredEarly: boolean;
   error?: string;
 };
 
@@ -198,6 +202,18 @@ function extractSpokenTextFromPayloads(payloads: VoiceResponsePayload[]): string
   return spokenSegments.length > 0 ? spokenSegments.join(" ").trim() : null;
 }
 
+async function deliverEarlyText(
+  callback: (text: string) => Promise<boolean>,
+  text: string,
+): Promise<boolean> {
+  try {
+    return await callback(text);
+  } catch (error) {
+    console.error("[voice-call] Early TTS delivery failed:", error);
+    return false;
+  }
+}
+
 function resolveVoiceSandboxSessionKey(agentId: string, sessionKey: string): string {
   const trimmed = sessionKey.trim();
   if (trimmed.toLowerCase().startsWith("agent:")) {
@@ -222,10 +238,15 @@ export async function generateVoiceResponse(
     userMessage,
     coreConfig,
     agentRuntime,
+    onEarlyText,
   } = params;
 
   if (!coreConfig) {
-    return { text: null, error: "Core config unavailable for voice response" };
+    return {
+      text: null,
+      deliveredEarly: false,
+      error: "Core config unavailable for voice response",
+    };
   }
   const cfg = coreConfig;
 
@@ -292,7 +313,11 @@ export async function generateVoiceResponse(
             })) ?? undefined;
         }
         if (!sessionEntry?.sessionId) {
-          return { text: null, error: "Voice response session could not be initialized" };
+          return {
+            text: null,
+            deliveredEarly: false,
+            error: "Voice response session could not be initialized",
+          };
         }
         const sessionId = sessionEntry.sessionId;
 
@@ -322,6 +347,11 @@ export async function generateVoiceResponse(
           voiceConfig.responseTimeoutMs ?? agentRuntime.resolveAgentTimeoutMs({ cfg });
         const runId = `voice:${callId}:${Date.now()}`;
 
+        const blockReplyPayloads: VoiceResponsePayload[] = [];
+        let blockReplyMessageIndex: number | undefined;
+        let deliveredEarly = false;
+        let lastFlushedText: string | null = null;
+
         const result = await agentRuntime.runEmbeddedAgent({
           sessionId,
           sessionKey: resolvedSessionKey,
@@ -348,21 +378,59 @@ export async function generateVoiceResponse(
           agentDir,
           toolsAllow,
           abortSignal,
+          blockReplyBreak: "text_end",
+          onBlockReply: (payload, context) => {
+            const messageIndex = context?.assistantMessageIndex;
+            if (
+              messageIndex !== undefined &&
+              (blockReplyMessageIndex === undefined || messageIndex > blockReplyMessageIndex)
+            ) {
+              blockReplyPayloads.length = 0;
+              blockReplyMessageIndex = messageIndex;
+            }
+            if (
+              messageIndex !== undefined &&
+              blockReplyMessageIndex !== undefined &&
+              messageIndex < blockReplyMessageIndex
+            ) {
+              return;
+            }
+            blockReplyPayloads.push(payload);
+          },
+          onBlockReplyFlush: async (context) => {
+            if (context.reason !== "pre_compaction") {
+              return;
+            }
+            const pendingPayloads = blockReplyPayloads.splice(0);
+            blockReplyMessageIndex = undefined;
+            if (!context.attemptAccepted) {
+              return;
+            }
+            // Call-control APIs acknowledge a playback request, not playback
+            // completion. Never let a later retry flush replace in-flight audio.
+            if (deliveredEarly || !onEarlyText) {
+              return;
+            }
+            const text = extractSpokenTextFromPayloads(pendingPayloads);
+            lastFlushedText = text;
+            deliveredEarly = Boolean(text) && (await deliverEarlyText(onEarlyText, text));
+          },
         });
 
-        const text = extractSpokenTextFromPayloads(
-          (result.payloads ?? []) as VoiceResponsePayload[],
-        );
+        const text =
+          extractSpokenTextFromPayloads((result.payloads ?? []) as VoiceResponsePayload[]) ??
+          lastFlushedText ??
+          extractSpokenTextFromPayloads(blockReplyPayloads);
 
         if (!text && result.meta?.aborted) {
-          return { text: null, error: "Response generation was aborted" };
+          return { text: null, deliveredEarly: false, error: "Response generation was aborted" };
         }
 
-        return { text };
+        return { text, deliveredEarly };
       },
     );
   } catch (err) {
     console.error(`[voice-call] Response generation failed:`, err);
-    return { text: null, error: String(err) };
+    return { text: null, deliveredEarly: false, error: String(err) };
   }
 }
