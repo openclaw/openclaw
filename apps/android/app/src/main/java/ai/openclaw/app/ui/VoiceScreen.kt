@@ -632,7 +632,11 @@ private fun VoiceHero(
       speaking = talkModeSpeaking,
     )
 
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+    ) {
       Box(
         modifier =
           Modifier
@@ -653,7 +657,10 @@ private fun VoiceHero(
           },
         style = ClawTheme.type.body,
         color = ClawTheme.colors.textMuted,
+        modifier = Modifier.weight(1f, fill = false),
         textAlign = TextAlign.Center,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
       )
     }
 
@@ -757,8 +764,20 @@ private fun VoiceModeRow(
         }
       }
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(text = title, style = ClawTheme.type.body, color = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textMuted, maxLines = 1)
-        Text(text = subtitle, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+        Text(
+          text = title,
+          style = ClawTheme.type.body,
+          color = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textMuted,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+          text = subtitle,
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
       }
       if (enabled) {
         Icon(
@@ -811,12 +830,19 @@ private fun VoiceProviderCard(
         }
       }
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(text = "Voice setup", style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
+        Text(
+          text = "Voice setup",
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.text,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
         Text(
           text = voiceAttentionStatus ?: voiceSetupSummary(gatewayStatus, talkSetupReadiness),
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.textMuted,
           maxLines = 2,
+          overflow = TextOverflow.Ellipsis,
         )
       }
       Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {

@@ -19,7 +19,11 @@ import {
   scanPolicyIngress,
   scanPolicyMcpServers,
 } from "../policy-state.js";
-import { registerPolicyDoctorChecks, resetPolicyDoctorChecksForTest } from "./register.js";
+import {
+  evaluatePolicy,
+  registerPolicyDoctorChecks,
+  resetPolicyDoctorChecksForTest,
+} from "./register.js";
 
 let workspaceDir: string;
 let originalOpenClawHome: string | undefined;
@@ -1408,6 +1412,10 @@ describe("registerPolicyDoctorChecks", () => {
         fixHint: "Telegram is not approved for this workspace.",
       }),
     ]);
+
+    const evaluation = await evaluatePolicy(ctx(configPath, cfg));
+    expect(evaluation.findings[0]).not.toHaveProperty("fixRecommendation");
+    expect(evaluation.attestedFindings[0]).not.toHaveProperty("fixRecommendation");
   });
 
   it("repairs denied enabled channels by disabling them when workspace repairs are enabled", async () => {

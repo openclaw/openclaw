@@ -428,6 +428,35 @@ describeBrowserLayout("chat responsive browser layout", () => {
   });
 
   it.each([
+    [320, 568],
+    [1366, 900],
+    [1440, 1400],
+  ] as const)("keeps the first message clear of the topbar at %sx%s", async (width, height) => {
+    const page = await openFixture(width, height);
+    try {
+      const spacing = await page.evaluate(() => {
+        const thread = document.querySelector<HTMLElement>(".chat-thread");
+        const firstMessage = document.querySelector<HTMLElement>(
+          ".chat-thread-inner > .chat-group",
+        );
+        if (!thread || !firstMessage) {
+          return null;
+        }
+        return {
+          inset: firstMessage.getBoundingClientRect().top - thread.getBoundingClientRect().top,
+          paddingTop: Number.parseFloat(getComputedStyle(thread).paddingTop),
+        };
+      });
+
+      expect(spacing).not.toBeNull();
+      expect(spacing?.paddingTop).toBeGreaterThanOrEqual(20);
+      expect(spacing?.inset).toBeCloseTo(spacing?.paddingTop ?? 0, 0);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it.each([
     [1120, 740],
     [1366, 900],
     [1440, 900],
