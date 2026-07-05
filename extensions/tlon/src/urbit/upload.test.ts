@@ -27,7 +27,7 @@ async function setupSuccessfulUpload(params?: { contentType?: string; uploadedUr
   if (params?.uploadedUrl) {
     mockUploadFile.mockResolvedValue({ url: params.uploadedUrl });
   }
-  return { buffer, contentType };
+  return { buffer };
 }
 
 function requireUploadParams(): { blob?: Blob; contentType?: string; fileName?: string } {
