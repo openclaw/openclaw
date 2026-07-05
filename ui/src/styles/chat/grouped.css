@@ -478,12 +478,6 @@ details.msg-meta:not([open]) .msg-meta__details {
   display: none;
 }
 
-@media (hover: hover) and (pointer: fine) {
-  details.msg-meta:not([open]):hover .msg-meta__details {
-    display: inline-flex;
-  }
-}
-
 .msg-meta__details {
   display: inline-flex;
   align-items: center;

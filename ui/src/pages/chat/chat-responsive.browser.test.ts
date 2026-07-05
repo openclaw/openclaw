@@ -124,32 +124,6 @@ function activityAlignmentHtml() {
   `;
 }
 
-function messageMetaHtml() {
-  return `
-    <div class="chat-group assistant">
-      <div class="chat-avatar assistant">A</div>
-      <div class="chat-group-messages">
-        <div class="chat-bubble"><div class="chat-text">Done.</div></div>
-        <div class="chat-group-footer">
-          <span class="chat-sender-name">Claw</span>
-          <details class="msg-meta">
-            <summary class="msg-meta__summary" aria-label="Message context">
-              <time class="chat-group-timestamp">Jul 5, 2026, 9:51 AM</time>
-            </summary>
-            <span class="msg-meta__details">
-              <span class="msg-meta__tokens">↑19.6k</span>
-              <span class="msg-meta__tokens">↓126</span>
-              <span class="msg-meta__cache">R2.4k</span>
-              <span class="msg-meta__ctx">8% ctx</span>
-              <span class="msg-meta__model">gpt-5.5</span>
-            </span>
-          </details>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
 function chatBubbleActionsHtml() {
   return `
     <div class="chat-bubble-actions">
@@ -562,26 +536,40 @@ describeBrowserLayout("chat responsive browser layout", () => {
   });
 
   it("reveals message context on timestamp hover and keeps click-to-open", async () => {
+    if (!realChatServer) {
+      throw new Error("Expected the Control UI server to be ready");
+    }
     const page = await openBrowserPage(1366, 900);
     try {
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${messageMetaHtml()}</body></html>`,
-      );
+      await installMockGateway(page, {
+        assistantName: "Claw",
+        historyMessages: [
+          {
+            content: [{ text: "Context hover regression fixture.", type: "text" }],
+            model: "openai/gpt-5.5",
+            role: "assistant",
+            timestamp: Date.UTC(2026, 6, 5, 9, 51),
+            usage: { cacheRead: 2_400, input: 19_600, output: 126 },
+          },
+        ],
+      });
+      await page.goto(`${realChatServer.baseUrl}chat`);
+      await page.getByText("Context hover regression fixture.").waitFor({ timeout: 10_000 });
 
       const details = page.locator("details.msg-meta");
       const context = page.locator(".msg-meta__details");
-      const contextDisplay = () => context.evaluate((node) => getComputedStyle(node).display);
-      expect(await contextDisplay()).toBe("none");
+      expect(await context.isVisible()).toBe(false);
 
       await page.locator(".msg-meta__summary").hover();
-      expect(await contextDisplay()).toBe("inline-flex");
+      expect(await context.isVisible()).toBe(true);
 
       await page.mouse.move(0, 0);
-      expect(await contextDisplay()).toBe("none");
+      expect(await context.isVisible()).toBe(false);
 
       await page.locator(".msg-meta__summary").click();
+      await page.mouse.move(0, 0);
       expect(await details.getAttribute("open")).toBe("");
-      expect(await contextDisplay()).toBe("inline-flex");
+      expect(await context.isVisible()).toBe(true);
     } finally {
       await closeBrowserPage(page);
     }

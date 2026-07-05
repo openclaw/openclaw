@@ -871,7 +871,7 @@ describe("grouped chat rendering", () => {
     expect(outputHeavy.querySelector(".msg-meta__ctx")?.textContent).toBe("10% ctx");
   });
 
-  it("toggles message context from the timestamp", () => {
+  it("previews message context from the timestamp and pins it on click", () => {
     const container = document.createElement("div");
     renderAssistantMessage(
       container,
@@ -887,7 +887,17 @@ describe("grouped chat rendering", () => {
 
     const details = container.querySelector<HTMLDetailsElement>("details.msg-meta")!;
     const summary = details.querySelector<HTMLElement>("summary")!;
+    const pointerEnter = new Event("pointerenter");
+    Object.defineProperty(pointerEnter, "pointerType", { value: "mouse" });
+    details.dispatchEvent(pointerEnter);
+    expect(details.open).toBe(true);
+
+    details.dispatchEvent(new Event("pointerleave"));
+    expect(details.open).toBe(false);
+
+    details.dispatchEvent(pointerEnter);
     summary.click();
+    details.dispatchEvent(new Event("pointerleave"));
     expect(details.open).toBe(true);
 
     summary.click();

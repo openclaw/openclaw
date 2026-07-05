@@ -130,6 +130,42 @@ function renderChatTimestamp(timestamp: number, interactive = false) {
   `;
 }
 
+function resolveMessageMetaDetails(target: EventTarget | null): HTMLDetailsElement | null {
+  if (target instanceof HTMLDetailsElement) {
+    return target;
+  }
+  return target instanceof HTMLElement
+    ? target.closest<HTMLDetailsElement>("details.msg-meta")
+    : null;
+}
+
+function previewMessageMeta(event: PointerEvent | FocusEvent) {
+  const details = resolveMessageMetaDetails(event.currentTarget);
+  if (!details || details.open || ("pointerType" in event && event.pointerType === "touch")) {
+    return;
+  }
+  details.dataset.preview = "true";
+  details.open = true;
+}
+
+function closeMessageMetaPreview(event: PointerEvent | FocusEvent) {
+  const details = resolveMessageMetaDetails(event.currentTarget);
+  if (!details || details.dataset.preview !== "true" || details.matches(":hover, :focus-within")) {
+    return;
+  }
+  delete details.dataset.preview;
+  details.open = false;
+}
+
+function pinMessageMetaPreview(event: MouseEvent) {
+  const details = resolveMessageMetaDetails(event.currentTarget);
+  if (details?.dataset.preview !== "true") {
+    return;
+  }
+  event.preventDefault();
+  delete details.dataset.preview;
+}
+
 export function resetAssistantAttachmentAvailabilityCacheForTest() {
   assistantAttachmentAvailabilityCache.clear();
   bumpAssistantAttachmentAvailabilityRenderVersion();
@@ -884,8 +920,18 @@ function renderMessageMeta(timestamp: number, meta: GroupMeta | null) {
   const display = formatChatTimestampForDisplay(timestamp);
 
   return html`
-    <details class="msg-meta">
-      <summary class="msg-meta__summary" aria-label=${`Message context for ${display.title}`}>
+    <details
+      class="msg-meta"
+      @pointerenter=${previewMessageMeta}
+      @pointerleave=${closeMessageMetaPreview}
+      @focusin=${previewMessageMeta}
+      @focusout=${closeMessageMetaPreview}
+    >
+      <summary
+        class="msg-meta__summary"
+        aria-label=${`Message context for ${display.title}`}
+        @click=${pinMessageMetaPreview}
+      >
         ${renderChatTimestamp(timestamp, true)}
       </summary>
       <span class="msg-meta__details">${parts}</span>
