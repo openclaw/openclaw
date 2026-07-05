@@ -47,9 +47,20 @@ public final class OpenClawChatViewModel {
     public private(set) var pendingToolCalls: [OpenClawChatPendingToolCall] = []
 
     private(set) var timelineRevision: UInt64 = 0
-    public private(set) var sessions: [OpenClawChatSessionEntry] = []
+    /// Setter is module-internal for the transcript-cache extension only.
+    public internal(set) var sessions: [OpenClawChatSessionEntry] = []
+    /// True while the visible transcript came from the offline cache and no
+    /// live history response has replaced it yet (possibly stale).
+    public internal(set) var isShowingCachedTranscript = false
+    /// Guard the cache pre-paint: once a live response applied (even an empty
+    /// one), a slow cache read must never paint stale rows over it.
+    var hasAppliedLiveHistory = false
+    var hasAppliedLiveSessions = false
     private let transport: any OpenClawChatTransport
     let haptics: OpenClawChatHaptics
+    let transcriptCache: (any OpenClawChatTranscriptCache)?
+    @ObservationIgnored
+    var pendingCacheWriteTask: Task<Void, Never>?
     private var sessionDefaults: OpenClawChatSessionsDefaults?
     private let prefersExplicitThinkingLevel: Bool
     private let onSessionChanged: (@MainActor (String) -> Void)?
@@ -113,7 +124,7 @@ public final class OpenClawChatViewModel {
         case externalSync
     }
 
-    private struct SessionSnapshot {
+    struct SessionSnapshot {
         var key: String
         var generation: UInt64
     }
@@ -166,6 +177,7 @@ public final class OpenClawChatViewModel {
         sessionKey: String,
         transport: any OpenClawChatTransport,
         haptics: OpenClawChatHaptics = OpenClawChatHaptics(),
+        transcriptCache: (any OpenClawChatTranscriptCache)? = nil,
         initialThinkingLevel: String? = nil,
         onSessionChanged: (@MainActor (String) -> Void)? = nil,
         onThinkingLevelChanged: (@MainActor @Sendable (String) -> Void)? = nil,
@@ -174,6 +186,7 @@ public final class OpenClawChatViewModel {
         self.sessionKey = sessionKey
         self.transport = transport
         self.haptics = haptics
+        self.transcriptCache = transcriptCache
         let normalizedThinkingLevel = Self.normalizedThinkingLevel(initialThinkingLevel)
         let initialResolvedThinkingLevel = normalizedThinkingLevel ?? "off"
         self.thinkingLevel = initialResolvedThinkingLevel
@@ -380,7 +393,7 @@ public final class OpenClawChatViewModel {
         self.timelineRevision &+= 1
     }
 
-    private func replaceMessages(_ messages: [OpenClawChatMessage]) {
+    func replaceMessages(_ messages: [OpenClawChatMessage]) {
         guard self.messages != messages else { return }
         self.messages = messages
         self.markTimelineChanged()
@@ -413,7 +426,7 @@ public final class OpenClawChatViewModel {
         SessionSnapshot(key: self.sessionKey, generation: self.sessionGeneration)
     }
 
-    private func isCurrentSession(_ snapshot: SessionSnapshot) -> Bool {
+    func isCurrentSession(_ snapshot: SessionSnapshot) -> Bool {
         self.sessionKey == snapshot.key && self.sessionGeneration == snapshot.generation
     }
 
@@ -486,6 +499,11 @@ public final class OpenClawChatViewModel {
         if syncThinkingOptions || appliedThinkingLevel != nil {
             self.syncThinkingLevelOptions()
         }
+        // Live history is the source of truth: it clears the cached marker and
+        // is written through so the next cold open pre-paints current rows.
+        self.hasAppliedLiveHistory = true
+        self.isShowingCachedTranscript = false
+        self.persistTranscriptToCache(sessionKey: request.session.key)
         return true
     }
 
@@ -505,6 +523,7 @@ public final class OpenClawChatViewModel {
         self.pendingToolCallsById = [:]
         self.updateStreamingAssistantText(nil)
         self.sessionId = nil
+        self.paintFromCacheIfNeeded(session: context.session)
         self.bootstrapTask = Task { [weak self] in
             guard let self else { return }
             await self.bootstrap(context: context)
@@ -1582,8 +1601,10 @@ public final class OpenClawChatViewModel {
             if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) { return }
             self.sessions = res.sessions
             self.sessionDefaults = res.defaults
+            self.hasAppliedLiveSessions = true
             self.syncSelectedModel()
             self.syncThinkingLevelOptions()
+            self.persistSessionsToCache(res.sessions)
         } catch {
             // Best-effort.
         }
@@ -1611,6 +1632,8 @@ public final class OpenClawChatViewModel {
         }
         self.modelSelectionID = Self.defaultModelSelectionID
         self.replaceMessages([])
+        self.isShowingCachedTranscript = false
+        self.hasAppliedLiveHistory = false
         self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
         self.runMessageScopesByRunID.removeAll()
         self.provisionalFinalMessagesByID.removeAll()
@@ -1648,6 +1671,8 @@ public final class OpenClawChatViewModel {
         self.onSessionChanged?(next)
         self.modelSelectionID = Self.defaultModelSelectionID
         self.replaceMessages([])
+        self.isShowingCachedTranscript = false
+        self.hasAppliedLiveHistory = false
         self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
         self.runMessageScopesByRunID.removeAll()
         self.provisionalFinalMessagesByID.removeAll()

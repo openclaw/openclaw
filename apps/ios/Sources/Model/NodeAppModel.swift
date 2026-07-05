@@ -333,6 +333,35 @@ final class NodeAppModel {
         return IOSGatewayChatTransport(gateway: self.operatorSession)
     }
 
+    /// Gateway identity the transcript cache is scoped to: the active
+    /// connection's stableID, or the keychain-persisted last connection on
+    /// cold open before the gateway session is up. Nil for fixture transports
+    /// and unpaired installs so demo or foreign rows can never leak into a
+    /// real gateway's transcript.
+    var chatTranscriptCacheGatewayID: String? {
+        guard !self.isLocalGatewayFixtureEnabled else { return nil }
+        let stableID = self.activeGatewayConnectConfig?.effectiveStableID
+            ?? GatewaySettingsStore.loadLastGatewayConnection()?.stableID
+        guard let stableID, !stableID.isEmpty else { return nil }
+        return stableID
+    }
+
+    /// Recreation key for the chat view model. Includes the cache gateway
+    /// identity: switching paired gateways while the transport mode stays
+    /// "operator" must rebuild the view model so transcripts are never read
+    /// from or written under another gateway's cache scope.
+    var chatViewModelIdentityID: String {
+        "\(self.chatTransportModeID)|\(self.chatTranscriptCacheGatewayID ?? "")"
+    }
+
+    /// Offline transcript cache scoped to the paired gateway identity.
+    func makeChatTranscriptCache() -> (any OpenClawChatTranscriptCache)? {
+        guard let gatewayID = self.chatTranscriptCacheGatewayID else { return nil }
+        guard let supportDir = try? OpenClawNodeStorage.appSupportDir() else { return nil }
+        let databaseURL = supportDir.appendingPathComponent("chat-cache.sqlite", isDirectory: false)
+        return OpenClawChatSQLiteTranscriptCache(databaseURL: databaseURL, gatewayID: gatewayID)
+    }
+
     private(set) var activeGatewayConnectConfig: GatewayConnectConfig?
 
     private static let watchExecApprovalBridgeStateKey = "watch.execApproval.bridge.state.v1"

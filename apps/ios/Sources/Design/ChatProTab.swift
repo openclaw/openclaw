@@ -151,12 +151,15 @@ struct ChatProTab: View {
 
     private func syncChatViewModel() {
         let sessionKey = self.appModel.chatSessionKey
-        let transportModeID = self.appModel.chatTransportModeID
+        // Includes the cache gateway identity so switching paired gateways
+        // rebuilds the view model even while the transport mode stays the same.
+        let transportModeID = self.appModel.chatViewModelIdentityID
         guard let viewModel else {
             self.viewModelTransportModeID = transportModeID
             self.viewModel = OpenClawChatViewModel(
                 sessionKey: sessionKey,
                 transport: self.appModel.makeChatTransport(),
+                transcriptCache: self.appModel.makeChatTranscriptCache(),
                 onSessionChanged: { sessionKey in
                     self.appModel.focusChatSession(sessionKey)
                 },
@@ -170,6 +173,7 @@ struct ChatProTab: View {
             self.viewModel = OpenClawChatViewModel(
                 sessionKey: sessionKey,
                 transport: self.appModel.makeChatTransport(),
+                transcriptCache: self.appModel.makeChatTranscriptCache(),
                 onSessionChanged: { sessionKey in
                     self.appModel.focusChatSession(sessionKey)
                 },
