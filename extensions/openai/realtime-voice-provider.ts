@@ -398,6 +398,14 @@ function isOpenAIRealtimeMaxSessionDurationError(detail: string): boolean {
   );
 }
 
+function readRealtimeErrorEventId(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const eventId = (error as Record<string, unknown>).event_id;
+  return typeof eventId === "string" ? eventId : undefined;
+}
+
 function base64ToBuffer(b64: string): Buffer {
   return Buffer.from(b64, "base64");
 }
@@ -419,6 +427,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private responseStartTimestamp: number | null = null;
   private responseActive = false;
   private responseCreateInFlight = false;
+  private manualResponseCreateEventId: string | null = null;
   private responseCancelInFlight = false;
   private responseCreatePending = false;
   private autoRespondSuppressedForManualResponse = false;
@@ -1056,6 +1065,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       case "response.done":
         this.responseActive = false;
         this.responseCreateInFlight = false;
+        this.manualResponseCreateEventId = null;
         this.responseCancelInFlight = false;
         if (this.responseCreatePending) {
           this.flushPendingResponseCreate();
@@ -1107,9 +1117,16 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
       case "error": {
         const detail = readRealtimeErrorDetail(event.error);
-        if (detail.startsWith(OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX)) {
+        const rejectsManualResponseCreate =
+          this.manualResponseCreateEventId !== null &&
+          readRealtimeErrorEventId(event.error) === this.manualResponseCreateEventId;
+        if (
+          rejectsManualResponseCreate &&
+          detail.startsWith(OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX)
+        ) {
           this.responseActive = true;
           this.responseCreateInFlight = false;
+          this.manualResponseCreateEventId = null;
           this.responseCreatePending = true;
           return;
         }
@@ -1123,8 +1140,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           }
           return;
         }
-        this.responseCreateInFlight = false;
-        this.restoreAutoRespondAfterManualResponse();
+        if (rejectsManualResponseCreate) {
+          this.responseCreateInFlight = false;
+          this.manualResponseCreateEventId = null;
+          this.restoreAutoRespondAfterManualResponse();
+        }
         this.config.onError?.(new Error(detail));
       }
 
@@ -1228,7 +1248,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.responseCreatePending = false;
     this.responseCreateInFlight = true;
     this.suppressAutoRespondForManualResponse();
-    this.sendEvent({ type: "response.create" });
+    const eventId = `openclaw-response-create-${randomUUID()}`;
+    // Realtime errors can describe unrelated client events. Keep this id until
+    // the manual turn settles so only its rejection may release VAD suppression.
+    this.manualResponseCreateEventId = eventId;
+    this.sendEvent({ type: "response.create", event_id: eventId });
   }
 
   private suppressAutoRespondForManualResponse(): void {
@@ -1262,6 +1286,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.responseStartTimestamp = null;
     this.responseActive = false;
     this.responseCreateInFlight = false;
+    this.manualResponseCreateEventId = null;
     this.responseCancelInFlight = false;
     this.responseCreatePending = false;
     this.autoRespondSuppressedForManualResponse = false;
