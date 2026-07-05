@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   readBestEffortConfig,
@@ -34,6 +36,24 @@ describe("readBestEffortConfig", () => {
       expect(
         bestEffort.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.params?.cacheRetention,
       ).toBe("short");
+    });
+  });
+
+  it("can read diagnostics config without writing read-side state", async () => {
+    await withTempHome(async (home) => {
+      const configPath = await writeOpenClawConfig(home, {
+        commands: { ownerDisplay: "hash" },
+        gateway: { mode: "local" },
+      });
+      const healthStatePath = path.join(home, ".openclaw", "logs", "config-health.json");
+      const before = await fs.readFile(configPath, "utf-8");
+
+      const bestEffort = await readBestEffortConfig({ readOnly: true });
+
+      expect(bestEffort.gateway?.mode).toBe("local");
+      expect(bestEffort.commands?.ownerDisplaySecret).toEqual(expect.any(String));
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(before);
+      await expect(fs.stat(healthStatePath)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 });

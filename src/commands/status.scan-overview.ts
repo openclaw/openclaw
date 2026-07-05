@@ -163,7 +163,8 @@ export async function collectStatusScanOverview(params: {
   } = await loadStatusScanCommandConfig({
     commandName: params.commandName,
     allowMissingConfigFastPath: params.allowMissingConfigFastPath,
-    readBestEffortConfig: async () => (await loadConfigModule()).readBestEffortConfig(),
+    readBestEffortConfig: async () =>
+      (await loadConfigModule()).readBestEffortConfig({ readOnly: true }),
     resolveConfig: async (loadedConfig) =>
       await (
         await loadCommandConfigResolutionModule()

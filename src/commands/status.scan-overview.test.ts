@@ -103,6 +103,7 @@ describe("collectStatusScanOverview", () => {
       useGatewayCallOverridesForChannelsStatus: true,
     });
 
+    expect(mocks.readBestEffortConfig).toHaveBeenCalledWith({ readOnly: true });
     expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "channels.status",
