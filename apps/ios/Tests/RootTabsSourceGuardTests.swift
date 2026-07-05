@@ -970,7 +970,8 @@ struct RootTabsSourceGuardTests {
         #expect(!controllerSource.contains("shouldApplyTokenField"))
         #expect(!controllerSource.contains("shouldApplyPasswordField"))
         #expect(controllerSource.contains("allowStoredDeviceAuth: !suppressStoredDeviceAuth"))
-        #expect(controllerSource.contains("deviceAuthGatewayID: stableID"))
+        #expect(controllerSource.contains(
+            "deviceAuthGatewayID: GatewaySettingsStore.authenticationOwnerID("))
         #expect(controllerSource.contains("DeviceAuthStore.migrateUnscopedToken("))
         #expect(controllerSource.contains("DeviceAuthStore.discardUnscopedTokens("))
         #expect(onboardingSource.contains(

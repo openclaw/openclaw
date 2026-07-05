@@ -792,21 +792,23 @@ import UIKit
 
         let primaryIdentity = DeviceIdentityStore.loadOrCreate()
         let shareIdentity = DeviceIdentityStore.loadOrCreate(profile: .shareExtension)
-        for gatewayID in [gatewayA, gatewayB] {
+        GatewayTLSStore.saveFingerprint("fingerprint-a", stableID: gatewayA)
+        GatewayTLSStore.saveFingerprint("fingerprint-b", stableID: gatewayB)
+        let gatewayAOwner = GatewaySettingsStore.authenticationOwnerID(routeStableID: gatewayA)
+        let gatewayBOwner = GatewaySettingsStore.authenticationOwnerID(routeStableID: gatewayB)
+        for (routeID, ownerID) in [(gatewayA, gatewayAOwner), (gatewayB, gatewayBOwner)] {
             _ = DeviceAuthStore.storeToken(
                 deviceId: primaryIdentity.deviceId,
                 role: "node",
-                token: "primary-\(gatewayID)",
-                gatewayID: gatewayID)
+                token: "primary-\(routeID)",
+                gatewayID: ownerID)
             _ = DeviceAuthStore.storeToken(
                 deviceId: shareIdentity.deviceId,
                 role: "node",
-                token: "share-\(gatewayID)",
-                gatewayID: gatewayID,
+                token: "share-\(routeID)",
+                gatewayID: ownerID,
                 profile: .shareExtension)
         }
-        GatewayTLSStore.saveFingerprint("fingerprint-a", stableID: gatewayA)
-        GatewayTLSStore.saveFingerprint("fingerprint-b", stableID: gatewayB)
 
         let appModel = NodeAppModel()
         GatewayOnboardingReset.prepareForBootstrapPairing(
@@ -818,20 +820,20 @@ import UIKit
         #expect(DeviceAuthStore.loadToken(
             deviceId: primaryIdentity.deviceId,
             role: "node",
-            gatewayID: gatewayA) != nil)
+            gatewayID: gatewayAOwner) != nil)
         #expect(DeviceAuthStore.loadToken(
             deviceId: primaryIdentity.deviceId,
             role: "node",
-            gatewayID: gatewayB) == nil)
+            gatewayID: gatewayBOwner) == nil)
         #expect(DeviceAuthStore.loadToken(
             deviceId: shareIdentity.deviceId,
             role: "node",
-            gatewayID: gatewayA,
+            gatewayID: gatewayAOwner,
             profile: .shareExtension) != nil)
         #expect(DeviceAuthStore.loadToken(
             deviceId: shareIdentity.deviceId,
             role: "node",
-            gatewayID: gatewayB,
+            gatewayID: gatewayBOwner,
             profile: .shareExtension) == nil)
         #expect(GatewayTLSStore.loadFingerprint(stableID: gatewayA) == "fingerprint-a")
         #expect(GatewayTLSStore.loadFingerprint(stableID: gatewayB) == nil)
