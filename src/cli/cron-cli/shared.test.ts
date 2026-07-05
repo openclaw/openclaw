@@ -347,6 +347,8 @@ describe("parseDurationMs", () => {
 
   it("rejects non-positive and malformed durations", () => {
     expect(parseDurationMs("0s")).toBeNull();
+    expect(parseDurationMs("0.5ms")).toBeNull();
+    expect(parseDurationMs("0.001ms")).toBeNull();
     expect(parseDurationMs("-5s")).toBeNull();
     expect(parseDurationMs("abc")).toBeNull();
     expect(parseDurationMs("")).toBeNull();

@@ -371,7 +371,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1096,
+      "line": 1098,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
       "source": "Connecting…",
       "surface": "android",
@@ -379,7 +379,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1096,
+      "line": 1098,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
       "source": "Reconnecting…",
       "surface": "android",
@@ -20163,7 +20163,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 709,
+      "line": 710,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "Running tools…",
       "surface": "apple",
@@ -20171,7 +20171,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 717,
+      "line": 718,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "\\(display.emoji) \\(display.label)",
       "surface": "apple",
