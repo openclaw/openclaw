@@ -31,7 +31,6 @@ import type {
 
 type CallbackServerInfo = {
   server: Server;
-  redirectUri: string;
   cancelWait: () => void;
   waitForCode: () => Promise<{ code: string; state: string } | null>;
 };
@@ -47,10 +46,11 @@ const decode = (s: string) => atob(s);
 const CLIENT_ID = decode("OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl");
 const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
 const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
-const DEFAULT_CALLBACK_HOST = "localhost";
+const DEFAULT_CALLBACK_HOST = "127.0.0.1";
 const LOOPBACK_CALLBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 const CALLBACK_PORT = 53692;
 const CALLBACK_PATH = "/callback";
+const REDIRECT_URI = `http://localhost:${CALLBACK_PORT}${CALLBACK_PATH}`;
 
 function resolveCallbackHost(env: NodeJS.ProcessEnv = process.env): string {
   const host = env.OPENCLAW_OAUTH_CALLBACK_HOST?.trim() || DEFAULT_CALLBACK_HOST;
@@ -58,19 +58,6 @@ function resolveCallbackHost(env: NodeJS.ProcessEnv = process.env): string {
     throw new Error("Anthropic OAuth callback host must be localhost, 127.0.0.1, or ::1");
   }
   return host;
-}
-
-function resolveRedirectUri(host: string): string {
-  const hostForUrl = host === "::1" ? "[::1]" : host;
-  const url = new URL(`http://${hostForUrl}:${CALLBACK_PORT}`);
-  url.pathname = CALLBACK_PATH;
-  return url.toString();
-}
-
-function resolveCallbackConfig(): { callbackHost: string; redirectUri: string } {
-  const callbackHost = resolveCallbackHost();
-  const redirectUri = resolveRedirectUri(callbackHost);
-  return { callbackHost, redirectUri };
 }
 
 const SCOPES =
@@ -226,7 +213,7 @@ async function startCallbackServer(expectedState: string): Promise<CallbackServe
       }
     });
 
-    const { callbackHost, redirectUri } = resolveCallbackConfig();
+    const callbackHost = resolveCallbackHost();
 
     server.on("error", (err) => {
       reject(err);
@@ -235,7 +222,6 @@ async function startCallbackServer(expectedState: string): Promise<CallbackServe
     server.listen(CALLBACK_PORT, callbackHost, () => {
       resolve({
         server,
-        redirectUri,
         cancelWait: () => {
           settleWait?.(null);
         },
@@ -330,7 +316,6 @@ export async function loginAnthropic(options: {
 
   let code: string | undefined;
   let state: string | undefined;
-  let redirectUriForExchange = server.redirectUri;
 
   try {
     throwIfOAuthLoginAborted(options.signal);
@@ -338,7 +323,7 @@ export async function loginAnthropic(options: {
       code: "true",
       client_id: CLIENT_ID,
       response_type: "code",
-      redirect_uri: server.redirectUri,
+      redirect_uri: REDIRECT_URI,
       scope: SCOPES,
       code_challenge: challenge,
       code_challenge_method: "S256",
@@ -379,7 +364,6 @@ export async function loginAnthropic(options: {
       if (result?.code) {
         code = result.code;
         state = result.state;
-        redirectUriForExchange = server.redirectUri;
       } else if (manualInput) {
         const parsed = parseOAuthAuthorizationInput(manualInput);
         if (parsed.state && parsed.state !== expectedState) {
@@ -412,7 +396,6 @@ export async function loginAnthropic(options: {
       if (result?.code) {
         code = result.code;
         state = result.state;
-        redirectUriForExchange = server.redirectUri;
       }
     }
 
@@ -420,7 +403,7 @@ export async function loginAnthropic(options: {
       const input = await withOAuthLoginAbort(
         options.onPrompt({
           message: "Paste the authorization code or full redirect URL:",
-          placeholder: server.redirectUri,
+          placeholder: REDIRECT_URI,
         }),
         options.signal,
         server.cancelWait,
@@ -442,7 +425,7 @@ export async function loginAnthropic(options: {
     }
 
     options.onProgress?.("Exchanging authorization code for tokens...");
-    return exchangeAuthorizationCode(code, state, verifier, redirectUriForExchange, options.signal);
+    return exchangeAuthorizationCode(code, state, verifier, REDIRECT_URI, options.signal);
   } finally {
     server.server.close();
   }
@@ -496,8 +479,7 @@ export const anthropicOAuthProvider: OAuthProviderInterface = {
   },
 };
 
-export const testing = {
-  resolveCallbackConfig,
+export const __testing = {
   resolveCallbackHost,
-  resolveRedirectUri,
+  redirectUri: REDIRECT_URI,
 };
