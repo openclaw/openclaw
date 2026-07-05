@@ -109,6 +109,27 @@ describe("extractSwiftHandledEvents", () => {
 
     expect([...constants]).toEqual([["ApprovalBridge.requestedKind", "exec.approval.requested"]]);
   });
+
+  it("does not resolve qualified constants inside quoted case labels", () => {
+    const constants = extractSwiftStaticStringConstants(`
+      enum ApprovalBridge {
+        static let requestedKind = "exec.approval.requested"
+      }
+    `);
+    const handled = extractSwiftHandledEvents(
+      `
+        switch evt.event {
+        case "ApprovalBridge.requestedKind":
+          return .approval
+        default:
+          return nil
+        }
+      `,
+      constants,
+    );
+
+    expect(handled).toEqual(new Set(["ApprovalBridge.requestedKind"]));
+  });
 });
 
 describe("extractKotlinHandledEvents", () => {

@@ -196,7 +196,8 @@ export function extractSwiftHandledEvents(source, constants = new Map()) {
     const label = SWIFT_CASE_LABEL_RE.exec(line);
     if (label) {
       pushStringLiterals(label[1], sink);
-      for (const reference of label[1].matchAll(SWIFT_QUALIFIED_CONSTANT_RE)) {
+      const constantReferences = sanitizeLineForBraces(label[1]);
+      for (const reference of constantReferences.matchAll(SWIFT_QUALIFIED_CONSTANT_RE)) {
         const value = constants.get(reference[1]);
         if (value) {
           sink.push(value);
