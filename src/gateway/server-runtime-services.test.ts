@@ -257,17 +257,23 @@ describe("server-runtime-services", () => {
 
   it("requeues next-seam post-compaction claims using the boot-time cutoff", async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-03T20:00:00.000Z"));
+    const recoveryArmedAt = new Date("2026-07-03T20:00:00.000Z");
+    const recoveryArmedAtMs = recoveryArmedAt.getTime();
+    vi.setSystemTime(recoveryArmedAt);
 
     activateScheduledServicesForTest();
     await vi.advanceTimersByTimeAsync(1_400);
     await vi.dynamicImportSettled();
 
+    expect(hoisted.recoverPendingContinuationDelegates).toHaveBeenCalledWith({
+      queuedCreatedAtOrBefore: recoveryArmedAtMs,
+      includeRunningUpdatedAtOrBefore: recoveryArmedAtMs,
+    });
     expect(hoisted.requeueAwaitingNextCompactionDelegates).toHaveBeenCalledWith({
-      runningUpdatedAtOrBefore: new Date("2026-07-03T20:00:00.000Z").getTime(),
+      runningUpdatedAtOrBefore: recoveryArmedAtMs,
     });
     expect(hoisted.recoverAndReleaseStagedPostCompactionDelegates).toHaveBeenCalledWith({
-      runningUpdatedAtOrBefore: new Date("2026-07-03T20:00:00.000Z").getTime(),
+      runningUpdatedAtOrBefore: recoveryArmedAtMs,
     });
   });
 

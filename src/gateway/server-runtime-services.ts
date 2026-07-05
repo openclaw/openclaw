@@ -192,7 +192,10 @@ function recoverPendingContinuations(params: { log: GatewayRuntimeServiceLogger 
         import("../auto-reply/continuation/work-dispatch.js"),
       ]);
       const delegateLog = params.log.child("continuation-delegate-recovery");
-      const delegateSummary = await delegateModule.recoverPendingContinuationDelegates();
+      const delegateSummary = await delegateModule.recoverPendingContinuationDelegates({
+        queuedCreatedAtOrBefore: recoveryArmedAt,
+        includeRunningUpdatedAtOrBefore: recoveryArmedAt,
+      });
       if (
         delegateSummary.sessions > 0 ||
         delegateSummary.dispatched > 0 ||

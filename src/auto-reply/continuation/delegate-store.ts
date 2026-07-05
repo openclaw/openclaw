@@ -139,6 +139,12 @@ const PendingDelegateStateSchema = z
 
 type PendingDelegateState = z.infer<typeof PendingDelegateStateSchema>;
 
+type PendingDelegateCutoffOptions = {
+  includeRunning?: boolean;
+  queuedCreatedAtOrBefore?: number;
+  includeRunningUpdatedAtOrBefore?: number;
+};
+
 export type ContinuationDelegateQueueDepths = {
   pendingQueued: number;
   pendingRunnable: number;
@@ -256,20 +262,34 @@ function isRecoverableContinuationDelegateFlow(flow: TaskFlowRecord): boolean {
   );
 }
 
+function isRecoverablePendingFlowWithinCutoffs(
+  flow: TaskFlowRecord,
+  options: PendingDelegateCutoffOptions = {},
+): boolean {
+  if (!isPendingDelegateFlow(flow)) {
+    return false;
+  }
+  if (flow.status === "queued") {
+    if (options.queuedCreatedAtOrBefore === undefined) {
+      return true;
+    }
+    return flow.createdAt <= options.queuedCreatedAtOrBefore;
+  }
+  if (flow.status !== "running" || options.includeRunning !== true) {
+    return false;
+  }
+  if (options.includeRunningUpdatedAtOrBefore === undefined) {
+    return true;
+  }
+  return flow.updatedAt <= options.includeRunningUpdatedAtOrBefore;
+}
+
 function listRecoverablePendingFlows(
   sessionKey: string,
-  options: { includeRunning?: boolean; includeRunningUpdatedAtOrBefore?: number } = {},
+  options: PendingDelegateCutoffOptions = {},
 ): TaskFlowRecord[] {
   return listTaskFlowsForOwnerKey(sessionKey)
-    .filter((flow) =>
-      options.includeRunning
-        ? isPendingDelegateFlow(flow) &&
-          (flow.status === "queued" ||
-            (flow.status === "running" &&
-              (options.includeRunningUpdatedAtOrBefore === undefined ||
-                flow.updatedAt <= options.includeRunningUpdatedAtOrBefore)))
-        : isPendingDelegateFlow(flow) && flow.status === "queued",
-    )
+    .filter((flow) => isRecoverablePendingFlowWithinCutoffs(flow, options))
     .toSorted((a, b) => a.createdAt - b.createdAt);
 }
 
@@ -554,18 +574,24 @@ export function enqueuePendingDelegate(
  * Re-arming a `setTimeout(delayMs)` against a consumed delegate charges the
  * wait twice and drifts recipient drains by approximately the original delay.
  */
-export function listPendingDelegateSessionKeysForRecovery(): string[] {
+export function listPendingDelegateSessionKeysForRecovery(
+  options: Omit<PendingDelegateCutoffOptions, "includeRunning"> = {},
+): string[] {
   const sessionKeys = listTaskFlowRecords()
-    .filter(isRecoverablePendingFlow)
+    .filter((flow) =>
+      isRecoverablePendingFlowWithinCutoffs(flow, {
+        includeRunning: true,
+        queuedCreatedAtOrBefore: options.queuedCreatedAtOrBefore,
+        includeRunningUpdatedAtOrBefore: options.includeRunningUpdatedAtOrBefore,
+      }),
+    )
     .map((flow) => flow.ownerKey);
   return [...new Set(sessionKeys)].toSorted();
 }
 
 export function consumePendingDelegates(
   sessionKey: string,
-  options: {
-    includeRunning?: boolean;
-    includeRunningUpdatedAtOrBefore?: number;
+  options: PendingDelegateCutoffOptions & {
     /**
      * Dispatch queued delegates immediately even if their `delayMs` has not
      * elapsed. Used as a fail-closed lever when the child chain-cost persist
@@ -763,10 +789,19 @@ export function markPendingDelegateChainStatePersistPlanned(
  * still fire in fully-quiet channels where no further response-finalize
  * arrives.
  */
-export function peekSoonestUnmaturedDelegateDueAt(sessionKey: string): number | undefined {
+export function peekSoonestUnmaturedDelegateDueAt(
+  sessionKey: string,
+  options: Pick<PendingDelegateCutoffOptions, "queuedCreatedAtOrBefore"> = {},
+): number | undefined {
   const now = Date.now();
   let soonest: number | undefined;
   for (const flow of listQueuedPendingFlows(sessionKey)) {
+    if (
+      options.queuedCreatedAtOrBefore !== undefined &&
+      flow.createdAt > options.queuedCreatedAtOrBefore
+    ) {
+      continue;
+    }
     const state = decodeDelegateState(flow);
     if (!state) {
       continue;

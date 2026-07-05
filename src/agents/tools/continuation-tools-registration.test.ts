@@ -182,6 +182,10 @@ describe("continuation tool registration", { timeout: 240000 }, () => {
     // task is required (model-facing contract).
     expect(params.required).toContain("task");
 
+    const delaySecondsProp = properties.delaySeconds as { description?: string };
+    expect(delaySecondsProp.description).toContain("0 or omitted = immediate");
+    expect(delaySecondsProp.description).not.toContain("omitted = default delay");
+
     // mode enum must include the four canonical values.
     const modeProp = properties.mode as {
       anyOf?: Array<{ const?: string; enum?: string[] }>;
