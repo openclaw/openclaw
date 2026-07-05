@@ -282,13 +282,13 @@ If disabling SIP is not acceptable for your threat model:
     <Warning>
     Group routing under `groupPolicy: "allowlist"` runs **two** gates back-to-back:
 
-    1. **Sender allowlist** (`channels.imessage.groupAllowFrom`) — handle, `accessGroup:<name>`, `chat_guid`, `chat_identifier`, or `chat_id`. Empty (and no `allowFrom` fallback) means every group message is dropped (`groupPolicy allowlist (empty groupAllowFrom)` in verbose logs).
-    2. **Group registry** (`channels.imessage.groups`) — enforced once the map has entries: the chat must match an explicit per-`chat_id` entry or a `groups: { "*": { ... } }` wildcard (`allowAll`). A group chat that matches neither is dropped. When `groups` is empty or missing, the sender allowlist alone decides admission.
+    1. **Sender allowlist** (`channels.imessage.groupAllowFrom`) — handle, `accessGroup:<name>`, `chat_guid`, `chat_identifier`, or `chat_id`. An empty effective list (no `groupAllowFrom` and no `allowFrom` fallback) blocks every group sender.
+    2. **Group registry** (`channels.imessage.groups`) — enforced once the map has entries: the chat must match an explicit per-`chat_id` entry or a `groups: { "*": { ... } }` wildcard. When `groups` is empty or missing, the sender allowlist alone decides admission.
 
-    The plugin emits `warn`-level signals at the default log level:
+    If no effective group sender allowlist is configured, every group message is dropped before the registry gate. Each gate has its own `warn`-level signal at the default log level, and each names a different fix:
 
-    - one-time per account at startup when `groups` is empty: `imessage: groupPolicy="allowlist" but channels.imessage.groups is empty for account "<id>"`
-    - one-time per `chat_id` when the registry gate drops a chat: `imessage: dropping group message from chat_id=<id> ...`
+    - one-time per account at startup, when the effective group sender allowlist is empty: `imessage: groupPolicy="allowlist" for account "<id>" but no group sender allowlist is configured ...` — fix by setting `channels.imessage.groupAllowFrom` (or `allowFrom`); adding `groups` entries alone leaves gate 1 blocking every sender.
+    - one-time per `chat_id` at runtime, when a sender passed gate 1 but the chat is missing from a populated `groups` registry: `imessage: dropping group message from chat_id=<id> ...` — fix by adding that `chat_id` (or `"*"`) under `channels.imessage.groups`.
 
     DMs are unaffected — they take a different code path.
 
@@ -306,7 +306,7 @@ If disabling SIP is not acceptable for your threat model:
     }
     ```
 
-    If the per-`chat_id` drop lines appear in the gateway log, the registry gate is dropping that chat — add it to `groups` (or add the `"*"` wildcard).
+    `groupAllowFrom` alone admits those senders in any group; add the `groups` block to scope which chats are allowed (and to set per-chat options like `requireMention`).
     </Warning>
 
     Mention gating for groups:
