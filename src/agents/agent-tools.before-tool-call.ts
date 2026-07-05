@@ -702,6 +702,7 @@ async function requestPluginToolApproval(params: {
   const approval = params.approval;
   const timeoutMs = resolvePluginToolApprovalTimeoutMs(approval);
   const gatewayTimeoutMs = resolvePluginToolApprovalGatewayTimeoutMs(timeoutMs);
+  let gatewayApprovalPhase: "none" | "request" | "wait" = "none";
   try {
     const embeddedApprovalBroker = isEmbeddedMode() ? getEmbeddedPluginApprovalBroker() : null;
     if (embeddedApprovalBroker) {
@@ -767,6 +768,7 @@ async function requestPluginToolApproval(params: {
       };
     }
 
+    gatewayApprovalPhase = "request";
     const requestResult: {
       id?: string;
       status?: string;
@@ -799,6 +801,7 @@ async function requestPluginToolApproval(params: {
       },
       { expectFinal: false },
     );
+    gatewayApprovalPhase = "none";
     const id = requestResult?.id;
     if (!id) {
       notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
@@ -830,6 +833,7 @@ async function requestPluginToolApproval(params: {
     } else {
       // Wait for the decision, but abort early if the agent run is cancelled
       // so the user isn't blocked for the full approval timeout.
+      gatewayApprovalPhase = "wait";
       const waitPromise: Promise<{
         id?: string;
         decision?: string | null;
@@ -929,13 +933,15 @@ async function requestPluginToolApproval(params: {
         params: params.baseParams,
       };
     }
-    // UNAVAILABLE can also arrive as a structured response. Only validation
-    // rejection proves a healthy Gateway rejected the approval payload.
-    const requestRejected =
+    // INVALID_REQUEST means different things before and after registration.
+    const invalidRequest =
       err instanceof GatewayClientRequestError && err.gatewayCode === "INVALID_REQUEST";
-    const reason = requestRejected
-      ? `Plugin approval request rejected: ${formatErrorMessage(err)}`
-      : "Plugin approval required (gateway unavailable)";
+    const reason =
+      invalidRequest && gatewayApprovalPhase === "request"
+        ? `Plugin approval request rejected: ${formatErrorMessage(err)}`
+        : invalidRequest && gatewayApprovalPhase === "wait"
+          ? `Plugin approval no longer available: ${formatErrorMessage(err)}`
+          : "Plugin approval required (gateway unavailable)";
     log.warn(`plugin approval gateway request failed; blocking tool call: ${String(err)}`);
     return {
       blocked: true,

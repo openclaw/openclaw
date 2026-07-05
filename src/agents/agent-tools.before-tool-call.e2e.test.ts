@@ -1631,6 +1631,31 @@ describe("before_tool_call requireApproval handling", () => {
     expect(result).toHaveProperty("reason", expectedReason);
   });
 
+  it("reports an expired accepted approval without calling it a request rejection", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: { title: "Approval", description: "Wait phase classification" },
+    });
+    mockCallGateway
+      .mockResolvedValueOnce({ id: "plugin:accepted", status: "accepted" })
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "approval expired or not found",
+        }),
+      );
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: {},
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result).toHaveProperty(
+      "reason",
+      "Plugin approval no longer available: approval expired or not found",
+    );
+  });
+
   it("blocks when gateway returns no id", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
