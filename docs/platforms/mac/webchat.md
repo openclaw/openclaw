@@ -29,6 +29,7 @@ The macOS menu bar app embeds the WebChat UI as a native SwiftUI view. It connec
 - `chat.history` returns a display-normalized transcript: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (`<tool_call>`, `<function_call>`, `<tool_calls>`, `<function_calls>`, including truncated blocks) and leaked model control tokens are stripped, pure silent-token assistant rows such as exact `NO_REPLY`/`no_reply` are omitted, and oversized rows can be replaced with a truncated placeholder.
 - Session: defaults to the primary session as above; the UI can switch between sessions.
 - Onboarding uses a dedicated session to keep first-run setup separate.
+- Offline cache: the app keeps a small read-only cache of recent chat sessions and transcripts per gateway (`~/Library/Application Support/OpenClaw/chat-cache.sqlite`): cold opens paint the last known transcript immediately and refresh once the Gateway responds, and recent chats stay browsable while disconnected (sending stays disabled until the connection is back).
 
 ## Security surface
 
