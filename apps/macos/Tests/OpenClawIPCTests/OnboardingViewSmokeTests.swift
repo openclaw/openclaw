@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawDiscovery
+import OpenClawIPC
 import SwiftUI
 import Testing
 @testable import OpenClaw
@@ -33,7 +34,7 @@ struct OnboardingViewSmokeTests {
         #expect(!order.contains(8))
     }
 
-    @Test func `fresh local setup installs CLI before starting gateway wizard`() {
+    @Test func `fresh local setup installs CLI before the Crestodian chat`() {
         let order = OnboardingView.pageOrder(
             for: .local,
             showOnboardingChat: false,
@@ -109,9 +110,13 @@ struct OnboardingViewSmokeTests {
             installing: false))
     }
 
-    @Test func `paused onboarding defers the local gateway wizard`() {
-        #expect(!OnboardingWizardModel.shouldStart(mode: .local, paused: true))
-        #expect(OnboardingWizardModel.shouldStart(mode: .local, paused: false))
+    @Test func `Crestodian setup requires a nonempty auth value`() {
+        #expect(!OnboardingView.hasCrestodianSetupAuth([:]))
+        #expect(!OnboardingView.hasCrestodianSetupAuth(["token": "  "]))
+        #expect(OnboardingView.hasCrestodianSetupAuth(["mode": "token"]))
+        #expect(OnboardingView.hasCrestodianSetupAuth([
+            "token": ["source": "env", "provider": "default", "id": "GATEWAY_TOKEN"],
+        ]))
     }
 
     @Test func `select remote gateway clears stale ssh target when endpoint unresolved`() async {
@@ -144,5 +149,16 @@ struct OnboardingViewSmokeTests {
             view.selectRemoteGateway(gateway)
             #expect(state.remoteTarget.isEmpty)
         }
+    }
+
+    @Test
+    func `permission list covers every capability in importance order`() {
+        #expect(Set(Capability.importanceOrdered) == Set(Capability.allCases))
+        #expect(Capability.importanceOrdered.count == Capability.allCases.count)
+        // App control and context capture lead; location stays last.
+        #expect(Capability.importanceOrdered.first == .appleScript)
+        #expect(Array(Capability.importanceOrdered.prefix(3))
+            == [.appleScript, .accessibility, .screenRecording])
+        #expect(Capability.importanceOrdered.last == Capability.location)
     }
 }

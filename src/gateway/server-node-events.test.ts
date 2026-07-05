@@ -557,6 +557,28 @@ describe("node exec events", () => {
     expect(requestHeartbeatMock).toHaveBeenCalledWith(execEventHeartbeatOptions());
   });
 
+  it("does not split surrogate pairs when truncating exec.finished output", async () => {
+    // 178 ASCII chars + emoji (🫠 = 2 UTF-16 code units at pos 178-179) = 180+ total.
+    // safe = 179 → old slice(0,179) would land on a lone high surrogate at pos 178.
+    const emoji = "🫠";
+    const padded = "A".repeat(178) + emoji + "tail";
+    const ctx = buildExecCtx();
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        runId: "run-surrogate",
+        exitCode: 0,
+        timedOut: false,
+        output: padded,
+      }),
+    });
+
+    const [[text]] = enqueueSystemEventMock.mock.calls;
+    // Must not contain a lone high surrogate (U+D800–U+DBFF).
+    expect(text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(text.endsWith("…")).toBe(true);
+  });
+
   it("does not enqueue or wake agent work for exec.denied events", async () => {
     const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-3", {

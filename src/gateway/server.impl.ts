@@ -828,6 +828,10 @@ export async function startGatewayServer(
 
   const wizardRunner = opts.wizardRunner ?? runDefaultSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
+  const crestodianSessions = new Map<
+    string,
+    import("./server-methods/crestodian.js").CrestodianChatSession
+  >();
 
   const deps = createDefaultDeps();
   let runtimeState: GatewayServerLiveState | null = null;
@@ -1492,6 +1496,7 @@ export async function startGatewayServer(
           registerToolEventRecipient: toolEventRecipients.add,
           dedupe,
           wizardSessions,
+          crestodianSessions,
           findRunningWizard,
           purgeWizardSession,
           getRuntimeSnapshot,
