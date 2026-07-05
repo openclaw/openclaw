@@ -95,20 +95,25 @@ function removePromptContextAroundOccurrence(params: {
     if (index === -1 || index + params.prompt.length > searchEnd) {
       return stripped;
     }
-    const before = params.text.slice(0, index).trimEnd();
-    const after = params.text.slice(index + params.prompt.length).trimStart();
+    const rawBefore = params.text.slice(0, index);
+    const rawAfter = params.text.slice(index + params.prompt.length);
+    const before = rawBefore.trimEnd();
+    const after = rawAfter.trimStart();
     if (
       (!hiddenBefore || before.endsWith(hiddenBefore)) &&
       (!hiddenAfter || after.startsWith(hiddenAfter))
     ) {
+      const hiddenBeforeStart = before.length - hiddenBefore.length;
+      const hiddenAfterStart = rawAfter.length - after.length;
       const keptBefore = hiddenBefore
-        ? before.slice(0, before.length - hiddenBefore.length).trimEnd()
-        : before;
-      const keptAfter = hiddenAfter ? after.slice(hiddenAfter.length).trimStart() : after;
-      stripped = [keptBefore, params.prompt, keptAfter]
-        .filter((part) => part.length > 0)
-        .join("\n\n")
-        .trim();
+        ? rawBefore.slice(0, hiddenBeforeStart).replace(/\r?\n\r?\n$/u, "")
+        : rawBefore;
+      const keptAfter = hiddenAfter
+        ? rawAfter.slice(hiddenAfterStart + hiddenAfter.length).replace(/^\r?\n\r?\n/u, "")
+        : rawAfter;
+      const beforePrompt = hiddenBefore && keptBefore ? `${keptBefore}\n\n` : keptBefore;
+      const afterPrompt = hiddenAfter && keptAfter ? `\n\n${keptAfter}` : keptAfter;
+      stripped = `${beforePrompt}${params.prompt}${afterPrompt}`;
     }
     searchFrom = index + Math.max(1, params.prompt.length);
   }
@@ -138,6 +143,16 @@ export function resolveRuntimeContextPromptParts(params: {
       : shouldExtractInternalRuntimeContext
         ? extractInternalRuntimeContext(params.modelPrompt)
         : { text: params.modelPrompt };
+  const modelPromptHookContext = params.modelPromptHookContext
+    ? {
+        prepend: shouldExtractInternalRuntimeContext
+          ? extractInternalRuntimeContext(params.modelPromptHookContext.prepend).text
+          : params.modelPromptHookContext.prepend,
+        append: shouldExtractInternalRuntimeContext
+          ? extractInternalRuntimeContext(params.modelPromptHookContext.append).text
+          : params.modelPromptHookContext.append,
+      }
+    : undefined;
   const modelPromptText = modelPrompt?.text ?? transcriptPrompt ?? extracted.text;
   const prompt = transcriptPrompt ?? extracted.text;
   if (!prompt.trim() && params.emptyTranscriptMode === "model-prompt") {
@@ -200,7 +215,7 @@ export function resolveRuntimeContextPromptParts(params: {
           prompt: transcriptPrompt ?? extracted.text,
           hiddenBefore: hiddenPromptParts.before,
           hiddenAfter: hiddenPromptParts.after,
-          hookContext: params.modelPromptHookContext,
+          hookContext: modelPromptHookContext,
         }) ?? modelPromptText)
       : modelPromptText;
 

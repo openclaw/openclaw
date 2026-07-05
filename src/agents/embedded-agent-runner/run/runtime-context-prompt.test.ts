@@ -218,6 +218,50 @@ describe("runtime context prompt submission", () => {
     });
   });
 
+  it("normalizes quoted hook prompts before locating the active prompt", () => {
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello";
+    const internalContext = [
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "private runtime note",
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    ].join("\n");
+    const effectivePrompt = [systemEvent, userText, internalContext].join("\n\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt,
+        transcriptPrompt: userText,
+        modelPrompt: [effectivePrompt, effectivePrompt].join("\n\n"),
+        modelPromptHookContext: { prepend: "", append: effectivePrompt },
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: [userText, systemEvent, userText].join("\n\n"),
+      runtimeContext: [systemEvent, internalContext].join("\n\n"),
+    });
+  });
+
+  it("preserves user prompt edge whitespace while removing hidden context", () => {
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = " leading text ";
+    const appendContext = "Hook tail";
+    const effectivePrompt = [systemEvent, userText].join("\n\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt,
+        transcriptPrompt: userText,
+        modelPrompt: [effectivePrompt, appendContext].join("\n\n"),
+        modelPromptHookContext: { prepend: "", append: appendContext },
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: `${userText}\n\n${appendContext}`,
+      runtimeContext: systemEvent,
+    });
+  });
+
   it("does not extract no-transcript delimiter text", () => {
     const effectivePrompt = [
       "visible ask",
