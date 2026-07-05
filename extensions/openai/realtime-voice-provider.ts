@@ -23,6 +23,7 @@ import type {
   RealtimeVoiceTool,
   RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { warn } from "openclaw/plugin-sdk/runtime-env";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
@@ -93,6 +94,10 @@ const OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR =
   "Cancellation failed: no active response found";
 const OPENAI_REALTIME_MAX_SESSION_DURATION_FRAGMENT = "maximum duration";
 const OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
+// Realtime validates this character set but accepts names beyond the 64-character
+// cap used by other OpenAI tool surfaces.
+const OPENAI_REALTIME_TOOL_NAME_RE = /^[A-Za-z0-9_-]+$/;
+const AZURE_OPENAI_REALTIME_TOOL_NAME_MAX_LENGTH = 64;
 const OPENAI_REALTIME_VOICES = [
   "alloy",
   "ash",
@@ -334,6 +339,40 @@ function hasOpenAIRealtimeApiKeyInput(configuredApiKey: string | undefined): boo
     normalizeSecretInputString(configuredApiKey) ??
     normalizeSecretInputString(process.env.OPENAI_API_KEY),
   );
+}
+
+function normalizeOpenAIRealtimeTools(
+  tools: RealtimeVoiceTool[] | undefined,
+  maxNameLength?: number,
+): RealtimeVoiceTool[] | undefined {
+  const normalized: RealtimeVoiceTool[] = [];
+  let omitted = 0;
+  for (const tool of tools ?? []) {
+    try {
+      const name = tool.name;
+      if (typeof name !== "string") {
+        omitted += 1;
+        continue;
+      }
+      const exceedsLengthLimit = maxNameLength !== undefined && name.length > maxNameLength;
+      if (exceedsLengthLimit || !OPENAI_REALTIME_TOOL_NAME_RE.test(name)) {
+        omitted += 1;
+        continue;
+      }
+      normalized.push({
+        type: "function",
+        name,
+        description: tool.description,
+        parameters: tool.parameters,
+      });
+    } catch {
+      omitted += 1;
+    }
+  }
+  if (omitted > 0) {
+    warn(`openai realtime: omitted ${omitted} tool definition(s) with unsupported names`);
+  }
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 async function resolveOpenAIRealtimePlatformApiKey(params: {
@@ -846,6 +885,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   private buildGaSessionUpdate(): RealtimeGaSessionUpdate {
     const cfg = this.config;
+    const tools = normalizeOpenAIRealtimeTools(cfg.tools);
     return {
       type: "session.update",
       session: {
@@ -866,9 +906,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           },
         },
         ...(cfg.reasoningEffort ? { reasoning: { effort: cfg.reasoningEffort } } : {}),
-        ...(cfg.tools && cfg.tools.length > 0
+        ...(tools
           ? {
-              tools: cfg.tools,
+              tools,
               tool_choice: "auto",
             }
           : {}),
@@ -883,6 +923,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private buildAzureDeploymentSessionUpdate(): RealtimeAzureDeploymentSessionUpdate {
     const cfg = this.config;
     const format = this.resolveLegacyRealtimeAudioFormat();
+    const tools = normalizeOpenAIRealtimeTools(
+      cfg.tools,
+      AZURE_OPENAI_REALTIME_TOOL_NAME_MAX_LENGTH,
+    );
     return {
       type: "session.update",
       session: {
@@ -894,9 +938,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         input_audio_transcription: { model: "whisper-1" },
         turn_detection: this.buildTurnDetectionConfig(),
         temperature: cfg.temperature ?? 0.8,
-        ...(cfg.tools && cfg.tools.length > 0
+        ...(tools
           ? {
-              tools: cfg.tools,
+              tools,
               tool_choice: "auto",
             }
           : {}),
@@ -1399,6 +1443,7 @@ async function createOpenAIRealtimeBrowserSession(
     cfg: req.cfg,
   });
   const voice = normalizeOpenAIRealtimeVoice(req.voice) ?? config.voice ?? "alloy";
+  const tools = normalizeOpenAIRealtimeTools(req.tools);
   const session: Record<string, unknown> = {
     type: "realtime",
     model,
@@ -1425,8 +1470,8 @@ async function createOpenAIRealtimeBrowserSession(
       output: { voice },
     },
   };
-  if (req.tools && req.tools.length > 0) {
-    session.tools = req.tools;
+  if (tools) {
+    session.tools = tools;
     session.tool_choice = "auto";
   }
   const reasoningEffort = trimToUndefined(req.reasoningEffort) ?? config.reasoningEffort;

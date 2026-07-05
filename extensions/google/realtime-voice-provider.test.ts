@@ -1,5 +1,6 @@
 // Google tests cover realtime voice provider plugin behavior.
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
+import type { RealtimeVoiceTool } from "openclaw/plugin-sdk/realtime-voice";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
@@ -88,6 +89,35 @@ function requireFirstError(mock: ReturnType<typeof vi.fn>): { message?: string }
 
 function requireFirstAudio(mock: ReturnType<typeof vi.fn>): unknown {
   return requireFirstMockArg(mock, "Google Live audio");
+}
+
+function createRealtimeTool(name: string): RealtimeVoiceTool {
+  return {
+    type: "function",
+    name,
+    description: "Contract test tool",
+    parameters: { type: "object", properties: {} },
+  };
+}
+
+function createUnreadableToolName(): RealtimeVoiceTool {
+  return {
+    type: "function",
+    get name(): string {
+      throw new Error("unreadable tool name");
+    },
+    description: "Contract test tool",
+    parameters: { type: "object", properties: {} },
+  };
+}
+
+function createMalformedToolName(name: unknown): RealtimeVoiceTool {
+  return {
+    type: "function",
+    name,
+    description: "Contract test tool",
+    parameters: { type: "object", properties: {} },
+  } as unknown as RealtimeVoiceTool;
 }
 
 describe("buildGoogleRealtimeVoiceProvider", () => {
@@ -300,6 +330,36 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       required: ["question"],
     });
     expect(declarations[1]?.behavior).toBe("NON_BLOCKING");
+  });
+
+  it("omits tool names that Google Live cannot accept", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      tools: [
+        createRealtimeTool("_lookup"),
+        createRealtimeTool("calendar.lookup:next"),
+        createRealtimeTool("1_lookup"),
+        createRealtimeTool("bad/name"),
+        createRealtimeTool(`x${"a".repeat(128)}`),
+        createMalformedToolName(undefined),
+        createMalformedToolName(null),
+        createMalformedToolName(42),
+        createUnreadableToolName(),
+      ],
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    const config = lastConnectParams().config as {
+      tools?: Array<{ functionDeclarations?: Array<{ name?: string }> }>;
+    };
+    expect(config.tools?.[0]?.functionDeclarations?.map((declaration) => declaration.name)).toEqual([
+      "_lookup",
+      "calendar.lookup:next",
+    ]);
   });
 
   it("omits zero temperature for native audio responses", async () => {

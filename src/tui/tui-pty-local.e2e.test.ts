@@ -370,13 +370,14 @@ async function startLocalModeTui(opts: { invalidEditLoop?: boolean } = {}) {
 
 async function startGatewayModeTui(params: {
   queueMode: "followup" | "collect";
+  firstReplyText?: string;
   firstResponseDelayMs?: number;
   queueDebounceMs?: number;
   invalidEditLoop?: boolean;
 }) {
   const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-gateway-"));
   const workspaceDir = path.join(tempDir, "workspace");
-  const mockModel = await startMockModelServer("FIRST_RUN_ACTIVE", {
+  const mockModel = await startMockModelServer(params.firstReplyText ?? "FIRST_RUN_ACTIVE", {
     firstResponseDelayMs: params.firstResponseDelayMs ?? 2_500,
     followupReplyText: "FOLLOWUP_RUN_COMPLETE",
     invalidEditLoop: params.invalidEditLoop,
@@ -680,6 +681,60 @@ describe("TUI PTY real backends", () => {
         expect(JSON.stringify(fixture.mockModel.requests()[2]?.body)).toContain(
           "turn after queued followup",
         );
+
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "renders a non-deliverable direct reply failure through the real Gateway and TUI",
+    async () => {
+      const fixture = await startGatewayModeTui({
+        queueMode: "followup",
+        firstReplyText: "[[reply_to_current]]",
+        firstResponseDelayMs: 0,
+      });
+      try {
+        await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write("non-deliverable first turn\r");
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 1 ? true : null),
+          onTimeout: () =>
+            new Error(`first prompt did not reach the model\n${fixture.run.output()}`),
+        });
+
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () =>
+            fixture.run.output().includes("did not produce a visible reply") ? true : null,
+          onTimeout: () =>
+            new Error(
+              `empty-reply fallback was not rendered\nrequests=${JSON.stringify(
+                fixture.mockModel.requests(),
+                null,
+                2,
+              )}\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
+            ),
+        });
+        expect(fixture.mockModel.requests()).toHaveLength(1);
+        expect(fixture.run.output()).not.toContain("[[reply_to_current]]");
+
+        await fixture.run.write("turn after empty reply\r");
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 2 ? true : null),
+          onTimeout: () =>
+            new Error(
+              `TUI stayed blocked after empty-reply fallback\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
+            ),
+        });
+        await fixture.run.waitForOutput("FOLLOWUP_RUN_COMPLETE");
 
         await fixture.run.write("/exit\r", { delay: false });
         expect((await fixture.run.waitForExit()).exitCode).toBe(0);

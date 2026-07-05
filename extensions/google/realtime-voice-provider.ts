@@ -22,6 +22,7 @@ import {
   timestampMsToIsoString,
 } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
+import { warn } from "openclaw/plugin-sdk/runtime-env";
 import type {
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBridge,
@@ -63,6 +64,8 @@ const GOOGLE_REALTIME_BROWSER_NEW_SESSION_TTL_MS = 60 * 1000;
 const GOOGLE_REALTIME_RECONNECT_MAX_ATTEMPTS = 3;
 const GOOGLE_REALTIME_RECONNECT_BASE_DELAY_MS = 250;
 const GOOGLE_REALTIME_RECONNECT_MAX_DELAY_MS = 2_000;
+// Google Live requires a leading letter/underscore and caps function names at 128 characters.
+const GOOGLE_REALTIME_TOOL_NAME_RE = /^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$/;
 const MULAW_LINEAR_SAMPLES = new Int16Array(256);
 
 for (let i = 0; i < MULAW_LINEAR_SAMPLES.length; i += 1) {
@@ -339,19 +342,34 @@ function buildRealtimeInputConfig(
 }
 
 function buildFunctionDeclarations(tools: RealtimeVoiceTool[] | undefined): FunctionDeclaration[] {
-  return (tools ?? []).map((tool) => {
-    // Live preview models honor the OpenAPI `parameters` field; the SDK normalizes
-    // our lowercase JSON Schema types before sending the mutually exclusive field.
-    const declaration: FunctionDeclaration = {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters as unknown as FunctionDeclaration["parameters"],
-    };
-    if (tool.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
-      declaration.behavior = "NON_BLOCKING" as Behavior;
+  const declarations: FunctionDeclaration[] = [];
+  let omitted = 0;
+  for (const tool of tools ?? []) {
+    try {
+      const name = tool.name;
+      if (typeof name !== "string" || !GOOGLE_REALTIME_TOOL_NAME_RE.test(name)) {
+        omitted += 1;
+        continue;
+      }
+      // Live preview models honor the OpenAPI `parameters` field; the SDK normalizes
+      // our lowercase JSON Schema types before sending the mutually exclusive field.
+      const declaration: FunctionDeclaration = {
+        name,
+        description: tool.description,
+        parameters: tool.parameters as unknown as FunctionDeclaration["parameters"],
+      };
+      if (name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
+        declaration.behavior = "NON_BLOCKING" as Behavior;
+      }
+      declarations.push(declaration);
+    } catch {
+      omitted += 1;
     }
-    return declaration;
-  });
+  }
+  if (omitted > 0) {
+    warn(`google realtime: omitted ${omitted} tool definition(s) with unsupported names`);
+  }
+  return declarations;
 }
 
 function buildGoogleLiveConnectConfig(config: GoogleRealtimeLiveConfig): LiveConnectConfig {
