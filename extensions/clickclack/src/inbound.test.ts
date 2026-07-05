@@ -289,10 +289,11 @@ describe("handleClickClackInbound", () => {
         allowProgressCallbacksWhenSourceDeliverySuppressed?: unknown;
       };
     };
-    // Model provenance capture applies to every account (it stamps the final
-    // reply), but durable activity item events wire up only on opt-in.
-    expect(typeof withoutOptIn.replyOptions?.onModelSelected).toBe("function");
-    expect(withoutOptIn.replyOptions?.onItemEvent).toBeUndefined();
+    // Provenance capture and activity item events both ride the agentActivity
+    // opt-in: with the flag off, reply wire payloads stay byte-identical to
+    // pre-activity builds.
+    expect(withoutOptIn.replyOptions).toBeUndefined();
+    expect(typeof withOptIn.replyOptions?.onModelSelected).toBe("function");
     expect(withOptIn.replyOptions?.commentaryProgressEnabled).toBe(true);
     // Channel-owned progress rendering: item events must flow even when
     // session verbose mode is off and source delivery is handled by ClickClack.

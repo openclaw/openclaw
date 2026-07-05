@@ -217,26 +217,27 @@ export async function handleClickClackInbound(params: {
     dispatchReplyWithBufferedBlockDispatcher:
       runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
     toolsAllow: params.account.toolsAllow,
-    replyOptions: {
-      onModelSelected: (ctx: { provider: string; model: string; thinkLevel?: string }) => {
-        turnProvenance = {
-          model: ctx.provider && ctx.model ? `${ctx.provider}/${ctx.model}` : ctx.model,
-          thinking: ctx.thinkLevel,
-        };
-        activity?.setProvenance(turnProvenance);
-      },
-      ...(activity
-        ? {
-            onItemEvent: activity.onItemEvent,
-            commentaryProgressEnabled: true,
-            // The durable activity rows are ClickClack's own progress
-            // rendering, so item events must flow even when session verbose
-            // mode is off and the default tool-progress texts stay suppressed.
-            suppressDefaultToolProgressMessages: true,
-            allowProgressCallbacksWhenSourceDeliverySuppressed: true,
-          }
-        : {}),
-    },
+    // Provenance stamping shares the agentActivity opt-in: with the flag off
+    // the extension's wire payloads stay byte-identical to pre-activity
+    // builds, which is the documented contract for stock setups.
+    replyOptions: activity
+      ? {
+          onModelSelected: (ctx: { provider: string; model: string; thinkLevel?: string }) => {
+            turnProvenance = {
+              model: ctx.provider && ctx.model ? `${ctx.provider}/${ctx.model}` : ctx.model,
+              thinking: ctx.thinkLevel,
+            };
+            activity?.setProvenance(turnProvenance);
+          },
+          onItemEvent: activity.onItemEvent,
+          commentaryProgressEnabled: true,
+          // The durable activity rows are ClickClack's own progress
+          // rendering, so item events must flow even when session verbose
+          // mode is off and the default tool-progress texts stay suppressed.
+          suppressDefaultToolProgressMessages: true,
+          allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+        }
+      : undefined,
     delivery: {
       deliver: async (payload) => {
         const text =
