@@ -1357,6 +1357,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Operations and approval
   - H2: Setup bootstrap
   - H2: Model-assisted planner
+  - H3: CLI harness trust model
   - H2: Switching to an agent
   - H2: Message rescue mode
   - H2: Related
