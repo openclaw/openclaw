@@ -429,6 +429,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private responseCreateInFlight = false;
   private manualResponseCreateEventId: string | null = null;
   private responseCancelInFlight = false;
+  private manualResponseCancelEventId: string | null = null;
   private responseCreatePending = false;
   private autoRespondSuppressedForManualResponse = false;
   private continuingToolCallIds = new Set<string>();
@@ -1067,6 +1068,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         this.responseCreateInFlight = false;
         this.manualResponseCreateEventId = null;
         this.responseCancelInFlight = false;
+        this.manualResponseCancelEventId = null;
         if (this.responseCreatePending) {
           this.flushPendingResponseCreate();
         } else {
@@ -1130,9 +1132,16 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           this.responseCreatePending = true;
           return;
         }
+        const rejectsManualResponseCancel =
+          this.manualResponseCancelEventId !== null &&
+          readRealtimeErrorEventId(event.error) === this.manualResponseCancelEventId;
         if (detail === OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR) {
+          if (!rejectsManualResponseCancel) {
+            return;
+          }
           this.responseActive = false;
           this.responseCancelInFlight = false;
+          this.manualResponseCancelEventId = null;
           if (this.responseCreatePending) {
             this.flushPendingResponseCreate();
           } else {
@@ -1188,7 +1197,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.responseActive &&
       !this.responseCancelInFlight
     ) {
-      this.sendEvent({ type: "response.cancel" }, "reason=barge-in");
+      const eventId = `openclaw-response-cancel-${randomUUID()}`;
+      this.manualResponseCancelEventId = eventId;
+      this.sendEvent({ type: "response.cancel", event_id: eventId }, "reason=barge-in");
       this.responseCancelInFlight = true;
     }
     if (shouldInterruptProvider) {
@@ -1292,6 +1303,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.responseCreateInFlight = false;
     this.manualResponseCreateEventId = null;
     this.responseCancelInFlight = false;
+    this.manualResponseCancelEventId = null;
     this.responseCreatePending = false;
     this.autoRespondSuppressedForManualResponse = false;
     this.continuingToolCallIds.clear();

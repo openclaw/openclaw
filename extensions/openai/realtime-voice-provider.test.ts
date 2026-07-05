@@ -153,6 +153,13 @@ function expectedResponseCreateEvent() {
   });
 }
 
+function expectedResponseCancelEvent() {
+  return expect.objectContaining({
+    type: "response.cancel",
+    event_id: expect.stringMatching(/^openclaw-response-cancel-/),
+  });
+}
+
 function createJsonResponse(body: unknown, init?: { status?: number }): Response {
   return new Response(JSON.stringify(body), {
     status: init?.status ?? 200,
@@ -1436,7 +1443,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(onAudio).toHaveBeenCalledTimes(1);
     expect(onClearAudio).toHaveBeenCalledTimes(1);
     expect(parseSent(socket).slice(-2)).toEqual([
-      { type: "response.cancel" },
+      expectedResponseCancelEvent(),
       {
         type: "conversation.item.truncate",
         item_id: "item_1",
@@ -2266,7 +2273,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     bridge.handleBargeIn?.({ audioPlaybackActive: true, force: true });
 
     expect(parseSent(socket).slice(-2)).toEqual([
-      { type: "response.cancel" },
+      expectedResponseCancelEvent(),
       {
         type: "conversation.item.truncate",
         item_id: "item_1",
@@ -2323,7 +2330,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     expect(onClearAudio).toHaveBeenCalledTimes(1);
     expect(parseSent(socket).slice(-2)).toEqual([
-      { type: "response.cancel" },
+      expectedResponseCancelEvent(),
       {
         type: "conversation.item.truncate",
         item_id: "item_1",
@@ -2359,12 +2366,19 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     bridge.submitToolResult("call_1", { text: "done" });
     bridge.handleBargeIn?.({ audioPlaybackActive: true });
+    const responseCancelEvent = parseSent(socket).findLast(
+      (event) => event.type === "response.cancel",
+    );
+    if (!responseCancelEvent?.event_id) {
+      throw new Error("expected response.cancel event id");
+    }
     socket.emit(
       "message",
       Buffer.from(
         JSON.stringify({
           type: "error",
           error: {
+            event_id: responseCancelEvent.event_id,
             message: "Cancellation failed: no active response found",
           },
         }),
@@ -2373,6 +2387,85 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     expect(onError).not.toHaveBeenCalled();
     expect(parseSent(socket).slice(-1)).toEqual([expectedResponseCreateEvent()]);
+  });
+
+  it("ignores a stale cancellation error after a newer manual response starts", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onError = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onError,
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+    bridge.setMediaTimestamp(1000);
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "response.audio.delta",
+          item_id: "item_1",
+          delta: Buffer.from("assistant audio").toString("base64"),
+        }),
+      ),
+    );
+    bridge.setMediaTimestamp(1300);
+
+    bridge.handleBargeIn?.({ audioPlaybackActive: true });
+    const responseCancelEvent = parseSent(socket).findLast(
+      (event) => event.type === "response.cancel",
+    );
+    if (!responseCancelEvent?.event_id) {
+      throw new Error("expected response.cancel event id");
+    }
+    bridge.submitToolResult("call_1", { text: "done" });
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+    const sessionUpdateCount = parseSent(socket).filter(
+      (event) => event.type === "session.update",
+    ).length;
+
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "error",
+          error: {
+            event_id: responseCancelEvent.event_id,
+            message: "Cancellation failed: no active response found",
+          },
+        }),
+      ),
+    );
+
+    expect(onError).not.toHaveBeenCalled();
+    expect(parseSent(socket).filter((event) => event.type === "session.update")).toHaveLength(
+      sessionUpdateCount,
+    );
+    expect(parseSent(socket).at(-1)).toEqual(expectedResponseCreateEvent());
+
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+    expectRecordFields(
+      requireNestedRecord(parseSent(socket).at(-1)?.session, ["audio", "input", "turn_detection"]),
+      "restored turn detection",
+      {
+        create_response: true,
+        interrupt_response: true,
+      },
+    );
   });
 
   it("resets deferred response guards after websocket reconnect", async () => {
