@@ -15,6 +15,7 @@ import {
   buildMentionRegexes,
   buildChannelInboundEventContext,
   createChannelInboundDebouncer,
+  formatInboundMediaUnavailableText,
   formatInboundEnvelope,
   formatInboundFromLabel,
   matchesMentionPatterns,
@@ -44,7 +45,12 @@ import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
-import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import {
+  danger,
+  logVerbose,
+  shouldLogVerbose,
+  sleep as delay,
+} from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -139,12 +145,6 @@ function hasSignalStatusReplyDeliveryFailure(result: SignalStatusDispatchResult)
     (failedCounts?.block ?? 0) > 0 ||
     (failedCounts?.final ?? 0) > 0
   );
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function resolveSignalStatusReactionEmojis(
@@ -335,7 +335,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         body: combinedBody,
         bodyForAgent: entry.bodyText,
         inboundHistory,
-        rawBody: entry.bodyText,
+        rawBody: entry.commandBody,
         commandBody: entry.commandBody,
       },
       access: {
@@ -515,7 +515,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         ingest: () => ({
           id: entry.messageId ?? `${entry.timestamp ?? Date.now()}`,
           timestamp: entry.timestamp,
-          rawText: entry.bodyText,
+          rawText: entry.commandBody,
           raw: entry,
         }),
         resolveTurn: () => ({
@@ -645,7 +645,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     },
     shouldDebounce: (entry) => {
       return shouldDebounceTextInbound({
-        text: entry.bodyText,
+        text: entry.commandBody,
         cfg: deps.cfg,
         hasMedia: Boolean(entry.mediaPath || entry.mediaType || entry.mediaPaths?.length),
       });
@@ -663,12 +663,17 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         .map((entry) => entry.bodyText)
         .filter(Boolean)
         .join("\\n");
+      const combinedCommandBody = entries
+        .map((entry) => entry.commandBody)
+        .filter(Boolean)
+        .join("\\n");
       if (!combinedText.trim()) {
         return;
       }
       await handleSignalInboundMessage({
         ...last,
         bodyText: combinedText,
+        commandBody: combinedCommandBody,
         mediaPath: undefined,
         mediaType: undefined,
         mediaPaths: undefined,
@@ -1065,9 +1070,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const mediaTypes: string[] = [];
     let placeholder = "";
     const attachments = dataMessage.attachments ?? [];
+    let unavailableAttachmentCount = deps.ignoreAttachments ? attachments.length : 0;
     if (!deps.ignoreAttachments) {
       for (const attachment of attachments) {
         if (!attachment?.id) {
+          unavailableAttachmentCount += 1;
           continue;
         }
         try {
@@ -1088,8 +1095,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
               mediaPath = fetched.path;
               mediaType = fetched.contentType ?? attachment.contentType ?? undefined;
             }
+          } else {
+            unavailableAttachmentCount += 1;
           }
         } catch (err) {
+          unavailableAttachmentCount += 1;
           deps.runtime.error?.(danger(`attachment fetch failed: ${String(err)}`));
         }
       }
@@ -1101,12 +1111,19 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       const kind = kindFromMime(mediaType ?? undefined);
       if (kind) {
         placeholder = `<media:${kind}>`;
-      } else if (attachments.length) {
+      } else if (mediaPaths.length > 0) {
         placeholder = "<media:attachment>";
       }
     }
 
-    const bodyText = messageText || placeholder || visibleQuoteText || "";
+    let bodyText = messageText || placeholder || visibleQuoteText || "";
+    if (unavailableAttachmentCount > 0) {
+      const attachmentLabel = unavailableAttachmentCount === 1 ? "attachment" : "attachments";
+      bodyText = formatInboundMediaUnavailableText({
+        body: bodyText,
+        notice: `[signal ${unavailableAttachmentCount > 1 ? `${unavailableAttachmentCount} ` : ""}${attachmentLabel} unavailable]`,
+      });
+    }
     if (!bodyText) {
       return;
     }

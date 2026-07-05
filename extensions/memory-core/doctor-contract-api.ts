@@ -18,7 +18,11 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemoryDreamingWorkspaces } from "openclaw/plugin-sdk/memory-core-host-status";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  archiveLegacyStateSource,
+  legacyStateFileExists,
+  type PluginDoctorStateMigration,
+} from "openclaw/plugin-sdk/runtime-doctor";
 import {
   ensureOpenClawAgentDatabaseSchema,
   resolveOpenClawAgentSqlitePath,
@@ -724,7 +728,7 @@ async function collectLegacyMemorySidecarSources(params: {
   async function addSource(agentId: string, legacyPath: string): Promise<void> {
     const normalizedPath = path.resolve(legacyPath);
     const key = `${agentId}\0${normalizedPath}`;
-    if (seen.has(key) || !(await fileExists(normalizedPath))) {
+    if (seen.has(key) || !(await legacyStateFileExists(normalizedPath))) {
       return;
     }
     seen.add(key);
@@ -759,7 +763,7 @@ async function archiveLegacyMemorySidecar(params: {
     await Promise.all(
       LEGACY_MEMORY_SIDECAR_SUFFIXES.map(async (suffix) => {
         const filePath = `${params.source.legacyPath}${suffix}`;
-        return (await fileExists(filePath)) ? filePath : null;
+        return (await legacyStateFileExists(filePath)) ? filePath : null;
       }),
     )
   ).filter((filePath): filePath is string => filePath !== null);
@@ -770,7 +774,7 @@ async function archiveLegacyMemorySidecar(params: {
     await Promise.all(
       existingSources.map(async (sourcePath) => {
         const archivedPath = `${sourcePath}.migrated`;
-        return (await fileExists(archivedPath)) ? archivedPath : null;
+        return (await legacyStateFileExists(archivedPath)) ? archivedPath : null;
       }),
     )
   ).filter((filePath): filePath is string => filePath !== null);
@@ -789,7 +793,10 @@ async function archiveLegacyMemorySidecar(params: {
     } catch (err) {
       for (const entry of renamed.toReversed()) {
         try {
-          if ((await fileExists(entry.archivedPath)) && !(await fileExists(entry.sourcePath))) {
+          if (
+            (await legacyStateFileExists(entry.archivedPath)) &&
+            !(await legacyStateFileExists(entry.sourcePath))
+          ) {
             await fs.rename(entry.archivedPath, entry.sourcePath);
           }
         } catch (rollbackErr) {
@@ -827,7 +834,7 @@ async function preserveLegacyMemorySidecarRetryPath(params: {
     await Promise.all(
       LEGACY_MEMORY_SIDECAR_SUFFIXES.map(async (suffix) => {
         const targetPath = `${retryPath}${suffix}`;
-        return (await fileExists(targetPath)) ? targetPath : null;
+        return (await legacyStateFileExists(targetPath)) ? targetPath : null;
       }),
     )
   ).filter((targetPath): targetPath is string => targetPath !== null);
@@ -843,14 +850,14 @@ async function preserveLegacyMemorySidecarRetryPath(params: {
             .digest("hex")
             .slice(0, 12)}.sqlite`,
         );
-  if (await fileExists(targetBasePath)) {
+  if (await legacyStateFileExists(targetBasePath)) {
     return;
   }
   const existingSources = (
     await Promise.all(
       LEGACY_MEMORY_SIDECAR_SUFFIXES.map(async (suffix) => {
         const sourcePath = `${params.source.legacyPath}${suffix}`;
-        return (await fileExists(sourcePath))
+        return (await legacyStateFileExists(sourcePath))
           ? { sourcePath, targetPath: `${targetBasePath}${suffix}` }
           : null;
       }),
@@ -985,40 +992,8 @@ function resolveConfiguredWorkspaces(config: unknown, env: NodeJS.ProcessEnv): s
   ).map((entry) => entry.workspaceDir);
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(filePath);
-    return stat.isFile();
-  } catch {
-    return false;
-  }
-}
-
 async function readJsonFile(filePath: string): Promise<unknown> {
   return JSON.parse(await fs.readFile(filePath, "utf8"));
-}
-
-async function archiveLegacySource(params: {
-  filePath: string;
-  label: string;
-  changes: string[];
-  warnings: string[];
-}): Promise<void> {
-  const archivedPath = `${params.filePath}.migrated`;
-  if (await fileExists(archivedPath)) {
-    params.warnings.push(
-      `Left migrated Memory Core ${params.label} source in place because ${archivedPath} already exists`,
-    );
-    return;
-  }
-  try {
-    await fs.rename(params.filePath, archivedPath);
-    params.changes.push(`Archived Memory Core ${params.label} legacy source -> ${archivedPath}`);
-  } catch (err) {
-    params.warnings.push(
-      `Failed archiving Memory Core ${params.label} legacy source: ${String(err)}`,
-    );
-  }
 }
 
 async function collectLegacySources(
@@ -1035,7 +1010,7 @@ async function collectLegacySources(
     ];
     for (const candidate of candidates) {
       const filePath = path.join(workspaceDir, candidate.relativePath);
-      if (await fileExists(filePath)) {
+      if (await legacyStateFileExists(filePath)) {
         sources.push({ workspaceDir, label: candidate.label, filePath });
       }
     }
@@ -1200,9 +1175,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         changes.push(
           `Migrated Memory Core ${source.label} -> SQLite plugin state (${imported} row(s))`,
         );
-        await archiveLegacySource({
+        await archiveLegacyStateSource({
           filePath: source.filePath,
-          label: source.label,
+          label: `Memory Core ${source.label}`,
           changes,
           warnings,
         });

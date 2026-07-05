@@ -189,23 +189,16 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun parseGatewayEndpointAllowsLinkLocalIpv6ZoneCleartextWsUrls() {
-    val parsed = parseGatewayEndpoint("ws://[fe80::1%25eth0]")
-
-    assertEquals("fe80::1%25eth0", parsed?.host)
-    assertEquals(18789, parsed?.port)
-    assertEquals(false, parsed?.tls)
-    assertEquals("http://[fe80::1%25eth0]:18789", parsed?.displayUrl)
-  }
-
-  @Test
-  fun parseGatewayEndpointAllowsSecureIpv6ZoneUrls() {
-    val parsed = parseGatewayEndpoint("wss://[fe80::1%25wlan0]:443")
-
-    assertEquals("fe80::1%25wlan0", parsed?.host)
-    assertEquals(443, parsed?.port)
-    assertEquals(true, parsed?.tls)
-    assertEquals("https://[fe80::1%25wlan0]", parsed?.displayUrl)
+  fun parseGatewayEndpointReportsUnsupportedIpv6ZoneIds() {
+    listOf(
+        "ws://[fe80::1%25eth0]",
+        "wss://[fe80::1%25wlan0]:443",
+      )
+      .forEach { url ->
+        val parsed = parseGatewayEndpointResult(url)
+        assertNull(url, parsed.config)
+        assertEquals(url, GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED, parsed.error)
+      }
   }
 
   @Test
@@ -344,6 +337,35 @@ class GatewayConfigResolverTest {
 
     assertNull(resolved.setupCode)
     assertEquals(GatewayEndpointValidationError.INSECURE_REMOTE_URL, resolved.error)
+  }
+
+  @Test
+  fun resolveScannedSetupCodeResultPreservesIpv6ZoneError() {
+    val setupCode =
+      encodeSetupCode("""{"url":"wss://[fe80::1%25wlan0]:443","bootstrapToken":"bootstrap-1"}""")
+
+    val resolved = resolveScannedSetupCodeResult(setupCode)
+
+    assertNull(resolved.setupCode)
+    assertEquals(GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED, resolved.error)
+  }
+
+  @Test
+  fun gatewayEndpointValidationMessageExplainsIpv6ZoneReplacement() {
+    val error = GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED
+
+    assertEquals(
+      "IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname.",
+      gatewayEndpointValidationMessage(error, GatewayEndpointInputSource.MANUAL),
+    )
+    assertEquals(
+      "Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
+      gatewayEndpointValidationMessage(error, GatewayEndpointInputSource.SETUP_CODE),
+    )
+    assertEquals(
+      "QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
+      gatewayEndpointValidationMessage(error, GatewayEndpointInputSource.QR_SCAN),
+    )
   }
 
   @Test

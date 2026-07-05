@@ -29,6 +29,8 @@ import type {
 } from "../server-chat-state.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
+import type { TerminalLaunchResolution } from "../terminal/launch.js";
+import type { TerminalSessionManager } from "../terminal/session-manager.js";
 
 /**
  * Shared gateway request types used by every server-method module.
@@ -67,6 +69,8 @@ export type GatewayRequestContext = {
   cron: CronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
+  isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   loadGatewayModelCatalog: (params?: { readOnly?: boolean }) => Promise<ModelCatalogEntry[]>;
@@ -101,8 +105,13 @@ export type GatewayRequestContext = {
   disconnectClientsUsingSharedGatewayAuth?: () => void;
   enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;
   nodeRegistry: NodeRegistry;
+  // Operator terminal session store. Absent in local/in-process contexts where
+  // no PTY surface is served.
+  terminalSessions?: TerminalSessionManager;
   agentRunSeq: Map<string, number>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  /** Cancel identities for turns waiting in the followup/collect queue. */
+  chatQueuedTurns: Map<string, import("../chat-queued-turns.js").QueuedChatTurnEntry>;
   chatAbortedRuns: Map<string, ChatAbortMarker>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;

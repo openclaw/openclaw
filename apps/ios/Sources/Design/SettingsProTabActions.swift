@@ -1,3 +1,4 @@
+import CoreLocation
 import OpenClawKit
 import SwiftUI
 import UIKit
@@ -11,81 +12,70 @@ extension SettingsProTab {
         value: String,
         color: Color) -> some View
     {
-        ProCard(radius: SettingsLayout.cardRadius) {
+        Section {
             HStack(spacing: 12) {
-                ProIconBadge(systemName: icon, color: color)
-                VStack(alignment: .leading, spacing: 3) {
+                SettingsIcon(systemName: icon, color: color)
+                VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.headline)
+                        .font(OpenClawType.headline)
                     Text(detail)
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
-                ProValuePill(value: value, color: color)
+                Text(value)
+                    .font(OpenClawType.subheadMedium)
+                    .foregroundStyle(color)
             }
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     var diagnosticChecksCard: some View {
-        ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
-            VStack(spacing: 0) {
-                self.diagnosticCheckRow(
-                    icon: "stethoscope",
-                    title: "Last Run",
-                    detail: self.diagnosticsLastRunText,
-                    value: self.diagnosticsRunValue,
-                    color: self.diagnosticsRunColor)
-                Divider().padding(.leading, 60)
-                self.diagnosticCheckRow(
-                    icon: "antenna.radiowaves.left.and.right",
-                    title: "Gateway Link",
-                    detail: self.gatewayStatusDetail,
-                    value: self.gatewayStatusValue,
-                    color: self.gatewayStatusColor)
-                Divider().padding(.leading, 60)
-                self.diagnosticCheckRow(
-                    icon: "dot.radiowaves.left.and.right",
-                    title: "Discovery",
-                    detail: self.gatewayController.discoveryStatusText,
-                    value: "\(self.gatewayController.gateways.count)",
-                    color: self.gatewayController.gateways.isEmpty ? .secondary : OpenClawBrand.accent)
-                Divider().padding(.leading, 60)
-                self.diagnosticCheckRow(
-                    icon: "waveform",
-                    title: "Talk Config",
-                    detail: self.gatewayTalkConfigDetail,
-                    value: self.gatewayTalkConfigValue,
-                    color: self.gatewayTalkConfigColor)
-                Divider().padding(.leading, 60)
-                self.diagnosticCheckRow(
-                    icon: "bell",
-                    title: "Notifications",
-                    detail: "Approval and event alert channel",
-                    value: self.notificationStatusText,
-                    color: self.notificationStatus.color)
-                Divider().padding(.leading, 60)
-                self.diagnosticCheckRow(
-                    icon: "rectangle.on.rectangle",
-                    title: "Screen Capture",
-                    detail: "Live foreground capture state",
-                    value: self.appModel.screenRecordActive ? "live" : "idle",
-                    color: self.appModel.screenRecordActive ? OpenClawBrand.ok : .secondary)
-                Divider().padding(.leading, 60)
-                self.diagnosticCheckRow(
-                    icon: "mic",
-                    title: "Voice Wake",
-                    detail: self.appModel.voiceWake.statusText,
-                    value: self.voiceWakeEnabled ? "on" : "off",
-                    color: self.voiceWakeEnabled ? OpenClawBrand.ok : .secondary)
-                    .accessibilityElement(children: .combine)
-                    .accessibilityIdentifier("diagnostics-voice-wake-status")
-                    .accessibilityValue(self.appModel.voiceWake.statusText)
-            }
+        Section("Checks") {
+            self.diagnosticCheckRow(
+                icon: "stethoscope",
+                title: "Last Run",
+                detail: self.diagnosticsLastRunText,
+                value: self.diagnosticsRunValue,
+                color: self.diagnosticsRunColor)
+            self.diagnosticCheckRow(
+                icon: "antenna.radiowaves.left.and.right",
+                title: "Gateway Link",
+                detail: self.gatewayStatusDetail,
+                value: self.gatewayStatusValue,
+                color: self.gatewayStatusColor)
+            self.diagnosticCheckRow(
+                icon: "dot.radiowaves.left.and.right",
+                title: "Discovery",
+                detail: self.gatewayController.discoveryStatusText,
+                value: "\(self.gatewayController.gateways.count)",
+                color: self.gatewayController.gateways.isEmpty ? .secondary : OpenClawBrand.accent)
+            self.diagnosticCheckRow(
+                icon: "waveform",
+                title: "Talk Config",
+                detail: self.gatewayTalkConfigDetail,
+                value: self.gatewayTalkConfigValue,
+                color: self.gatewayTalkConfigColor)
+            self.diagnosticCheckRow(
+                icon: "bell",
+                title: "Notifications",
+                detail: "Approval and event alert channel",
+                value: self.notificationStatusText,
+                color: self.notificationStatus.color)
+            self.diagnosticCheckRow(
+                icon: "rectangle.on.rectangle",
+                title: "Screen Capture",
+                detail: "Live foreground capture state",
+                value: self.appModel.screenRecordActive ? "live" : "idle",
+                color: self.appModel.screenRecordActive ? OpenClawBrand.ok : .secondary)
+            self.diagnosticCheckRow(
+                icon: "mic",
+                title: "Voice Wake",
+                detail: self.appModel.voiceWake.statusText,
+                value: self.voiceWakeEnabled ? "on" : "off",
+                color: self.voiceWakeEnabled ? OpenClawBrand.ok : .secondary)
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     func diagnosticCheckRow(
@@ -96,42 +86,35 @@ extension SettingsProTab {
         color: Color) -> some View
     {
         HStack(spacing: 12) {
-            ProIconBadge(systemName: icon, color: color)
-            VStack(alignment: .leading, spacing: 3) {
+            SettingsIcon(systemName: icon, color: color)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                 Text(detail)
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            ProValuePill(value: value, color: color)
+            Text(value)
+                .font(OpenClawType.subhead)
+                .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
     }
 
     func detailListCard(@ViewBuilder content: () -> some View) -> some View {
-        ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
-            VStack(spacing: 0, content: content)
+        Section {
+            content()
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     func detailRow(_ label: String, value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 8)
+        LabeledContent(label) {
             Text(value)
-                .font(.caption)
+                .font(OpenClawType.subhead)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
-        .padding(.horizontal, 14)
-        .frame(height: 42)
     }
 
     func reconnectGateway() async {
@@ -170,10 +153,41 @@ extension SettingsProTab {
         self.manualGatewayPortText = self.manualGatewayPort > 0 ? String(self.manualGatewayPort) : ""
         self.selectedAgentPickerId = self.appModel.selectedAgentId ?? ""
         self.defaultShareInstruction = ShareToAgentSettings.loadDefaultInstruction()
+        self.refreshLocationPermissionSummary()
         let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedInstanceId.isEmpty else { return }
         self.gatewayToken = GatewaySettingsStore.loadGatewayToken(instanceId: trimmedInstanceId) ?? ""
         self.gatewayPassword = GatewaySettingsStore.loadGatewayPassword(instanceId: trimmedInstanceId) ?? ""
+    }
+
+    func refreshLocationPermissionSummary(desiredMode modeOverride: OpenClawLocationMode? = nil) {
+        let mode = modeOverride ?? OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
+        let manager = CLLocationManager()
+        self.locationPermissionRefreshID &+= 1
+        let refreshID = self.locationPermissionRefreshID
+        let currentSummary = self.locationPermissionSummary
+        self.locationPermissionSummary = LocationPermissionSummary(
+            desiredMode: mode,
+            locationServicesEnabled: currentSummary.locationServicesEnabled,
+            authorizationStatus: manager.authorizationStatus,
+            accuracyAuthorization: manager.accuracyAuthorization)
+        Task {
+            let locationServicesEnabled = await Self.locationServicesEnabled()
+            guard refreshID == self.locationPermissionRefreshID else { return }
+            let latestManager = CLLocationManager()
+            let latestMode = modeOverride ?? OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
+            self.locationPermissionSummary = LocationPermissionSummary(
+                desiredMode: latestMode,
+                locationServicesEnabled: locationServicesEnabled,
+                authorizationStatus: latestManager.authorizationStatus,
+                accuracyAuthorization: latestManager.accuracyAuthorization)
+        }
+    }
+
+    private static func locationServicesEnabled() async -> Bool {
+        await Task.detached(priority: .utility) {
+            CLLocationManager.locationServicesEnabled()
+        }.value
     }
 
     func syncAfterOnboardingReset() {
@@ -376,15 +390,19 @@ extension SettingsProTab {
     {
         self.isChangingLocationMode = true
         self.locationStatusText = nil
+        self.refreshLocationPermissionSummary(desiredMode: mode)
         defer { self.isChangingLocationMode = false }
 
         if mode == .off {
+            _ = await self.appModel.requestLocationPermissions(mode: mode)
             self.previousLocationModeRaw = rawValue
+            self.refreshLocationPermissionSummary(desiredMode: mode)
             self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
             return
         }
 
         let granted = await self.appModel.requestLocationPermissions(mode: mode)
+        self.refreshLocationPermissionSummary(desiredMode: mode)
         if granted {
             self.previousLocationModeRaw = rawValue
             self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
@@ -392,6 +410,8 @@ extension SettingsProTab {
             self.locationModeRaw = previous
             self.previousLocationModeRaw = previous
             self.locationStatusText = "Location permission was not granted."
+            self.refreshLocationPermissionSummary(
+                desiredMode: OpenClawLocationMode(rawValue: previous) ?? .off)
         }
     }
 
@@ -702,14 +722,6 @@ extension SettingsProTab {
         self.appModel.gatewayServerName ?? "OpenClaw Gateway"
     }
 
-    var permissionsDetail: String {
-        var enabled = 0
-        if self.cameraEnabled { enabled += 1 }
-        if self.locationModeRaw != OpenClawLocationMode.off.rawValue { enabled += 1 }
-        if self.preventSleep { enabled += 1 }
-        return "\(enabled) enabled"
-    }
-
     var pendingApproval: NodeAppModel.ExecApprovalPrompt? {
         self.appModel.pendingExecApprovalPrompt
     }
@@ -750,10 +762,6 @@ extension SettingsProTab {
         return "Off"
     }
 
-    var diagnosticsDetail: String {
-        "System checks"
-    }
-
     var diagnosticsHealthValue: String {
         if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
         if self.gatewayConnected { return "ready" }
@@ -773,15 +781,35 @@ extension SettingsProTab {
 
     var privacyDetail: String {
         let location = OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
-        return location == .off ? "Location off" : "Location \(self.locationLabel)"
+        return switch (location, self.locationPermissionSummary.effectiveMode) {
+        case (.off, _):
+            "Location off"
+        case (.whileUsing, .whileUsing):
+            "Location While Using"
+        case (.whileUsing, .off):
+            "Location While Using, effective Off"
+        case (.whileUsing, .always):
+            "Location While Using, effective Always"
+        case (.always, .always):
+            "Location Always"
+        case (.always, .whileUsing):
+            "Location Always, effective While Using"
+        case (.always, .off):
+            "Location Always, effective Off"
+        }
     }
 
-    var locationLabel: String {
-        switch OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off {
-        case .off: "Off"
-        case .whileUsing: "While Using"
-        case .always: "Always"
+    var locationPermissionDetailText: String {
+        if self.isChangingLocationMode {
+            return "Requesting iOS location permission…"
         }
+        return self.locationPermissionSummary.detailText
+    }
+
+    var locationPermissionWarningText: String? {
+        guard let locationStatusText else { return nil }
+        guard locationStatusText != self.locationPermissionSummary.detailText else { return nil }
+        return locationStatusText
     }
 
     var notificationStatusText: String {

@@ -39,6 +39,7 @@ import { CustomEditor } from "./components/custom-editor.js";
 import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 import { editorTheme, theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
+import { addBlockedChatSubmitNotice } from "./tui-busy-notice.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import {
@@ -402,7 +403,6 @@ export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
 }
 
 export function canSubmitTuiChatMessage(params: {
-  local?: boolean;
   activeChatRunId?: string | null;
   pendingChatRunId?: string | null;
   pendingOptimisticUserMessage?: boolean;
@@ -412,11 +412,7 @@ export function canSubmitTuiChatMessage(params: {
   if (stopText && (params.activeChatRunId || params.pendingChatRunId)) {
     return true;
   }
-  const pending = Boolean(params.pendingChatRunId) || params.pendingOptimisticUserMessage === true;
-  if (!params.local && params.activeChatRunId) {
-    return false;
-  }
-  return !pending;
+  return !params.pendingChatRunId && params.pendingOptimisticUserMessage !== true;
 }
 
 const TUI_BUSY_ACTIVITY_STATUSES = new Set([
@@ -1427,14 +1423,13 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   updateAutocompleteProvider();
   const canSubmitChatMessage = (message: string) =>
     canSubmitTuiChatMessage({
-      local: isLocalMode,
       activeChatRunId: state.activeChatRunId,
       pendingChatRunId: state.pendingChatRunId,
       pendingOptimisticUserMessage: state.pendingOptimisticUserMessage,
       message,
     });
   const notifyBlockedChatSubmit = () => {
-    chatLog.addSystem("agent is busy — press Esc to abort before sending a new message");
+    addBlockedChatSubmitNotice(chatLog);
     tui.requestRender();
   };
   const submitHandler = createEditorSubmitHandler({

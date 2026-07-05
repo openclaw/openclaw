@@ -6,6 +6,7 @@ import SwiftUI
 
 extension OnboardingView {
     func selectLocalGateway() {
+        self.defaultsToLocalGateway = false
         self.state.connectionMode = .local
         self.preferredGatewayID = nil
         self.showAdvancedConnection = false
@@ -13,6 +14,7 @@ extension OnboardingView {
     }
 
     func selectUnconfiguredGateway() {
+        self.defaultsToLocalGateway = false
         Task { await self.onboardingWizard.cancelIfRunning() }
         self.state.connectionMode = .unconfigured
         self.preferredGatewayID = nil
@@ -21,6 +23,7 @@ extension OnboardingView {
     }
 
     func selectRemoteGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
+        self.defaultsToLocalGateway = false
         Task { await self.onboardingWizard.cancelIfRunning() }
         self.preferredGatewayID = gateway.stableID
         GatewayDiscoveryPreferences.setPreferredStableID(gateway.stableID)
@@ -42,10 +45,20 @@ extension OnboardingView {
 
     func handleNext() {
         if self.isWizardBlocking { return }
+        self.commitRecommendedConnectionIfNeeded(for: self.activePageIndex)
         if self.currentPage < self.pageCount - 1 {
             withAnimation { self.currentPage += 1 }
         } else {
             self.finish()
+        }
+    }
+
+    func commitRecommendedConnectionIfNeeded(for pageIndex: Int) {
+        if pageIndex == self.connectionPageIndex,
+           self.defaultsToLocalGateway,
+           self.state.connectionMode == .unconfigured
+        {
+            self.selectLocalGateway()
         }
     }
 

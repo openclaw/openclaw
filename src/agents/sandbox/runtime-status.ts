@@ -11,7 +11,7 @@ import {
 } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { auditSandboxToolPolicyBlock } from "../tool-policy-audit.js";
+import { auditSandboxToolPolicyBlock, escapeControlCharsVisible } from "../tool-policy-audit.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   classifyToolAgainstSandboxToolPolicy,
@@ -92,22 +92,7 @@ export function resolveSandboxRuntimeStatus(params: {
 }
 
 function sanitizeForSingleLineDisplay(value: string): string {
-  return Array.from(value, (char) => {
-    if (char === "\n") {
-      return "\\n";
-    }
-    if (char === "\r") {
-      return "\\r";
-    }
-    if (char === "\t") {
-      return "\\t";
-    }
-    const codePoint = char.codePointAt(0) ?? 0;
-    if (codePoint < 0x20 || codePoint === 0x7f) {
-      return `\\x${codePoint.toString(16).padStart(2, "0")}`;
-    }
-    return char;
-  }).join("");
+  return escapeControlCharsVisible(value);
 }
 
 function hasUnsafeControlChars(value: string): boolean {

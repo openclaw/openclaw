@@ -2,6 +2,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { isEmbeddedMode, setEmbeddedMode } from "../infra/embedded-mode.js";
 import { defaultRuntime } from "../runtime.js";
+import { notifyListeners } from "../shared/listeners.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 const agentCommandFromIngressMock = vi.fn();
@@ -238,6 +239,12 @@ async function flushMicrotasks() {
   await Promise.resolve();
 }
 
+function emitRegisteredAgentEvent(evt: unknown) {
+  if (registeredListener) {
+    notifyListeners([registeredListener], evt);
+  }
+}
+
 describe("EmbeddedTuiBackend", () => {
   const originalRuntimeLog = defaultRuntime.log;
   const originalRuntimeError = defaultRuntime.error;
@@ -414,6 +421,40 @@ describe("EmbeddedTuiBackend", () => {
         },
       },
     ]);
+  });
+
+  it("isolates TUI event consumer failures in the agent event bus", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    backend.onEvent = () => {
+      throw new Error("render failed");
+    };
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "hello",
+      runId: "run-listener-error",
+    });
+
+    expect(() =>
+      emitRegisteredAgentEvent({
+        runId: "run-listener-error",
+        stream: "assistant",
+        data: { text: "hello", delta: "hello" },
+      }),
+    ).not.toThrow();
+    await flushMicrotasks();
+
+    backend.onEvent = undefined;
+    pending.resolve({ payloads: [{ text: "hello" }], meta: {} });
+    await flushMicrotasks();
+    await backend.stop();
   });
 
   it("lists configured replace-mode models without loading the gateway catalog", async () => {
@@ -1378,13 +1419,13 @@ describe("EmbeddedTuiBackend", () => {
         agentId: "work",
         runId: "run-local-default-global",
       }),
-    ).resolves.toEqual({ ok: true, aborted: false });
+    ).resolves.toEqual({ ok: true, aborted: false, runIds: [] });
     await expect(
       backend.abortChat({
         sessionKey: "global",
         runId: "run-local-work-global",
       }),
-    ).resolves.toEqual({ ok: true, aborted: false });
+    ).resolves.toEqual({ ok: true, aborted: false, runIds: [] });
 
     expect(defaultAbortListener).not.toHaveBeenCalled();
     expect(workAbortListener).not.toHaveBeenCalled();
@@ -1994,8 +2035,64 @@ describe("EmbeddedTuiBackend", () => {
     });
     await flushMicrotasks();
 
-    expect(result).toEqual({ ok: true, aborted: true });
+    expect(result).toEqual({ ok: true, aborted: true, runIds: ["run-abort-1"] });
     expect(capturedSignal?.aborted).toBe(true);
+  });
+
+  it("keeps local BTW runs alive during a session-scoped abort", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    loadSessionEntryMock.mockReturnValue({
+      cfg: {},
+      canonicalKey: "agent:main:main",
+      storePath: "/tmp/openclaw-sessions.json",
+      store: {},
+      entry: { sessionId: "session-main" },
+    });
+    const mainRun = deferred<{ payloads: Array<{ text: string }>; meta: { aborted?: boolean } }>();
+    const btwRun = deferred<{ text: string }>();
+    let mainSignal: AbortSignal | undefined;
+    let btwSignal: AbortSignal | undefined;
+    agentCommandFromIngressMock.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
+      mainSignal = opts.abortSignal;
+      opts.abortSignal?.addEventListener(
+        "abort",
+        () => mainRun.resolve({ payloads: [], meta: { aborted: true } }),
+        { once: true },
+      );
+      return mainRun.promise;
+    });
+    runBtwSideQuestionMock.mockImplementationOnce(
+      (params: { opts?: { abortSignal?: AbortSignal } }) => {
+        btwSignal = params.opts?.abortSignal;
+        return btwRun.promise;
+      },
+    );
+
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "long task",
+      runId: "run-main-abort",
+    });
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "/btw what changed?",
+      runId: "run-btw-survives",
+    });
+    await vi.waitFor(() => {
+      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+      expect(runBtwSideQuestionMock).toHaveBeenCalledTimes(1);
+    });
+
+    const result = await backend.abortChat({ sessionKey: "agent:main:main" });
+
+    expect(result).toEqual({ ok: true, aborted: true, runIds: ["run-main-abort"] });
+    expect(mainSignal?.aborted).toBe(true);
+    expect(btwSignal?.aborted).toBe(false);
+
+    btwRun.resolve({ text: "still running" });
+    await flushMicrotasks();
   });
 
   it("passes explicit chat timeouts to the agent command as seconds", async () => {

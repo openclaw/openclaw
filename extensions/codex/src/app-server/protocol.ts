@@ -159,6 +159,58 @@ export type CodexThreadForkParams = CodexThreadStartParams & {
 
 export type CodexThreadForkResponse = CodexThreadStartResponse;
 
+export const CODEX_INTERACTIVE_THREAD_SOURCE_KINDS = ["cli", "vscode"] as const;
+
+export type CodexThreadSourceKind =
+  | (typeof CODEX_INTERACTIVE_THREAD_SOURCE_KINDS)[number]
+  | "exec"
+  | "appServer"
+  | "subAgent"
+  | "subAgentReview"
+  | "subAgentCompact"
+  | "subAgentThreadSpawn"
+  | "subAgentOther"
+  | "unknown";
+
+export type CodexThreadListParams = JsonObject & {
+  cursor?: string | null;
+  limit?: number | null;
+  modelProviders?: string[] | null;
+  sortKey?: "created_at" | "updated_at" | "recency_at" | null;
+  sortDirection?: "asc" | "desc" | null;
+  archived?: boolean | null;
+  searchTerm?: string | null;
+  sourceKinds?: CodexThreadSourceKind[] | null;
+};
+
+export type CodexThreadListResponse = {
+  data: CodexThread[];
+  nextCursor?: string | null;
+  backwardsCursor?: string | null;
+};
+
+export type CodexThreadReadParams = JsonObject & {
+  threadId: string;
+  includeTurns?: boolean;
+};
+
+export type CodexThreadReadResponse = {
+  thread: CodexThread;
+};
+
+export type CodexThreadSetNameParams = JsonObject & {
+  threadId: string;
+  name: string;
+};
+
+export type CodexThreadArchiveParams = JsonObject & {
+  threadId: string;
+};
+
+export type CodexThreadUnarchiveResponse = {
+  thread: CodexThread;
+};
+
 export type CodexThreadResumeResponse = {
   thread: CodexThread;
   model: string;
@@ -229,6 +281,7 @@ export type CodexThread = {
   threadSource?: string | null;
   agentNickname?: string | null;
   agentRole?: string | null;
+  turns?: CodexTurn[];
 };
 
 export type CodexThreadStatus =
@@ -564,8 +617,13 @@ export declare namespace v2 {
 type CodexAppServerRequestParamsOverride = {
   "environment/add": { environmentId: string; execServerUrl: string };
   "thread/fork": CodexThreadForkParams;
+  "thread/archive": CodexThreadArchiveParams;
   "thread/inject_items": CodexThreadInjectItemsParams;
+  "thread/list": CodexThreadListParams;
+  "thread/name/set": CodexThreadSetNameParams;
+  "thread/read": CodexThreadReadParams;
   "thread/start": CodexThreadStartParams;
+  "thread/unarchive": CodexThreadArchiveParams;
   "thread/unsubscribe": CodexThreadUnsubscribeParams;
   "turn/interrupt": CodexTurnInterruptParams;
 };
@@ -592,11 +650,15 @@ type CodexAppServerRequestResultMap = {
   "review/start": JsonValue;
   "skills/list": CodexSkillsListResponse;
   "thread/compact/start": JsonValue;
+  "thread/archive": JsonValue;
   "thread/fork": CodexThreadForkResponse;
   "thread/inject_items": JsonValue;
-  "thread/list": JsonValue;
+  "thread/list": CodexThreadListResponse;
+  "thread/name/set": JsonValue;
+  "thread/read": CodexThreadReadResponse;
   "thread/resume": CodexThreadResumeResponse;
   "thread/start": CodexThreadStartResponse;
+  "thread/unarchive": CodexThreadUnarchiveResponse;
   "thread/unsubscribe": JsonValue;
   "turn/interrupt": JsonValue;
   "turn/start": CodexTurnStartResponse;

@@ -178,12 +178,13 @@ afterEach(() => {
 });
 
 describe("createCodexDynamicToolBridge", () => {
-  it("keeps turn-yield direct while deferring OpenClaw session spawn", () => {
+  it("keeps OpenClaw control-path tools direct while deferring broad tools", () => {
     const bridge = createCodexDynamicToolBridge({
       tools: [
         createTool({ name: "web_search" }),
         createTool({ name: "message" }),
         createTool({ name: HEARTBEAT_RESPONSE_TOOL_NAME }),
+        createTool({ name: "agents_list" }),
         createTool({ name: "sessions_spawn" }),
         createTool({ name: "sessions_yield" }),
       ],
@@ -194,6 +195,7 @@ describe("createCodexDynamicToolBridge", () => {
     const webSearch = specs.find((tool) => tool.name === "web_search");
     const message = specs.find((tool) => tool.name === "message");
     const heartbeat = specs.find((tool) => tool.name === HEARTBEAT_RESPONSE_TOOL_NAME);
+    const agentsList = specs.find((tool) => tool.name === "agents_list");
     const sessionsSpawn = specs.find((tool) => tool.name === "sessions_spawn");
     const sessionsYield = specs.find((tool) => tool.name === "sessions_yield");
 
@@ -212,11 +214,8 @@ describe("createCodexDynamicToolBridge", () => {
       namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
       deferLoading: true,
     });
-    expectDynamicSpec(sessionsSpawn, {
-      name: "sessions_spawn",
-      namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
-      deferLoading: true,
-    });
+    expectNoNamespace(agentsList);
+    expectNoNamespace(sessionsSpawn);
     expectNoNamespace(sessionsYield);
   });
 

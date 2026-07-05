@@ -1,4 +1,3 @@
-// Forwards exec approval requests between runtime sessions and approval handlers.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -21,6 +20,8 @@ import {
 } from "../plugin-sdk/approval-renderers.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+// Forwards exec approval requests between runtime sessions and approval handlers.
+import { formatFencedCodeBlock } from "../shared/markdown-code.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -227,11 +228,7 @@ function formatApprovalCommand(command: string): { inline: boolean; text: string
     return { inline: true, text: `\`${command}\`` };
   }
 
-  let fence = "```";
-  while (command.includes(fence)) {
-    fence += "`";
-  }
-  return { inline: false, text: `${fence}\n${command}\n${fence}` };
+  return { inline: false, text: formatFencedCodeBlock(command) };
 }
 
 export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, nowMs: number) {

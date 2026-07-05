@@ -132,7 +132,6 @@ describe("unit-fast vitest lane", () => {
     expect(testConfig.include).toContain("src/security/audit-gateway-tools-http.test.ts");
     expect(testConfig.include).toContain("src/security/audit-plugin-readonly-scope.test.ts");
     expect(testConfig.include).toContain("src/security/audit-loopback-logging.test.ts");
-    expect(testConfig.include).toContain("src/ui-app-settings.agents-files-refresh.test.ts");
     expect(testConfig.include).toContain("src/video-generation/provider-registry.test.ts");
     expect(testConfig.include).toContain("src/plugin-sdk/provider-entry.test.ts");
     expect(testConfig.include).toContain("src/security/dangerous-config-flags.test.ts");

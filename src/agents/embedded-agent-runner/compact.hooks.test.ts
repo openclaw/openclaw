@@ -6,6 +6,7 @@ import {
   applyAgentCompactionSettingsFromConfigMock,
   buildEmbeddedSystemPromptMock,
   contextEngineCompactMock,
+  compactWithSafetyTimeoutMock,
   createAgentSessionMock,
   createPreparedEmbeddedAgentSettingsManagerMock,
   createOpenClawCodingToolsMock,
@@ -2218,7 +2219,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     } as never);
     maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
       ok: true,
-      compacted: false,
+      compacted: true,
       result: {
         summary: "",
         firstKeptEntryId: "",
@@ -2226,7 +2227,8 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         details: {
           backend: "codex-app-server",
           signal: "thread/compact/start",
-          pending: true,
+          pending: false,
+          completed: true,
         },
       },
     });
@@ -2262,16 +2264,64 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       | undefined;
     expect(details?.codexNativeCompaction).toMatchObject({
       ok: true,
-      compacted: false,
+      compacted: true,
       result: {
         tokensBefore: 333,
         details: {
           backend: "codex-app-server",
           signal: "thread/compact/start",
-          pending: true,
+          pending: false,
+          completed: true,
         },
       },
     });
+  });
+
+  it("holds the queued lane until secondary Codex compaction reaches its terminal event", async () => {
+    resolveAgentHarnessPolicyMock.mockReturnValue({
+      runtime: "codex",
+      runtimeSource: "model",
+    } as never);
+    const nativeTerminal = createDeferred<{
+      ok: true;
+      compacted: true;
+      result: { summary: string; firstKeptEntryId: string; tokensBefore: number };
+    }>();
+    maybeCompactAgentHarnessSessionMock.mockReturnValueOnce(nativeTerminal.promise);
+    compactWithSafetyTimeoutMock
+      .mockImplementation(async () => {
+        throw new Error("Compaction timed out");
+      })
+      .mockImplementationOnce(async (compact) => await compact());
+
+    let settled = false;
+    const resultPromise = compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        provider: "codex",
+        model: "gpt-5.4",
+        agentHarnessId: "codex",
+        trigger: "budget",
+      }),
+    ).finally(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => {
+      expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
+    });
+    expect(settled).toBe(false);
+    expect(compactWithSafetyTimeoutMock).toHaveBeenCalledTimes(1);
+
+    nativeTerminal.resolve({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "",
+        firstKeptEntryId: "",
+        tokensBefore: 333,
+      },
+    });
+    await expect(resultPromise).resolves.toMatchObject({ ok: true, compacted: true });
   });
 
   it("keeps context-engine compaction successful when the secondary Codex bridge gets a provider 4xx", async () => {
