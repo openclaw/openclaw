@@ -12,13 +12,13 @@ All camera access is gated behind a user-controlled setting per platform.
 
 ## iOS node
 
-### User setting
+### iOS user setting
 
 - iOS Settings tab → **Camera** → **Allow Camera** (`camera.enabled`).
   - Default: **on** (missing key is treated as enabled).
   - When off: `camera.*` commands return `CAMERA_DISABLED`.
 
-### Commands (via Gateway `node.invoke`)
+### iOS commands (via Gateway `node.invoke`)
 
 - `camera.list`
   - Response payload: `devices` — array of `{ id, name, position, deviceType }`.
@@ -43,7 +43,7 @@ All camera access is gated behind a user-controlled setting per platform.
     - `deviceId`: string (optional; from `camera.list`)
   - Response payload: `format: "mp4"`, `base64`, `durationMs`, `hasAudio`.
 
-### Foreground requirement
+### iOS foreground requirement
 
 Like `canvas.*`, the iOS node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE`.
 
@@ -62,7 +62,7 @@ openclaw nodes camera clip --node <id> --no-audio
 
 ## Android node
 
-### User setting
+### Android user setting
 
 - Android Settings sheet → **Camera** → **Allow Camera** (`camera.enabled`).
   - **Fresh installs default to off.** Existing installs that predate this setting are migrated to **on** so upgrades do not silently lose previously working camera access.
@@ -75,11 +75,11 @@ openclaw nodes camera clip --node <id> --no-audio
 
 The app prompts for runtime permissions when possible.
 
-### Foreground requirement
+### Android foreground requirement
 
 Like `canvas.*`, the Android node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE: command requires foreground`.
 
-### Commands (via Gateway `node.invoke`)
+### Android commands (via Gateway `node.invoke`)
 
 - `camera.list`
   - Response payload: `devices` — array of `{ id, name, position, deviceType }`.
@@ -96,7 +96,7 @@ Like `canvas.*`, the Android node only allows `camera.*` commands in the **foreg
 
 ## macOS app
 
-### User setting
+### macOS user setting
 
 The macOS companion app exposes a checkbox:
 

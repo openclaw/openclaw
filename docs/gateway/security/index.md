@@ -544,17 +544,23 @@ When the bundled `bonjour` plugin is enabled, the Gateway broadcasts presence vi
 
 - Keep Bonjour disabled unless LAN discovery is needed - it auto-starts on macOS hosts and is opt-in elsewhere; direct Gateway URLs, Tailnet, SSH, or wide-area DNS-SD avoid local multicast.
 - **Minimal mode** (default when Bonjour is enabled, recommended for exposed gateways) omits sensitive fields:
+
   ```json5
   { discovery: { mdns: { mode: "minimal" } } }
   ```
+
 - **Off** suppresses local discovery while keeping the plugin enabled:
+
   ```json5
   { discovery: { mdns: { mode: "off" } } }
   ```
+
 - **Full mode** (opt-in) includes `cliPath` + `sshPort`:
+
   ```json5
   { discovery: { mdns: { mode: "full" } } }
   ```
+
 - Or set `OPENCLAW_DISABLE_BONJOUR=1` to disable mDNS without config changes.
 
 In minimal mode the Gateway broadcasts `role`, `gatewayPort`, `transport` but omits `cliPath`/`sshPort`; apps that need the CLI path can fetch it over the authenticated WebSocket connection instead.

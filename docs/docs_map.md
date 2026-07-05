@@ -4613,17 +4613,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /nodes/camera
 - Headings:
   - H2: iOS node
-  - H3: User setting
-  - H3: Commands (via Gateway node.invoke)
-  - H3: Foreground requirement
+  - H3: iOS user setting
+  - H3: iOS commands (via Gateway node.invoke)
+  - H3: iOS foreground requirement
   - H3: CLI helper
   - H2: Android node
-  - H3: User setting
+  - H3: Android user setting
   - H3: Permissions
-  - H3: Foreground requirement
-  - H3: Commands (via Gateway node.invoke)
+  - H3: Android foreground requirement
+  - H3: Android commands (via Gateway node.invoke)
   - H2: macOS app
-  - H3: User setting
+  - H3: macOS user setting
   - H3: CLI helper (node invoke)
   - H2: Safety + practical limits
   - H2: macOS screen video (OS-level)
