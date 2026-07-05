@@ -992,6 +992,30 @@ describe("model-selection", () => {
       expect(index.byKey.get(modelKey("anthropic", "claude-3-5-sonnet"))).toEqual(["fast"]);
     });
 
+    it("indexes duplicate aliases by provider", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "lmstudio-moe/qwen3.6-35b-a3b": { alias: "Local" },
+              "lmstudio-dense/qwen3.6-27b": { alias: "Local" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const index = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
+
+      expect(index.byProviderAlias?.get("lmstudio-moe/local")?.ref).toEqual({
+        provider: "lmstudio-moe",
+        model: "qwen3.6-35b-a3b",
+      });
+      expect(index.byProviderAlias?.get("lmstudio-dense/local")?.ref).toEqual({
+        provider: "lmstudio-dense",
+        model: "qwen3.6-27b",
+      });
+    });
+
     it("does not normalize configured model keys that have no alias", () => {
       providerModelNormalizationMock.normalizeProviderModelIdWithRuntime.mockClear();
       const models = Object.fromEntries(
@@ -1653,6 +1677,43 @@ describe("model-selection", () => {
         defaultProvider: "anthropic",
       });
       expect(resolved?.ref).toEqual({ provider: "openai", model: "gpt-4" });
+    });
+
+    it("resolves provider-qualified aliases without cross-provider collisions", () => {
+      const index = buildModelAliasIndex({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "lmstudio-moe/qwen3.6-35b-a3b": { alias: "Local" },
+                "lmstudio-dense/qwen3.6-27b": { alias: "Local" },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        defaultProvider: "openai",
+      });
+
+      expect(
+        resolveModelRefFromString({
+          raw: "lmstudio-moe/Local",
+          defaultProvider: "openai",
+          aliasIndex: index,
+        }),
+      ).toEqual({
+        ref: { provider: "lmstudio-moe", model: "qwen3.6-35b-a3b" },
+        alias: "Local",
+      });
+      expect(
+        resolveModelRefFromString({
+          raw: "lmstudio-dense/LOCAL",
+          defaultProvider: "openai",
+          aliasIndex: index,
+        }),
+      ).toEqual({
+        ref: { provider: "lmstudio-dense", model: "qwen3.6-27b" },
+        alias: "Local",
+      });
     });
 
     it("prefers slash-form aliases over direct provider/model parsing", () => {
