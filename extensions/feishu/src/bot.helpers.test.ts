@@ -1,7 +1,7 @@
 // Feishu tests cover bot.helpers plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { parseMessageContent } from "./bot-content.js";
+import { parseMessageContent, resolveFeishuMediaFailurePresentation } from "./bot-content.js";
 import {
   buildBroadcastSessionKey,
   buildFeishuAgentBody,
@@ -97,12 +97,24 @@ describe("parseMessageContent media placeholders", () => {
         "audio",
       ),
     ).toBe("spoken words");
+    expect(
+      resolveFeishuMediaFailurePresentation(
+        JSON.stringify({ file_key: "file_audio", speech_to_text: " spoken words " }),
+        "audio",
+      ),
+    ).toEqual({ mediaPlaceholder: undefined, unavailableBody: undefined });
   });
 
   it("keeps media filenames as placeholder context without raw payload fields", () => {
     expect(
       parseMessageContent(JSON.stringify({ file_key: "file_doc", file_name: "q1.pdf" }), "file"),
     ).toBe("<media:document> (q1.pdf)");
+    expect(
+      resolveFeishuMediaFailurePresentation(
+        JSON.stringify({ file_key: "file_doc", file_name: "q1.pdf" }),
+        "file",
+      ),
+    ).toEqual({ mediaPlaceholder: "<media:document>", unavailableBody: "q1.pdf" });
   });
 });
 

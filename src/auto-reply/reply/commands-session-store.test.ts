@@ -16,6 +16,65 @@ async function withTempStore<T>(run: (storePath: string) => Promise<T>): Promise
 }
 
 describe("commands session store persistence", () => {
+  it("creates a missing row for the first command-only session mutation", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "agent:main:first-command";
+      const entry: SessionEntry = {
+        sessionId: "first-command-session",
+        updatedAt: 1,
+        responseUsage: "tokens",
+      };
+      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
+      await saveSessionStore(storePath, {}, { skipMaintenance: true });
+
+      await expect(
+        persistSessionEntry({
+          allowCreateSessionEntry: true,
+          sessionEntry: entry,
+          sessionStore,
+          sessionKey,
+          storePath,
+          touchedFields: ["responseUsage"],
+        }),
+      ).resolves.toBe(true);
+
+      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(persisted).toMatchObject({
+        sessionId: "first-command-session",
+        responseUsage: "tokens",
+      });
+      expect(sessionStore[sessionKey]).toMatchObject({
+        sessionId: "first-command-session",
+        responseUsage: "tokens",
+      });
+    });
+  });
+
+  it("does not recreate a missing row without explicit create ownership", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "agent:main:missing-existing";
+      const entry: SessionEntry = {
+        sessionId: "missing-existing-session",
+        updatedAt: 1,
+        responseUsage: "tokens",
+      };
+      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
+      await saveSessionStore(storePath, {}, { skipMaintenance: true });
+
+      await expect(
+        persistSessionEntry({
+          sessionEntry: entry,
+          sessionStore,
+          sessionKey,
+          storePath,
+          touchedFields: ["responseUsage"],
+        }),
+      ).resolves.toBe(false);
+
+      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
+    });
+  });
+
   it("persists command state without reverting concurrent session management", async () => {
     await withTempStore(async (storePath) => {
       const sessionKey = "agent:main:command";

@@ -100,7 +100,7 @@ type SlackBlockActionBody = {
   response_url?: string;
   channel?: { id?: string };
   container?: { channel_id?: string; message_ts?: string; thread_ts?: string };
-  message?: { ts?: string; text?: string; blocks?: unknown[] };
+  message?: { ts?: string; thread_ts?: string; text?: string; blocks?: unknown[] };
 };
 
 type SlackBlockActionRespond = NonNullable<SlackActionMiddlewareArgs["respond"]>;
@@ -444,7 +444,7 @@ function parseSlackBlockAction(params: {
     userId: typedBody.user?.id ?? "unknown",
     channelId: typedBody.channel?.id ?? typedBody.container?.channel_id,
     messageTs: typedBody.message?.ts ?? typedBody.container?.message_ts,
-    threadTs: typedBody.container?.thread_ts,
+    threadTs: typedBody.container?.thread_ts ?? typedBody.message?.thread_ts,
     actionSummary: summarizeAction(typedAction),
   };
 }

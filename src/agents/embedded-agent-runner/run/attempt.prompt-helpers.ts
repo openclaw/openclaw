@@ -1,3 +1,4 @@
+import { prependSystemPromptAdditionAfterCacheBoundary } from "@openclaw/ai/internal/shared";
 /**
  * Builds and repairs prompt inputs for embedded-agent attempts.
  */
@@ -23,7 +24,6 @@ import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-pr
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../../music-generation-task-status.js";
-import { prependSystemPromptAdditionAfterCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { derivePromptTokens, type NormalizedUsage } from "../../usage.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../../video-generation-task-status.js";

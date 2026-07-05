@@ -237,6 +237,12 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "nativeHook.invoke", scope: "operator.admin", advertise: false },
   { name: "web.login.start", scope: "operator.admin", advertise: false },
   { name: "web.login.wait", scope: "operator.admin", advertise: false },
+  // Terminal detach/reattach surface. Appended at the end (not next to the
+  // other terminal.* methods) so previously advertised method indices stay
+  // stable for older clients.
+  { name: "terminal.attach", scope: "operator.admin" },
+  { name: "terminal.list", scope: "operator.admin" },
+  { name: "terminal.text", scope: "operator.admin" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

@@ -168,4 +168,28 @@ describe("slackOutbound", () => {
       blocks: [{ type: "divider" }],
     });
   });
+
+  it("preserves raw Unicode agent identity emoji", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-text" });
+
+    await slackOutbound.sendText!({
+      cfg,
+      to: "C123",
+      text: "heartbeat alert",
+      accountId: "default",
+      identity: { name: "Pulse", emoji: "📟" },
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "heartbeat alert",
+      expect.objectContaining({
+        identity: {
+          username: "Pulse",
+          iconUrl: undefined,
+          iconEmoji: "📟",
+        },
+      }),
+    );
+  });
 });

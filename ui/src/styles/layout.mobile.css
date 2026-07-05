@@ -735,31 +735,27 @@
     max-height: 380px;
   }
 
-  /* Reset the desktop fill-height chain on mobile — single page scroll is
-     more usable on small viewports than a tiny pinned log panel.
-     Selectors are intentionally double-classed so they outrank the
-     desktop rules in components.css / config-quick.css, which are
-     imported AFTER this file (see ui/src/styles.css). */
-  .card--fill-height.card--fill-height .log-stream {
-    flex: none;
-    min-height: 200px;
-    max-height: 380px;
-  }
-
-  .content.content--logs {
+  .content:has(openclaw-logs-page) {
     display: block;
     overflow-y: auto;
   }
 
-  .content.content--logs .settings-workspace {
+  .content:has(openclaw-logs-page) > openclaw-router-outlet,
+  .content openclaw-logs-page,
+  .content .settings-workspace--fill-height,
+  .content .settings-workspace--fill-height > .settings-workspace__body,
+  .content .settings-workspace--fill-height .logs-card {
     display: block;
     height: auto;
+    min-height: 0;
     flex: initial;
+    overflow-y: visible;
   }
 
-  .content.content--logs .settings-workspace__body {
-    display: block;
-    flex: initial;
+  .content .settings-workspace--fill-height .log-stream {
+    flex: none;
+    min-height: 200px;
+    max-height: 380px;
   }
 
   .log-row {

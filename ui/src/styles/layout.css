@@ -320,6 +320,18 @@
   box-shadow: var(--focus-ring);
 }
 
+/* Without explicit sizing/stroke the Lucide-style icon renders as a filled
+   blob at the browser's default svg size (e.g. the terminal toggle glyph). */
+.topbar-icon-btn svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .topbar-search__label {
   flex: 1;
   text-align: left;
@@ -392,67 +404,6 @@
   stroke-width: 1.75px;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-.topbar-theme-mode__btn[data-tooltip]::before,
-.topbar-theme-mode__btn[data-tooltip]::after {
-  position: absolute;
-  left: 50%;
-  pointer-events: none;
-  opacity: 0;
-  transition:
-    opacity var(--duration-fast) var(--ease-out),
-    transform var(--duration-fast) var(--ease-out);
-  z-index: 60;
-}
-
-.topbar-theme-mode__btn[data-tooltip]::before {
-  content: none;
-}
-
-.topbar-theme-mode__btn[data-tooltip]::after {
-  content: attr(data-tooltip);
-  top: calc(100% + 6px);
-  min-width: max-content;
-  max-width: min(220px, 60vw);
-  padding: 7px 9px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 84%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--card) 94%, black 6%);
-  box-shadow:
-    0 10px 28px rgba(0, 0, 0, 0.24),
-    0 0 0 1px rgba(255, 255, 255, 0.04);
-  color: var(--text);
-  font-size: 12px; /* was 11px */
-  font-weight: 500;
-  line-height: 1.35;
-  text-align: center;
-  white-space: nowrap;
-  transform: translateY(-3px);
-}
-
-@media (hover: hover) {
-  .topbar-theme-mode__btn[data-tooltip]:hover::before,
-  .topbar-theme-mode__btn[data-tooltip]:hover::after {
-    opacity: 1;
-  }
-
-  .topbar-theme-mode__btn[data-tooltip]:hover::before,
-  .topbar-theme-mode__btn[data-tooltip]:hover::after {
-    transform: translateY(0);
-  }
-}
-
-.topbar-theme-mode__btn[data-tooltip]:focus-visible::before,
-.topbar-theme-mode__btn[data-tooltip]:focus-visible::after {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.topbar-theme-mode__btn[data-tooltip]::before,
-.topbar-theme-mode__btn[data-tooltip]::after {
-  content: none !important;
-  display: none !important;
 }
 
 /* ===========================================
@@ -1112,6 +1063,7 @@
 }
 
 .sidebar--collapsed .sidebar-new-session {
+  justify-content: center;
   width: 44px;
   min-height: 44px;
   padding: 0;
@@ -1203,6 +1155,13 @@
   min-height: 42px;
 }
 
+.sidebar-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 /* Borderless status line: the sidebar footer signals connectivity only;
    the gateway version moved into Settings (Quick Settings footer). */
 .sidebar-status {
@@ -1235,6 +1194,53 @@
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 14%, transparent);
 }
 
+.sidebar-pair-mobile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.sidebar-pair-mobile:hover:not(:disabled),
+.sidebar-pair-mobile:focus-visible {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--border) 76%, transparent);
+  background: var(--bg-hover);
+}
+
+.sidebar-pair-mobile:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: 1px;
+}
+
+.sidebar-pair-mobile:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.sidebar-pair-mobile svg {
+  width: 17px;
+  height: 17px;
+  stroke: currentColor;
+  fill: none;
+}
+
+.sidebar-pair-mobile svg * {
+  stroke: currentColor;
+  fill: none;
+}
+
 .sidebar--collapsed .sidebar-shell__footer {
   padding: 8px 0 2px;
 }
@@ -1249,6 +1255,10 @@
   min-height: 36px;
   padding: 0;
   justify-content: center;
+}
+
+.sidebar--collapsed .sidebar-footer-row {
+  flex-direction: column-reverse;
 }
 
 /* Mode switch in sidebar — hidden on desktop, shown on mobile */
@@ -1317,10 +1327,6 @@
   margin-top: 20px;
 }
 
-:root[data-theme-mode="light"] .content {
-  background: var(--bg-content);
-}
-
 .content--chat {
   display: flex;
   flex-direction: column;
@@ -1334,6 +1340,13 @@
   margin-top: 0;
 }
 
+.content--chat > openclaw-router-outlet {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
 .content--workboard {
   display: flex;
   flex-direction: column;
@@ -1343,6 +1356,22 @@
 
 .content--workboard > * + * {
   margin-top: 14px;
+}
+
+.content--workboard > openclaw-router-outlet,
+.content--workboard openclaw-workboard-page {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.content--workboard openclaw-workboard-page {
+  gap: 14px;
+}
+
+:root[data-theme-mode="light"] .content {
+  background: var(--bg-content);
 }
 
 /* Content header */
@@ -1360,6 +1389,10 @@
     max-height var(--shell-focus-duration) var(--shell-focus-ease),
     padding var(--shell-focus-duration) var(--shell-focus-ease);
   max-height: 80px;
+}
+
+.content-header--page + * {
+  margin-top: 20px;
 }
 
 .content--chat .content-header.content-header--chat-hidden {
@@ -1635,4 +1668,18 @@
 
 .chat-controls-dropdown {
   display: none;
+}
+
+/* Terminal-only document (`?view=terminal`, mobile WebViews): centered notice
+   when the gateway refuses or lacks the terminal surface. */
+.terminal-view-unavailable {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+  background: var(--bg);
 }

@@ -1,8 +1,9 @@
-import AppKit
+import OpenClawChatUI
 import SwiftUI
 
 struct GlowingOpenClawIcon: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let size: CGFloat
     let glowIntensity: Double
@@ -35,12 +36,10 @@ struct GlowingOpenClawIcon: View {
                 .scaleEffect(self.breathe ? 1.08 : 0.96)
                 .opacity(0.84)
 
-            Image(nsImage: NSApp.applicationIconImage)
-                .resizable()
+            // Mascot animates itself (and goes still under reduce motion), so no breathe scale here.
+            OpenClawMascotView()
                 .frame(width: self.size, height: self.size)
-                .clipShape(RoundedRectangle(cornerRadius: self.size * 0.22, style: .continuous))
                 .shadow(color: .black.opacity(0.18), radius: 14, y: 6)
-                .scaleEffect(self.breathe ? 1.02 : 1.0)
         }
         .frame(
             width: glowCanvasSize + (glowBlurRadius * 2),
@@ -53,7 +52,7 @@ struct GlowingOpenClawIcon: View {
     }
 
     private func updateBreatheAnimation() {
-        guard self.enableFloating, self.scenePhase == .active else {
+        guard self.enableFloating, !self.reduceMotion, self.scenePhase == .active else {
             self.breathe = false
             return
         }

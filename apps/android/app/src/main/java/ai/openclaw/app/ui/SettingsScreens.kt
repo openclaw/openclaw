@@ -140,6 +140,7 @@ internal enum class SettingsRoute {
   Channels,
   Dreaming,
   Canvas,
+  Terminal,
   Notifications,
   PhoneCapabilities,
   Gateway,
@@ -172,6 +173,7 @@ internal fun SettingsDetailScreen(
     SettingsRoute.Channels -> ChannelsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Dreaming -> DreamingSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Canvas -> CanvasSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.Terminal -> TerminalSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Notifications -> NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.PhoneCapabilities -> PhoneCapabilitiesScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Gateway -> GatewaySettingsScreen(viewModel = viewModel, onBack = onBack)
@@ -975,9 +977,9 @@ private fun GatewaySettingsScreen(
       Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(text = "Pair New Gateway", style = ClawTheme.type.section, color = ClawTheme.colors.text)
         Text(text = "Clear this phone's saved gateway access and scan a fresh setup code.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-          ClawSecondaryButton(text = "Pair New Gateway", onClick = viewModel::pairNewGateway, modifier = Modifier.weight(1f), icon = Icons.Default.QrCode2)
-          ClawSecondaryButton(text = "Setup Code", onClick = { showSetupCodeHelp = !showSetupCodeHelp }, modifier = Modifier.weight(1f), icon = Icons.Default.Info)
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          ClawSecondaryButton(text = "Pair New Gateway", onClick = viewModel::pairNewGateway, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.QrCode2)
+          ClawSecondaryButton(text = "Setup Code", onClick = { showSetupCodeHelp = !showSetupCodeHelp }, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.Info)
         }
         if (showSetupCodeHelp) {
           Text(
