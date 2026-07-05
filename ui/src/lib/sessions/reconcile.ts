@@ -317,6 +317,12 @@ export function reconcileSessionChanged(
   if (rowFields.pinnedAt === null) {
     delete row.pinnedAt;
   }
+  if (rowFields.label === null) {
+    delete row.label;
+  }
+  if (rowFields.displayName === null) {
+    delete row.displayName;
+  }
   const next = reconcileSessionHistory(result, row, undefined, {
     ...options,
     selectedGlobalAgentId,

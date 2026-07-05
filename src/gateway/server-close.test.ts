@@ -977,7 +977,7 @@ describe("createGatewayCloseHandler", () => {
       createGatewayCloseTestDeps({
         broadcast,
         chatAbortControllers,
-        getPendingReplyCount: () => 1,
+        getPendingReplyCount: vi.fn().mockReturnValueOnce(1).mockReturnValue(0),
         markMainSessionsAbortedForRestart,
         nodeSendToSession,
       }),
@@ -1031,7 +1031,7 @@ describe("createGatewayCloseHandler", () => {
     const close = createGatewayCloseHandler(
       createGatewayCloseTestDeps({
         chatAbortControllers,
-        getPendingReplyCount: () => 1,
+        getPendingReplyCount: vi.fn().mockReturnValueOnce(1).mockReturnValue(0),
         markMainSessionsAbortedForRestart,
       }),
     );

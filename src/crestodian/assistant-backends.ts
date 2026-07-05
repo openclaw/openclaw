@@ -53,7 +53,8 @@ export function selectCrestodianLocalPlannerBackends(
   return backends;
 }
 
-function buildCliPlannerConfig(workspaceDir: string, modelRef: string): OpenClawConfig {
+/** Minimal run config for a CLI-harness model scoped to one workspace. */
+export function buildCliPlannerConfig(workspaceDir: string, modelRef: string): OpenClawConfig {
   return {
     agents: {
       defaults: {
@@ -64,7 +65,8 @@ function buildCliPlannerConfig(workspaceDir: string, modelRef: string): OpenClaw
   };
 }
 
-function buildCodexAppServerPlannerConfig(workspaceDir: string): OpenClawConfig {
+/** Run config for the Codex app-server harness (exec must be allowed to spawn it). */
+export function buildCodexAppServerPlannerConfig(workspaceDir: string): OpenClawConfig {
   return {
     agents: {
       defaults: {

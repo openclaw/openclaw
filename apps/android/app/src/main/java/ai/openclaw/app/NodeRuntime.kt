@@ -3714,8 +3714,6 @@ internal fun parseGatewayNodeApprovalState(raw: String?): GatewayNodeApprovalSta
     else -> GatewayNodeApprovalState.Loading
   }
 
-internal fun gatewayEventInvalidatesNodesDevices(event: String): Boolean = event == "node.pair.requested" || event == "node.pair.resolved"
-
 internal fun nodeConnectFailureNeedsApprovalRefresh(error: GatewaySession.ErrorShape): Boolean = error.details?.code == "PAIRING_REQUIRED"
 
 internal fun currentNodeCapabilityApproval(

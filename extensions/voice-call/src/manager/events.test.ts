@@ -687,7 +687,7 @@ describe("processEvent (functional)", () => {
     });
     ctx.providerCallIdMap.set("provider-dedupe", "call-dedupe");
 
-    processEvent(ctx, {
+    const firstResult = processEvent(ctx, {
       id: "evt-1",
       dedupeKey: "stable-key-1",
       type: "call.speech",
@@ -698,7 +698,7 @@ describe("processEvent (functional)", () => {
       isFinal: true,
     });
 
-    processEvent(ctx, {
+    const replayResult = processEvent(ctx, {
       id: "evt-2",
       dedupeKey: "stable-key-1",
       type: "call.speech",
@@ -715,6 +715,12 @@ describe("processEvent (functional)", () => {
     }
     expect(call.transcript).toHaveLength(1);
     expect(Array.from(ctx.processedEventIds)).toEqual(["stable-key-1"]);
+    expect(firstResult).toMatchObject({
+      kind: "final-speech",
+      transcript: "hello",
+      waiterResolved: false,
+    });
+    expect(replayResult).toEqual({ kind: "ignored" });
   });
 
   it("keeps retryable call.error events replayable", () => {

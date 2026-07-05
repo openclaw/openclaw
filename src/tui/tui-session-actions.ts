@@ -37,7 +37,6 @@ type SessionActionContext = {
   setActivityStatus: (text: string) => void;
   clearLocalRunIds?: () => void;
   rememberSessionKey?: (sessionKey: string) => void | Promise<void>;
-  emptySessionInfoDefaults?: SessionInfo;
 };
 
 type SessionInfoDefaults = {
@@ -118,7 +117,6 @@ export function createSessionActions(context: SessionActionContext) {
     setActivityStatus,
     clearLocalRunIds,
     rememberSessionKey,
-    emptySessionInfoDefaults,
   } = context;
   let refreshSessionInfoInFlight: Promise<void> | null = null;
   let refreshSessionInfoQueued = false;
@@ -340,6 +338,7 @@ export function createSessionActions(context: SessionActionContext) {
         state.currentSessionKey = entry.key;
         updateHeader();
       }
+      state.currentSessionId = typeof entry?.sessionId === "string" ? entry.sessionId : null;
       applySessionInfo({
         entry,
         defaults: result.defaults,
@@ -583,37 +582,6 @@ export function createSessionActions(context: SessionActionContext) {
     await loadHistory();
   };
 
-  const setEmptySession = async (rawKey: string) => {
-    const nextKey = resolveSessionKey(rawKey);
-    updateAgentFromSessionKey(nextKey);
-    state.currentSessionKey = nextKey;
-    state.activeChatRunId = null;
-    state.pendingChatRunId = null;
-    state.pendingOptimisticUserMessage = false;
-    state.pendingSubmitDraft = null;
-    setActivityStatus("idle");
-    state.currentSessionId = null;
-    const defaults = lastSessionDefaults;
-    state.sessionInfo = {
-      ...emptySessionInfoDefaults,
-      modelProvider: defaults?.modelProvider ?? undefined,
-      model: defaults?.model ?? undefined,
-      contextTokens: defaults?.contextTokens ?? null,
-      thinkingLevels: defaults?.thinkingLevels ?? emptySessionInfoDefaults?.thinkingLevels,
-      inputTokens: null,
-      outputTokens: null,
-      totalTokens: null,
-      goal: undefined,
-      updatedAt: null,
-      displayName: undefined,
-    };
-    clearLocalRunIds?.();
-    updateHeader();
-    updateAutocompleteProvider();
-    updateFooter();
-    clearDisplayedSession();
-  };
-
   const abortActive = async (params?: { preferActive?: boolean }) => {
     if (
       opts.local === true &&
@@ -674,7 +642,6 @@ export function createSessionActions(context: SessionActionContext) {
     applySessionMutationResult,
     loadHistory,
     setSession,
-    setEmptySession,
     abortActive,
   };
 }

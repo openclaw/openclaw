@@ -539,5 +539,7 @@ export type AgentEvent =
       isError: boolean;
       /** False when resolution, argument preparation, validation, or policy blocked execution. */
       executionStarted?: boolean;
+      /** Typed pre-execution failure provenance for safe downstream diagnostics. */
+      errorKind?: "argument-validation";
       hideFromChannelProgress?: boolean;
     };

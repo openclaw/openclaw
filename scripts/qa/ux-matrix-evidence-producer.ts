@@ -128,6 +128,30 @@ function parseOptions(argv: readonly string[]): ProducerOptions {
   };
 }
 
+type ProducerCliOutput = {
+  error: (message: string) => void;
+  log: (message: string) => void;
+};
+
+export async function runUxMatrixEvidenceProducerCli(
+  argv: readonly string[],
+  output: ProducerCliOutput = console,
+): Promise<number> {
+  try {
+    if (isHelpRequest(argv)) {
+      output.log(usage());
+      return 0;
+    }
+    const result = await runUxMatrixEvidenceProducer(parseOptions(argv));
+    output.log(`UX Matrix evidence: ${path.join(result.artifactBase, QA_EVIDENCE_FILENAME)}`);
+    output.log(`UX Matrix entries: ${result.evidence.entries.length}`);
+    return 0;
+  } catch (error) {
+    output.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+}
+
 async function writeJson(filePath: string, value: unknown) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
@@ -784,21 +808,5 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  (async () => {
-    const cliArgs = process.argv.slice(2);
-    if (isHelpRequest(cliArgs)) {
-      console.log(usage());
-      return;
-    }
-    const result = await runUxMatrixEvidenceProducer(parseOptions(cliArgs));
-    console.log(`UX Matrix evidence: ${path.join(result.artifactBase, QA_EVIDENCE_FILENAME)}`);
-    console.log(`UX Matrix entries: ${result.evidence.entries.length}`);
-  })()
-    .then(() => {
-      process.exitCode = 0;
-    })
-    .catch((error: unknown) => {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exitCode = 1;
-    });
+  process.exitCode = await runUxMatrixEvidenceProducerCli(process.argv.slice(2));
 }
