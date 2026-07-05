@@ -1,10 +1,10 @@
 // Executes task records through configured runtimes and updates registry state.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  type DetachedRunningTaskCreateParams,
-  type DetachedTaskCreateParams,
-  type DetachedTaskFinalizeParams,
+import type {
+  DetachedRunningTaskCreateParams,
+  DetachedTaskCreateParams,
+  DetachedTaskFinalizeParams,
 } from "./detached-task-runtime-contract.js";
 import { getRegisteredDetachedTaskLifecycleRuntime } from "./detached-task-runtime-state.js";
 import {
