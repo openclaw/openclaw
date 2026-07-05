@@ -4146,6 +4146,7 @@ extension NodeAppModel {
             .map(Self.makeWatchExecApprovalItem)
         let message = OpenClawWatchExecApprovalSnapshotMessage(
             approvals: approvals,
+            gatewayStableID: self.currentExecApprovalGatewayStableID(),
             sentAtMs: Int(Date().timeIntervalSince1970 * 1000),
             snapshotId: UUID().uuidString)
         do {

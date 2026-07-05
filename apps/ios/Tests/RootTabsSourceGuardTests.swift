@@ -1067,7 +1067,8 @@ struct RootTabsSourceGuardTests {
         #expect(ownerMatchedMerge.contains("merged.chatStatusText = self.appSnapshot?.chatStatusText"))
     }
 
-    @Test func `watch generic prompts follow the active gateway owner`() throws {
+    @Test func `watch generic prompts wait for the active gateway owner`() throws {
+        let receiverSource = try String(contentsOf: Self.watchConnectivityReceiverSourceURL(), encoding: .utf8)
         let source = try String(contentsOf: Self.watchInboxStoreSourceURL(), encoding: .utf8)
         let consumeMessage = try Self.extract(
             source,
@@ -1078,8 +1079,25 @@ struct RootTabsSourceGuardTests {
             from: "func consume(appSnapshot message: WatchAppSnapshotMessage)",
             to: "func markAppSnapshotRequestStarted()")
 
-        #expect(consumeMessage.contains("guard self.acceptsGatewayOwner(message.gatewayStableID)"))
+        let replay = try Self.extract(
+            source,
+            from: "func replayDeferredGatewayPayloads()",
+            to: "private func clearMessagePrompt()")
+
+        #expect(consumeMessage.contains("self.routeGatewayPayload(.notification"))
         #expect(consumeAppSnapshot.contains("self.clearMessagePrompt()"))
+        #expect(source.contains("private var deferredGatewayPayloads: [DeferredGatewayPayload]"))
+        #expect(replay.contains("WatchDeferredPayloadOrdering.indicesOldestFirst"))
+        #expect(replay.contains("WatchDeferredPayloadOrdering.isExpired"))
+        #expect(replay.contains("WatchDeferredPayloadOrdering.isNewerThanSnapshot"))
+        #expect(replay.contains("WatchDeferredPayloadOrdering.isAtOrBeforeSnapshot"))
+        #expect(replay.contains("case let .notification(message, transport):"))
+        #expect(replay.contains("approvalSnapshotGatewayID == activeGatewayID"))
+        #expect(replay.contains("payload.isFullyRepresentedByExecApprovalSnapshot"))
+        #expect(replay.contains("let approval = payload.approvalPrompt"))
+        #expect(source.contains("if hasSameSnapshotOwner"))
+        #expect(source.contains("if let sentAtMs = message.sentAtMs"))
+        #expect(receiverSource.contains("self.store.replayDeferredGatewayPayloads()"))
     }
 
     @Test func `watch approval notifications include their gateway owner`() throws {

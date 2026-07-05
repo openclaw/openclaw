@@ -2155,6 +2155,7 @@ private actor WatchSnapshotSendGate {
                         commandText: "echo safe",
                         allowedDecisions: [.allowOnce, .deny]),
                 ],
+                gatewayStableID: "gateway-a",
                 snapshotId: "approval-a"))
 
         let appContext = WatchMessagingPayloadCodec.encodeSnapshotApplicationContext(
@@ -2172,6 +2173,7 @@ private actor WatchSnapshotSendGate {
         #expect(nestedApp["gatewayStableID"] as? String == "gateway-a")
         #expect(nestedApp["snapshotId"] as? String == "app-a")
         #expect(nestedApprovals["snapshotId"] as? String == "approval-a")
+        #expect(nestedApprovals["gatewayStableID"] as? String == "gateway-a")
         #expect((nestedApprovals["approvals"] as? [Any])?.count == 1)
     }
 

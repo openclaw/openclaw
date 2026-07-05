@@ -404,10 +404,13 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         let approvals = (payload["approvals"] as? [Any] ?? []).compactMap { item in
             Self.parseExecApprovalItem(item)
         }
+        let gatewayStableID = (payload["gatewayStableID"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let sentAtMs = (payload["sentAtMs"] as? Int) ?? (payload["sentAtMs"] as? NSNumber)?.intValue
         let snapshotId = (payload["snapshotId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return WatchExecApprovalSnapshotMessage(
             approvals: approvals,
+            gatewayStableID: gatewayStableID?.isEmpty == false ? gatewayStableID : nil,
             sentAtMs: sentAtMs,
             snapshotId: snapshotId)
     }
@@ -613,6 +616,9 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
                 if let execApprovalSnapshot {
                     self.store.consume(execApprovalSnapshot: execApprovalSnapshot, transport: transport)
                 }
+                if appSnapshot != nil {
+                    self.store.replayDeferredGatewayPayloads()
+                }
             }
             return
         }
@@ -649,6 +655,7 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
         if let snapshot = Self.parseAppSnapshotPayload(payload) {
             Task { @MainActor in
                 self.store.consume(appSnapshot: snapshot)
+                self.store.replayDeferredGatewayPayloads()
             }
         }
     }

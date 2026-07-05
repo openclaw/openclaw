@@ -180,16 +180,19 @@ public struct OpenClawWatchExecApprovalExpiredMessage: Codable, Sendable, Equata
 public struct OpenClawWatchExecApprovalSnapshotMessage: Codable, Sendable, Equatable {
     public var type: OpenClawWatchPayloadType
     public var approvals: [OpenClawWatchExecApprovalItem]
+    public var gatewayStableID: String?
     public var sentAtMs: Int?
     public var snapshotId: String?
 
     public init(
         approvals: [OpenClawWatchExecApprovalItem],
+        gatewayStableID: String? = nil,
         sentAtMs: Int? = nil,
         snapshotId: String? = nil)
     {
         self.type = .execApprovalSnapshot
         self.approvals = approvals
+        self.gatewayStableID = gatewayStableID
         self.sentAtMs = sentAtMs
         self.snapshotId = snapshotId
     }

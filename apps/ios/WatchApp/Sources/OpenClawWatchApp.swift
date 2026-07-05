@@ -148,6 +148,7 @@ extension WatchInboxStore {
         self.consume(
             execApprovalSnapshot: WatchExecApprovalSnapshotMessage(
                 approvals: [],
+                gatewayStableID: "watch-screenshot-gateway",
                 sentAtMs: sentAtMs,
                 snapshotId: nil),
             transport: "screenshot")
