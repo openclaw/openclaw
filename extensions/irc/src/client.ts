@@ -33,6 +33,10 @@ function takeIrcPrivmsgChunk(text: string, maxChars: number, maxBytes: number): 
     return text;
   }
   const fitted = text.slice(0, end);
+  // A delimiter just beyond the cap already gives this chunk a clean word boundary.
+  if (text[end] === " ") {
+    return fitted;
+  }
   const splitAt = fitted.lastIndexOf(" ");
   if (splitAt >= Math.floor(fitted.length / 2)) {
     return fitted.slice(0, splitAt);
