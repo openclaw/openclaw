@@ -8,7 +8,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **WhatsApp reconnect catch-up:** auto-reply to bounded offline `append` messages after reconnecting a recently active listener while keeping stale startup history suppressed. (#80642) Thanks @VishalJ99.
 - **WhatsApp restart recovery:** stop automatic restart loops after logged-out or connection-replaced disconnects until the account reconnects. (#78511) Thanks @openperf.
 - **iMessage group warnings:** suppress the false drop-all startup warning when an effective group sender allowlist can admit groups, and point true empty-allowlist configurations at the correct remedy. (#100046)
 - **Control UI mobile login:** keep Gateway recovery guidance visible after connection failures, make the disconnected gate scroll safely on constrained screens, and improve mobile keyboard and tap-target behavior. (#100208)
