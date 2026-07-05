@@ -68,7 +68,10 @@ export {
 export type { OutboundDeliveryFormattingOptions } from "../infra/outbound/formatting.js";
 export { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
 export type { OutboundIdentity } from "../infra/outbound/identity.js";
-export { createReplyToFanout } from "../infra/outbound/reply-policy.js";
+export {
+  createReplyToDeliveryPolicy,
+  createReplyToFanout,
+} from "../infra/outbound/reply-policy.js";
 export type { ReplyToResolution } from "../infra/outbound/reply-policy.js";
 export { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
 export type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
