@@ -169,6 +169,21 @@ describe("completion-cli", () => {
     expect(script).toContain("--token");
     expect(script).not.toContain("-t,");
   });
+
+  it("generates valid Bash completion without subcommands", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const script = getCompletionScript("bash", new Command().name("openclaw"));
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-n"], {
+      encoding: "utf8",
+      input: script,
+    });
+
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+  });
 });
 
 // Commander aliases are typeable commands (`openclaw capability` == `openclaw infer`),
@@ -176,6 +191,7 @@ describe("completion-cli", () => {
 function createAliasedCompletionProgram(): Command {
   const program = new Command();
   program.name("openclaw");
+  program.option("--profile <name>", "Profile");
   const infer = program.command("infer").alias("capability").description("Run inference");
   infer.command("embed").description("Embed text").option("--model <id>", "Model id");
   const cron = program.command("cron").description("Cron commands");
@@ -197,12 +213,51 @@ describe("completion-cli command aliases", () => {
     expect(script).toContain("(add|create) _openclaw_cron_add ;;");
   });
 
-  it("completes root and nested aliases in bash word lists and case labels", () => {
+  it("completes root and nested aliases in bash command paths", () => {
     const script = getCompletionScript("bash", createAliasedCompletionProgram());
 
-    expect(script).toContain("infer capability cron");
-    expect(script).toContain("infer|capability)");
-    expect(script).toContain("add create");
+    expect(script).toContain('opts="infer capability cron --profile"');
+    expect(script).toContain('"infer"|"capability")');
+    expect(script).toContain('"cron")');
+    expect(script).toContain('opts="add create"');
+    expect(script).toContain('"cron add"|"cron create")');
+    expect(script).toContain('opts="--at"');
+  });
+
+  it("offers options after a nested alias in bash", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const script = getCompletionScript("bash", createAliasedCompletionProgram());
+    const result = spawnSync(
+      "bash",
+      [
+        "--noprofile",
+        "--norc",
+        "-c",
+        `${script}
+COMP_WORDS=(openclaw --profile work cron create --a)
+COMP_CWORD=5
+_openclaw_completion
+printf '%s\\n' "\${COMPREPLY[@]}"
+`,
+      ],
+      { encoding: "utf8" },
+    );
+    if (result.error) {
+      if (
+        "code" in result.error &&
+        (result.error.code === "ENOENT" || result.error.code === "EACCES")
+      ) {
+        return;
+      }
+      throw result.error;
+    }
+
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("--at");
   });
 
   it("completes aliases and their subtrees in fish", () => {
@@ -212,20 +267,20 @@ describe("completion-cli command aliases", () => {
       'complete -c openclaw -n "__fish_use_subcommand" -a "capability" -d \'Run inference\'',
     );
     expect(script).toContain(
-      'complete -c openclaw -n "__openclaw_command_path_matches capability --" -a "embed" -d \'Embed text\'',
+      'complete -c openclaw -n "__openclaw_command_path_matches capability -- --profile" -a "embed" -d \'Embed text\'',
     );
     expect(script).toContain(
-      'complete -c openclaw -n "__openclaw_command_path_matches cron --" -a "create" -d \'Add a job\'',
+      'complete -c openclaw -n "__openclaw_command_path_matches cron -- --profile" -a "create" -d \'Add a job\'',
     );
     expect(script).toContain(
-      "complete -c openclaw -n \"__openclaw_command_path_matches cron create -- --at\" -l at -d 'Schedule time'",
+      "complete -c openclaw -n \"__openclaw_command_path_matches cron create -- --profile --at\" -l at -d 'Schedule time'",
     );
   });
 
   it("completes aliases and alias command paths in PowerShell", () => {
     const script = getCompletionScript("powershell", createAliasedCompletionProgram());
 
-    expect(script).toContain("$completions = @('infer','capability','cron')");
+    expect(script).toContain("$completions = @('infer','capability','cron','--profile')");
     expect(script).toContain("if ($commandPath -eq 'capability') {");
     expect(script).toContain("if ($commandPath -eq 'cron create') {");
   });
