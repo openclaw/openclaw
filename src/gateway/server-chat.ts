@@ -1475,7 +1475,14 @@ export function createAgentEventHandler({
         sessionKey,
         agentId: sessionAgentId,
         event: evt,
-      }).catch(() => undefined);
+      }).catch((err: unknown) => {
+        // Surface the swallowed start-phase persistence failure: a silent write
+        // failure drops the run's start marker from restart-recovery accounting
+        // with no operator trace, matching the terminal-phase log below.
+        logError(
+          `gateway: start session persistence failed session=${formatForLog(sessionKey)} run=${formatForLog(evt.runId)} error=${formatForLog(err)}`,
+        );
+      });
       const sessionEventConnIds = sessionEventSubscribers.getAll();
       if (sessionEventConnIds.size > 0) {
         broadcastToConnIds(
