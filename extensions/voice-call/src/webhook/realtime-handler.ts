@@ -229,12 +229,6 @@ type CallRegistration = {
   initialGreetingInstructions?: string;
 };
 
-function shouldTriggerInitialGreetingOnReady(params: {
-  initialGreetingInstructions?: string;
-}): boolean {
-  return Boolean(params.initialGreetingInstructions);
-}
-
 type ActiveRealtimeVoiceBridge = RealtimeVoiceBridgeSession;
 
 type RealtimeSpeakResult = {
@@ -653,9 +647,7 @@ export class RealtimeCallHandler {
       instructions: this.config.instructions,
       tools: this.config.tools,
       initialGreetingInstructions,
-      triggerGreetingOnReady: shouldTriggerInitialGreetingOnReady({
-        initialGreetingInstructions,
-      }),
+      triggerGreetingOnReady: Boolean(initialGreetingInstructions),
       audioSink: {
         isOpen: () => ws.readyState === WebSocket.OPEN,
         sendAudio: (muLaw) => {

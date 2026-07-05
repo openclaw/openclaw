@@ -814,14 +814,24 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       "response.create",
       "input_audio_buffer.append",
     ]);
-    expectRecordFields(
-      requireNestedRecord(sent[2]?.session, ["audio", "input", "turn_detection"]),
-      "pre-drain suppressed turn detection",
-      {
-        create_response: false,
-        interrupt_response: false,
+    expect(sent[2]).toEqual({
+      type: "session.update",
+      session: {
+        type: "realtime",
+        audio: {
+          input: {
+            turn_detection: {
+              type: "server_vad",
+              threshold: 0.5,
+              prefix_padding_ms: 300,
+              silence_duration_ms: 500,
+              create_response: false,
+              interrupt_response: true,
+            },
+          },
+        },
       },
-    );
+    });
     expect(sent[4]).toEqual({
       type: "input_audio_buffer.append",
       audio: Buffer.from("before-ready").toString("base64"),
@@ -967,6 +977,37 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
     await connecting;
+
+    bridge.triggerGreeting?.("Say hello.");
+    expect(parseSent(socket).slice(-2)).toEqual([
+      {
+        type: "session.update",
+        session: {
+          turn_detection: {
+            type: "server_vad",
+            threshold: 0.5,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 500,
+            create_response: false,
+          },
+        },
+      },
+      { type: "response.create" },
+    ]);
+
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+    expect(parseSent(socket).at(-1)).toEqual({
+      type: "session.update",
+      session: {
+        turn_detection: {
+          type: "server_vad",
+          threshold: 0.5,
+          prefix_padding_ms: 300,
+          silence_duration_ms: 500,
+          create_response: true,
+        },
+      },
+    });
   });
 
   it("rejects connection when session configuration fails before readiness", async () => {
@@ -1674,7 +1715,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       "manual response turn detection",
       {
         create_response: false,
-        interrupt_response: false,
+        interrupt_response: true,
       },
     );
     expect(sent[3]).toEqual({ type: "response.create" });
@@ -1761,7 +1802,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       "suppressed turn detection",
       {
         create_response: false,
-        interrupt_response: false,
+        interrupt_response: true,
       },
     );
 
@@ -2291,7 +2332,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       "still suppressed turn detection",
       {
         create_response: false,
-        interrupt_response: false,
+        interrupt_response: true,
       },
     );
 

@@ -192,6 +192,19 @@ type RealtimeAzureDeploymentSessionUpdate = {
   };
 };
 
+type RealtimeAutoResponseSessionUpdate =
+  | {
+      type: "session.update";
+      session: {
+        type: "realtime";
+        audio: { input: { turn_detection: RealtimeTurnDetectionConfig } };
+      };
+    }
+  | {
+      type: "session.update";
+      session: { turn_detection: RealtimeTurnDetectionConfig };
+    };
+
 type OpenAIRealtimeAudioFormatConfig =
   | {
       type: "audio/pcm";
@@ -825,20 +838,18 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
   }
 
-  private sendSessionUpdate(options?: { autoRespondToAudio?: boolean }): void {
+  private sendSessionUpdate(): void {
     if (this.usesAzureDeploymentRealtimeApi()) {
-      this.sendEvent(this.buildAzureDeploymentSessionUpdate(options));
+      this.sendEvent(this.buildAzureDeploymentSessionUpdate());
       return;
     }
 
-    this.sendEvent(this.buildGaSessionUpdate(options));
+    this.sendEvent(this.buildGaSessionUpdate());
   }
 
-  private buildGaSessionUpdate(options?: {
-    autoRespondToAudio?: boolean;
-  }): RealtimeGaSessionUpdate {
+  private buildGaSessionUpdate(): RealtimeGaSessionUpdate {
     const cfg = this.config;
-    const autoRespondToAudio = options?.autoRespondToAudio ?? cfg.autoRespondToAudio ?? true;
+    const autoRespondToAudio = cfg.autoRespondToAudio ?? true;
     const interruptResponseOnInputAudio = cfg.interruptResponseOnInputAudio ?? autoRespondToAudio;
     return {
       type: "session.update",
@@ -881,12 +892,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     return Boolean(this.config.azureEndpoint && this.config.azureDeployment);
   }
 
-  private buildAzureDeploymentSessionUpdate(options?: {
-    autoRespondToAudio?: boolean;
-  }): RealtimeAzureDeploymentSessionUpdate {
+  private buildAzureDeploymentSessionUpdate(): RealtimeAzureDeploymentSessionUpdate {
     const cfg = this.config;
     const format = this.resolveLegacyRealtimeAudioFormat();
-    const autoRespondToAudio = options?.autoRespondToAudio ?? cfg.autoRespondToAudio ?? true;
     return {
       type: "session.update",
       session: {
@@ -901,7 +909,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           threshold: cfg.vadThreshold ?? 0.5,
           prefix_padding_ms: cfg.prefixPaddingMs ?? 300,
           silence_duration_ms: cfg.silenceDurationMs ?? 500,
-          create_response: autoRespondToAudio,
+          create_response: cfg.autoRespondToAudio ?? true,
         },
         temperature: cfg.temperature ?? 0.8,
         ...(cfg.tools && cfg.tools.length > 0
@@ -912,6 +920,33 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           : {}),
       },
     };
+  }
+
+  private sendAutoResponseSessionUpdate(createResponse: boolean): void {
+    let event: RealtimeAutoResponseSessionUpdate;
+    if (this.usesAzureDeploymentRealtimeApi()) {
+      const turnDetection = this.buildAzureDeploymentSessionUpdate().session.turn_detection;
+      event = {
+        type: "session.update",
+        session: {
+          turn_detection: { ...turnDetection, create_response: createResponse },
+        },
+      };
+    } else {
+      const turnDetection = this.buildGaSessionUpdate().session.audio.input.turn_detection;
+      event = {
+        type: "session.update",
+        session: {
+          type: "realtime",
+          audio: {
+            input: {
+              turn_detection: { ...turnDetection, create_response: createResponse },
+            },
+          },
+        },
+      };
+    }
+    this.sendEvent(event);
   }
 
   private resolveRealtimeAudioFormat(): OpenAIRealtimeAudioFormatConfig {
@@ -1220,8 +1255,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (this.config.autoRespondToAudio === false || this.autoRespondSuppressedForManualResponse) {
       return;
     }
+    // Manual response.create owns this turn. Keep VAD events and interruption active,
+    // but prevent a second server-owned response until all queued manual work finishes.
     this.autoRespondSuppressedForManualResponse = true;
-    this.sendSessionUpdate({ autoRespondToAudio: false });
+    this.sendAutoResponseSessionUpdate(false);
   }
 
   private restoreAutoRespondAfterManualResponse(): void {
@@ -1229,7 +1266,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       return;
     }
     this.autoRespondSuppressedForManualResponse = false;
-    this.sendSessionUpdate();
+    this.sendAutoResponseSessionUpdate(true);
   }
 
   private flushPendingResponseCreate(): void {
