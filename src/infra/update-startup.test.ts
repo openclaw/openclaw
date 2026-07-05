@@ -523,8 +523,6 @@ describe("update-startup", () => {
     { channel: "stable" as const, persistedTag: "extended-stable" },
     { channel: "beta" as const, persistedTag: undefined },
     { channel: "beta" as const, persistedTag: "extended-stable" },
-    { channel: "extended-stable" as const, persistedTag: "latest" },
-    { channel: "extended-stable" as const, persistedTag: "beta" },
     { channel: "dev" as const, persistedTag: "latest" },
   ])(
     "suppresses $persistedTag persisted availability on the $channel channel",
@@ -548,6 +546,36 @@ describe("update-startup", () => {
       expect(resolveNpmChannelTag).not.toHaveBeenCalled();
       expect(onUpdateAvailableChange).not.toHaveBeenCalled();
       expect(getUpdateAvailable()).toBeNull();
+    },
+  );
+
+  it.each(["latest", "beta"])(
+    "bypasses the shared throttle for mismatched %s availability on extended-stable",
+    async (persistedTag) => {
+      writePersistedUpdateCheckState({
+        lastCheckedAt: new Date(Date.now()).toISOString(),
+        lastAvailableVersion: "2.0.0",
+        lastAvailableTag: persistedTag,
+      });
+      mockPackageUpdateStatus("extended-stable", "2.0.0");
+      const onUpdateAvailableChange = vi.fn();
+
+      await runExtendedStableUpdateCheck({ onUpdateAvailableChange });
+
+      expect(checkUpdateStatus).toHaveBeenCalledTimes(1);
+      expect(resolveNpmChannelTag).toHaveBeenCalledWith({
+        channel: "extended-stable",
+        timeoutMs: 2500,
+      });
+      expect(onUpdateAvailableChange).toHaveBeenCalledWith({
+        currentVersion: "1.0.0",
+        latestVersion: "2.0.0",
+        channel: "extended-stable",
+      });
+      expect(readPersistedUpdateCheckState()).toMatchObject({
+        lastAvailableVersion: "2.0.0",
+        lastAvailableTag: "extended-stable",
+      });
     },
   );
 

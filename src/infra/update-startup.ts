@@ -551,6 +551,10 @@ export async function runGatewayUpdateCheck(params: {
   const now = resolveUpdateCheckNowMs(rawNow);
   const rawNowIsValid = asDateTimestampMs(rawNow) !== undefined;
   const lastCheckedAt = state.lastCheckedAt ? Date.parse(state.lastCheckedAt) : null;
+  const hasIncompatiblePersistedAvailability =
+    configuredChannel === "extended-stable" &&
+    Boolean(state.lastAvailableVersion?.trim()) &&
+    !isPersistedAvailabilityForChannel({ state, channel: configuredChannel });
   if (shouldRunUpdateHints) {
     const persistedAvailable = resolvePersistedUpdateAvailable(state, configuredChannel);
     setUpdateAvailableCache({
@@ -566,7 +570,12 @@ export async function runGatewayUpdateCheck(params: {
   const checkIntervalMs = shouldRunAutoUpdate
     ? resolveCheckIntervalMs(params.cfg)
     : UPDATE_CHECK_INTERVAL_MS;
-  if (rawNowIsValid && lastCheckedAt && Number.isFinite(lastCheckedAt)) {
+  if (
+    !hasIncompatiblePersistedAvailability &&
+    rawNowIsValid &&
+    lastCheckedAt &&
+    Number.isFinite(lastCheckedAt)
+  ) {
     if (now - lastCheckedAt < checkIntervalMs) {
       return;
     }
