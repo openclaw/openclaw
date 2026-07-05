@@ -148,4 +148,20 @@ describe("gateway CLI backend live probe helpers", () => {
       server.close();
     }
   });
+
+  it("wraps malformed loopback JSON-RPC responses with a contextual error", async () => {
+    const server = createHttpServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("not valid json {");
+    });
+    const port = await listen(server);
+    activateLoopbackRuntime(port);
+    try {
+      await expect(verifyCliCronMcpLoopbackPreflight(preflightParams())).rejects.toThrow(
+        "mcp loopback returned malformed JSON",
+      );
+    } finally {
+      server.close();
+    }
+  });
 });
