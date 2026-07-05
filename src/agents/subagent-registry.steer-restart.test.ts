@@ -2,6 +2,10 @@
 // commands while preserving lifecycle hooks and completion delivery.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../context-engine/types.js";
+import {
+  getDetachedTaskLifecycleRuntime,
+  setDetachedTaskLifecycleRuntime,
+} from "../tasks/detached-task-runtime.js";
 import { findTaskByRunIdForStatus } from "../tasks/task-status-access.js";
 
 const noop = () => {};
@@ -782,6 +786,35 @@ describe("subagent registry steer restarts", () => {
     expect(announceSpy).toHaveBeenCalledTimes(1);
     const announce = requireFirstAnnounceCall();
     expect(announce.childRunId).toBe("run-failed-restart");
+  });
+
+  it("restores announce when abandoned steer task finalization fails", async () => {
+    registerRun({
+      runId: "run-failed-task-finalize",
+      childSessionKey: "agent:main:subagent:failed-task-finalize",
+      task: "recover despite task runtime failure",
+    });
+    expect(mod.markSubagentRunForSteerRestart("run-failed-task-finalize")).toBe(true);
+    emitLifecycleEnd("run-failed-task-finalize");
+    await flushAnnounce();
+    expect(announceSpy).not.toHaveBeenCalled();
+
+    const runtime = getDetachedTaskLifecycleRuntime();
+    setDetachedTaskLifecycleRuntime({
+      ...runtime,
+      finalizeTaskRunByRunId: () => {
+        throw new Error("task store unavailable");
+      },
+    });
+    try {
+      expect(mod.clearSubagentRunSteerRestart("run-failed-task-finalize")).toBe(true);
+    } finally {
+      setDetachedTaskLifecycleRuntime(runtime);
+    }
+
+    await flushAnnounce();
+    expect(announceSpy).toHaveBeenCalledTimes(1);
+    expect(listMainRuns()[0]?.suppressAnnounceReason).toBeUndefined();
   });
 
   it("terminalizes the shared task when an interrupted steer restart is abandoned", async () => {

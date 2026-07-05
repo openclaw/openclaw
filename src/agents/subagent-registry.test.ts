@@ -2947,11 +2947,11 @@ describe("subagent registry seam flow", () => {
     const completedAt = Date.parse("2026-03-24T11:56:00Z");
     const childSessionKey = "agent:main:subagent:opaque-finalizer-miss";
     const completeTaskRunByRunId = vi.fn(() => [] as never);
-    const finalizeTaskRunByRunId = vi.fn(() => [] as never);
+    const finalizeTaskRunSpy = vi.fn(() => [] as never);
     const opaqueRuntime = {
       ...getDetachedTaskLifecycleRuntime(),
       completeTaskRunByRunId,
-      finalizeTaskRunByRunId,
+      finalizeTaskRunByRunId: finalizeTaskRunSpy,
     };
     delete opaqueRuntime.findTaskRun;
     setDetachedTaskLifecycleRuntime(opaqueRuntime);
@@ -2990,7 +2990,7 @@ describe("subagent registry seam flow", () => {
       .find((entry) => entry.runId === "run-opaque-finalizer-miss");
     expect(run?.killReconciliation).toBeUndefined();
     expect(completeTaskRunByRunId).toHaveBeenCalled();
-    expect(finalizeTaskRunByRunId).toHaveBeenCalled();
+    expect(finalizeTaskRunSpy).toHaveBeenCalled();
   });
 
   it("retires stable operator cancellation despite a late persisted completion", async () => {

@@ -546,13 +546,25 @@ export function createSubagentRunManager(params: {
             }
           : resolveFinalizedSubagentTaskState(entry);
       if (terminal) {
-        finalizeTaskRunByRunId({
-          runId: task?.runId ?? entry.taskRunId ?? entry.runId,
-          runtime: "subagent",
-          sessionKey: task?.childSessionKey ?? entry.childSessionKey,
-          ...terminal,
-          suppressDelivery: true,
-        });
+        const targetRunId = task?.runId ?? entry.taskRunId ?? entry.runId;
+        const targetSessionKey = task?.childSessionKey ?? entry.childSessionKey;
+        try {
+          finalizeTaskRunByRunId({
+            runId: targetRunId,
+            runtime: "subagent",
+            sessionKey: targetSessionKey,
+            ...terminal,
+            suppressDelivery: true,
+          });
+        } catch (err) {
+          // A task-runtime failure must not leave the interrupted run's
+          // announcement and cleanup path permanently suppressed.
+          log.warn("failed to finalize abandoned steer-restart task run", {
+            err,
+            runId: targetRunId,
+            childSessionKey: targetSessionKey,
+          });
+        }
       }
     }
     entry.suppressAnnounceReason = undefined;

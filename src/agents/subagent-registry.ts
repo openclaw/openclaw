@@ -132,7 +132,9 @@ type SubagentRegistryDeps = {
   restoreSubagentRunsFromDisk: typeof restoreSubagentRunsFromDisk;
   runSubagentAnnounceFlow: SubagentAnnounceModule["runSubagentAnnounceFlow"];
   ensureContextEnginesInitialized?: () => void;
-  ensureRuntimePluginsLoaded?: typeof ensureRuntimePluginsLoadedFn;
+  ensureRuntimePluginsLoaded?: (
+    params: Parameters<typeof ensureRuntimePluginsLoadedFn>[0],
+  ) => void | Promise<void>;
   resolveContextEngine?: (
     cfg?: OpenClawConfig,
     options?: ResolveContextEngineOptions,
@@ -1101,10 +1103,9 @@ async function sweepSubagentRuns() {
         const taskResolutionBeforeReconciliation = findSubagentTaskForRun(entry);
         const taskBeforeReconciliation = taskResolutionBeforeReconciliation.task;
         const nextRunCreatedAt = findNextSubagentRunCreatedAt(entry);
-        const hasStableTaskCancellation = Boolean(
+        const hasStableTaskCancellation =
           taskBeforeReconciliation?.status === "cancelled" &&
-          !isProvisionalSubagentKillTask(taskBeforeReconciliation),
-        );
+          !isProvisionalSubagentKillTask(taskBeforeReconciliation);
         const killedAt = killReconciliation.killedAt;
         const taskCompletion =
           nextRunCreatedAt === undefined
@@ -1209,11 +1210,10 @@ async function sweepSubagentRuns() {
           }
           const taskResolutionAfterCompletion = findSubagentTaskForRun(entry);
           const taskAfterCompletion = taskResolutionAfterCompletion.task;
-          const stableCancellationWonDuringCompletion = Boolean(
+          const stableCancellationWonDuringCompletion =
             taskAfterCompletion?.status === "cancelled" &&
             !isProvisionalSubagentKillTask(taskAfterCompletion) &&
-            completionEndedAt >= killedAt,
-          );
+            completionEndedAt >= killedAt;
           if (
             !stableCancellationWonDuringCompletion &&
             taskResolutionAfterCompletion.lookup !== "unavailable"
@@ -1234,9 +1234,8 @@ async function sweepSubagentRuns() {
         }
         const taskResolutionBefore = findSubagentTaskForRun(entry);
         const taskBefore = taskResolutionBefore.task;
-        const stableTaskCancellationAfterReconciliation = Boolean(
-          taskBefore?.status === "cancelled" && !isProvisionalSubagentKillTask(taskBefore),
-        );
+        const stableTaskCancellationAfterReconciliation =
+          taskBefore?.status === "cancelled" && !isProvisionalSubagentKillTask(taskBefore);
         const taskNeedsStabilization =
           taskResolutionBefore.lookup === "unavailable" ||
           (taskBefore !== undefined &&

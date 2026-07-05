@@ -400,10 +400,10 @@ export function createSubagentRegistryLifecycleController(params: {
     entry: SubagentRunRecord;
     outcome: SubagentRunOutcome;
     taskResolution?: DetachedTaskFindResult;
-  }): ReturnType<typeof completeTaskRunByRunId> | undefined => {
+  }): ReturnType<typeof completeTaskRunByRunId> => {
     const terminal = resolveFinalizedSubagentTaskState(args.entry);
     if (!terminal) {
-      return;
+      return [];
     }
     const target = resolveSubagentTaskTarget(args.entry, args.taskResolution);
     const { status, error, terminalOutcome, ...details } = terminal;
@@ -435,7 +435,7 @@ export function createSubagentRegistryLifecycleController(params: {
         childSessionKey: maskSessionKey(args.entry.childSessionKey),
         outcomeStatus: args.outcome.status,
       });
-      return undefined;
+      return [];
     }
   };
 
@@ -1335,7 +1335,7 @@ export function createSubagentRegistryLifecycleController(params: {
     let mutated = false;
     let completionReason = completeParams.reason;
     let sessionSuperseded = false;
-    let suppressTaskFinalization = false;
+    let suppressTaskFinalization: boolean;
     let provisionalKillSnapshot: SubagentRunRecord | undefined;
     let postCaptureTaskResolution: DetachedTaskFindResult | undefined;
     let entrySnapshot: SubagentRunRecord | undefined;
@@ -1611,9 +1611,8 @@ export function createSubagentRegistryLifecycleController(params: {
           }
           const latestTaskResolution = params.resolveSubagentTask(provisionalKillSnapshot);
           const latestTask = latestTaskResolution.task;
-          const stableTaskCancellation = Boolean(
-            latestTask?.status === "cancelled" && !isProvisionalSubagentKillTask(latestTask),
-          );
+          const stableTaskCancellation =
+            latestTask?.status === "cancelled" && !isProvisionalSubagentKillTask(latestTask);
           const cancellationEndedAt = resolveKilledSubagentTaskEndedAt(provisionalKillSnapshot);
           const completionPredatesCancellation =
             typeof cancellationEndedAt === "number" && endedAt < cancellationEndedAt;
