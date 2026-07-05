@@ -57,6 +57,8 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
       toolProfile: "coding",
     },
     onSecurityConfigure: vi.fn(),
+    canPairDevice: true,
+    onPairMobile: vi.fn(),
     onBrowserEnabledToggle: vi.fn(),
     onToolProfileChange: vi.fn(),
     theme: "claw",
@@ -210,6 +212,19 @@ describe("renderQuickSettings", () => {
       "qs-segmented__btn--compact",
       "qs-segmented__btn--active",
     ]);
+  });
+
+  it("opens mobile pairing from Security quick settings", () => {
+    const onPairMobile = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ onPairMobile })), container);
+
+    expectRowByLabel(container, "OpenClaw mobile");
+    const button = expectButtonByText(container, "Pair mobile device");
+    expect(button.disabled).toBe(false);
+    button.click();
+    expect(onPairMobile).toHaveBeenCalledOnce();
   });
 
   it("lets operators change text size from Appearance quick settings", () => {
