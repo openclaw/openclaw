@@ -2,7 +2,6 @@
 import type {
   Api,
   AssistantMessage,
-  ImageContent,
   Message,
   Model,
   TextContent,

@@ -18,7 +18,6 @@ import type {
   Api,
   AssistantMessage,
   Context,
-  ImageContent,
   Model,
   SimpleStreamOptions,
   StopReason,
@@ -441,10 +440,11 @@ export function convertResponsesMessages<TApi extends Api>(
 
         for (const block of msg.content) {
           if (isImageBlock(block)) {
+            const image = block as { mimeType: string; data: string };
             contentParts.push({
               type: "input_image",
               detail: "auto",
-              image_url: `data:${block.mimeType};base64,${block.data}`,
+              image_url: `data:${image.mimeType};base64,${image.data}`,
             });
           }
         }
