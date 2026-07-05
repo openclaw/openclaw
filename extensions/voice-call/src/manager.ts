@@ -407,7 +407,7 @@ export class CallManager {
     // is actually available; otherwise speak immediately on answered.
     const mode = (call.metadata?.mode as string | undefined) ?? "conversation";
     if (mode === "conversation") {
-      if (this.config.realtime.enabled) {
+      if (this.config.realtime?.enabled) {
         return;
       }
       const shouldWaitForStreamConnect =

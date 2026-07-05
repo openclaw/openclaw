@@ -209,6 +209,24 @@ describe("CallManager notify and mapping", () => {
     expectFirstPlayTtsText(provider, "Twilio non-stream");
   });
 
+  it("speaks initial message on answered when legacy config omits realtime", async () => {
+    const { manager, provider } = await createManagerHarness({}, new FakeProvider("plivo"));
+    const managerConfig = requireRecord(manager, "manager internals") as {
+      config?: Record<string, unknown>;
+    };
+    delete managerConfig.config?.realtime;
+
+    const callId = await initiateCallWithMessage(
+      manager,
+      "+15550000014",
+      "Legacy config hello",
+      "conversation",
+    );
+    await answerCall(manager, callId, "evt-conversation-missing-realtime");
+
+    expectFirstPlayTtsText(provider, "Legacy config hello");
+  });
+
   it("lets realtime conversations own the initial greeting instead of posting legacy TwiML", async () => {
     const { manager, provider } = await createManagerHarness(
       { realtime: { enabled: true, provider: "openai" } },
