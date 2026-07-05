@@ -20,6 +20,19 @@ internal class AndroidAudioInputSession private constructor(
   companion object {
     private const val tag = "AudioInput"
 
+    internal fun requireSuccessfulRead(result: Int): Int {
+      if (result >= 0) return result
+      val label =
+        when (result) {
+          AudioRecord.ERROR -> "ERROR"
+          AudioRecord.ERROR_BAD_VALUE -> "ERROR_BAD_VALUE"
+          AudioRecord.ERROR_INVALID_OPERATION -> "ERROR_INVALID_OPERATION"
+          AudioRecord.ERROR_DEAD_OBJECT -> "ERROR_DEAD_OBJECT"
+          else -> "code=$result"
+        }
+      throw IllegalStateException("microphone read failed: $label")
+    }
+
     @SuppressLint("MissingPermission")
     fun open(
       context: Context,
@@ -94,7 +107,11 @@ internal class AndroidAudioInputSession private constructor(
     buffer: ByteArray,
     offset: Int,
     size: Int,
-  ): Int = audioRecord.read(buffer, offset, size)
+  ): Int {
+    // AudioRecord reports terminal device failures as negative results. Normalize
+    // them here so both dictation and realtime Talk leave their loops and close routing.
+    return requireSuccessfulRead(audioRecord.read(buffer, offset, size))
+  }
 
   private fun openRoute() {
     audioManager.registerAudioDeviceCallback(deviceCallback, callbackHandler)

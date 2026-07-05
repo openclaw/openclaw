@@ -5523,7 +5523,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 222,
+      "line": 221,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/MicCaptureManager.kt",
       "source": "Speaking · waiting for reply",
       "surface": "android",
@@ -5531,7 +5531,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 222,
+      "line": 221,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/MicCaptureManager.kt",
       "source": "Speaking…",
       "surface": "android",
@@ -5539,7 +5539,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 416,
+      "line": 415,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/MicCaptureManager.kt",
       "source": "Mic off",
       "surface": "android",
@@ -5547,7 +5547,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 416,
+      "line": 415,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/MicCaptureManager.kt",
       "source": "Mic off · sending…",
       "surface": "android",
@@ -5555,7 +5555,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 482,
+      "line": 481,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/MicCaptureManager.kt",
       "source": "Listening · sending queued voice",
       "surface": "android",
@@ -5563,7 +5563,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 482,
+      "line": 481,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/MicCaptureManager.kt",
       "source": "Sending queued voice",
       "surface": "android",

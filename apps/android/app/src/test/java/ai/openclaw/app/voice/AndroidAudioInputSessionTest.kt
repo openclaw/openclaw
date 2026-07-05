@@ -4,10 +4,12 @@ import android.Manifest
 import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.media.AudioRecord
 import android.os.Looper
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -105,6 +107,29 @@ class AndroidAudioInputSessionTest {
     assertEquals(AudioDeviceInfo.TYPE_BLE_HEADSET, audioManager.communicationDevice?.type)
     newSession.close()
     assertNull(audioManager.communicationDevice)
+  }
+
+  @Test
+  fun negativeReadResultsBecomeStableCaptureFailures() {
+    val cases =
+      mapOf(
+        AudioRecord.ERROR to "ERROR",
+        AudioRecord.ERROR_BAD_VALUE to "ERROR_BAD_VALUE",
+        AudioRecord.ERROR_INVALID_OPERATION to "ERROR_INVALID_OPERATION",
+        AudioRecord.ERROR_DEAD_OBJECT to "ERROR_DEAD_OBJECT",
+        -99 to "code=-99",
+      )
+
+    for ((result, label) in cases) {
+      try {
+        AndroidAudioInputSession.requireSuccessfulRead(result)
+        fail("expected $label to fail")
+      } catch (err: IllegalStateException) {
+        assertEquals("microphone read failed: $label", err.message)
+      }
+    }
+    assertEquals(0, AndroidAudioInputSession.requireSuccessfulRead(0))
+    assertEquals(42, AndroidAudioInputSession.requireSuccessfulRead(42))
   }
 
   private fun audioDevice(type: Int): AudioDeviceInfo {
