@@ -29,6 +29,29 @@ const loadSharedClientModule = async () => {
   return await sharedClientModulePromise;
 };
 
+<<<<<<< HEAD
+=======
+/** Returns the process-shared app-server client for normal attempt reuse. */
+export const defaultCodexAppServerClientFactory: CodexAppServerClientFactory = (
+  startOptions,
+  authProfileId,
+  agentDir,
+  config,
+  options,
+) =>
+  loadSharedClientModule().then(({ getSharedCodexAppServerClient }) =>
+    getSharedCodexAppServerClient({
+      startOptions,
+      authProfileId,
+      agentDir,
+      config,
+      onStartedClient: options?.onStartedClient,
+      abandonSignal: options?.abandonSignal,
+      timeoutMs: options?.timeoutMs,
+    }),
+  );
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Returns a leased shared client so startup can release ownership explicitly. */
 export const defaultLeasedCodexAppServerClientFactory: CodexAppServerClientFactory = (
   startOptions,

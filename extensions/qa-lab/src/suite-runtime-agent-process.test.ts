@@ -5,14 +5,20 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+<<<<<<< HEAD
 const spawnSyncMock = vi.hoisted(() => vi.fn());
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const resolveQaNodeExecPathMock = vi.hoisted(() => vi.fn(async () => "/usr/bin/node"));
 const waitForGatewayHealthyMock = vi.hoisted(() => vi.fn(async () => undefined));
 const waitForTransportReadyMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("node:child_process", () => ({
   spawn: spawnMock,
+<<<<<<< HEAD
   spawnSync: spawnSyncMock,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("./node-exec.js", () => ({
@@ -34,7 +40,10 @@ import {
   runQaCli,
   startAgentRun,
   waitForAgentRun,
+<<<<<<< HEAD
   waitForAgentHistoryReply,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   waitForMemorySearchMatch,
 } from "./suite-runtime-agent-process.js";
 
@@ -84,7 +93,10 @@ function firstGatewayCall(
 describe("qa suite runtime agent process helpers", () => {
   beforeEach(() => {
     spawnMock.mockReset();
+<<<<<<< HEAD
     spawnSyncMock.mockReset();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resolveQaNodeExecPathMock.mockClear();
     waitForGatewayHealthyMock.mockClear();
     waitForTransportReadyMock.mockClear();
@@ -110,7 +122,11 @@ describe("qa suite runtime agent process helpers", () => {
 
     await waitForSpawnCount(1);
     child.stdout.emit("data", Buffer.from("ok\n"));
+<<<<<<< HEAD
     child.emit("close", 0);
+=======
+    child.emit("exit", 0);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await expect(pending).resolves.toBe("ok");
     const spawnCall = firstSpawnCall();
@@ -146,7 +162,11 @@ describe("qa suite runtime agent process helpers", () => {
       await waitForSpawnCount(1);
       expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
       child.stdout.emit("data", Buffer.from("ok\n"));
+<<<<<<< HEAD
       child.emit("close", 0);
+=======
+      child.emit("exit", 0);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       await expect(pending).resolves.toBe("ok");
     } finally {
       timeoutSpy.mockRestore();
@@ -186,6 +206,7 @@ describe("qa suite runtime agent process helpers", () => {
     }
   });
 
+<<<<<<< HEAD
   it("force-kills timed-out Windows qa cli process trees with taskkill", async () => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
     const originalSystemRoot = process.env.SystemRoot;
@@ -244,6 +265,8 @@ describe("qa suite runtime agent process helpers", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("merges isolated env overrides into qa cli runs", async () => {
     const child = createSpawnedProcess();
     spawnMock.mockReturnValue(child);
@@ -270,7 +293,11 @@ describe("qa suite runtime agent process helpers", () => {
 
     await waitForSpawnCount(1);
     child.stdout.emit("data", Buffer.from("ok\n"));
+<<<<<<< HEAD
     child.emit("close", 0);
+=======
+    child.emit("exit", 0);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await expect(pending).resolves.toBe("ok");
     const spawnCall = firstSpawnCall();
@@ -308,7 +335,11 @@ describe("qa suite runtime agent process helpers", () => {
 
     await waitForSpawnCount(1);
     child.stdout.emit("data", Buffer.from('{"ok":true}\n'));
+<<<<<<< HEAD
     child.emit("close", 0);
+=======
+    child.emit("exit", 0);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await expect(pending).resolves.toEqual({ ok: true });
   });
@@ -339,7 +370,11 @@ describe("qa suite runtime agent process helpers", () => {
         '\u001b[35m[plugins]\u001b[39m \u001b[36mcodex loaded plugin package metadata\u001b[39m\n{"results":[{"text":"ORBIT-10"}]}\n',
       ),
     );
+<<<<<<< HEAD
     child.emit("close", 0);
+=======
+    child.emit("exit", 0);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
   });
@@ -370,6 +405,7 @@ describe("qa suite runtime agent process helpers", () => {
         '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n',
       ),
     );
+<<<<<<< HEAD
     child.emit("close", 0);
 
     await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
@@ -522,6 +558,9 @@ describe("qa suite runtime agent process helpers", () => {
       ),
     );
     child.emit("close", 0);
+=======
+    child.emit("exit", 0);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
   });
@@ -547,7 +586,11 @@ describe("qa suite runtime agent process helpers", () => {
 
     await waitForSpawnCount(1);
     child.stdout.emit("data", Buffer.alloc(QA_CHILD_STDOUT_MAX_BYTES + 1, "x"));
+<<<<<<< HEAD
     child.emit("close", 0);
+=======
+    child.emit("exit", 0);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await expect(pending).rejects.toThrow(
       `qa cli stdout exceeded ${QA_CHILD_STDOUT_MAX_BYTES} bytes; refusing to parse truncated output`,
@@ -578,7 +621,11 @@ describe("qa suite runtime agent process helpers", () => {
       "data",
       Buffer.from(`head-marker\n${"x".repeat(QA_CHILD_STDERR_TAIL_BYTES)}\ntail-marker`),
     );
+<<<<<<< HEAD
     child.emit("close", 1);
+=======
+    child.emit("exit", 1);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const error = await pending.catch((value: unknown) => value);
     expect(error).toBeInstanceOf(Error);
@@ -596,7 +643,10 @@ describe("qa suite runtime agent process helpers", () => {
       transport: {
         buildAgentDelivery: vi.fn(() => ({
           channel: "qa-channel",
+<<<<<<< HEAD
           to: "transport-target",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           replyChannel: "reply-channel",
           replyTo: "reply-target",
         })),
@@ -618,13 +668,19 @@ describe("qa suite runtime agent process helpers", () => {
           replyChannel?: string;
           replyTo?: string;
           sessionKey?: string;
+<<<<<<< HEAD
           to?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }
       | undefined;
     expect(agentPayload?.sessionKey).toBe("session-1");
     expect(agentPayload?.message).toBe("hello");
     expect(agentPayload?.channel).toBe("qa-channel");
+<<<<<<< HEAD
     expect(agentPayload?.to).toBe("transport-target");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(agentPayload?.replyChannel).toBe("reply-channel");
     expect(agentPayload?.replyTo).toBe("reply-target");
     expect(gatewayArgs?.[2]).toBeTypeOf("object");
@@ -680,6 +736,7 @@ describe("qa suite runtime agent process helpers", () => {
     ).rejects.toThrow("agent.wait returned error: boom");
   });
 
+<<<<<<< HEAD
   it("accepts completed agent wait status as a successful terminal run", async () => {
     const gatewayCall = vi
       .fn()
@@ -766,6 +823,8 @@ describe("qa suite runtime agent process helpers", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("waits for a specific agent run id", async () => {
     const gatewayCall = vi.fn(async () => ({ status: "ok" }));
 
@@ -788,7 +847,11 @@ describe("qa suite runtime agent process helpers", () => {
 
     expect(gatewayCall).toHaveBeenCalledWith(
       "agent.wait",
+<<<<<<< HEAD
       { runId: "run-oversized", timeoutMs: MAX_TIMER_TIMEOUT_MS },
+=======
+      { runId: "run-oversized", timeoutMs: 9e15 },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       { timeoutMs: MAX_TIMER_TIMEOUT_MS },
     );
   });

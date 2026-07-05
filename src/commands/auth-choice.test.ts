@@ -29,8 +29,11 @@ type DetectZaiEndpoint = (params: {
   modelId: string;
   note: string;
 } | null>;
+<<<<<<< HEAD
 type ResolveDeprecatedProviderInstallCatalogEntry =
   typeof import("../plugins/provider-install-catalog.js").resolveDeprecatedProviderInstallCatalogEntry;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
 const ZAI_CODING_GLOBAL_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
@@ -38,12 +41,17 @@ const ZAI_CODING_CN_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
 const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
+<<<<<<< HEAD
 const resolveDeprecatedProviderInstallCatalogEntry = vi.hoisted(() =>
   vi.fn<ResolveDeprecatedProviderInstallCatalogEntry>(() => undefined),
 );
 
 vi.mock("../plugins/provider-install-catalog.js", () => ({
   resolveDeprecatedProviderInstallCatalogEntry,
+=======
+
+vi.mock("../plugins/provider-install-catalog.js", () => ({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveProviderInstallCatalogEntry: vi.fn(() => undefined),
 }));
 
@@ -697,8 +705,11 @@ describe("applyAuthChoice", () => {
     runProviderModelSelectedHook.mockClear();
     detectZaiEndpoint.mockReset();
     detectZaiEndpoint.mockResolvedValue(null);
+<<<<<<< HEAD
     resolveDeprecatedProviderInstallCatalogEntry.mockReset();
     resolveDeprecatedProviderInstallCatalogEntry.mockReturnValue(undefined);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     testAuthProfileStores.clear();
     await lifecycle.cleanup();
   });
@@ -804,6 +815,7 @@ describe("applyAuthChoice", () => {
     }
   });
 
+<<<<<<< HEAD
   it("guides external provider auth-choice replacements before the plugin is installed", async () => {
     const deprecatedChoiceSpy = vi
       .spyOn(providerAuthChoices, "resolveManifestDeprecatedProviderAuthChoice")
@@ -828,6 +840,8 @@ describe("applyAuthChoice", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("prompts and writes provider API key profiles for common providers", async () => {
     const scenarios: Array<{
       authChoice: "huggingface-api-key";

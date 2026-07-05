@@ -22,7 +22,10 @@ export async function repairLoadedGatewayServiceForStart(params: {
   issues: GatewayServiceStartRepairIssue[];
   json: boolean;
   stdout: NodeJS.WritableStream;
+<<<<<<< HEAD
   warn?: (message: string) => void;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }): Promise<{ result: "started"; message: string; warnings?: string[]; loaded: boolean }> {
   const { snapshot: configSnapshot, writeOptions: configWriteOptions } =
     await readConfigFileSnapshotForWrite();
@@ -76,7 +79,10 @@ export async function repairLoadedGatewayServiceForStart(params: {
   await params.service.install({
     env: installEnv as GatewayServiceEnv,
     stdout: params.stdout,
+<<<<<<< HEAD
     warn: params.warn,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     programArguments,
     workingDirectory,
     environment,

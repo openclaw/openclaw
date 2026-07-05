@@ -562,6 +562,7 @@ describe("acp translator stop reason mapping", () => {
     });
   });
 
+<<<<<<< HEAD
   it("ignores stale send close errors while reconnect finish is settling the same prompt", async () => {
     let rejectChatSend: ((err: Error) => void) | undefined;
     const chatSendPromise = new Promise<never>((_, reject) => {
@@ -620,6 +621,8 @@ describe("acp translator stop reason mapping", () => {
     await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not let a stale disconnect deadline reject a newer prompt on the same session", async () => {
     vi.useFakeTimers();
     try {

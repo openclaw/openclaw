@@ -9,14 +9,20 @@ import { afterEach, describe, expect, it } from "vitest";
 import { makeTempDir } from "../../../test/helpers/temp-dir.js";
 import {
   buildExecRemoteCommand,
+<<<<<<< HEAD
   buildRemoteWorkdirValidationCommand,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   buildValidatedExecRemoteCommand,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
   ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT,
   type SshSandboxSession,
   uploadDirectoryToSshTarget,
+<<<<<<< HEAD
   VALIDATE_REMOTE_WORKDIR_SCRIPT,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./ssh.js";
 
 const sessions: SshSandboxSession[] = [];
@@ -240,6 +246,7 @@ describe("sandbox ssh helpers", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+<<<<<<< HEAD
     "validates exec workdirs without creating missing directories",
     async () => {
       const root = makeTempDir(tempDirs, "openclaw-ssh-workdir-");
@@ -321,6 +328,8 @@ describe("sandbox ssh helpers", () => {
   });
 
   it.runIf(process.platform !== "win32")(
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     "rejects symlinked directories inside the trusted remote root",
     async () => {
       const realParent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ssh-real-"));

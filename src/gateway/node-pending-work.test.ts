@@ -3,6 +3,10 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+<<<<<<< HEAD
+=======
+  acknowledgeNodePendingWork,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   drainNodePendingWork,
   enqueueNodePendingWork,
   getNodePendingWorkStateCountForTests,
@@ -25,7 +29,11 @@ describe("node pending work", () => {
     expect(drained.hasMore).toBe(false);
   });
 
+<<<<<<< HEAD
   it("dedupes explicit work by type until the node drains it", () => {
+=======
+  it("dedupes explicit work by type and removes acknowledged items", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const first = enqueueNodePendingWork({ nodeId: "node-2", type: "location.request" });
     const second = enqueueNodePendingWork({ nodeId: "node-2", type: "location.request" });
 
@@ -35,11 +43,23 @@ describe("node pending work", () => {
 
     const drained = drainNodePendingWork("node-2");
     expect(drained.items.map((item) => item.type)).toEqual(["location.request", "status.request"]);
+<<<<<<< HEAD
     expect(getNodePendingWorkStateCountForTests()).toBe(0);
 
     const afterDrain = enqueueNodePendingWork({ nodeId: "node-2", type: "location.request" });
     expect(afterDrain.deduped).toBe(false);
     expect(afterDrain.item.id).not.toBe(first.item.id);
+=======
+
+    const acked = acknowledgeNodePendingWork({
+      nodeId: "node-2",
+      itemIds: [first.item.id, "baseline-status"],
+    });
+    expect(acked.removedItemIds).toEqual([first.item.id]);
+
+    const afterAck = drainNodePendingWork("node-2");
+    expect(afterAck.items.map((item) => item.id)).toEqual(["baseline-status"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("keeps hasMore true when the baseline status item is deferred by maxItems", () => {
@@ -49,6 +69,7 @@ describe("node pending work", () => {
 
     expect(drained.items.map((item) => item.type)).toEqual(["location.request"]);
     expect(drained.hasMore).toBe(true);
+<<<<<<< HEAD
     expect(getNodePendingWorkStateCountForTests()).toBe(0);
 
     const next = drainNodePendingWork("node-3", { maxItems: 1 });
@@ -70,11 +91,14 @@ describe("node pending work", () => {
     expect(secondDrain.items.map((item) => item.id)).not.toEqual(["baseline-status"]);
     expect(secondDrain.hasMore).toBe(false);
     expect(getNodePendingWorkStateCountForTests()).toBe(0);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("does not allocate state for drain-only nodes with no queued work", () => {
     expect(getNodePendingWorkStateCountForTests()).toBe(0);
 
+<<<<<<< HEAD
     const drained = drainNodePendingWork("node-5");
 
     expect(drained.items.map((item) => item.id)).toEqual(["baseline-status"]);
@@ -103,18 +127,41 @@ describe("node pending work", () => {
     const drained = drainNodePendingWork("node-default-expiry", { nowMs: expiresAtMs });
 
     expect(drained.items.map((item) => item.id)).toEqual(["baseline-status"]);
+=======
+    const drained = drainNodePendingWork("node-4");
+    const acked = acknowledgeNodePendingWork({ nodeId: "node-4", itemIds: ["baseline-status"] });
+
+    expect(drained.items.map((item) => item.id)).toEqual(["baseline-status"]);
+    expect(acked).toEqual({ revision: 0, removedItemIds: [] });
+    expect(getNodePendingWorkStateCountForTests()).toBe(0);
+  });
+
+  it("prunes the state entry once all explicit items are acknowledged", () => {
+    const { item } = enqueueNodePendingWork({ nodeId: "node-5", type: "status.request" });
+    expect(getNodePendingWorkStateCountForTests()).toBe(1);
+
+    acknowledgeNodePendingWork({ nodeId: "node-5", itemIds: [item.id] });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(getNodePendingWorkStateCountForTests()).toBe(0);
   });
 
   it("prunes the state entry when all items expire naturally via drain", () => {
     const queued = enqueueNodePendingWork({
+<<<<<<< HEAD
       nodeId: "node-7",
+=======
+      nodeId: "node-6",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       type: "location.request",
       expiresInMs: 5_000,
     });
     expect(getNodePendingWorkStateCountForTests()).toBe(1);
 
+<<<<<<< HEAD
     const drained = drainNodePendingWork("node-7", { nowMs: Date.now() + 60_000 });
+=======
+    const drained = drainNodePendingWork("node-6", { nowMs: Date.now() + 60_000 });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(drained.revision).toBeGreaterThan(queued.revision);
     expect(getNodePendingWorkStateCountForTests()).toBe(0);

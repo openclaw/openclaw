@@ -290,6 +290,14 @@ function readGatewayServiceCommandPortState(
   return { kind: "missing" };
 }
 
+<<<<<<< HEAD
+=======
+export function readGatewayServiceCommandPort(programArguments?: string[]): number | undefined {
+  const servicePort = readGatewayServiceCommandPortState(programArguments);
+  return servicePort.kind === "valid" ? servicePort.port : undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function auditGatewayServicePort(params: {
   programArguments: string[] | undefined;
   issues: ServiceConfigIssue[];

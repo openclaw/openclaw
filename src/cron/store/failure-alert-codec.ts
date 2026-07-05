@@ -46,7 +46,10 @@ export function failureAlertFromRow(row: CronJobRow): CronFailureAlert | false |
   if (row.failure_alert_disabled === 1) {
     return false;
   }
+<<<<<<< HEAD
   const failureAlertExplicitlyEnabled = row.failure_alert_disabled === 0;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (
     row.failure_alert_after == null &&
     !row.failure_alert_channel &&
@@ -54,8 +57,12 @@ export function failureAlertFromRow(row: CronJobRow): CronFailureAlert | false |
     row.failure_alert_cooldown_ms == null &&
     row.failure_alert_include_skipped == null &&
     !row.failure_alert_mode &&
+<<<<<<< HEAD
     !row.failure_alert_account_id &&
     !failureAlertExplicitlyEnabled
+=======
+    !row.failure_alert_account_id
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ) {
     return undefined;
   }

@@ -4,7 +4,10 @@ export type LiveTransportStandardScenarioId =
   | "mention-gating"
   | "allowlist-block"
   | "top-level-reply-shape"
+<<<<<<< HEAD
   | "quote-reply"
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   | "restart-resume"
   | "thread-follow-up"
   | "thread-isolation"
@@ -51,11 +54,14 @@ const LIVE_TRANSPORT_STANDARD_SCENARIOS: readonly LiveTransportStandardScenarioD
     description: "Top-level replies stay top-level when the lane is configured that way.",
   },
   {
+<<<<<<< HEAD
     id: "quote-reply",
     title: "Quote reply",
     description: "Reply-mode responses quote the triggering transport message.",
   },
   {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     id: "restart-resume",
     title: "Restart resume",
     description: "The lane still responds after a gateway restart.",

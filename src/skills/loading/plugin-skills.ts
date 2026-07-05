@@ -273,6 +273,7 @@ function isGeneratedPluginSkillEntry(
 
 function removeGeneratedPluginSkillEntry(linkPath: string): void {
   try {
+<<<<<<< HEAD
     const entry = fs.lstatSync(linkPath);
     if (entry.isSymbolicLink()) {
       fs.unlinkSync(linkPath);
@@ -284,6 +285,8 @@ function removeGeneratedPluginSkillEntry(linkPath: string): void {
     }
   }
   try {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     fs.rmSync(linkPath, { recursive: true, force: true });
   } catch {
     // best-effort cleanup

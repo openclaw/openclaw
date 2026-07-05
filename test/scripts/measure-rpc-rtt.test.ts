@@ -1,9 +1,14 @@
 // Measure Rpc Rtt tests cover measure rpc rtt script behavior.
+<<<<<<< HEAD
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
+=======
+import { EventEmitter } from "node:events";
+import { describe, expect, it, vi } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   assertRpcSmokeResponse,
   cleanupTempRoot,
@@ -18,6 +23,7 @@ import {
   waitForGatewayReady,
 } from "../../scripts/measure-rpc-rtt.mjs";
 
+<<<<<<< HEAD
 function expectedTaskkillPath(): string {
   return resolveWindowsTaskkillPath();
 }
@@ -43,6 +49,8 @@ function withDefaultWindowsSystemRoot(run: () => void): void {
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 class FakeWebSocket extends EventEmitter {
   static OPEN = 1;
   static instances: FakeWebSocket[] = [];
@@ -50,7 +58,10 @@ class FakeWebSocket extends EventEmitter {
   closed = false;
   readyState = 0;
   sent: string[] = [];
+<<<<<<< HEAD
   terminated = false;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   constructor(
     readonly url: string,
@@ -70,6 +81,7 @@ class FakeWebSocket extends EventEmitter {
     this.readyState = 3;
     this.emit("close", 1000, "closed");
   }
+<<<<<<< HEAD
 
   terminate(): void {
     this.terminated = true;
@@ -79,6 +91,8 @@ class FakeWebSocket extends EventEmitter {
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), init);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 describe("scripts/measure-rpc-rtt.mjs", () => {
@@ -92,6 +106,7 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
 
     await expect(client.waitOpen()).rejects.toThrow("gateway websocket open timeout");
     expect(FakeWebSocket.instances[0]?.closed).toBe(true);
+<<<<<<< HEAD
     expect(FakeWebSocket.instances[0]?.terminated).toBe(true);
   });
 
@@ -108,6 +123,8 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
 
     await expect(opened).rejects.toThrow("closed before open (1006): bye");
     expect(FakeWebSocket.instances[0]?.closed).toBe(false);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("rejects pending websocket requests when cleanup closes the client", async () => {
@@ -129,6 +146,7 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     expect(socket.closed).toBe(true);
   });
 
+<<<<<<< HEAD
   it("clears pending websocket request timers when send throws synchronously", async () => {
     vi.useFakeTimers();
     FakeWebSocket.instances = [];
@@ -151,6 +169,8 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     client.close();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("parses bounded RPC RTT options strictly", () => {
     expect(
       parseArgs([
@@ -179,6 +199,7 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     expect(() => parseArgs(["--output-dir", "/tmp/rpc-rtt", "--methods"])).toThrow(
       "--methods requires a value.",
     );
+<<<<<<< HEAD
     expect(() =>
       parseArgs(["--output-dir", "/tmp/rpc-rtt", "--methods", "health, config.get,health"]),
     ).toThrow("--methods contains duplicate gateway method: health");
@@ -209,6 +230,13 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     expect(result.stderr).toBe("");
   });
 
+=======
+    for (const flag of ["--output-dir", "--repo-root", "--iterations", "--methods"]) {
+      expect(() => parseArgs([flag, "--methods", "health"])).toThrow(`${flag} requires a value.`);
+    }
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not publish zero-millisecond RPC RTT summaries", () => {
     expect(summarizeRttSamples([0, 0.1, 0.49])).toEqual({
       avgMs: 1,
@@ -290,8 +318,11 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
   });
 
   it("closes parent gateway log handles after spawning", async () => {
+<<<<<<< HEAD
     const repoRoot = "/repo";
     const tempRoot = "/tmp/rpc-rtt";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const child = Object.assign(new EventEmitter(), {
       exitCode: null,
       kill: vi.fn(),
@@ -308,12 +339,20 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
         env: { PATH: "/bin" },
         openImpl,
         port: 23456,
+<<<<<<< HEAD
         repoRoot,
+=======
+        repoRoot: "/repo",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         sourceEntryExists: () => true,
         spawnImpl,
         stderrPath: "/tmp/stderr.log",
         stdoutPath: "/tmp/stdout.log",
+<<<<<<< HEAD
         tempRoot,
+=======
+        tempRoot: "/tmp/rpc-rtt",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         token: "secret-token",
       }),
     ).resolves.toBe(child);
@@ -325,7 +364,11 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       [
         "--import",
         "tsx",
+<<<<<<< HEAD
         path.join(repoRoot, "src", "entry.ts"),
+=======
+        "/repo/src/entry.ts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         "gateway",
         "run",
         "--port",
@@ -335,6 +378,7 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
         "--allow-unconfigured",
       ],
       expect.objectContaining({
+<<<<<<< HEAD
         cwd: repoRoot,
         detached: process.platform !== "win32",
         env: expect.objectContaining({
@@ -342,6 +386,15 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
           OPENCLAW_CONFIG_PATH: "/tmp/openclaw.json",
           OPENCLAW_GATEWAY_TOKEN: "secret-token",
           OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
+=======
+        cwd: "/repo",
+        detached: process.platform !== "win32",
+        env: expect.objectContaining({
+          HOME: "/tmp/rpc-rtt/home",
+          OPENCLAW_CONFIG_PATH: "/tmp/openclaw.json",
+          OPENCLAW_GATEWAY_TOKEN: "secret-token",
+          OPENCLAW_STATE_DIR: "/tmp/rpc-rtt/state",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           PATH: "/bin",
         }),
         stdio: ["ignore", 41, 42],
@@ -359,6 +412,7 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       signalCode: null,
     });
     const kill = vi.fn(() => true);
+<<<<<<< HEAD
     const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
 
     expect(signalGatewayProcess(child, "SIGTERM", kill, { runTaskkill })).toBe(true);
@@ -368,12 +422,20 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
         stdio: "ignore",
       });
       expect(child.kill).not.toHaveBeenCalled();
+=======
+
+    expect(signalGatewayProcess(child, "SIGTERM", kill)).toBe(true);
+
+    if (process.platform === "win32") {
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } else {
       expect(kill).toHaveBeenCalledWith(-12345, "SIGTERM");
       expect(child.kill).not.toHaveBeenCalled();
     }
   });
 
+<<<<<<< HEAD
   it("signals Windows gateway process trees with taskkill", () => {
     withDefaultWindowsSystemRoot(() => {
       const child = Object.assign(new EventEmitter(), {
@@ -461,6 +523,8 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("treats missing gateway process groups as already exited", () => {
     const child = Object.assign(new EventEmitter(), {
       exitCode: null,
@@ -471,9 +535,14 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     const kill = vi.fn(() => {
       throw Object.assign(new Error("no such process"), { code: "ESRCH" });
     });
+<<<<<<< HEAD
     const runTaskkill = vi.fn(() => ({ error: new Error("not found"), status: 1 }));
 
     expect(signalGatewayProcess(child, "SIGTERM", kill, { runTaskkill })).toBe(false);
+=======
+
+    expect(signalGatewayProcess(child, "SIGTERM", kill)).toBe(false);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("checks process group liveness instead of only the pnpm wrapper", () => {
@@ -501,6 +570,7 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       signalCode: null,
     });
     const kill = vi.fn(() => true);
+<<<<<<< HEAD
     const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
 
     await stopGateway(child, { killGraceMs: 1, killProcess: kill, runTaskkill });
@@ -523,6 +593,14 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
         },
       );
       expect(child.kill).not.toHaveBeenCalled();
+=======
+
+    await stopGateway(child, { killGraceMs: 1, killProcess: kill });
+
+    if (process.platform === "win32") {
+      expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+      expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } else {
       expect(kill).toHaveBeenNthCalledWith(1, -12346, 0);
       expect(kill).toHaveBeenNthCalledWith(2, -12346, "SIGTERM");
@@ -553,6 +631,7 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       }
       return true;
     });
+<<<<<<< HEAD
     const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
 
     await stopGateway(child, {
@@ -580,6 +659,14 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
         },
       );
       expect(child.kill).not.toHaveBeenCalled();
+=======
+
+    await stopGateway(child, { forceKillGraceMs: 50, killGraceMs: 1, killProcess: kill });
+
+    if (process.platform === "win32") {
+      expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+      expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } else {
       expect(kill).toHaveBeenCalledWith(-12350, "SIGKILL");
       expect(postKillLivenessChecks).toBe(2);
@@ -595,9 +682,14 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       signalCode: null,
     });
     const kill = vi.fn(() => true);
+<<<<<<< HEAD
     const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
 
     await stopGateway(child, { killGraceMs: 1, killProcess: kill, runTaskkill });
+=======
+
+    await stopGateway(child, { killGraceMs: 1, killProcess: kill });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     if (process.platform === "win32") {
       expect(child.kill).not.toHaveBeenCalled();
@@ -609,8 +701,12 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     }
   });
 
+<<<<<<< HEAD
   it("gives gateway process groups a grace window before re-raising parent signals", async () => {
     vi.useFakeTimers();
+=======
+  it("cleans up the gateway process group before re-raising parent signals", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const child = Object.assign(new EventEmitter(), {
       exitCode: null,
       kill: vi.fn(),
@@ -622,6 +718,7 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       pid: 98765,
     });
     const kill = vi.fn(() => true);
+<<<<<<< HEAD
     const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
 
     try {
@@ -655,6 +752,26 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     } finally {
       vi.useRealTimers();
     }
+=======
+
+    const removeCleanup = installGatewayParentCleanup(child, {
+      killProcess: kill,
+      processLike,
+    });
+    processLike.emit("SIGTERM");
+
+    if (process.platform === "win32") {
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    } else {
+      expect(kill).toHaveBeenNthCalledWith(1, -12348, "SIGTERM");
+      expect(kill).toHaveBeenNthCalledWith(2, -12348, "SIGKILL");
+      expect(child.kill).not.toHaveBeenCalled();
+    }
+    expect(processLike.kill).toHaveBeenCalledWith(98765, "SIGTERM");
+    expect(processLike.listenerCount("SIGTERM")).toBe(0);
+
+    removeCleanup();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("cleans up the gateway process group on parent exit", () => {
@@ -669,20 +786,30 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       pid: 98766,
     });
     const kill = vi.fn(() => true);
+<<<<<<< HEAD
     const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const removeCleanup = installGatewayParentCleanup(child, {
       killProcess: kill,
       processLike,
+<<<<<<< HEAD
       runTaskkill,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     processLike.emit("exit");
 
     if (process.platform === "win32") {
+<<<<<<< HEAD
       expect(runTaskkill).toHaveBeenCalledWith(expectedTaskkillPath(), ["/PID", "12349", "/T"], {
         stdio: "ignore",
       });
       expect(child.kill).not.toHaveBeenCalled();
+=======
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } else {
       expect(kill).toHaveBeenNthCalledWith(1, -12349, "SIGTERM");
       expect(kill).toHaveBeenNthCalledWith(2, -12349, "SIGKILL");
@@ -729,9 +856,18 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     const child = new EventEmitter();
     const fetchImpl = vi
       .fn()
+<<<<<<< HEAD
       .mockResolvedValueOnce(new Response(new ReadableStream<Uint8Array>({ start() {} })))
       .mockResolvedValueOnce(jsonResponse({ ok: true, status: "live" }))
       .mockResolvedValueOnce(jsonResponse({ failing: [], ready: true }));
+=======
+      .mockRejectedValueOnce(new DOMException("request timed out", "TimeoutError"))
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({
+        json: vi.fn().mockResolvedValue({ ready: true }),
+        ok: true,
+      });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await waitForGatewayReady({
       child,
@@ -771,9 +907,27 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     const child = new EventEmitter();
     const fetchImpl = vi
       .fn()
+<<<<<<< HEAD
       .mockResolvedValueOnce(jsonResponse({ failing: ["gateway"], ready: false }, { status: 503 }))
       .mockResolvedValueOnce(jsonResponse({ ok: true, status: "live" }))
       .mockResolvedValueOnce(jsonResponse({ failing: [], ready: true }));
+=======
+      .mockResolvedValueOnce({
+        json: vi.fn().mockResolvedValue({ failing: ["gateway"], ready: false }),
+        ok: false,
+        status: 503,
+      })
+      .mockResolvedValueOnce({
+        json: vi.fn().mockResolvedValue({ ok: true, status: "live" }),
+        ok: true,
+        status: 200,
+      })
+      .mockResolvedValueOnce({
+        json: vi.fn().mockResolvedValue({ failing: [], ready: true }),
+        ok: true,
+        status: 200,
+      });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await waitForGatewayReady({
       child,
@@ -808,6 +962,7 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       }),
     );
   });
+<<<<<<< HEAD
 
   it("cancels unconsumed readiness probe response bodies", async () => {
     const child = new EventEmitter();
@@ -849,4 +1004,6 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     expect(readyzCanceled).toBe(true);
     expect(healthzCanceled).toBe(true);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

@@ -2,7 +2,10 @@
  * Orchestrates one agent attempt across embedded, CLI, and ACP runtimes.
  */
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
+<<<<<<< HEAD
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
@@ -97,12 +100,15 @@ const ACP_TRANSCRIPT_USAGE = {
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_PROVIDER_ID = "google";
 
+<<<<<<< HEAD
 function shouldSuppressEmbeddedLiveStreamOutput(params: {
   opts: AgentCommandOpts;
 }): boolean {
   return params.opts.sessionEffects === "internal" && params.opts.deliver !== true;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type TranscriptUsage = {
   input?: number;
   output?: number;
@@ -188,10 +194,13 @@ function resolveHarnessAuthProfileSelection(params: {
     };
   }
 
+<<<<<<< HEAD
   if (!params.allowHarnessAuthProfileForwarding) {
     return { authProfileProvider: params.authProfileProvider };
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
     provider: params.provider,
     authProfileProvider: params.authProfileProvider,
@@ -481,10 +490,14 @@ export function runAgentAttempt(params: {
   body: string;
   isFallbackRetry: boolean;
   resolvedThinkLevel: ThinkLevel;
+<<<<<<< HEAD
   fastMode?: FastMode;
   fastModeStartedAtMs?: number;
   fastModeAutoOnSeconds?: number;
   isFinalFallbackAttempt?: boolean;
+=======
+  fastMode?: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   timeoutMs: number;
   runTimeoutOverrideMs?: number;
   runId: string;
@@ -701,11 +714,16 @@ export function runAgentAttempt(params: {
         streamParams: params.opts.streamParams,
         messageProvider: params.opts.messageProvider ?? params.messageChannel,
         currentChannelId: params.runContext.currentChannelId,
+<<<<<<< HEAD
         chatId: params.runContext.chatId,
         channelContext: params.runContext.channelContext,
         currentThreadTs: params.runContext.currentThreadTs,
         currentInboundAudio: params.runContext.currentInboundAudio,
         approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
+=======
+        currentThreadTs: params.runContext.currentThreadTs,
+        currentInboundAudio: params.runContext.currentInboundAudio,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         agentAccountId: params.runContext.accountId,
         senderId: params.runContext.senderId,
         senderIsOwner: params.opts.senderIsOwner,
@@ -774,8 +792,11 @@ export function runAgentAttempt(params: {
     groupSpace: params.runContext.groupSpace,
     spawnedBy: params.spawnedBy,
     currentChannelId: params.runContext.currentChannelId,
+<<<<<<< HEAD
     chatId: params.runContext.chatId,
     channelContext: params.runContext.channelContext,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     currentThreadTs: params.runContext.currentThreadTs,
     currentInboundAudio: params.runContext.currentInboundAudio,
     replyToMode: params.runContext.replyToMode,
@@ -800,19 +821,27 @@ export function runAgentAttempt(params: {
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
     thinkLevel: params.resolvedThinkLevel,
     fastMode: params.fastMode,
+<<<<<<< HEAD
     fastModeStartedAtMs: params.fastModeStartedAtMs,
     fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     verboseLevel: params.resolvedVerboseLevel,
     bashElevated: params.opts.bashElevated,
     approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
+=======
+    verboseLevel: params.resolvedVerboseLevel,
+    bashElevated: params.opts.bashElevated,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     timeoutMs: params.timeoutMs,
     runId: params.runId,
     lifecycleGeneration: params.lifecycleGeneration,
     lane: params.opts.lane,
+<<<<<<< HEAD
     // Hidden internal runs have no assistant-event consumer. Visible subagent
     // lanes can still feed Control UI, session subscribers, and ACP parent relays.
     suppressLiveStreamOutput: shouldSuppressEmbeddedLiveStreamOutput(params),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     abortSignal: params.opts.abortSignal,
     extraSystemPrompt: params.opts.extraSystemPrompt,
     bootstrapContextMode: params.opts.bootstrapContextMode,

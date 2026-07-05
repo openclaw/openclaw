@@ -271,6 +271,7 @@ describe("resolveFailureDestination", () => {
     expect(plan).toBeNull();
   });
 
+<<<<<<< HEAD
   it("keeps a failure destination matching a threaded primary chat without that thread", () => {
     const plan = resolveFailureDestination(
       makeCronJob({
@@ -298,6 +299,8 @@ describe("resolveFailureDestination", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("returns null when provider-prefixed failure destination matches a provider-prefixed primary target", () => {
     const plan = resolveFailureDestination(
       makeCronJob({

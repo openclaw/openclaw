@@ -2,7 +2,10 @@
   "id": "nextcloud-talk",
   "name": "Nextcloud Talk",
   "description": "OpenClaw Nextcloud Talk channel plugin for conversations.",
+<<<<<<< HEAD
   "icon": "https://cdn.simpleicons.org/nextcloud",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "activation": {
     "onStartup": false
   },

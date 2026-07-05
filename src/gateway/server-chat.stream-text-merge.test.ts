@@ -60,6 +60,7 @@ describe("server chat stream text merge", () => {
     ).toBe("Before tool call\nAfter tool call");
   });
 
+<<<<<<< HEAD
   it("replaces prior live text when Codex assistant item switches with empty delta", () => {
     const prior = "coordination draft";
     const replacement = resolveMergedAssistantText({
@@ -83,6 +84,8 @@ describe("server chat stream text merge", () => {
     expect(buggy).toBe("coordination draftfinal ");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("caps merged live text while preserving the newest assistant output", () => {
     const result = resolveMergedAssistantText({
       previousText: "a".repeat(MAX_LIVE_CHAT_BUFFER_CHARS - 2),

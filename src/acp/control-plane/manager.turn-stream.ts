@@ -42,7 +42,10 @@ async function consumeAcpTurnEvents(params: {
       streamError = new AcpRuntimeError(
         normalizeAcpErrorCode(event.code),
         normalizeText(event.message) || "ACP turn failed before completion.",
+<<<<<<< HEAD
         event.detailCode ? { detailCode: event.detailCode } : undefined,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       );
     } else if (event.type === "text_delta" || event.type === "tool_call") {
       sawOutput = true;
@@ -65,7 +68,10 @@ function errorFromTurnResult(result: Extract<AcpRuntimeTurnResult, { status: "fa
   return new AcpRuntimeError(
     normalizeAcpErrorCode(result.error.code),
     normalizeText(result.error.message) || "ACP turn failed before completion.",
+<<<<<<< HEAD
     result.error.detailCode ? { detailCode: result.error.detailCode } : undefined,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
 }
 

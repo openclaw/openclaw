@@ -23,6 +23,7 @@ export type PluginVersionDriftReport = {
   drifts: PluginVersionDriftEntry[];
 };
 
+<<<<<<< HEAD
 function resolveExactNpmPinPackageName(entry: PluginVersionDriftEntry): string | undefined {
   if (entry.source !== "npm" || !entry.spec) {
     return undefined;
@@ -46,6 +47,8 @@ export function resolvePluginVersionDriftUpdateCommand(entry: PluginVersionDrift
   return `openclaw plugins update ${entry.pluginId}`;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Strip a trailing build qualifier (e.g. `2026.5.4-1` -> `2026.5.4`) so that
  * a gateway packaged as `2026.5.4-1` is not reported as drifted from a

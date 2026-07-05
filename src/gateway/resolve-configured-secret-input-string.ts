@@ -133,7 +133,10 @@ export async function resolveConfiguredSecretInputWithFallback(params: {
   secretRefConfigured: boolean;
 }> {
   const resolved = await resolveConfiguredSecretRefOnlyInputString(params);
+<<<<<<< HEAD
   const readNormalizedFallback = () => normalizeOptionalString(params.readFallback?.());
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const configValue = !resolved.refConfigured ? normalizeOptionalString(params.value) : undefined;
   if (configValue) {
     return {
@@ -143,7 +146,11 @@ export async function resolveConfiguredSecretInputWithFallback(params: {
     };
   }
   if (!resolved.refConfigured) {
+<<<<<<< HEAD
     const fallback = readNormalizedFallback();
+=======
+    const fallback = params.readFallback?.();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (fallback) {
       // Fallbacks are only returned after direct config is absent, preserving
       // explicit config precedence while still allowing credential stores.
@@ -164,7 +171,11 @@ export async function resolveConfiguredSecretInputWithFallback(params: {
     };
   }
 
+<<<<<<< HEAD
   const fallback = readNormalizedFallback();
+=======
+  const fallback = params.readFallback?.();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (fallback) {
     // An unresolved SecretRef does not block fallback credentials. Callers get
     // both the source and secretRefConfigured flag for warning policy.

@@ -121,6 +121,7 @@ describe("compileMemoryWikiVault", () => {
     ).resolves.toContain('"text":"Alpha is the canonical source page."');
   });
 
+<<<<<<< HEAD
   it("discovers pages in nested subdirectories during compile", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
@@ -161,6 +162,8 @@ describe("compileMemoryWikiVault", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("renders native directory index links relative to each generated index", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
@@ -599,6 +602,7 @@ describe("compileMemoryWikiVault", () => {
     );
   });
 
+<<<<<<< HEAD
   it("excludes concept and synthesis pages from stale-pages report", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
@@ -678,6 +682,8 @@ describe("compileMemoryWikiVault", () => {
     expect(stalePages).not.toContain("[Gamma Synthesis](../syntheses/synthesis-gamma.md)");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("skips dashboard report pages when createDashboards is disabled", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),

@@ -12,8 +12,11 @@ import {
   requestChatSend,
   requestSkillWorkshopRevisionChatSend,
   sendChatMessage,
+<<<<<<< HEAD
   sendDetachedChatMessage,
   sendSteerChatMessage,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type ChatEventPayload,
   type ChatState,
 } from "./chat.ts";
@@ -71,6 +74,7 @@ function requireFirstRequestCall(request: ReturnType<typeof vi.fn>): unknown[] {
   return call;
 }
 
+<<<<<<< HEAD
 function createStartedChatSendAck(params: unknown) {
   const requestParams = requireRecord(params);
   const runId = requestParams.idempotencyKey;
@@ -80,6 +84,8 @@ function createStartedChatSendAck(params: unknown) {
   return { runId, status: "started" as const };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function expectTextChatMessage(message: unknown, role: string, text: string): void {
   const record = requireRecord(message);
   expect(record.role).toBe(role);
@@ -1879,16 +1885,24 @@ describe("sendChatMessage", () => {
     expect(state.chatMessages).toHaveLength(1);
   });
 
+<<<<<<< HEAD
   it("passes the backing session id from history without resume for ordinary sends", async () => {
+=======
+  it("passes the backing session id from history when sending after reconnect", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const request = vi
       .fn()
       .mockResolvedValueOnce({
         sessionId: "session-before-reconnect",
         messages: [],
       })
+<<<<<<< HEAD
       .mockImplementationOnce((_method: string, params?: unknown) =>
         createStartedChatSendAck(params),
       );
+=======
+      .mockResolvedValueOnce({ runId: "run-1", status: "started" });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const state = createState({
       connected: true,
       client: { request } as unknown as ChatState["client"],
@@ -1904,6 +1918,7 @@ describe("sendChatMessage", () => {
     const sendParams = requireRecord(sendRequest?.[1]);
     expect(sendParams.sessionKey).toBe("main");
     expect(sendParams.sessionId).toBe("session-before-reconnect");
+<<<<<<< HEAD
     expect(sendParams.resumeSession).toBeUndefined();
     expect(sendParams).not.toHaveProperty("__controlUiReconnectResume");
     expect(sendParams.message).toBe("continue");
@@ -1936,6 +1951,11 @@ describe("sendChatMessage", () => {
     expect(state.reconnectResumeSessionId).toBeNull();
   });
 
+=======
+    expect(sendParams.message).toBe("continue");
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not reuse another global agent's visible session id for queued sends", async () => {
     const request = vi.fn().mockResolvedValue({ runId: "run-work", status: "started" });
     const state = createState({
@@ -2102,6 +2122,7 @@ describe("sendChatMessage", () => {
     });
   });
 
+<<<<<<< HEAD
   it("clears the local run and rejects acceptance when the send acks a terminal timeout", async () => {
     const request = vi.fn((_method: string, params: { idempotencyKey: string }) =>
       Promise.resolve({ runId: params.idempotencyKey, status: "timeout" }),
@@ -2184,6 +2205,10 @@ describe("sendChatMessage", () => {
     const request = vi.fn((_method: string, params?: unknown) =>
       Promise.resolve(createStartedChatSendAck(params)),
     );
+=======
+  it("serializes non-image chat attachments as files", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const state = createState({
       connected: true,
       client: { request } as unknown as ChatState["client"],
@@ -2228,9 +2253,13 @@ describe("sendChatMessage", () => {
   });
 
   it("serializes attachments from the side payload store without copying data URLs into chat state", async () => {
+<<<<<<< HEAD
     const request = vi.fn((_method: string, params?: unknown) =>
       Promise.resolve(createStartedChatSendAck(params)),
     );
+=======
+    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const state = createState({
       connected: true,
       client: { request } as unknown as ChatState["client"],
@@ -2284,9 +2313,13 @@ describe("sendChatMessage", () => {
   });
 
   it("sends inline image payloads without copying data URLs into optimistic chat state", async () => {
+<<<<<<< HEAD
     const request = vi.fn((_method: string, params?: unknown) =>
       Promise.resolve(createStartedChatSendAck(params)),
     );
+=======
+    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const state = createState({
       connected: true,
       client: { request } as unknown as ChatState["client"],
@@ -2326,9 +2359,13 @@ describe("sendChatMessage", () => {
     ]);
     expect(JSON.stringify(state.chatMessages)).not.toContain("data:image/png;base64");
 
+<<<<<<< HEAD
     const captionedRequest = vi.fn((_method: string, params?: unknown) =>
       Promise.resolve(createStartedChatSendAck(params)),
     );
+=======
+    const captionedRequest = vi.fn().mockResolvedValue({ runId: "run-2", status: "started" });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const captionedState = createState({
       connected: true,
       client: { request: captionedRequest } as unknown as ChatState["client"],

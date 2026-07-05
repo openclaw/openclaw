@@ -111,12 +111,15 @@ async function readCappedResponseBuffer(res: Response, maxResponseBytes: number)
   });
 }
 
+<<<<<<< HEAD
 async function releaseUnreadResponseBody(res: Response | undefined): Promise<void> {
   if (res?.bodyUsed !== true) {
     await res?.body?.cancel().catch(() => undefined);
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Check if bbernhard container REST API is available.
  */
@@ -126,9 +129,14 @@ export async function containerCheck(
   account?: string,
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
   const normalized = normalizeBaseUrl(baseUrl);
+<<<<<<< HEAD
   let res: Response | undefined;
   try {
     res = await fetchWithTimeout(`${normalized}/v1/about`, { method: "GET" }, timeoutMs);
+=======
+  try {
+    const res = await fetchWithTimeout(`${normalized}/v1/about`, { method: "GET" }, timeoutMs);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!res.ok) {
       return { ok: false, status: res.status, error: `HTTP ${res.status}` };
     }
@@ -143,8 +151,11 @@ export async function containerCheck(
       status: null,
       error: err instanceof Error ? err.message : String(err),
     };
+<<<<<<< HEAD
   } finally {
     await releaseUnreadResponseBody(res);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 
@@ -202,6 +213,7 @@ function containerReceiveCheck(
         error: err instanceof Error ? err.message : String(err),
       });
     });
+<<<<<<< HEAD
     ws.once("close", (code, reason) => {
       const reasonText = reason.length > 0 ? `: ${reason.toString("utf8")}` : "";
       settle({
@@ -210,6 +222,8 @@ function containerReceiveCheck(
         error: `Signal container receive WebSocket closed before open (${code}${reasonText})`,
       });
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 }
 
@@ -262,6 +276,7 @@ export async function containerFetchAttachment(
 ): Promise<Buffer | null> {
   const baseUrl = normalizeBaseUrl(opts.baseUrl);
   const url = `${baseUrl}/v1/attachments/${encodeURIComponent(attachmentId)}`;
+<<<<<<< HEAD
   let res: Response | undefined;
 
   try {
@@ -275,6 +290,16 @@ export async function containerFetchAttachment(
   } finally {
     await releaseUnreadResponseBody(res);
   }
+=======
+
+  const res = await fetchWithTimeout(url, { method: "GET" }, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+
+  if (!res.ok) {
+    return null;
+  }
+
+  return readCappedResponseBuffer(res, normalizeMaxResponseBytes(opts.maxResponseBytes));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /**

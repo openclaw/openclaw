@@ -2,9 +2,13 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
+<<<<<<< HEAD
 import { modelKey } from "../../agents/model-ref-shared.js";
 import { isModelKeyAllowedBySet } from "../../agents/model-selection-shared.js";
 export { modelKey };
+=======
+import { isModelKeyAllowedBySet } from "../../agents/model-selection-shared.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Alias lookup tables used by `/model` directive resolution. */
 export type ModelAliasIndex = {
@@ -61,6 +65,26 @@ const FUZZY_VARIANT_TOKENS = [
   "nano",
 ];
 
+<<<<<<< HEAD
+=======
+/** Builds the canonical provider/model key used by allowlists and aliases. */
+export function modelKey(provider: string, model: string): string {
+  const providerId = provider.trim();
+  const modelId = model.trim();
+  if (!providerId) {
+    return modelId;
+  }
+  if (!modelId) {
+    return providerId;
+  }
+  return normalizeLowercaseStringOrEmpty(modelId).startsWith(
+    `${normalizeLowercaseStringOrEmpty(providerId)}/`,
+  )
+    ? modelId
+    : `${providerId}/${modelId}`;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Resolves an explicit model directive string into a provider/model ref. */
 export function resolveModelRefFromDirectiveString(params: {
   raw: string;

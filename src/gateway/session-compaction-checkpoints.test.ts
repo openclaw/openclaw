@@ -11,12 +11,22 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   captureCompactionCheckpointSnapshotAsync,
+<<<<<<< HEAD
   cleanupCompactionCheckpointSnapshot,
   createFileBackedCompactionCheckpointStore,
+=======
+  captureRuntimeCompactionCheckpointSnapshotAsync,
+  cleanupCompactionCheckpointSnapshot,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   forkCompactionCheckpointTranscriptAsync,
   MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES,
   MAX_COMPACTION_CHECKPOINT_RETAINED_BYTES_PER_SESSION,
   persistSessionCompactionCheckpoint,
+<<<<<<< HEAD
+=======
+  readRuntimeSessionLeafIdFromTranscriptAsync,
+  readSessionLeafIdFromTranscriptAsync,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   readSessionLeafStateFromTranscriptAsync,
   resolveCompactionCheckpointTranscriptPosition,
 } from "./session-compaction-checkpoints.js";
@@ -92,10 +102,14 @@ function checkpointConfig(storePath: string): OpenClawConfig {
 async function writeSessionStore(
   storePath: string,
   sessionKey: string,
+<<<<<<< HEAD
   entry: { sessionId: string; updatedAt: number; compactionCheckpoints?: unknown[] } & Record<
     string,
     unknown
   >,
+=======
+  entry: { sessionId: string; updatedAt: number; compactionCheckpoints?: unknown[] },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ): Promise<void> {
   await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: entry }, null, 2), "utf-8");
 }
@@ -181,6 +195,28 @@ describe("session-compaction-checkpoints", () => {
     });
   });
 
+<<<<<<< HEAD
+=======
+  test("runtime checkpoint probes do not create session metadata for missing transcripts", async () => {
+    const { storePath, sessionKey } = await makeTempSessionStore(
+      "openclaw-checkpoint-runtime-probe-",
+      "missing-session",
+    );
+    await fs.writeFile(storePath, "{}\n", "utf-8");
+    const scope = {
+      agentId: MAIN_AGENT_ID,
+      sessionId: "missing-session",
+      sessionKey,
+      storePath,
+    };
+
+    await expect(readRuntimeSessionLeafIdFromTranscriptAsync(scope)).resolves.toBeNull();
+    await expect(captureRuntimeCompactionCheckpointSnapshotAsync({ scope })).resolves.toBeNull();
+
+    expect(await fs.readFile(storePath, "utf-8")).toBe("{}\n");
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   test("async capture stores pre-compaction identity without copying the transcript", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-async-"));
     tempDirs.push(dir);
@@ -262,7 +298,11 @@ describe("session-compaction-checkpoints", () => {
     const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
     let snapshot: Awaited<ReturnType<typeof captureCompactionCheckpointSnapshotAsync>> | undefined;
     try {
+<<<<<<< HEAD
       expect((await readSessionLeafStateFromTranscriptAsync(sessionFile))?.leafId).toBe(leafId);
+=======
+      expect(await readSessionLeafIdFromTranscriptAsync(sessionFile)).toBe(leafId);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       snapshot = await captureCompactionCheckpointSnapshotAsync({
         sessionFile,
       });
@@ -337,6 +377,10 @@ describe("session-compaction-checkpoints", () => {
       "utf-8",
     );
 
+<<<<<<< HEAD
+=======
+    expect(await readSessionLeafIdFromTranscriptAsync(sessionFile)).toBe("active-tail");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(await readSessionLeafStateFromTranscriptAsync(sessionFile)).toEqual({
       entryId: "post-leaf-metadata",
       leafId: "active-tail",
@@ -633,6 +677,7 @@ describe("session-compaction-checkpoints", () => {
     ]);
   });
 
+<<<<<<< HEAD
   test("file-backed checkpoint store restores from the stored transcript boundary", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-store-"));
     tempDirs.push(dir);
@@ -706,6 +751,8 @@ describe("session-compaction-checkpoints", () => {
     expect(nextStore[MAIN_SESSION_KEY]?.totalTokens).toBe(45);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   test("async fork migrates legacy checkpoint snapshots before writing a current header", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-legacy-fork-"));
     tempDirs.push(dir);
@@ -930,6 +977,7 @@ describe("session-compaction-checkpoints", () => {
     expect(nextStore[MAIN_SESSION_KEY]?.compactionCheckpoints).toBeUndefined();
   });
 
+<<<<<<< HEAD
   test("persist skips malformed session rows without synthesizing a session id", async () => {
     const { storePath, sessionId, sessionKey, now } = await makeTempSessionStore(
       "openclaw-checkpoint-malformed-row-",
@@ -961,6 +1009,8 @@ describe("session-compaction-checkpoints", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   test("persist trims retained checkpoint snapshots by total byte budget", async () => {
     const { dir, storePath, sessionId, sessionKey, now } = await makeTempSessionStore(
       "openclaw-checkpoint-byte-trim-",

@@ -2,7 +2,10 @@
 // wide-area DNS records, Bonjour naming, and shutdown cleanup.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginGatewayDiscoveryServiceRegistration } from "../plugins/registry-types.js";
+<<<<<<< HEAD
 import { captureFullEnv } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type WriteWideAreaGatewayZone = typeof import("../infra/widearea-dns.js").writeWideAreaGatewayZone;
 type ResolveWideAreaDiscoveryDomain =
@@ -119,11 +122,27 @@ function startStuckDiscovery(timeoutMs: string) {
 }
 
 describe("startGatewayDiscovery", () => {
+<<<<<<< HEAD
   const envSnapshot = captureFullEnv();
 
   afterEach(() => {
     vi.useRealTimers();
     envSnapshot.restore();
+=======
+  const prevEnv = { ...process.env };
+
+  afterEach(() => {
+    vi.useRealTimers();
+    for (const key of Object.keys(process.env)) {
+      if (!(key in prevEnv)) {
+        delete process.env[key];
+      }
+    }
+    for (const [key, value] of Object.entries(prevEnv)) {
+      process.env[key] = value;
+    }
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     vi.clearAllMocks();
   });
 

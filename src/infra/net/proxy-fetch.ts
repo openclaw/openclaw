@@ -3,7 +3,10 @@
 import { logWarn } from "../../logger.js";
 import { formatErrorMessage } from "../errors.js";
 import { normalizeHeadersInitForFetch } from "../fetch-headers.js";
+<<<<<<< HEAD
 import { isFormDataLike } from "./form-data.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   addActiveManagedProxyTlsOptions,
   resolveManagedEnvHttpProxyAgentOptions,
@@ -16,6 +19,18 @@ type ProxyFetchWithMetadata = typeof fetch & {
   [PROXY_FETCH_PROXY_URL]?: string;
 };
 
+<<<<<<< HEAD
+=======
+function isFormDataLike(value: unknown): value is FormData {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as FormData).entries === "function" &&
+    (value as { [Symbol.toStringTag]?: unknown })[Symbol.toStringTag] === "FormData"
+  );
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type UndiciFormDataCtor = NonNullable<UndiciRuntimeDeps["FormData"]>;
 type UndiciFormDataInstance = InstanceType<UndiciFormDataCtor>;
 

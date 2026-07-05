@@ -24,8 +24,17 @@ vi.mock("../config/config.js", () => ({
   }),
 }));
 
+<<<<<<< HEAD
 vi.mock("../sessions/transcript-events.js", () => ({
   onInternalSessionTranscriptUpdate: (cb: typeof transcriptUpdateHandler) => {
+=======
+vi.mock("../config/sessions.js", () => ({
+  loadSessionStore: () => ({ entries: [] }),
+}));
+
+vi.mock("../sessions/transcript-events.js", () => ({
+  onSessionTranscriptUpdate: (cb: typeof transcriptUpdateHandler) => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     transcriptUpdateHandler = cb;
     return () => {
       if (transcriptUpdateHandler === cb) {
@@ -79,12 +88,19 @@ vi.mock("./http-utils.js", () => ({
 }));
 
 vi.mock("./session-utils.js", () => ({
+<<<<<<< HEAD
   resolveGatewaySessionStoreTargetWithStore: () => ({
+=======
+  resolveGatewaySessionStoreTarget: () => ({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     storePath: "/tmp",
     storeKeys: ["agent:main"],
     canonicalKey: "agent:main",
     agentId: "main",
+<<<<<<< HEAD
     store: {},
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }),
   resolveFreshestSessionEntryFromStoreKeys: () => ({
     sessionId: "session-1",

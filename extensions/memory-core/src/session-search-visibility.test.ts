@@ -1,4 +1,5 @@
 // Memory Core tests cover session search visibility plugin behavior.
+<<<<<<< HEAD
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +12,11 @@ import {
   replaceQmdSessionArtifactMappings,
   resolveQmdSessionArtifactIdentity,
 } from "./qmd-session-artifacts.js";
+=======
+import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import * as sessionTranscriptHit from "openclaw/plugin-sdk/session-transcript-hit";
+import { afterEach, describe, expect, it, vi } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import { asOpenClawConfig } from "./tools.test-helpers.js";
 
@@ -28,7 +34,10 @@ const crossAgentStore: Record<string, TestSessionEntry> = {
   },
 };
 let combinedSessionStore: Record<string, TestSessionEntry> = crossAgentStore;
+<<<<<<< HEAD
 const tempRoots: string[] = [];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => {
   const actual =
@@ -43,6 +52,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
 });
 
 describe("filterMemorySearchHitsBySessionVisibility", () => {
+<<<<<<< HEAD
   afterEach(async () => {
     vi.mocked(sessionTranscriptHit.loadCombinedSessionStoreForGateway).mockClear();
     combinedSessionStore = crossAgentStore;
@@ -97,6 +107,13 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     return attachQmdSessionArtifactHit(hit, identity);
   }
 
+=======
+  afterEach(() => {
+    vi.mocked(sessionTranscriptHit.loadCombinedSessionStoreForGateway).mockClear();
+    combinedSessionStore = crossAgentStore;
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("drops sessions-sourced hits when requester key is missing (fail closed)", async () => {
     const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "all" } } });
     const hits: MemorySearchResult[] = [
@@ -517,6 +534,7 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     expect(filtered).toStrictEqual([]);
   });
 
+<<<<<<< HEAD
   it("keeps mapped QMD session hits when the artifact filename no longer matches the session id", async () => {
     combinedSessionStore = {
       "agent:main:actual-key": {
@@ -700,6 +718,8 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     expect(filtered).toStrictEqual([]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps same-agent QMD archived deleted .md hits when no store entry remains", async () => {
     combinedSessionStore = {};
     const hit: MemorySearchResult = {

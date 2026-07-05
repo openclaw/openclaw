@@ -342,37 +342,58 @@ function deliveryEnvelopeIndicatesDryRun(value: unknown, depth = 0): boolean {
   );
 }
 
+<<<<<<< HEAD
 function deliveryEnvelopeIndicatesDelivered(
   value: unknown,
   depth = 0,
   requireReceipt = false,
 ): boolean {
   if (!requireReceipt && isBareSentDeliveryStatus(value)) {
+=======
+function deliveryEnvelopeIndicatesDelivered(value: unknown, depth = 0): boolean {
+  if (isBareSentDeliveryStatus(value)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return true;
   }
   if (!value || typeof value !== "object" || depth > 4) {
     return false;
   }
   if (Array.isArray(value)) {
+<<<<<<< HEAD
     return value.some((item) =>
       deliveryEnvelopeIndicatesDelivered(item, depth + 1, requireReceipt),
     );
+=======
+    return value.some((item) => deliveryEnvelopeIndicatesDelivered(item, depth + 1));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   const record = value as Record<string, unknown>;
   if (
+<<<<<<< HEAD
     (!requireReceipt && normalizeStatus(record.deliveryStatus) === SENT_DELIVERY_STATUS) ||
     (!requireReceipt && normalizeStatus(record.status) === SENT_DELIVERY_STATUS) ||
+=======
+    normalizeStatus(record.deliveryStatus) === SENT_DELIVERY_STATUS ||
+    normalizeStatus(record.status) === SENT_DELIVERY_STATUS ||
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     recordHasDeliveredMessageId(record)
   ) {
     return true;
   }
   if (typeof record.text === "string") {
     const parsed = parseJsonRecord(record.text);
+<<<<<<< HEAD
     if (parsed && deliveryEnvelopeIndicatesDelivered(parsed, depth + 1, requireReceipt)) {
       return true;
     }
     if (!requireReceipt && isBareSentDeliveryStatus(record.text)) {
+=======
+    if (parsed && deliveryEnvelopeIndicatesDelivered(parsed, depth + 1)) {
+      return true;
+    }
+    if (isBareSentDeliveryStatus(record.text)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return true;
     }
   }
@@ -380,14 +401,22 @@ function deliveryEnvelopeIndicatesDelivered(
   const content = record.content;
   if (Array.isArray(content)) {
     for (const item of content) {
+<<<<<<< HEAD
       if (deliveryEnvelopeIndicatesDelivered(item, depth + 1, requireReceipt)) {
+=======
+      if (deliveryEnvelopeIndicatesDelivered(item, depth + 1)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         return true;
       }
       if (item && typeof item === "object" && !Array.isArray(item)) {
         const text = (item as Record<string, unknown>).text;
         if (typeof text === "string") {
           const parsed = parseJsonRecord(text);
+<<<<<<< HEAD
           if (parsed && deliveryEnvelopeIndicatesDelivered(parsed, depth + 1, requireReceipt)) {
+=======
+          if (parsed && deliveryEnvelopeIndicatesDelivered(parsed, depth + 1)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             return true;
           }
         }
@@ -396,6 +425,7 @@ function deliveryEnvelopeIndicatesDelivered(
   }
 
   return RESULT_ENVELOPE_KEYS.some((key) =>
+<<<<<<< HEAD
     deliveryEnvelopeIndicatesDelivered(record[key], depth + 1, requireReceipt),
   );
 }
@@ -405,6 +435,12 @@ export function hasMessagingDeliveryReceipt(value: unknown): boolean {
   return deliveryEnvelopeIndicatesDelivered(value, 0, true);
 }
 
+=======
+    deliveryEnvelopeIndicatesDelivered(record[key], depth + 1),
+  );
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function deliveryEnvelopeIndicatesSessionsSendAccepted(value: unknown, depth = 0): boolean {
   if (!value || typeof value !== "object" || depth > 4) {
     return false;

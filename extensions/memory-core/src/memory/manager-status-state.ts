@@ -20,9 +20,15 @@ type StatusAggregateDb = {
 };
 
 export const MEMORY_STATUS_AGGREGATE_SQL =
+<<<<<<< HEAD
   `SELECT 'files' AS kind, source, COUNT(*) as c FROM memory_index_sources WHERE 1=1__FILTER__ GROUP BY source\n` +
   `UNION ALL\n` +
   `SELECT 'chunks' AS kind, source, COUNT(*) as c FROM memory_index_chunks WHERE 1=1__FILTER__ GROUP BY source`;
+=======
+  `SELECT 'files' AS kind, source, COUNT(*) as c FROM files WHERE 1=1__FILTER__ GROUP BY source\n` +
+  `UNION ALL\n` +
+  `SELECT 'chunks' AS kind, source, COUNT(*) as c FROM chunks WHERE 1=1__FILTER__ GROUP BY source`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export function resolveInitialMemoryDirty(params: {
   hasMemorySource: boolean;

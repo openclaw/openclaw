@@ -844,6 +844,7 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("does not run for dreaming-narrative cron session keys", async () => {
     const result = await hooks.before_prompt_build(
       { prompt: "what wings should i order?", messages: [] },
@@ -917,6 +918,8 @@ describe("active-memory plugin", () => {
     expect(result).not.toBeUndefined();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("defaults to direct-style sessions only", async () => {
     const result = await hooks.before_prompt_build(
       { prompt: "what wings should we order?", messages: [] },
@@ -4389,7 +4392,11 @@ describe("active-memory plugin", () => {
       sessionId: "s-empty-search-completed-output",
       updatedAt: 0,
     };
+<<<<<<< HEAD
     runEmbeddedAgent.mockImplementation(async (params: { sessionFile: string }) => {
+=======
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       await writeTranscriptJsonl(params.sessionFile, [
         {
           message: {

@@ -75,6 +75,13 @@ function firstSkillsChangedPath(changedPaths: string[]): string | undefined {
   return changedPaths.find(matchesSkillsInvalidationPrefix);
 }
 
+<<<<<<< HEAD
+=======
+export function shouldInvalidateSkillsSnapshotForPaths(changedPaths: string[]): boolean {
+  return firstSkillsChangedPath(changedPaths) !== undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
   return (
     !plan.restartGateway &&

@@ -7,7 +7,11 @@ import crypto from "node:crypto";
 import type { ClearSessionQueueResult } from "../auto-reply/reply/queue.js";
 import { resolveSubagentLabel, sortSubagentRuns } from "../auto-reply/reply/subagents-utils.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
+<<<<<<< HEAD
 import { loadSessionEntry, patchSessionEntry } from "../config/sessions/session-accessor.js";
+=======
+import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
@@ -50,18 +54,30 @@ const SUBAGENT_REPLY_HISTORY_LIMIT = 50;
 const steerRateLimit = new Map<string, number>();
 
 type GatewayCaller = typeof callGateway;
+<<<<<<< HEAD
 type PatchSessionEntry = typeof patchSessionEntry;
+=======
+type UpdateSessionStore = typeof updateSessionStore;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type AbortEmbeddedAgentRun = (sessionId: string) => boolean;
 type ClearSessionQueues = (keys: Array<string | undefined>) => ClearSessionQueueResult;
 
 const defaultSubagentControlDeps = {
   callGateway,
+<<<<<<< HEAD
   patchSessionEntry,
+=======
+  updateSessionStore,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 let subagentControlDeps: {
   callGateway: GatewayCaller;
+<<<<<<< HEAD
   patchSessionEntry: PatchSessionEntry;
+=======
+  updateSessionStore: UpdateSessionStore;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   abortEmbeddedAgentRun?: AbortEmbeddedAgentRun;
   clearSessionQueues?: ClearSessionQueues;
 } = defaultSubagentControlDeps;
@@ -187,6 +203,7 @@ async function killSubagentRun(params: {
   }
   if (resolved.entry) {
     try {
+<<<<<<< HEAD
       await subagentControlDeps.patchSessionEntry(
         { storePath: resolved.storePath, sessionKey: childSessionKey },
         (current) => ({
@@ -196,6 +213,17 @@ async function killSubagentRun(params: {
         }),
         { replaceEntry: true },
       );
+=======
+      await subagentControlDeps.updateSessionStore(resolved.storePath, (store) => {
+        const current = store[childSessionKey];
+        if (!current) {
+          return;
+        }
+        current.abortedLastRun = true;
+        current.updatedAt = Date.now();
+        store[childSessionKey] = current;
+      });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } catch (error) {
       logVerbose(
         `subagents control kill: failed to persist abortedLastRun for ${childSessionKey}: ${formatErrorMessage(error)}`,
@@ -660,11 +688,16 @@ export async function sendControlledSubagentMessage(params: {
   const targetSessionKey = params.entry.childSessionKey;
   const parsed = parseAgentSessionKey(targetSessionKey);
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed?.agentId });
+<<<<<<< HEAD
   const targetSessionEntry = loadSessionEntry({
     storePath,
     sessionKey: targetSessionKey,
     clone: false,
   });
+=======
+  const store = loadSessionStore(storePath);
+  const targetSessionEntry = store[targetSessionKey];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const targetSessionId =
     typeof targetSessionEntry?.sessionId === "string" && targetSessionEntry.sessionId.trim()
       ? targetSessionEntry.sessionId.trim()
@@ -727,7 +760,11 @@ export const testing = {
   setDepsForTest(
     overrides?: Partial<{
       callGateway: GatewayCaller;
+<<<<<<< HEAD
       patchSessionEntry: PatchSessionEntry;
+=======
+      updateSessionStore: UpdateSessionStore;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       abortEmbeddedAgentRun: AbortEmbeddedAgentRun;
       clearSessionQueues: ClearSessionQueues;
     }>,

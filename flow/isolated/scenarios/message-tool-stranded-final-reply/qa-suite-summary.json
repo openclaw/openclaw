@@ -1,0 +1,73 @@
+{
+  "scenarios": [
+    {
+      "name": "Message-tool-only private final reply warning",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "warns for substantive private final text when the model omits the message tool",
+          "status": "pass",
+          "details": "no-outbound private final; WARN logged=true; mock requests=1; gateway log: \u001b[90m2026-07-03T13:15:39.517+00:00\u001b[39m \u001b[32m[source-reply/private-final]\u001b[39m \u001b[33magent produced a long private final reply without calling the configured delivery tool (message_tool_only); response kept private and not delivered to the source channel\u001b[39m"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 74713,
+    "gatewayProcessCpuMs": 5000,
+    "gatewayCpuCoreRatio": 0.067,
+    "gatewayProcessRssStartBytes": 852471808,
+    "gatewayProcessRssEndBytes": 415588352,
+    "gatewayProcessRssDeltaBytes": -436883456,
+    "gatewayProcessRssPeakBytes": 852471808,
+    "gatewayProcessRssPeakDeltaBytes": 0,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:15:24.420Z",
+        "gatewayProcessRssBytes": 852471808
+      },
+      {
+        "label": "scenario:message-tool-stranded-final-reply:start",
+        "at": "2026-07-03T13:15:24.481Z",
+        "gatewayProcessRssBytes": 851660800
+      },
+      {
+        "label": "scenario:message-tool-stranded-final-reply:finish",
+        "at": "2026-07-03T13:15:56.910Z",
+        "gatewayProcessRssBytes": 415588352
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:15:57.022Z",
+        "gatewayProcessRssBytes": 415588352
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:14:42.198Z",
+    "finishedAt": "2026-07-03T13:15:56.911Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "message-tool-stranded-final-reply"
+    ],
+    "runtimePair": null
+  }
+}

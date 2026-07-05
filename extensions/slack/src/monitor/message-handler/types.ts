@@ -4,7 +4,10 @@ import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { ResolvedSlackAccount } from "../../accounts.js";
+<<<<<<< HEAD
 import type { SlackSendIdentity } from "../../send.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackChannelConfigResolved } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -13,7 +16,10 @@ export type PreparedSlackMessage = {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
   message: SlackMessageEvent;
+<<<<<<< HEAD
   relayIdentity?: SlackSendIdentity;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   route: ResolvedAgentRoute;
   channelConfig: SlackChannelConfigResolved | null;
   replyTarget: string;

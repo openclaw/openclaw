@@ -107,7 +107,10 @@ const ERROR_PATTERNS = {
     // Chinese provider overloaded messages
     "服务过载",
     "当前负载过高",
+<<<<<<< HEAD
     "访问量过大",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ],
   serverError: [
     "an error occurred while processing",
@@ -184,6 +187,7 @@ const ERROR_PATTERNS = {
     // the configured fallback chain runs instead of surfacing the error.
     /^request failed$/i,
     /\brequest failed after repeated internal retries\b/i,
+<<<<<<< HEAD
     // The generic assistant error text "LLM request failed." is produced by
     // formatUserFacingAssistantErrorText when the underlying provider error
     // cannot be formatted into a specific category. For local providers (LM
@@ -196,6 +200,8 @@ const ERROR_PATTERNS = {
     // (a format/schema error, not transient) are NOT caught here — they
     // fall through to their own pattern classifications.
     /^llm request failed\.$/i,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,

@@ -29,6 +29,7 @@
  */
 
 import { createHash } from "node:crypto";
+<<<<<<< HEAD
 import {
   runAgentHarnessBeforeMessageWriteHook,
   type AgentMessage,
@@ -39,6 +40,18 @@ import {
   type SessionTranscriptTargetParams,
   type SessionTranscriptWriteLockParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
+=======
+import fs from "node:fs/promises";
+import {
+  acquireSessionWriteLock,
+  appendSessionTranscriptMessage,
+  emitSessionTranscriptUpdate,
+  resolveSessionWriteLockAcquireTimeoutMs,
+  runAgentHarnessBeforeMessageWriteHook,
+  type AgentMessage,
+  type SessionWriteLockAcquireTimeoutConfig,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
 
@@ -95,7 +108,10 @@ function buildMirrorDedupeIdentity(message: MirroredAgentMessage): string {
 
 export interface MirrorCopilotTranscriptParams {
   sessionFile: string;
+<<<<<<< HEAD
   sessionId: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sessionKey?: string;
   agentId?: string;
   messages: AgentMessage[];
@@ -107,7 +123,11 @@ export interface MirrorCopilotTranscriptParams {
    * entry collide with its existing on-disk key and be a true no-op.
    */
   idempotencyScope?: string;
+<<<<<<< HEAD
   config?: SessionTranscriptWriteLockParams["config"];
+=======
+  config?: SessionWriteLockAcquireTimeoutConfig;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export async function mirrorCopilotTranscript(
@@ -121,6 +141,7 @@ export async function mirrorCopilotTranscript(
     return;
   }
 
+<<<<<<< HEAD
   const transcriptTarget = resolveCopilotMirrorTranscriptTarget(params);
   const didAppend = await withSessionTranscriptWriteLock(
     { ...transcriptTarget, config: params.config },
@@ -206,6 +227,84 @@ function readTranscriptIdempotencyKeys(events: unknown[]): Set<string> {
     const parsed = event as { message?: { idempotencyKey?: unknown } };
     if (typeof parsed.message?.idempotencyKey === "string") {
       keys.add(parsed.message.idempotencyKey);
+=======
+  const lock = await acquireSessionWriteLock({
+    sessionFile: params.sessionFile,
+    timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
+  });
+  try {
+    const existingIdempotencyKeys = await readTranscriptIdempotencyKeys(params.sessionFile);
+    for (const message of messages) {
+      const dedupeIdentity = buildMirrorDedupeIdentity(message);
+      const idempotencyKey = params.idempotencyScope
+        ? `${params.idempotencyScope}:${dedupeIdentity}`
+        : undefined;
+      if (idempotencyKey && existingIdempotencyKeys.has(idempotencyKey)) {
+        continue;
+      }
+      const transcriptMessage = {
+        ...message,
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+      } as AgentMessage;
+      const nextMessage = runAgentHarnessBeforeMessageWriteHook({
+        message: transcriptMessage,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      });
+      if (!nextMessage) {
+        continue;
+      }
+      const messageToAppend = (
+        idempotencyKey
+          ? {
+              ...(nextMessage as unknown as Record<string, unknown>),
+              idempotencyKey,
+            }
+          : nextMessage
+      ) as AgentMessage;
+      await appendSessionTranscriptMessage({
+        transcriptPath: params.sessionFile,
+        message: messageToAppend,
+        config: params.config,
+      });
+      if (idempotencyKey) {
+        existingIdempotencyKeys.add(idempotencyKey);
+      }
+    }
+  } finally {
+    await lock.release();
+  }
+
+  if (params.sessionKey) {
+    emitSessionTranscriptUpdate({ sessionFile: params.sessionFile, sessionKey: params.sessionKey });
+  } else {
+    emitSessionTranscriptUpdate(params.sessionFile);
+  }
+}
+
+async function readTranscriptIdempotencyKeys(sessionFile: string): Promise<Set<string>> {
+  const keys = new Set<string>();
+  let raw: string;
+  try {
+    raw = await fs.readFile(sessionFile, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+    return keys;
+  }
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(line) as { message?: { idempotencyKey?: unknown } };
+      if (typeof parsed.message?.idempotencyKey === "string") {
+        keys.add(parsed.message.idempotencyKey);
+      }
+    } catch {
+      continue;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   }
   return keys;

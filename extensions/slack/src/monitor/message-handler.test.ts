@@ -3,9 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueMock = vi.fn(async (_entry: unknown) => {});
 const flushKeyMock = vi.fn(async (_key: string) => {});
+<<<<<<< HEAD
 const onFlushCallbacks: Array<(entries: Array<Record<string, unknown>>) => Promise<void>> = [];
 const prepareSlackMessageMock = vi.fn(async () => ({ ctxPayload: {} }));
 const dispatchPreparedSlackMessageMock = vi.fn(async () => {});
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const resolveThreadTsMock = vi.fn(async ({ message }: { message: Record<string, unknown> }) => ({
   ...message,
 }));
@@ -17,6 +20,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   );
   return {
     ...actual,
+<<<<<<< HEAD
     createChannelInboundDebouncer: (params: {
       onFlush: (entries: Array<Record<string, unknown>>) => Promise<void>;
     }) => {
@@ -29,6 +33,15 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
         },
       };
     },
+=======
+    createChannelInboundDebouncer: () => ({
+      debounceMs: 10,
+      debouncer: {
+        enqueue: (entry: unknown) => enqueueMock(entry),
+        flushKey: (key: string) => flushKeyMock(key),
+      },
+    }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     shouldDebounceTextInbound: ({ hasMedia }: { hasMedia?: boolean }) => !hasMedia,
   };
 });
@@ -39,6 +52,7 @@ vi.mock("./thread-resolution.js", () => ({
   }),
 }));
 
+<<<<<<< HEAD
 vi.mock("./message-handler/pipeline.runtime.js", () => ({
   prepareSlackMessage: prepareSlackMessageMock,
   dispatchPreparedSlackMessage: dispatchPreparedSlackMessageMock,
@@ -49,6 +63,8 @@ vi.mock("./inbound-delivery-state.js", () => ({
   recordSlackInboundMessageDeliveries: vi.fn(async () => {}),
 }));
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function createContext(overrides?: {
   markMessageSeen?: (channel: string | undefined, ts: string | undefined) => boolean;
   releaseSeenMessage?: (channel: string | undefined, ts: string | undefined) => void;
@@ -98,9 +114,12 @@ describe("createSlackMessageHandler", () => {
   beforeEach(() => {
     enqueueMock.mockClear();
     flushKeyMock.mockClear();
+<<<<<<< HEAD
     onFlushCallbacks.length = 0;
     prepareSlackMessageMock.mockClear();
     dispatchPreparedSlackMessageMock.mockClear();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resolveThreadTsMock.mockClear();
   });
 
@@ -222,6 +241,7 @@ describe("createSlackMessageHandler", () => {
 
     expect(flushKeyMock).toHaveBeenCalledWith("slack:default:C111:1709000000.000100:U111");
   });
+<<<<<<< HEAD
 
   it("waits for debounced dispatch completion when requested by relay delivery", async () => {
     const { handler } = createHandlerWithTracker();
@@ -270,4 +290,6 @@ describe("createSlackMessageHandler", () => {
     const flushFailure = expect(onFlushCallbacks[0]?.([entry])).rejects.toThrow("dispatch failed");
     await Promise.all([handledFailure, flushFailure]);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

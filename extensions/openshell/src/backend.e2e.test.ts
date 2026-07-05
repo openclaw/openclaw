@@ -18,14 +18,18 @@ const OPENCLAW_OPENSHELL_E2E = process.env.OPENCLAW_E2E_OPENSHELL === "1";
 const OPENCLAW_OPENSHELL_E2E_TIMEOUT_MS = 12 * 60_000;
 const OPENCLAW_OPENSHELL_COMMAND =
   process.env.OPENCLAW_E2E_OPENSHELL_COMMAND?.trim() || "openshell";
+<<<<<<< HEAD
 const OPENCLAW_OPENSHELL_CONFIG_HOME =
   process.env.OPENCLAW_E2E_OPENSHELL_CONFIG_HOME?.trim() || null;
 const OPENCLAW_OPENSHELL_HOST_IP = process.env.OPENCLAW_E2E_OPENSHELL_HOST_IP?.trim() || null;
 const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-?]*[ -/]*[@-~]`, "gu");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const CUSTOM_IMAGE_DOCKERFILE = `FROM python:3.13-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \\
+<<<<<<< HEAD
     coreutils curl findutils iproute2 nftables \\
   && rm -rf /var/lib/apt/lists/*
 
@@ -36,6 +40,19 @@ RUN groupadd -g 1000660000 sandbox && \\
 RUN echo "openclaw-openshell-e2e" > /opt/openshell-e2e-marker.txt
 
 USER sandbox
+=======
+    coreutils \\
+    curl \\
+    findutils \\
+    iproute2 \\
+  && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -g 1000 sandbox && \\
+    useradd -m -u 1000 -g sandbox sandbox
+
+RUN echo "openclaw-openshell-e2e" > /opt/openshell-e2e-marker.txt
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 WORKDIR /sandbox
 CMD ["sleep", "infinity"]
 `;
@@ -128,6 +145,7 @@ async function commandAvailable(command: string): Promise<boolean> {
   }
 }
 
+<<<<<<< HEAD
 async function activeOpenShellGateway(
   command: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -177,6 +195,19 @@ async function activeOpenShellGateway(
     return null;
   } catch {
     return null;
+=======
+async function openshellGatewayAvailable(command: string): Promise<boolean> {
+  try {
+    const result = await runCommand({
+      command,
+      args: ["gateway", "start", "--help"],
+      allowFailure: true,
+      timeoutMs: 20_000,
+    });
+    return result.code === 0 && `${result.stdout}\n${result.stderr}`.includes("--name");
+  } catch {
+    return false;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 
@@ -194,6 +225,7 @@ async function dockerReady(): Promise<boolean> {
   }
 }
 
+<<<<<<< HEAD
 async function resolveOpenShellHostIp(): Promise<string> {
   if (OPENCLAW_OPENSHELL_HOST_IP) {
     return OPENCLAW_OPENSHELL_HOST_IP;
@@ -229,6 +261,8 @@ async function resolveOpenShellHostIp(): Promise<string> {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function allocatePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -361,28 +395,41 @@ HTTPServer(("0.0.0.0", 8000), Handler).serve_forever()
   throw new Error("docker-backed host policy server did not become ready");
 }
 
+<<<<<<< HEAD
 function buildOpenShellPolicyYaml(params: {
   port: number;
   binaryPath: string;
   hostIp: string;
 }): string {
+=======
+function buildOpenShellPolicyYaml(params: { port: number; binaryPath: string }): string {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const networkPolicies = `  host_echo:
     name: host-echo
     endpoints:
       - host: host.openshell.internal
         port: ${params.port}
+<<<<<<< HEAD
         protocol: rest
         enforcement: enforce
         access: full
         allowed_ips:
           - "${params.hostIp}/32"
+=======
+        allowed_ips:
+          - "0.0.0.0/0"
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     binaries:
       - path: ${params.binaryPath}`;
   return `version: 1
 
 filesystem_policy:
   include_workdir: true
+<<<<<<< HEAD
   read_only: [/usr, /lib, /proc, /dev/urandom, /app, /etc, /var/log, /opt]
+=======
+  read_only: [/usr, /lib, /proc, /dev/urandom, /app, /etc, /var/log]
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   read_write: [/sandbox, /tmp, /dev/null]
 
 landlock:
@@ -434,6 +481,7 @@ describe("openshell sandbox backend e2e", () => {
     { timeout: OPENCLAW_OPENSHELL_E2E_TIMEOUT_MS },
     async () => {
       if (!(await dockerReady())) {
+<<<<<<< HEAD
         throw new Error("OpenShell E2E requires a working Docker daemon");
       }
       if (!(await commandAvailable(OPENCLAW_OPENSHELL_COMMAND))) {
@@ -452,6 +500,15 @@ describe("openshell sandbox backend e2e", () => {
       });
       if (!gatewayName) {
         throw new Error("OpenShell E2E requires an active local registered gateway");
+=======
+        return;
+      }
+      if (!(await commandAvailable(OPENCLAW_OPENSHELL_COMMAND))) {
+        return;
+      }
+      if (!(await openshellGatewayAvailable(OPENCLAW_OPENSHELL_COMMAND))) {
+        return;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
 
       const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-openshell-e2e-"));
@@ -465,8 +522,15 @@ describe("openshell sandbox backend e2e", () => {
       const denyPolicyPath = path.join(rootDir, "deny-policy.yaml");
       const allowPolicyPath = path.join(rootDir, "allow-policy.yaml");
       const scopeSuffix = `${process.pid}-${Date.now()}`;
+<<<<<<< HEAD
       const scopeKey = `session:openshell-e2e-deny:${scopeSuffix}`;
       const allowSandboxName = `openclaw-policy-allow-${scopeSuffix}`;
+=======
+      const gatewayName = `openclaw-e2e-${scopeSuffix}`;
+      const scopeKey = `session:openshell-e2e-deny:${scopeSuffix}`;
+      const allowSandboxName = `openclaw-policy-allow-${scopeSuffix}`;
+      const gatewayPort = await allocatePort();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       let hostPolicyServer: HostPolicyServer | null | undefined;
       const sandboxCfg = {
         mode: "all" as const,
@@ -517,6 +581,7 @@ describe("openshell sandbox backend e2e", () => {
         }
         await fs.mkdir(workspaceDir, { recursive: true });
         await fs.mkdir(dockerfileDir, { recursive: true });
+<<<<<<< HEAD
         const isolatedConfigHome = env.XDG_CONFIG_HOME;
         if (!isolatedConfigHome) {
           throw new Error("OpenShell E2E could not create an isolated XDG config home");
@@ -527,6 +592,8 @@ describe("openshell sandbox backend e2e", () => {
           path.join(isolatedConfigHome, "openshell"),
           { recursive: true },
         );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         await fs.writeFile(path.join(workspaceDir, "seed.txt"), "seed-from-local\n", "utf8");
         await fs.writeFile(dockerfilePath, CUSTOM_IMAGE_DOCKERFILE, "utf8");
         await fs.writeFile(
@@ -534,7 +601,10 @@ describe("openshell sandbox backend e2e", () => {
           buildOpenShellPolicyYaml({
             port: hostPolicyServer.port,
             binaryPath: "/usr/bin/false",
+<<<<<<< HEAD
             hostIp,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           }),
           "utf8",
         );
@@ -542,12 +612,34 @@ describe("openshell sandbox backend e2e", () => {
           allowPolicyPath,
           buildOpenShellPolicyYaml({
             port: hostPolicyServer.port,
+<<<<<<< HEAD
             binaryPath: "/usr/bin/curl",
             hostIp,
+=======
+            binaryPath: "/**",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           }),
           "utf8",
         );
 
+<<<<<<< HEAD
+=======
+        await runCommand({
+          command: OPENCLAW_OPENSHELL_COMMAND,
+          args: [
+            "gateway",
+            "start",
+            "--name",
+            gatewayName,
+            "--port",
+            String(gatewayPort),
+            "--recreate",
+          ],
+          env,
+          timeoutMs: 8 * 60_000,
+        });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const execResult = await runBackendExec({
           backend,
           command: "pwd && cat /opt/openshell-e2e-marker.txt && cat seed.txt",
@@ -657,6 +749,16 @@ describe("openshell sandbox backend e2e", () => {
           allowFailure: true,
           timeoutMs: 2 * 60_000,
         });
+<<<<<<< HEAD
+=======
+        await runCommand({
+          command: OPENCLAW_OPENSHELL_COMMAND,
+          args: ["gateway", "destroy", "--name", gatewayName],
+          env,
+          allowFailure: true,
+          timeoutMs: 3 * 60_000,
+        });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         await hostPolicyServer?.close().catch(() => {});
         await fs.rm(rootDir, { recursive: true, force: true });
         if (previousHome === undefined) {

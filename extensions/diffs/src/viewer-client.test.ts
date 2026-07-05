@@ -55,17 +55,29 @@ const viewerPayload = JSON.stringify({
     unsafeCSS: "",
   },
   langs: ["text"],
+<<<<<<< HEAD
   oldFile: { name: "a.ts", lang: "text", contents: "old" },
   newFile: { name: "a.ts", lang: "text", contents: "new" },
 });
 
 function renderCard(payloadOverride?: string): void {
   const payload = payloadOverride ?? viewerPayload;
+=======
+  oldFile: { fileName: "a.ts", lang: "text", content: "old" },
+  newFile: { fileName: "a.ts", lang: "text", content: "new" },
+});
+
+function renderCard(): void {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   document.body.insertAdjacentHTML(
     "beforeend",
     `<section class="oc-diff-card">
       <div data-openclaw-diff-host></div>
+<<<<<<< HEAD
       <script type="application/json" data-openclaw-diff-payload>${payload}</script>
+=======
+      <script type="application/json" data-openclaw-diff-payload>${viewerPayload}</script>
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     </section>`,
   );
 }
@@ -172,6 +184,7 @@ describe("hydrateViewer", () => {
     expect(document.documentElement.dataset.openclawDiffsError).toBeUndefined();
     warn.mockRestore();
   });
+<<<<<<< HEAD
 
   it("replaces stale controllers when hydrating the current cards again", async () => {
     renderCard();
@@ -487,4 +500,6 @@ describe("getHydrateProps branching", () => {
     expect(hydrateArg.oldFile).toEqual({ name: "a.ts", lang: "text", contents: "old" });
     expect(hydrateArg.newFile).toEqual({ name: "a.ts", lang: "text", contents: "new" });
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

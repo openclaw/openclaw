@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { loginChutes } from "./oauth.js";
 
+<<<<<<< HEAD
 function boundedErrorResponse(body: string, status = 500): {
   response: Response;
   cancel: ReturnType<typeof vi.fn>;
@@ -38,6 +39,8 @@ function boundedErrorResponse(body: string, status = 500): {
   return { response, cancel, releaseLock, text };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("chutes plugin OAuth", () => {
   it("rejects unsafe token lifetimes before storing credentials", async () => {
     const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
@@ -69,6 +72,7 @@ describe("chutes plugin OAuth", () => {
       }),
     ).rejects.toThrow("Chutes token exchange returned invalid expires_in");
   });
+<<<<<<< HEAD
 
   it("bounds token exchange error bodies without requiring response.text()", async () => {
     const errorResponse = boundedErrorResponse(
@@ -112,4 +116,6 @@ describe("chutes plugin OAuth", () => {
     expect(errorResponse.cancel).toHaveBeenCalledTimes(1);
     expect(errorResponse.releaseLock).toHaveBeenCalledTimes(1);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

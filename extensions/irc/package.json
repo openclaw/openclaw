@@ -1,6 +1,10 @@
 {
   "name": "@openclaw/irc",
+<<<<<<< HEAD
   "version": "2026.6.10",
+=======
+  "version": "2026.6.8",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "description": "OpenClaw IRC channel plugin",
   "type": "module",
   "devDependencies": {
@@ -11,11 +15,15 @@
       "./index.ts"
     ],
     "install": {
+<<<<<<< HEAD
       "clawhubSpec": "clawhub:@openclaw/irc",
       "npmSpec": "@openclaw/irc",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.6.9",
       "allowInvalidConfigRecovery": true
+=======
+      "minHostVersion": ">=2026.4.10"
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
     "setupEntry": "./setup-entry.ts",
     "channel": {
@@ -40,6 +48,7 @@
         "specifier": "./configured-state",
         "exportName": "hasIrcConfiguredState"
       }
+<<<<<<< HEAD
     },
     "compat": {
       "pluginApi": ">=2026.6.10"
@@ -51,13 +60,18 @@
     "release": {
       "publishToClawHub": true,
       "publishToNpm": true
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   },
   "dependencies": {
     "zod": "4.4.3"
+<<<<<<< HEAD
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }

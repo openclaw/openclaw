@@ -1,7 +1,11 @@
 /**
  * Shared validation for model-supplied tool parameters.
  * Converts malformed file-tool arguments into retryable errors and fixes the
+<<<<<<< HEAD
  * specific XML suffix and Office-extension corruption seen in path arguments.
+=======
+ * specific XML suffix corruption seen in path arguments.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
  */
 import type { AnyAgentTool } from "./agent-tools.types.js";
 
@@ -14,6 +18,7 @@ export type RequiredParamGroup = {
 
 const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
 const XML_ARG_VALUE_SUFFIX_RE = /<\/arg_value>>+$/;
+<<<<<<< HEAD
 const FILE_TOOL_PATH_PARAM_KEYS = new Set(["path"]);
 const HALLUCINATED_OFFICE_PATH_EXTENSION_RE = /\.(doc|ppt|xls)(?:odex|codex|xodex|xcodex)$/i;
 const OFFICE_EXTENSION_BY_FAMILY: Record<string, string> = {
@@ -21,6 +26,9 @@ const OFFICE_EXTENSION_BY_FAMILY: Record<string, string> = {
   ppt: ".pptx",
   xls: ".xlsx",
 };
+=======
+const XML_ARG_VALUE_PATH_PARAM_KEYS = new Set(["path"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function parameterValidationError(message: string): Error {
   return new Error(`${message}.${RETRY_GUIDANCE_SUFFIX}`);
@@ -116,6 +124,7 @@ export function stripMalformedXmlArgValueSuffix(value: string): string {
   return value.includes("</arg_value>") ? value.replace(XML_ARG_VALUE_SUFFIX_RE, "") : value;
 }
 
+<<<<<<< HEAD
 /** Normalize known model-hallucinated Office/codex path extensions. */
 export function normalizeHallucinatedOfficePathExtension(value: string): string {
   return value.replace(HALLUCINATED_OFFICE_PATH_EXTENSION_RE, (_match, family: string) => {
@@ -128,6 +137,8 @@ export function normalizeFileToolPathParam(value: string): string {
   return normalizeHallucinatedOfficePathExtension(stripMalformedXmlArgValueSuffix(value));
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Strip malformed XML suffixes from selected string fields without mutating input. */
 export function stripMalformedXmlArgValueSuffixFromKeys<T extends Record<string, unknown>>(
   record: T,
@@ -148,6 +159,7 @@ export function stripMalformedXmlArgValueSuffixFromKeys<T extends Record<string,
   return normalized ?? record;
 }
 
+<<<<<<< HEAD
 /** Normalize selected file-tool path fields without mutating input. */
 export function normalizeFileToolPathParamsFromKeys<T extends Record<string, unknown>>(
   record: T,
@@ -173,6 +185,15 @@ function resolveFileToolPathParamKeys(groups: readonly RequiredParamGroup[] | un
   for (const group of groups ?? []) {
     for (const key of group.keys) {
       if (FILE_TOOL_PATH_PARAM_KEYS.has(key)) {
+=======
+function resolveMalformedXmlArgValuePathKeys(
+  groups: readonly RequiredParamGroup[] | undefined,
+): string[] {
+  const keys = new Set<string>();
+  for (const group of groups ?? []) {
+    for (const key of group.keys) {
+      if (XML_ARG_VALUE_PATH_PARAM_KEYS.has(key)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         keys.add(key);
       }
     }
@@ -231,10 +252,17 @@ export function wrapToolParamValidation(
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
       const record = getToolParamsRecord(params);
+<<<<<<< HEAD
       const pathKeys = resolveFileToolPathParamKeys(requiredParamGroups);
       const normalizedParams =
         record && pathKeys.length > 0
           ? normalizeFileToolPathParamsFromKeys(record, pathKeys)
+=======
+      const pathKeys = resolveMalformedXmlArgValuePathKeys(requiredParamGroups);
+      const normalizedParams =
+        record && pathKeys.length > 0
+          ? stripMalformedXmlArgValueSuffixFromKeys(record, pathKeys)
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           : params;
       if (requiredParamGroups?.length) {
         assertRequiredParams(getToolParamsRecord(normalizedParams), requiredParamGroups, tool.name);

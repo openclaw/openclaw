@@ -122,7 +122,11 @@ function createBot(api: Record<string, unknown> = {}): Bot {
 }
 
 async function deliverWith(params: DeliverWithParams) {
+<<<<<<< HEAD
   return await deliverReplies({
+=======
+  await deliverReplies({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ...baseDeliveryParams,
     ...params,
     mediaLoader: params.mediaLoader ?? loadWebMedia,
@@ -277,6 +281,7 @@ describe("deliverReplies", () => {
     expect(firstMockCallArg(sendMessage, 1)).toBe("hello");
   });
 
+<<<<<<< HEAD
   it("applies reaction-only replies without logging missing text/media", async () => {
     const runtime = createRuntime(false);
     const setMessageReaction = vi.fn().mockResolvedValue(true);
@@ -374,6 +379,8 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("mirrors delivered replies once after successful sends", async () => {
     const runtime = createRuntime(false);
     const transcriptMirror = vi.fn();
@@ -1239,6 +1246,7 @@ describe("deliverReplies", () => {
     expect(mockCallArg(sendRichMessage, 1, 0)).not.toHaveProperty("reply_to_message_id");
   });
 
+<<<<<<< HEAD
   it("skips rich entity detection for reply text with provider-prefixed email addresses", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
@@ -1266,6 +1274,8 @@ describe("deliverReplies", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses legacy reply id when selected reply target differs from quote source", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({

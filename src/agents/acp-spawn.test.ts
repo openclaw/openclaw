@@ -71,6 +71,7 @@ const hoisted = vi.hoisted(() => {
   const countActiveRunsForSessionMock = vi.fn();
   const getSubagentRunByChildSessionKeyMock = vi.fn();
   const listTasksForOwnerKeyMock = vi.fn();
+<<<<<<< HEAD
   const createSessionAccessorMock = () => {
     const resolveMockStorePath = (scope: {
       agentId?: string;
@@ -133,6 +134,8 @@ const hoisted = vi.hoisted(() => {
       },
     };
   };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const state = {
     cfg: createDefaultSpawnConfig(),
   };
@@ -160,7 +163,10 @@ const hoisted = vi.hoisted(() => {
     countActiveRunsForSessionMock,
     getSubagentRunByChildSessionKeyMock,
     listTasksForOwnerKeyMock,
+<<<<<<< HEAD
     createSessionAccessorMock,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     state,
   };
 });
@@ -197,8 +203,11 @@ vi.mock("../config/sessions/store.js", () => ({
   loadSessionStore: hoisted.loadSessionStoreMock,
 }));
 
+<<<<<<< HEAD
 vi.mock("../config/sessions/session-accessor.js", () => hoisted.createSessionAccessorMock());
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: hoisted.loadSessionStoreMock,
   resolveStorePath: hoisted.resolveStorePathMock,

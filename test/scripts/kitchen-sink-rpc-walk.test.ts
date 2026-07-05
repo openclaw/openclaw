@@ -1,5 +1,8 @@
 // Kitchen Sink Rpc Walk tests cover kitchen sink rpc walk script behavior.
+<<<<<<< HEAD
 import { spawn } from "node:child_process";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs, {
@@ -39,29 +42,42 @@ import {
   findErrorLogFindings,
   findDistCallGatewayModuleFiles,
   hasChildExited,
+<<<<<<< HEAD
   MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   listKitchenSinkToolInvokeNames,
   listKitchenSinkAuthorizationRpcProbeNames,
   listKitchenSinkReadOnlyRpcProbeNames,
   makeEnv,
+<<<<<<< HEAD
   parseJsonOutput,
   parseGatewayCliRequestFailure,
   readPositiveInt,
   readPositiveTimerMs,
   readBoundedResponseText,
   resolveKitchenSinkRpcConfig,
+=======
+  parseGatewayCliRequestFailure,
+  readPositiveInt,
+  readBoundedResponseText,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveKitchenSinkRpcPort,
   runCommand,
   sampleProcess,
   sampleWindowsProcessByPort,
   shouldPrintHelp,
+<<<<<<< HEAD
   signalGateway,
   signalProcessGroup,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   stopGateway,
   summarizeProcessSamples,
   tailFile,
   unwrapRpcPayload,
   usesBuiltOpenClawEntry,
+<<<<<<< HEAD
   validateCliArgs,
   waitForGatewayReady,
 } from "../../scripts/e2e/kitchen-sink-rpc-walk.mjs";
@@ -70,10 +86,15 @@ import {
   resolveWindowsSystem32Path,
   resolveWindowsTaskkillPath,
 } from "../../scripts/lib/windows-taskkill.mjs";
+=======
+  waitForGatewayReady,
+} from "../../scripts/e2e/kitchen-sink-rpc-walk.mjs";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 
+<<<<<<< HEAD
 function expectedTaskkillPath(): string {
   return resolveWindowsTaskkillPath();
 }
@@ -86,6 +107,8 @@ function expectedPowerShellPath(): string {
   return resolveWindowsPowerShellPath();
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -141,6 +164,7 @@ describe("kitchen-sink RPC isolated state", () => {
     expect(shouldPrintHelp([])).toBe(false);
   });
 
+<<<<<<< HEAD
   it("rejects unknown CLI args before creating temp state", async () => {
     expect(() => validateCliArgs(["--wat"])).toThrow("Unknown argument: --wat");
 
@@ -158,6 +182,8 @@ describe("kitchen-sink RPC isolated state", () => {
     expect(error?.stderr).not.toContain("temp root preserved");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects loose numeric env values before they bypass runtime guardrails", () => {
     expect(readPositiveInt(undefined, 60_000)).toBe(60_000);
     expect(readPositiveInt("", 60_000)).toBe(60_000);
@@ -174,6 +200,7 @@ describe("kitchen-sink RPC isolated state", () => {
     );
   });
 
+<<<<<<< HEAD
   it("clamps timer env values before they reach Node timers", () => {
     const oversizedTimerMs = String(Number.MAX_SAFE_INTEGER);
 
@@ -203,11 +230,14 @@ describe("kitchen-sink RPC isolated state", () => {
     ).toBe(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses an explicit RPC port or asks the OS for an available fallback", async () => {
     await expect(
       resolveKitchenSinkRpcPort({ OPENCLAW_KITCHEN_SINK_RPC_PORT: "19080" }),
     ).resolves.toBe(19080);
     await expect(
+<<<<<<< HEAD
       resolveKitchenSinkRpcPort({ OPENCLAW_KITCHEN_SINK_RPC_PORT: "65535" }),
     ).resolves.toBe(65535);
     await expect(
@@ -216,6 +246,8 @@ describe("kitchen-sink RPC isolated state", () => {
       'OPENCLAW_KITCHEN_SINK_RPC_PORT must be a TCP port from 1 to 65535. Got: "65536"',
     );
     await expect(
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       resolveKitchenSinkRpcPort({}, { findAvailablePort: async () => 45678 }),
     ).resolves.toBe(45678);
   });
@@ -331,6 +363,7 @@ describe("kitchen-sink RPC gateway teardown", () => {
     expect(child.kill).toHaveBeenCalledOnce();
   });
 
+<<<<<<< HEAD
   it("signals Windows gateway process trees with taskkill", () => {
     const child = {
       kill: vi.fn(),
@@ -410,6 +443,8 @@ describe("kitchen-sink RPC gateway teardown", () => {
     expect(child.kill).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   posixIt("does not trust an exited wrapper while the gateway process group is alive", async () => {
     const child = Object.assign(new EventEmitter(), {
       exitCode: 0,
@@ -714,6 +749,7 @@ describe("kitchen-sink RPC command output capture", () => {
     expect(result.stderrTruncatedChars).toBe(3);
   });
 
+<<<<<<< HEAD
   it("clamps oversized command timeout env values before scheduling timers", async () => {
     const previousTimeout = process.env.OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS;
     process.env.OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS = String(Number.MAX_SAFE_INTEGER);
@@ -734,10 +770,13 @@ describe("kitchen-sink RPC command output capture", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   posixIt("kills timed command process groups", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-timeout-"));
     const scriptPath = path.join(root, "trap-term.mjs");
     const grandchildPidPath = path.join(root, "grandchild.pid");
+<<<<<<< HEAD
     const grandchildReadyPath = path.join(root, "grandchild.ready");
     let grandchildPid = 0;
     const grandchildScript = [
@@ -746,6 +785,9 @@ describe("kitchen-sink RPC command output capture", () => {
       "fs.writeFileSync(process.env.GRANDCHILD_READY_PATH, 'ready');",
       "setInterval(() => {}, 1000);",
     ].join(" ");
+=======
+    let grandchildPid = 0;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     writeFileSync(
       scriptPath,
@@ -755,8 +797,13 @@ import fs from "node:fs";
 
 const grandchild = spawn(process.execPath, [
   "-e",
+<<<<<<< HEAD
   ${JSON.stringify(grandchildScript)},
 ], { env: { ...process.env, GRANDCHILD_READY_PATH: process.argv[3] }, stdio: "ignore" });
+=======
+  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+], { stdio: "ignore" });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 fs.writeFileSync(process.argv[2], String(grandchild.pid));
 process.on("SIGTERM", () => {});
 setInterval(() => {}, 1000);
@@ -764,11 +811,16 @@ setInterval(() => {}, 1000);
       "utf8",
     );
 
+<<<<<<< HEAD
     const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath, grandchildReadyPath], {
+=======
+    const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath], {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       detached: undefined,
       timeoutKillGraceMs: 25,
       timeoutMs: 500,
     });
+<<<<<<< HEAD
     const runErrorPromise = runPromise.then(
       () => {
         throw new Error("expected timed command to reject");
@@ -779,13 +831,22 @@ setInterval(() => {}, 1000);
     try {
       await waitFor(() => existsSync(grandchildPidPath));
       await waitFor(() => existsSync(grandchildReadyPath));
+=======
+
+    try {
+      await waitFor(() => existsSync(grandchildPidPath));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
       expect(Number.isInteger(grandchildPid)).toBe(true);
       expect(isProcessAlive(grandchildPid)).toBe(true);
 
+<<<<<<< HEAD
       const runError = await runErrorPromise;
       expect(runError).toBeInstanceOf(Error);
       expect((runError as Error).message).toContain("timed out after 500ms");
+=======
+      await expect(runPromise).rejects.toThrow("timed out after 500ms");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
     } finally {
       await runPromise.catch(() => {});
@@ -796,6 +857,7 @@ setInterval(() => {}, 1000);
     }
   });
 
+<<<<<<< HEAD
   it("signals Windows command process trees with taskkill", () => {
     const child = {
       kill: vi.fn(),
@@ -865,6 +927,8 @@ setInterval(() => {}, 1000);
     expect(child.kill).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   posixIt("rejects timed commands that exit cleanly after SIGTERM", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-timeout-zero-"));
     const scriptPath = path.join(root, "term-zero.mjs");
@@ -1031,6 +1095,7 @@ describe("kitchen-sink RPC caller loading", () => {
     const root = makeTempDir(tempDirs, "openclaw-kitchen-rpc-timeout-clean-parent-");
     const scriptPath = path.join(root, "term-zero-grandchild.mjs");
     const grandchildPidPath = path.join(root, "grandchild.pid");
+<<<<<<< HEAD
     const grandchildReadyPath = path.join(root, "grandchild.ready");
     let grandchildPid = 0;
     const grandchildScript = [
@@ -1039,6 +1104,9 @@ describe("kitchen-sink RPC caller loading", () => {
       "fs.writeFileSync(process.env.GRANDCHILD_READY_PATH, 'ready');",
       "setInterval(() => {}, 1000);",
     ].join(" ");
+=======
+    let grandchildPid = 0;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     writeFileSync(
       scriptPath,
@@ -1048,8 +1116,13 @@ import fs from "node:fs";
 
 const grandchild = spawn(process.execPath, [
   "-e",
+<<<<<<< HEAD
   ${JSON.stringify(grandchildScript)},
 ], { env: { ...process.env, GRANDCHILD_READY_PATH: process.argv[3] }, stdio: "ignore" });
+=======
+  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+], { stdio: "ignore" });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 fs.writeFileSync(process.argv[2], String(grandchild.pid));
 process.on("SIGTERM", () => process.exit(0));
 setInterval(() => {}, 1000);
@@ -1057,6 +1130,7 @@ setInterval(() => {}, 1000);
       "utf8",
     );
 
+<<<<<<< HEAD
     const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath, grandchildReadyPath], {
       timeoutKillGraceMs: 2_000,
       timeoutMs: 1_500,
@@ -1071,13 +1145,26 @@ setInterval(() => {}, 1000);
     try {
       await waitFor(() => existsSync(grandchildPidPath));
       await waitFor(() => existsSync(grandchildReadyPath));
+=======
+    const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath], {
+      timeoutKillGraceMs: 2_000,
+      timeoutMs: 100,
+    });
+
+    try {
+      await waitFor(() => existsSync(grandchildPidPath));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
       expect(Number.isInteger(grandchildPid)).toBe(true);
       expect(isProcessAlive(grandchildPid)).toBe(true);
 
+<<<<<<< HEAD
       const runError = await runErrorPromise;
       expect(runError).toBeInstanceOf(Error);
       expect((runError as Error).message).toContain("timed out after 1500ms");
+=======
+      await expect(runPromise).rejects.toThrow("timed out after 100ms");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
     } finally {
       await runPromise.catch(() => {});
@@ -1087,6 +1174,7 @@ setInterval(() => {}, 1000);
       cleanupTempDirs(tempDirs);
     }
   });
+<<<<<<< HEAD
 
   posixIt("cleans active command process groups before parent signal exit", async () => {
     const tempDirs: string[] = [];
@@ -1177,6 +1265,11 @@ describe("kitchen-sink RPC payload unwrapping", () => {
     expect(parsed).toEqual({ ok: true, result: { current: true } });
   });
 
+=======
+});
+
+describe("kitchen-sink RPC payload unwrapping", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves explicit nullish JSON-RPC result fields", () => {
     expect(unwrapRpcPayload({ jsonrpc: "2.0", result: null })).toBeNull();
     expect(unwrapRpcPayload({ jsonrpc: "2.0", result: undefined })).toBeUndefined();
@@ -1200,6 +1293,7 @@ describe("kitchen-sink RPC payload unwrapping", () => {
     });
   });
 
+<<<<<<< HEAD
   it("preserves gateway request error metadata from built RPC calls", () => {
     const error = captureSyncError(() =>
       unwrapRpcPayload({
@@ -1225,6 +1319,8 @@ describe("kitchen-sink RPC payload unwrapping", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("bounds failed RPC payload diagnostics", () => {
     const error = captureSyncError(() =>
       unwrapRpcPayload({
@@ -1349,6 +1445,7 @@ describe("kitchen-sink RPC command catalog assertions", () => {
       }),
     ).resolves.toBeUndefined();
     await expect(
+<<<<<<< HEAD
       assertOperatorRpcDenied({ method: "skills.bins", params: {} }, async () =>
         unwrapRpcPayload({
           ok: false,
@@ -1362,6 +1459,8 @@ describe("kitchen-sink RPC command catalog assertions", () => {
       ),
     ).resolves.toBeUndefined();
     await expect(
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       assertOperatorRpcDenied({ method: "skills.bins", params: {} }, async () => {
         throw new Error(
           "openclaw gateway call skills.bins failed with 1\nGateway call failed: unauthorized role: operator",
@@ -1790,6 +1889,7 @@ describe("kitchen-sink RPC health/status assertions", () => {
 });
 
 describe("kitchen-sink RPC process sampling", () => {
+<<<<<<< HEAD
   it("rejects unsafe Windows System32 executable names", () => {
     expect(() => resolveWindowsSystem32Path("..\\netstat.exe")).toThrow(
       /Invalid Windows System32 executable name/u,
@@ -1799,6 +1899,8 @@ describe("kitchen-sink RPC process sampling", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("samples RSS on Windows instead of silently disabling the resource guard", async () => {
     const calls: Array<{ command: string; args: string[] }> = [];
     const sample = await sampleProcess(1234, {
@@ -1816,7 +1918,11 @@ describe("kitchen-sink RPC process sampling", () => {
       processId: 5678,
       rssMiB: 256,
     });
+<<<<<<< HEAD
     expect(calls[0]?.command).toBe(expectedPowerShellPath());
+=======
+    expect(calls[0]?.command).toBe("powershell.exe");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(calls[0]?.args.join(" ")).toContain("$rootPid = 1234");
     expect(calls[0]?.args.join(" ")).toContain("ParentProcessId");
   });
@@ -1848,18 +1954,35 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(command).toContain("Sort-Object WorkingSet64 -Descending");
   });
 
+<<<<<<< HEAD
   it("does not fall back to a PATH-resolved powershell command on Windows", async () => {
+=======
+  it("falls back to the legacy powershell command name on Windows", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const commands: string[] = [];
     const sample = await sampleProcess(1234, {
       platform: "win32",
       runCommand: async (command: string) => {
         commands.push(command);
+<<<<<<< HEAD
         throw new Error("trusted powershell unavailable");
       },
     });
 
     expect(commands).toEqual([expectedPowerShellPath()]);
     expect(sample).toBeNull();
+=======
+        if (command === "powershell.exe") {
+          throw new Error("missing powershell.exe");
+        }
+        return { stdout: `${96 * 1024 * 1024} 0 1234`, stderr: "" };
+      },
+    });
+
+    expect(commands).toEqual(["powershell.exe", "powershell"]);
+    expect(sample?.rssMiB).toBe(96);
+    expect(sample?.aggregateRssMiB).toBe(96);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("does not truncate malformed Windows PowerShell CPU or id samples", async () => {
@@ -1942,7 +2065,11 @@ describe("kitchen-sink RPC process sampling", () => {
     const sample = await sampleWindowsProcessByPort(19675, {
       runCommand: async (command: string, args: string[]) => {
         calls.push({ command, args });
+<<<<<<< HEAD
         if (command === expectedWindowsSystem32Path("netstat.exe")) {
+=======
+        if (command === "netstat.exe") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           return {
             stdout: [
               "  Proto  Local Address          Foreign Address        State           PID",
@@ -1953,7 +2080,11 @@ describe("kitchen-sink RPC process sampling", () => {
             stderr: "",
           };
         }
+<<<<<<< HEAD
         if (command === expectedPowerShellPath()) {
+=======
+        if (command === "powershell.exe") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           return { stdout: `${384 * 1024 * 1024} 2.25 6789 ${512 * 1024 * 1024}`, stderr: "" };
         }
         throw new Error(`unexpected command ${command}`);
@@ -1968,9 +2099,15 @@ describe("kitchen-sink RPC process sampling", () => {
       rssMiB: 384,
     });
     expect(calls).toEqual([
+<<<<<<< HEAD
       { command: expectedWindowsSystem32Path("netstat.exe"), args: ["-ano", "-p", "tcp"] },
       {
         command: expectedPowerShellPath(),
+=======
+      { command: "netstat.exe", args: ["-ano", "-p", "tcp"] },
+      {
+        command: "powershell.exe",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         args: expect.arrayContaining(["-Command", expect.stringContaining("$rootPid = 6789")]),
       },
     ]);
@@ -1981,7 +2118,11 @@ describe("kitchen-sink RPC process sampling", () => {
     const sample = await sampleWindowsProcessByPort(19675, {
       runCommand: async (command: string) => {
         calls.push(command);
+<<<<<<< HEAD
         if (command === expectedWindowsSystem32Path("netstat.exe")) {
+=======
+        if (command === "netstat.exe") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           return {
             stdout: [
               "  Proto  Local Address          Foreign Address        State           PID",
@@ -1990,10 +2131,17 @@ describe("kitchen-sink RPC process sampling", () => {
             stderr: "",
           };
         }
+<<<<<<< HEAD
         if (command === expectedPowerShellPath()) {
           throw new Error("powershell unavailable");
         }
         if (command === expectedWindowsSystem32Path("tasklist.exe")) {
+=======
+        if (command === "powershell.exe" || command === "powershell") {
+          throw new Error("powershell unavailable");
+        }
+        if (command === "tasklist.exe") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           return {
             stdout: '"node.exe","6789","Console","1","262,144 K"',
             stderr: "",
@@ -2009,17 +2157,25 @@ describe("kitchen-sink RPC process sampling", () => {
       processId: 6789,
       rssMiB: 256,
     });
+<<<<<<< HEAD
     expect(calls).toEqual([
       expectedWindowsSystem32Path("netstat.exe"),
       expectedPowerShellPath(),
       expectedWindowsSystem32Path("tasklist.exe"),
     ]);
+=======
+    expect(calls).toEqual(["netstat.exe", "powershell.exe", "powershell", "tasklist.exe"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("falls back to the known Windows pid when tasklist reports malformed pid text", async () => {
     const sample = await sampleWindowsProcessByPort(19675, {
       runCommand: async (command: string) => {
+<<<<<<< HEAD
         if (command === expectedWindowsSystem32Path("netstat.exe")) {
+=======
+        if (command === "netstat.exe") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           return {
             stdout: [
               "  Proto  Local Address          Foreign Address        State           PID",
@@ -2028,10 +2184,17 @@ describe("kitchen-sink RPC process sampling", () => {
             stderr: "",
           };
         }
+<<<<<<< HEAD
         if (command === expectedPowerShellPath()) {
           throw new Error("powershell unavailable");
         }
         if (command === expectedWindowsSystem32Path("tasklist.exe")) {
+=======
+        if (command === "powershell.exe" || command === "powershell") {
+          throw new Error("powershell unavailable");
+        }
+        if (command === "tasklist.exe") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           return {
             stdout: '"node.exe","9999x","Console","1","262,144 K"',
             stderr: "",
@@ -2052,7 +2215,11 @@ describe("kitchen-sink RPC process sampling", () => {
   it("rejects malformed tasklist RSS instead of stripping digits", async () => {
     const sample = await sampleWindowsProcessByPort(19675, {
       runCommand: async (command: string) => {
+<<<<<<< HEAD
         if (command === expectedWindowsSystem32Path("netstat.exe")) {
+=======
+        if (command === "netstat.exe") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           return {
             stdout: [
               "  Proto  Local Address          Foreign Address        State           PID",
@@ -2061,10 +2228,17 @@ describe("kitchen-sink RPC process sampling", () => {
             stderr: "",
           };
         }
+<<<<<<< HEAD
         if (command === expectedPowerShellPath()) {
           throw new Error("powershell unavailable");
         }
         if (command === expectedWindowsSystem32Path("tasklist.exe")) {
+=======
+        if (command === "powershell.exe" || command === "powershell") {
+          throw new Error("powershell unavailable");
+        }
+        if (command === "tasklist.exe") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           return {
             stdout: '"node.exe","6789","Console","1","262x144 K"',
             stderr: "",
@@ -2118,6 +2292,7 @@ describe("kitchen-sink RPC process sampling", () => {
     });
   });
 
+<<<<<<< HEAD
   it("does not loop forever on self-parenting POSIX process rows", async () => {
     const sample = await sampleProcess(4321, {
       platform: "linux",
@@ -2135,6 +2310,8 @@ describe("kitchen-sink RPC process sampling", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("samples the POSIX gateway child instead of the pnpm launcher", async () => {
     const sample = await sampleProcess(4321, {
       platform: "linux",
@@ -2161,6 +2338,7 @@ describe("kitchen-sink RPC process sampling", () => {
     });
   });
 
+<<<<<<< HEAD
   it("samples the POSIX gateway root when command-line needles match", async () => {
     const sample = await sampleProcess(4321, {
       platform: "darwin",
@@ -2180,6 +2358,8 @@ describe("kitchen-sink RPC process sampling", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("falls back to the POSIX gateway process title when the port arg is rewritten", async () => {
     const sample = await sampleProcess(4321, {
       platform: "darwin",
@@ -2256,6 +2436,7 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+<<<<<<< HEAD
   it("aborts HTTP probe retry backoff when the external signal fires", async () => {
     const controller = new AbortController();
     const reset = new TypeError("fetch failed", {
@@ -2280,6 +2461,8 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(Date.now() - startedAt).toBeLessThan(500);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("bounds HTTP probe response bodies", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response("x".repeat(1025), { status: 200 }));
 
@@ -2295,6 +2478,7 @@ describe("kitchen-sink RPC process sampling", () => {
     });
   });
 
+<<<<<<< HEAD
   it("clamps oversized HTTP probe timeouts before scheduling timers", async () => {
     const fetchImpl = vi.fn(async () => {
       await delay(25);
@@ -2311,6 +2495,8 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects oversized HTTP probe responses before reading declared large bodies", async () => {
     let canceled = false;
     const response = new Response(
@@ -2361,6 +2547,7 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(response.text).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("rejects unsafe decimal HTTP content lengths before reading", async () => {
     const response = {
       headers: new Headers({
@@ -2408,12 +2595,15 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(response.text).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("reads bounded response streams", async () => {
     await expect(readBoundedResponseText(new Response('{"status":"live"}'), 1024)).resolves.toBe(
       '{"status":"live"}',
     );
   });
 
+<<<<<<< HEAD
   it("releases HTTP probe response stream readers after bounded reads", async () => {
     const releaseLock = vi.fn();
     const response = {
@@ -2498,6 +2688,8 @@ describe("kitchen-sink RPC process sampling", () => {
     await waitFor(() => canceled);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("times out stalled HTTP probe response bodies", async () => {
     vi.useFakeTimers();
     const fetchImpl = vi.fn().mockResolvedValue({
@@ -2584,6 +2776,7 @@ async function waitFor(condition: () => boolean, timeoutMs = 3_000) {
   }
 }
 
+<<<<<<< HEAD
 async function waitForChildClose(child: ReturnType<typeof spawn>, timeoutMs = 3_000) {
   return await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
     (resolve, reject) => {
@@ -2598,6 +2791,8 @@ async function waitForChildClose(child: ReturnType<typeof spawn>, timeoutMs = 3_
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isProcessAlive(pid: number) {
   try {
     process.kill(pid, 0);

@@ -1,7 +1,14 @@
 // Legacy web-fetch migration tests cover doctor repair of old web fetch config.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+<<<<<<< HEAD
 import { migrateLegacyWebFetchConfig } from "./legacy-web-fetch-migrate.js";
+=======
+import {
+  listLegacyWebFetchConfigPaths,
+  migrateLegacyWebFetchConfig,
+} from "./legacy-web-fetch-migrate.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("legacy web fetch config", () => {
   it("migrates legacy Firecrawl fetch config into plugin-owned config", () => {
@@ -65,4 +72,23 @@ describe("legacy web fetch config", () => {
     });
   });
 
+<<<<<<< HEAD
+=======
+  it("lists legacy Firecrawl fetch config paths", () => {
+    expect(
+      listLegacyWebFetchConfigPaths({
+        tools: {
+          web: {
+            fetch: {
+              firecrawl: {
+                apiKey: "firecrawl-key",
+                maxAgeMs: 123,
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual(["tools.web.fetch.firecrawl.apiKey", "tools.web.fetch.firecrawl.maxAgeMs"]);
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

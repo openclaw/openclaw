@@ -151,8 +151,11 @@ type GatewayHost = {
   execApprovalBusy: boolean;
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
+<<<<<<< HEAD
   currentSessionId?: string | null;
   reconnectResumeSessionId?: string | null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   reconcileWebPushState?: () => Promise<void> | void;
   realtimeTalkOptionsOpen?: boolean;
   fetchRealtimeTalkCatalog?: () => Promise<void>;
@@ -913,11 +916,14 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       host.connected = false;
+<<<<<<< HEAD
       const currentSessionId =
         typeof host.currentSessionId === "string" ? host.currentSessionId.trim() : "";
       if (currentSessionId) {
         host.reconnectResumeSessionId = currentSessionId;
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       markQueuedChatSendsWaitingForReconnect(
         host as unknown as Parameters<typeof markQueuedChatSendsWaitingForReconnect>[0],
       );

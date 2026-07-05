@@ -197,7 +197,10 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         conversationKey: entry.conversationKey,
         messageId: entry.messageId,
         approvalId: request.id,
+<<<<<<< HEAD
         approvalKind: view.approvalKind,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         allowedDecisions: pendingPayload.reactionPayload.allowedDecisions,
         targetAuthorKeys: entry.targetAuthorKeys,
         route: {

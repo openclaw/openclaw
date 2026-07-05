@@ -139,7 +139,10 @@ import {
   buildTelegramConversationContext,
   buildTelegramReplyChain,
   createTelegramMessageCache,
+<<<<<<< HEAD
   isTelegramSessionBoundaryCommandText,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveTelegramMessageCacheScope,
   type TelegramCachedMessageNode,
   type TelegramReplyChainEntry,
@@ -167,6 +170,7 @@ import {
 } from "./network-errors.js";
 import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 import { buildInlineKeyboard } from "./send.js";
+<<<<<<< HEAD
 import { buildTelegramSessionTranscriptPromptMessages } from "./session-transcript-context.js";
 
 type TelegramPromptContextMessageForDedupe = {
@@ -185,6 +189,8 @@ function resolvePromptContextTextDedupeKey(
   }
   return `${message.timestamp_ms}:${message.body.trim()}`;
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -695,7 +701,10 @@ export const registerTelegramHandlers = ({
     agentId: string;
     sessionEntry: ReturnType<typeof getSessionEntry>;
     sessionKey: string;
+<<<<<<< HEAD
     storePath: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     model?: string;
   } => {
     const runtimeCfg = params.runtimeCfg ?? telegramDeps.getRuntimeConfig();
@@ -756,7 +765,10 @@ export const registerTelegramHandlers = ({
         agentId: route.agentId,
         sessionEntry: entry,
         sessionKey,
+<<<<<<< HEAD
         storePath,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         model: storedOverride.provider
           ? `${storedOverride.provider}/${storedOverride.model}`
           : storedOverride.model,
@@ -769,7 +781,10 @@ export const registerTelegramHandlers = ({
         agentId: route.agentId,
         sessionEntry: entry,
         sessionKey,
+<<<<<<< HEAD
         storePath,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         model: `${provider}/${model}`,
       };
     }
@@ -778,7 +793,10 @@ export const registerTelegramHandlers = ({
       agentId: route.agentId,
       sessionEntry: entry,
       sessionKey,
+<<<<<<< HEAD
       storePath,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       model: typeof modelCfg === "string" ? modelCfg : modelCfg?.primary,
     };
   };
@@ -1246,6 +1264,7 @@ export const registerTelegramHandlers = ({
       messageId,
     });
     const threadId = currentNode?.threadId ? Number(currentNode.threadId) : undefined;
+<<<<<<< HEAD
     const sessionBeforeTimestampMs =
       options?.receivedAtMs ?? (msg.date ? msg.date * 1000 : undefined);
     const isSessionBoundaryMessage = isTelegramSessionBoundaryCommandText(
@@ -1271,6 +1290,8 @@ export const registerTelegramHandlers = ({
               ? { minTimestampMs: options.promptContextMinTimestampMs }
               : {}),
           });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const conversationContext = await buildTelegramConversationContext({
       cache: messageCache,
       messageId,
@@ -1287,6 +1308,7 @@ export const registerTelegramHandlers = ({
         ? { includeNode: buildMentionOnlyGroupHistoryPredicate({ ctx, msg, threadId }) }
         : {}),
     });
+<<<<<<< HEAD
     const cachePromptMessages = conversationContext.map((entry) =>
       toPromptContextMessage(
         entry.node,
@@ -1311,11 +1333,28 @@ export const registerTelegramHandlers = ({
           {
             label: "Conversation context",
             source: sessionOnlyPromptMessages.length > 0 ? "session" : "telegram",
+=======
+    return conversationContext.length > 0
+      ? [
+          {
+            label: "Conversation context",
+            source: "telegram",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             type: "chat_window",
             payload: {
               order: "chronological",
               relation: "selected_for_current_message",
+<<<<<<< HEAD
               messages: promptMessages,
+=======
+              messages: conversationContext.map((entry) =>
+                toPromptContextMessage(
+                  entry.node,
+                  { replyTarget: entry.isReplyTarget },
+                  entry.node.messageId ? mediaByMessageId?.get(entry.node.messageId) : undefined,
+                ),
+              ),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             },
           },
         ]

@@ -1045,6 +1045,7 @@ describe("deliverOutboundPayloads", () => {
     expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("marks queued delivery as unknown-after-send (not failed) when a later payload fails after an earlier one succeeded", async () => {
     const sendMatrix = vi
       .fn()
@@ -1090,6 +1091,8 @@ describe("deliverOutboundPayloads", () => {
     expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("fails required delivery when the post-send unknown marker cannot be written", async () => {
     queueMocks.markDeliveryPlatformOutcomeUnknown.mockRejectedValueOnce(
       new Error("unknown marker offline"),
@@ -3598,6 +3601,7 @@ describe("deliverOutboundPayloads", () => {
     expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("does not reuse a previous payload message id for a suppressed text send", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendText = vi
@@ -3646,6 +3650,8 @@ describe("deliverOutboundPayloads", () => {
     expect(hookMocks.runner.runMessageSent.mock.calls[1]?.[0]).not.toHaveProperty("messageId");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("emits message_sent success for sendPayload deliveries", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });

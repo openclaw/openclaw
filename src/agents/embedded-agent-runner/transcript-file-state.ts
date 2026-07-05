@@ -4,7 +4,10 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+<<<<<<< HEAD
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import { appendRegularFile } from "../../infra/fs-safe.js";
@@ -66,6 +69,13 @@ const repairableToolCallContentTypes = new Set([
 
 const invalidJsonlSlotType = "__openclaw_invalid_jsonl_slot";
 
+<<<<<<< HEAD
+=======
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isString(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
 }

@@ -23,6 +23,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+<<<<<<< HEAD
 // Mirrors SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES in the source under test. Kept in
 // sync deliberately so the regression asserts the body is capped, not drained.
 const SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES = 16 * 1024 * 1024;
@@ -59,6 +60,8 @@ function createUnboundedJsonStream(): {
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function createRuntime() {
   return {
     error: vi.fn(),
@@ -122,6 +125,7 @@ async function configureSelfHostedTestProvider(params: {
   });
 }
 
+<<<<<<< HEAD
 function cancelTrackedResponse(init?: ResponseInit): {
   response: Response;
   wasCanceled: () => boolean;
@@ -141,11 +145,16 @@ function cancelTrackedResponse(init?: ResponseInit): {
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("discoverOpenAICompatibleLocalModels", () => {
   it("uses guarded fetch pinned to the configured self-hosted provider", async () => {
     const release = vi.fn(async () => undefined);
     const propsRelease = vi.fn(async () => undefined);
+<<<<<<< HEAD
     const propsResponse = cancelTrackedResponse({ status: 404 });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: new Response(JSON.stringify({ data: [{ id: "Qwen/Qwen3-32B" }] }), {
         status: 200,
@@ -154,7 +163,11 @@ describe("discoverOpenAICompatibleLocalModels", () => {
       release,
     });
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
+<<<<<<< HEAD
       response: propsResponse.response,
+=======
+      response: new Response("{}", { status: 404 }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       finalUrl: "http://127.0.0.1:8000/props",
       release: propsRelease,
     });
@@ -197,6 +210,7 @@ describe("discoverOpenAICompatibleLocalModels", () => {
     });
     expect(release).toHaveBeenCalledOnce();
     expect(propsRelease).toHaveBeenCalledOnce();
+<<<<<<< HEAD
     expect(propsResponse.wasCanceled()).toBe(true);
   });
 
@@ -219,6 +233,8 @@ describe("discoverOpenAICompatibleLocalModels", () => {
     expect(models).toEqual([]);
     expect(release).toHaveBeenCalledOnce();
     expect(response.wasCanceled()).toBe(true);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("uses llama.cpp nested /props n_ctx as the runtime context cap", async () => {
@@ -473,6 +489,7 @@ describe("discoverOpenAICompatibleLocalModels", () => {
     });
     expect(release).toHaveBeenCalledOnce();
   });
+<<<<<<< HEAD
 
   it("bounds an unbounded /models discovery stream instead of buffering it", async () => {
     const release = vi.fn(async () => undefined);
@@ -542,6 +559,8 @@ describe("discoverOpenAICompatibleLocalModels", () => {
     expect(modelsRelease).toHaveBeenCalledOnce();
     expect(propsRelease).toHaveBeenCalledOnce();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {

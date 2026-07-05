@@ -1,6 +1,10 @@
 // Whatsapp tests cover approval reactions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+<<<<<<< HEAD
+=======
+  buildWhatsAppApprovalReactionHint,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   clearWhatsAppApprovalReactionTargetsForTest,
   extractWhatsAppApprovalPromptBinding,
   maybeResolveWhatsAppApprovalReaction,
@@ -8,7 +12,10 @@ import {
   registerWhatsAppApprovalReactionTargetForOutboundMessage,
   resolveWhatsAppApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
+<<<<<<< HEAD
 import { resolveEquivalentWhatsAppDirectChatJids, type LidLookup } from "./text-runtime.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const resolverMocks = vi.hoisted(() => ({
   resolveWhatsAppApproval: vi.fn(),
@@ -20,6 +27,7 @@ vi.mock("./approval-resolver.js", () => ({
   isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
 }));
 
+<<<<<<< HEAD
 function approvalConfig(allowFrom: string[]) {
   return {
     channels: {
@@ -67,6 +75,8 @@ function buildReactionMessage(params: {
   } as never;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("WhatsApp approval reactions", () => {
   beforeEach(() => {
     clearWhatsAppApprovalReactionTargetsForTest();
@@ -76,6 +86,21 @@ describe("WhatsApp approval reactions", () => {
     resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
   });
 
+<<<<<<< HEAD
+=======
+  it("renders thumbs-only reaction choices for allowed decisions", () => {
+    expect(buildWhatsAppApprovalReactionHint(["allow-once", "deny"])).toBe(
+      "React with:\n\n👍 Allow Once\n👎 Deny",
+    );
+  });
+
+  it("exposes allow-always as a reaction choice when allowed", () => {
+    expect(buildWhatsAppApprovalReactionHint(["allow-once", "allow-always", "deny"])).toBe(
+      "React with:\n\n👍 Allow Once\n♾️ Allow Always\n👎 Deny",
+    );
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("registers reaction state when only allow-always is available", async () => {
     expect(
       registerWhatsAppApprovalReactionTarget({
@@ -179,19 +204,56 @@ describe("WhatsApp approval reactions", () => {
     });
 
     const handled = await maybeResolveWhatsAppApprovalReaction({
+<<<<<<< HEAD
       cfg: approvalConfig(["+15551230000"]),
       accountId: "default",
       msg: buildReactionMessage({
         remoteJid: "120363401234567890@g.us",
         participant: "15551230000@s.whatsapp.net",
       }),
+=======
+      cfg: {
+        channels: {
+          whatsapp: {
+            allowFrom: ["+15551230000"],
+          },
+        },
+      },
+      accountId: "default",
+      msg: {
+        key: {
+          remoteJid: "120363401234567890@g.us",
+          participant: "15551230000@s.whatsapp.net",
+          fromMe: false,
+        },
+        message: {
+          reactionMessage: {
+            text: "👍",
+            key: {
+              remoteJid: "120363401234567890@g.us",
+              id: "approval-message",
+            },
+          },
+        },
+      } as never,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       resolveInboundJid: async (jid) =>
         jid === "15551230000@s.whatsapp.net" ? "+15551230000" : null,
     });
 
     expect(handled).toBe(true);
     expect(resolverMocks.resolveWhatsAppApproval).toHaveBeenCalledWith({
+<<<<<<< HEAD
       cfg: approvalConfig(["+15551230000"]),
+=======
+      cfg: {
+        channels: {
+          whatsapp: {
+            allowFrom: ["+15551230000"],
+          },
+        },
+      },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       approvalId: "plugin:abc",
       decision: "allow-once",
       senderId: "+15551230000",
@@ -209,6 +271,7 @@ describe("WhatsApp approval reactions", () => {
     });
 
     const handled = await maybeResolveWhatsAppApprovalReaction({
+<<<<<<< HEAD
       cfg: approvalConfig(["+15551230001"]),
       accountId: "default",
       msg: buildReactionMessage({
@@ -216,13 +279,50 @@ describe("WhatsApp approval reactions", () => {
         fromMe: true,
         reactionFromMe: true,
       }),
+=======
+      cfg: {
+        channels: {
+          whatsapp: {
+            allowFrom: ["+15551230001"],
+          },
+        },
+      },
+      accountId: "default",
+      msg: {
+        key: {
+          id: "reaction-message",
+          remoteJid: "276853659042038@lid",
+          fromMe: true,
+        },
+        message: {
+          reactionMessage: {
+            text: "👍",
+            key: {
+              remoteJid: "276853659042038@lid",
+              id: "approval-message",
+              fromMe: true,
+            },
+          },
+        },
+      } as never,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       selfLid: "276853659042038@lid",
       resolveInboundJid: async (jid) => (jid === "276853659042038@lid" ? "+15551230001" : null),
     });
 
     expect(handled).toBe(true);
     expect(resolverMocks.resolveWhatsAppApproval).toHaveBeenCalledWith({
+<<<<<<< HEAD
       cfg: approvalConfig(["+15551230001"]),
+=======
+      cfg: {
+        channels: {
+          whatsapp: {
+            allowFrom: ["+15551230001"],
+          },
+        },
+      },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       approvalId: "exec-self",
       decision: "allow-once",
       senderId: "+15551230001",
@@ -230,6 +330,7 @@ describe("WhatsApp approval reactions", () => {
     });
   });
 
+<<<<<<< HEAD
   it.each([
     {
       name: "stored PN target from outer chat JID",
@@ -348,6 +449,8 @@ describe("WhatsApp approval reactions", () => {
     ).resolves.toBeNull();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not attribute a peer DM fromMe reaction to the peer", async () => {
     registerWhatsAppApprovalReactionTarget({
       accountId: "default",
@@ -358,6 +461,7 @@ describe("WhatsApp approval reactions", () => {
     });
 
     const handled = await maybeResolveWhatsAppApprovalReaction({
+<<<<<<< HEAD
       cfg: approvalConfig(["+15551230000"]),
       accountId: "default",
       msg: buildReactionMessage({
@@ -365,6 +469,33 @@ describe("WhatsApp approval reactions", () => {
         fromMe: true,
         reactionFromMe: true,
       }),
+=======
+      cfg: {
+        channels: {
+          whatsapp: {
+            allowFrom: ["+15551230000"],
+          },
+        },
+      },
+      accountId: "default",
+      msg: {
+        key: {
+          id: "reaction-message",
+          remoteJid: "15551230000@s.whatsapp.net",
+          fromMe: true,
+        },
+        message: {
+          reactionMessage: {
+            text: "👍",
+            key: {
+              remoteJid: "15551230000@s.whatsapp.net",
+              id: "approval-message",
+              fromMe: true,
+            },
+          },
+        },
+      } as never,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       selfLid: "276853659042038@lid",
       resolveInboundJid: async (jid) => {
         if (jid === "15551230000@s.whatsapp.net") {
@@ -391,9 +522,35 @@ describe("WhatsApp approval reactions", () => {
     });
 
     const handled = await maybeResolveWhatsAppApprovalReaction({
+<<<<<<< HEAD
       cfg: approvalConfig(["+15551230000"]),
       accountId: "default",
       msg: buildReactionMessage({ remoteJid: "120363401234567890@g.us" }),
+=======
+      cfg: {
+        channels: {
+          whatsapp: {
+            allowFrom: ["+15551230000"],
+          },
+        },
+      },
+      accountId: "default",
+      msg: {
+        key: {
+          remoteJid: "120363401234567890@g.us",
+          fromMe: false,
+        },
+        message: {
+          reactionMessage: {
+            text: "👍",
+            key: {
+              remoteJid: "120363401234567890@g.us",
+              id: "approval-message",
+            },
+          },
+        },
+      } as never,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       resolveInboundJid: async () => null,
     });
 
@@ -417,7 +574,25 @@ describe("WhatsApp approval reactions", () => {
         },
       },
       accountId: "default",
+<<<<<<< HEAD
       msg: buildReactionMessage({ remoteJid: "15551230000@s.whatsapp.net" }),
+=======
+      msg: {
+        key: {
+          remoteJid: "15551230000@s.whatsapp.net",
+          fromMe: false,
+        },
+        message: {
+          reactionMessage: {
+            text: "👍",
+            key: {
+              remoteJid: "15551230000@s.whatsapp.net",
+              id: "approval-message",
+            },
+          },
+        },
+      } as never,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       resolveInboundJid: async () => "+15551230000",
     });
 
@@ -441,10 +616,29 @@ describe("WhatsApp approval reactions", () => {
         },
       },
       accountId: "default",
+<<<<<<< HEAD
       msg: buildReactionMessage({
         remoteJid: "120363401234567890@g.us",
         participant: "15551230000@s.whatsapp.net",
       }),
+=======
+      msg: {
+        key: {
+          remoteJid: "120363401234567890@g.us",
+          participant: "15551230000@s.whatsapp.net",
+          fromMe: false,
+        },
+        message: {
+          reactionMessage: {
+            text: "👍",
+            key: {
+              remoteJid: "120363401234567890@g.us",
+              id: "approval-message",
+            },
+          },
+        },
+      } as never,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       resolveInboundJid: async () => "+15551230000",
     });
 

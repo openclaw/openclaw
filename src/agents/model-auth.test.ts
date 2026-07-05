@@ -2,7 +2,10 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/config.js";
+<<<<<<< HEAD
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { AuthProfileStore } from "./auth-profiles.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
@@ -212,22 +215,48 @@ describe("createRuntimeProviderAuthLookup", () => {
 });
 
 async function withoutEnv<T>(key: string, fn: () => Promise<T>): Promise<T> {
+<<<<<<< HEAD
   const snapshot = captureEnv([key]);
   deleteTestEnvValue(key);
   try {
     return await fn();
   } finally {
     snapshot.restore();
+=======
+  const previous = process.env[key];
+  delete process.env[key];
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = previous;
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 
 async function withEnv<T>(key: string, value: string, fn: () => Promise<T>): Promise<T> {
+<<<<<<< HEAD
   const snapshot = captureEnv([key]);
   setTestEnvValue(key, value);
   try {
     return await fn();
   } finally {
     snapshot.restore();
+=======
+  const previous = process.env[key];
+  process.env[key] = value;
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = previous;
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 

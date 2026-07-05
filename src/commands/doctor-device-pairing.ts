@@ -4,7 +4,10 @@ import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalizatio
 import { note } from "../../packages/terminal-core/src/note.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
+<<<<<<< HEAD
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
@@ -164,6 +167,16 @@ function formatRoles(roles: string[]): string {
   return roles.length > 0 ? roles.join(", ") : "none";
 }
 
+<<<<<<< HEAD
+=======
+function quoteCliArg(value: string): string {
+  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) {
+    return value;
+  }
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function formatCliArgs(args: string[]): string {
   return formatCliCommand(args.map(quoteCliArg).join(" "));
 }

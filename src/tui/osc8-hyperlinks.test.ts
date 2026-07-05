@@ -1,6 +1,22 @@
 // Verifies OSC8 hyperlink formatting for TUI terminal output.
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { addOsc8Hyperlinks, extractUrls } from "./osc8-hyperlinks.js";
+=======
+import { addOsc8Hyperlinks, extractUrls, wrapOsc8 } from "./osc8-hyperlinks.js";
+
+describe("wrapOsc8", () => {
+  it("wraps text with OSC 8 open and close sequences", () => {
+    const result = wrapOsc8("https://example.com", "click here");
+    expect(result).toBe("\x1b]8;;https://example.com\x07click here\x1b]8;;\x07");
+  });
+
+  it("handles empty text", () => {
+    const result = wrapOsc8("https://example.com", "");
+    expect(result).toBe("\x1b]8;;https://example.com\x07\x1b]8;;\x07");
+  });
+});
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("extractUrls", () => {
   it("extracts bare URLs", () => {

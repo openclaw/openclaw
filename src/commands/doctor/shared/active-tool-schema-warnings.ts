@@ -7,19 +7,48 @@ import {
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
 import { createOpenClawCodingTools } from "../../../agents/agent-tools.js";
+<<<<<<< HEAD
 import { resolveModel } from "../../../agents/embedded-agent-runner/model.js";
+=======
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
+import { resolveModel } from "../../../agents/embedded-agent-runner/model.js";
+import { parseModelRef } from "../../../agents/model-selection-normalize.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeAgentRuntimeTools } from "../../../agents/runtime-plan/tools.js";
 import {
   filterRuntimeCompatibleTools,
   type RuntimeToolSchemaDiagnostic,
 } from "../../../agents/tool-schema-projection.js";
 import type { AnyAgentTool } from "../../../agents/tools/common.js";
+<<<<<<< HEAD
+=======
+import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
+<<<<<<< HEAD
 import { resolveDoctorPrimaryModelRef } from "./primary-model-ref.js";
+=======
+
+function resolvePrimaryModelRef(
+  cfg: OpenClawConfig,
+  agentModel?: NonNullable<ReturnType<typeof resolveAgentConfig>>["model"],
+): { provider: string; model: string } {
+  const raw =
+    resolveAgentModelPrimaryValue(agentModel) ??
+    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ??
+    DEFAULT_MODEL;
+  return (
+    parseModelRef(raw, DEFAULT_PROVIDER, { allowPluginNormalization: false }) ?? {
+      provider: DEFAULT_PROVIDER,
+      model: DEFAULT_MODEL,
+    }
+  );
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function resolveRuntimeModelContext(params: {
   cfg: OpenClawConfig;
@@ -110,7 +139,11 @@ export function collectActiveToolSchemaProjectionWarnings(params: {
   const warnings: string[] = [];
   for (const agentId of listAgentIds(params.cfg)) {
     const agentConfig = resolveAgentConfig(params.cfg, agentId);
+<<<<<<< HEAD
     const modelRef = resolveDoctorPrimaryModelRef(params.cfg, agentConfig?.model);
+=======
+    const modelRef = resolvePrimaryModelRef(params.cfg, agentConfig?.model);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const agentDir = resolveAgentDir(params.cfg, agentId, env);
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId, env);
     let runtimeModelContext: ReturnType<typeof resolveRuntimeModelContext> = {};

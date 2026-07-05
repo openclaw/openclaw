@@ -52,7 +52,10 @@ describe("gateway startup benchmark script", () => {
   });
 
   it("rejects ambiguous benchmark CLI values before spawning Node", () => {
+<<<<<<< HEAD
     expect(() => testing.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(testing.parsePositiveInt("5", 1, "--runs")).toBe(5);
     expect(testing.parseNonNegativeInt("0", 1, "--warmup")).toBe(0);
     expect(
@@ -81,6 +84,7 @@ describe("gateway startup benchmark script", () => {
     expect(() => testing.parseOptions(["--runs", "--warmup", "0"])).toThrow(
       "--runs requires a value",
     );
+<<<<<<< HEAD
     expect(() => testing.parseOptions(["--case", "default", "--case", "default"])).toThrow(
       'Duplicate --case "default"',
     );
@@ -138,6 +142,11 @@ describe("gateway startup benchmark script", () => {
     expect(result.stderr).not.toContain("\n    at ");
   });
 
+=======
+    expect(() => testing.resolveEntry("--inspect")).toThrow(/must be a file path/u);
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not disable local-check policy in the child gateway environment", () => {
     const env = testing.sanitizedEnv("/tmp/openclaw-bench", "/tmp/openclaw-bench/config.json", {
       config: {},

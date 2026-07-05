@@ -643,6 +643,7 @@ describe("cron tool", () => {
     );
   });
 
+<<<<<<< HEAD
   it("documents due-by-default cron run mode", () => {
     const tool = createTestCronTool();
     const parameters = tool.parameters as SchemaLike;
@@ -655,6 +656,8 @@ describe("cron tool", () => {
     expect(runMode?.description).toContain('use "force" to trigger now');
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("advertises delivery threadId in the tool schema", () => {
     const tool = createTestCronTool();
     const parameters = tool.parameters as SchemaLike;
@@ -722,8 +725,13 @@ describe("cron tool", () => {
     ],
     ["remove", { action: "remove", jobId: "job-1" }, { id: "job-1" }],
     ["remove", { action: "remove", id: "job-2" }, { id: "job-2" }],
+<<<<<<< HEAD
     ["run", { action: "run", jobId: "job-1" }, { id: "job-1", mode: "due" }],
     ["run", { action: "run", id: "job-2" }, { id: "job-2", mode: "due" }],
+=======
+    ["run", { action: "run", jobId: "job-1" }, { id: "job-1", mode: "force" }],
+    ["run", { action: "run", id: "job-2" }, { id: "job-2", mode: "force" }],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ["get", { action: "get", jobId: "job-1" }, { id: "job-1" }],
     ["get", { action: "get", id: "job-2" }, { id: "job-2" }],
     ["runs", { action: "runs", jobId: "job-1" }, { id: "job-1" }],
@@ -744,7 +752,11 @@ describe("cron tool", () => {
       id: "job-legacy",
     });
 
+<<<<<<< HEAD
     expect(readGatewayCall().params).toEqual({ id: "job-primary", mode: "due" });
+=======
+    expect(readGatewayCall().params).toEqual({ id: "job-primary", mode: "force" });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("supports due-only run mode", async () => {
@@ -758,6 +770,7 @@ describe("cron tool", () => {
     expect(readGatewayCall().params).toEqual({ id: "job-due", mode: "due" });
   });
 
+<<<<<<< HEAD
   it("supports force run mode", async () => {
     const tool = createTestCronTool();
     await tool.execute("call-force", {
@@ -769,6 +782,8 @@ describe("cron tool", () => {
     expect(readGatewayCall().params).toEqual({ id: "job-force", mode: "force" });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("normalizes cron.add job payloads", async () => {
     const tool = createTestCronTool();
     await tool.execute("call2", {
@@ -2167,7 +2182,10 @@ describe("cron tool", () => {
     expect(params?.patch?.payload).toEqual({
       kind: "agentTurn",
       toolsAllow: ["read", "cron"],
+<<<<<<< HEAD
       toolsAllowIsDefault: true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   });
 
@@ -2203,7 +2221,10 @@ describe("cron tool", () => {
           payload: {
             kind: "agentTurn",
             toolsAllow: ["read", "cron"],
+<<<<<<< HEAD
             toolsAllowIsDefault: true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           },
         },
       },
@@ -2280,6 +2301,7 @@ describe("cron tool", () => {
     });
   });
 
+<<<<<<< HEAD
   it("preserves the default toolsAllow flag across an update that omits toolsAllow", async () => {
     // Regression guard: a routine update (here, toggling enabled) of an
     // agentTurn job whose cap was an auto-stamped default must keep
@@ -2325,6 +2347,8 @@ describe("cron tool", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("adds the creator tool surface when converting an existing job to agentTurn", async () => {
     callGatewayMock
       .mockResolvedValueOnce({
@@ -2357,7 +2381,10 @@ describe("cron tool", () => {
             kind: "agentTurn",
             message: "run later",
             toolsAllow: ["read", "cron"],
+<<<<<<< HEAD
             toolsAllowIsDefault: true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           },
         },
       },

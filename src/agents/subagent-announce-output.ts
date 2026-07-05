@@ -20,7 +20,11 @@ import {
   resolveStorePath,
 } from "./subagent-announce.runtime.js";
 import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
+<<<<<<< HEAD
 import { extractAssistantText, sanitizeTextContent } from "./tools/chat-history-text.js";
+=======
+import { extractAssistantText, sanitizeTextContent } from "./tools/session-message-text.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;

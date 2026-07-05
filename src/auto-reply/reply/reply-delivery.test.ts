@@ -304,6 +304,7 @@ describe("createBlockReplyDeliveryHandler", () => {
     expect(normalized.payload.replyToCurrent).toBeUndefined();
   });
 
+<<<<<<< HEAD
   it("normalizes reaction directives into Telegram channel data", () => {
     const normalized = normalizeReplyPayloadDirectives({
       payload: { text: "[[react_to_current:✅]]" },
@@ -328,6 +329,8 @@ describe("createBlockReplyDeliveryHandler", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("passes structured media block replies through media path normalization", async () => {
     const blockReplyPipeline = {
       enqueue: vi.fn(),

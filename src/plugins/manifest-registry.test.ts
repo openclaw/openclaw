@@ -458,6 +458,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(manifestChangeCase.secondName).toBe("After");
   });
 
+<<<<<<< HEAD
   it("preserves optional manifest icon URLs on registry records", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
@@ -478,6 +479,8 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.icon).toBe("https://cdn.simpleicons.org/simpleicons");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps only the higher-precedence plugin for truly distinct duplicates", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();

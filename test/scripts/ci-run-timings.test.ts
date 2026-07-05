@@ -2,7 +2,10 @@
 import { describe, expect, it } from "vitest";
 import {
   collectRunJobsFromPages,
+<<<<<<< HEAD
   isRetryableGhJsonErrorMessage,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   parseRunTimingArgs,
   selectLatestMainPushCiRun,
   summarizePnpmStoreWarmupBarrier,
@@ -144,6 +147,7 @@ describe("scripts/ci-run-timings.mjs", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("retries transient GitHub API failures while preserving auth failures", () => {
     for (const message of [
       "gh: API secondary rate limit exceeded (HTTP 403)",
@@ -159,6 +163,8 @@ describe("scripts/ci-run-timings.mjs", () => {
     ).toBe(false);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("summarizes the pnpm store warmup fanout barrier", () => {
     expect(
       summarizePnpmStoreWarmupBarrier({
@@ -279,6 +285,7 @@ describe("scripts/ci-run-timings.mjs", () => {
   });
 
   it("rejects missing monitor limits instead of treating flags as values", () => {
+<<<<<<< HEAD
     for (const args of [
       ["--limit"],
       ["--limit", "--recent", "4"],
@@ -286,6 +293,9 @@ describe("scripts/ci-run-timings.mjs", () => {
       ["--recent"],
       ["--recent", "-h"],
     ]) {
+=======
+    for (const args of [["--limit"], ["--limit", "--recent", "4"], ["--recent"]]) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(() => parseRunTimingArgs(args)).toThrow("requires a value");
     }
   });

@@ -6,7 +6,10 @@ import {
   sanitizeReplayToolCallIdsForStream,
   shouldApplyReplayToolCallIdSanitizer,
   wrapStreamFnPromoteStandaloneTextToolCalls,
+<<<<<<< HEAD
   wrapStreamFnSanitizeMalformedToolCalls,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./attempt.tool-call-normalization.js";
 
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
@@ -1080,6 +1083,7 @@ describe("sanitizeReplayToolCallIdsForStream", () => {
   });
 });
 
+<<<<<<< HEAD
 describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
   it("keeps valid non-Responses replay inputs pass-through", () => {
     const messages: AgentMessage[] = [
@@ -1170,6 +1174,8 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
   });
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("sanitizeOpenAIResponsesReplayForStream", () => {
   it("normalizes live responses continuations before pi-ai splits ids", () => {
     const longCallId = `call_${"x".repeat(120)}`;
@@ -1229,6 +1235,7 @@ describe("sanitizeOpenAIResponsesReplayForStream", () => {
 
     expect(sanitizeOpenAIResponsesReplayForStream(messages)).toBe(messages);
   });
+<<<<<<< HEAD
 
   it("repairs dangling OpenAI Responses tool calls from async resume replay", () => {
     const messages: AgentMessage[] = [
@@ -1307,4 +1314,6 @@ describe("sanitizeOpenAIResponsesReplayForStream", () => {
     expect(danglingResult.isError).toBe(true);
     expect(danglingResult.content).toEqual([{ type: "text", text: "aborted" }]);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

@@ -32,7 +32,10 @@ import {
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
+<<<<<<< HEAD
 import { diagnosticErrorCategory } from "../../../infra/diagnostic-error-metadata.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import {
@@ -42,17 +45,25 @@ import {
   freezeDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
+<<<<<<< HEAD
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
+=======
+import { formatErrorMessage } from "../../../infra/errors.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata-snapshot.js";
+<<<<<<< HEAD
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
 } from "../../../plugins/hook-agent-context.js";
+=======
+import { buildAgentHookContextChannelFields } from "../../../plugins/hook-agent-context.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveBlockMessage } from "../../../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
@@ -134,6 +145,10 @@ import {
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   buildBootstrapContextForFiles,
   hasCompletedBootstrapTurn,
+<<<<<<< HEAD
+=======
+  isWorkspaceBootstrapPending,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   makeBootstrapWarn,
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
@@ -153,7 +168,10 @@ import {
   createCodeModeTools,
   resolveCodeModeConfig,
 } from "../../code-mode.js";
+<<<<<<< HEAD
 import { resolveUserTimezone } from "../../date-time.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import {
@@ -255,6 +273,7 @@ import {
 } from "../../tools/cron-tool.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
+<<<<<<< HEAD
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
   isWorkspaceBootstrapPending,
@@ -267,6 +286,12 @@ import {
   rotateTranscriptAfterCompaction,
   shouldRotateCompactionTranscript,
 } from "../compaction-successor-transcript.js";
+=======
+import { DEFAULT_BOOTSTRAP_FILENAME, type WorkspaceBootstrapFile } from "../../workspace.js";
+import { isRunnerAbortError } from "../abort.js";
+import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
+import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { applyFinalEffectiveToolPolicy } from "../effective-tool-policy.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
@@ -337,15 +362,20 @@ import {
 } from "../tool-result-context-guard.js";
 import {
   resolveLiveToolResultMaxChars,
+<<<<<<< HEAD
   createToolResultPromptProjectionState,
   truncateOversizedToolResultsInMessages,
   type ToolResultPromptProjectionState,
+=======
+  truncateOversizedToolResultsInMessages,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   truncateOversizedToolResultsInSessionManager,
 } from "../tool-result-truncation.js";
 import { splitSdkTools } from "../tool-split.js";
 import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
+<<<<<<< HEAD
 import { releaseEmbeddedAttemptSessionLockForAbort } from "./attempt-abort.js";
 import { resolveAttemptWorkspaceBootstrapRouting } from "./attempt-bootstrap-routing.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
@@ -357,13 +387,20 @@ import {
 } from "./attempt-stage-timing.js";
 import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
 import {
+=======
+import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
+import {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
   shouldCreateBundleLspRuntimeForAttempt,
   shouldCreateBundleMcpRuntimeForAttempt,
 } from "./attempt-tool-construction-plan.js";
+<<<<<<< HEAD
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush-cleanup.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   resolveAttemptTrajectoryTerminal,
   resolveTerminalAssistantTexts,
@@ -379,6 +416,25 @@ import {
   isPrimaryBootstrapRun,
   remapInjectedContextFilesToWorkspace,
 } from "./attempt.bootstrap-context.js";
+<<<<<<< HEAD
+=======
+export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
+import { resolveUserTimezone } from "../../date-time.js";
+import {
+  rotateTranscriptAfterCompaction,
+  shouldRotateCompactionTranscript,
+} from "../compaction-successor-transcript.js";
+import { releaseEmbeddedAttemptSessionLockForAbort } from "./attempt-abort.js";
+import { resolveAttemptWorkspaceBootstrapRouting } from "./attempt-bootstrap-routing.js";
+import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
+import {
+  createEmbeddedRunStageTracker,
+  formatEmbeddedRunStageSummary,
+  shouldWarnEmbeddedRunStageSummary,
+} from "./attempt-stage-timing.js";
+import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
+import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush-cleanup.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   assembleAttemptContextEngine,
   buildLoopPromptCacheInfo,
@@ -396,7 +452,14 @@ import {
   normalizeMessagesForCurrentPromptBoundary,
   normalizeMessagesForLlmBoundary,
 } from "./attempt.llm-boundary.js";
+<<<<<<< HEAD
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
+=======
+import {
+  diagnosticErrorCategory,
+  wrapStreamFnWithDiagnosticModelCallEvents,
+} from "./attempt.model-diagnostic-events.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
@@ -524,8 +587,28 @@ export {
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   shouldWarnOnOrphanedUserRepair,
+<<<<<<< HEAD
 } from "./attempt.prompt-helpers.js";
 export {
+=======
+  shouldInjectHeartbeatPrompt,
+} from "./attempt.prompt-helpers.js";
+export {
+  persistSessionsYieldContextMessage,
+  queueSessionsYieldInterruptMessage,
+  stripSessionsYieldArtifacts,
+} from "./attempt.sessions-yield.js";
+export {
+  decodeHtmlEntitiesInObject,
+  wrapStreamFnRepairMalformedToolCallArguments,
+} from "./attempt.tool-call-argument-repair.js";
+export {
+  wrapStreamFnPromoteStandaloneTextToolCalls,
+  wrapStreamFnSanitizeMalformedToolCalls,
+  wrapStreamFnTrimToolCallNames,
+} from "./attempt.tool-call-normalization.js";
+export {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resetEmbeddedAgentBaseStreamFnCacheForTest,
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,
@@ -1254,7 +1337,10 @@ export async function runEmbeddedAttempt(
           const allTools = createOpenClawCodingTools({
             agentId: sessionAgentId,
             ...buildEmbeddedAttemptToolRunContext({ ...params, trace: runTrace }),
+<<<<<<< HEAD
             messageChannel: params.messageChannel,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             exec: {
               ...params.execOverrides,
               config: params.config,
@@ -1271,7 +1357,10 @@ export async function runEmbeddedAttempt(
             memberRoleIds: params.memberRoleIds,
             spawnedBy: params.spawnedBy,
             senderId: params.senderId,
+<<<<<<< HEAD
             channelContext: params.channelContext,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             senderName: params.senderName,
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
@@ -1287,7 +1376,10 @@ export async function runEmbeddedAttempt(
                 : undefined,
             sessionId: params.sessionId,
             runId: params.runId,
+<<<<<<< HEAD
             approvalReviewerDeviceId: params.approvalReviewerDeviceId,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             oneShotCliRun: params.oneShotCliRun,
             toolSearchCatalogRef,
             agentDir,
@@ -2570,8 +2662,11 @@ export async function runEmbeddedAttempt(
           await baseConvertToLlm(normalizeMessagesForLlmBoundary(messages, buildBoundaryOptions()));
       }
       let prePromptMessageCount = activeSession.messages.length;
+<<<<<<< HEAD
       const toolResultPromptProjectionState: ToolResultPromptProjectionState =
         createToolResultPromptProjectionState();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       let contextEngineAfterTurnCheckpoint: number | null = null;
       let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
       let contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]> =
@@ -2771,7 +2866,10 @@ export async function runEmbeddedAttempt(
         toolCount: effectiveTools.length,
         clientToolCount: clientToolDefs.length,
       });
+<<<<<<< HEAD
       const trajectoryFastMode = typeof params.fastMode === "boolean" ? params.fastMode : undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       trajectoryRecorder?.recordEvent(
         "trace.metadata",
         buildTrajectoryRunMetadata({
@@ -2788,7 +2886,11 @@ export async function runEmbeddedAttempt(
           modelId: params.modelId,
           modelApi: params.model.api,
           timeoutMs: params.timeoutMs,
+<<<<<<< HEAD
           fastMode: trajectoryFastMode,
+=======
+          fastMode: params.fastMode,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           thinkLevel: params.thinkLevel,
           reasoningLevel: params.reasoningLevel,
           toolResultFormat: params.toolResultFormat,
@@ -3129,11 +3231,15 @@ export async function runEmbeddedAttempt(
         trigger: params.trigger,
         runTimeoutMs: resolvedRunTimeoutMs,
         modelRequestTimeoutMs: (params.model as { requestTimeoutMs?: number }).requestTimeoutMs,
+<<<<<<< HEAD
         model: {
           baseUrl: params.model.baseUrl,
           id: params.modelId,
           provider: params.provider,
         },
+=======
+        model: params.model as { baseUrl?: string },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
       if (idleTimeoutMs > 0) {
         activeSession.agent.streamFn = streamWithIdleTimeout(
@@ -3391,9 +3497,13 @@ export async function runEmbeddedAttempt(
           }
         }
         if (isTimeout) {
+<<<<<<< HEAD
           const timeoutReason = reason instanceof Error ? reason : makeTimeoutAbortReason();
           params.onAttemptTimeout?.(timeoutReason);
           runAbortController.abort(timeoutReason);
+=======
+          runAbortController.abort(reason ?? makeTimeoutAbortReason());
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         } else {
           runAbortController.abort(reason);
         }
@@ -3526,12 +3636,15 @@ export async function runEmbeddedAttempt(
                 modelId: reportedModelRef.model,
                 trigger: params.trigger,
                 ...buildAgentHookContextChannelFields(params),
+<<<<<<< HEAD
                 ...buildAgentHookContextIdentityFields({
                   trigger: params.trigger,
                   senderId: params.senderId,
                   chatId: params.chatId,
                   channelContext: params.channelContext,
                 }),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               },
               hookRunner,
             });
@@ -3584,7 +3697,10 @@ export async function runEmbeddedAttempt(
             (params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd)
               ? "finishing"
               : "end",
+<<<<<<< HEAD
           onToolStreamBoundary: params.onToolStreamBoundary,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           isTerminalAborted: () => aborted,
           resolveTerminalStopReason: () =>
             isAgentRunRestartAbortReason(runAbortController.signal.reason)
@@ -3610,7 +3726,10 @@ export async function runEmbeddedAttempt(
           },
           enforceFinalTag: params.enforceFinalTag,
           silentExpected: params.silentExpected,
+<<<<<<< HEAD
           suppressLiveStreamOutput: params.suppressLiveStreamOutput,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           config: params.config,
           sessionKey: sandboxSessionKey,
           currentChannelId: params.currentChannelId,
@@ -3711,7 +3830,10 @@ export async function runEmbeddedAttempt(
 
       const abortActiveRunExternally = (reason?: "user_abort" | "restart" | "superseded") => {
         externalAbort = true;
+<<<<<<< HEAD
         params.onAttemptAbort?.();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         abortRun(false, reason === "restart" ? createAgentRunRestartAbortError() : undefined);
       };
       const queueHandle: EmbeddedAgentQueueHandle & {
@@ -3807,7 +3929,10 @@ export async function runEmbeddedAttempt(
         );
       };
       scheduleAbortTimer(params.timeoutMs, "initial");
+<<<<<<< HEAD
       params.onAttemptTimeoutArmed?.();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       let messagesSnapshot: AgentMessage[] = [];
       let sessionIdUsed = activeSession.sessionId;
@@ -3941,12 +4066,15 @@ export async function runEmbeddedAttempt(
           modelId: params.model.id,
           trigger: params.trigger,
           ...buildAgentHookContextChannelFields(params),
+<<<<<<< HEAD
           ...buildAgentHookContextIdentityFields({
             trigger: params.trigger,
             senderId: params.senderId,
             chatId: params.chatId,
             channelContext: params.channelContext,
           }),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         };
         const promptBuildMessages =
           pruneProcessedHistoryImages(activeSession.messages) ?? activeSession.messages;
@@ -4189,9 +4317,14 @@ export async function runEmbeddedAttempt(
             contextTokenBudget,
             promptToolResultMaxChars,
             promptToolResultMaxChars * PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER,
+<<<<<<< HEAD
             toolResultPromptProjectionState,
           );
           if (promptToolResultTruncation.messages !== activeSession.messages) {
+=======
+          );
+          if (promptToolResultTruncation.truncatedCount > 0) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             promptHistoryMessages = promptToolResultTruncation.messages;
             log.info(
               `[tool-result-truncation] Truncated ${promptToolResultTruncation.truncatedCount} ` +
@@ -4567,12 +4700,15 @@ export async function runEmbeddedAttempt(
                   workspaceDir: params.workspaceDir,
                   trigger: params.trigger,
                   ...buildAgentHookContextChannelFields(params),
+<<<<<<< HEAD
                   ...buildAgentHookContextIdentityFields({
                     trigger: params.trigger,
                     senderId: params.senderId,
                     chatId: params.chatId,
                     channelContext: params.channelContext,
                   }),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 },
               )
               .catch((err: unknown) => {
@@ -4737,9 +4873,14 @@ export async function runEmbeddedAttempt(
                     contextTokenBudget,
                     promptToolResultMaxChars,
                     promptToolResultMaxChars * PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER,
+<<<<<<< HEAD
                     toolResultPromptProjectionState,
                   );
                   return providerPromptHistoryTruncation.messages !== messages
+=======
+                  );
+                  return providerPromptHistoryTruncation.truncatedCount > 0
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                     ? providerPromptHistoryTruncation.messages
                     : messages;
                 },
@@ -5249,12 +5390,15 @@ export async function runEmbeddedAttempt(
               trigger: params.trigger,
               ...(params.config ? { config: params.config } : {}),
               ...buildAgentHookContextChannelFields(params),
+<<<<<<< HEAD
               ...buildAgentHookContextIdentityFields({
                 trigger: params.trigger,
                 senderId: params.senderId,
                 chatId: params.chatId,
                 channelContext: params.channelContext,
               }),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             },
             hookRunner,
           });
@@ -5419,12 +5563,15 @@ export async function runEmbeddedAttempt(
                 ? { contextWindowReferenceTokens: params.contextWindowInfo.referenceTokens }
                 : {}),
               ...buildAgentHookContextChannelFields(params),
+<<<<<<< HEAD
               ...buildAgentHookContextIdentityFields({
                 trigger: params.trigger,
                 senderId: params.senderId,
                 chatId: params.chatId,
                 channelContext: params.channelContext,
               }),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             },
           )
           .catch((err: unknown) => {
@@ -5776,7 +5923,11 @@ export async function runEmbeddedAttempt(
             }),
           );
         } else {
+<<<<<<< HEAD
           await Promise.reject(toErrorObject(cleanupFailure, "Non-Error rejection"));
+=======
+          await Promise.reject(toLintErrorObject(cleanupFailure, "Non-Error rejection"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }
       }
     }
@@ -5806,3 +5957,20 @@ export async function runEmbeddedAttempt(
     restoreSkillEnv?.();
   }
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

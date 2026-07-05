@@ -1,0 +1,73 @@
+{
+  "scenarios": [
+    {
+      "name": "Runtime inventory drift check",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "keeps tools.effective and skills.status aligned after config changes",
+          "status": "pass",
+          "details": "image_generate removed, qa-drift-skill marker=DRIFT-SKILL-OK disabled=true"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 122363,
+    "gatewayProcessCpuMs": 20000,
+    "gatewayCpuCoreRatio": 0.163,
+    "gatewayProcessRssStartBytes": 842137600,
+    "gatewayProcessRssEndBytes": 1090043904,
+    "gatewayProcessRssDeltaBytes": 247906304,
+    "gatewayProcessRssPeakBytes": 1090043904,
+    "gatewayProcessRssPeakDeltaBytes": 247906304,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:15:15.824Z",
+        "gatewayProcessRssBytes": 842137600
+      },
+      {
+        "label": "scenario:runtime-inventory-drift-check:start",
+        "at": "2026-07-03T13:15:15.856Z",
+        "gatewayProcessRssBytes": 842194944
+      },
+      {
+        "label": "scenario:runtime-inventory-drift-check:finish",
+        "at": "2026-07-03T13:16:36.620Z",
+        "gatewayProcessRssBytes": 1090043904
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:16:36.655Z",
+        "gatewayProcessRssBytes": 1090043904
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:14:34.257Z",
+    "finishedAt": "2026-07-03T13:16:36.620Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "runtime-inventory-drift-check"
+    ],
+    "runtimePair": null
+  }
+}

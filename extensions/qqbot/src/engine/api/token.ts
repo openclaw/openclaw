@@ -12,14 +12,20 @@ import {
   resolveExpiresAtMsFromDurationSeconds,
   resolveTimestampMsToIsoString,
 } from "openclaw/plugin-sdk/number-runtime";
+<<<<<<< HEAD
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
 const DEFAULT_TOKEN_EXPIRES_IN_SECONDS = 7200;
+<<<<<<< HEAD
 const QQBOT_TOKEN_RESPONSE_LIMIT_BYTES = 8 * 1024;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /**
  * Host-scoped SSRF policy for the QQ Bot token endpoint.
@@ -234,6 +240,17 @@ export class TokenManager {
     }
   }
 
+<<<<<<< HEAD
+=======
+  /** Check whether background refresh is running. */
+  isBackgroundRefreshRunning(appId?: string): boolean {
+    if (appId) {
+      return this.refreshControllers.has(appId);
+    }
+    return this.refreshControllers.size > 0;
+  }
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   // ---- Internal ----
 
   private async doFetchToken(appId: string, clientSecret: string): Promise<string> {
@@ -273,7 +290,11 @@ export class TokenManager {
 
       let rawBody: string;
       try {
+<<<<<<< HEAD
         rawBody = await readResponseTextLimited(response, QQBOT_TOKEN_RESPONSE_LIMIT_BYTES);
+=======
+        rawBody = await response.text();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       } catch (err) {
         throw new Error(`Failed to read access_token response: ${formatErrorMessage(err)}`, {
           cause: err,

@@ -2,7 +2,10 @@
  * Manages reusable Claude CLI stdio sessions for CLI-backed agent turns.
  */
 import crypto from "node:crypto";
+<<<<<<< HEAD
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import {
@@ -34,7 +37,10 @@ import {
 } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
+<<<<<<< HEAD
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { buildClaudeOwnerKey } from "./helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -732,6 +738,13 @@ function parseSessionId(parsed: Record<string, unknown>): string | undefined {
   return sessionId || undefined;
 }
 
+<<<<<<< HEAD
+=======
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function normalizePositiveInt(
   value: number | undefined,
   fallback: number,
@@ -1061,6 +1074,7 @@ async function createClaudeLiveSession(params: {
   cleanup: () => Promise<void>;
 }): Promise<ClaudeLiveSession> {
   let session: ClaudeLiveSession | null = null;
+<<<<<<< HEAD
   const mcpCaptureAttempt = await prepareCliBundleMcpCaptureAttempt({
     mode: params.context.backendResolved.bundleMcpMode,
     backend: params.context.preparedBackend.backend,
@@ -1104,6 +1118,41 @@ async function createClaudeLiveSession(params: {
     await mcpCaptureAttempt.cleanup?.();
     throw error;
   }
+=======
+  const managedRun = await params.supervisor.spawn({
+    sessionId: params.context.params.sessionId,
+    backendId: params.context.backendResolved.id,
+    scopeKey: `claude-live:${params.key}`,
+    replaceExistingScope: true,
+    mode: "child",
+    argv: params.argv,
+    cwd: params.context.cwd ?? params.context.workspaceDir,
+    env: params.mcpCaptureKey
+      ? { ...params.env, OPENCLAW_MCP_CLI_CAPTURE_KEY: params.mcpCaptureKey }
+      : params.env,
+    stdinMode: "pipe-open",
+    captureOutput: false,
+    onStdout: (chunk) => {
+      if (session) {
+        handleClaudeStdout(session, chunk);
+      }
+    },
+    onStderr: (chunk) => {
+      if (session) {
+        session.stderr += chunk;
+        if (session.stderr.length > CLAUDE_LIVE_MAX_STDERR_CHARS) {
+          closeLiveSession(
+            session,
+            "abort",
+            createOutputLimitError(session, "Claude CLI stderr exceeded limit."),
+          );
+          return;
+        }
+        resetNoOutputTimer(session);
+      }
+    },
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   session = {
     key: params.key,
     fingerprint: params.fingerprint,
@@ -1117,10 +1166,14 @@ async function createClaudeLiveSession(params: {
     drainTimer: null,
     drainingAbortedTurn: false,
     idleTimer: null,
+<<<<<<< HEAD
     cleanup: async () => {
       await mcpCaptureAttempt.cleanup?.();
       await params.cleanup();
     },
+=======
+    cleanup: params.cleanup,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     cleanupPromise: null,
     closing: false,
     mcpCaptureKey: params.mcpCaptureKey,

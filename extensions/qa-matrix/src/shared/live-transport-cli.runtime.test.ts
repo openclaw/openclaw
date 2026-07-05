@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { startLiveTransportQaOutputTee } from "openclaw/plugin-sdk/qa-runtime";
 import { afterEach, describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { resolveLiveTransportQaRunOptions } from "./live-transport-cli.runtime.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const tmpDirs: string[] = [];
 
@@ -13,6 +16,7 @@ describe("live transport CLI runtime", () => {
     await Promise.all(tmpDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
+<<<<<<< HEAD
   it("uses unique default output dirs for CLI runs", () => {
     const repoRoot = "/repo";
     const firstOutputDir = resolveLiveTransportQaRunOptions({ repoRoot }).outputDir;
@@ -29,6 +33,8 @@ describe("live transport CLI runtime", () => {
     ).toBe(path.join(repoRoot, ".artifacts/custom"));
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("tees stdout and stderr into an output artifact", async () => {
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-output-"));
     tmpDirs.push(outputDir);

@@ -40,9 +40,12 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
   if (/model/i.test(msg) && /does not exist/i.test(msg)) {
     return true;
   }
+<<<<<<< HEAD
   if (/selected model/i.test(msg) && /not(?:[_\-\s])?found/i.test(msg)) {
     return true;
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (/model/i.test(msg) && /deprecated/i.test(msg) && /(upgrade|transition) to/i.test(msg)) {
     return true;
   }

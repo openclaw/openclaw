@@ -39,18 +39,24 @@ function makeFixture(bundleId: string): { root: string; script: string; logFile:
     path.join(scriptsDir, "ios-configure-signing.sh"),
     `#!/usr/bin/env bash
 set -euo pipefail
+<<<<<<< HEAD
 if [[ -n "\${OPENCLAW_SIMULATOR_PUSH_PROOF_SECRET:-}" || -n "\${CUSTOM_SIMULATOR_PUSH_PROOF_SECRET:-}" ]]; then
   printf 'configure-signing-proof-env leaked\\n' >>"${logFile}"
 fi
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 `,
   );
   writeExecutable(
     path.join(scriptsDir, "ios-write-version-xcconfig.sh"),
     `#!/usr/bin/env bash
 set -euo pipefail
+<<<<<<< HEAD
 if [[ -n "\${OPENCLAW_SIMULATOR_PUSH_PROOF_SECRET:-}" || -n "\${CUSTOM_SIMULATOR_PUSH_PROOF_SECRET:-}" ]]; then
   printf 'write-version-proof-env leaked\\n' >>"${logFile}"
 fi
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 `,
   );
   writeExecutable(
@@ -58,12 +64,15 @@ fi
     `#!/usr/bin/env bash
 set -euo pipefail
 printf 'xcodegen %s\\n' "$*" >>"${logFile}"
+<<<<<<< HEAD
 if [[ -n "\${OPENCLAW_SIMULATOR_PUSH_PROOF_SECRET:-}" ]]; then
   printf 'xcodegen-proof-env leaked\\n' >>"${logFile}"
 fi
 if [[ -n "\${CUSTOM_SIMULATOR_PUSH_PROOF_SECRET:-}" ]]; then
   printf 'xcodegen-custom-proof-env leaked\\n' >>"${logFile}"
 fi
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 `,
   );
   writeExecutable(
@@ -71,12 +80,15 @@ fi
     `#!/usr/bin/env bash
 set -euo pipefail
 printf 'xcodebuild %s\\n' "$*" >>"${logFile}"
+<<<<<<< HEAD
 if [[ -n "\${OPENCLAW_SIMULATOR_PUSH_PROOF_SECRET:-}" ]]; then
   printf 'xcodebuild-proof-env leaked\\n' >>"${logFile}"
 fi
 if [[ -n "\${CUSTOM_SIMULATOR_PUSH_PROOF_SECRET:-}" ]]; then
   printf 'xcodebuild-custom-proof-env leaked\\n' >>"${logFile}"
 fi
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 derived=""
 configuration="Debug"
 while [[ $# -gt 0 ]]; do
@@ -108,6 +120,7 @@ PLIST
     `#!/usr/bin/env bash
 set -euo pipefail
 printf 'simctl %s\\n' "$*" >>"${logFile}"
+<<<<<<< HEAD
 if [[ "$1" == "launch" ]]; then
   if [[ -n "\${SIMCTL_CHILD_OPENCLAW_SIMULATOR_PUSH_PROOF_SECRET:-}" ]]; then
     printf 'simctl-launch-proof set\\n' >>"${logFile}"
@@ -115,6 +128,8 @@ if [[ "$1" == "launch" ]]; then
     printf 'simctl-launch-proof unset\\n' >>"${logFile}"
   fi
 fi
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 if [[ "$1" == "boot" ]]; then
   if [[ "\${SIMCTL_BOOT_MODE:-}" == "booted" ]]; then
     echo "Unable to boot device in current state: Booted" >&2
@@ -138,12 +153,17 @@ sed -n 's:.*<key>CFBundleIdentifier</key><string>\\([^<]*\\)</string>.*:\\1:p' "
   return { root, script, logFile };
 }
 
+<<<<<<< HEAD
 function runIosRun(
   fixture: { root: string; script: string },
   extraEnv = {},
   args: string[] = [],
 ): string {
   return execFileSync(BASH_BIN, [...bashArgs(fixture.script), ...args], {
+=======
+function runIosRun(fixture: { root: string; script: string }, extraEnv = {}): string {
+  return execFileSync(BASH_BIN, bashArgs(fixture.script), {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     env: {
       ...process.env,
       IOS_DERIVED_DATA_DIR: path.join(fixture.root, "DerivedData"),
@@ -175,6 +195,7 @@ describe("scripts/ios-run.sh", () => {
     );
   });
 
+<<<<<<< HEAD
   it("builds simulator sandbox relay mode and injects proof secret only at launch", () => {
     const fixture = makeFixture("ai.openclawfoundation.app");
     const proofSecret = "x".repeat(32);
@@ -219,6 +240,8 @@ describe("scripts/ios-run.sh", () => {
     expect(log).not.toContain(customProofSecret);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not ignore simulator boot failures other than already booted", () => {
     const fixture = makeFixture("ai.openclawfoundation.app");
 

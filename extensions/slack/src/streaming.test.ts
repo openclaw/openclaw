@@ -132,6 +132,7 @@ describe("stopSlackStream finalize error handling", () => {
     expect((thrown as SlackStreamNotDeliveredError).pendingText).toBe("hello world");
   });
 
+<<<<<<< HEAD
   it("throws SlackStreamNotDeliveredError for unexpected finalize codes while text is buffered", async () => {
     const session = makeSession({
       appendImpl: async () => null,
@@ -163,6 +164,8 @@ describe("stopSlackStream finalize error handling", () => {
     expect(session.pendingText).toBe("locally buffered reply");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("clears pendingText after an append flush is acknowledged by Slack", async () => {
     const session = makeSession({
       appendImpl: async () => ({ ts: "1700000000.100203" }),
@@ -403,17 +406,22 @@ describe("stopSlackStream finalize error handling", () => {
 
 describe("error classification", () => {
   it("isBenignSlackFinalizeError matches each allowlisted code", () => {
+<<<<<<< HEAD
     for (const code of [
       "user_not_found",
       "team_not_found",
       "missing_recipient_user_id",
       "method_not_supported_for_channel_type",
     ]) {
+=======
+    for (const code of ["user_not_found", "team_not_found", "missing_recipient_user_id"]) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(isBenignSlackFinalizeError(slackApiError(code))).toBe(true);
     }
   });
 
   it("isBenignSlackFinalizeError rejects non-listed codes", () => {
+<<<<<<< HEAD
     for (const code of [
       "not_authed",
       "ratelimited",
@@ -421,6 +429,9 @@ describe("error classification", () => {
       "internal_error",
       "fatal_error",
     ]) {
+=======
+    for (const code of ["not_authed", "ratelimited", "channel_not_found"]) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(isBenignSlackFinalizeError(slackApiError(code))).toBe(false);
     }
   });

@@ -1,6 +1,9 @@
 // Image runtime tests cover model-backed image routing, auth/profile handling,
 // provider payload transforms, and MiniMax/Copilot special paths.
+<<<<<<< HEAD
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
@@ -832,6 +835,7 @@ describe("describeImageWithModel", () => {
     });
   });
 
+<<<<<<< HEAD
   it("clamps oversized image description timeouts before scheduling", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     discoverModelsMock.mockReturnValue({
@@ -873,6 +877,8 @@ describe("describeImageWithModel", () => {
     expect(firstCall[2].timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("places OpenRouter image prompts in user content before images", async () => {
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({

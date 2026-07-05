@@ -9,7 +9,10 @@ import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveBundledInstallPlanForCatalogEntry } from "../cli/plugin-install-plan.js";
+<<<<<<< HEAD
 import { invalidatePluginRuntimeDiscoveryAfterConfigMutation } from "../cli/plugins-registry-refresh.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { assertConfigWriteAllowedInCurrentMode } from "../config/nix-mode-write-guard.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
@@ -41,14 +44,20 @@ import {
   installPluginFromNpmPackArchive,
   type InstallPluginResult,
 } from "../plugins/install.js";
+<<<<<<< HEAD
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   buildNpmResolutionInstallFields,
   recordPluginInstall,
   resolveNpmInstallRecordSpec,
 } from "../plugins/installs.js";
 import type { PluginPackageInstall } from "../plugins/manifest.js";
+<<<<<<< HEAD
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { RuntimeEnv } from "../runtime.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import { VERSION } from "../version.js";
@@ -82,6 +91,7 @@ type OnboardingPluginInstallResult = {
   status: OnboardingPluginInstallStatus;
 };
 
+<<<<<<< HEAD
 async function markOnboardingPluginInstalled(
   result: OnboardingPluginInstallResult & { installed: true },
   params: {
@@ -98,6 +108,8 @@ async function markOnboardingPluginInstalled(
   return result;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function shouldFallbackClawHubToNpm(params: {
   result: { ok: false; code?: string };
   npmSpec?: string;
@@ -115,6 +127,7 @@ function shouldFallbackClawHubToNpm(params: {
   );
 }
 
+<<<<<<< HEAD
 function readInstallFailureWarning(result: InstallPluginFromClawHubResult): string | undefined {
   if (result.ok || !("warning" in result) || typeof result.warning !== "string") {
     return undefined;
@@ -122,6 +135,8 @@ function readInstallFailureWarning(result: InstallPluginFromClawHubResult): stri
   return result.warning;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveRealDirectory(dir: string): string | null {
   try {
     const resolved = fs.realpathSync(dir);
@@ -685,6 +700,7 @@ function logInstallWarningWithSpacing(runtime: RuntimeEnv, message: string): voi
   runtime.log?.(`${sanitized}\n`);
 }
 
+<<<<<<< HEAD
 function logInstallWarningWithLineBreaks(runtime: RuntimeEnv, message: string): void {
   const sanitized = message
     .split("\n")
@@ -709,6 +725,8 @@ function isClawHubTrustWarning(message: string): boolean {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function installPluginFromNpmSpecWithProgress(params: {
   cfg: OpenClawConfig;
   entry: OnboardingPluginInstallEntry;
@@ -965,6 +983,7 @@ async function installPluginFromOverride(params: {
           ...(result.version ? { version: result.version } : {}),
           ...buildNpmResolutionInstallFields(result.npmResolution),
         } as const);
+<<<<<<< HEAD
   return await markOnboardingPluginInstalled(
     {
       cfg: recordPluginInstall(enableResult.config, install),
@@ -974,6 +993,14 @@ async function installPluginFromOverride(params: {
     },
     { runtime: params.runtime },
   );
+=======
+  return {
+    cfg: recordPluginInstall(enableResult.config, install),
+    installed: true,
+    pluginId: result.pluginId,
+    status: "installed",
+  };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function installPluginFromClawHubSpecWithProgress(params: {
@@ -1000,11 +1027,14 @@ async function installPluginFromClawHubSpecWithProgress(params: {
     }
     animated.setLabel(shortenInstallLabel(sanitized));
   };
+<<<<<<< HEAD
   let renderedTrustWarning = false;
   const renderTrustWarning = (message: string) => {
     logInstallWarningWithLineBreaks(params.runtime, message);
     renderedTrustWarning = true;
   };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   try {
     const { installPluginFromClawHub } = await import("../plugins/clawhub.js");
@@ -1020,6 +1050,7 @@ async function installPluginFromClawHubSpecWithProgress(params: {
           info: updateProgress,
           warn: (message) => {
             updateProgress(message);
+<<<<<<< HEAD
             if (isReviewRequiredClawHubTrustWarning(message)) {
               return;
             }
@@ -1048,15 +1079,23 @@ async function installPluginFromClawHubSpecWithProgress(params: {
             initialValue: false,
           });
         },
+=======
+            logInstallWarningWithSpacing(params.runtime, message);
+          },
+        },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }),
       ONBOARDING_PLUGIN_INSTALL_WATCHDOG_TIMEOUT_MS,
     );
     animated.stop();
+<<<<<<< HEAD
     const failureWarning = readInstallFailureWarning(result);
     if (failureWarning && !renderedTrustWarning) {
       progress.stop("Review ClawHub warning");
       renderTrustWarning(failureWarning);
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (result.ok) {
       progress.stop(formatPluginInstalled(safeLabel));
     } else {
@@ -1192,6 +1231,7 @@ export async function ensureOnboardingPluginInstalled(params: {
       };
     }
     if (pathsReferToSameDirectory(localPath, bundledLocalPath)) {
+<<<<<<< HEAD
       return await markOnboardingPluginInstalled(
         {
           cfg: enableResult.config,
@@ -1213,6 +1253,23 @@ export async function ensureOnboardingPluginInstalled(params: {
       },
       { runtime },
     );
+=======
+      return {
+        cfg: enableResult.config,
+        installed: true,
+        pluginId: entry.pluginId,
+        status: "installed",
+      };
+    }
+    next = addPluginLoadPath(enableResult.config, localPath);
+    next = await recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec, workspaceDir });
+    return {
+      cfg: next,
+      installed: true,
+      pluginId: entry.pluginId,
+      status: "installed",
+    };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   let shouldTryNpm = choice === "npm";
@@ -1265,6 +1322,7 @@ export async function ensureOnboardingPluginInstalled(params: {
         spec: clawhubSpecs?.recordSpec ?? clawhubInstallSpec,
         installPath: result.targetDir,
       });
+<<<<<<< HEAD
       return await markOnboardingPluginInstalled(
         {
           cfg: next,
@@ -1274,6 +1332,14 @@ export async function ensureOnboardingPluginInstalled(params: {
         },
         { runtime },
       );
+=======
+      return {
+        cfg: next,
+        installed: true,
+        pluginId: result.pluginId,
+        status: "installed",
+      };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
 
     await prompter.note(
@@ -1390,6 +1456,7 @@ export async function ensureOnboardingPluginInstalled(params: {
       ...buildNpmResolutionInstallFields(result.npmResolution),
     } as const;
     next = recordPluginInstall(next, install);
+<<<<<<< HEAD
     return await markOnboardingPluginInstalled(
       {
         cfg: next,
@@ -1399,6 +1466,14 @@ export async function ensureOnboardingPluginInstalled(params: {
       },
       { runtime },
     );
+=======
+    return {
+      cfg: next,
+      installed: true,
+      pluginId: result.pluginId,
+      status: "installed",
+    };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   await prompter.note(
@@ -1438,6 +1513,7 @@ export async function ensureOnboardingPluginInstalled(params: {
         };
       }
       if (pathsReferToSameDirectory(localPath, bundledLocalPath)) {
+<<<<<<< HEAD
         return await markOnboardingPluginInstalled(
           {
             cfg: enableResult.config,
@@ -1459,6 +1535,23 @@ export async function ensureOnboardingPluginInstalled(params: {
         },
         { runtime },
       );
+=======
+        return {
+          cfg: enableResult.config,
+          installed: true,
+          pluginId: entry.pluginId,
+          status: "installed",
+        };
+      }
+      next = addPluginLoadPath(enableResult.config, localPath);
+      next = await recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec, workspaceDir });
+      return {
+        cfg: next,
+        installed: true,
+        pluginId: entry.pluginId,
+        status: "installed",
+      };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   }
 

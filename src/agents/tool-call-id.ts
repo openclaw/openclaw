@@ -5,7 +5,10 @@
  */
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "./runtime/index.js";
+<<<<<<< HEAD
 import { isThinkingLikeBlock } from "./thinking-block.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-shared.js";
 
 export type ToolCallIdMode = "strict" | "strict9";
@@ -125,6 +128,17 @@ export function extractToolResultIds(msg: Extract<AgentMessage, { role: "toolRes
   return ids;
 }
 
+<<<<<<< HEAD
+=======
+function isThinkingLikeBlock(block: unknown): boolean {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const type = (block as { type?: unknown }).type;
+  return type === "thinking" || type === "redacted_thinking";
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function hasToolCallInput(block: ReplaySafeToolCallBlock): boolean {
   const hasInput = "input" in block ? block.input !== undefined && block.input !== null : false;
   const hasArguments =
@@ -429,6 +443,7 @@ function rewriteToolResultIds(params: {
   message: Extract<AgentMessage, { role: "toolResult" }>;
   resolveId: (id: string) => string;
 }): Extract<AgentMessage, { role: "toolResult" }> {
+<<<<<<< HEAD
   const idFields = [
     "toolCallId",
     "toolUseId",
@@ -473,12 +488,35 @@ function rewriteToolResultIds(params: {
   }
 
   if (Object.keys(updates).length === 0) {
+=======
+  const toolCallId =
+    typeof params.message.toolCallId === "string" && params.message.toolCallId
+      ? params.message.toolCallId
+      : undefined;
+  const toolUseId = (params.message as { toolUseId?: unknown }).toolUseId;
+  const toolUseIdStr = typeof toolUseId === "string" && toolUseId ? toolUseId : undefined;
+  const sharedRawId =
+    toolCallId && toolUseIdStr && toolCallId === toolUseIdStr ? toolCallId : undefined;
+
+  const sharedResolvedId = sharedRawId ? params.resolveId(sharedRawId) : undefined;
+  const nextToolCallId =
+    sharedResolvedId ?? (toolCallId ? params.resolveId(toolCallId) : undefined);
+  const nextToolUseId =
+    sharedResolvedId ?? (toolUseIdStr ? params.resolveId(toolUseIdStr) : undefined);
+
+  if (nextToolCallId === toolCallId && nextToolUseId === toolUseIdStr) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return params.message;
   }
 
   return {
     ...params.message,
+<<<<<<< HEAD
     ...updates,
+=======
+    ...(nextToolCallId && { toolCallId: nextToolCallId }),
+    ...(nextToolUseId && { toolUseId: nextToolUseId }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } as Extract<AgentMessage, { role: "toolResult" }>;
 }
 

@@ -87,28 +87,45 @@ async function collectVaultCounts(vaultPath: string): Promise<{
   };
   const dirs = ["entities", "concepts", "sources", "syntheses", "reports"] as const;
   for (const dir of dirs) {
+<<<<<<< HEAD
     const dirPath = path.join(vaultPath, dir);
     const entries = await fs
       .readdir(dirPath, { withFileTypes: true, recursive: true })
+=======
+    const entries = await fs
+      .readdir(path.join(vaultPath, dir), { withFileTypes: true })
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       .catch(() => []);
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(".md") || entry.name === "index.md") {
         continue;
       }
+<<<<<<< HEAD
       const absolutePath = path.join(entry.parentPath ?? dirPath, entry.name);
       const relativeToVault = path.relative(vaultPath, absolutePath).split(path.sep).join("/");
       const kind = inferWikiPageKind(relativeToVault);
+=======
+      const kind = inferWikiPageKind(path.join(dir, entry.name));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (kind) {
         pageCounts[kind] += 1;
       }
       if (dir === "sources") {
+<<<<<<< HEAD
+=======
+        const absolutePath = path.join(vaultPath, dir, entry.name);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const raw = await fs.readFile(absolutePath, "utf8").catch(() => null);
         if (!raw) {
           continue;
         }
         const page = toWikiPageSummary({
           absolutePath,
+<<<<<<< HEAD
           relativePath: relativeToVault,
+=======
+          relativePath: path.join(dir, entry.name),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           raw,
         });
         if (!page) {

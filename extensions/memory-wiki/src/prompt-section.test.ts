@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveMemoryWikiConfig } from "./config.js";
+<<<<<<< HEAD
 import { createWikiPromptSectionBuilder } from "./prompt-section.js";
+=======
+import { buildWikiPromptSection, createWikiPromptSectionBuilder } from "./prompt-section.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 let suiteRoot = "";
 
@@ -18,6 +22,7 @@ afterAll(async () => {
   }
 });
 
+<<<<<<< HEAD
 const buildDefaultWikiPromptSection = createWikiPromptSectionBuilder(
   resolveMemoryWikiConfig({
     vault: { path: "" },
@@ -28,6 +33,11 @@ const buildDefaultWikiPromptSection = createWikiPromptSectionBuilder(
 describe("default wiki prompt section", () => {
   it("prefers shared memory corpus guidance when memory tools are available", () => {
     const lines = buildDefaultWikiPromptSection({
+=======
+describe("buildWikiPromptSection", () => {
+  it("prefers shared memory corpus guidance when memory tools are available", () => {
+    const lines = buildWikiPromptSection({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       availableTools: new Set(["memory_search", "memory_get", "wiki_search", "wiki_get"]),
     });
 
@@ -37,9 +47,13 @@ describe("default wiki prompt section", () => {
   });
 
   it("stays empty when no wiki or memory-adjacent tools are registered", () => {
+<<<<<<< HEAD
     expect(
       buildDefaultWikiPromptSection({ availableTools: new Set(["web_search"]) }),
     ).toStrictEqual([]);
+=======
+    expect(buildWikiPromptSection({ availableTools: new Set(["web_search"]) })).toStrictEqual([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("can append a compact compiled digest snapshot when enabled", async () => {

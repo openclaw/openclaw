@@ -1,7 +1,10 @@
 // Plugin MCP serve tests cover serving plugin tools over MCP.
+<<<<<<< HEAD
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type HookContext,
@@ -88,8 +91,11 @@ function requireToolPolicyParams(mock: ReturnType<typeof vi.fn>) {
 describe("plugin tools MCP server", () => {
   it("routes logs to stderr before resolving tools for stdio", async () => {
     const { servePluginToolsMcp } = await import("./plugin-tools-serve.js");
+<<<<<<< HEAD
     const runtimeRegistry = createMockPluginRegistry([]);
     ensureStandalonePluginToolRegistryLoadedMock.mockReturnValue(runtimeRegistry);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resolvePluginToolsMock.mockReturnValue([
       {
         name: "memory_recall",
@@ -107,9 +113,12 @@ describe("plugin tools MCP server", () => {
       context: { config: { plugins: { enabled: true } } },
     });
     expect(resolvePluginToolsMock).toHaveBeenCalledTimes(1);
+<<<<<<< HEAD
     expect(resolvePluginToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({ runtimeRegistry }),
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(ensureStandalonePluginToolRegistryLoadedMock.mock.invocationCallOrder[0]).toBeLessThan(
       resolvePluginToolsMock.mock.invocationCallOrder[0] ?? 0,
     );
@@ -183,6 +192,7 @@ describe("plugin tools MCP server", () => {
     expect(result.content).toEqual([{ type: "text", text: "Stored." }]);
   });
 
+<<<<<<< HEAD
   it("serializes source-shaped image tool content with pinned MCP image blocks", async () => {
     const execute = vi.fn().mockResolvedValue({
       content: [
@@ -259,6 +269,8 @@ describe("plugin tools MCP server", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("serializes plugin tool results that do not use the MCP content envelope", async () => {
     const execute = vi.fn().mockResolvedValue({
       provider: "kitchen-sink-search",

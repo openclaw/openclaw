@@ -4,16 +4,23 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+<<<<<<< HEAD
 import { loadJsonFile } from "openclaw/plugin-sdk/json-store";
 import type {
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+=======
+import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
 } from "../../account-selection.js";
+<<<<<<< HEAD
 import { isRecord } from "../../record-shared.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { getMatrixRuntime } from "../../runtime.js";
 import {
   resolveMatrixAccountStorageRoot,
@@ -29,16 +36,22 @@ import {
   scoreMatrixCryptoStateInStore,
   writeMatrixIdbSnapshotJson,
 } from "../crypto-state-store.js";
+<<<<<<< HEAD
 import { resolveMatrixSqliteStateEnv } from "../sqlite-state.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { MatrixAuth } from "./types.js";
 import type { MatrixStoragePaths } from "./types.js";
 
 const DEFAULT_ACCOUNT_KEY = "default";
 const STORAGE_META_FILENAME = "storage-meta.json";
 const THREAD_BINDINGS_FILENAME = "thread-bindings.json";
+<<<<<<< HEAD
 const STORAGE_META_NAMESPACE = "storage-meta";
 const STORAGE_META_STATE_KEY = "current";
 const STORAGE_META_MAX_ENTRIES = 10;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type LegacyMoveRecord = {
   sourcePath: string;
   targetPath: string;
@@ -50,7 +63,11 @@ type LegacyArchiveRecord = {
   label: string;
 };
 
+<<<<<<< HEAD
 export type MatrixStorageMetadata = {
+=======
+type StoredRootMetadata = {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   homeserver?: string;
   userId?: string;
   accountId?: string;
@@ -60,6 +77,7 @@ export type MatrixStorageMetadata = {
   createdAt?: string;
 };
 
+<<<<<<< HEAD
 export function openMatrixStorageMetaStoreOptions(storageRootDir: string) {
   return {
     namespace: STORAGE_META_NAMESPACE,
@@ -74,6 +92,8 @@ function openStorageMetaStore(rootDir: string): PluginStateSyncKeyedStore<Matrix
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveLegacyStoragePaths(env: NodeJS.ProcessEnv = process.env): {
   rootDir: string;
   storagePath: string;
@@ -105,11 +125,15 @@ function assertLegacyMigrationAccountSelection(params: { accountKey: string }): 
 
 function scoreStorageRoot(rootDir: string): number {
   let score = 0;
+<<<<<<< HEAD
   const metadata = readStoredRootMetadata(rootDir);
   if (Object.keys(metadata).length > 0) {
     score += 1;
   }
   if (metadata.currentTokenStateClaimed === true) {
+=======
+  if (readStoredRootMetadata(rootDir).currentTokenStateClaimed === true) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     score += 8;
   }
   if (fs.existsSync(path.join(rootDir, "crypto"))) {
@@ -128,6 +152,12 @@ function scoreStorageRoot(rootDir: string): number {
     score += 2;
   }
   score += scoreMatrixCryptoStateInStore(rootDir);
+<<<<<<< HEAD
+=======
+  if (fs.existsSync(path.join(rootDir, STORAGE_META_FILENAME))) {
+    score += 1;
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return score;
 }
 
@@ -139,6 +169,7 @@ function resolveStorageRootMtimeMs(rootDir: string): number {
   }
 }
 
+<<<<<<< HEAD
 export function normalizeMatrixStorageMetadata(value: unknown): MatrixStorageMetadata | null {
   if (!isRecord(value)) {
     return null;
@@ -197,6 +228,39 @@ function readStoredRootMetadata(rootDir: string): MatrixStorageMetadata {
   return (
     normalizeMatrixStorageMetadata(loadJsonFile(path.join(rootDir, STORAGE_META_FILENAME))) ?? {}
   );
+=======
+function readStoredRootMetadata(rootDir: string): StoredRootMetadata {
+  const metadata: StoredRootMetadata = {};
+
+  const parsed = loadJsonFile<Partial<StoredRootMetadata>>(
+    path.join(rootDir, STORAGE_META_FILENAME),
+  );
+  if (parsed) {
+    if (typeof parsed.homeserver === "string" && parsed.homeserver.trim()) {
+      metadata.homeserver = parsed.homeserver.trim();
+    }
+    if (typeof parsed.userId === "string" && parsed.userId.trim()) {
+      metadata.userId = parsed.userId.trim();
+    }
+    if (typeof parsed.accountId === "string" && parsed.accountId.trim()) {
+      metadata.accountId = parsed.accountId.trim();
+    }
+    if (typeof parsed.accessTokenHash === "string" && parsed.accessTokenHash.trim()) {
+      metadata.accessTokenHash = parsed.accessTokenHash.trim();
+    }
+    if (typeof parsed.deviceId === "string" && parsed.deviceId.trim()) {
+      metadata.deviceId = parsed.deviceId.trim();
+    }
+    if (parsed.currentTokenStateClaimed === true) {
+      metadata.currentTokenStateClaimed = true;
+    }
+    if (typeof parsed.createdAt === "string" && parsed.createdAt.trim()) {
+      metadata.createdAt = parsed.createdAt.trim();
+    }
+  }
+
+  return metadata;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function isCompatibleStorageRoot(params: {
@@ -367,6 +431,10 @@ export function resolveMatrixStoragePaths(params: {
     rootDir,
     storagePath: path.join(rootDir, "bot-storage.json"),
     cryptoPath: path.join(rootDir, "crypto"),
+<<<<<<< HEAD
+=======
+    metaPath: path.join(rootDir, STORAGE_META_FILENAME),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     recoveryKeyPath: path.join(rootDir, MATRIX_RECOVERY_KEY_FILENAME),
     idbSnapshotPath: path.join(rootDir, MATRIX_IDB_SNAPSHOT_FILENAME),
     accountKey: canonical.accountKey,
@@ -670,7 +738,11 @@ function rollbackLegacyMoves(moved: LegacyMoveRecord[]): string | null {
 }
 
 function writeStoredRootMetadata(
+<<<<<<< HEAD
   rootDir: string,
+=======
+  metaPath: string,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   payload: {
     homeserver?: string;
     userId?: string;
@@ -682,11 +754,15 @@ function writeStoredRootMetadata(
   },
 ): boolean {
   try {
+<<<<<<< HEAD
     const normalized = normalizeMatrixStorageMetadata(payload);
     if (!normalized) {
       return false;
     }
     openStorageMetaStore(rootDir).register(STORAGE_META_STATE_KEY, normalized);
+=======
+    saveJsonFile(metaPath, payload);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return true;
   } catch {
     return false;
@@ -702,7 +778,11 @@ export function writeStorageMeta(params: {
   currentTokenStateClaimed?: boolean;
 }): boolean {
   const existing = readStoredRootMetadata(params.storagePaths.rootDir);
+<<<<<<< HEAD
   return writeStoredRootMetadata(params.storagePaths.rootDir, {
+=======
+  return writeStoredRootMetadata(params.storagePaths.metaPath, {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     homeserver: params.homeserver,
     userId: params.userId,
     accountId: params.accountId ?? DEFAULT_ACCOUNT_KEY,
@@ -719,7 +799,11 @@ export function claimCurrentTokenStorageState(params: { rootDir: string }): bool
   if (!metadata.accessTokenHash?.trim()) {
     return false;
   }
+<<<<<<< HEAD
   return writeStoredRootMetadata(params.rootDir, {
+=======
+  return writeStoredRootMetadata(path.join(params.rootDir, STORAGE_META_FILENAME), {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     homeserver: metadata.homeserver,
     userId: metadata.userId,
     accountId: metadata.accountId ?? DEFAULT_ACCOUNT_KEY,
@@ -742,7 +826,11 @@ export function recordCurrentStorageMetaDeviceId(params: {
   if (!metadata.accessTokenHash?.trim()) {
     return false;
   }
+<<<<<<< HEAD
   return writeStoredRootMetadata(params.rootDir, {
+=======
+  return writeStoredRootMetadata(path.join(params.rootDir, STORAGE_META_FILENAME), {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     homeserver: metadata.homeserver,
     userId: metadata.userId,
     accountId: metadata.accountId ?? DEFAULT_ACCOUNT_KEY,

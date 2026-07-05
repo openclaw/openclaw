@@ -3,9 +3,24 @@ import { describe, expect, it } from "vitest";
 import {
   collectConfigDocBaselineEntries,
   dedupeConfigDocBaselineEntries,
+<<<<<<< HEAD
 } from "./doc-baseline.js";
 
 describe("config doc baseline", () => {
+=======
+  normalizeConfigDocBaselineHelpPath,
+} from "./doc-baseline.js";
+
+describe("config doc baseline", () => {
+  it("normalizes array and record paths to wildcard form", () => {
+    expect(normalizeConfigDocBaselineHelpPath("agents.list[].skills")).toBe("agents.list.*.skills");
+    expect(normalizeConfigDocBaselineHelpPath("session.sendPolicy.rules[0].match.keyPrefix")).toBe(
+      "session.sendPolicy.rules.*.match.keyPrefix",
+    );
+    expect(normalizeConfigDocBaselineHelpPath(".env.*.")).toBe("env.*");
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("merges tuple item metadata instead of dropping earlier entries", () => {
     const entries = dedupeConfigDocBaselineEntries(
       collectConfigDocBaselineEntries(

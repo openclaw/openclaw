@@ -63,6 +63,10 @@ export const nl: TranslationMap = {
     docs: "Docs",
     theme: "Thema",
     colorMode: "Kleurmodus",
+<<<<<<< HEAD
+=======
+    colorModeOption: "Kleurmodus: {mode}",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resources: "Bronnen",
     search: "Zoeken",
     save: "Opslaan",
@@ -202,7 +206,10 @@ export const nl: TranslationMap = {
     inherit: "overnemen",
     defaultOption: "Standaard ({value})",
     offExplicit: "uit (expliciet)",
+<<<<<<< HEAD
     auto: "auto",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     on: "aan",
     off: "uit",
     full: "volledig",
@@ -1447,7 +1454,10 @@ export const nl: TranslationMap = {
     jaJP: "日本語 (Japans)",
     ko: "한국어 (Koreaans)",
     fr: "Français (Frans)",
+<<<<<<< HEAD
     hi: "हिन्दी (Hindi)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ar: "العربية (Arabisch)",
     it: "Italiano (Italiaans)",
     tr: "Türkçe (Turks)",
@@ -1458,7 +1468,10 @@ export const nl: TranslationMap = {
     vi: "Tiếng Việt (Vietnamees)",
     nl: "Nederlands",
     fa: "فارسی (Perzisch)",
+<<<<<<< HEAD
     ru: "Русский (Russisch)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   cron: {
     quickCreate: {
@@ -1627,7 +1640,10 @@ export const nl: TranslationMap = {
       nextHeartbeat: "Volgende heartbeat",
       wakeModeHelp: "Nu triggert onmiddellijk. Volgende heartbeat wacht op de volgende cyclus.",
       payloadKind: "Wat moet er worden uitgevoerd?",
+<<<<<<< HEAD
       command: "Command",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       systemEvent: "Bericht plaatsen op main-tijdlijn",
       agentTurn: "Assistenttaak uitvoeren (geïsoleerd)",
       systemEventHelp:

@@ -130,6 +130,7 @@ describe("containerCheck", () => {
     expectFirstFetchCall("http://localhost:8080/v1/about", "GET");
   });
 
+<<<<<<< HEAD
   it("cancels /v1/about response bodies after simple health checks", async () => {
     const cancel = vi.fn(async () => undefined);
     mockFetch.mockResolvedValue({
@@ -146,6 +147,8 @@ describe("containerCheck", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("returns ok:false when /v1/about returns 404", async () => {
     mockFetch.mockResolvedValue({
       ok: false,
@@ -199,6 +202,7 @@ describe("containerCheck", () => {
       error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
     });
   });
+<<<<<<< HEAD
 
   it("rejects container receive endpoints that close before opening", async () => {
     wsMockState.behavior = "close";
@@ -212,6 +216,8 @@ describe("containerCheck", () => {
       error: "Signal container receive WebSocket closed before open (1000: done)",
     });
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("containerRestRequest", () => {
@@ -651,11 +657,17 @@ describe("containerFetchAttachment", () => {
   });
 
   it("returns null on non-ok response", async () => {
+<<<<<<< HEAD
     const cancel = vi.fn(async () => undefined);
     mockFetch.mockResolvedValue({
       ok: false,
       status: 404,
       body: { cancel },
+=======
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 404,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     const result = await containerFetchAttachment("attachment-123", {
@@ -663,7 +675,10 @@ describe("containerFetchAttachment", () => {
     });
 
     expect(result).toBeNull();
+<<<<<<< HEAD
     expect(cancel).toHaveBeenCalledTimes(1);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("encodes attachment ID in URL", async () => {

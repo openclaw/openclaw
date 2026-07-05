@@ -3,6 +3,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loginMiniMaxPortalOAuth, normalizeOAuthExpires } from "./oauth.js";
 
+<<<<<<< HEAD
 function cancelTrackedResponse(
   text: string,
   init: ResponseInit,
@@ -25,6 +26,8 @@ function cancelTrackedResponse(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -52,6 +55,7 @@ describe("normalizeOAuthExpires", () => {
 });
 
 describe("loginMiniMaxPortalOAuth", () => {
+<<<<<<< HEAD
   it("bounds authorization error bodies without using response.text()", async () => {
     const tracked = cancelTrackedResponse(
       `${"minimax authorization unavailable ".repeat(1024)}tail`,
@@ -162,6 +166,8 @@ describe("loginMiniMaxPortalOAuth", () => {
     expect(textSpy).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses MiniMax account OAuth endpoints directly for global and CN login", async () => {
     for (const [region, expectedHosts] of [
       [

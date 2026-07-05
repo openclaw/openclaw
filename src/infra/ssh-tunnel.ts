@@ -4,7 +4,11 @@ import net from "node:net";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { formatErrorMessage, isErrno } from "./errors.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
+<<<<<<< HEAD
 import { ensurePortAvailable, PortInUseError } from "./ports.js";
+=======
+import { ensurePortAvailable } from "./ports.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type SshParsedTarget = {
   user?: string;
@@ -21,6 +25,7 @@ export type SshTunnel = {
   stop: () => Promise<void>;
 };
 
+<<<<<<< HEAD
 // Reject hosts that would corrupt the SSH HostName field or enable argument
 // injection: a leading '-' becomes an ssh option, and a stray leading/trailing
 // ':' (e.g. sliced from "host::22") produces an invalid HostName.
@@ -28,6 +33,8 @@ function isMalformedHost(host: string): boolean {
   return host.startsWith("-") || host.startsWith(":") || host.endsWith(":");
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function parseSshTarget(raw: string): SshParsedTarget | null {
   const trimmed = raw.trim().replace(/^ssh\s+/, "");
   if (!trimmed) {
@@ -51,7 +58,12 @@ export function parseSshTarget(raw: string): SshParsedTarget | null {
     if (!host || port === undefined || port > 65535) {
       return null;
     }
+<<<<<<< HEAD
     if (isMalformedHost(host)) {
+=======
+    // Security: Reject hostnames starting with '-' to prevent argument injection
+    if (host.startsWith("-")) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return null;
     }
     return { user: userPart, host, port };
@@ -60,7 +72,12 @@ export function parseSshTarget(raw: string): SshParsedTarget | null {
   if (!hostPart) {
     return null;
   }
+<<<<<<< HEAD
   if (isMalformedHost(hostPart)) {
+=======
+  // Security: Reject hostnames starting with '-' to prevent argument injection
+  if (hostPart.startsWith("-")) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return null;
   }
   return { user: userPart, host: hostPart, port: 22 };
@@ -124,9 +141,15 @@ export async function startSshPortForward(opts: {
 
   let localPort = opts.localPortPreferred;
   try {
+<<<<<<< HEAD
     await ensurePortAvailable(localPort, "127.0.0.1");
   } catch (err) {
     if (err instanceof PortInUseError || (isErrno(err) && err.code === "EADDRINUSE")) {
+=======
+    await ensurePortAvailable(localPort);
+  } catch (err) {
+    if (isErrno(err) && err.code === "EADDRINUSE") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       localPort = await pickEphemeralPort();
     } else {
       throw err;
@@ -137,7 +160,11 @@ export async function startSshPortForward(opts: {
   const args = [
     "-N",
     "-L",
+<<<<<<< HEAD
     `127.0.0.1:${localPort}:127.0.0.1:${opts.remotePort}`,
+=======
+    `${localPort}:127.0.0.1:${opts.remotePort}`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     "-p",
     String(parsed.port),
     "-o",

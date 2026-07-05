@@ -254,7 +254,11 @@ describe("Codex plugin thread config", () => {
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "app/list") {
         appListParams.push(params as v2.AppsListParams);
+<<<<<<< HEAD
         return { data: [appInfo("google-calendar-app", true, false)], nextCursor: null };
+=======
+        return { data: [appInfo("google-calendar-app", true)], nextCursor: null };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
       if (method === "plugin/list") {
         return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
@@ -317,6 +321,7 @@ describe("Codex plugin thread config", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("re-enables an OpenClaw-allowed app even when app/list reports it disabled", async () => {
     const appCache = new CodexAppInventoryCache();
     await appCache.refreshNow({
@@ -428,6 +433,8 @@ describe("Codex plugin thread config", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not expose plugin apps missing from the app inventory snapshot", async () => {
     const appCache = new CodexAppInventoryCache();
     await appCache.refreshNow({
@@ -486,11 +493,16 @@ describe("Codex plugin thread config", () => {
           allowDestructiveActions: true,
           destructiveApprovalMode: "allow",
         },
+<<<<<<< HEAD
         message: "google-calendar-app is not accessible for google-calendar.",
+=======
+        message: "google-calendar-app is not accessible or enabled for google-calendar.",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     ]);
   });
 
+<<<<<<< HEAD
   it("does not expose apps for plugins that OpenClaw policy leaves disabled", async () => {
     const appCache = new CodexAppInventoryCache();
     await appCache.refreshNow({
@@ -539,6 +551,8 @@ describe("Codex plugin thread config", () => {
     expect(config.diagnostics).toStrictEqual([]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("force-refreshes app inventory when proven plugin apps are not ready", async () => {
     const appCache = new CodexAppInventoryCache();
     await appCache.refreshNow({
@@ -731,7 +745,13 @@ describe("Codex plugin thread config", () => {
     let installed = false;
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "plugin/list") {
+<<<<<<< HEAD
         return pluginList([pluginSummary("google-calendar", { installed, enabled: installed })]);
+=======
+        return pluginList([
+          pluginSummary("google-calendar", { installed, enabled: installed }),
+        ]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
       if (method === "plugin/read") {
         return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
@@ -895,6 +915,7 @@ describe("Codex plugin thread config", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("fails closed when app inventory entries are malformed", async () => {
     const appCache = new CodexAppInventoryCache();
     await appCache.refreshNow({
@@ -959,6 +980,8 @@ describe("Codex plugin thread config", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses durable policy and app cache key in the cheap input fingerprint", async () => {
     const appCache = new CodexAppInventoryCache();
     const first = buildCodexPluginThreadConfigInputFingerprint({

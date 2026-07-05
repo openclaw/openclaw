@@ -18,6 +18,13 @@ const coherePresetAppliers = createModelCatalogPresetAppliers({
   }),
 });
 
+<<<<<<< HEAD
+=======
+export function applyCohereProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return coherePresetAppliers.applyProviderConfig(cfg);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function applyCohereConfig(cfg: OpenClawConfig): OpenClawConfig {
   return coherePresetAppliers.applyConfig(cfg);
 }

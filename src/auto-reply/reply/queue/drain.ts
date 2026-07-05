@@ -66,7 +66,10 @@ type OriginRoutingMetadata = Pick<
   | "originatingTo"
   | "originatingAccountId"
   | "originatingThreadId"
+<<<<<<< HEAD
   | "originatingChatId"
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   | "originatingReplyToId"
   | "originatingReplyToMode"
   | "originatingChatType"
@@ -81,7 +84,10 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
         item.originatingTo ||
         item.originatingAccountId ||
         item.originatingThreadId != null ||
+<<<<<<< HEAD
         item.originatingChatId ||
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         item.originatingReplyToId ||
         item.originatingReplyToMode ||
         item.originatingChatType,
@@ -94,7 +100,10 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
     originatingTo: source.originatingTo,
     originatingAccountId: source.originatingAccountId,
     originatingThreadId: source.originatingThreadId,
+<<<<<<< HEAD
     originatingChatId: source.originatingChatId,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     originatingReplyToId: source.originatingReplyToId,
     originatingReplyToMode: source.originatingReplyToMode,
     originatingChatType: source.originatingChatType,
@@ -110,7 +119,10 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
 export function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string {
   return JSON.stringify([
     run.senderId ?? "",
+<<<<<<< HEAD
     JSON.stringify(run.channelContext ?? null),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     run.senderE164 ?? "",
     run.senderIsOwner === true,
     run.execOverrides?.host ?? "",
@@ -133,7 +145,10 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
       accountId: run.originatingAccountId,
       threadId: run.originatingThreadId,
     }),
+<<<<<<< HEAD
     run.originatingChatId ?? "",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resolveFollowupReplyAnchor(run) ?? "",
     run.originatingReplyToMode ?? "",
     normalizeChatType(run.originatingChatType) ?? "",
@@ -454,6 +469,7 @@ function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string
   const threadId = item.originatingThreadId;
   const replyToId = resolveFollowupReplyAnchor(item);
   const chatType = normalizeChatType(item.originatingChatType);
+<<<<<<< HEAD
   if (
     !channel &&
     !to &&
@@ -462,6 +478,9 @@ function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string
     !item.originatingChatId &&
     !replyToId
   ) {
+=======
+  if (!channel && !to && !accountId && (threadId == null || threadId === "") && !replyToId) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return chatType ? { key: JSON.stringify(["unresolved", chatType]) } : {};
   }
   if (!isRoutableChannel(channel) || !to) {
@@ -509,7 +528,10 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     originatingTo: source.originatingTo,
     originatingAccountId: source.originatingAccountId,
     originatingThreadId: source.originatingThreadId,
+<<<<<<< HEAD
     originatingChatId: source.originatingChatId,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     originatingReplyToId: source.originatingReplyToId,
     originatingReplyToMode: source.originatingReplyToMode,
     originatingChatType: source.originatingChatType,

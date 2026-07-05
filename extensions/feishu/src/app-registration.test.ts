@@ -1,21 +1,31 @@
 // Feishu tests cover app registration plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { beginAppRegistration, pollAppRegistration, printQrCode } from "./app-registration.js";
 
 const { fetchWithSsrFGuardMock, renderQrTerminalMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
   renderQrTerminalMock: vi.fn(async () => "terminal-qr"),
+=======
+import { beginAppRegistration, pollAppRegistration } from "./app-registration.js";
+
+const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
+  fetchWithSsrFGuardMock: vi.fn(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
+<<<<<<< HEAD
 vi.mock("./qr-terminal.js", () => ({
   renderQrTerminal: renderQrTerminalMock,
 }));
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function mockFeishuJson(payload: unknown) {
   fetchWithSsrFGuardMock.mockResolvedValueOnce({
     response: new Response(JSON.stringify(payload), { status: 200 }),
@@ -28,7 +38,10 @@ describe("Feishu app registration", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     fetchWithSsrFGuardMock.mockReset();
+<<<<<<< HEAD
     renderQrTerminalMock.mockClear();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("defaults unsafe begin polling lifetimes from provider responses", async () => {
@@ -65,6 +78,7 @@ describe("Feishu app registration", () => {
     await vi.runOnlyPendingTimersAsync();
     await expect(poll).resolves.toEqual({ status: "timeout" });
   });
+<<<<<<< HEAD
 
   it("prints scan-to-create QR codes with compact terminal rendering", async () => {
     const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -77,4 +91,6 @@ describe("Feishu app registration", () => {
     );
     expect(writeSpy).toHaveBeenCalledWith("terminal-qr\n");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

@@ -1824,12 +1824,19 @@ export function renderApp(state: AppViewState) {
               : typeof agentsDefaults.thinkingLevel === "string"
                 ? agentsDefaults.thinkingLevel
                 : "off";
+<<<<<<< HEAD
           const resolvedFastMode =
             activeSession?.effectiveFastMode ?? activeSession?.fastMode ?? agentsDefaults.fastMode;
           const fastMode =
             resolvedFastMode === "auto" || typeof resolvedFastMode === "boolean"
               ? resolvedFastMode
               : false;
+=======
+          const fastMode =
+            typeof activeSession?.fastMode === "boolean"
+              ? activeSession.fastMode
+              : agentsDefaults.fastMode === true;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           return renderQuickSettings({
             currentModel,
             thinkingLevel,
@@ -1844,8 +1851,13 @@ export function renderApp(state: AppViewState) {
                 requestHostUpdate?.(),
               );
             },
+<<<<<<< HEAD
             onFastModeChange: (mode) => {
               void patchSession(state, state.sessionKey, { fastMode: mode }).then(() =>
+=======
+            onFastModeToggle: () => {
+              void patchSession(state, state.sessionKey, { fastMode: !fastMode }).then(() =>
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 requestHostUpdate?.(),
               );
             },
@@ -3557,8 +3569,12 @@ export function renderApp(state: AppViewState) {
                 },
                 onClawHubDetailOpen: (slug) => void loadClawHubDetail(state, slug),
                 onClawHubDetailClose: () => closeClawHubDetail(state),
+<<<<<<< HEAD
                 onClawHubInstall: (slug, acknowledgeClawHubRisk, version) =>
                   void installFromClawHub(state, slug, acknowledgeClawHubRisk, version),
+=======
+                onClawHubInstall: (slug) => void installFromClawHub(state, slug),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               }),
             )
           : nothing}

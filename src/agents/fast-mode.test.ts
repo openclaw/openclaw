@@ -1,6 +1,7 @@
 // Verifies fast-mode precedence across session, agent, and model defaults.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+<<<<<<< HEAD
 import {
   formatFastModeAutoLabel,
   formatFastModeAutoProgressText,
@@ -11,6 +12,9 @@ import {
   resolveFastModeForElapsed,
   resolveFastModeState,
 } from "./fast-mode.js";
+=======
+import { resolveFastModeState } from "./fast-mode.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("resolveFastModeState", () => {
   it("prefers session overrides", () => {
@@ -22,6 +26,7 @@ describe("resolveFastModeState", () => {
     });
 
     expect(state.enabled).toBe(true);
+<<<<<<< HEAD
     expect(state.mode).toBe(true);
     expect(state.source).toBe("session");
   });
@@ -38,6 +43,11 @@ describe("resolveFastModeState", () => {
     expect(state.enabled).toBe(true);
   });
 
+=======
+    expect(state.source).toBe("session");
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses agent fastModeDefault when present", () => {
     const cfg = {
       agents: {
@@ -77,6 +87,7 @@ describe("resolveFastModeState", () => {
     expect(state.source).toBe("config");
   });
 
+<<<<<<< HEAD
   it("uses OpenAI model config for the Codex app-server runtime provider", () => {
     const cfg = {
       agents: {
@@ -194,6 +205,8 @@ describe("resolveFastModeState", () => {
     expect(state.fastAutoOnSeconds).toBe(15);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses model config when the runtime passes a provider-qualified model ref", () => {
     const cfg = {
       agents: {
@@ -272,6 +285,7 @@ describe("resolveFastModeState", () => {
     expect(state.source).toBe("default");
   });
 });
+<<<<<<< HEAD
 
 describe("resolveFastModeForElapsed", () => {
   it("keeps auto on through the exact threshold", () => {
@@ -361,3 +375,5 @@ describe("resolveFastModeForElapsed", () => {
     ).toBe("💨Fast: auto-on");
   });
 });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

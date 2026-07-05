@@ -6,13 +6,19 @@ import {
   imageSourceUploadFileName,
   parseImageDataUrl,
   parseOpenAiCompatibleImageResponse,
+<<<<<<< HEAD
   resolveInlineImageJsonResponseMaxBytes,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sniffImageMimeType,
   toImageDataUrl,
 } from "./image-assets.js";
 
+<<<<<<< HEAD
 const DEFAULT_TEST_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("image asset helpers", () => {
   it("converts buffers to image data URLs and parses them back", () => {
     const buffer = Buffer.from("png-bytes");
@@ -49,6 +55,7 @@ describe("image asset helpers", () => {
     expect(imageFileExtensionForMimeType(undefined, "jpg")).toBe("jpg");
   });
 
+<<<<<<< HEAD
   it("sizes inline image JSON caps from decoded image payload limits", () => {
     expect(resolveInlineImageJsonResponseMaxBytes(4, DEFAULT_TEST_IMAGE_MAX_BYTES)).toBe(
       34_603_008,
@@ -59,6 +66,8 @@ describe("image asset helpers", () => {
     expect(resolveInlineImageJsonResponseMaxBytes(2, 8 * 1024 * 1024)).toBe(23_418_198);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("sniffs common generated image types", () => {
     expect(sniffImageMimeType(Buffer.from([0xff, 0xd8, 0xff]))).toEqual({
       mimeType: "image/jpeg",

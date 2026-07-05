@@ -35,10 +35,13 @@ import {
   fetchGoogleMeetSpace,
 } from "./src/meet.js";
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
+<<<<<<< HEAD
 import {
   createGoogleMeetChromeNodeInvokePolicy,
   GOOGLE_MEET_CHROME_NODE_COMMAND,
 } from "./src/node-invoke-policy.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { GoogleMeetRuntime } from "./src/runtime.js";
 import { isGoogleMeetBrowserManualActionError } from "./src/transports/chrome-create.js";
 
@@ -1200,12 +1203,19 @@ export default definePluginEntry({
     );
 
     api.registerNodeHostCommand({
+<<<<<<< HEAD
       command: GOOGLE_MEET_CHROME_NODE_COMMAND,
       cap: "google-meet",
       dangerous: true,
       handle: handleGoogleMeetNodeHostCommand,
     });
     api.registerNodeInvokePolicy(createGoogleMeetChromeNodeInvokePolicy(config));
+=======
+      command: "googlemeet.chrome",
+      cap: "google-meet",
+      handle: handleGoogleMeetNodeHostCommand,
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     api.registerCli(
       async ({ program }) => {

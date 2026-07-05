@@ -138,6 +138,15 @@ export class Row<T extends BaseMessageInteractiveComponent> extends BaseComponen
   addComponent(component: T): void {
     this.components.push(component);
   }
+<<<<<<< HEAD
+=======
+  removeComponent(component: T): void {
+    this.components = this.components.filter((entry) => entry !== component);
+  }
+  removeAllComponents(): void {
+    this.components = [];
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   serialize(): APIActionRowComponent<APIComponentInMessageActionRow> {
     return {
       type: this.type,

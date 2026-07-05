@@ -1,7 +1,10 @@
 // Gateway RPC handlers for skill discovery, install/update, and proposal workflows.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+<<<<<<< HEAD
   buildClawHubTrustErrorDetails,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ErrorCodes,
   errorShape,
   validateSkillsBinsParams,
@@ -119,12 +122,15 @@ function respondSkillWorkshopError(respond: RespondFn, err: unknown) {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(err)));
 }
 
+<<<<<<< HEAD
 function collectClawHubTrustWarnings(results: Array<{ warning?: string }>): string[] {
   return results
     .map((result) => normalizeOptionalString(result.warning))
     .filter((warning): warning is string => Boolean(warning));
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function buildRevisionAgentInstruction(proposal: Awaited<ReturnType<typeof inspectSkillProposal>>) {
   if (!proposal) {
     return "";
@@ -546,17 +552,25 @@ export const skillsHandlers: GatewayRequestHandlers = {
         slug: string;
         version?: string;
         force?: boolean;
+<<<<<<< HEAD
         acknowledgeClawHubRisk?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       };
       const result = await installSkillFromClawHub({
         workspaceDir: workspaceDirRaw,
         slug: p.slug,
         version: p.version,
         force: Boolean(p.force),
+<<<<<<< HEAD
         ...(p.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
         config: cfg,
       });
       const errorDetails = result.ok ? undefined : buildClawHubTrustErrorDetails(result);
+=======
+        config: cfg,
+      });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       respond(
         result.ok,
         result.ok
@@ -569,6 +583,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
               slug: result.slug,
               version: result.version,
               targetDir: result.targetDir,
+<<<<<<< HEAD
               ...(result.warning ? { warning: result.warning } : {}),
             }
           : result,
@@ -579,6 +594,11 @@ export const skillsHandlers: GatewayRequestHandlers = {
               result.error,
               errorDetails ? { details: errorDetails } : undefined,
             ),
+=======
+            }
+          : result,
+        result.ok ? undefined : errorShape(ErrorCodes.UNAVAILABLE, result.error),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       );
       return;
     }
@@ -646,7 +666,10 @@ export const skillsHandlers: GatewayRequestHandlers = {
         source: "clawhub";
         slug?: string;
         all?: boolean;
+<<<<<<< HEAD
         acknowledgeClawHubRisk?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       };
       if (!p.slug && !p.all) {
         respond(
@@ -675,11 +698,17 @@ export const skillsHandlers: GatewayRequestHandlers = {
       const results = await updateSkillsFromClawHub({
         workspaceDir: resolved.workspaceDir,
         slug: p.slug,
+<<<<<<< HEAD
         ...(p.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
         config: resolved.cfg,
       });
       const errors = results.filter((result) => !result.ok);
       const warnings = collectClawHubTrustWarnings(results);
+=======
+        config: resolved.cfg,
+      });
+      const errors = results.filter((result) => !result.ok);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       respond(
         errors.length === 0,
         {
@@ -692,12 +721,16 @@ export const skillsHandlers: GatewayRequestHandlers = {
         },
         errors.length === 0
           ? undefined
+<<<<<<< HEAD
           : errorShape(ErrorCodes.UNAVAILABLE, errors.map((result) => result.error).join("; "), {
               details: {
                 results,
                 ...(warnings.length > 0 ? { warnings } : {}),
               },
             }),
+=======
+          : errorShape(ErrorCodes.UNAVAILABLE, errors.map((result) => result.error).join("; ")),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       );
       return;
     }

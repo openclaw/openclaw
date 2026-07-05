@@ -1,11 +1,18 @@
 // Resolves ACP command target sessions from user text and active state.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { callGateway } from "../../../gateway/call.js";
+<<<<<<< HEAD
 import { SESSION_ID_RE } from "../../../sessions/session-id.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveEffectiveResetTargetSessionKey } from "../acp-reset-target.js";
 import { resolveRequesterSessionKey } from "../commands-subagents/shared.js";
 import type { HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandBindingContext } from "./context.js";
+<<<<<<< HEAD
+=======
+import { SESSION_ID_RE } from "./shared.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 async function resolveSessionKeyByToken(token: string): Promise<string | null> {
   const trimmed = token.trim();

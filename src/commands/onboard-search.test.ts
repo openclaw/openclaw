@@ -96,6 +96,7 @@ function createSearchProviderEntry(id: string): PluginWebSearchProviderEntry {
       >;
       entries[metadata.pluginId] = { ...entries[metadata.pluginId], enabled: true };
       next.plugins = { ...next.plugins, entries };
+<<<<<<< HEAD
       if (id !== "firecrawl" || next.tools?.web?.fetch?.provider) {
         return next;
       }
@@ -109,6 +110,9 @@ function createSearchProviderEntry(id: string): PluginWebSearchProviderEntry {
           },
         },
       };
+=======
+      return next;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
   };
   if (id === "kimi") {
@@ -403,7 +407,11 @@ describe("setupSearch", () => {
       });
       const result = await setupSearch(cfg, runtime, prompter);
       expect(result.tools?.web?.search?.provider).toBe("brave");
+<<<<<<< HEAD
       expect(result.tools?.web?.search?.enabled).toBe(false);
+=======
+      expect(result.tools?.web?.search?.enabled).toBeUndefined();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const missingNote = notes.find((n) => n.message.includes("No Brave Search API key stored"));
       expect(missingNote?.message).toContain("No Brave Search API key stored");
     } finally {
@@ -415,6 +423,7 @@ describe("setupSearch", () => {
     }
   });
 
+<<<<<<< HEAD
   it("keeps keyless Firecrawl fetch configured when search setup has no key", async () => {
     const original = process.env.FIRECRAWL_API_KEY;
     delete process.env.FIRECRAWL_API_KEY;
@@ -439,6 +448,8 @@ describe("setupSearch", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps existing key when user leaves input blank", async () => {
     const result = await runBlankPerplexityKeyEntry(
       "existing-key", // pragma: allowlist secret
@@ -517,7 +528,11 @@ describe("setupSearch", () => {
       });
       expect(prompter.text).toHaveBeenCalled();
       expect(result.tools?.web?.search?.provider).toBe("grok");
+<<<<<<< HEAD
       expect(result.tools?.web?.search?.enabled).toBe(false);
+=======
+      expect(result.tools?.web?.search?.enabled).toBeUndefined();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } finally {
       if (original === undefined) {
         delete process.env.XAI_API_KEY;

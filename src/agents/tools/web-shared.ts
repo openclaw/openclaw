@@ -285,9 +285,12 @@ export async function readResponseText(
         // let cleanup turn a bounded read into a hung fetch.
         void reader.cancel().catch(() => undefined);
       }
+<<<<<<< HEAD
       try {
         reader.releaseLock();
       } catch {}
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
 
     const bytes = concatBytes(parts, bytesRead);

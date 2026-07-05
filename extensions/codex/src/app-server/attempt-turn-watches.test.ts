@@ -1,7 +1,10 @@
 // Codex tests cover attempt turn watches plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { updateActiveCompletionBlockerItemIds } from "./attempt-notifications.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createCodexAttemptTurnWatchController } from "./attempt-turn-watches.js";
 
 describe("Codex app-server attempt turn watches", () => {
@@ -24,7 +27,10 @@ describe("Codex app-server attempt turn watches", () => {
     let terminalQueued = false;
     let activeRequests = 0;
     let activeItems = 0;
+<<<<<<< HEAD
     let activeCompletionBlockers = 0;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const interrupts: Array<Record<string, unknown>> = [];
     const timeouts: Array<Record<string, unknown>> = [];
     const events: Array<{ name: string; fields: Record<string, unknown> }> = [];
@@ -38,7 +44,10 @@ describe("Codex app-server attempt turn watches", () => {
       isTerminalTurnNotificationQueued: () => terminalQueued,
       getActiveAppServerTurnRequests: () => activeRequests,
       getActiveTurnItemCount: () => activeItems,
+<<<<<<< HEAD
       getActiveCompletionBlockerItemCount: () => activeCompletionBlockers,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       turnCompletionIdleTimeoutMs: 10,
       turnAssistantCompletionIdleTimeoutMs: 10,
       turnAttemptIdleTimeoutMs: 10,
@@ -72,9 +81,12 @@ describe("Codex app-server attempt turn watches", () => {
       set activeItems(value: number) {
         activeItems = value;
       },
+<<<<<<< HEAD
       set activeCompletionBlockers(value: number) {
         activeCompletionBlockers = value;
       },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       interrupts,
       timeouts,
       events,
@@ -161,6 +173,7 @@ describe("Codex app-server attempt turn watches", () => {
     expect(harness.abortController.signal.aborted).toBe(false);
   });
 
+<<<<<<< HEAD
   it("waits for active completion blocker items before firing completion idle timeout", () => {
     const harness = createController();
     harness.activeCompletionBlockers = 1;
@@ -187,6 +200,8 @@ describe("Codex app-server attempt turn watches", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("releases a completed assistant item after the assistant idle guard expires", () => {
     const harness = createController();
 
@@ -246,6 +261,7 @@ describe("Codex app-server attempt turn watches", () => {
     expect(harness.abortController.signal.reason).toBe("turn_progress_idle_timeout");
   });
 });
+<<<<<<< HEAD
 
 describe("Codex completion blocker item tracking", () => {
   it.each([
@@ -284,3 +300,5 @@ describe("Codex completion blocker item tracking", () => {
     },
   );
 });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

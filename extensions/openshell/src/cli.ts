@@ -9,7 +9,10 @@ import type { ResolvedOpenShellPluginConfig } from "./config.js";
 
 export {
   buildExecRemoteCommand,
+<<<<<<< HEAD
   buildRemoteWorkdirValidationCommand,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   buildValidatedExecRemoteCommand,
   shellEscape,
 } from "openclaw/plugin-sdk/sandbox";

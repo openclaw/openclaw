@@ -26,6 +26,21 @@ export function resolvePinnedNpmSpec(params: {
   };
 }
 
+<<<<<<< HEAD
+=======
+/** Convert npm resolver metadata into persisted install-record fields. */
+export function mapNpmResolutionMetadata(resolution?: NpmResolutionMetadata): {
+  resolvedName?: string;
+  resolvedVersion?: string;
+  resolvedSpec?: string;
+  integrity?: string;
+  shasum?: string;
+  resolvedAt?: string;
+} {
+  return buildNpmResolutionFields(resolution);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Build the npm section of a plugin install record. */
 export function buildNpmInstallRecordFields(params: {
   spec: string;

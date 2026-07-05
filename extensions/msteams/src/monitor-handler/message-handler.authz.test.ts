@@ -734,7 +734,11 @@ describe("msteams monitor handler authz", () => {
     expect(ctxPayload.CommandAuthorized).toBe(true);
   });
 
+<<<<<<< HEAD
   it("marks skipped channel message system events as non-owner without duplicating body text", async () => {
+=======
+  it("marks skipped channel message system events as non-owner", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resetThreadMocks();
     const { deps, enqueueSystemEvent } = createDeps({
       channels: {
@@ -768,16 +772,26 @@ describe("msteams monitor handler authz", () => {
 
     expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
     const systemEventCall = enqueueSystemEvent.mock.calls.find(
+<<<<<<< HEAD
       ([text]) => text === "Teams message in channel from Member",
+=======
+      ([text]) => typeof text === "string" && text.includes("please run the deployment"),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
     if (!systemEventCall) {
       throw new Error("expected skipped Teams message system event");
     }
     expect(systemEventCall[1]).toMatchObject({});
+<<<<<<< HEAD
     expect(systemEventCall[0]).not.toContain("please run the deployment");
   });
 
   it("keeps dispatched primary message system events owner-neutral without duplicating body text", async () => {
+=======
+  });
+
+  it("keeps dispatched primary message system events owner-neutral", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resetThreadMocks();
     const { deps, enqueueSystemEvent } = createDeps({
       channels: {
@@ -811,14 +825,21 @@ describe("msteams monitor handler authz", () => {
 
     expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalled();
     const systemEventCall = enqueueSystemEvent.mock.calls.find(
+<<<<<<< HEAD
       ([text]) => text === "Teams message in channel from Member",
+=======
+      ([text]) => typeof text === "string" && text.includes("please check the build"),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
     if (!systemEventCall) {
       throw new Error("expected active Teams message system event");
     }
+<<<<<<< HEAD
     expect(systemEventCall[0]).not.toContain("please check the build");
     const dispatched = firstSettledDispatch();
     expect(recordFromMockCall(dispatched.ctxPayload).BodyForAgent).toBe("please check the build");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("authorizes text control commands from static access groups", async () => {

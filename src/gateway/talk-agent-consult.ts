@@ -18,6 +18,7 @@ import type {
 import { registerTalkRealtimeRelayAgentRun } from "./talk-realtime-relay.js";
 import { formatForLog } from "./ws-log.js";
 
+<<<<<<< HEAD
 type TalkChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
 
 function normalizeTalkChatSendAckStatus(result: unknown): TalkChatSendAckStatus {
@@ -52,6 +53,8 @@ function terminalTalkChatSendAckError(status: TalkChatSendAckStatus): ErrorShape
   return undefined;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Starts the agent-consult chat run that backs realtime Talk tool calls.
  */
@@ -117,10 +120,13 @@ export async function startTalkRealtimeAgentConsult(params: {
     return { ok: false, error: chatResponse.error };
   }
   const result = chatResponse.result;
+<<<<<<< HEAD
   const terminalAckError = terminalTalkChatSendAckError(normalizeTalkChatSendAckStatus(result));
   if (terminalAckError) {
     return { ok: false, error: terminalAckError };
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const runId =
     result && typeof result === "object" && !Array.isArray(result)
       ? typeof (result as Record<string, unknown>).runId === "string"

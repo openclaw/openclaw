@@ -8,8 +8,14 @@ import type {
   SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
 import { createWritableRenameTargetResolver } from "openclaw/plugin-sdk/sandbox";
+<<<<<<< HEAD
 import { FsSafeError, isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
+=======
+import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
+import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
+import { movePathWithCopyFallback } from "./mirror.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type ResolvedMountPath = SandboxResolvedPath & {
   mountHostRoot: string;
@@ -17,9 +23,12 @@ type ResolvedMountPath = SandboxResolvedPath & {
   source: "workspace" | "agent" | "protectedSkill";
 };
 
+<<<<<<< HEAD
 type FsSafeRoot = Awaited<ReturnType<typeof fsRoot>>;
 type FsSafeStat = Awaited<ReturnType<FsSafeRoot["stat"]>>;
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const MATERIALIZED_SKILLS_CONTAINER_PARTS = [".openclaw", "sandbox-skills", "skills"] as const;
 
 export function createOpenShellFsBridge(params: {
@@ -119,7 +128,11 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowFinalSymlinkForUnlink: false,
     });
     await this.backend.mkdirpRemotePath(target.containerPath, params.signal);
+<<<<<<< HEAD
     await mkdirLocalRootPath({ hostPath, target });
+=======
+    await fsPromises.mkdir(hostPath, { recursive: true });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   async remove(params: {
@@ -143,11 +156,17 @@ class OpenShellFsBridge implements SandboxFsBridge {
       signal: params.signal,
       ignoreMissing: params.force !== false,
     });
+<<<<<<< HEAD
     await removeLocalRootPath({
       force: params.force,
       hostPath,
       recursive: params.recursive,
       target,
+=======
+    await fsPromises.rm(hostPath, {
+      recursive: params.recursive ?? false,
+      force: params.force !== false,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   }
 
@@ -172,6 +191,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowMissingLeaf: true,
       allowFinalSymlinkForUnlink: false,
     });
+<<<<<<< HEAD
     await assertRenameSourceSupported(fromHostPath);
     if (from.mountHostRoot !== to.mountHostRoot) {
       throw new Error("OpenShell cross-root mirror renames require pinned fs-safe support");
@@ -183,6 +203,11 @@ class OpenShellFsBridge implements SandboxFsBridge {
     });
     await this.backend.renameRemotePath(from.containerPath, to.containerPath, params.signal);
     await moveLocalRootPath({ from, fromHostPath, to, toHostPath });
+=======
+    await this.backend.renameRemotePath(from.containerPath, to.containerPath, params.signal);
+    await fsPromises.mkdir(path.dirname(toHostPath), { recursive: true });
+    await movePathWithCopyFallback({ from: fromHostPath, to: toHostPath });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   async stat(params: {
@@ -355,6 +380,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
   }
 }
 
+<<<<<<< HEAD
 async function mkdirLocalRootPath(params: {
   target: ResolvedMountPath;
   hostPath: string;
@@ -511,6 +537,8 @@ function isNotFoundError(err: unknown): boolean {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveProtectedSkillTarget(params: {
   input: string;
   skillsRoot: string;
@@ -589,11 +617,15 @@ async function assertLocalPathSafety(params: {
   const canonicalRoot = await fsPromises
     .realpath(params.root)
     .catch(() => path.resolve(params.root));
+<<<<<<< HEAD
   const targetStats = await fsPromises.lstat(params.target.hostPath).catch(() => null);
   const candidate =
     params.allowFinalSymlinkForUnlink && targetStats?.isSymbolicLink()
       ? path.resolve(canonicalRoot, path.relative(params.root, params.target.hostPath))
       : await resolveCanonicalCandidate(params.target.hostPath);
+=======
+  const candidate = await resolveCanonicalCandidate(params.target.hostPath);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!isPathInside(canonicalRoot, candidate)) {
     throw new Error(
       `Sandbox path escapes allowed mounts; cannot access: ${params.target.containerPath}`,

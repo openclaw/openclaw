@@ -13,9 +13,12 @@ export const CLAWHUB_INSTALL_ERROR_CODE = {
   MISSING_ARCHIVE_INTEGRITY: "missing_archive_integrity",
   ARTIFACT_DOWNLOAD_UNAVAILABLE: "artifact_download_unavailable",
   ARCHIVE_INTEGRITY_MISMATCH: "archive_integrity_mismatch",
+<<<<<<< HEAD
   CLAWHUB_SECURITY_UNAVAILABLE: "clawhub_security_unavailable",
   CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED: "clawhub_risk_acknowledgement_required",
   CLAWHUB_DOWNLOAD_BLOCKED: "clawhub_download_blocked",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } as const;
 
 /** Union of stable ClawHub install error code values. */

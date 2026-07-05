@@ -1,10 +1,14 @@
 // Outbound payload planning normalizes reply payloads into sendable text,
 // media, presentation, interactive, and mirror projections.
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+<<<<<<< HEAD
 import {
   mergeReactionDirectiveChannelData,
   parseReplyDirectives,
 } from "../../auto-reply/reply/reply-directives.js";
+=======
+import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   formatBtwTextForExternalDelivery,
   isRenderablePayload,
@@ -229,7 +233,10 @@ function createOutboundPayloadPlanEntry(
   const isSilent = strippedParsed.isSilent && mergedMedia.length === 0;
   const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
   const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
+<<<<<<< HEAD
   const channelData = mergeReactionDirectiveChannelData(payload.channelData, parsed.reaction);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const normalizedPayload: ReplyPayload = {
     ...payload,
     text:
@@ -243,7 +250,10 @@ function createOutboundPayloadPlanEntry(
     replyToTag: payload.replyToTag || parsed.replyToTag,
     replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
     audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
+<<<<<<< HEAD
     ...(channelData ? { channelData } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
   if (!isRenderablePayload(normalizedPayload) && !isSilent) {
     return null;

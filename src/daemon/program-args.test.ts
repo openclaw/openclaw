@@ -1,8 +1,11 @@
 // Daemon program argument tests cover CLI argument construction for services.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { resetWindowsInstallRootsForTests } from "../infra/windows-install-roots.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const childProcessMocks = vi.hoisted(() => ({
   execFileSync: vi.fn(),
@@ -45,8 +48,11 @@ const originalArgv = [...process.argv];
 afterEach(() => {
   process.argv = [...originalArgv];
   vi.resetAllMocks();
+<<<<<<< HEAD
   vi.unstubAllEnvs();
   resetWindowsInstallRootsForTests();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("resolveGatewayProgramArguments", () => {
@@ -183,6 +189,7 @@ describe("resolveGatewayProgramArguments", () => {
     expect(result.workingDirectory).toBe(path.resolve("/repo"));
   });
 
+<<<<<<< HEAD
   it("uses trusted Windows where.exe when resolving dev runtime binaries", async () => {
     const repoIndexPath = path.resolve("/repo/src/index.ts");
     const repoEntryPath = path.resolve("/repo/src/entry.ts");
@@ -216,6 +223,8 @@ describe("resolveGatewayProgramArguments", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses an executable wrapper when provided", async () => {
     const wrapperPath = path.resolve("/usr/local/bin/openclaw-doppler");
     fsMocks.stat.mockResolvedValue({ isFile: () => true } as never);

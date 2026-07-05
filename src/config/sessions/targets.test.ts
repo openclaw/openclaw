@@ -8,6 +8,10 @@ import type { OpenClawConfig } from "../config.js";
 import { resolveStorePath } from "./paths.js";
 import {
   resolveAgentSessionStoreTargetsSync,
+<<<<<<< HEAD
+=======
+  resolveAllAgentSessionStoreTargets,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveAllAgentSessionStoreTargetsSync,
   resolveSessionStoreTargets,
 } from "./targets.js";
@@ -56,7 +60,11 @@ async function resolveTargetsForCustomRoot(home: string, agentIds: string[]) {
   const customRoot = path.join(home, "custom-state");
   const storePaths = await createAgentSessionStores(customRoot, agentIds);
   const cfg = createCustomRootCfg(customRoot);
+<<<<<<< HEAD
   const targets = resolveAllAgentSessionStoreTargetsSync(cfg, { env: process.env });
+=======
+  const targets = await resolveAllAgentSessionStoreTargets(cfg, { env: process.env });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return { storePaths, targets };
 }
 
@@ -71,6 +79,22 @@ function expectTargetsToContainStores(
   }
 }
 
+<<<<<<< HEAD
+=======
+const discoveryResolvers = [
+  {
+    label: "async",
+    resolve: async (cfg: OpenClawConfig, env: NodeJS.ProcessEnv) =>
+      await resolveAllAgentSessionStoreTargets(cfg, { env }),
+  },
+  {
+    label: "sync",
+    resolve: async (cfg: OpenClawConfig, env: NodeJS.ProcessEnv) =>
+      resolveAllAgentSessionStoreTargetsSync(cfg, { env }),
+  },
+] as const;
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("resolveSessionStoreTargets", () => {
   it("resolves all configured agent stores", async () => {
     await withTempHome(async () => {
@@ -212,7 +236,11 @@ describe("resolveAgentSessionStoreTargetsSync", () => {
   });
 });
 
+<<<<<<< HEAD
 describe("resolveAllAgentSessionStoreTargetsSync", () => {
+=======
+describe("resolveAllAgentSessionStoreTargets", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("includes discovered on-disk agent stores alongside configured targets", async () => {
     await withTempHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
@@ -224,7 +252,11 @@ describe("resolveAllAgentSessionStoreTargetsSync", () => {
         },
       };
 
+<<<<<<< HEAD
       const targets = resolveAllAgentSessionStoreTargetsSync(cfg, { env: process.env });
+=======
+      const targets = await resolveAllAgentSessionStoreTargets(cfg, { env: process.env });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       expectTargetsToContainStores(targets, storePaths);
       expect(countMatching(targets, (target) => target.storePath === storePaths.ops)).toBe(1);
@@ -274,7 +306,11 @@ describe("resolveAllAgentSessionStoreTargetsSync", () => {
       const mainStorePath = await resolveRealStorePath(mainSessionsDir);
       const retiredStorePath = await resolveRealStorePath(retiredSessionsDir);
 
+<<<<<<< HEAD
       const targets = resolveAllAgentSessionStoreTargetsSync(cfg, { env });
+=======
+      const targets = await resolveAllAgentSessionStoreTargets(cfg, { env });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       expect(
         targets.some((target) => target.agentId === "main" && target.storePath === mainStorePath),
@@ -287,6 +323,7 @@ describe("resolveAllAgentSessionStoreTargetsSync", () => {
     });
   });
 
+<<<<<<< HEAD
   it("skips unreadable or invalid discovery roots when other roots are still readable", async () => {
     await withTempHome(async (home) => {
       const customRoot = path.join(home, "custom-state");
@@ -333,6 +370,54 @@ describe("resolveAllAgentSessionStoreTargetsSync", () => {
       ).toBe(false);
     });
   });
+=======
+  for (const resolver of discoveryResolvers) {
+    it(`skips unreadable or invalid discovery roots when other roots are still readable (${resolver.label})`, async () => {
+      await withTempHome(async (home) => {
+        const customRoot = path.join(home, "custom-state");
+        await fs.mkdir(customRoot, { recursive: true });
+        await fs.writeFile(path.join(customRoot, "agents"), "not-a-directory", "utf8");
+
+        const envStateDir = path.join(home, "env-state");
+        const storePaths = await createAgentSessionStores(envStateDir, ["main", "retired"]);
+        const cfg = createCustomRootCfg(customRoot, "main");
+        const env = {
+          ...process.env,
+          OPENCLAW_STATE_DIR: envStateDir,
+        };
+
+        const targets = await resolver.resolve(cfg, env);
+        expect(
+          targets.some(
+            (target) => target.agentId === "retired" && target.storePath === storePaths.retired,
+          ),
+        ).toBe(true);
+      });
+    });
+
+    it(`skips symlinked discovered stores under templated agents roots (${resolver.label})`, async () => {
+      await withTempHome(async (home) => {
+        if (process.platform === "win32") {
+          return;
+        }
+        const customRoot = path.join(home, "custom-state");
+        const opsSessionsDir = path.join(customRoot, "agents", "ops", "sessions");
+        const leakedFile = path.join(home, "outside.json");
+        await fs.mkdir(opsSessionsDir, { recursive: true });
+        await fs.writeFile(leakedFile, JSON.stringify({ leak: { secret: "x" } }), "utf8");
+        await fs.symlink(leakedFile, path.join(opsSessionsDir, "sessions.json"));
+
+        const targets = await resolver.resolve(createCustomRootCfg(customRoot), process.env);
+        const symlinkStoreSuffix = path.join("ops", "sessions", "sessions.json");
+        expect(
+          targets.some(
+            (target) => target.agentId === "ops" && target.storePath.includes(symlinkStoreSuffix),
+          ),
+        ).toBe(false);
+      });
+    });
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   it("skips discovered directories that only normalize into the default main agent", async () => {
     await withTempHome(async (home) => {
@@ -346,7 +431,11 @@ describe("resolveAllAgentSessionStoreTargetsSync", () => {
 
       const cfg: OpenClawConfig = {};
       const mainStorePath = await resolveRealStorePath(mainSessionsDir);
+<<<<<<< HEAD
       const targets = resolveAllAgentSessionStoreTargetsSync(cfg, { env: process.env });
+=======
+      const targets = await resolveAllAgentSessionStoreTargets(cfg, { env: process.env });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       expect(targets).toEqual([
         {

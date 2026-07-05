@@ -4,7 +4,10 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { pathExists, writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
+<<<<<<< HEAD
 import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   type CommandRunner,
   type CrabboxInspect,
@@ -142,6 +145,19 @@ const CRABBOX_KEEP_ENV = "OPENCLAW_MANTIS_KEEP_VM";
 const CRABBOX_IDLE_TIMEOUT_ENV = "OPENCLAW_MANTIS_CRABBOX_IDLE_TIMEOUT";
 const CRABBOX_TTL_ENV = "OPENCLAW_MANTIS_CRABBOX_TTL";
 
+<<<<<<< HEAD
+=======
+function trimToValue(value: string | undefined) {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+function isTruthyOptIn(value: string | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function defaultOutputDir(repoRoot: string, startedAt: Date) {
   const stamp = startedAt.toISOString().replace(/[:.]/gu, "-");
   return path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", `visual-task-${stamp}`);

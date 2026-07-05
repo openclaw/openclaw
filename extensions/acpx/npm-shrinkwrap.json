@@ -1,16 +1,28 @@
 {
   "name": "@openclaw/acpx",
+<<<<<<< HEAD
   "version": "2026.6.10",
+=======
+  "version": "2026.6.8",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/acpx",
+<<<<<<< HEAD
       "version": "2026.6.10",
       "dependencies": {
         "@agentclientprotocol/claude-agent-acp": "0.39.0",
         "@zed-industries/codex-acp": "0.15.0",
         "acpx": "0.11.2",
+=======
+      "version": "2026.6.8",
+      "dependencies": {
+        "@agentclientprotocol/claude-agent-acp": "0.39.0",
+        "@zed-industries/codex-acp": "0.15.0",
+        "acpx": "0.10.0",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         "zod": "4.4.3"
       }
     },
@@ -196,9 +208,15 @@
       }
     },
     "node_modules/@clack/core": {
+<<<<<<< HEAD
       "version": "1.3.1",
       "resolved": "https://registry.npmjs.org/@clack/core/-/core-1.3.1.tgz",
       "integrity": "sha512-fT1qHVGAag4IEkrupZ6lRRbNCs1vS9P01KB/sG8zKgvUztbYtFBtQpjSITNwooDZ83tpsPzP0mRNs1/KVszCRA==",
+=======
+      "version": "1.4.1",
+      "resolved": "https://registry.npmjs.org/@clack/core/-/core-1.4.1.tgz",
+      "integrity": "sha512-FILJa1gGKEFTGZAJE9RpVhrjKz3c3h4ar60dSv6cGuDqufQ84YEIS3GAGvZiN+H6yaLbbvTFNejjCC4tXpZEuw==",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "license": "MIT",
       "dependencies": {
         "fast-wrap-ansi": "^0.2.0",
@@ -209,12 +227,21 @@
       }
     },
     "node_modules/@clack/prompts": {
+<<<<<<< HEAD
       "version": "1.4.0",
       "resolved": "https://registry.npmjs.org/@clack/prompts/-/prompts-1.4.0.tgz",
       "integrity": "sha512-S0My7XPGIgpRWMDG8uRqalbgT+a6FmCUdOW+HaIOVVpUPHOb7RrpvjTjiODadKp06fsrVDJZlIzc6yCTp4AnxA==",
       "license": "MIT",
       "dependencies": {
         "@clack/core": "1.3.1",
+=======
+      "version": "1.5.1",
+      "resolved": "https://registry.npmjs.org/@clack/prompts/-/prompts-1.5.1.tgz",
+      "integrity": "sha512-zccHj2z2oCCO4yrDiRSlFOxWerGqRiysP7a5jPK6uoI9URKAquwY42Dd/iUP8JWHxEzdRe4TlbvZCo8z1/mhrw==",
+      "license": "MIT",
+      "dependencies": {
+        "@clack/core": "1.4.1",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         "fast-string-width": "^3.0.2",
         "fast-wrap-ansi": "^0.2.0",
         "sisteransi": "^1.0.5"
@@ -701,7 +728,10 @@
       "version": "0.15.0",
       "resolved": "https://registry.npmjs.org/@zed-industries/codex-acp/-/codex-acp-0.15.0.tgz",
       "integrity": "sha512-eAv7sGBeiYrYkOulF729nrM51szS7WIhBtugRj5wWq6csRKZUhAZfoUZlF8xUWdHPtOIzd/eT6MNG6gMHu6z0w==",
+<<<<<<< HEAD
       "deprecated": "This package has been replaced by @agentclientprotocol/codex-acp. Please migrate to continue receiving updates.",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "license": "Apache-2.0",
       "bin": {
         "codex-acp": "bin/codex-acp.js"
@@ -722,7 +752,10 @@
       "cpu": [
         "arm64"
       ],
+<<<<<<< HEAD
       "deprecated": "This package has been replaced by @agentclientprotocol/codex-acp. Please migrate to continue receiving updates.",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "license": "Apache-2.0",
       "optional": true,
       "os": [
@@ -739,7 +772,10 @@
       "cpu": [
         "x64"
       ],
+<<<<<<< HEAD
       "deprecated": "This package has been replaced by @agentclientprotocol/codex-acp. Please migrate to continue receiving updates.",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "license": "Apache-2.0",
       "optional": true,
       "os": [
@@ -756,7 +792,10 @@
       "cpu": [
         "arm64"
       ],
+<<<<<<< HEAD
       "deprecated": "This package has been replaced by @agentclientprotocol/codex-acp. Please migrate to continue receiving updates.",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "license": "Apache-2.0",
       "optional": true,
       "os": [
@@ -773,7 +812,10 @@
       "cpu": [
         "x64"
       ],
+<<<<<<< HEAD
       "deprecated": "This package has been replaced by @agentclientprotocol/codex-acp. Please migrate to continue receiving updates.",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "license": "Apache-2.0",
       "optional": true,
       "os": [
@@ -790,7 +832,10 @@
       "cpu": [
         "arm64"
       ],
+<<<<<<< HEAD
       "deprecated": "This package has been replaced by @agentclientprotocol/codex-acp. Please migrate to continue receiving updates.",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "license": "Apache-2.0",
       "optional": true,
       "os": [
@@ -807,7 +852,10 @@
       "cpu": [
         "x64"
       ],
+<<<<<<< HEAD
       "deprecated": "This package has been replaced by @agentclientprotocol/codex-acp. Please migrate to continue receiving updates.",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "license": "Apache-2.0",
       "optional": true,
       "os": [
@@ -831,6 +879,7 @@
       }
     },
     "node_modules/acpx": {
+<<<<<<< HEAD
       "version": "0.11.2",
       "resolved": "https://registry.npmjs.org/acpx/-/acpx-0.11.2.tgz",
       "integrity": "sha512-ksTmfJDVqUAJJXsNDamEno03AMZ/aAZzXk/h5nt61VsLc/jcpoDMfCVpErzuYNJjwCd0V6Zm5o6F8OoqxsjQWA==",
@@ -840,6 +889,17 @@
         "commander": "^15.0.0",
         "skillflag": "^0.2.0",
         "tsx": "^4.22.4",
+=======
+      "version": "0.10.0",
+      "resolved": "https://registry.npmjs.org/acpx/-/acpx-0.10.0.tgz",
+      "integrity": "sha512-hd48XV03gG3sd409T1lDrOKJTTz1ap4g0wrndXjxQ590tN85pBYlvfNLyerybvGRrtUGsZjNdt99r1jpIt6ukA==",
+      "license": "MIT",
+      "dependencies": {
+        "@agentclientprotocol/sdk": "^0.22.1",
+        "commander": "^14.0.3",
+        "skillflag": "^0.1.4",
+        "tsx": "^4.22.0",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         "zod": "^4.4.3"
       },
       "bin": {
@@ -849,6 +909,7 @@
         "node": ">=22.13.0"
       }
     },
+<<<<<<< HEAD
     "node_modules/acpx/node_modules/@agentclientprotocol/sdk": {
       "version": "0.28.1",
       "resolved": "https://registry.npmjs.org/@agentclientprotocol/sdk/-/sdk-0.28.1.tgz",
@@ -858,6 +919,8 @@
         "zod": "^3.25.0 || ^4.0.0"
       }
     },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     "node_modules/ajv": {
       "version": "8.20.0",
       "resolved": "https://registry.npmjs.org/ajv/-/ajv-8.20.0.tgz",
@@ -1059,12 +1122,21 @@
       }
     },
     "node_modules/commander": {
+<<<<<<< HEAD
       "version": "15.0.0",
       "resolved": "https://registry.npmjs.org/commander/-/commander-15.0.0.tgz",
       "integrity": "sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg==",
       "license": "MIT",
       "engines": {
         "node": ">=22.12.0"
+=======
+      "version": "14.0.3",
+      "resolved": "https://registry.npmjs.org/commander/-/commander-14.0.3.tgz",
+      "integrity": "sha512-H+y0Jo/T1RZ9qPP4Eh1pkcQcLRglraJaSLoyOtHxu6AapkjWVCy2Sit1QQ4x3Dng8qDlSsZEet7g5Pq06MvTgw==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=20"
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     },
     "node_modules/content-disposition": {
@@ -2061,9 +2133,15 @@
       "license": "MIT"
     },
     "node_modules/skillflag": {
+<<<<<<< HEAD
       "version": "0.2.0",
       "resolved": "https://registry.npmjs.org/skillflag/-/skillflag-0.2.0.tgz",
       "integrity": "sha512-7ZmEpBeEoPLc+hqZ/StAnCO/hulgEPANzPyZgOM/CZ5zc3b0ApSp3URavY5POM/OKyi5d9+UC/Q21OoiYC2kJw==",
+=======
+      "version": "0.1.4",
+      "resolved": "https://registry.npmjs.org/skillflag/-/skillflag-0.1.4.tgz",
+      "integrity": "sha512-egFg+XCF5sloOWdtzxZivTX7n4UDj5pxQoY33wbT8h+YSDjMQJ76MZUg2rXQIBXmIDtlZhLgirS1g/3R5/qaHA==",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "license": "MIT",
       "dependencies": {
         "@clack/prompts": "^1.0.1",

@@ -320,6 +320,7 @@ describe("applyJobPatch", () => {
     }
   });
 
+<<<<<<< HEAD
   it("clears agentTurn payload.fallbacks when patch requests null", () => {
     const job = createIsolatedAgentTurnJob("job-fallbacks-clear", {
       mode: "announce",
@@ -367,6 +368,8 @@ describe("applyJobPatch", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("persists agentTurn payload.toolsAllow updates when editing existing jobs", () => {
     const job = createIsolatedAgentTurnJob("job-tools", {
       mode: "announce",
@@ -392,6 +395,7 @@ describe("applyJobPatch", () => {
     }
   });
 
+<<<<<<< HEAD
   it("clears the default toolsAllow flag when editing to an explicit restriction", () => {
     const job = createIsolatedAgentTurnJob("job-tools-explicit", {
       mode: "announce",
@@ -449,6 +453,8 @@ describe("applyJobPatch", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("clears agentTurn payload.toolsAllow when patch requests null", () => {
     const job = createIsolatedAgentTurnJob("job-tools-clear", {
       mode: "announce",
@@ -458,7 +464,10 @@ describe("applyJobPatch", () => {
       kind: "agentTurn",
       message: "do it",
       toolsAllow: ["exec", "read"],
+<<<<<<< HEAD
       toolsAllowIsDefault: true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
 
     applyJobPatch(job, {
@@ -472,7 +481,10 @@ describe("applyJobPatch", () => {
     expect(job.payload.kind).toBe("agentTurn");
     if (job.payload.kind === "agentTurn") {
       expect(job.payload.toolsAllow).toBeUndefined();
+<<<<<<< HEAD
       expect(job.payload.toolsAllowIsDefault).toBeUndefined();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
@@ -586,6 +598,7 @@ describe("applyJobPatch", () => {
     }
   });
 
+<<<<<<< HEAD
   it("carries payload.toolsAllow default flag when replacing payload kind via patch", () => {
     const job = createIsolatedAgentTurnJob("job-tools-default-switch", {
       mode: "announce",
@@ -610,6 +623,8 @@ describe("applyJobPatch", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.each([
     { name: "no delivery update", patch: { enabled: true } satisfies CronJobPatch },
     {

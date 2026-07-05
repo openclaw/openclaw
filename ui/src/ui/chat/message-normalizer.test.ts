@@ -90,6 +90,7 @@ describe("message-normalizer", () => {
       });
     });
 
+<<<<<<< HEAD
     it("normalizes persisted Responses text blocks as renderable text", () => {
       const user = normalizeMessage({
         role: "user",
@@ -125,6 +126,8 @@ describe("message-normalizer", () => {
       expect(assistant.content).toContainEqual({ type: "text", text: "User-only block" });
     });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     it("normalizes structured base64 audio content blocks as renderable attachments", () => {
       const result = normalizeMessage({
         role: "assistant",

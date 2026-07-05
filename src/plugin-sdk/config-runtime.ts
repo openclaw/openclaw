@@ -4,6 +4,7 @@
  * config-mutation, and runtime-config-snapshot.
  */
 
+<<<<<<< HEAD
 import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/store-load.js";
 export {
   getSessionEntry,
@@ -21,6 +22,22 @@ export {
  * migrate away from reading sessions.json directly.
  */
 export const loadSessionStore = loadSessionStoreImpl;
+=======
+import {
+  listSessionEntries,
+  loadSessionEntry as getSessionEntry,
+  readSessionUpdatedAt,
+} from "../config/sessions/session-accessor.js";
+import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/store-load.js";
+
+/**
+ * @deprecated Use getSessionEntry/listSessionEntries for reads and
+ * patchSessionEntry/upsertSessionEntry for writes. loadSessionStore keeps the
+ * legacy mutable whole-store shape and will remain a compatibility escape hatch.
+ */
+export const loadSessionStore = loadSessionStoreImpl;
+export { getSessionEntry, listSessionEntries, readSessionUpdatedAt };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {
@@ -150,10 +167,19 @@ export type {
 } from "../config/types.js";
 export {
   clearSessionStoreCacheForTest,
+<<<<<<< HEAD
+=======
+  patchSessionEntry,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   recordSessionMetaFromInbound,
   saveSessionStore,
   updateLastRoute,
   updateSessionStore,
+<<<<<<< HEAD
+=======
+  updateSessionStoreEntry,
+  upsertSessionEntry,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveSessionStoreEntry,
 } from "../config/sessions/store.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";

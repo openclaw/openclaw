@@ -18,7 +18,10 @@ import {
   resolveMergedAssistantText,
   shouldSuppressAssistantEventForLiveChat,
 } from "./live-chat-projector.js";
+<<<<<<< HEAD
 import { isChatAbortMarkerCurrent } from "./server-chat-state.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type {
   BufferedAgentEvent,
   ChatRunEntry,
@@ -38,7 +41,10 @@ import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 export {
+<<<<<<< HEAD
   createChatAbortMarker,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   createChatRunRegistry,
   createChatRunState,
   createSessionEventSubscriberRegistry,
@@ -46,10 +52,15 @@ export {
   createToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 export type {
+<<<<<<< HEAD
   ChatAbortMarker,
   ChatRunEntry,
   ChatRunRegistry,
   ChatRunRegistration,
+=======
+  ChatRunEntry,
+  ChatRunRegistry,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ChatRunState,
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
@@ -475,9 +486,12 @@ export function createAgentEventHandler({
       contextTokens: row?.contextTokens,
       estimatedCostUsd: row?.estimatedCostUsd,
       responseUsage: row?.responseUsage,
+<<<<<<< HEAD
       // Carry the row-built channel-aware effective mode so the chat snapshot
       // matches the session-event/list projections.
       effectiveResponseUsage: row?.effectiveResponseUsage,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       modelProvider: row?.modelProvider,
       model: row?.model,
       status: snapshotSource.status,
@@ -569,8 +583,12 @@ export function createAgentEventHandler({
     const clientRunId = chatLink?.clientRunId ?? evt.runId;
     const eventRunId = chatLink?.clientRunId ?? evt.runId;
     const isAborted =
+<<<<<<< HEAD
       isChatAbortMarkerCurrent(chatRunState.abortedRuns.get(clientRunId), chatLink) ||
       isChatAbortMarkerCurrent(chatRunState.abortedRuns.get(evt.runId), chatLink);
+=======
+      chatRunState.abortedRuns.has(clientRunId) || chatRunState.abortedRuns.has(evt.runId);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const deliverySessionKey = sessionKey
       ? resolveSessionDeliveryKey(sessionKey, sessionAgentId)
       : undefined;
@@ -1156,9 +1174,13 @@ export function createAgentEventHandler({
     const eventRunId = chatLink?.clientRunId ?? evt.runId;
     const eventForClients = chatLink ? { ...evt, runId: eventRunId } : evt;
     const isAborted =
+<<<<<<< HEAD
       isChatAbortMarkerCurrent(chatRunState.abortedRuns.get(clientRunId), chatLink) ||
       isChatAbortMarkerCurrent(chatRunState.abortedRuns.get(evt.runId), chatLink);
 
+=======
+      chatRunState.abortedRuns.has(clientRunId) || chatRunState.abortedRuns.has(evt.runId);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const restartRecoveryState = restartRecoverySessionKey
       ? resolveRestartRecoveryLifecycleState(restartRecoverySessionKey, restartRecoveryAgentId, evt)
       : undefined;
@@ -1183,7 +1205,10 @@ export function createAgentEventHandler({
     if (lifecyclePhase !== null && lifecyclePhase !== "error") {
       clearPendingTerminalLifecycleError(evt.runId);
     }
+<<<<<<< HEAD
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     // Include sessionKey so Control UI can filter tool streams per session.
     const spawnedBy = sessionKey ? resolveSpawnedBy(sessionKey) : null;
     const agentPayload = sessionKey
@@ -1362,6 +1387,7 @@ export function createAgentEventHandler({
           { agentId: sessionAgentId, controlUiVisible: false, dropIfSlow: true },
         );
       }
+<<<<<<< HEAD
       if (!isControlUiVisible && isItemEvent && sessionKey && hasSessionMessageSubscribers) {
         sendAgentPayload(
           sessionKey,
@@ -1369,6 +1395,8 @@ export function createAgentEventHandler({
           { agentId: sessionAgentId, controlUiVisible: false, dropIfSlow: true },
         );
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
 
     if ((isControlUiVisible || hasSessionMessageSubscribers) && sessionKey) {

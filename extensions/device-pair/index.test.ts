@@ -54,6 +54,10 @@ vi.mock("./notify.js", () => ({
   armPairNotifyOnce: vi.fn(async () => false),
   formatPendingRequests: vi.fn(() => "No pending device pairing requests."),
   handleNotifyCommand: vi.fn(async () => ({ text: "notify" })),
+<<<<<<< HEAD
+=======
+  registerPairingNotifierService: vi.fn(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 import {

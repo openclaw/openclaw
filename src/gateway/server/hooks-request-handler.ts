@@ -31,7 +31,10 @@ import {
   resolveHookSessionKey,
   resolveHookTargetAgentId,
 } from "../hooks.js";
+<<<<<<< HEAD
 import { sendJson } from "../http-common.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveRequestClientIp } from "../net.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 
@@ -64,6 +67,15 @@ type HookReplayScope = {
   dispatchScope: Record<string, unknown>;
 };
 
+<<<<<<< HEAD
+=======
+function sendJson(res: ServerResponse, status: number, body: unknown) {
+  res.statusCode = status;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(JSON.stringify(body));
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveMappedHookExternalContentSource(params: {
   subPath: string;
   payload: Record<string, unknown>;

@@ -363,6 +363,17 @@ export class ChatLog extends Container {
     return component;
   }
 
+<<<<<<< HEAD
+=======
+  updateToolArgs(toolCallId: string, args: unknown) {
+    const existing = this.toolById.get(toolCallId);
+    if (!existing) {
+      return;
+    }
+    existing.setArgs(args);
+  }
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   updateToolResult(
     toolCallId: string,
     result: unknown,

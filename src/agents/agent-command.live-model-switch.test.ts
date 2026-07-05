@@ -199,6 +199,10 @@ vi.mock("@openclaw/acp-core/runtime/session-identifiers", () => ({
 
 vi.mock("../auto-reply/thinking.js", () => ({
   formatThinkingLevels: () => "low, medium, high",
+<<<<<<< HEAD
+=======
+  formatXHighModelHint: () => "model-x",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   normalizeThinkLevel: (v?: string) => v || undefined,
   normalizeVerboseLevel: (v?: string) => v || undefined,
   isThinkingLevelSupported: (args: unknown) => state.isThinkingLevelSupportedMock(args),
@@ -1145,6 +1149,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
   });
 
+<<<<<<< HEAD
   it("keeps the fast mode cutoff timestamp across live model switch retries", async () => {
     let invocation = 0;
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
@@ -1176,6 +1181,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(firstAttempt.fastModeStartedAtMs).toBe(secondAttempt.fastModeStartedAtMs);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses an embedded queue rebound generation for terminal lifecycle and cleanup", async () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockImplementation(async (attemptParams: unknown) => {

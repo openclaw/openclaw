@@ -1,5 +1,6 @@
 // Persists short-lived gateway restart handoff metadata.
 import { randomUUID } from "node:crypto";
+<<<<<<< HEAD
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -18,12 +19,31 @@ export const GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND = "gateway-supervisor-resta
 const GATEWAY_SUPERVISOR_RESTART_HANDOFF_KEY = "current";
 const GATEWAY_RESTART_HANDOFF_TTL_MS = 60_000;
 const GATEWAY_RESTART_TRACE_HANDOFF_MAX_DURATION_MS = 10 * 60_000;
+=======
+import fs from "node:fs";
+import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveStateDir } from "../config/paths.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+// Restart handoff files let a supervisor explain a recent gateway restart after
+// the old process exits. The file is short-lived, bounded, and regular-file only.
+export const GATEWAY_SUPERVISOR_RESTART_HANDOFF_FILENAME =
+  "gateway-supervisor-restart-handoff.json";
+export const GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND = "gateway-supervisor-restart-handoff";
+const GATEWAY_RESTART_HANDOFF_TTL_MS = 60_000;
+const GATEWAY_RESTART_TRACE_HANDOFF_MAX_DURATION_MS = 10 * 60_000;
+const GATEWAY_RESTART_HANDOFF_MAX_BYTES = 4096;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const MAX_INTENT_ID_LENGTH = 120;
 const MAX_PROCESS_INSTANCE_ID_LENGTH = 120;
 const MAX_REASON_LENGTH = 200;
 
 const handoffLog = createSubsystemLogger("restart-handoff");
+<<<<<<< HEAD
 type GatewayRestartHandoffDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_handoff">;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type GatewayRestartHandoffRestartKind = "full-process" | "update-process";
 export type GatewayRestartHandoffSource =
@@ -102,6 +122,31 @@ export function formatGatewayRestartHandoffDiagnostic(
   return `Recent restart handoff: ${detail.join("; ")}`;
 }
 
+<<<<<<< HEAD
+=======
+function resolveGatewayRestartHandoffPath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveStateDir(env), GATEWAY_SUPERVISOR_RESTART_HANDOFF_FILENAME);
+}
+
+function unlinkRegularFileSync(filePath: string): boolean {
+  try {
+    const stat = fs.lstatSync(filePath);
+    if (!stat.isFile() || stat.nlink > 1) {
+      return false;
+    }
+    fs.unlinkSync(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Remove the restart handoff file when it is a regular single-link file. */
+export function clearGatewayRestartHandoffSync(env: NodeJS.ProcessEnv = process.env): void {
+  unlinkRegularFileSync(resolveGatewayRestartHandoffPath(env));
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function normalizePid(pid: number | undefined): number | null {
   return typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0 ? pid : null;
 }
@@ -196,6 +241,7 @@ function isSupervisorMode(value: unknown): value is GatewayRestartHandoffSupervi
   return value === "launchd" || value === "systemd" || value === "schtasks" || value === "external";
 }
 
+<<<<<<< HEAD
 function normalizeGatewayRestartHandoffRow(row: {
   kind: string;
   version: number;
@@ -251,10 +297,65 @@ function normalizeGatewayRestartHandoffRow(row: {
     source: row.source,
     restartKind: row.restart_kind,
     supervisorMode: row.supervisor_mode,
+=======
+function parseGatewayRestartHandoff(raw: string): GatewayRestartHandoff | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!isRecord(parsed)) {
+    return null;
+  }
+  if (
+    parsed.kind !== GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND ||
+    parsed.version !== 1 ||
+    typeof parsed.intentId !== "string" ||
+    parsed.intentId.trim().length === 0 ||
+    typeof parsed.pid !== "number" ||
+    !Number.isSafeInteger(parsed.pid) ||
+    parsed.pid <= 0 ||
+    typeof parsed.createdAt !== "number" ||
+    !Number.isFinite(parsed.createdAt) ||
+    typeof parsed.expiresAt !== "number" ||
+    !Number.isFinite(parsed.expiresAt) ||
+    parsed.expiresAt <= parsed.createdAt ||
+    parsed.expiresAt - parsed.createdAt > GATEWAY_RESTART_HANDOFF_TTL_MS ||
+    !isSource(parsed.source) ||
+    !isRestartKind(parsed.restartKind) ||
+    !isSupervisorMode(parsed.supervisorMode)
+  ) {
+    return null;
+  }
+  if (parsed.reason !== undefined && typeof parsed.reason !== "string") {
+    return null;
+  }
+  if (parsed.processInstanceId !== undefined && typeof parsed.processInstanceId !== "string") {
+    return null;
+  }
+  const restartTrace = normalizeRestartTraceHandoff(parsed.restartTrace);
+
+  const processInstanceId = normalizeText(parsed.processInstanceId, MAX_PROCESS_INSTANCE_ID_LENGTH);
+  const reason = normalizeText(parsed.reason, MAX_REASON_LENGTH);
+  return {
+    kind: GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND,
+    version: 1,
+    intentId: parsed.intentId.trim().slice(0, MAX_INTENT_ID_LENGTH),
+    pid: parsed.pid,
+    ...(processInstanceId ? { processInstanceId } : {}),
+    createdAt: Math.floor(parsed.createdAt),
+    expiresAt: Math.floor(parsed.expiresAt),
+    ...(reason ? { reason } : {}),
+    source: parsed.source,
+    restartKind: parsed.restartKind,
+    supervisorMode: parsed.supervisorMode,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ...(restartTrace ? { restartTrace } : {}),
   };
 }
 
+<<<<<<< HEAD
 function readGatewayRestartHandoffRowSync(env: NodeJS.ProcessEnv) {
   try {
     const { db } = openOpenClawStateDatabase({ env });
@@ -280,6 +381,18 @@ function readGatewayRestartHandoffRowSync(env: NodeJS.ProcessEnv) {
         ])
         .where("handoff_key", "=", GATEWAY_SUPERVISOR_RESTART_HANDOFF_KEY),
     );
+=======
+function readGatewayRestartHandoffRawSync(env: NodeJS.ProcessEnv): string | null {
+  const handoffPath = resolveGatewayRestartHandoffPath(env);
+  try {
+    const stat = fs.lstatSync(handoffPath);
+    // Handoff reads ignore symlinks, hardlinks, and oversized files because the
+    // state directory may be user-writable on some installs.
+    if (!stat.isFile() || stat.nlink > 1 || stat.size > GATEWAY_RESTART_HANDOFF_MAX_BYTES) {
+      return null;
+    }
+    return fs.readFileSync(handoffPath, "utf8");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } catch {
     return null;
   }
@@ -331,6 +444,7 @@ export function writeGatewayRestartHandoffSync(opts: {
     ...(restartTrace ? { restartTrace } : {}),
   };
 
+<<<<<<< HEAD
   try {
     runOpenClawStateWriteTransaction(
       ({ db }) => {
@@ -380,6 +494,31 @@ export function writeGatewayRestartHandoffSync(opts: {
     );
     return payload;
   } catch (err) {
+=======
+  let tmpPath: string | undefined;
+  try {
+    const handoffPath = resolveGatewayRestartHandoffPath(env);
+    fs.mkdirSync(path.dirname(handoffPath), { recursive: true });
+    tmpPath = path.join(
+      path.dirname(handoffPath),
+      `.${path.basename(handoffPath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`,
+    );
+    let fd: number | undefined;
+    try {
+      fd = fs.openSync(tmpPath, "wx", 0o600);
+      fs.writeFileSync(fd, `${JSON.stringify(payload)}\n`, "utf8");
+    } finally {
+      if (fd !== undefined) {
+        fs.closeSync(fd);
+      }
+    }
+    fs.renameSync(tmpPath, handoffPath);
+    return payload;
+  } catch (err) {
+    if (tmpPath) {
+      unlinkRegularFileSync(tmpPath);
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     handoffLog.warn(`failed to write gateway restart handoff: ${String(err)}`);
     return null;
   }
@@ -390,10 +529,66 @@ export function readGatewayRestartHandoffSync(
   env: NodeJS.ProcessEnv = process.env,
   now = Date.now(),
 ): GatewayRestartHandoff | null {
+<<<<<<< HEAD
   const row = readGatewayRestartHandoffRowSync(env);
   const payload = row ? normalizeGatewayRestartHandoffRow(row) : null;
+=======
+  const raw = readGatewayRestartHandoffRawSync(env);
+  if (!raw) {
+    return null;
+  }
+  const payload = parseGatewayRestartHandoff(raw);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!payload || now < payload.createdAt || now > payload.expiresAt) {
     return null;
   }
   return payload;
 }
+<<<<<<< HEAD
+=======
+
+/** Consume a handoff only when it belongs to the just-exited process. */
+export function consumeGatewayRestartHandoffForExitedProcessSync(opts: {
+  env?: NodeJS.ProcessEnv;
+  exitedPid?: number;
+  processInstanceId?: string;
+  now?: number;
+}): GatewayRestartHandoff | null {
+  const env = opts.env ?? process.env;
+  const handoffPath = resolveGatewayRestartHandoffPath(env);
+  let raw: string | null = null;
+  try {
+    const stat = fs.lstatSync(handoffPath);
+    // Consume uses the same regular-file guard as reads, then clears the file
+    // even if parsing fails so stale handoffs do not repeat.
+    if (!stat.isFile() || stat.nlink > 1 || stat.size > GATEWAY_RESTART_HANDOFF_MAX_BYTES) {
+      return null;
+    }
+    raw = fs.readFileSync(handoffPath, "utf8");
+  } catch {
+    return null;
+  } finally {
+    clearGatewayRestartHandoffSync(env);
+  }
+
+  const payload = raw ? parseGatewayRestartHandoff(raw) : null;
+  const exitedPid = normalizePid(opts.exitedPid);
+  if (!payload || exitedPid === null || payload.pid !== exitedPid) {
+    return null;
+  }
+
+  const expectedProcessInstanceId = normalizeText(
+    opts.processInstanceId,
+    MAX_PROCESS_INSTANCE_ID_LENGTH,
+  );
+  if (expectedProcessInstanceId && payload.processInstanceId !== expectedProcessInstanceId) {
+    return null;
+  }
+
+  const now = opts.now ?? Date.now();
+  if (now < payload.createdAt || now > payload.expiresAt) {
+    return null;
+  }
+  return payload;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

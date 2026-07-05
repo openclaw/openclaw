@@ -4,13 +4,22 @@ import { describe, expect, it } from "vitest";
 import { buildCohereCatalogModels, COHERE_BASE_URL, COHERE_MODEL_CATALOG } from "./models.js";
 import {
   applyCohereConfig,
+<<<<<<< HEAD
+=======
+  applyCohereProviderConfig,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   COHERE_DEFAULT_MODEL_ID,
   COHERE_DEFAULT_MODEL_REF,
 } from "./onboard.js";
 
 describe("Cohere onboarding", () => {
+<<<<<<< HEAD
   it("registers the manifest catalog through the onboarding preset", () => {
     const result = applyCohereConfig({});
+=======
+  it("registers the manifest catalog through the compatibility endpoint", () => {
+    const result = applyCohereProviderConfig({});
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const provider = result.models?.providers?.cohere;
 
     expect(provider).toMatchObject({

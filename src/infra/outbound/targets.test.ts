@@ -1194,6 +1194,7 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.reason).toBe("dm-blocked");
   });
 
+<<<<<<< HEAD
   it("resolves heartbeat reserved targets through directory before session routing", async () => {
     const listGroups = vi
       .fn()
@@ -1305,6 +1306,8 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(listGroupsLive).toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps heartbeat route canonicalization best-effort when target resolution fails", async () => {
     setActivePluginRegistry(
       createTargetsTestRegistry([

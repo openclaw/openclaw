@@ -3,6 +3,7 @@ import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createXSearchTool } from "./x-search.js";
 
+<<<<<<< HEAD
 function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(payload), {
     status: 200,
@@ -32,6 +33,31 @@ function installXSearchFetch(payload?: Record<string, unknown>) {
         },
       ),
     ),
+=======
+function installXSearchFetch(payload?: Record<string, unknown>) {
+  const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+    Promise.resolve({
+      ok: true,
+      json: () =>
+        Promise.resolve(
+          payload ?? {
+            output: [
+              {
+                type: "message",
+                content: [
+                  {
+                    type: "output_text",
+                    text: "Found X posts",
+                    annotations: [{ type: "url_citation", url: "https://x.com/openclaw/status/1" }],
+                  },
+                ],
+              },
+            ],
+            citations: ["https://x.com/openclaw/status/1"],
+          },
+        ),
+    } as Response),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
   global.fetch = withFetchPreconnect(mockFetch);
   return mockFetch;
@@ -327,12 +353,19 @@ describe("xai x_search tool", () => {
 
   it("reports malformed x_search JSON as a provider error", async () => {
     const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+<<<<<<< HEAD
       Promise.resolve(
         new Response("{ nope", {
           status: 200,
           headers: { "Content-Type": "application/json" },
         }),
       ),
+=======
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.reject(new SyntaxError("Unexpected token")),
+      } as Response),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
     global.fetch = withFetchPreconnect(mockFetch);
     const tool = createXSearchTool({
@@ -363,7 +396,14 @@ describe("xai x_search tool", () => {
 
   it("rejects x_search success JSON without answer text", async () => {
     const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+<<<<<<< HEAD
       Promise.resolve(jsonResponse({ output: [] })),
+=======
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ output: [] }),
+      } as Response),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
     global.fetch = withFetchPreconnect(mockFetch);
     const tool = createXSearchTool({

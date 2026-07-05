@@ -134,6 +134,7 @@ describe("user turn transcript persistence", () => {
       expect(buildPersistedUserTurnMediaInputsFromFields(undefined)).toEqual([]);
       expect(buildPersistedUserTurnMediaInputsFromFields({})).toEqual([]);
     });
+<<<<<<< HEAD
 
     it("preserves index alignment when an earlier attachment lacks a content type", () => {
       // Writer pads missing types with "" to keep MediaPaths/MediaTypes index-aligned.
@@ -169,6 +170,8 @@ describe("user turn transcript persistence", () => {
         { url: "https://example.test/remote.png", contentType: "image/png" },
       ]);
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   describe("mergePreparedUserTurnMessageForRuntime", () => {

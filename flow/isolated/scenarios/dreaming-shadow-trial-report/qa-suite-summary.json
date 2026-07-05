@@ -1,0 +1,73 @@
+{
+  "scenarios": [
+    {
+      "name": "Dreaming shadow trial report",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "writes a report-only shadow trial for a candidate memory",
+          "status": "pass",
+          "details": "Report: dreaming-shadow-trial-report.md\nPromotion action: report-only\nDREAMING-SHADOW-TRIAL-OK"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 45169,
+    "gatewayProcessCpuMs": 2000,
+    "gatewayCpuCoreRatio": 0.044,
+    "gatewayProcessRssStartBytes": 864419840,
+    "gatewayProcessRssEndBytes": 1058402304,
+    "gatewayProcessRssDeltaBytes": 193982464,
+    "gatewayProcessRssPeakBytes": 1058402304,
+    "gatewayProcessRssPeakDeltaBytes": 193982464,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:14:40.890Z",
+        "gatewayProcessRssBytes": 864419840
+      },
+      {
+        "label": "scenario:dreaming-shadow-trial-report:start",
+        "at": "2026-07-03T13:14:40.929Z",
+        "gatewayProcessRssBytes": 866144256
+      },
+      {
+        "label": "scenario:dreaming-shadow-trial-report:finish",
+        "at": "2026-07-03T13:14:46.024Z",
+        "gatewayProcessRssBytes": 1058344960
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:14:46.060Z",
+        "gatewayProcessRssBytes": 1058402304
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:14:00.855Z",
+    "finishedAt": "2026-07-03T13:14:46.024Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "dreaming-shadow-trial-report"
+    ],
+    "runtimePair": null
+  }
+}

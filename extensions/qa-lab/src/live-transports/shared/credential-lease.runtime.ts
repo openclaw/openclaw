@@ -17,10 +17,13 @@ const DEFAULT_ENDPOINT_PREFIX = QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
 const DEFAULT_LEASE_TTL_MS = 20 * 60 * 1_000;
+<<<<<<< HEAD
 const DEFAULT_CHUNKED_PAYLOAD_MAX_BYTES = 64 * 1024 * 1024;
 const DEFAULT_CHUNKED_PAYLOAD_MAX_CHUNKS = 4096;
 const CHUNKED_PAYLOAD_MAX_BYTES_ENV = "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES";
 const CHUNKED_PAYLOAD_MAX_CHUNKS_ENV = "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_CHUNKS";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const RETRY_BACKOFF_MS = [500, 1_000, 2_000, 4_000, 5_000] as const;
 const RETRYABLE_ACQUIRE_CODES = new Set(["POOL_EXHAUSTED", "NO_CREDENTIAL_AVAILABLE"]);
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
@@ -59,8 +62,11 @@ type ConvexCredentialBrokerConfig = {
   httpTimeoutMs: number;
   leaseTtlMs: number;
   ownerId: string;
+<<<<<<< HEAD
   payloadMaxBytes: number;
   payloadMaxChunks: number;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   payloadChunkUrl: string;
   releaseUrl: string;
   role: QaCredentialRole;
@@ -209,6 +215,7 @@ function resolveConvexCredentialBrokerConfig(params: {
       "OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS",
       DEFAULT_HTTP_TIMEOUT_MS,
     ),
+<<<<<<< HEAD
     payloadMaxBytes: parsePositiveIntegerEnv(
       params.env,
       CHUNKED_PAYLOAD_MAX_BYTES_ENV,
@@ -219,6 +226,8 @@ function resolveConvexCredentialBrokerConfig(params: {
       CHUNKED_PAYLOAD_MAX_CHUNKS_ENV,
       DEFAULT_CHUNKED_PAYLOAD_MAX_CHUNKS,
     ),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     acquireUrl: joinQaCredentialEndpoint(baseUrl, endpointPrefix, "acquire"),
     heartbeatUrl: joinQaCredentialEndpoint(baseUrl, endpointPrefix, "heartbeat"),
     payloadChunkUrl: joinQaCredentialEndpoint(baseUrl, endpointPrefix, "payload-chunk"),
@@ -226,10 +235,14 @@ function resolveConvexCredentialBrokerConfig(params: {
   };
 }
 
+<<<<<<< HEAD
 function parseChunkedPayloadMarker(
   payload: unknown,
   limits: { maxBytes: number; maxChunks: number },
 ) {
+=======
+function parseChunkedPayloadMarker(payload: unknown) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return null;
   }
@@ -244,9 +257,12 @@ function parseChunkedPayloadMarker(
   ) {
     throw new Error("Chunked credential payload marker has an invalid chunkCount.");
   }
+<<<<<<< HEAD
   if (record.chunkCount > limits.maxChunks) {
     throw new Error(`Chunked credential payload marker exceeds ${limits.maxChunks} chunks.`);
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (
     typeof record.byteLength !== "number" ||
     !Number.isInteger(record.byteLength) ||
@@ -254,9 +270,12 @@ function parseChunkedPayloadMarker(
   ) {
     throw new Error("Chunked credential payload marker has an invalid byteLength.");
   }
+<<<<<<< HEAD
   if (record.byteLength > limits.maxBytes) {
     throw new Error(`Chunked credential payload marker exceeds ${limits.maxBytes} bytes.`);
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return {
     chunkCount: record.chunkCount,
     byteLength: record.byteLength,
@@ -329,15 +348,22 @@ async function resolveConvexCredentialPayload(params: {
   fetchImpl: typeof fetch;
   kind: string;
 }) {
+<<<<<<< HEAD
   const marker = parseChunkedPayloadMarker(params.acquired.payload, {
     maxBytes: params.config.payloadMaxBytes,
     maxChunks: params.config.payloadMaxChunks,
   });
+=======
+  const marker = parseChunkedPayloadMarker(params.acquired.payload);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!marker) {
     return params.acquired.payload;
   }
   const chunks: string[] = [];
+<<<<<<< HEAD
   let serializedBytes = 0;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   for (let index = 0; index < marker.chunkCount; index += 1) {
     const payload = await postConvexBroker({
       fetchImpl: params.fetchImpl,
@@ -354,6 +380,7 @@ async function resolveConvexCredentialPayload(params: {
       },
     });
     const parsed = convexPayloadChunkSuccessSchema.parse(payload);
+<<<<<<< HEAD
     serializedBytes += Buffer.byteLength(parsed.data, "utf8");
     if (serializedBytes > marker.byteLength) {
       throw new Error("Chunked credential payload exceeded declared byteLength.");
@@ -362,6 +389,12 @@ async function resolveConvexCredentialPayload(params: {
   }
   const serialized = chunks.join("");
   if (serializedBytes !== marker.byteLength) {
+=======
+    chunks.push(parsed.data);
+  }
+  const serialized = chunks.join("");
+  if (serialized.length !== marker.byteLength) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     throw new Error("Chunked credential payload length mismatch.");
   }
   return JSON.parse(serialized) as unknown;

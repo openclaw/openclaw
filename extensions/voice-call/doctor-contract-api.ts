@@ -2,8 +2,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+<<<<<<< HEAD
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type {
   PluginDoctorStateMigration,
   PluginStateKeyedStore,
@@ -83,6 +86,7 @@ type PluginDoctorStateMigrationParams = Parameters<
   PluginDoctorStateMigration["detectLegacyState"]
 >[0];
 
+<<<<<<< HEAD
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -113,6 +117,8 @@ export function resolveSessionStoreAgentIds(params: { cfg: OpenClawConfig }): st
   return [...agentIds].toSorted();
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Resolve the voice-call store path used by legacy and plugin-state call records. */
 function resolveVoiceCallStorePath(params: {
   config: PluginDoctorStateMigrationParams["config"];

@@ -37,6 +37,7 @@ function runHelper(script: string) {
   });
 }
 
+<<<<<<< HEAD
 function getPackageManagerHelperBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf("DIST_PNPM_CMD=()");
@@ -48,6 +49,8 @@ function getPackageManagerHelperBlock(): string {
   return script.slice(start, end);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -113,6 +116,7 @@ describe("package-mac-dist plist validation", () => {
     expect(script).not.toContain('canonical_sparkle_build "$VERSION" 2>/dev/null || true');
   });
 
+<<<<<<< HEAD
   it("prefers repo Corepack pnpm over a global pnpm shim", () => {
     const helperBlock = getPackageManagerHelperBlock();
     const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-dist-pnpm-root-"));
@@ -175,6 +179,8 @@ describe("package-mac-dist plist validation", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps dependency bootstrap output out of captured Sparkle build values", () => {
     const script = readFileSync(scriptPath, "utf8");
     const helpers = script.slice(
@@ -305,6 +311,7 @@ describe("package-mac-dist plist validation", () => {
     expect(result.stderr).not.toContain("node reran after failed install");
   });
 
+<<<<<<< HEAD
   it("cleans the temporary notary zip when notarization exits early", () => {
     const script = readFileSync(scriptPath, "utf8");
     const notaryBlock = script.slice(
@@ -323,6 +330,8 @@ describe("package-mac-dist plist validation", () => {
     expect(notaryBlock).toContain("trap - EXIT");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("fails closed when required dSYM outputs are missing", () => {
     const script = readFileSync(scriptPath, "utf8");
     const dsymBlock = script.slice(script.indexOf('if [[ "$SKIP_DSYM" != "1" ]]'));
@@ -336,6 +345,7 @@ describe("package-mac-dist plist validation", () => {
     expect(dsymBlock).toContain("Error: missing DWARF binaries for dSYM merge");
     expect(dsymBlock).toContain("Error: dSYM not found");
     expect(dsymBlock).toContain("exit 1");
+<<<<<<< HEAD
     expect(script).toContain('if ! cp -R "$1" "$TMP_DSYM"; then');
     expect(dsymBlock).toContain("cleanup_tmp_dsym");
     expect(dsymBlock).toContain('copy_dsym_to_tmp "${DSYM_PATHS[0]}"');
@@ -345,6 +355,8 @@ describe("package-mac-dist plist validation", () => {
     );
     expect(dsymBlock).toContain('if ! ditto -c -k --keepParent "$TMP_DSYM" "$DSYM_ZIP"; then');
     expect(dsymBlock).toContain('rm -rf "$TMP_DSYM"');
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(dsymBlock).not.toContain("WARN:");
     expect(dsymBlock).not.toContain("continuing");
   });

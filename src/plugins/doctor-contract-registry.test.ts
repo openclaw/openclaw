@@ -19,7 +19,10 @@ let collectRelevantDoctorPluginIds: typeof import("./doctor-contract-registry.js
 let collectRelevantDoctorPluginIdsForTouchedPaths: typeof import("./doctor-contract-registry.js").collectRelevantDoctorPluginIdsForTouchedPaths;
 let listPluginDoctorLegacyConfigRules: typeof import("./doctor-contract-registry.js").listPluginDoctorLegacyConfigRules;
 let listPluginDoctorSessionRouteStateOwners: typeof import("./doctor-contract-registry.js").listPluginDoctorSessionRouteStateOwners;
+<<<<<<< HEAD
 let listPluginDoctorSessionStoreAgentIds: typeof import("./doctor-contract-registry.js").listPluginDoctorSessionStoreAgentIds;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 let setPluginDoctorContractRegistryModuleLoaderFactoryForTest:
   | typeof import("./doctor-contract-registry.js").setPluginDoctorContractRegistryModuleLoaderFactoryForTest
   | undefined;
@@ -52,7 +55,10 @@ describe("doctor-contract-registry module loader", () => {
       collectRelevantDoctorPluginIdsForTouchedPaths,
       listPluginDoctorLegacyConfigRules,
       listPluginDoctorSessionRouteStateOwners,
+<<<<<<< HEAD
       listPluginDoctorSessionStoreAgentIds,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       setPluginDoctorContractRegistryModuleLoaderFactoryForTest,
     } = await import("./doctor-contract-registry.js"));
     setPluginDoctorContractRegistryModuleLoaderFactoryForTest(mocks.createJiti);
@@ -217,6 +223,7 @@ describe("doctor-contract-registry module loader", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("loads config-derived session-store agent IDs from doctor contract modules", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(
@@ -241,6 +248,8 @@ describe("doctor-contract-registry module loader", () => {
     ).toEqual(["cards", "voice"]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("loads multiple bundled CLI route-state owners from doctor contract modules", () => {
     const anthropicRoot = makeTempDir();
     const googleRoot = makeTempDir();

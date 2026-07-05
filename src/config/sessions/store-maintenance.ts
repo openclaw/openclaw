@@ -19,7 +19,10 @@ import type { SessionEntry } from "./types.js";
 const log = createSubsystemLogger("sessions/store");
 
 const DEFAULT_SESSION_PRUNE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
+<<<<<<< HEAD
 const DEFAULT_MODEL_RUN_PRUNE_AFTER_MS = 24 * 60 * 60 * 1000;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const DEFAULT_SESSION_MAX_ENTRIES = 500;
 const DEFAULT_SESSION_MAINTENANCE_MODE: SessionMaintenanceMode = "enforce";
 const DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO = 0.8;
@@ -41,18 +44,24 @@ export type ResolvedSessionMaintenanceConfig = {
   mode: SessionMaintenanceMode;
   pruneAfterMs: number;
   maxEntries: number;
+<<<<<<< HEAD
   modelRunPruneAfterMs: number;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resetArchiveRetentionMs: number | null;
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
 };
 
+<<<<<<< HEAD
 export type ResolvedSessionMaintenanceConfigInput = Omit<
   ResolvedSessionMaintenanceConfig,
   "modelRunPruneAfterMs"
 > &
   Partial<Pick<ResolvedSessionMaintenanceConfig, "modelRunPruneAfterMs">>;
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
   const raw = maintenance?.pruneAfter ?? maintenance?.pruneDays;
   const normalized = normalizeStringifiedOptionalString(raw);
@@ -146,13 +155,17 @@ export function resolveMaintenanceConfigFromInput(
     mode: maintenance?.mode ?? DEFAULT_SESSION_MAINTENANCE_MODE,
     pruneAfterMs,
     maxEntries: maintenance?.maxEntries ?? DEFAULT_SESSION_MAX_ENTRIES,
+<<<<<<< HEAD
     modelRunPruneAfterMs: DEFAULT_MODEL_RUN_PRUNE_AFTER_MS,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resetArchiveRetentionMs: resolveResetArchiveRetentionMs(maintenance, pruneAfterMs),
     maxDiskBytes,
     highWaterBytes: resolveHighWaterBytes(maintenance, maxDiskBytes),
   };
 }
 
+<<<<<<< HEAD
 export function normalizeResolvedMaintenanceConfigInput(
   maintenance: ResolvedSessionMaintenanceConfigInput,
 ): ResolvedSessionMaintenanceConfig {
@@ -162,6 +175,8 @@ export function normalizeResolvedMaintenanceConfigInput(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function resolveSessionEntryMaintenanceHighWater(maxEntries: number): number {
   if (!Number.isSafeInteger(maxEntries) || maxEntries <= 0) {
     return 1;
@@ -188,6 +203,7 @@ export function shouldRunSessionEntryMaintenance(params: {
   return params.entryCount >= resolveSessionEntryMaintenanceHighWater(params.maxEntries);
 }
 
+<<<<<<< HEAD
 export function shouldRunModelRunPrune(params: {
   maintenance: Pick<ResolvedSessionMaintenanceConfig, "maxEntries">;
   entryCount: number;
@@ -232,6 +248,8 @@ export function isGatewayModelRunSessionKey(sessionKey: string): boolean {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Remove entries whose `updatedAt` is older than the configured threshold.
  * Entries without `updatedAt` are kept (cannot determine staleness).
@@ -265,6 +283,7 @@ export function pruneStaleEntries(
   return pruned;
 }
 
+<<<<<<< HEAD
 /**
  * Remove stale one-shot gateway model-run probe sessions before normal retention/capping.
  * Existing polluted stores may not carry modelRun metadata, so this intentionally keys off the
@@ -309,6 +328,18 @@ export function pruneStaleModelRunEntries(
 export const DEFAULT_QUOTA_SUSPENSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const QUOTA_SUSPENSION_CLEANUP_FACTOR = 2; // entries beyond N*ttl are deleted outright
 
+=======
+export const DEFAULT_QUOTA_SUSPENSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const QUOTA_SUSPENSION_CLEANUP_FACTOR = 2; // entries beyond N*ttl are deleted outright
+
+export interface QuotaSuspensionMaintenanceResult {
+  /** Suspensions whose state was advanced from "suspended" to "resuming" so the next attempt injects a handoff. */
+  resumed: Array<{ sessionKey: string; laneId?: string }>;
+  /** Entries whose `quotaSuspension` field was removed entirely (already-resumed records past 2x TTL). */
+  cleared: number;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type QuotaSuspensionEntryMaintenanceResult = {
   /** Patch to apply to the entry, or null when no TTL transition is due. */
   patch: Partial<SessionEntry> | null;
@@ -349,6 +380,57 @@ export function resolveQuotaSuspensionEntryMaintenance(params: {
   return { patch: null, cleared: false };
 }
 
+<<<<<<< HEAD
+=======
+/**
+ * Two-stage TTL maintenance for `quotaSuspension` records:
+ *  1. After `ttlMs`, transition `state: "suspended" → "resuming"` so the next
+ *     attempt for that session sees the resume marker and injects a handoff.
+ *  2. After `2 * ttlMs`, drop the field entirely (the record has done its job).
+ *
+ * Mutates `store` in-place. The caller is responsible for translating the
+ * returned `resumed[]` into in-process lane-concurrency restoration calls,
+ * which keeps this module free of `process/*` dependencies.
+ */
+export function pruneQuotaSuspensions(params: {
+  store: Record<string, SessionEntry>;
+  now: number;
+  ttlMs?: number;
+  log?: boolean;
+}): QuotaSuspensionMaintenanceResult {
+  const ttlMs = params.ttlMs ?? DEFAULT_QUOTA_SUSPENSION_TTL_MS;
+  const resumed: Array<{ sessionKey: string; laneId?: string }> = [];
+  let cleared = 0;
+  for (const [sessionKey, entry] of Object.entries(params.store)) {
+    const result = resolveQuotaSuspensionEntryMaintenance({
+      entry,
+      now: params.now,
+      ttlMs,
+    });
+    if (!result.patch) {
+      continue;
+    }
+    if (result.cleared) {
+      delete entry.quotaSuspension;
+      cleared++;
+    } else if (result.patch.quotaSuspension) {
+      entry.quotaSuspension = result.patch.quotaSuspension;
+    }
+    if (result.resumed) {
+      resumed.push({ sessionKey, laneId: result.resumed.laneId });
+    }
+  }
+  if ((resumed.length > 0 || cleared > 0) && params.log !== false) {
+    log.info("processed quota-suspension TTLs", {
+      resumed: resumed.length,
+      cleared,
+      ttlMs,
+    });
+  }
+  return { resumed, cleared };
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function getEntryUpdatedAt(entry?: SessionEntry): number {
   return entry?.updatedAt ?? Number.NEGATIVE_INFINITY;
 }

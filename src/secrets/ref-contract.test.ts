@@ -9,7 +9,10 @@ import {
 import {
   isValidExecSecretRefId,
   isValidFileSecretRefId,
+<<<<<<< HEAD
   isValidSecretRef,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   validateExecSecretRefId,
 } from "./ref-contract.js";
 
@@ -53,6 +56,7 @@ describe("exec secret ref id validation", () => {
     });
   });
 });
+<<<<<<< HEAD
 
 describe("secret ref validation", () => {
   it("rejects non-canonical refs with extra properties", () => {
@@ -69,3 +73,5 @@ describe("secret ref validation", () => {
     ).toBe(false);
   });
 });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

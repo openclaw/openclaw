@@ -63,6 +63,10 @@ export const de: TranslationMap = {
     docs: "Dokumentation",
     theme: "Design",
     colorMode: "Farbmodus",
+<<<<<<< HEAD
+=======
+    colorModeOption: "Farbmodus: {mode}",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resources: "Ressourcen",
     search: "Suchen",
     save: "Speichern",
@@ -203,7 +207,10 @@ export const de: TranslationMap = {
     inherit: "Übernehmen",
     defaultOption: "Standard ({value})",
     offExplicit: "Aus (explizit)",
+<<<<<<< HEAD
     auto: "auto",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     on: "Ein",
     off: "aus",
     full: "Vollständig",
@@ -1452,7 +1459,10 @@ export const de: TranslationMap = {
     jaJP: "日本語 (Japanisch)",
     ko: "한국어 (Koreanisch)",
     fr: "Français (Französisch)",
+<<<<<<< HEAD
     hi: "हिन्दी (Hindi)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ar: "العربية (Arabisch)",
     it: "Italiano (Italienisch)",
     tr: "Türkçe (Türkisch)",
@@ -1463,7 +1473,10 @@ export const de: TranslationMap = {
     vi: "Tiếng Việt (Vietnamesisch)",
     nl: "Nederlands (Niederländisch)",
     fa: "فارسی (Persisch)",
+<<<<<<< HEAD
     ru: "Русский (Russisch)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   cron: {
     quickCreate: {
@@ -1638,7 +1651,10 @@ export const de: TranslationMap = {
       wakeModeHelp:
         "Jetzt wird sofort ausgelöst. Nächster Heartbeat wartet auf den nächsten Zyklus.",
       payloadKind: "Was soll ausgeführt werden?",
+<<<<<<< HEAD
       command: "Command",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       systemEvent: "Nachricht in der Main-Zeitachse posten",
       agentTurn: "Assistentenaufgabe ausführen (isoliert)",
       systemEventHelp:

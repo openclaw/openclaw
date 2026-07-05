@@ -16,10 +16,14 @@ import {
   type ContextEngineHostSupport,
 } from "../../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../../context-engine/init.js";
+<<<<<<< HEAD
 import {
   getContextEngineRegistration,
   resolveContextEngine,
 } from "../../../context-engine/registry.js";
+=======
+import { getContextEngineFactory, resolveContextEngine } from "../../../context-engine/registry.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ContextEngineInfo } from "../../../context-engine/types.js";
 import { ensurePluginRegistryLoaded } from "../../../plugins/runtime/runtime-registry-loader.js";
 import { defaultSlotIdForKey } from "../../../plugins/slots.js";
@@ -257,7 +261,11 @@ async function resolveSelectedContextEngineInfo(params: {
   }
 
   ensureContextEnginesInitialized();
+<<<<<<< HEAD
   if (getContextEngineRegistration(engineId)?.lifecycle !== "runtime") {
+=======
+  if (!getContextEngineFactory(engineId)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     try {
       ensurePluginRegistryLoaded({
         scope: "all",
@@ -266,7 +274,11 @@ async function resolveSelectedContextEngineInfo(params: {
         onlyPluginIds: [engineId],
       });
     } catch (error) {
+<<<<<<< HEAD
       if (getContextEngineRegistration(engineId)?.lifecycle !== "runtime") {
+=======
+      if (!getContextEngineFactory(engineId)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const message = error instanceof Error ? error.message : String(error);
         return {
           warnings: [
@@ -275,7 +287,11 @@ async function resolveSelectedContextEngineInfo(params: {
         };
       }
     }
+<<<<<<< HEAD
     if (getContextEngineRegistration(engineId)?.lifecycle !== "runtime") {
+=======
+    if (!getContextEngineFactory(engineId)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return {
         warnings: [
           `- plugins.slots.contextEngine: could not inspect context engine "${engineId}" host requirements because it is not registered.`,

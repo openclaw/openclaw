@@ -106,6 +106,7 @@ describe("runCronIsolatedAgentTurn cron delivery awareness", () => {
     });
   });
 
+<<<<<<< HEAD
   it("refuses keyless implicit last-target delivery inherited from the shared main bucket, queuing no awareness", async () => {
     // #91613: a keyless implicit cron (sessionTarget "isolated", delivery.channel "last", no `to`)
     // would inherit the SHARED agent-main bucket's lastTo. In a multi-conversation agent that room
@@ -115,6 +116,9 @@ describe("runCronIsolatedAgentTurn cron delivery awareness", () => {
     // wrong room or the durable queue, and no main-session awareness event is queued. (This is the
     // single-conversation behavior change called out for the maintainer: a keyless cron must now
     // pin delivery.to / delivery.channel, or run from a session that carries its own context.)
+=======
+  it("does not queue main-session awareness for implicit last-target delivery", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await withTempCronHome(async (home) => {
       const storePath = await writeDefaultAgentSessionStoreEntries({
         "agent:main:main": {
@@ -139,8 +143,13 @@ describe("runCronIsolatedAgentTurn cron delivery awareness", () => {
         },
       });
 
+<<<<<<< HEAD
       expect(result.status).toBe("error");
       expect(result.delivered).toBeFalsy();
+=======
+      expect(result.status).toBe("ok");
+      expect(result.delivered).toBe(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
     });
   });

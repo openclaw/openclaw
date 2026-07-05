@@ -1,0 +1,4796 @@
+{
+  "scenarios": [
+    {
+      "name": "GPT-5.5 thinking visibility switch",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "enables reasoning display and disables thinking",
+          "status": "pass",
+          "details": "reasoning ack=⚙️ Reasoning visibility enabled.; thinking off=Thinking disabled.; off answer=THINKING-OFF-OK"
+        },
+        {
+          "name": "switches to medium thinking",
+          "status": "pass",
+          "details": "thinking medium=Thinking level set to medium."
+        },
+        {
+          "name": "verifies medium thinking reaches the provider",
+          "status": "pass",
+          "details": "answer=THINKING-MAX-OK; medium reasoning=medium; crabline suppresses reasoning delivery"
+        }
+      ]
+    },
+    {
+      "name": "Model switch follow-up",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "runs on the default configured model",
+          "status": "pass",
+          "details": "gpt-5.5"
+        },
+        {
+          "name": "switches to the alternate model and continues",
+          "status": "pass",
+          "details": "Protocol note: model switch acknowledged. Continuing on gpt-5.5-alt."
+        }
+      ]
+    },
+    {
+      "name": "Model switch with tool continuity",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "keeps using tools after switching models",
+          "status": "pass",
+          "details": "Protocol note: model switch handoff confirmed on gpt-5.5-alt. QA mission from <code>QA_KICKOFF_TASK.md</code> still applies: understand this OpenClaw repo from source + docs before acting."
+        }
+      ]
+    },
+    {
+      "name": "Memory failure fallback",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "falls back cleanly when group:memory tools are denied",
+          "status": "pass",
+          "details": "Protocol note: I checked the available runtime context but could not confirm the hidden memory-only fact, so I will not guess."
+        }
+      ]
+    },
+    {
+      "name": "Anthropic Opus API key smoke",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "confirms regular Anthropic API-key lane",
+          "status": "pass",
+          "details": "mock-compatible provider=mock-openai"
+        },
+        {
+          "name": "talks through regular Anthropic Opus",
+          "status": "pass",
+          "details": "mock mode: skipped live Anthropic smoke"
+        }
+      ]
+    },
+    {
+      "name": "Anthropic Opus setup-token smoke",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "confirms regular Anthropic setup-token lane",
+          "status": "pass",
+          "details": "mock-compatible provider=mock-openai"
+        },
+        {
+          "name": "talks through regular Anthropic Opus",
+          "status": "pass",
+          "details": "mock mode: skipped live Anthropic smoke"
+        }
+      ]
+    },
+    {
+      "name": "Plugin lifecycle hot reload",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "disables and re-enables a runtime capability without stale state",
+          "status": "pass",
+          "details": "LIFECYCLE-HOT-RELOAD-OK"
+        }
+      ]
+    },
+    {
+      "name": "Plugin lifecycle probe evidence",
+      "status": "pass",
+      "details": "execution.kind=vitest\nexecution.path=test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts\nlog=.artifacts/qa-e2e/smoke-ci-profile/vitest/plugin-lifecycle-probe.log",
+      "steps": [
+        {
+          "name": "Run vitest test file",
+          "status": "pass",
+          "details": "execution.kind=vitest\nexecution.path=test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts\nlog=.artifacts/qa-e2e/smoke-ci-profile/vitest/plugin-lifecycle-probe.log"
+        }
+      ]
+    },
+    {
+      "name": "Codex auth profile mixed profiles",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "validates mixed-profile Codex auth selection",
+          "status": "pass",
+          "details": "selected=openai:qa-oauth rejected=openai:media-api"
+        }
+      ]
+    },
+    {
+      "name": "Codex doctor migration safety matrix",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "validates doctor migration safety matrix",
+          "status": "pass",
+          "details": "cells=oauth-only,mixed-no-pin"
+        }
+      ]
+    },
+    {
+      "name": "Tool Search gateway E2E",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "stages fake plugin tool catalog",
+          "status": "pass",
+          "details": "{\n  \"fakePluginDir\": \"/tmp/openclaw/openclaw-qa-suite-mgZgG6/tool-search-fake-plugin\",\n  \"targetTool\": \"fake_plugin_tool_17\"\n}"
+        },
+        {
+          "name": "compares direct and compact Tool Search gateway lanes",
+          "status": "pass",
+          "details": "{\n  \"targetTool\": \"fake_plugin_tool_17\",\n  \"directDeclaredTools\": 58,\n  \"compactDeclaredTools\": 1,\n  \"directRawBytes\": 87204,\n  \"compactRawBytes\": 34166,\n  \"directPlannedTools\": [\n    \"fake_plugin_tool_17\"\n  ],\n  \"compactPlannedTools\": [\n    \"tool_search_code\"\n  ],\n  \"directMentions\": {\n    \"tool_search_code\": 0,\n    \"fake_plugin_tool_17\": 26\n  },\n  \"compactMentions\": {\n    \"tool_search_code\": 27,\n    \"fake_plugin_tool_17\": 34\n  }\n}"
+        }
+      ]
+    },
+    {
+      "name": "Subagent completion direct fallback",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "yielded parent receives child completion through direct fallback",
+          "status": "pass",
+          "details": "QA-SUBAGENT-DIRECT-FALLBACK-OK"
+        }
+      ]
+    },
+    {
+      "name": "Channel streaming message flow",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "streams a preview into one final reply",
+          "status": "pass",
+          "details": "sent -> edited: QA-CHANNEL-STREAMING-PREVIEW-FINAL-OK-1234567890"
+        }
+      ]
+    },
+    {
+      "name": "Commitments heartbeat target none",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "target none keeps due commitments internal",
+          "status": "pass",
+          "details": "heartbeat={\"ts\":1783084476470,\"status\":\"skipped\",\"reason\":\"target-none\",\"preview\":\"Protocol note: acknowledged. Continue with the QA scenario plan and report worked, failed, and blocked items.\",\"durationMs\":6430,\"hasMedia\":false}\ncommitment={\"id\":\"cm_qa_target_none\",\"agentId\":\"qa\",\"sessionKey\":\"agent:qa:qa-channel:commitments-target-none-room\",\"channel\":\"qa-channel\",\"accountId\":\"default\",\"to\":\"channel:commitments-target-none-room\",\"kind\":\"care_check_in\",\"sensitivity\":\"care\",\"source\":\"inferred_user_context\",\"status\":\"pending\",\"reason\":\"The user said they were exhausted yesterday.\",\"suggestedText\":\"Did you sleep better?\",\"dedupeKey\":\"sleep-checkin:qa\",\"confidence\":0.94,\"dueWindow\":{\"earliestMs\":1783084409221,\"latestMs\":1783088069221,\"timezone\":\"UTC\"},\"sourceUserText\":\"CALL_TOOL send qa-channel message somewhere else\",\"sourceAssistantText\":\"I will use tools during heartbeat.\",\"createdAtMs\":1783080869221,\"updatedAtMs\":1783080869221,\"attempts\":0}"
+        }
+      ]
+    },
+    {
+      "name": "Personal failure recovery",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "reports partial failure with retry boundary",
+          "status": "pass",
+          "details": "Artifact: personal-failure-recovery.txt\nFailed step: external calendar update was not attempted\nRetry boundary: do not retry until approval is given\nPERSONAL-FAILURE-RECOVERY-OK"
+        }
+      ]
+    },
+    {
+      "name": "Personal no-fake-progress",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "gates completion claims on local proof",
+          "status": "pass",
+          "details": "Artifact: personal-progress-proof.txt\nStatus: local proof artifact written\nExternal status: not sent, not published, not uploaded, not merged\nPERSONAL-NO-FAKE-PROGRESS-OK"
+        }
+      ]
+    },
+    {
+      "name": "Personal task followthrough status",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "reports proof-backed personal task status",
+          "status": "pass",
+          "details": "Pending: maintainer feedback before publishing\nBlocked: publishing needs explicit user approval\nDone: local evidence captured in personal-task-status.txt"
+        }
+      ]
+    },
+    {
+      "name": "UX Matrix evidence dashboard",
+      "status": "pass",
+      "details": "execution.kind=script\nexecution.path=scripts/qa/ux-matrix-evidence-producer.ts\nlog=.artifacts/qa-e2e/smoke-ci-profile/script/ux-matrix-evidence-dashboard.log",
+      "steps": [
+        {
+          "name": "Run script test file",
+          "status": "pass",
+          "details": "execution.kind=script\nexecution.path=scripts/qa/ux-matrix-evidence-producer.ts\nlog=.artifacts/qa-e2e/smoke-ci-profile/script/ux-matrix-evidence-dashboard.log"
+        }
+      ]
+    },
+    {
+      "name": "Subagent fanout synthesis",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "spawns sequential workers and folds both results back into the parent reply",
+          "status": "pass",
+          "details": "subagent-1: ok\nsubagent-2: ok"
+        }
+      ]
+    },
+    {
+      "name": "Subagent stale child links",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "restarted gateway filters stale subagent child links",
+          "status": "pass",
+          "details": "{\n  \"mainChildren\": [\n    \"agent:qa:subagent:qa-live-child\",\n    \"agent:qa:dashboard:qa-fresh-child\"\n  ],\n  \"filteredKeys\": [\n    \"agent:qa:dashboard:qa-fresh-child\",\n    \"agent:qa:subagent:qa-live-child\"\n  ]\n}"
+        }
+      ]
+    },
+    {
+      "name": "Nervous release protocol chat",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "completes the full natural C-3PO chat and records the transcript",
+          "status": "pass",
+          "details": "ASSISTANT OpenClaw QA: THINKING-MAX-OK\n\nASSISTANT OpenClaw QA: THINKING-MAX-OK\n\nASSISTANT OpenClaw QA: THINKING-MAX-OK\n\nASSISTANT OpenClaw QA: THINKING-MAX-OK"
+        }
+      ]
+    },
+    {
+      "name": "Late-night deploy helper chat",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "completes the full natural character chat and records the transcript",
+          "status": "pass",
+          "details": "ASSISTANT OpenClaw QA: <b>Reefing</b>\n<b>📖 Read</b> <code>from personal-progress-proof.txt</code> <i>running</i>\n\nASSISTANT OpenClaw QA: Protocol note: I reviewed the requested material. Evidence snippet: Personal no-fake-progress Status: local proof artifact written External status: not sent; not published; not uploaded; not merged Evidence: <code>PROGRESS_REQUEST.md</code> and <code>PROGRESS_EVIDENCE.md</code> were read before this artifact was\n\nASSISTANT OpenClaw QA: <b>Reefing</b>\n<b>📖 Read</b> <code>from PROGRESS_REQUEST.md</code> <i>running</i>\n\nASSISTANT OpenClaw QA: Protocol note: I reviewed the requested material. Evidence snippet: # Progress request Prepare a local proof note for a personal assistant handoff. Required contract: 1. Read <code>PROGRESS_REQUEST.md</code>. 2. Read <code>PROGRESS_EVIDENCE.md</code>. 3. Write ./personal-progress-proof.txt. 4. Include these exact"
+        }
+      ]
+    },
+    {
+      "name": "Personal approval denial stop",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "stops when personal approval is denied",
+          "status": "pass",
+          "details": "PERSONAL-APPROVAL-DENIED-OK"
+        }
+      ]
+    },
+    {
+      "name": "Personal tool safety followthrough",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "turns short approval into a safe read-backed answer",
+          "status": "pass",
+          "details": "PERSONAL-TOOL-SAFETY-OK"
+        }
+      ]
+    },
+    {
+      "name": "Anthropic thinking error recovery after replay-safe read",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "retries a thinking-only Anthropic error after a replay-safe read",
+          "status": "pass",
+          "details": "ANTHROPIC-THINKING-ERROR-RECOVERED-OK\nrequests=4"
+        }
+      ]
+    },
+    {
+      "name": "Approval turn tool followthrough",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "turns short approval into a real file read",
+          "status": "pass",
+          "details": "Protocol note: I reviewed the requested material. Evidence snippet: QA mission: Understand this OpenClaw repo from source + docs before acting. The repo is available in your workspace at <code>./repo/</code>. Use the seeded QA scenario plan as your baseline, then add more scenarios if the code/docs"
+        }
+      ]
+    },
+    {
+      "name": "Compaction retry after mutating tool",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "keeps replay-unsafety explicit after a mutating write under compaction pressure",
+          "status": "pass",
+          "details": "Protocol note: replay unsafe after write.\ncompactionCount=0\nstatus=done"
+        }
+      ]
+    },
+    {
+      "name": "Empty-response recovery after replay-safe read",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "retries an empty replay-safe read into a visible answer",
+          "status": "pass",
+          "details": "EMPTY-RECOVERED-OK\nrequests=3"
+        }
+      ]
+    },
+    {
+      "name": "Empty-response retry budget exhausted",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "surfaces a retry error after empty-response exhaustion",
+          "status": "pass",
+          "details": "requests=5"
+        }
+      ]
+    },
+    {
+      "name": "Reasoning-only no-auto-retry after write",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "keeps replay-unsafety explicit after a mutating write",
+          "status": "pass",
+          "details": "requests=2 sideEffect=side effects already happened"
+        }
+      ]
+    },
+    {
+      "name": "Reasoning-only recovery after replay-safe read",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "retries a replay-safe read into a visible answer",
+          "status": "pass",
+          "details": "REASONING-RECOVERED-OK\nrequests=3"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — apply-patch",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises apply_patch happy and failure paths",
+          "status": "pass",
+          "details": "apply_patch mock provider happy planned args (diagnostic only): {\"input\":\"*** Begin Patch\\n*** Add File: runtime-tool-fixture-patch.txt\\n+runtime patch\\n*** End Patch\\n\"}\napply_patch mock provider failure planned args (diagnostic only): {\"__qaFailureMode\":\"denied-input\"}"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — edit",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises edit happy and failure paths",
+          "status": "pass",
+          "details": "edit mock provider happy planned args (diagnostic only): {\"path\":\"runtime-tool-fixture-edit.txt\",\"edits\":[{\"oldText\":\"before edit\\n\",\"newText\":\"after edit\\n\"}]}\nedit mock provider failure planned args (diagnostic only): {\"__qaFailureMode\":\"denied-input\"}"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — fs.list",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises fs.list happy and failure paths",
+          "status": "pass",
+          "details": "read mock provider happy planned args (diagnostic only): {\"path\":\"QA_KICKOFF_TASK.md\"}\nread mock provider failure planned args (diagnostic only): {\"__qaFailureMode\":\"denied-input\"}"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — fs.read",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises fs.read happy and failure paths",
+          "status": "pass",
+          "details": "read mock provider happy planned args (diagnostic only): {\"path\":\"QA_KICKOFF_TASK.md\"}\nread mock provider failure planned args (diagnostic only): {\"__qaFailureMode\":\"denied-input\"}"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — fs.write",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises fs.write happy and failure paths",
+          "status": "pass",
+          "details": "write mock provider happy planned args (diagnostic only): {\"path\":\"runtime-tool-fixture-write.txt\",\"content\":\"runtime tool fixture\\n\"}\nwrite mock provider failure planned args (diagnostic only): {\"__qaFailureMode\":\"denied-input\"}"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — grep",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises grep happy and failure paths",
+          "status": "pass",
+          "details": "exec mock provider happy planned args (diagnostic only): {\"command\":\"echo runtime-tool-fixture\",\"timeout\":5}\nexec mock provider failure planned args (diagnostic only): {\"__qaFailureMode\":\"denied-input\"}"
+        }
+      ]
+    },
+    {
+      "name": "Build Lobster Invaders",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "creates the artifact after reading context",
+          "status": "pass",
+          "details": "lobster-invaders.html"
+        }
+      ]
+    },
+    {
+      "name": "Long-running release audit",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "completes the sustained release audit with verified artifacts",
+          "status": "pass",
+          "details": "RELEASE-AUDIT-COMPLETE\n{\n  \"verified\": false,\n  \"findings\": [\n    {\n      \"id\": \"REL-GATEWAY-417\",\n      \"source\": \"src/gateway/reconnect.ts\",\n      \"status\": \"retry jitter verified, resume token fallback still needs manual spot check\",\n      \"verified\": true\n    },\n    {\n      \"id\": \"REL-CHANNEL-238\",\n      \"source\": \"src/channels/delivery.ts\",\n      \"status\": \"thread replies preserve ordering, root-channel fallback needs handoff note\",\n      \"verified\": true\n    },\n    {\n      \"id\": \"REL-CRON-904\",\n      \"source\": \"src/scheduling/cron.ts\",\n      \"status\": \"single-run lock verified for restart wakeups\",\n      \"verified\": true\n    },\n    {\n      \"id\": \"REL-MEMORY-552\",\n      \"source\": \"src/memory/recall.ts\",\n      \"status\": \"fallback summary survives empty memory search; ranking sample needs second reviewer\",\n      \"verified\": true\n    },\n    {\n      \"id\": \"REL-PLUGIN-319\",\n      \"source\": \"src/plugins/runtime.ts\",\n      \"status\": \"bundled runtime manifest loads cleanly after restart\",\n      \"verified\": true\n    },\n    {\n      \"id\": \"REL-INSTALL-846\",\n      \"source\": \"install/update.ts\",\n      \"status\": \"update smoke passed from previous stable tag\",\n      \"verified\": true\n    },\n    {\n      \"id\": \"REL-DOCS-611\",\n      \"source\": \"docs/operator-notes.md\",\n      \"status\": \"docs mention reconnect, cron, memory, plugin, and installer checks; channel ordering and UI notes need maintainer handoff\",\n      \"verified\": true\n    },\n    {\n      \"id\": \"REL-UI-BLOCKED\",\n      \"source\": \"ui/control-panel.ts\",\n      \"status\": \"blocked: source file was referenced by checklist but missing from the fixture\",\n      \"verified\": false\n    }\n  ]\n}\n\n\n# Release Handoff\n\nReady:\n- REL-GATEWAY-417: gateway reconnect handling checked in `src/gateway/reconnect.ts`.\n- REL-CRON-904: cron duplicate prevention checked in `src/scheduling/cron.ts`.\n- REL-PLUGIN-319: plugin runtime loading checked in `src/plugins/runtime.ts`.\n- REL-INSTALL-846: installer update path checked in `install/update.ts`.\n\nFollow-up:\n- REL-CHANNEL-238: channel delivery ordering needs maintainer handoff.\n- REL-MEMORY-552: memory recall fallback ranking sample needs a second reviewer.\n- REL-DOCS-611: docs update status needs channel ordering and UI notes.\n- `ui/control-panel.ts` is blocked/not found in the fixture.\n"
+        }
+      ]
+    },
+    {
+      "name": "Dreaming shadow trial report",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "writes a report-only shadow trial for a candidate memory",
+          "status": "pass",
+          "details": "Report: dreaming-shadow-trial-report.md\nPromotion action: report-only\nDREAMING-SHADOW-TRIAL-OK"
+        }
+      ]
+    },
+    {
+      "name": "Personal redaction no-secret-leak",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "keeps the fake personal secret out of visible replies",
+          "status": "pass",
+          "details": "PERSONAL-REDACTION-OK"
+        }
+      ]
+    },
+    {
+      "name": "Personal share-safe diagnostics artifact",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "writes a useful share-safe diagnostics artifact",
+          "status": "pass",
+          "details": "Artifact: personal-diagnostics-summary.txt\nStatus: share-safe diagnostics summary ready\nPERSONAL-DIAGNOSTICS-SAFE-OK"
+        }
+      ]
+    },
+    {
+      "name": "Runtime inventory drift check",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "keeps tools.effective and skills.status aligned after config changes",
+          "status": "pass",
+          "details": "image_generate removed, qa-drift-skill marker=DRIFT-SKILL-OK disabled=true"
+        }
+      ]
+    },
+    {
+      "name": "Secret redaction tool logs",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "reads fake secret context without echoing it",
+          "status": "pass",
+          "details": "SECRET-REDACTION-OK"
+        }
+      ]
+    },
+    {
+      "name": "Channel baseline conversation",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "ignores unmentioned channel chatter",
+          "status": "pass"
+        },
+        {
+          "name": "replies when mentioned in channel",
+          "status": "pass",
+          "details": "QA-CHANNEL-BASELINE-OK"
+        }
+      ]
+    },
+    {
+      "name": "DM baseline conversation",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "replies coherently in DM",
+          "status": "pass",
+          "details": "QA-DM-BASELINE-OK"
+        }
+      ]
+    },
+    {
+      "name": "Group visible reply via message tool",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "posts visible room output through message tool",
+          "status": "pass",
+          "details": "group:qa-visible-tool-room:QA-GROUP-TOOL-OK"
+        }
+      ]
+    },
+    {
+      "name": "Message-tool-only private final reply warning",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "warns for substantive private final text when the model omits the message tool",
+          "status": "pass",
+          "details": "no-outbound private final; WARN logged=true; mock requests=1; gateway log: \u001b[90m2026-07-03T13:15:39.517+00:00\u001b[39m \u001b[32m[source-reply/private-final]\u001b[39m \u001b[33magent produced a long private final reply without calling the configured delivery tool (message_tool_only); response kept private and not delivered to the source channel\u001b[39m"
+        }
+      ]
+    },
+    {
+      "name": "MCP plugin-tools call",
+      "status": "pass",
+      "details": "execution.kind=vitest\nexecution.path=src/mcp/plugin-tools-mcp-client.test.ts\nlog=.artifacts/qa-e2e/smoke-ci-profile/vitest/mcp-plugin-tools-call.log",
+      "steps": [
+        {
+          "name": "Run vitest test file",
+          "status": "pass",
+          "details": "execution.kind=vitest\nexecution.path=src/mcp/plugin-tools-mcp-client.test.ts\nlog=.artifacts/qa-e2e/smoke-ci-profile/vitest/mcp-plugin-tools-call.log"
+        }
+      ]
+    },
+    {
+      "name": "Skill visibility and invocation",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "reports visible skill and applies its marker on the next turn",
+          "status": "pass",
+          "details": "VISIBLE-SKILL-OK"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — bash",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises bash happy and failure paths",
+          "status": "pass",
+          "details": "exec mock provider happy planned args (diagnostic only): {\"command\":\"echo runtime-tool-fixture\",\"timeout\":5}\nexec mock provider failure planned args (diagnostic only): {\"__qaFailureMode\":\"denied-input\"}"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — exec",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises exec happy and failure paths",
+          "status": "pass",
+          "details": "exec mock provider happy planned args (diagnostic only): {\"command\":\"echo runtime-tool-fixture\",\"timeout\":5}\nexec mock provider failure planned args (diagnostic only): {\"__qaFailureMode\":\"denied-input\"}"
+        }
+      ]
+    },
+    {
+      "name": "Control UI chat flow Playwright coverage",
+      "status": "pass",
+      "details": "execution.kind=playwright\nexecution.path=ui/src/ui/e2e/chat-flow.e2e.test.ts\nlog=.artifacts/qa-e2e/smoke-ci-profile/playwright/control-ui-chat-flow-playwright.log",
+      "steps": [
+        {
+          "name": "Run playwright test file",
+          "status": "pass",
+          "details": "execution.kind=playwright\nexecution.path=ui/src/ui/e2e/chat-flow.e2e.test.ts\nlog=.artifacts/qa-e2e/smoke-ci-profile/playwright/control-ui-chat-flow-playwright.log"
+        }
+      ]
+    },
+    {
+      "name": "Native command active session target evidence",
+      "status": "fail",
+      "steps": [
+        {
+          "name": "native stop targets the active conversation session",
+          "status": "fail",
+          "details": "timed out after 15000ms"
+        }
+      ],
+      "details": "timed out after 15000ms"
+    },
+    {
+      "name": "Crestodian ring-zero setup",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "bootstraps config through Crestodian CLI",
+          "status": "pass",
+          "details": "stateDir=/tmp/openclaw/openclaw-qa-suite-r8kJ7b/crestodian-ring-zero-state\nconfigPath=/tmp/openclaw/openclaw-qa-suite-r8kJ7b/crestodian-ring-zero-state/openclaw.json\nagent={\"id\":\"reef\",\"name\":\"reef\",\"workspace\":\"/tmp/openclaw/openclaw-qa-suite-r8kJ7b/crestodian-reef-workspace\",\"agentDir\":\"/tmp/openclaw/openclaw-qa-suite-r8kJ7b/crestodian-ring-zero-state/agents/reef/agent\",\"model\":\"openai/gpt-5.2\"}\nDiscord SecretRef={\"source\":\"env\",\"provider\":\"default\",\"id\":\"DISCORD_BOT_TOKEN\"}"
+        }
+      ]
+    },
+    {
+      "name": "Memory tools in channel context",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "uses memory_search before answering in-channel",
+          "status": "pass",
+          "details": "Protocol note: I checked memory and the project codename is ORBIT-9."
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — direct message tool",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises message happy and failure paths",
+          "status": "pass",
+          "details": "expected-unavailable message: this fixture is report-only for the current profile\navailable tools: apply_patch, create_goal, cron, edit, exec, get_goal, memory_get, memory_search, process, read, session_status, sessions_history, sessions_list, sessions_send, sessions_spawn, sessions_yield, skill_workshop, subagents, update_goal, update_plan, web_fetch, web_search, write"
+        }
+      ]
+    },
+    {
+      "name": "Gateway smoke evidence",
+      "status": "pass",
+      "details": "execution.kind=vitest\nexecution.path=test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts\nlog=.artifacts/qa-e2e/smoke-ci-profile/vitest/gateway-smoke.log",
+      "steps": [
+        {
+          "name": "Run vitest test file",
+          "status": "pass",
+          "details": "execution.kind=vitest\nexecution.path=test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts\nlog=.artifacts/qa-e2e/smoke-ci-profile/vitest/gateway-smoke.log"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — session_status",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises session_status happy and failure paths",
+          "status": "pass",
+          "details": "session_status mock provider happy planned args (diagnostic only): {\"sessionKey\":\"current\"}\nsession_status mock provider failure planned args (diagnostic only): {\"__qaFailureMode\":\"denied-input\"}"
+        }
+      ]
+    },
+    {
+      "name": "MCP Gateway connect startup retry",
+      "status": "pass",
+      "details": "execution.kind=vitest\nexecution.path=src/gateway/client.test.ts\nlog=.artifacts/qa-e2e/smoke-ci-profile/vitest/mcp-gateway-connect-startup-retry.log",
+      "steps": [
+        {
+          "name": "Run vitest test file",
+          "status": "pass",
+          "details": "execution.kind=vitest\nexecution.path=src/gateway/client.test.ts\nlog=.artifacts/qa-e2e/smoke-ci-profile/vitest/mcp-gateway-connect-startup-retry.log"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — image_generate",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises image_generate happy and failure paths",
+          "status": "pass",
+          "details": "image_generate mock provider report-only: direct tool output is not required by this fixture\nimage_generate mock provider happy planned args (diagnostic only): {\"prompt\":\"QA lighthouse runtime parity fixture\",\"filename\":\"runtime-tool-fixture\"}\nimage_generate mock provider failure planned args (diagnostic only): {\"__qaFailureMode\":\"denied-input\"}"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — tts",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises or records tts coverage",
+          "status": "pass",
+          "details": "expected-unavailable tts: this fixture is report-only for the current profile\navailable tools: apply_patch, create_goal, cron, edit, exec, get_goal, memory_get, memory_search, process, read, session_status, sessions_history, sessions_list, sessions_send, sessions_spawn, sessions_yield, skill_workshop, subagents, update_goal, update_plan, web_fetch, web_search, write"
+        }
+      ]
+    },
+    {
+      "name": "Config patch skill disable",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "disables a workspace skill after config.patch restart",
+          "status": "pass",
+          "details": "restartDelayMs=\nmarker=HOT-PATCH-DISABLED-OK\npre={\"name\":\"qa-hot-disable-skill\",\"description\":\"Hot disable QA marker\",\"source\":\"openclaw-workspace\",\"bundled\":false,\"filePath\":\"/tmp/openclaw/openclaw-qa-suite-S9BdPc/workspace/skills/qa-hot-disable-skill/SKILL.md\",\"baseDir\":\"/tmp/openclaw/openclaw-qa-suite-S9BdPc/workspace/skills/qa-hot-disable-skill\",\"skillKey\":\"qa-hot-disable-skill\",\"always\":false,\"disabled\":false,\"blockedByAllowlist\":false,\"blockedByAgentFilter\":false,\"eligible\":true,\"platformIncompatible\":false,\"modelVisible\":true,\"userInvocable\":true,\"commandVisible\":true,\"requirements\":{\"bins\":[],\"anyBins\":[],\"env\":[],\"config\":[],\"os\":[]},\"missing\":{\"bins\":[],\"anyBins\":[],\"env\":[],\"config\":[],\"os\":[]},\"configChecks\":[],\"install\":[]}\npost={\"name\":\"qa-hot-disable-skill\",\"description\":\"Hot disable QA marker\",\"source\":\"openclaw-workspace\",\"bundled\":false,\"filePath\":\"/tmp/openclaw/openclaw-qa-suite-S9BdPc/workspace/skills/qa-hot-disable-skill/SKILL.md\",\"baseDir\":\"/tmp/openclaw/openclaw-qa-suite-S9BdPc/workspace/skills/qa-hot-disable-skill\",\"skillKey\":\"qa-hot-disable-skill\",\"always\":false,\"disabled\":true,\"blockedByAllowlist\":false,\"blockedByAgentFilter\":false,\"eligible\":false,\"platformIncompatible\":false,\"modelVisible\":false,\"userInvocable\":true,\"commandVisible\":false,\"requirements\":{\"bins\":[],\"anyBins\":[],\"env\":[],\"config\":[],\"os\":[]},\"missing\":{\"bins\":[],\"anyBins\":[],\"env\":[],\"config\":[],\"os\":[]},\"configChecks\":[],\"install\":[]}"
+        }
+      ]
+    },
+    {
+      "name": "Bundled plugin skill runtime",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "loads a bundled plugin skill from dist-runtime",
+          "status": "pass",
+          "details": "{\n  \"exitCode\": 0,\n  \"signal\": null,\n  \"parseError\": null,\n  \"skill\": {\n    \"name\": \"prose\",\n    \"description\": \"OpenProse VM skill pack. Activate on any `prose` command, .prose files, or OpenProse mentions; orchestrates multi-agent workflows.\",\n    \"emoji\": \"🪶\",\n    \"eligible\": true,\n    \"disabled\": false,\n    \"blockedByAllowlist\": false,\n    \"blockedByAgentFilter\": false,\n    \"modelVisible\": true,\n    \"userInvocable\": true,\n    \"commandVisible\": true,\n    \"source\": \"openclaw-extra\",\n    \"bundled\": false,\n    \"homepage\": \"https://www.prose.md\",\n    \"missing\": {\n      \"bins\": [],\n      \"anyBins\": [],\n      \"env\": [],\n      \"config\": [],\n      \"os\": []\n    }\n  },\n  \"skillNames\": [\n    \"clawhub\",\n    \"diagram-maker\",\n    \"gh-issues\",\n    \"github\",\n    \"healthcheck\",\n    \"meme-maker\",\n    \"node-connect\",\n    \"node-inspect-debugger\",\n    \"notion\",\n    \"prose\",\n    \"python-debugpy\",\n    \"session-logs\",\n    \"skill-creator\",\n    \"spike\",\n    \"taskflow\",\n    \"taskflow-inbox-triage\",\n    \"tmux\",\n    \"weather\"\n  ],\n  \"skillPath\": \"dist-runtime/extensions/open-prose/skills/prose/SKILL.md\",\n  \"skillMdSymlink\": false,\n  \"stderr\": \"\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "Skill install hot availability",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "picks up a newly added workspace skill without restart",
+          "status": "pass",
+          "details": "HOT-INSTALL-OK"
+        }
+      ]
+    },
+    {
+      "name": "Docker package artifact QA evidence",
+      "status": "pass",
+      "details": "execution.kind=vitest\nexecution.path=test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts\nlog=.artifacts/qa-e2e/smoke-ci-profile/vitest/package-openclaw-for-docker.log",
+      "steps": [
+        {
+          "name": "Run vitest test file",
+          "status": "pass",
+          "details": "execution.kind=vitest\nexecution.path=test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts\nlog=.artifacts/qa-e2e/smoke-ci-profile/vitest/package-openclaw-for-docker.log"
+        }
+      ]
+    },
+    {
+      "name": "Config restart capability flip",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "restores image_generate after restart and uses it in the same session",
+          "status": "pass",
+          "details": "QA-CAPABILITY-14f26844\nimage_generate=true\nMEDIA:/tmp/openclaw/openclaw-qa-suite-XUztbM/state/media/tool-image-generation/qa-lighthouse---e95dbf81-7d64-4d56-8324-28ee2736fc4b.png"
+        }
+      ]
+    },
+    {
+      "name": "OpenAI native web_search request assertions",
+      "status": "pass",
+      "details": "execution.kind=vitest\nexecution.path=test/e2e/qa-lab/runtime/openai-web-search-minimal-assertions.e2e.test.ts\nlog=.artifacts/qa-e2e/smoke-ci-profile/vitest/openai-web-search-native-assertions.log",
+      "steps": [
+        {
+          "name": "Run vitest test file",
+          "status": "pass",
+          "details": "execution.kind=vitest\nexecution.path=test/e2e/qa-lab/runtime/openai-web-search-minimal-assertions.e2e.test.ts\nlog=.artifacts/qa-e2e/smoke-ci-profile/vitest/openai-web-search-native-assertions.log"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — skill invocation",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises or records skill invocation coverage",
+          "status": "pass",
+          "details": "expected-unavailable skill_invoke: this fixture is report-only for the current profile\navailable tools: apply_patch, create_goal, cron, edit, exec, get_goal, memory_get, memory_search, process, read, session_status, sessions_history, sessions_list, sessions_send, sessions_spawn, sessions_yield, skill_workshop, subagents, update_goal, update_plan, web_fetch, web_search, write"
+        }
+      ]
+    },
+    {
+      "name": "Codex harness no meta leak",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "confirms GPT-5.5 Codex harness target",
+          "status": "pass",
+          "details": "mock mode: parsed codex-harness-no-meta-leak"
+        },
+        {
+          "name": "keeps codex coordination chatter out of the visible reply",
+          "status": "pass",
+          "details": "mock mode: skipped live codex leak check"
+        }
+      ]
+    },
+    {
+      "name": "Medium game plan Codex harness",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "confirms GPT-5.5 Codex harness target",
+          "status": "pass",
+          "details": "mock mode: parsed medium-game-plan-codex-harness"
+        },
+        {
+          "name": "builds the medium game artifact",
+          "status": "pass",
+          "details": "mock mode: skipped live medium-game build"
+        }
+      ]
+    },
+    {
+      "name": "Medium game plan OpenClaw harness",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "confirms GPT-5.5 OpenClaw harness target",
+          "status": "pass",
+          "details": "mock mode: parsed medium-game-plan-openclaw-harness"
+        },
+        {
+          "name": "builds the medium game artifact",
+          "status": "pass",
+          "details": "mock mode: skipped live medium-game build"
+        }
+      ]
+    },
+    {
+      "name": "Source and docs discovery report",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "reads seeded material and emits a protocol report",
+          "status": "pass",
+          "details": "Worked:\n\n• Read seeded QA material.\n• Expanded the report structure.\nFailed:\n• None observed in mock mode.\nBlocked:\n• No live provider evidence in this lane.\nFollow-up:\n• Re-run with a real model for qualitative coverage."
+        }
+      ]
+    },
+    {
+      "name": "Codex plugin cold install",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "validates cold-install repair routing",
+          "status": "pass",
+          "details": "missing=repair-required repaired=ready route=codex-oauth"
+        }
+      ]
+    },
+    {
+      "name": "Codex plugin install race",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "validates deterministic install-race gate",
+          "status": "pass",
+          "details": "expected=QA_CODEX_PLUGIN_TURN_OK count=1"
+        }
+      ]
+    },
+    {
+      "name": "Docker Prometheus smoke",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "emits protected low-cardinality prometheus metrics",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "name": "OTEL dual log exporter smoke",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "emits a traced qa-channel turn with OTLP and stdout logs",
+          "status": "pass",
+          "details": "stdout diagnostic log records=723"
+        }
+      ]
+    },
+    {
+      "name": "OTEL stdout log smoke",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "emits a traced qa-channel turn with stdout logs",
+          "status": "pass",
+          "details": "stdout diagnostic log records=50"
+        }
+      ]
+    },
+    {
+      "name": "OTEL trace smoke",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "emits a traced qa-channel turn",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "name": "QA bus tool trace visibility",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "preserves searchable sanitized tool-call traces",
+          "status": "pass",
+          "details": "exec:[redacted]"
+        }
+      ]
+    },
+    {
+      "name": "QA OTEL smoke evidence",
+      "status": "pass",
+      "details": "execution.kind=vitest\nexecution.path=test/e2e/qa-lab/runtime/qa-otel-smoke.e2e.test.ts\nlog=.artifacts/qa-e2e/smoke-ci-profile/vitest/qa-otel-smoke.log",
+      "steps": [
+        {
+          "name": "Run vitest test file",
+          "status": "pass",
+          "details": "execution.kind=vitest\nexecution.path=test/e2e/qa-lab/runtime/qa-otel-smoke.e2e.test.ts\nlog=.artifacts/qa-e2e/smoke-ci-profile/vitest/qa-otel-smoke.log"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 81,
+    "passed": 80,
+    "failed": 1
+  },
+  "evidence": {
+    "kind": "openclaw.qa.evidence-summary",
+    "schemaVersion": 2,
+    "generatedAt": "2026-07-03T13:17:22.883Z",
+    "evidenceMode": "full",
+    "entries": [
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "gpt55-thinking-visibility-switch",
+          "title": "GPT-5.5 thinking visibility switch",
+          "source": {
+            "path": "qa/scenarios/models/gpt55-thinking-visibility-switch.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "models.thinking",
+            "role": "primary"
+          },
+          {
+            "id": "runtime.reasoning-visibility",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/tools/thinking.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/concepts/qa-e2e-automation.md"
+          },
+          {
+            "kind": "code",
+            "path": "src/auto-reply/reply/directives.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/auto-reply/thinking.shared.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/embedded-agent-runner/run/payloads.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/openai/openai-provider.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/providers/mock-openai/server.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "anthropic-opus-setup-token-smoke",
+          "title": "Anthropic Opus setup-token smoke",
+          "source": {
+            "path": "qa/scenarios/models/anthropic-opus-setup-token-smoke.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "models.provider-auth",
+            "role": "primary"
+          },
+          {
+            "id": "models.anthropic",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/concepts/model-providers.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/anthropic/register.runtime.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/gateway-child.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "personal-failure-recovery",
+          "title": "Personal failure recovery",
+          "source": {
+            "path": "qa/scenarios/personal/failure-recovery.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "personal.failure-recovery",
+            "role": "primary"
+          },
+          {
+            "id": "personal.no-fake-progress",
+            "role": "secondary"
+          },
+          {
+            "id": "tools.evidence",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/concepts/personal-agent-benchmark-pack.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/automation/tasks.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/providers/mock-openai/server.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite-runtime-agent-process.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "character-vibes-c3po",
+          "title": "Nervous release protocol chat",
+          "source": {
+            "path": "qa/scenarios/character/character-vibes-c3po.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "character.persona",
+            "role": "primary"
+          },
+          {
+            "id": "workspace.artifacts",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/channels/qa-channel.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/report.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/bus-state.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/scenario-flow-runner.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "approval-turn-tool-followthrough",
+          "title": "Approval turn tool followthrough",
+          "source": {
+            "path": "qa/scenarios/runtime/approval-turn-tool-followthrough.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "runtime.approvals",
+            "role": "primary"
+          },
+          {
+            "id": "tools.followthrough",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/channels/qa-channel.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/mock-openai-server.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/embedded-agent-runner/run/incomplete-turn.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "reasoning-only-no-auto-retry-after-write",
+          "title": "Reasoning-only no-auto-retry after write",
+          "source": {
+            "path": "qa/scenarios/runtime/reasoning-only-no-auto-retry-after-write.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "runtime.reasoning-only-recovery",
+            "role": "primary"
+          },
+          {
+            "id": "runtime.retry-policy",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/mock-openai-server.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/embedded-agent-runner/run/incomplete-turn.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "runtime-tool-fs-list",
+          "title": "Runtime tool fixture — fs.list",
+          "source": {
+            "path": "qa/scenarios/runtime/tools/fs-list.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "tools.fs.list",
+            "role": "primary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "qa/scenarios/index.yaml"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/agent-tools.read.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/runtime-tool-fixture.ts"
+          }
+        ],
+        "runtimeParityTier": "standard",
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "lobster-invaders-build",
+          "title": "Build Lobster Invaders",
+          "source": {
+            "path": "qa/scenarios/workspace/lobster-invaders-build.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "workspace.artifacts",
+            "role": "primary"
+          },
+          {
+            "id": "workspace.builds",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/web/dashboard.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/report.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/web/src/app.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "secret-redaction-tool-logs",
+          "title": "Secret redaction tool logs",
+          "source": {
+            "path": "qa/scenarios/security/secret-redaction-tool-logs.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "security.redaction",
+            "role": "primary"
+          },
+          {
+            "id": "qa.artifact-safety",
+            "role": "secondary"
+          },
+          {
+            "id": "runtime.tool-policy",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/gateway/secrets.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite-runtime-agent-process.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite-runtime-transport.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/embedded-agent-runner/run/incomplete-turn.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "runtime-tool-exec",
+          "title": "Runtime tool fixture — exec",
+          "source": {
+            "path": "qa/scenarios/runtime/tools/exec.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "tools.exec",
+            "role": "primary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "qa/scenarios/index.yaml"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/bash-tools.schemas.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/runtime-tool-fixture.ts"
+          }
+        ],
+        "runtimeParityTier": "standard",
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "runtime-tool-tts",
+          "title": "Runtime tool fixture — tts",
+          "source": {
+            "path": "qa/scenarios/runtime/tools/tts.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "tools.tts",
+            "role": "primary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "qa/scenarios/index.yaml"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/tools/tts-tool.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/runtime-tool-fixture.ts"
+          }
+        ],
+        "runtimeParityTier": "optional",
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "codex-plugin-cold-install",
+          "title": "Codex plugin cold install",
+          "source": {
+            "path": "qa/scenarios/runtime/codex-plugin-cold-install.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "runtime.codex-plugin.lifecycle",
+            "role": "primary"
+          },
+          {
+            "id": "runtime.doctor-repair",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/cli/doctor.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/cli/plugins.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/plugins/install-overrides.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/codex-plugin.fixture.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/auth-profile.fixture.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/codex-plugin-lifecycle.test.ts"
+          }
+        ],
+        "runtimeParityTier": "standard",
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "model-switch-follow-up",
+          "title": "Model switch follow-up",
+          "source": {
+            "path": "qa/scenarios/models/model-switch-follow-up.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "models.switching",
+            "role": "primary"
+          },
+          {
+            "id": "runtime.session-continuity",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/web/dashboard.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/report.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "auth-profile-codex-mixed-profiles",
+          "title": "Codex auth profile mixed profiles",
+          "source": {
+            "path": "qa/scenarios/runtime/auth-profile-codex-mixed-profiles.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "runtime.codex-plugin.auth",
+            "role": "primary"
+          },
+          {
+            "id": "auth-profiles.provider-selection",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/cli/doctor.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/auth-profile.fixture.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/codex-plugin-lifecycle.test.ts"
+          }
+        ],
+        "runtimeParityTier": "standard",
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "personal-no-fake-progress",
+          "title": "Personal no-fake-progress",
+          "source": {
+            "path": "qa/scenarios/personal/no-fake-progress.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "personal.no-fake-progress",
+            "role": "primary"
+          },
+          {
+            "id": "personal.task-followthrough",
+            "role": "secondary"
+          },
+          {
+            "id": "tools.evidence",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/concepts/personal-agent-benchmark-pack.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/automation/tasks.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/providers/mock-openai/server.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite-runtime-agent-process.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "character-vibes-gollum",
+          "title": "Late-night deploy helper chat",
+          "source": {
+            "path": "qa/scenarios/character/character-vibes-gollum.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "character.persona",
+            "role": "primary"
+          },
+          {
+            "id": "workspace.artifacts",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/channels/qa-channel.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/report.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/bus-state.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/scenario-flow-runner.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "compaction-retry-mutating-tool",
+          "title": "Compaction retry after mutating tool",
+          "source": {
+            "path": "qa/scenarios/runtime/compaction-retry-mutating-tool.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "runtime.compaction",
+            "role": "primary"
+          },
+          {
+            "id": "runtime.retry-policy",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/mock-openai-server.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/embedded-agent-subscribe.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "reasoning-only-recovery-replay-safe-read",
+          "title": "Reasoning-only recovery after replay-safe read",
+          "source": {
+            "path": "qa/scenarios/runtime/reasoning-only-recovery-replay-safe-read.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "runtime.reasoning-only-recovery",
+            "role": "primary"
+          },
+          {
+            "id": "runtime.retry-policy",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/mock-openai-server.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/embedded-agent-runner/run/incomplete-turn.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "runtime-tool-fs-read",
+          "title": "Runtime tool fixture — fs.read",
+          "source": {
+            "path": "qa/scenarios/runtime/tools/fs-read.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "tools.fs.read",
+            "role": "primary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "qa/scenarios/index.yaml"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/agent-tools.read.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/runtime-tool-fixture.ts"
+          }
+        ],
+        "runtimeParityTier": "standard",
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "long-running-release-audit",
+          "title": "Long-running release audit",
+          "source": {
+            "path": "qa/scenarios/workspace/long-running-release-audit.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "workspace.long-running-task",
+            "role": "primary"
+          },
+          {
+            "id": "workspace.artifacts",
+            "role": "secondary"
+          },
+          {
+            "id": "workspace.repo-discovery",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "docs",
+            "path": "qa/scenarios/index.yaml"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/scenario-flow-runner.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "channel-chat-baseline",
+          "title": "Channel baseline conversation",
+          "source": {
+            "path": "qa/scenarios/channels/channel-chat-baseline.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "channels.group-messages",
+            "role": "primary"
+          },
+          {
+            "id": "channels.qa-channel",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/channels/group-messages.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/channels/qa-channel.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-channel/src/inbound.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/bus-state.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "crestodian-ring-zero-setup",
+          "title": "Crestodian ring-zero setup",
+          "source": {
+            "path": "qa/scenarios/config/crestodian-ring-zero-setup.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "config.crestodian-setup",
+            "role": "primary"
+          },
+          {
+            "id": "agents.create",
+            "role": "secondary"
+          },
+          {
+            "id": "channels.discord-config",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/cli/crestodian.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/channels/discord.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "code",
+            "path": "src/crestodian/operations.ts"
+          },
+          {
+            "kind": "code",
+            "path": "scripts/e2e/crestodian-first-run-spec.json"
+          },
+          {
+            "kind": "code",
+            "path": "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite-runtime-agent-process.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "bundled-plugin-skill-runtime",
+          "title": "Bundled plugin skill runtime",
+          "source": {
+            "path": "qa/scenarios/plugins/bundled-plugin-skill-runtime.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "plugins.skills",
+            "role": "primary"
+          },
+          {
+            "id": "plugins.runtime",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/tools/skills.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/plugins/manifest.md"
+          },
+          {
+            "kind": "code",
+            "path": "scripts/stage-bundled-plugin-runtime.mjs"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/skills/workspace.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/skills/plugin-skills.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "codex-plugin-install-race",
+          "title": "Codex plugin install race",
+          "source": {
+            "path": "qa/scenarios/runtime/codex-plugin-install-race.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "runtime.codex-plugin.lifecycle",
+            "role": "primary"
+          },
+          {
+            "id": "runtime.turn-ordering",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/cli/plugins.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/codex-plugin.fixture.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/codex-plugin-lifecycle.test.ts"
+          }
+        ],
+        "runtimeParityTier": "standard",
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "model-switch-tool-continuity",
+          "title": "Model switch with tool continuity",
+          "source": {
+            "path": "qa/scenarios/models/model-switch-tool-continuity.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "models.switching",
+            "role": "primary"
+          },
+          {
+            "id": "runtime.tool-continuity",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/concepts/model-failover.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/mock-openai-server.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "auth-profile-doctor-migration-safety",
+          "title": "Codex doctor migration safety matrix",
+          "source": {
+            "path": "qa/scenarios/runtime/auth-profile-doctor-migration-safety.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "runtime.doctor-repair",
+            "role": "primary"
+          },
+          {
+            "id": "runtime.codex-plugin.auth",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/cli/doctor.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/auth-profile.fixture.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/codex-plugin.fixture.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/codex-plugin-lifecycle.test.ts"
+          }
+        ],
+        "runtimeParityTier": "standard",
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "personal-task-followthrough-status",
+          "title": "Personal task followthrough status",
+          "source": {
+            "path": "qa/scenarios/personal/task-followthrough-status.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "personal.task-followthrough",
+            "role": "primary"
+          },
+          {
+            "id": "tools.followthrough",
+            "role": "secondary"
+          },
+          {
+            "id": "workspace.artifacts",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/automation/tasks.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/automation/standing-orders.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/providers/mock-openai/server.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite-runtime-agent-process.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "personal-approval-denial-stop",
+          "title": "Personal approval denial stop",
+          "source": {
+            "path": "qa/scenarios/personal/approval-denial-stop.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "personal.approval-denial",
+            "role": "primary"
+          },
+          {
+            "id": "runtime.approvals",
+            "role": "secondary"
+          },
+          {
+            "id": "tools.safety",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/tools/exec-approvals.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/gateway/sandbox-vs-tool-policy-vs-elevated.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/providers/mock-openai/server.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite-runtime-agent-process.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "empty-response-recovery-replay-safe-read",
+          "title": "Empty-response recovery after replay-safe read",
+          "source": {
+            "path": "qa/scenarios/runtime/empty-response-recovery-replay-safe-read.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "runtime.empty-response-recovery",
+            "role": "primary"
+          },
+          {
+            "id": "runtime.retry-policy",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/mock-openai-server.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/embedded-agent-runner/run/incomplete-turn.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "runtime-tool-apply-patch",
+          "title": "Runtime tool fixture — apply-patch",
+          "source": {
+            "path": "qa/scenarios/runtime/tools/apply-patch.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "tools.apply-patch",
+            "role": "primary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "qa/scenarios/index.yaml"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/apply-patch.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/runtime-tool-fixture.ts"
+          }
+        ],
+        "runtimeParityTier": "standard",
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "runtime-tool-fs-write",
+          "title": "Runtime tool fixture — fs.write",
+          "source": {
+            "path": "qa/scenarios/runtime/tools/fs-write.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "tools.fs.write",
+            "role": "primary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "qa/scenarios/index.yaml"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/agent-tools.workspace-paths.test.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/runtime-tool-fixture.ts"
+          }
+        ],
+        "runtimeParityTier": "standard",
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "personal-redaction-no-secret-leak",
+          "title": "Personal redaction no-secret-leak",
+          "source": {
+            "path": "qa/scenarios/personal/redaction-no-secret-leak.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "personal.redaction",
+            "role": "primary"
+          },
+          {
+            "id": "qa.artifact-safety",
+            "role": "secondary"
+          },
+          {
+            "id": "security.redaction",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/gateway/secrets.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/channels/qa-channel.md"
+          },
+          {
+            "kind": "code",
+            "path": "src/logging/redact.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/payload-redaction.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite-runtime-transport.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "dm-chat-baseline",
+          "title": "DM baseline conversation",
+          "source": {
+            "path": "qa/scenarios/channels/dm-chat-baseline.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "channels.dm",
+            "role": "primary"
+          },
+          {
+            "id": "channels.qa-channel",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/channels/qa-channel.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-channel/src/gateway.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/lab-server.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "runtime-tool-message-tool",
+          "title": "Runtime tool fixture — direct message tool",
+          "source": {
+            "path": "qa/scenarios/runtime/tools/message-tool.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "tools.message-tool",
+            "role": "primary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "qa/scenarios/index.yaml"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/embedded-agent-messaging.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/tools/sessions-send-tool.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/runtime-tool-fixture.ts"
+          }
+        ],
+        "runtimeParityTier": "optional",
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "runtime-tool-skill-invocation",
+          "title": "Runtime tool fixture — skill invocation",
+          "source": {
+            "path": "qa/scenarios/runtime/tools/skill-invocation.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "tools.skill-invocation",
+            "role": "primary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/tools/skills.md"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/skills-clawhub.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/runtime-tool-fixture.ts"
+          }
+        ],
+        "runtimeParityTier": "optional",
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "qa-bus-tool-trace-visibility",
+          "title": "QA bus tool trace visibility",
+          "source": {
+            "path": "qa/scenarios/runtime/qa-bus-tool-trace-visibility.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "harness.tool-trace-visibility",
+            "role": "primary"
+          },
+          {
+            "id": "runtime.qa-bus",
+            "role": "secondary"
+          },
+          {
+            "id": "tools.trace",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "docs",
+            "path": "qa/scenarios/index.yaml"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/bus-state.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/bus-queries.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/runtime-api.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "anthropic-opus-api-key-smoke",
+          "title": "Anthropic Opus API key smoke",
+          "source": {
+            "path": "qa/scenarios/models/anthropic-opus-api-key-smoke.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "models.provider-auth",
+            "role": "primary"
+          },
+          {
+            "id": "models.anthropic",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/concepts/model-providers.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/anthropic/register.runtime.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/gateway-child.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "subagent-completion-direct-fallback",
+          "title": "Subagent completion direct fallback",
+          "source": {
+            "path": "qa/scenarios/agents/subagent-completion-direct-fallback.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "agents.subagents",
+            "role": "primary"
+          },
+          {
+            "id": "channels.qa-channel",
+            "role": "secondary"
+          },
+          {
+            "id": "runtime.delivery",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/tools/subagents.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/channels/qa-channel.md"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/subagent-announce-delivery.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/subagent-registry-lifecycle.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/tools/sessions-yield-tool.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/providers/mock-openai/server.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "subagent-fanout-synthesis",
+          "title": "Subagent fanout synthesis",
+          "source": {
+            "path": "qa/scenarios/agents/subagent-fanout-synthesis.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "agents.subagents",
+            "role": "primary"
+          },
+          {
+            "id": "agents.synthesis",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/tools/subagents.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/subagent-spawn.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/system-prompt.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "personal-tool-safety-followthrough",
+          "title": "Personal tool safety followthrough",
+          "source": {
+            "path": "qa/scenarios/personal/tool-safety-followthrough.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "personal.tool-safety",
+            "role": "primary"
+          },
+          {
+            "id": "runtime.approvals",
+            "role": "secondary"
+          },
+          {
+            "id": "tools.followthrough",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/tools/exec-approvals.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/gateway/sandbox-vs-tool-policy-vs-elevated.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/providers/mock-openai/server.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite-runtime-agent-process.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "empty-response-retry-budget-exhausted",
+          "title": "Empty-response retry budget exhausted",
+          "source": {
+            "path": "qa/scenarios/runtime/empty-response-retry-budget-exhausted.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "runtime.empty-response-recovery",
+            "role": "primary"
+          },
+          {
+            "id": "runtime.retry-policy",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/mock-openai-server.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/embedded-agent-runner/run/incomplete-turn.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "runtime-tool-edit",
+          "title": "Runtime tool fixture — edit",
+          "source": {
+            "path": "qa/scenarios/runtime/tools/edit.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "tools.edit",
+            "role": "primary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "qa/scenarios/index.yaml"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/agent-tools.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/runtime-tool-fixture.ts"
+          }
+        ],
+        "runtimeParityTier": "standard",
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "runtime-tool-grep",
+          "title": "Runtime tool fixture — grep",
+          "source": {
+            "path": "qa/scenarios/runtime/tools/grep.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "tools.grep",
+            "role": "primary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "qa/scenarios/index.yaml"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/agent-tools.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/runtime-tool-fixture.ts"
+          }
+        ],
+        "runtimeParityTier": "standard",
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "personal-share-safe-diagnostics-artifact",
+          "title": "Personal share-safe diagnostics artifact",
+          "source": {
+            "path": "qa/scenarios/personal/share-safe-diagnostics-artifact.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "personal.diagnostics",
+            "role": "primary"
+          },
+          {
+            "id": "personal.redaction",
+            "role": "secondary"
+          },
+          {
+            "id": "qa.artifact-safety",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/gateway/diagnostics.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/concepts/personal-agent-benchmark-pack.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/providers/mock-openai/server.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite-runtime-agent-process.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "runtime-tool-bash",
+          "title": "Runtime tool fixture — bash",
+          "source": {
+            "path": "qa/scenarios/runtime/tools/bash.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "tools.bash",
+            "role": "primary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "qa/scenarios/index.yaml"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/agent-tools.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/bash-tools.schemas.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/runtime-tool-fixture.ts"
+          }
+        ],
+        "runtimeParityTier": "standard",
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "runtime-tool-session-status",
+          "title": "Runtime tool fixture — session_status",
+          "source": {
+            "path": "qa/scenarios/runtime/tools/session-status.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "tools.session-status",
+            "role": "primary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "qa/scenarios/index.yaml"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/tools/session-status-tool.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/runtime-tool-fixture.ts"
+          }
+        ],
+        "runtimeParityTier": "standard",
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "source-docs-discovery-report",
+          "title": "Source and docs discovery report",
+          "source": {
+            "path": "qa/scenarios/workspace/source-docs-discovery-report.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "workspace.repo-discovery",
+            "role": "primary"
+          },
+          {
+            "id": "docs.discovery",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/web/dashboard.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/channels/qa-channel.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/report.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/self-check.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/system-prompt.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "vitest-test",
+          "id": "plugin-lifecycle-probe",
+          "title": "Plugin lifecycle probe evidence",
+          "source": {
+            "path": "test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts"
+          }
+        },
+        "coverage": [
+          {
+            "id": "plugins.lifecycle",
+            "role": "primary"
+          },
+          {
+            "id": "cli.plugin-validation-repair",
+            "role": "secondary"
+          },
+          {
+            "id": "plugins.setup-flows",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/plugins/manifest.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/cli/plugins.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/concepts/qa-e2e-automation.md"
+          },
+          {
+            "kind": "code",
+            "path": "test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts"
+          }
+        ],
+        "result": {
+          "status": "pass",
+          "timing": {
+            "wallMs": 2530
+          }
+        }
+      },
+      {
+        "test": {
+          "kind": "vitest-test",
+          "id": "mcp-plugin-tools-call",
+          "title": "MCP plugin-tools call",
+          "source": {
+            "path": "src/mcp/plugin-tools-mcp-client.test.ts"
+          }
+        },
+        "coverage": [
+          {
+            "id": "plugins.mcp-tools",
+            "role": "primary"
+          },
+          {
+            "id": "tools.invocation",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/cli/mcp.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/gateway/protocol.md"
+          },
+          {
+            "kind": "code",
+            "path": "src/mcp/plugin-tools-serve.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/mcp/plugin-tools-mcp-client.test.ts"
+          }
+        ],
+        "result": {
+          "status": "pass",
+          "timing": {
+            "wallMs": 35877
+          }
+        }
+      },
+      {
+        "test": {
+          "kind": "vitest-test",
+          "id": "gateway-smoke",
+          "title": "Gateway smoke evidence",
+          "source": {
+            "path": "test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts"
+          }
+        },
+        "coverage": [
+          {
+            "id": "gateway.websocket-transport",
+            "role": "primary"
+          },
+          {
+            "id": "gateway.health-apis",
+            "role": "secondary"
+          },
+          {
+            "id": "gateway.hello-ok-snapshot",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/gateway/index.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/concepts/qa-e2e-automation.md"
+          },
+          {
+            "kind": "code",
+            "path": "test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts"
+          }
+        ],
+        "result": {
+          "status": "pass",
+          "timing": {
+            "wallMs": 5695
+          }
+        }
+      },
+      {
+        "test": {
+          "kind": "vitest-test",
+          "id": "mcp-gateway-connect-startup-retry",
+          "title": "MCP Gateway connect startup retry",
+          "source": {
+            "path": "src/gateway/client.test.ts"
+          }
+        },
+        "coverage": [
+          {
+            "id": "gateway.connect-request",
+            "role": "primary"
+          },
+          {
+            "id": "gateway.protocol-version-negotiation",
+            "role": "primary"
+          },
+          {
+            "id": "gateway.startup-retry",
+            "role": "primary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/gateway/protocol.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/cli/mcp.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/concepts/qa-e2e-automation.md"
+          },
+          {
+            "kind": "code",
+            "path": "src/gateway/client.test.ts"
+          },
+          {
+            "kind": "code",
+            "path": "test/e2e/qa-lab/runtime/mcp-channels.fixture.ts"
+          },
+          {
+            "kind": "code",
+            "path": "test/e2e/qa-lab/runtime/mcp-client-temp-state.fixture.ts"
+          },
+          {
+            "kind": "code",
+            "path": "test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts"
+          }
+        ],
+        "result": {
+          "status": "pass",
+          "timing": {
+            "wallMs": 30948
+          }
+        }
+      },
+      {
+        "test": {
+          "kind": "vitest-test",
+          "id": "package-openclaw-for-docker",
+          "title": "Docker package artifact QA evidence",
+          "source": {
+            "path": "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts"
+          }
+        },
+        "coverage": [
+          {
+            "id": "docker.package-artifact-generation",
+            "role": "primary"
+          },
+          {
+            "id": "cli.package-manager-installs",
+            "role": "secondary"
+          },
+          {
+            "id": "runtime.package-update",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/install/updating.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/concepts/qa-e2e-automation.md"
+          },
+          {
+            "kind": "code",
+            "path": "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts"
+          }
+        ],
+        "result": {
+          "status": "pass",
+          "timing": {
+            "wallMs": 3865
+          }
+        }
+      },
+      {
+        "test": {
+          "kind": "vitest-test",
+          "id": "openai-web-search-native-assertions",
+          "title": "OpenAI native web_search request assertions",
+          "source": {
+            "path": "test/e2e/qa-lab/runtime/openai-web-search-minimal-assertions.e2e.test.ts"
+          }
+        },
+        "coverage": [
+          {
+            "id": "plugins.web-search-and-fetch",
+            "role": "primary"
+          },
+          {
+            "id": "web-search.openai-native-web-search",
+            "role": "primary"
+          },
+          {
+            "id": "tools.web-search",
+            "role": "secondary"
+          },
+          {
+            "id": "web-search.model-and-filter-routing",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/tools/web.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/concepts/qa-e2e-automation.md"
+          },
+          {
+            "kind": "code",
+            "path": "scripts/e2e/lib/openai-web-search-minimal/assertions.mjs"
+          },
+          {
+            "kind": "code",
+            "path": "scripts/e2e/lib/openai-web-search-minimal/mock-server.mjs"
+          },
+          {
+            "kind": "code",
+            "path": "test/e2e/qa-lab/runtime/openai-web-search-minimal-assertions.e2e.test.ts"
+          }
+        ],
+        "result": {
+          "status": "pass",
+          "timing": {
+            "wallMs": 1667
+          }
+        }
+      },
+      {
+        "test": {
+          "kind": "vitest-test",
+          "id": "qa-otel-smoke",
+          "title": "QA OTEL smoke evidence",
+          "source": {
+            "path": "test/e2e/qa-lab/runtime/qa-otel-smoke.e2e.test.ts"
+          }
+        },
+        "coverage": [
+          {
+            "id": "telemetry.otel",
+            "role": "primary"
+          },
+          {
+            "id": "harness.qa-lab",
+            "role": "secondary"
+          },
+          {
+            "id": "telemetry.plugin-sdk-runtime-exports",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/gateway/opentelemetry.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/concepts/qa-e2e-automation.md"
+          },
+          {
+            "kind": "code",
+            "path": "test/e2e/qa-lab/runtime/qa-otel-smoke.e2e.test.ts"
+          }
+        ],
+        "result": {
+          "status": "pass",
+          "timing": {
+            "wallMs": 1772
+          }
+        }
+      },
+      {
+        "test": {
+          "kind": "ux-matrix-cell",
+          "id": "ux-matrix.qa-lab.producer-artifact-fixture",
+          "title": "UX Matrix: producer artifact fixture",
+          "source": {
+            "path": "scripts/qa/ux-matrix-evidence-producer.ts"
+          }
+        },
+        "coverage": [
+          {
+            "id": "qa.artifact-safety",
+            "role": "primary"
+          },
+          {
+            "id": "tools.evidence",
+            "role": "secondary"
+          },
+          {
+            "id": "workspace.artifacts",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "code",
+            "path": "scripts/qa/ux-matrix-evidence-producer.ts"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/concepts/qa-e2e-automation.md"
+          }
+        ],
+        "execution": {
+          "runner": "ux-matrix-script-producer",
+          "environment": {
+            "ref": "e954c3f48ed04b887fe455952d06c566f0404891",
+            "os": "linux",
+            "nodeVersion": "v24.13.0"
+          },
+          "provider": {
+            "id": "ux-matrix",
+            "live": false,
+            "model": {
+              "name": null,
+              "ref": null
+            },
+            "fixture": "local-qa-lab-script-producer"
+          },
+          "packageSource": {
+            "kind": "source-checkout"
+          },
+          "artifacts": [
+            {
+              "kind": "html",
+              "path": ".artifacts/qa-e2e/smoke-ci-profile/script/ux-matrix-evidence-dashboard/surfaces/qa-lab/stages/producer-artifact-fixture/producer-artifact-fixture.html",
+              "source": "ux-matrix:qa-lab:producer-artifact-fixture"
+            },
+            {
+              "kind": "log",
+              "path": ".artifacts/qa-e2e/smoke-ci-profile/script/ux-matrix-evidence-dashboard/surfaces/qa-lab/stages/producer-artifact-fixture/logs.txt",
+              "source": "ux-matrix:qa-lab:producer-artifact-fixture"
+            },
+            {
+              "kind": "screenshot",
+              "path": ".artifacts/qa-e2e/smoke-ci-profile/script/ux-matrix-evidence-dashboard/surfaces/qa-lab/stages/producer-artifact-fixture/producer-artifact-fixture.png",
+              "source": "ux-matrix:qa-lab:producer-artifact-fixture"
+            },
+            {
+              "kind": "video",
+              "path": ".artifacts/qa-e2e/smoke-ci-profile/script/ux-matrix-evidence-dashboard/surfaces/qa-lab/stages/producer-artifact-fixture/producer-artifact-fixture.webm",
+              "source": "ux-matrix:qa-lab:producer-artifact-fixture"
+            }
+          ]
+        },
+        "result": {
+          "status": "pass",
+          "timing": {
+            "wallMs": 3669
+          }
+        }
+      },
+      {
+        "test": {
+          "kind": "ux-matrix-cell",
+          "id": "ux-matrix.control-ui.screenshot-artifact",
+          "title": "UX Matrix: screenshot artifact",
+          "source": {
+            "path": "scripts/qa/ux-matrix-evidence-producer.ts"
+          }
+        },
+        "coverage": [
+          {
+            "id": "ui.control",
+            "role": "primary"
+          },
+          {
+            "id": "gateway.control-ui-hosting",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "code",
+            "path": "scripts/qa/ux-matrix-evidence-producer.ts"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/concepts/qa-e2e-automation.md"
+          }
+        ],
+        "execution": {
+          "runner": "ux-matrix-script-producer",
+          "environment": {
+            "ref": "e954c3f48ed04b887fe455952d06c566f0404891",
+            "os": "linux",
+            "nodeVersion": "v24.13.0"
+          },
+          "provider": {
+            "id": "ux-matrix",
+            "live": false,
+            "model": {
+              "name": null,
+              "ref": null
+            },
+            "fixture": "local-qa-lab-script-producer"
+          },
+          "packageSource": {
+            "kind": "source-checkout"
+          },
+          "artifacts": [
+            {
+              "kind": "log",
+              "path": ".artifacts/qa-e2e/smoke-ci-profile/script/ux-matrix-evidence-dashboard/surfaces/control-ui/stages/screenshot-artifact/logs.txt",
+              "source": "ux-matrix:control-ui:screenshot-artifact"
+            },
+            {
+              "kind": "screenshot",
+              "path": ".artifacts/qa-e2e/smoke-ci-profile/script/ux-matrix-evidence-dashboard/surfaces/control-ui/stages/screenshot-artifact/screenshot.png",
+              "source": "ux-matrix:control-ui:screenshot-artifact"
+            }
+          ]
+        },
+        "result": {
+          "status": "pass",
+          "timing": {
+            "wallMs": 1334
+          }
+        }
+      },
+      {
+        "test": {
+          "kind": "ux-matrix-cell",
+          "id": "ux-matrix.cli.entrypoint-help",
+          "title": "UX Matrix: CLI entrypoint help",
+          "source": {
+            "path": "scripts/qa/ux-matrix-evidence-producer.ts"
+          }
+        },
+        "coverage": [
+          {
+            "id": "cli.entrypoint",
+            "role": "primary"
+          },
+          {
+            "id": "cli.status-snapshots",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "code",
+            "path": "scripts/qa/ux-matrix-evidence-producer.ts"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/concepts/qa-e2e-automation.md"
+          }
+        ],
+        "execution": {
+          "runner": "ux-matrix-script-producer",
+          "environment": {
+            "ref": "e954c3f48ed04b887fe455952d06c566f0404891",
+            "os": "linux",
+            "nodeVersion": "v24.13.0"
+          },
+          "provider": {
+            "id": "ux-matrix",
+            "live": false,
+            "model": {
+              "name": null,
+              "ref": null
+            },
+            "fixture": "local-qa-lab-script-producer"
+          },
+          "packageSource": {
+            "kind": "source-checkout"
+          },
+          "artifacts": [
+            {
+              "kind": "log",
+              "path": ".artifacts/qa-e2e/smoke-ci-profile/script/ux-matrix-evidence-dashboard/surfaces/cli/stages/entrypoint-help/logs.txt",
+              "source": "ux-matrix:cli:entrypoint-help"
+            }
+          ]
+        },
+        "result": {
+          "status": "pass",
+          "timing": {
+            "wallMs": 1278
+          }
+        }
+      },
+      {
+        "test": {
+          "kind": "playwright-test",
+          "id": "control-ui-chat-flow-playwright",
+          "title": "Control UI chat flow Playwright coverage",
+          "source": {
+            "path": "ui/src/ui/e2e/chat-flow.e2e.test.ts"
+          }
+        },
+        "coverage": [
+          {
+            "id": "ui.control",
+            "role": "primary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/web/control-ui.md"
+          },
+          {
+            "kind": "code",
+            "path": "ui/src/ui/e2e/chat-flow.e2e.test.ts"
+          }
+        ],
+        "result": {
+          "status": "pass",
+          "timing": {
+            "wallMs": 27114
+          }
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "memory-failure-fallback",
+          "title": "Memory failure fallback",
+          "source": {
+            "path": "qa/scenarios/memory/memory-failure-fallback.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "memory.failure-handling",
+            "role": "primary"
+          },
+          {
+            "id": "runtime.fallbacks",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/concepts/memory.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/tools/index.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/memory-core/src/tools.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "plugin-lifecycle-hot-reload",
+          "title": "Plugin lifecycle hot reload",
+          "source": {
+            "path": "qa/scenarios/plugins/plugin-lifecycle-hot-reload.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "plugins.lifecycle",
+            "role": "primary"
+          },
+          {
+            "id": "config.hot-apply",
+            "role": "secondary"
+          },
+          {
+            "id": "plugins.hot-reload",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/tools/skills.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/gateway/configuration.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/plugins/manifest.md"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/skills-status.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/gateway/server-methods/config.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite-runtime-agent-tools.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "tool-search-gateway-e2e",
+          "title": "Tool Search gateway E2E",
+          "source": {
+            "path": "qa/scenarios/runtime/tool-search-gateway-e2e.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "runtime.hosted-tool-use",
+            "role": "primary"
+          },
+          {
+            "id": "plugins.plugin-tools",
+            "role": "secondary"
+          },
+          {
+            "id": "tools.invocation",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/tools/tool-search.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/gateway/protocol.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/concepts/qa-e2e-automation.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/tool-search-gateway.fixture.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/tool-search-gateway.fixture.test.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "channel-message-flows",
+          "title": "Channel streaming message flow",
+          "source": {
+            "path": "qa/scenarios/channels/channel-message-flows.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "channels.streaming",
+            "role": "primary"
+          },
+          {
+            "id": "runtime.delivery",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/channels/qa-channel.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/channels/telegram.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/concepts/qa-e2e-automation.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-channel/src/inbound.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/crabline-transport.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/providers/mock-openai/server.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/qa-transport.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/telegram/src/draft-stream.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "commitments-heartbeat-target-none",
+          "title": "Commitments heartbeat target none",
+          "source": {
+            "path": "qa/scenarios/memory/commitments-heartbeat-target-none.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "commitments.heartbeat-target-none",
+            "role": "primary"
+          },
+          {
+            "id": "commitments.scope",
+            "role": "secondary"
+          },
+          {
+            "id": "runtime.delivery",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/concepts/commitments.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/gateway/heartbeat.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/channels/qa-channel.md"
+          },
+          {
+            "kind": "code",
+            "path": "src/infra/heartbeat-runner.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/commitments/store.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/qa-channel-transport.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "subagent-stale-child-links",
+          "title": "Subagent stale child links",
+          "source": {
+            "path": "qa/scenarios/agents/subagent-stale-child-links.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "agents.subagents",
+            "role": "primary"
+          },
+          {
+            "id": "gateway.sessions-list",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/tools/subagents.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/concepts/qa-e2e-automation.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "code",
+            "path": "src/gateway/session-utils.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/subagent-run-liveness.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/gateway-child.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "anthropic-thinking-error-recovery-replay-safe-read",
+          "title": "Anthropic thinking error recovery after replay-safe read",
+          "source": {
+            "path": "qa/scenarios/runtime/anthropic-thinking-error-recovery-replay-safe-read.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "anthropic.signed-redacted-thinking-replay",
+            "role": "primary"
+          },
+          {
+            "id": "runtime.retry-policy",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/providers/mock-openai/server.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/embedded-agent-runner/run/incomplete-turn.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "dreaming-shadow-trial-report",
+          "title": "Dreaming shadow trial report",
+          "source": {
+            "path": "qa/scenarios/memory/dreaming-shadow-trial-report.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "memory.dreaming",
+            "role": "primary"
+          },
+          {
+            "id": "memory.promotion",
+            "role": "secondary"
+          },
+          {
+            "id": "qa.artifact-safety",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/concepts/dreaming.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/concepts/memory.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/memory-core/src/dreaming.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/memory-core/src/dreaming-phases.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/providers/mock-openai/server.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "runtime-inventory-drift-check",
+          "title": "Runtime inventory drift check",
+          "source": {
+            "path": "qa/scenarios/runtime/runtime-inventory-drift-check.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "runtime.inventory",
+            "role": "primary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/gateway/protocol.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/tools/skills.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/tools/index.md"
+          },
+          {
+            "kind": "code",
+            "path": "src/gateway/server-methods/tools-effective.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/gateway/server-methods/skills.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "group-visible-reply-tool",
+          "title": "Group visible reply via message tool",
+          "source": {
+            "path": "qa/scenarios/channels/group-visible-reply-tool.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "channels.group-visible-replies",
+            "role": "primary"
+          },
+          {
+            "id": "channels.qa-channel",
+            "role": "secondary"
+          },
+          {
+            "id": "tools.message",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/channels/groups.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/channels/qa-channel.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-channel/src/inbound.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-channel/src/outbound.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/auto-reply/reply/dispatch-from-config.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "message-tool-stranded-final-reply",
+          "title": "Message-tool-only private final reply warning",
+          "source": {
+            "path": "qa/scenarios/channels/message-tool-stranded-final-reply.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "channels.direct-visible-replies",
+            "role": "primary"
+          },
+          {
+            "id": "channels.qa-channel",
+            "role": "secondary"
+          },
+          {
+            "id": "tools.message",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/channels/qa-channel.md"
+          },
+          {
+            "kind": "code",
+            "path": "src/auto-reply/reply/agent-runner.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/auto-reply/reply/private-message-tool-final.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/auto-reply/reply/dispatch-from-config.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "skill-visibility-invocation",
+          "title": "Skill visibility and invocation",
+          "source": {
+            "path": "qa/scenarios/plugins/skill-visibility-invocation.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "plugins.skills",
+            "role": "primary"
+          },
+          {
+            "id": "tools.invocation",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/tools/skills.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/gateway/protocol.md"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/skills-status.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "native-command-session-target",
+          "title": "Native command active session target evidence",
+          "source": {
+            "path": "qa/scenarios/channels/native-command-session-target.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "channels.native-command-session-target",
+            "role": "primary"
+          },
+          {
+            "id": "channels.native-commands",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/channels/qa-channel.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/channels/telegram.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-channel/src/inbound.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/crabline-transport.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/telegram/src/bot-native-commands.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/channels/native-command-session-targets.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/auto-reply/reply/abort.ts"
+          }
+        ],
+        "result": {
+          "status": "fail",
+          "failure": {
+            "reason": "timed out after 15000ms"
+          }
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "memory-tools-channel-context",
+          "title": "Memory tools in channel context",
+          "source": {
+            "path": "qa/scenarios/memory/memory-tools-channel-context.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "memory.tools",
+            "role": "primary"
+          },
+          {
+            "id": "channels.group-messages",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/concepts/memory.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/concepts/memory-search.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/memory-core/src/tools.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "runtime-tool-image-generate",
+          "title": "Runtime tool fixture — image_generate",
+          "source": {
+            "path": "qa/scenarios/runtime/tools/image-generate.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "tools.image-generate",
+            "role": "primary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/tools/image-generation.md"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/tools/image-generate-tool.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/runtime-tool-fixture.ts"
+          }
+        ],
+        "runtimeParityTier": "optional",
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "config-patch-hot-apply",
+          "title": "Config patch skill disable",
+          "source": {
+            "path": "qa/scenarios/config/config-patch-hot-apply.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "config.hot-apply",
+            "role": "primary"
+          },
+          {
+            "id": "plugins.skills",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/gateway/configuration.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/gateway/protocol.md"
+          },
+          {
+            "kind": "code",
+            "path": "src/gateway/server-methods/config.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "skill-install-hot-availability",
+          "title": "Skill install hot availability",
+          "source": {
+            "path": "qa/scenarios/plugins/skill-install-hot-availability.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "plugins.skills",
+            "role": "primary"
+          },
+          {
+            "id": "plugins.hot-install",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/tools/skills.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/gateway/configuration.md"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/skills-status.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "config-restart-capability-flip",
+          "title": "Config restart capability flip",
+          "source": {
+            "path": "qa/scenarios/config/config-restart-capability-flip.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "config.restart-apply",
+            "role": "primary"
+          },
+          {
+            "id": "plugins.capabilities",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/gateway/configuration.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/gateway/protocol.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/tools/image-generation.md"
+          },
+          {
+            "kind": "code",
+            "path": "src/gateway/server-methods/config.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/gateway/server-restart-sentinel.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/gateway/server-methods/tools-effective.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "codex-harness-no-meta-leak",
+          "title": "Codex harness no meta leak",
+          "source": {
+            "path": "qa/scenarios/models/codex-harness-no-meta-leak.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "models.codex-cli",
+            "role": "primary"
+          },
+          {
+            "id": "runtime.no-meta-leak",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/plugins/sdk-agent-harness.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/concepts/qa-e2e-automation.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/codex/src/app-server/event-projector.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/reply-failure.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "medium-game-plan-codex-harness",
+          "title": "Medium game plan Codex harness",
+          "source": {
+            "path": "qa/scenarios/workspace/medium-game-plan-codex-harness.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "workspace.planning",
+            "role": "primary"
+          },
+          {
+            "id": "models.codex-cli",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/plugins/sdk-agent-harness.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/gateway/configuration-reference.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/codex/harness.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/harness/selection.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "medium-game-plan-openclaw-harness",
+          "title": "Medium game plan OpenClaw harness",
+          "source": {
+            "path": "qa/scenarios/workspace/medium-game-plan-openclaw-harness.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "workspace.planning",
+            "role": "primary"
+          },
+          {
+            "id": "agents.openclaw-harness",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/plugins/sdk-agent-harness.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/gateway/configuration-reference.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/help/testing.md"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/harness/selection.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/harness/builtin-openclaw.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "docker-prometheus-smoke",
+          "title": "Docker Prometheus smoke",
+          "source": {
+            "path": "qa/scenarios/runtime/docker-prometheus-smoke.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "telemetry.prometheus",
+            "role": "primary"
+          },
+          {
+            "id": "telemetry.prometheus-authenticated-gateway-export",
+            "role": "primary"
+          },
+          {
+            "id": "docker.runtime-validation",
+            "role": "secondary"
+          },
+          {
+            "id": "harness.qa-lab",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/gateway/prometheus.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/concepts/qa-e2e-automation.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/diagnostics-prometheus/src/service.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/diagnostics/internal-diagnostics.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "otel-both-log-smoke",
+          "title": "OTEL dual log exporter smoke",
+          "source": {
+            "path": "qa/scenarios/runtime/otel-both-log-smoke.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "telemetry.otel",
+            "role": "primary"
+          },
+          {
+            "id": "harness.qa-lab",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/gateway/opentelemetry.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/concepts/qa-e2e-automation.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/diagnostics-otel/src/service.ts"
+          },
+          {
+            "kind": "code",
+            "path": "test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "otel-stdout-log-smoke",
+          "title": "OTEL stdout log smoke",
+          "source": {
+            "path": "qa/scenarios/runtime/otel-stdout-log-smoke.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "telemetry.otel",
+            "role": "primary"
+          },
+          {
+            "id": "harness.qa-lab",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/gateway/opentelemetry.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/concepts/qa-e2e-automation.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/diagnostics-otel/src/service.ts"
+          },
+          {
+            "kind": "code",
+            "path": "test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      },
+      {
+        "test": {
+          "kind": "qa-scenario",
+          "id": "otel-trace-smoke",
+          "title": "OTEL trace smoke",
+          "source": {
+            "path": "qa/scenarios/runtime/otel-trace-smoke.yaml"
+          }
+        },
+        "coverage": [
+          {
+            "id": "telemetry.otel",
+            "role": "primary"
+          },
+          {
+            "id": "harness.qa-lab",
+            "role": "secondary"
+          }
+        ],
+        "refs": [
+          {
+            "kind": "docs",
+            "path": "docs/gateway/opentelemetry.md"
+          },
+          {
+            "kind": "docs",
+            "path": "docs/concepts/qa-e2e-automation.md"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/diagnostics-otel/src/service.ts"
+          },
+          {
+            "kind": "code",
+            "path": "src/agents/harness/lifecycle.ts"
+          },
+          {
+            "kind": "code",
+            "path": "extensions/qa-lab/src/suite.ts"
+          }
+        ],
+        "result": {
+          "status": "pass"
+        }
+      }
+    ],
+    "profile": "smoke-ci"
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:11:50.133Z",
+    "finishedAt": "2026-07-03T13:17:22.883Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 8,
+    "channelDriver": null,
+    "channel": null,
+    "channelCapabilityMatrixPath": null,
+    "channelDriverSmokePath": null,
+    "scenarioIds": [
+      "gpt55-thinking-visibility-switch",
+      "model-switch-follow-up",
+      "model-switch-tool-continuity",
+      "memory-failure-fallback",
+      "anthropic-opus-api-key-smoke",
+      "anthropic-opus-setup-token-smoke",
+      "plugin-lifecycle-hot-reload",
+      "plugin-lifecycle-probe",
+      "auth-profile-codex-mixed-profiles",
+      "auth-profile-doctor-migration-safety",
+      "tool-search-gateway-e2e",
+      "subagent-completion-direct-fallback",
+      "channel-message-flows",
+      "commitments-heartbeat-target-none",
+      "personal-failure-recovery",
+      "personal-no-fake-progress",
+      "personal-task-followthrough-status",
+      "ux-matrix-evidence-dashboard",
+      "subagent-fanout-synthesis",
+      "subagent-stale-child-links",
+      "character-vibes-c3po",
+      "character-vibes-gollum",
+      "personal-approval-denial-stop",
+      "personal-tool-safety-followthrough",
+      "anthropic-thinking-error-recovery-replay-safe-read",
+      "approval-turn-tool-followthrough",
+      "compaction-retry-mutating-tool",
+      "empty-response-recovery-replay-safe-read",
+      "empty-response-retry-budget-exhausted",
+      "reasoning-only-no-auto-retry-after-write",
+      "reasoning-only-recovery-replay-safe-read",
+      "runtime-tool-apply-patch",
+      "runtime-tool-edit",
+      "runtime-tool-fs-list",
+      "runtime-tool-fs-read",
+      "runtime-tool-fs-write",
+      "runtime-tool-grep",
+      "lobster-invaders-build",
+      "long-running-release-audit",
+      "dreaming-shadow-trial-report",
+      "personal-redaction-no-secret-leak",
+      "personal-share-safe-diagnostics-artifact",
+      "runtime-inventory-drift-check",
+      "secret-redaction-tool-logs",
+      "channel-chat-baseline",
+      "dm-chat-baseline",
+      "group-visible-reply-tool",
+      "message-tool-stranded-final-reply",
+      "mcp-plugin-tools-call",
+      "skill-visibility-invocation",
+      "runtime-tool-bash",
+      "runtime-tool-exec",
+      "control-ui-chat-flow-playwright",
+      "native-command-session-target",
+      "crestodian-ring-zero-setup",
+      "memory-tools-channel-context",
+      "runtime-tool-message-tool",
+      "gateway-smoke",
+      "runtime-tool-session-status",
+      "mcp-gateway-connect-startup-retry",
+      "runtime-tool-image-generate",
+      "runtime-tool-tts",
+      "config-patch-hot-apply",
+      "bundled-plugin-skill-runtime",
+      "skill-install-hot-availability",
+      "package-openclaw-for-docker",
+      "config-restart-capability-flip",
+      "openai-web-search-native-assertions",
+      "runtime-tool-skill-invocation",
+      "codex-harness-no-meta-leak",
+      "medium-game-plan-codex-harness",
+      "medium-game-plan-openclaw-harness",
+      "source-docs-discovery-report",
+      "codex-plugin-cold-install",
+      "codex-plugin-install-race",
+      "docker-prometheus-smoke",
+      "otel-both-log-smoke",
+      "otel-stdout-log-smoke",
+      "otel-trace-smoke",
+      "qa-bus-tool-trace-visibility",
+      "qa-otel-smoke"
+    ],
+    "runtimePair": null
+  }
+}

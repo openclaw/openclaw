@@ -5,6 +5,7 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+<<<<<<< HEAD
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
@@ -12,6 +13,12 @@ import {
   assertExpectedSha256ForTest,
   cleanupPackageSourceWorktreeForTest,
   cleanPackedOpenClawTarballsForTest,
+=======
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  ARTIFACT_TARBALL_SCAN_MAX_ENTRIES,
+  cleanupPackageSourceWorktreeForTest,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   downloadUrl,
   findSingleTarballForTest,
   loadTrustedPackageSource,
@@ -21,6 +28,7 @@ import {
   readPackageBuildSourceSha,
   resolveNpmPackageCandidatePackRunner,
   runCommandForTest,
+<<<<<<< HEAD
   signalChildProcessTree,
   validateOpenClawPackageSpec,
 } from "../../scripts/resolve-openclaw-package-candidate.mjs";
@@ -29,6 +37,11 @@ function expectedTaskkillPath(): string {
   return resolveWindowsTaskkillPath();
 }
 
+=======
+  validateOpenClawPackageSpec,
+} from "../../scripts/resolve-openclaw-package-candidate.mjs";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const tempDirs: string[] = [];
 
 type LookupAddress = { address: string; family: number };
@@ -174,6 +187,7 @@ describe("resolve-openclaw-package-candidate", () => {
     });
   });
 
+<<<<<<< HEAD
   it("rejects option-shaped package candidate option values", () => {
     for (const flag of [
       "--artifact-dir",
@@ -236,6 +250,8 @@ describe("resolve-openclaw-package-candidate", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects package candidate output names that escape the output directory", () => {
     for (const outputName of [
       "../openclaw-current.tgz",
@@ -282,6 +298,7 @@ describe("resolve-openclaw-package-candidate", () => {
     });
   });
 
+<<<<<<< HEAD
   it("signals Windows package runner process trees with taskkill", () => {
     const child = {
       kill: vi.fn(),
@@ -351,6 +368,8 @@ describe("resolve-openclaw-package-candidate", () => {
     expect(child.kill).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps npm pack filenames inside the package candidate output directory", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-npm-pack-"));
     tempDirs.push(dir);
@@ -402,6 +421,7 @@ describe("resolve-openclaw-package-candidate", () => {
     }
   });
 
+<<<<<<< HEAD
   it("cleans stale package tarballs before npm fallback scanning", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-npm-pack-stale-"));
     tempDirs.push(dir);
@@ -419,6 +439,8 @@ describe("resolve-openclaw-package-candidate", () => {
     await expect(readFile(path.join(dir, "openclaw-current.tgz"), "utf8")).resolves.toBe("current");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("bounds captured command stderr tails on failures", async () => {
     await expect(
       runCommandForTest(
@@ -449,6 +471,7 @@ describe("resolve-openclaw-package-candidate", () => {
     ).rejects.toThrow(/produced more than \d+ captured stdout chars/u);
   });
 
+<<<<<<< HEAD
   it("clamps oversized package runner command timers before scheduling", async () => {
     await expect(
       runCommandForTest(process.execPath, ["-e", "setTimeout(() => process.exit(0), 25);"], {
@@ -458,6 +481,8 @@ describe("resolve-openclaw-package-candidate", () => {
     ).resolves.toBe("");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("kills timed-out package runner process groups", async () => {
     if (process.platform === "win32") {
       return;
@@ -497,6 +522,7 @@ describe("resolve-openclaw-package-candidate", () => {
     }
   });
 
+<<<<<<< HEAD
   it("clamps oversized package runner kill grace before scheduling", async () => {
     if (process.platform === "win32") {
       return;
@@ -593,6 +619,8 @@ describe("resolve-openclaw-package-candidate", () => {
     expect(Date.now() - startedAt).toBeLessThan(1_700);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("forwards external termination to package runner process groups", async () => {
     if (process.platform === "win32") {
       return;
@@ -803,7 +831,11 @@ describe("resolve-openclaw-package-candidate", () => {
           status: 200,
         });
       },
+<<<<<<< HEAD
       lookupHost: lookupAddresses([{ address: "203.0.113.8", family: 4 }]),
+=======
+      lookupHost: lookupAddresses([{ address: "10.0.0.8", family: 4 }]),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       maxBytes: 3,
       trustedSource,
     });
@@ -823,6 +855,7 @@ describe("resolve-openclaw-package-candidate", () => {
     await expect(
       downloadUrl("https://packages.internal:8443/other/openclaw.tgz", target, {
         fetchImpl: unexpectedFetch,
+<<<<<<< HEAD
         lookupHost: lookupAddresses([{ address: "203.0.113.8", family: 4 }]),
         trustedSource,
       }),
@@ -861,6 +894,9 @@ describe("resolve-openclaw-package-candidate", () => {
       downloadUrl("https://packages.internal:8443/artifactory/openclaw-malicious/pkg.tgz", target, {
         fetchImpl: unexpectedFetch,
         lookupHost: lookupAddresses([{ address: "203.0.113.8", family: 4 }]),
+=======
+        lookupHost: lookupAddresses([{ address: "10.0.0.8", family: 4 }]),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         trustedSource,
       }),
     ).rejects.toThrow("path is not allowed by trusted package source enterprise-artifactory");
@@ -892,6 +928,7 @@ describe("resolve-openclaw-package-candidate", () => {
     ).rejects.toThrow("is not allowed by trusted package source enterprise-artifactory");
   });
 
+<<<<<<< HEAD
   it("does not forward trusted package auth headers to redirect hosts", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
     tempDirs.push(dir);
@@ -946,6 +983,8 @@ describe("resolve-openclaw-package-candidate", () => {
     await expect(readFile(target)).resolves.toEqual(Buffer.from([4, 5, 6]));
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("validates redirects for package_url downloads", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
     tempDirs.push(dir);
@@ -1078,6 +1117,7 @@ describe("resolve-openclaw-package-candidate", () => {
     expect(bodyCancelled).toBe(true);
   });
 
+<<<<<<< HEAD
   it("rejects unsafe decimal package_url content-length values before reading", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
     tempDirs.push(dir);
@@ -1122,6 +1162,8 @@ describe("resolve-openclaw-package-candidate", () => {
     await expect(missing(`${target}.tmp`)).resolves.toBe(true);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("bounds package_url downloads and writes completed files atomically", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
     tempDirs.push(dir);
@@ -1154,6 +1196,7 @@ describe("resolve-openclaw-package-candidate", () => {
     await expect(missing(`${target}.tmp`)).resolves.toBe(true);
   });
 
+<<<<<<< HEAD
   it("clamps oversized package_url download timers before scheduling", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
     tempDirs.push(dir);
@@ -1252,6 +1295,8 @@ describe("resolve-openclaw-package-candidate", () => {
     await expect(missing(`${target}.tmp`)).resolves.toBe(true);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("reads package source metadata from package artifacts", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-candidate-"));
     tempDirs.push(dir);
@@ -1277,6 +1322,7 @@ describe("resolve-openclaw-package-candidate", () => {
     });
   });
 
+<<<<<<< HEAD
   it("normalizes artifact package source SHAs before workflow output", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-candidate-sha-"));
     tempDirs.push(dir);
@@ -1332,6 +1378,8 @@ describe("resolve-openclaw-package-candidate", () => {
     await expect(assertExpectedSha256ForTest(file, digest.toUpperCase())).resolves.toBe(digest);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects source artifact scans that exceed the filesystem entry limit", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-artifact-scan-"));
     tempDirs.push(dir);
@@ -1352,6 +1400,7 @@ describe("resolve-openclaw-package-candidate", () => {
     await writeFile(path.join(dir, "openclaw-a.tgz"), "a");
     await writeFile(path.join(dir, "nested.tar.gz"), "b");
 
+<<<<<<< HEAD
     const error = await findSingleTarballForTest(dir).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(Error);
     const message = (error as Error).message;
@@ -1360,6 +1409,11 @@ describe("resolve-openclaw-package-candidate", () => {
     expect(message).toContain("openclaw-a.tgz");
     expect(message).not.toContain(path.join(dir, "nested.tar.gz"));
     expect(message).not.toContain(path.join(dir, "openclaw-a.tgz"));
+=======
+    await expect(findSingleTarballForTest(dir)).rejects.toThrow(
+      "source=artifact requires exactly one .tgz",
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("reads the source SHA from packed npm build metadata", async () => {

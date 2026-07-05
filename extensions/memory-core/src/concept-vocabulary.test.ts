@@ -29,6 +29,7 @@ describe("concept vocabulary", () => {
     expect(tags).not.toContain("2026-04-04.md");
   });
 
+<<<<<<< HEAD
   it("preserves short protected-glossary terms past the latin minimum-length gate", () => {
     const tags = deriveConceptTags({
       path: "memory/2026-04-04.md",
@@ -53,6 +54,8 @@ describe("concept vocabulary", () => {
     expect(tags).toContain("css3");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("extracts protected and segmented CJK concept tags", () => {
     const tags = deriveConceptTags({
       path: "memory/2026-04-04.md",

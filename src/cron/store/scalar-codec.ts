@@ -1,5 +1,8 @@
+<<<<<<< HEAD
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Parses a JSON object column, returning the fallback for malformed or non-object values. */
 export function parseJsonObject<T>(raw: string, fallback: T): T {
   try {
@@ -20,7 +23,16 @@ export function parseJsonValue<T>(raw: string, fallback: T): T {
 }
 
 /** Normalizes SQLite number/bigint columns into JavaScript numbers. */
+<<<<<<< HEAD
 export { normalizeSqliteNumber as normalizeNumber };
+=======
+export function normalizeNumber(value: number | bigint | null): number | undefined {
+  if (typeof value === "bigint") {
+    return Number(value);
+  }
+  return typeof value === "number" ? value : undefined;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Converts optional booleans into nullable SQLite integer flags. */
 export function booleanToInteger(value: boolean | undefined): number | null {
@@ -29,7 +41,11 @@ export function booleanToInteger(value: boolean | undefined): number | null {
 
 /** Converts SQLite integer flags into booleans while preserving missing columns as undefined. */
 export function integerToBoolean(value: number | bigint | null): boolean | undefined {
+<<<<<<< HEAD
   const normalized = normalizeSqliteNumber(value);
+=======
+  const normalized = normalizeNumber(value);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return normalized == null ? undefined : normalized !== 0;
 }
 

@@ -11,7 +11,10 @@ import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+<<<<<<< HEAD
 import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isCliProvider } from "../model-selection.js";
@@ -30,6 +33,13 @@ async function getContextModule() {
   return await contextModuleLoader.load();
 }
 
+<<<<<<< HEAD
+=======
+function resolveNonNegativeNumber(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolvePositiveInteger(value: number | undefined): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return undefined;

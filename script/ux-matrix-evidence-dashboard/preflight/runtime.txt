@@ -1,0 +1,5 @@
+platform=linux
+arch=x64
+node=v24.13.0
+freeMemoryBytes=4136230912
+totalMemoryBytes=8226091008

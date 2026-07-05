@@ -61,10 +61,13 @@ vi.mock("../model-suppression.js", () => {
     return undefined;
   }
 
+<<<<<<< HEAD
   function isUnsupportedXaiMultiAgentModel(provider?: string, id?: string): boolean {
     return provider === "xai" && id?.trim().toLowerCase() === "grok-4.20-multi-agent-0309";
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return {
     shouldSuppressBuiltInModel: ({
       provider,
@@ -83,9 +86,12 @@ vi.mock("../model-suppression.js", () => {
       ) {
         return true;
       }
+<<<<<<< HEAD
       if (isUnsupportedXaiMultiAgentModel(provider, id)) {
         return true;
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return (
         (provider === "qwen" || provider === "modelstudio") &&
         id?.trim().toLowerCase() === "qwen3.6-plus" &&
@@ -99,7 +105,11 @@ vi.mock("../model-suppression.js", () => {
       ) {
         return true;
       }
+<<<<<<< HEAD
       return isUnsupportedXaiMultiAgentModel(provider, id);
+=======
+      return false;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
     buildSuppressedBuiltInModelError: ({
       provider,
@@ -123,9 +133,12 @@ vi.mock("../model-suppression.js", () => {
       ) {
         return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run \`openclaw models auth login --provider openai\` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.`;
       }
+<<<<<<< HEAD
       if (isUnsupportedXaiMultiAgentModel(provider, id)) {
         return "Unknown model: xai/grok-4.20-multi-agent-0309. OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai.";
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return undefined;
     },
   };
@@ -169,8 +182,17 @@ import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "../copilot-dynam
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
+<<<<<<< HEAD
 import { buildInlineProviderModels } from "./model.inline-provider.js";
 import { resolveModel, resolveModelAsync, resolveModelWithRegistry } from "./model.js";
+=======
+import {
+  buildInlineProviderModels,
+  resolveModel,
+  resolveModelAsync,
+  resolveModelWithRegistry,
+} from "./model.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   buildOpenAICodexForwardCompatExpectation,
   makeModel,
@@ -3457,6 +3479,7 @@ describe("resolveModel", () => {
     );
   });
 
+<<<<<<< HEAD
   it("does not build a configured fallback for unsupported xAI multi-agent models", () => {
     const cfg = {
       models: {
@@ -3478,6 +3501,8 @@ describe("resolveModel", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects stale openai gpt-5.3-codex-spark discovery rows", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai",

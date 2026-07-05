@@ -6,6 +6,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   hasMeaningfulChannelConfig,
+<<<<<<< HEAD
+=======
+  hasPotentialConfiguredChannels,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelPresenceSignals,
   listPotentialConfiguredChannelIds,
@@ -32,12 +36,22 @@ function expectPotentialConfiguredChannelCase(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   expectedIds: string[];
+<<<<<<< HEAD
+=======
+  expectedConfigured: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   options?: Parameters<typeof listPotentialConfiguredChannelIds>[2];
 }) {
   const options = params.options ?? matrixPresenceOptions;
   expect(listPotentialConfiguredChannelIds(params.cfg, params.env, options)).toEqual(
     params.expectedIds,
   );
+<<<<<<< HEAD
+=======
+  expect(hasPotentialConfiguredChannels(params.cfg, params.env, options)).toBe(
+    params.expectedConfigured,
+  );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 afterEach(() => {
@@ -65,6 +79,10 @@ describe("config presence", () => {
       cfg,
       env,
       expectedIds: [],
+<<<<<<< HEAD
+=======
+      expectedConfigured: false,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       options: { includePersistedAuthState: false },
     });
   });
@@ -91,6 +109,10 @@ describe("config presence", () => {
       cfg: {},
       env,
       expectedIds: ["matrix"],
+<<<<<<< HEAD
+=======
+      expectedConfigured: true,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       options: { includePersistedAuthState: false },
     });
     expect(
@@ -100,6 +122,7 @@ describe("config presence", () => {
     ).toEqual([{ channelId: "matrix", source: "env" }]);
   });
 
+<<<<<<< HEAD
   it("detects official external channel env vars", () => {
     const env = {
       MATTERMOST_URL: "https://mattermost.example.test",
@@ -119,6 +142,8 @@ describe("config presence", () => {
     ).toEqual([{ channelId: "mattermost", source: "env" }]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("detects persisted Matrix credentials without config or env", () => {
     const stateDir = makeTempStateDir().replace(
       "openclaw-channel-config-presence-",
@@ -132,6 +157,10 @@ describe("config presence", () => {
       cfg: {},
       env,
       expectedIds: ["matrix"],
+<<<<<<< HEAD
+=======
+      expectedConfigured: true,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       options: {
         persistedAuthStateProbe: {
           listChannelIds: () => ["matrix"],

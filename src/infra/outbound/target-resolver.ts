@@ -11,11 +11,15 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { buildDirectoryCacheKey, DirectoryCache } from "./directory-cache.js";
+<<<<<<< HEAD
 import {
   ambiguousTargetError,
   reservedTargetLiteralError,
   unknownTargetError,
 } from "./target-errors.js";
+=======
+import { ambiguousTargetError, unknownTargetError } from "./target-errors.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { maybeResolveIdLikeTarget, type ResolvedIdLikeTarget } from "./target-id-resolution.js";
 import {
   buildTargetResolverSignature,
@@ -24,7 +28,10 @@ import {
   normalizeChannelTargetInput,
   normalizeTargetForProvider,
   resolveNormalizedTargetInput,
+<<<<<<< HEAD
   resolveReservedTargetLiteral,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./target-normalization.js";
 
 /** Directory-backed destination kind used by outbound target resolution. */
@@ -96,6 +103,7 @@ function normalizeQuery(value: string): string {
   return normalizeLowercaseStringOrEmpty(value);
 }
 
+<<<<<<< HEAD
 function stripTargetPrefixes(value: string, channel?: ChannelId, plugin?: ChannelPlugin): string {
   const providerPrefixes = [channel, plugin?.id, ...(plugin?.messaging?.targetPrefixes ?? [])]
     .map((prefix) => prefix?.trim().toLowerCase() ?? "")
@@ -111,6 +119,11 @@ function stripTargetPrefixes(value: string, channel?: ChannelId, plugin?: Channe
   }
   return target
     .replace(/^(channel|group|user):/i, "")
+=======
+function stripTargetPrefixes(value: string): string {
+  return value
+    .replace(/^(channel|user):/i, "")
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     .replace(/^[@#]/, "")
     .trim();
 }
@@ -205,11 +218,14 @@ function detectTargetKind(
     return "group";
   }
 
+<<<<<<< HEAD
   const chatTypes = plugin?.capabilities?.chatTypes ?? [];
   if (chatTypes.length > 0 && chatTypes.every((chatType) => chatType === "direct")) {
     return "user";
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return "group";
 }
 
@@ -227,7 +243,10 @@ function matchesDirectoryEntry(params: {
   entry: ChannelDirectoryEntry;
   query: string;
   plugin?: ChannelPlugin;
+<<<<<<< HEAD
   exactOnly?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }): boolean {
   const query = normalizeQuery(params.query);
   if (!query) {
@@ -235,6 +254,7 @@ function matchesDirectoryEntry(params: {
   }
   const id = stripTargetPrefixes(
     normalizeDirectoryEntryId(params.channel, params.entry, params.plugin),
+<<<<<<< HEAD
     params.channel,
     params.plugin,
   );
@@ -248,6 +268,13 @@ function matchesDirectoryEntry(params: {
   return candidates.some((value) =>
     params.exactOnly ? value === query : value === query || value.includes(query),
   );
+=======
+  );
+  const name = params.entry.name ? stripTargetPrefixes(params.entry.name) : "";
+  const handle = params.entry.handle ? stripTargetPrefixes(params.entry.handle) : "";
+  const candidates = [id, name, handle].map((value) => normalizeQuery(value)).filter(Boolean);
+  return candidates.some((value) => value === query || value.includes(query));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function resolveMatch(params: {
@@ -255,7 +282,10 @@ function resolveMatch(params: {
   entries: ChannelDirectoryEntry[];
   query: string;
   plugin?: ChannelPlugin;
+<<<<<<< HEAD
   exactOnly?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }) {
   const matches = params.entries.filter((entry) =>
     matchesDirectoryEntry({
@@ -263,7 +293,10 @@ function resolveMatch(params: {
       entry,
       query: params.query,
       plugin: params.plugin,
+<<<<<<< HEAD
       exactOnly: params.exactOnly,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }),
   );
   if (matches.length === 0) {
@@ -426,10 +459,15 @@ export async function resolveMessagingTarget(params: {
   const kind = detectTargetKind(params.channel, raw, params.preferredKind, plugin);
   const normalizedInput = resolveNormalizedTargetInput(params.channel, raw, plugin);
   const normalized = normalizedInput?.normalized ?? raw;
+<<<<<<< HEAD
   const reservedLiteral = resolveReservedTargetLiteral({ raw, plugin });
   if (
     normalizedInput &&
     !reservedLiteral &&
+=======
+  if (
+    normalizedInput &&
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     looksLikeTargetId({
       channel: params.channel,
       raw: normalizedInput.raw,
@@ -456,7 +494,11 @@ export async function resolveMessagingTarget(params: {
       kind,
     });
   }
+<<<<<<< HEAD
   const query = stripTargetPrefixes(raw, params.channel, plugin);
+=======
+  const query = stripTargetPrefixes(raw);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const entries = await getDirectoryEntries({
     cfg: params.cfg,
     channel: params.channel,
@@ -467,6 +509,7 @@ export async function resolveMessagingTarget(params: {
     preferLiveOnMiss: true,
     plugin,
   });
+<<<<<<< HEAD
   const match = resolveMatch({
     channel: params.channel,
     entries,
@@ -474,6 +517,9 @@ export async function resolveMessagingTarget(params: {
     plugin,
     exactOnly: Boolean(reservedLiteral),
   });
+=======
+  const match = resolveMatch({ channel: params.channel, entries, query, plugin });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (match.kind === "single") {
     const entry = match.entry;
     return {
@@ -481,8 +527,12 @@ export async function resolveMessagingTarget(params: {
       target: {
         to: normalizeDirectoryEntryId(params.channel, entry, plugin),
         kind,
+<<<<<<< HEAD
         display:
           entry.name ?? entry.handle ?? stripTargetPrefixes(entry.id, params.channel, plugin),
+=======
+        display: entry.name ?? entry.handle ?? stripTargetPrefixes(entry.id),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         source: "directory",
         resolutionSource: "directory",
       },
@@ -498,8 +548,12 @@ export async function resolveMessagingTarget(params: {
           target: {
             to: normalizeDirectoryEntryId(params.channel, best, plugin),
             kind,
+<<<<<<< HEAD
             display:
               best.name ?? best.handle ?? stripTargetPrefixes(best.id, params.channel, plugin),
+=======
+            display: best.name ?? best.handle ?? stripTargetPrefixes(best.id),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             source: "directory",
             resolutionSource: "directory",
           },
@@ -512,10 +566,13 @@ export async function resolveMessagingTarget(params: {
       candidates: match.entries,
     };
   }
+<<<<<<< HEAD
   // Directory misses are the fail-closed boundary for reserved literals.
   if (reservedLiteral) {
     return { ok: false, error: reservedTargetLiteralError(providerLabel, reservedLiteral, hint) };
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const resolvedFallbackTarget = asResolvedMessagingTarget(
     await maybeResolvePluginMessagingTarget({
       cfg: params.cfg,

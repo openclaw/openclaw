@@ -3,20 +3,31 @@ import { generateKeyPairSync, sign } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+<<<<<<< HEAD
 import { describe, expect, it, vi } from "vitest";
 import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
   collectInstalledBundledExtensionManifestErrors,
+=======
+import { describe, expect, it } from "vitest";
+import {
+  buildPublishedInstallCommandArgs,
+  buildPublishedInstallScenarios,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   collectInstalledBundledRuntimeSidecarPaths,
   collectInstalledContextEngineRuntimeErrors,
   collectInstalledPluginSdkZodArtifactErrors,
   collectInstalledRootDependencyManifestErrors,
   collectInstalledPackageErrors,
+<<<<<<< HEAD
   fetchRegistryJson,
   normalizeInstalledBinaryVersion,
   openClawNpmPostpublishVerifyUsage,
   parseOpenClawNpmPostpublishVerifyArgs,
+=======
+  normalizeInstalledBinaryVersion,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveInstalledBinaryCommandInvocation,
   resolveInstalledBinaryPath,
   retryNpmRegistryProvenanceRead,
@@ -26,6 +37,7 @@ import {
 
 const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
 
+<<<<<<< HEAD
 describe("parseOpenClawNpmPostpublishVerifyArgs", () => {
   it("supports help and package-manager separators", () => {
     expect(parseOpenClawNpmPostpublishVerifyArgs(["--help"])).toEqual({
@@ -51,6 +63,8 @@ describe("parseOpenClawNpmPostpublishVerifyArgs", () => {
   });
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function writeDistJavaScriptFiles(packageRoot: string, count: number): void {
   const distDir = join(packageRoot, "dist");
   mkdirSync(distDir, { recursive: true });
@@ -117,6 +131,7 @@ describe("npm registry provenance verification", () => {
     },
   };
 
+<<<<<<< HEAD
   it("fetches npm registry JSON with bounded response handling", async () => {
     const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
       expect(init).toMatchObject({
@@ -170,6 +185,8 @@ describe("npm registry provenance verification", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("verifies an npm registry signature against the matching public key", () => {
     const keys = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
     const payload = `${packageName}@${version}:${integrity}`;
@@ -409,6 +426,7 @@ describe("collectInstalledPackageErrors", () => {
       rmSync(packageRoot, { recursive: true, force: true });
     }
   });
+<<<<<<< HEAD
 
   it("surfaces invalid installed bundled extension manifests", () => {
     const packageRoot = makeInstalledPackageRoot();
@@ -445,6 +463,8 @@ describe("collectInstalledPackageErrors", () => {
       rmSync(packageRoot, { recursive: true, force: true });
     }
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("collectInstalledContextEngineRuntimeErrors", () => {

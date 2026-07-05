@@ -10,6 +10,7 @@ import {
   resolveClaudeCliExecutionArgs,
 } from "./cli-shared.js";
 
+<<<<<<< HEAD
 const CLAUDE_CLI_DISALLOWED_TOOLS =
   "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor";
 
@@ -19,6 +20,8 @@ function expectDefaultDisallowedTools(args: readonly string[] | undefined) {
   expect(args?.[disallowedIndex + 1]).toBe(CLAUDE_CLI_DISALLOWED_TOOLS);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("normalizeClaudePermissionArgs", () => {
   it("leaves args alone when they omit permission flags", () => {
     expect(
@@ -365,10 +368,15 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.input).toBe("stdin");
     expect(backend.config.args).toContain("--setting-sources");
     expect(backend.config.args).toContain("user");
+<<<<<<< HEAD
     expectDefaultDisallowedTools(backend.config.args);
     expect(backend.config.resumeArgs).toContain("--setting-sources");
     expect(backend.config.resumeArgs).toContain("user");
     expectDefaultDisallowedTools(backend.config.resumeArgs);
+=======
+    expect(backend.config.resumeArgs).toContain("--setting-sources");
+    expect(backend.config.resumeArgs).toContain("user");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(backend.config.clearEnv).toEqual([...CLAUDE_CLI_CLEAR_ENV]);
     expect(backend.config.clearEnv).toContain("ANTHROPIC_API_TOKEN");
     expect(backend.config.clearEnv).toContain("ANTHROPIC_BASE_URL");
@@ -385,6 +393,7 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.clearEnv).toContain("OTEL_EXPORTER_OTLP_PROTOCOL");
     expect(backend.config.clearEnv).toContain("OTEL_SDK_DISABLED");
   });
+<<<<<<< HEAD
 
   it("disables native background Bash and Monitor tools in args and resumeArgs", () => {
     const backend = buildAnthropicCliBackend();
@@ -392,4 +401,6 @@ describe("normalizeClaudeBackendConfig", () => {
     expectDefaultDisallowedTools(backend.config.args);
     expectDefaultDisallowedTools(backend.config.resumeArgs);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

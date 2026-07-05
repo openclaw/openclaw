@@ -16,7 +16,10 @@ import {
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
 } from "./constants.js";
 import { log } from "./constants.js";
+<<<<<<< HEAD
 import { isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   areOAuthCredentialsEquivalent,
   hasUsableOAuthCredential,
@@ -62,6 +65,18 @@ type ExternalCliSyncProvider = {
   bootstrapOnly?: boolean;
 };
 
+<<<<<<< HEAD
+=======
+function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeAuthEmailToken(value: string | undefined): string | undefined {
+  return normalizeAuthIdentityToken(value)?.toLowerCase();
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // Keep this gate aligned with the canonical identity-copy rule in oauth.ts.
 /** Return true when imported CLI credentials match an existing profile identity. */
 export function isSafeToUseExternalCliCredential(
@@ -74,7 +89,28 @@ export function isSafeToUseExternalCliCredential(
   if (existing.provider !== imported.provider) {
     return false;
   }
+<<<<<<< HEAD
   return isSafeToCopyOAuthIdentity(existing, imported);
+=======
+
+  const existingAccountId = normalizeAuthIdentityToken(existing.accountId);
+  const importedAccountId = normalizeAuthIdentityToken(imported.accountId);
+  const existingEmail = normalizeAuthEmailToken(existing.email);
+  const importedEmail = normalizeAuthEmailToken(imported.email);
+
+  if (existingAccountId !== undefined && importedAccountId !== undefined) {
+    return existingAccountId === importedAccountId;
+  }
+  if (existingEmail !== undefined && importedEmail !== undefined) {
+    return existingEmail === importedEmail;
+  }
+
+  const existingHasIdentity = existingAccountId !== undefined || existingEmail !== undefined;
+  if (existingHasIdentity) {
+    return false;
+  }
+  return true;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
@@ -198,6 +234,11 @@ export function readExternalCliBootstrapCredential(params: {
   );
 }
 
+<<<<<<< HEAD
+=======
+export const readManagedExternalCliCredential = readExternalCliBootstrapCredential;
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Read a CLI credential as a fallback for refresh/runtime auth recovery. */
 export function readExternalCliFallbackCredential(params: {
   profileId: string;

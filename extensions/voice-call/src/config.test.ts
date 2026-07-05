@@ -2,11 +2,17 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   VoiceCallConfigSchema,
+<<<<<<< HEAD
   resolveVoiceCallAgentSessionKey,
   resolveTwilioAuthToken,
   resolveVoiceCallEffectiveConfig,
   resolveVoiceCallNumberRouteKey,
   resolveVoiceCallNumberRouteKeyForCall,
+=======
+  resolveTwilioAuthToken,
+  resolveVoiceCallEffectiveConfig,
+  resolveVoiceCallNumberRouteKey,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveVoiceCallSessionKey,
   validateProviderConfig,
   normalizeVoiceCallConfig,
@@ -298,6 +304,7 @@ describe("resolveVoiceCallConfig session routing", () => {
         callId: "call-123",
         phone: "+1 (555) 000-1111",
       }),
+<<<<<<< HEAD
     ).toBe("agent:main:voice:15550001111");
   });
 
@@ -315,6 +322,9 @@ describe("resolveVoiceCallConfig session routing", () => {
         phone: "+1 (555) 000-1111",
       }),
     ).toBe("agent:voice:voice:15550001111");
+=======
+    ).toBe("voice:15550001111");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("can scope voice sessions to each call", () => {
@@ -331,10 +341,17 @@ describe("resolveVoiceCallConfig session routing", () => {
         callId: "call-123",
         phone: "+1 (555) 000-1111",
       }),
+<<<<<<< HEAD
     ).toBe("agent:main:voice:call:call-123");
   });
 
   it("scopes explicit voice session keys by configured agent", () => {
+=======
+    ).toBe("voice:call:call-123");
+  });
+
+  it("preserves explicit voice session keys", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const config = resolveVoiceCallConfig({
       enabled: true,
       provider: "mock",
@@ -346,6 +363,7 @@ describe("resolveVoiceCallConfig session routing", () => {
         config,
         callId: "call-123",
         phone: "+1 (555) 000-1111",
+<<<<<<< HEAD
         explicitSessionKey: "Meet-Room-1",
       }),
     ).toBe("agent:main:meet-room-1");
@@ -475,6 +493,11 @@ describe("resolveVoiceCallConfig session routing", () => {
         coreSession: { scope: "global" },
       }),
     ).toBe("agent:voice:agent:main:main");
+=======
+        explicitSessionKey: "meet-room-1",
+      }),
+    ).toBe("meet-room-1");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("resolves per-number inbound route overrides over global voice settings", () => {
@@ -539,6 +562,7 @@ describe("resolveVoiceCallConfig session routing", () => {
     expect(effective.config).toBe(config);
     expect(effective.config.inboundGreeting).toBe("Hello from global.");
   });
+<<<<<<< HEAD
 
   it("uses dialed-number fallback only for inbound calls", () => {
     expect(
@@ -568,6 +592,8 @@ describe("resolveVoiceCallConfig session routing", () => {
       }),
     ).toBeUndefined();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("normalizeVoiceCallConfig", () => {

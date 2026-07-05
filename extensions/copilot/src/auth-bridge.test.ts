@@ -5,6 +5,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   COPILOT_DEFAULT_AGENT_ID,
   COPILOT_TOKEN_PROFILE_ERROR,
+<<<<<<< HEAD
+=======
+  normalizeCopilotHomePath,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveCopilotAuth,
   sanitizeAgentId,
   tokenFingerprint,
@@ -507,3 +511,21 @@ describe("resolveCopilotAuth - defaults wiring", () => {
     );
   });
 });
+<<<<<<< HEAD
+=======
+
+describe("normalizeCopilotHomePath", () => {
+  it("resolves to absolute and strips trailing separators", () => {
+    const normalized = normalizeCopilotHomePath("./foo/bar/");
+    expect(normalized).toBe(resolve("./foo/bar"));
+    expect(normalized.endsWith("/")).toBe(false);
+    expect(normalized.endsWith("\\")).toBe(false);
+  });
+
+  it("is idempotent", () => {
+    const once = normalizeCopilotHomePath("/some/path/");
+    const twice = normalizeCopilotHomePath(once);
+    expect(twice).toBe(once);
+  });
+});
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

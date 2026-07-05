@@ -135,6 +135,7 @@ export class MatrixRecoveryKeyStore {
     };
   }
 
+<<<<<<< HEAD
   getSecretStorageKeyCandidate(keyId: string): Uint8Array | null {
     const normalizedKeyId = keyId.trim();
     if (!normalizedKeyId) {
@@ -156,6 +157,8 @@ export class MatrixRecoveryKeyStore {
     return privateKey;
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   private resolveEncodedRecoveryKeyInput(params: {
     encodedPrivateKey: string;
     keyId?: string | null;

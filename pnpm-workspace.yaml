@@ -7,7 +7,10 @@ packages:
 minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
+<<<<<<< HEAD
   - "@openclaw/crabline@0.1.0"
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   - "@openclaw/fs-safe@0.3.0"
   - "@openclaw/proxyline@0.3.3"
   - "acpx"
@@ -135,13 +138,20 @@ allowBuilds:
   "@discordjs/opus": false
   esbuild: true
   koffi: false
+<<<<<<< HEAD
   node-llama-cpp: false
+=======
+  node-llama-cpp: true
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   protobufjs: true
   tree-sitter-bash: false
   openclaw: true
   "@openclaw/proxyline": true
   clawpdf: true
+<<<<<<< HEAD
   "@openclaw/crabline": true
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   rastermill: true
 
 packageExtensions:

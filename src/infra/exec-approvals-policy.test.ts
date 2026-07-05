@@ -13,7 +13,11 @@ vi.unmock("./exec-approvals.js");
 vi.unmock("./exec-approvals-effective.js");
 
 let collectExecPolicyScopeSnapshots: typeof import("./exec-approvals-effective.js").collectExecPolicyScopeSnapshots;
+<<<<<<< HEAD
 let resolveExecPolicyScopeSnapshot: typeof import("./exec-approvals-effective.js").resolveExecPolicyScopeSnapshot;
+=======
+let resolveExecPolicyScopeSummary: typeof import("./exec-approvals-effective.js").resolveExecPolicyScopeSummary;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 let evaluateExecAllowlist: typeof import("./exec-approvals.js").evaluateExecAllowlist;
 let hasDurableExecApproval: typeof import("./exec-approvals.js").hasDurableExecApproval;
 let maxAsk: typeof import("./exec-approvals.js").maxAsk;
@@ -40,7 +44,11 @@ async function loadActualExecApprovalModules(): Promise<void> {
     "./exec-approvals-effective.js",
   );
   collectExecPolicyScopeSnapshots = effective.collectExecPolicyScopeSnapshots;
+<<<<<<< HEAD
   resolveExecPolicyScopeSnapshot = effective.resolveExecPolicyScopeSnapshot;
+=======
+  resolveExecPolicyScopeSummary = effective.resolveExecPolicyScopeSummary;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   evaluateExecAllowlist = execApprovals.evaluateExecAllowlist;
   hasDurableExecApproval = execApprovals.hasDurableExecApproval;
   maxAsk = execApprovals.maxAsk;
@@ -62,6 +70,7 @@ async function loadActualExecApprovalModules(): Promise<void> {
   resolveExecPolicyForMode = execApprovals.resolveExecPolicyForMode;
 }
 
+<<<<<<< HEAD
 function summarizeExecPolicyScopeSnapshot(
   params: Parameters<typeof resolveExecPolicyScopeSnapshot>[0],
 ): Omit<ReturnType<typeof resolveExecPolicyScopeSnapshot>, "allowedDecisions"> {
@@ -70,6 +79,8 @@ function summarizeExecPolicyScopeSnapshot(
   return summary;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
   if (!value || typeof value !== "object") {
     throw new Error("expected fields object");
@@ -92,7 +103,11 @@ function expectMalformedAgentAskUsesDefaults(agentAsk: unknown): void {
       },
     },
   } as unknown as ExecApprovalsFile;
+<<<<<<< HEAD
   const summary = summarizeExecPolicyScopeSnapshot({
+=======
+  const summary = resolveExecPolicyScopeSummary({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     approvals,
     globalExecConfig: {
       ask: "off",
@@ -418,7 +433,11 @@ describe("exec approvals policy helpers", () => {
   });
 
   it("explains stricter host security and ask precedence", () => {
+<<<<<<< HEAD
     const summary = summarizeExecPolicyScopeSnapshot({
+=======
+    const summary = resolveExecPolicyScopeSummary({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       approvals: {
         version: 1,
         defaults: {
@@ -456,7 +475,11 @@ describe("exec approvals policy helpers", () => {
   });
 
   it("maps normalized requested mode into policy snapshots", () => {
+<<<<<<< HEAD
     const summary = summarizeExecPolicyScopeSnapshot({
+=======
+    const summary = resolveExecPolicyScopeSummary({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       approvals: {
         version: 1,
       },
@@ -486,7 +509,11 @@ describe("exec approvals policy helpers", () => {
   });
 
   it("lets narrower legacy policy override a global normalized mode in snapshots", () => {
+<<<<<<< HEAD
     const summary = summarizeExecPolicyScopeSnapshot({
+=======
+    const summary = resolveExecPolicyScopeSummary({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       approvals: {
         version: 1,
       },
@@ -516,7 +543,11 @@ describe("exec approvals policy helpers", () => {
   });
 
   it("preserves mode-derived siblings for partial narrower legacy policy snapshots", () => {
+<<<<<<< HEAD
     const summary = summarizeExecPolicyScopeSnapshot({
+=======
+    const summary = resolveExecPolicyScopeSummary({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       approvals: {
         version: 1,
       },
@@ -546,7 +577,11 @@ describe("exec approvals policy helpers", () => {
   });
 
   it("reports full plus on-miss as full because on-miss only gates allowlist misses", () => {
+<<<<<<< HEAD
     const summary = summarizeExecPolicyScopeSnapshot({
+=======
+    const summary = resolveExecPolicyScopeSummary({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       approvals: {
         version: 1,
       },
@@ -576,7 +611,11 @@ describe("exec approvals policy helpers", () => {
   });
 
   it("uses the actual approvals path when reporting host sources", () => {
+<<<<<<< HEAD
     const summary = summarizeExecPolicyScopeSnapshot({
+=======
+    const summary = resolveExecPolicyScopeSummary({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       approvals: {
         version: 1,
         defaults: {
@@ -607,7 +646,11 @@ describe("exec approvals policy helpers", () => {
     const stateDir = path.join(process.cwd(), ".tmp-openclaw-state");
     process.env.OPENCLAW_STATE_DIR = stateDir;
     try {
+<<<<<<< HEAD
       const summary = summarizeExecPolicyScopeSnapshot({
+=======
+      const summary = resolveExecPolicyScopeSummary({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         approvals: {
           version: 1,
           defaults: {
@@ -634,7 +677,11 @@ describe("exec approvals policy helpers", () => {
   });
 
   it("does not let host ask=off suppress a stricter requested ask", () => {
+<<<<<<< HEAD
     const summary = summarizeExecPolicyScopeSnapshot({
+=======
+    const summary = resolveExecPolicyScopeSummary({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       approvals: {
         version: 1,
         defaults: {
@@ -657,7 +704,11 @@ describe("exec approvals policy helpers", () => {
   });
 
   it("clamps askFallback to the effective security", () => {
+<<<<<<< HEAD
     const summary = summarizeExecPolicyScopeSnapshot({
+=======
+    const summary = resolveExecPolicyScopeSummary({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       approvals: {
         version: 1,
         defaults: {
@@ -693,7 +744,11 @@ describe("exec approvals policy helpers", () => {
   });
 
   it("attributes host policy to wildcard agent entries before defaults", () => {
+<<<<<<< HEAD
     const summary = summarizeExecPolicyScopeSnapshot({
+=======
+    const summary = resolveExecPolicyScopeSummary({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       approvals: {
         version: 1,
         defaults: {
@@ -733,7 +788,11 @@ describe("exec approvals policy helpers", () => {
   });
 
   it("inherits requested agent policy from global tools.exec config", () => {
+<<<<<<< HEAD
     const summary = summarizeExecPolicyScopeSnapshot({
+=======
+    const summary = resolveExecPolicyScopeSummary({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       approvals: {
         version: 1,
         agents: {
@@ -767,7 +826,11 @@ describe("exec approvals policy helpers", () => {
   });
 
   it("reports askFallback from the OpenClaw default when approvals omit it", () => {
+<<<<<<< HEAD
     const summary = summarizeExecPolicyScopeSnapshot({
+=======
+    const summary = resolveExecPolicyScopeSummary({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       approvals: {
         version: 1,
         agents: {},

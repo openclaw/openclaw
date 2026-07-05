@@ -15,7 +15,11 @@ import {
 } from "../config/model-input.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
+<<<<<<< HEAD
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
+=======
+import { formatErrorMessage } from "../infra/errors.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { getProviderEnvVars as getDefaultProviderEnvVars } from "../secrets/provider-env-vars.js";
 
 // Shared media-generation runtime helpers for provider fallback, request
@@ -582,7 +586,11 @@ export function throwCapabilityGenerationFailure(params: {
   lastError: unknown;
 }): never {
   if (params.attempts.length <= 1 && params.lastError) {
+<<<<<<< HEAD
     throw toErrorObject(params.lastError, "Non-Error thrown");
+=======
+    throw toLintErrorObject(params.lastError, "Non-Error thrown");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   const summary = formatCapabilityFailureAttempts(params.attempts);
   throw new Error(
@@ -663,3 +671,20 @@ export function buildNoCapabilityModelConfiguredMessage(params: {
       : "If you want a specific provider, also configure that provider's auth/API key first.",
   ].join(" ");
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

@@ -573,13 +573,21 @@ describe("createTelegramDraftStream", () => {
     stream.updatePreview({
       text: "Shelling\n\n`🛠️ Exec`",
       richMessage: {
+<<<<<<< HEAD
         html: "<b>Shelling</b>\n<b>🛠️ Exec</b>",
+=======
+        html: "<b>Shelling</b><br><b>🛠️ Exec</b>",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         skip_entity_detection: true,
       },
     });
     await stream.flush();
 
+<<<<<<< HEAD
     expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>Shelling</b>\n<b>🛠️ Exec</b>", {
+=======
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>Shelling</b><br><b>🛠️ Exec</b>", {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       parse_mode: "HTML",
     });
     expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
@@ -587,7 +595,11 @@ describe("createTelegramDraftStream", () => {
     stream.updatePreview({
       text: "Shelling\n\n`🛠️ Exec`\n• _Checking files_",
       richMessage: {
+<<<<<<< HEAD
         html: "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<i>Checking files</i>",
+=======
+        html: "<b>Shelling</b><br><b>🛠️ Exec</b><br><i>Checking files</i>",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         skip_entity_detection: true,
       },
     });
@@ -596,12 +608,17 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).toHaveBeenCalledWith(
       123,
       17,
+<<<<<<< HEAD
       "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<i>Checking files</i>",
+=======
+      "<b>Shelling</b><br><b>🛠️ Exec</b><br><i>Checking files</i>",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       { parse_mode: "HTML" },
     );
     expect(api.raw.editMessageText).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("sends marked progress rich previews through HTML text transport", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api);
@@ -660,6 +677,8 @@ describe("createTelegramDraftStream", () => {
     expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Shelling\n\n🛠️ Exec", {});
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses rich send and edit for previews when explicitly enabled", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, { richMessages: true });
@@ -690,6 +709,7 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("skips rich entity detection for draft text with provider-prefixed email addresses", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, { richMessages: true });
@@ -708,6 +728,8 @@ describe("createTelegramDraftStream", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps rich preview html out of plain preview gating", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, { richMessages: true, minInitialChars: 10 });
@@ -807,6 +829,7 @@ describe("createTelegramDraftStream", () => {
     expectNthPreviewSend(api, 2, "foo bar baz qux");
   });
 
+<<<<<<< HEAD
   it("clamps a first oversized non-final preview on a UTF-16 boundary", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, { maxChars: 10 });
@@ -817,6 +840,18 @@ describe("createTelegramDraftStream", () => {
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
     expectNthPreviewSend(api, 1, "123456789");
     expect(stream.lastDeliveredText?.()).toBe("123456789");
+=======
+  it("clamps a first oversized non-final preview", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { maxChars: 10 });
+
+    stream.update("1234567890ABCDEFGHIJ");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expectNthPreviewSend(api, 1, "1234567890");
+    expect(stream.lastDeliveredText?.()).toBe("1234567890");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("finalizes overflow that was hidden by a clamped non-final preview", async () => {

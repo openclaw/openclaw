@@ -639,6 +639,7 @@ function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse)
   return detectedVersion;
 }
 
+<<<<<<< HEAD
 export function isUnsupportedCodexAppServerVersionError(error: unknown): boolean {
   return (
     error instanceof Error &&
@@ -648,6 +649,8 @@ export function isUnsupportedCodexAppServerVersionError(error: unknown): boolean
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function buildCodexAppServerRuntimeIdentity(
   response: CodexInitializeResponse,
   serverVersion: string,

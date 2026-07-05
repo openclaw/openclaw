@@ -23,10 +23,15 @@ export type CaptureSessionRecord = {
   sourceScope: "openclaw";
   sourceProcess: string;
   proxyUrl?: string;
+<<<<<<< HEAD
   /** @deprecated Capture storage now lives in the shared state database. */
   dbPath?: string;
   /** @deprecated Capture payloads now live in the shared state database. */
   blobDir?: string;
+=======
+  dbPath: string;
+  blobDir: string;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 export type CaptureBlobRecord = {
@@ -38,10 +43,13 @@ export type CaptureBlobRecord = {
   contentType?: string;
 };
 
+<<<<<<< HEAD
 export type SharedCaptureBlobRecord = Omit<CaptureBlobRecord, "path"> & {
   path?: never;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type CaptureEventRecord = {
   sessionId: string;
   ts: number;

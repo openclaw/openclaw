@@ -43,11 +43,27 @@ export function registerAgentHarness(
   });
 }
 
+<<<<<<< HEAD
+=======
+/** Returns the active harness for an id, if one has been registered. */
+export function getAgentHarness(id: string): AgentHarness | undefined {
+  return getRegisteredAgentHarness(id)?.harness;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Returns the harness plus plugin ownership metadata for registry diagnostics. */
 export function getRegisteredAgentHarness(id: string): RegisteredAgentHarness | undefined {
   return getAgentHarnessRegistryState().harnesses.get(id.trim());
 }
 
+<<<<<<< HEAD
+=======
+/** Lists registered harness ids in insertion order. */
+export function listAgentHarnessIds(): string[] {
+  return [...getAgentHarnessRegistryState().harnesses.keys()];
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Lists registered harness records for selection and lifecycle fan-out. */
 export function listRegisteredAgentHarnesses(): RegisteredAgentHarness[] {
   return Array.from(getAgentHarnessRegistryState().harnesses.values());

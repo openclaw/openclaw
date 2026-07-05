@@ -6,9 +6,12 @@ import { runWatchMain } from "../../scripts/watch-node.mjs";
 class FakeProcess extends EventEmitter {
   execPath = process.execPath;
   pid = 12345;
+<<<<<<< HEAD
   stdin = {
     isTTY: false,
   };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   stderr = {
     write: () => true,
   };
@@ -16,12 +19,15 @@ class FakeProcess extends EventEmitter {
 
 class FakeChild extends EventEmitter {
   signals: string[] = [];
+<<<<<<< HEAD
   pid?: number;
 
   constructor(pid?: number) {
     super();
     this.pid = pid;
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   kill(signal: string): boolean {
     this.signals.push(signal);
@@ -64,6 +70,7 @@ describe("watch-node shutdown cleanup", () => {
     expect(child.signals).toEqual(["SIGTERM", "SIGKILL"]);
   });
 
+<<<<<<< HEAD
   it("force-cleans the child process group when the leader exits after shutdown", async () => {
     vi.useFakeTimers();
     const fakeProcess = new FakeProcess();
@@ -92,6 +99,8 @@ describe("watch-node shutdown cleanup", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("waits for the auto-doctor child when interrupted during repair", async () => {
     vi.useFakeTimers();
     const fakeProcess = new FakeProcess();

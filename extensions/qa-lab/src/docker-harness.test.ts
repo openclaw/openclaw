@@ -1,5 +1,9 @@
 // Qa Lab tests cover docker harness plugin behavior.
+<<<<<<< HEAD
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+=======
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -19,7 +23,10 @@ function parseComposeServices(compose: string) {
     services?: Record<
       string,
       {
+<<<<<<< HEAD
         build?: { context?: string };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         environment?: Record<string, string>;
         volumes?: string[];
       }
@@ -91,7 +98,11 @@ describe("qa docker harness", () => {
     expect(compose).toContain(":/opt/openclaw-repo:ro");
     expect(compose).toContain("./state:/opt/openclaw-scaffold:ro");
     expect(compose).toContain(
+<<<<<<< HEAD
       "cp -R /opt/openclaw-scaffold/seed-workspace/. /tmp/openclaw/workspace/ && rm -rf /tmp/openclaw/workspace/repo && ln -s /opt/openclaw-repo /tmp/openclaw/workspace/repo",
+=======
+      "cp -R /opt/openclaw-scaffold/seed-workspace/. /tmp/openclaw/workspace/",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
     expect(compose).toContain("OPENCLAW_CONFIG_PATH: /tmp/openclaw/openclaw.json");
     expect(compose).toContain("OPENCLAW_STATE_DIR: /tmp/openclaw/state");
@@ -157,6 +168,7 @@ describe("qa docker harness", () => {
       "docker build -t openclaw:qa-local-prebaked --build-arg OPENCLAW_EXTENSIONS=qa-channel qa-lab -f Dockerfile . @/repo/openclaw",
     ]);
   });
+<<<<<<< HEAD
 
   it("quotes generated compose paths so shell-sensitive repo paths survive YAML parsing", async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-docker-paths-"));
@@ -185,4 +197,6 @@ describe("qa docker harness", () => {
       "../repo #hash:/opt/openclaw-repo:ro",
     );
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

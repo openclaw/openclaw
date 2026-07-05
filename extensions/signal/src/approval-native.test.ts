@@ -8,6 +8,10 @@ import { describe, expect, it } from "vitest";
 import {
   shouldSuppressLocalSignalExecApprovalPrompt,
   signalApprovalCapability,
+<<<<<<< HEAD
+=======
+  signalNativeApprovalAdapter,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./approval-native.js";
 
 type SignalConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["signal"]>;
@@ -111,7 +115,11 @@ describe("signal approval capability", () => {
     const pluginRequest = buildPluginRequest("+15551230000");
 
     expect(
+<<<<<<< HEAD
       signalApprovalCapability?.getActionAvailabilityState?.({
+=======
+      signalNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         action: "approve",
@@ -119,7 +127,11 @@ describe("signal approval capability", () => {
       }),
     ).toEqual({ kind: "disabled" });
     expect(
+<<<<<<< HEAD
       signalApprovalCapability?.getActionAvailabilityState?.({
+=======
+      signalNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         action: "approve",
@@ -234,7 +246,11 @@ describe("signal approval capability", () => {
     const request = buildExecRequest("+15551230000");
 
     expect(
+<<<<<<< HEAD
       signalApprovalCapability?.getActionAvailabilityState?.({
+=======
+      signalNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         action: "approve",

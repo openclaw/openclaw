@@ -194,6 +194,7 @@ describe("skills verify CLI", () => {
     expect(mocks.runtimeErrors).toStrictEqual([]);
   });
 
+<<<<<<< HEAD
   it("verifies owner-qualified registry refs with explicit versions", async () => {
     mocks.fetchClawHubSkillVerificationMock.mockResolvedValueOnce({
       schema: "clawhub.skill.verify.v1",
@@ -268,6 +269,8 @@ describe("skills verify CLI", () => {
     expect(mocks.runtimeErrors).toStrictEqual([]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("surfaces only server-verified source provenance in verify JSON", async () => {
     const sourceUrl = "https://github.com/openclaw/skills/tree/main/agentreceipt";
     const verifiedSourceUrl =

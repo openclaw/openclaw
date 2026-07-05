@@ -35,6 +35,7 @@ describe("detectLifecyclePackageManager", () => {
     ).toBe("pnpm");
   });
 
+<<<<<<< HEAD
   it("detects npm cli launchers from npm_execpath", () => {
     expect(
       detectLifecyclePackageManager({
@@ -75,6 +76,8 @@ describe("detectLifecyclePackageManager", () => {
     ).toBe("yarn");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("ignores untrusted user-agent tokens with control characters", () => {
     expect(
       detectLifecyclePackageManager({

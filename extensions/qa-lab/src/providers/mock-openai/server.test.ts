@@ -122,11 +122,16 @@ function explicitSessionsSpawnPrompt(token: string) {
   return [
     "Use sessions_spawn for this QA check.",
     `task="${threadSubagentTask(token)}"`,
+<<<<<<< HEAD
     "label=qa-thread-subagent thread=true mode=session",
+=======
+    "label=qa-thread-subagent thread=true mode=session runTimeoutSeconds=30",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ].join(" ");
 }
 
 describe("qa mock openai server", () => {
+<<<<<<< HEAD
   it("retains enough debug requests for long shared QA runs", async () => {
     const server = await startMockServer();
 
@@ -150,6 +155,8 @@ describe("qa mock openai server", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("serves health and streamed responses", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
@@ -242,6 +249,7 @@ describe("qa mock openai server", () => {
     expect(debugPayload.plannedToolName).toBe("read");
   });
 
+<<<<<<< HEAD
   it("returns a substantive private final fixture for the message-tool warning scenario", async () => {
     const server = await startMockServer();
 
@@ -263,6 +271,8 @@ describe("qa mock openai server", () => {
     expect(text.match(/[.!?]+(?:\s|$)/g)).toHaveLength(2);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("emits deterministic text deltas for generic streaming QA prompts", async () => {
     const server = await startMockServer();
 
@@ -686,6 +696,7 @@ describe("qa mock openai server", () => {
     expect(debugPayload.plannedToolName).toBe("read");
   });
 
+<<<<<<< HEAD
   it("reads unquoted fixture paths and honors exact replies after tool output", async () => {
     const server = await startMockServer();
     const prompt =
@@ -742,6 +753,8 @@ describe("qa mock openai server", () => {
     expect(outputText(response)).toBe("VISIBLE-SKILL-OK");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("drives the Lobster Invaders write flow and memory recall responses", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
@@ -1014,6 +1027,7 @@ describe("qa mock openai server", () => {
     expect(firstPayload.output?.[0]?.call_id).not.toBe(secondPayload.output?.[0]?.call_id);
   });
 
+<<<<<<< HEAD
   it("uses unique ids for repeated identical tool calls", async () => {
     const server = await startMockServer();
     const body = {
@@ -1035,6 +1049,8 @@ describe("qa mock openai server", () => {
     expect(firstCallId).not.toBe(secondCallId);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("continues repo-contract followthrough when a retry user item follows tool output", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
@@ -1681,7 +1697,10 @@ describe("qa mock openai server", () => {
     expect(spawnArgs.label).toBe("qa-direct-fallback-worker");
     expect(spawnArgs.thread).toBe(false);
     expect(spawnArgs.mode).toBe("run");
+<<<<<<< HEAD
     expect(spawnArgs).not.toHaveProperty("runTimeoutSeconds");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const body = await expectResponsesText(server, {
       stream: true,
@@ -1748,6 +1767,10 @@ describe("qa mock openai server", () => {
             label: "qa-thread-subagent",
             thread: true,
             mode: "session",
+<<<<<<< HEAD
+=======
+            runTimeoutSeconds: 30,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           }),
         },
         {
@@ -1784,6 +1807,10 @@ describe("qa mock openai server", () => {
             label: "qa-thread-subagent",
             thread: true,
             mode: "session",
+<<<<<<< HEAD
+=======
+            runTimeoutSeconds: 30,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           }),
         },
         {
@@ -1846,6 +1873,7 @@ describe("qa mock openai server", () => {
     expect(memorySearch.status).toBe(200);
     expect(await memorySearch.text()).toContain('"name":"memory_search"');
 
+<<<<<<< HEAD
     const memoryGetFromPathOnlySearchResult = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
       headers: {
@@ -1892,6 +1920,8 @@ describe("qa mock openai server", () => {
     expect(memoryGetText).toContain('\\"path\\":\\"MEMORY.md\\"');
     expect(memoryGetText).toContain('\\"from\\":1');
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const image = await fetch(`${server.baseUrl}/v1/images/generations`, {
       method: "POST",
       headers: {
@@ -3042,6 +3072,7 @@ describe("qa mock openai server", () => {
     expect(outputText(await response.json())).toBe("QA_CANARY_TEST");
   });
 
+<<<<<<< HEAD
   it("prefers Matrix exact marker prompts over quoted silent-reply guidance", async () => {
     const server = await startMockServer();
 
@@ -3077,6 +3108,8 @@ describe("qa mock openai server", () => {
     expect(outputText(await response.json())).toBe("CURRENT_REPLY");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses WhatsApp location markers only for the matching coordinate body", async () => {
     const server = await startMockServer();
     const setupInput = makeUserInput(
@@ -3347,6 +3380,7 @@ describe("qa mock openai server", () => {
     expect(String(toolPlanOutput.arguments)).toContain("current");
   });
 
+<<<<<<< HEAD
   it("summarizes QA tool-search bridge outputs with the nested plugin result marker", async () => {
     const server = await startMockServer();
     const targetTool = "fake_plugin_tool_17";
@@ -3388,6 +3422,8 @@ describe("qa mock openai server", () => {
     expect(outputText(await response.json())).toBe(`FAKE_PLUGIN_OK ${targetTool}`);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("plans QA tool-search failure calls with denied-input args", async () => {
     const server = await startMockServer();
 
@@ -3404,7 +3440,11 @@ describe("qa mock openai server", () => {
     const toolPlanOutput = outputItem(await response.json());
     expect(toolPlanOutput.type).toBe("function_call");
     expect(toolPlanOutput.name).toBe("web_search");
+<<<<<<< HEAD
     expect(String(toolPlanOutput.arguments)).toContain("OPENCLAW_QA_WEB_SEARCH_DENIED_INPUT");
+=======
+    expect(String(toolPlanOutput.arguments)).toContain("denied-input");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("plans QA subagent handoff calls even when Codex dynamic tools are not in body.tools", async () => {
@@ -4067,7 +4107,11 @@ describe("qa mock openai server", () => {
     expect(toolUseBlock?.input.label).toBe("qa-thread-subagent");
     expect(toolUseBlock?.input.thread).toBe(true);
     expect(toolUseBlock?.input.mode).toBe("session");
+<<<<<<< HEAD
     expect(toolUseBlock?.input).not.toHaveProperty("runTimeoutSeconds");
+=======
+    expect(toolUseBlock?.input.runTimeoutSeconds).toBe(30);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
     expect(debugResponse.status).toBe(200);
@@ -4482,7 +4526,11 @@ describe("qa mock openai server", () => {
     expect(body).not.toContain("HEARTBEAT_OK");
   });
 
+<<<<<<< HEAD
   it("rejects malformed or non-object Anthropic /v1/messages JSON", async () => {
+=======
+  it("rejects malformed Anthropic /v1/messages JSON with an invalid_request_error", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
       port: 0,
@@ -4491,6 +4539,7 @@ describe("qa mock openai server", () => {
       await server.stop();
     });
 
+<<<<<<< HEAD
     for (const rawBody of ['{"model":"claude-opus-4-8","messages":[', "null", "[]", '"text"']) {
       const response = await fetch(`${server.baseUrl}/v1/messages`, {
         method: "POST",
@@ -4540,6 +4589,22 @@ describe("qa mock openai server", () => {
 
     const health = await fetch(`${server.baseUrl}/healthz`);
     expect(health.status).toBe(200);
+=======
+    const response = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: '{"model":"claude-opus-4-8","messages":[',
+    });
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as {
+      type: string;
+      error: { type: string; message: string };
+    };
+    expect(body.type).toBe("error");
+    expect(body.error.type).toBe("invalid_request_error");
+    expect(body.error.message).toContain("Malformed JSON body");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("defaults empty-string Anthropic /v1/messages model to claude-opus-4-8", async () => {

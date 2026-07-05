@@ -1,5 +1,9 @@
 // Discord plugin module implements realtime behavior.
+<<<<<<< HEAD
 import { PassThrough, pipeline } from "node:stream";
+=======
+import { PassThrough } from "node:stream";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   asDateTimestampMs,
@@ -51,7 +55,10 @@ import {
   convertDiscordPcm48kStereoToRealtimePcm24kMono,
   convertRealtimePcm24kMonoToDiscordPcm48kStereo,
 } from "./audio.js";
+<<<<<<< HEAD
 import { formatVoiceLogPreview } from "./log-preview.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 import {
@@ -82,6 +89,10 @@ const DISCORD_REALTIME_RECENT_AGENT_PROXY_CONSULT_LIMIT = 16;
 const DISCORD_REALTIME_RECENT_AGENT_PROXY_CONSULT_TTL_MS = 15_000;
 const DISCORD_REALTIME_IGNORED_WAKE_NAME_CONTEXT_TTL_MS = 10_000;
 const DISCORD_REALTIME_WAKE_NAME_FOLLOWUP_TTL_MS = 10_000;
+<<<<<<< HEAD
+=======
+const DISCORD_REALTIME_LOG_PREVIEW_CHARS = 500;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const DISCORD_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
 const DISCORD_REALTIME_FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const DISCORD_REALTIME_DUPLICATE_ERROR_SUPPRESS_MS = 60_000;
@@ -139,6 +150,17 @@ type AgentProxyConsultState = {
 
 type AgentProxyConsultHandle = RealtimeVoiceForcedConsultHandle<AgentProxyConsultState>;
 
+<<<<<<< HEAD
+=======
+function formatRealtimeLogPreview(text: string): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  if (oneLine.length <= DISCORD_REALTIME_LOG_PREVIEW_CHARS) {
+    return oneLine;
+  }
+  return `${oneLine.slice(0, DISCORD_REALTIME_LOG_PREVIEW_CHARS)}...`;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function formatRealtimeInterruptionLog(event: RealtimeVoiceBridgeEvent): string | undefined {
   const detail = event.detail ? ` ${event.detail}` : "";
   if (event.direction === "client") {
@@ -408,11 +430,16 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     | { message: string; suppressed: number; lastLoggedAt: number }
     | undefined;
   private readonly playerIdleHandler = () => {
+<<<<<<< HEAD
     const hadOutputAudio = this.isOutputAudioActive();
     this.resetOutputStream("player-idle");
     if (hadOutputAudio) {
       this.completeExactSpeechResponse("player-idle");
     }
+=======
+    this.resetOutputStream("player-idle");
+    this.completeExactSpeechResponse("player-idle");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 
   constructor(
@@ -517,7 +544,11 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       onTranscript: (role, text, isFinal) => {
         if (isFinal && text.trim()) {
           logger.info(
+<<<<<<< HEAD
             `discord voice: realtime ${role} transcript (${text.length} chars): ${formatVoiceLogPreview(text)}`,
+=======
+            `discord voice: realtime ${role} transcript (${text.length} chars): ${formatRealtimeLogPreview(text)}`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           );
         }
         if (isFinal && role === "assistant") {
@@ -782,6 +813,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       return;
     }
     this.logOutputAudioStopped(reason);
+<<<<<<< HEAD
     this.clearOutputPlaybackWatchdog();
     this.outputStream = null;
     this.resetOutputAudioStats();
@@ -789,6 +821,11 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     // close path releases queued exact speech, so clear the old watchdog before
     // the next response owns exact-speech state.
     this.completeExactSpeechResponse(reason);
+=======
+    this.outputStream = null;
+    this.resetOutputAudioStats();
+    this.completeExactSpeechResponse(reason, { drain: false });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   private queueOutputAudio(stream: PassThrough, discordPcm: Buffer): void {
@@ -821,6 +858,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       this.resetOutputStream("opus-encode-error");
     });
     opusStream.once("close", () => this.handleOutputStreamClosed(stream, "stream-close"));
+<<<<<<< HEAD
     pipeline(stream, opusStream, (err) => {
       if (!err) {
         return;
@@ -830,6 +868,9 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       );
       this.resetOutputStream("output-pipeline-error");
     });
+=======
+    stream.pipe(opusStream);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (this.outputPacedBuffer.length > 0) {
       stream.write(this.outputPacedBuffer);
       this.outputPacedBuffer = Buffer.alloc(0);
@@ -1143,7 +1184,11 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       return;
     }
     logger.info(
+<<<<<<< HEAD
       `discord voice: realtime consult requested call=${callId || "unknown"} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} question=${formatVoiceLogPreview(consultMessage)}`,
+=======
+      `discord voice: realtime consult requested call=${callId || "unknown"} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} question=${formatRealtimeLogPreview(consultMessage)}`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
     const nativeConsult = this.forcedConsults.recordNativeConsult(event.args, callId);
     const pendingConsult = nativeConsult.kind === "pending" ? nativeConsult.handle : undefined;
@@ -1199,7 +1244,11 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     void promise
       .then((text) => {
         logger.info(
+<<<<<<< HEAD
           `discord voice: realtime consult answer (${text.length} chars) voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} speaker=${context.speakerLabel} owner=${context.senderIsOwner}: ${formatVoiceLogPreview(text)}`,
+=======
+          `discord voice: realtime consult answer (${text.length} chars) voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} speaker=${context.speakerLabel} owner=${context.senderIsOwner}: ${formatRealtimeLogPreview(text)}`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         );
         session.submitToolResult(callId, { text });
       })
@@ -1427,7 +1476,11 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     if (skipReason) {
       const context = this.consumePendingSpeakerContext();
       logger.info(
+<<<<<<< HEAD
         `discord voice: realtime forced agent consult skipped reason=${skipReason} chars=${question.length} speaker=${context?.speakerLabel ?? "unknown"} transcript=${formatVoiceLogPreview(question)}`,
+=======
+        `discord voice: realtime forced agent consult skipped reason=${skipReason} chars=${question.length} speaker=${context?.speakerLabel ?? "unknown"} transcript=${formatRealtimeLogPreview(question)}`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       );
       return undefined;
     }
@@ -1493,7 +1546,11 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       this.setRecentAgentProxyConsultPromise(pending, promise);
       const text = await promise;
       logger.info(
+<<<<<<< HEAD
         `discord voice: realtime forced agent consult answer (${text.length} chars) elapsedMs=${Date.now() - startedAt} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId}: ${formatVoiceLogPreview(text)}`,
+=======
+        `discord voice: realtime forced agent consult answer (${text.length} chars) elapsedMs=${Date.now() - startedAt} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId}: ${formatRealtimeLogPreview(text)}`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       );
       if (text.trim()) {
         this.enqueueExactSpeechMessage(text);

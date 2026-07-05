@@ -19,6 +19,7 @@ import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
+<<<<<<< HEAD
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { loggingState } from "../logging/state.js";
@@ -28,6 +29,11 @@ import {
   resolveTrustedWindowsCmdExe,
 } from "../process/windows-command.js";
 import {
+=======
+import { setConsoleSubsystemFilter } from "../logging/console.js";
+import { loggingState } from "../logging/state.js";
+import {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   buildAgentMainSessionKey,
   normalizeAgentId,
   normalizeMainKey,
@@ -99,8 +105,12 @@ type RunTuiOptions = TuiOptions & {
 /** Resolve the absolute path to the `codex` CLI binary, or `null` if not installed. */
 export function resolveCodexCliBin(): string | null {
   try {
+<<<<<<< HEAD
     const lookupCmd =
       process.platform === "win32" ? getWindowsSystem32ExePath("where.exe") : "which";
+=======
+    const lookupCmd = process.platform === "win32" ? "where" : "which";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     // `where` on Windows can return multiple lines; take the first match.
     const raw = execFileSync(lookupCmd, ["codex"], { encoding: "utf8" }).trim();
     return raw.split(/\r?\n/)[0] || null;
@@ -131,6 +141,7 @@ export function resolveLocalAuthCliInvocation(params?: {
     : { command, args: [runNodePath, "models", "auth", "login"] };
 }
 
+<<<<<<< HEAD
 export function resolveLocalAuthSpawnInvocation(params: {
   command: string;
   args: string[];
@@ -149,6 +160,16 @@ export function resolveLocalAuthSpawnInvocation(params: {
     args: ["/d", "/s", "/c", buildWindowsCmdExeCommandLine(params.command, params.args)],
     options: { windowsHide: true, windowsVerbatimArguments: true },
   };
+=======
+export function resolveLocalAuthSpawnOptions(params: {
+  command: string;
+  platform?: NodeJS.Platform;
+}): { shell?: true } {
+  const platform = params.platform ?? process.platform;
+  return platform === "win32" && /\.(cmd|bat)$/iu.test(params.command.trim())
+    ? { shell: true }
+    : {};
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function resolveLocalAuthSpawnCwd(params: { args: string[]; defaultCwd?: string }): string {
@@ -1208,12 +1229,20 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
                   }
                 }
 
+<<<<<<< HEAD
                 const invocation = resolveLocalAuthSpawnInvocation({ command, args });
                 const child = spawn(invocation.command, invocation.args, {
                   cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: process.cwd() }),
                   env: process.env,
                   stdio: "inherit",
                   ...invocation.options,
+=======
+                const child = spawn(command, args, {
+                  cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: process.cwd() }),
+                  env: process.env,
+                  stdio: "inherit",
+                  ...resolveLocalAuthSpawnOptions({ command }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 });
                 child.once("error", reject);
                 child.once("exit", (exitCode, signal) => {
@@ -1237,8 +1266,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       : "unknown";
     const tokens = formatTokens(sessionInfo.totalTokens ?? null, sessionInfo.contextTokens ?? null);
     const think = sessionInfo.thinkingLevel ?? "off";
+<<<<<<< HEAD
     const fastLabel =
       sessionInfo.fastMode === "auto" ? "fast:auto" : sessionInfo.fastMode === true ? "fast" : null;
+=======
+    const fast = sessionInfo.fastMode === true;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const verbose = sessionInfo.verboseLevel ?? "off";
     const reasoning = sessionInfo.reasoningLevel ?? "off";
     const reasoningLabel =
@@ -1251,7 +1284,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       modelLabel,
       formatGoalFooter(sessionInfo.goal),
       think !== "off" ? `think ${think}` : null,
+<<<<<<< HEAD
       fastLabel,
+=======
+      fast ? "fast" : null,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       verbose !== "off" ? `verbose ${verbose}` : null,
       reasoningLabel,
       tokens,

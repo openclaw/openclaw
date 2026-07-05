@@ -1,15 +1,24 @@
 // Profile Extension Memory tests cover profile extension memory script behavior.
+<<<<<<< HEAD
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+=======
+import { spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { describe, expect, it } from "vitest";
 import { parseArgs, runCase } from "../../scripts/profile-extension-memory.mjs";
 
 const SCRIPT_PATH = path.resolve("scripts/profile-extension-memory.mjs");
 
+<<<<<<< HEAD
 async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
@@ -32,6 +41,8 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function runProfileExtensionMemory(args: string[], cwd = process.cwd()) {
   return spawnSync(process.execPath, [SCRIPT_PATH, ...args], {
     cwd,
@@ -39,6 +50,7 @@ function runProfileExtensionMemory(args: string[], cwd = process.cwd()) {
   });
 }
 
+<<<<<<< HEAD
 function extractReportPath(stdout: string) {
   const match = stdout.match(/^\[extension-memory\] report: (.+)$/mu);
   const reportPath = match?.[1];
@@ -71,6 +83,8 @@ async function waitForChildExit(
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("scripts/profile-extension-memory", () => {
   it("prints help without requiring built plugin artifacts", () => {
     const result = runProfileExtensionMemory(["--help"]);
@@ -112,6 +126,7 @@ describe("scripts/profile-extension-memory", () => {
     }
   });
 
+<<<<<<< HEAD
   it("rejects option-looking string flag values before scanning built plugin artifacts", () => {
     for (const args of [
       ["--extension", "-h"],
@@ -127,6 +142,8 @@ describe("scripts/profile-extension-memory", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("bounds noisy child output without losing RSS samples", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
     try {
@@ -185,6 +202,7 @@ describe("scripts/profile-extension-memory", () => {
     }
   });
 
+<<<<<<< HEAD
   it("uses distinct default JSON report paths for separate runs", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
     const reportPaths: string[] = [];
@@ -223,6 +241,8 @@ describe("scripts/profile-extension-memory", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("fails when a profiled plugin import fails", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
     try {
@@ -282,6 +302,7 @@ describe("scripts/profile-extension-memory", () => {
       timedOut: false,
     });
   });
+<<<<<<< HEAD
 
   it.runIf(process.platform !== "win32")(
     "cleans timeout descendants before resolving the case",
@@ -403,4 +424,6 @@ describe("scripts/profile-extension-memory", () => {
       }
     },
   );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

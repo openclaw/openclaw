@@ -1,0 +1,73 @@
+{
+  "scenarios": [
+    {
+      "name": "Subagent stale child links",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "restarted gateway filters stale subagent child links",
+          "status": "pass",
+          "details": "{\n  \"mainChildren\": [\n    \"agent:qa:subagent:qa-live-child\",\n    \"agent:qa:dashboard:qa-fresh-child\"\n  ],\n  \"filteredKeys\": [\n    \"agent:qa:dashboard:qa-fresh-child\",\n    \"agent:qa:subagent:qa-live-child\"\n  ]\n}"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 60725,
+    "gatewayProcessCpuMs": 0,
+    "gatewayCpuCoreRatio": 0,
+    "gatewayProcessRssStartBytes": 883740672,
+    "gatewayProcessRssEndBytes": 849055744,
+    "gatewayProcessRssDeltaBytes": -34684928,
+    "gatewayProcessRssPeakBytes": 884125696,
+    "gatewayProcessRssPeakDeltaBytes": 385024,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:14:35.099Z",
+        "gatewayProcessRssBytes": 883740672
+      },
+      {
+        "label": "scenario:subagent-stale-child-links:start",
+        "at": "2026-07-03T13:14:35.131Z",
+        "gatewayProcessRssBytes": 884125696
+      },
+      {
+        "label": "scenario:subagent-stale-child-links:finish",
+        "at": "2026-07-03T13:14:58.575Z",
+        "gatewayProcessRssBytes": 846852096
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:14:58.717Z",
+        "gatewayProcessRssBytes": 849055744
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:13:57.850Z",
+    "finishedAt": "2026-07-03T13:14:58.575Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "subagent-stale-child-links"
+    ],
+    "runtimePair": null
+  }
+}

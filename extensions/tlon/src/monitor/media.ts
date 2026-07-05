@@ -10,6 +10,10 @@ import {
   saveRemoteMedia,
 } from "openclaw/plugin-sdk/media-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+<<<<<<< HEAD
+=======
+import { getDefaultSsrFPolicy } from "../urbit/context.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const MAX_IMAGES_PER_MESSAGE = 8;
 const TLON_MEDIA_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
@@ -71,7 +75,11 @@ export async function downloadMedia(
       url,
       maxBytes: MAX_IMAGE_BYTES,
       readIdleTimeoutMs: TLON_MEDIA_DOWNLOAD_IDLE_TIMEOUT_MS,
+<<<<<<< HEAD
       ssrfPolicy: undefined,
+=======
+      ssrfPolicy: getDefaultSsrFPolicy(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       requestInit: { method: "GET" },
     };
 

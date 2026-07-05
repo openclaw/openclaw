@@ -26,7 +26,10 @@ import {
   registerAgentRunContext,
   withAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
+<<<<<<< HEAD
 import { isDiagnosticsEnabled, emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   resolveAgentDeliveryPlan,
@@ -68,7 +71,10 @@ import {
   isDeliverableMessageChannel,
   resolveMessageChannel,
 } from "../utils/message-channel.js";
+<<<<<<< HEAD
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
@@ -139,7 +145,10 @@ import {
 } from "./run-termination.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
+<<<<<<< HEAD
 import { hasNonzeroUsage } from "./usage.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { ensureAgentWorkspace } from "./workspace.js";
 
 const log = createSubsystemLogger("agents/agent-command");
@@ -1431,11 +1440,14 @@ async function agentCommandInternal(
             groupChannel: runContext.groupChannel ?? sessionEntry?.groupChannel,
             groupSubject: sessionEntry?.subject,
             parentSessionKey: sessionEntry?.parentSessionKey ?? sessionKey,
+<<<<<<< HEAD
             directUserIds: [
               sessionEntry?.origin?.nativeDirectUserId,
               sessionEntry?.origin?.from,
               sessionEntry?.origin?.to,
             ],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           })
         : null;
     const normalizedChannelOverride = channelModelOverride
@@ -1813,7 +1825,10 @@ async function agentCommandInternal(
     const MAX_LIVE_SWITCH_RETRIES = 5;
     let liveSwitchRetries = 0;
     let autoFallbackPrimaryProbeInterruptedByLiveSwitch = false;
+<<<<<<< HEAD
     const fastModeStartedAtMs = Date.now();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const fallbackTrajectoryRecorder = createTrajectoryRuntimeRecorder({
       cfg,
       runId,
@@ -1904,6 +1919,7 @@ async function agentCommandInternal(
               provider: providerOverride,
               model: modelOverride,
             });
+<<<<<<< HEAD
             const fastModeState = resolveFastModeState({
               cfg,
               provider: providerOverride,
@@ -1912,6 +1928,8 @@ async function agentCommandInternal(
               sessionEntry,
             });
             const fastMode = opts.fastMode ?? fastModeState.mode;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             return attemptExecutionRuntime.runAgentAttempt({
               providerOverride,
               modelOverride,
@@ -1928,6 +1946,7 @@ async function agentCommandInternal(
               body,
               isFallbackRetry,
               resolvedThinkLevel,
+<<<<<<< HEAD
               fastMode,
               fastModeStartedAtMs,
               fastModeAutoOnSeconds:
@@ -1935,6 +1954,15 @@ async function agentCommandInternal(
                   ? (opts.fastModeAutoOnSeconds ?? fastModeState.fastAutoOnSeconds)
                   : fastModeState.fastAutoOnSeconds,
               isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
+=======
+              fastMode: resolveFastModeState({
+                cfg,
+                provider: providerOverride,
+                model: modelOverride,
+                agentId: sessionAgentId,
+                sessionEntry,
+              }).enabled,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               timeoutMs,
               runTimeoutOverrideMs,
               runId,
@@ -2445,6 +2473,7 @@ export async function agentCommand(
   );
 }
 
+<<<<<<< HEAD
 /** Resolve the channel label for model.usage diagnostics from ingress run options. */
 function ingressDiagnosticChannel(opts: AgentCommandIngressOpts): string {
   return opts.runContext?.messageChannel ?? opts.messageChannel ?? opts.channel ?? "http";
@@ -2522,6 +2551,8 @@ function emitIngressModelUsageDiagnostic(
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Runs an agent turn from an inbound channel/gateway ingress context. */
 export async function agentCommandFromIngress(
   opts: AgentCommandIngressOpts,
@@ -2533,8 +2564,13 @@ export async function agentCommandFromIngress(
   }
   const lifecycleGeneration =
     opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
+<<<<<<< HEAD
   return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
     const result = await agentCommandInternal(
+=======
+  return await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
+    agentCommandInternal(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       {
         ...opts,
         lifecycleGeneration,
@@ -2542,6 +2578,7 @@ export async function agentCommandFromIngress(
       },
       runtime,
       deps,
+<<<<<<< HEAD
     );
 
     if (result) {
@@ -2550,14 +2587,21 @@ export async function agentCommandFromIngress(
 
     return result;
   });
+=======
+    ),
+  );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export const testing = {
   resolveAgentRuntimeConfig,
   prepareAgentCommandExecution,
   resolveExplicitAgentCommandSessionKey,
+<<<<<<< HEAD
   ingressDiagnosticChannel,
   emitIngressModelUsageDiagnostic,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 /** @deprecated Use `testing`. */

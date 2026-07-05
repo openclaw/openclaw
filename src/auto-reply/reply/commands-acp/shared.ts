@@ -35,6 +35,11 @@ export const ACP_INSTALL_USAGE = "Usage: /acp install";
 export const ACP_DOCTOR_USAGE = "Usage: /acp doctor";
 export const ACP_SESSIONS_USAGE = "Usage: /acp sessions";
 export const ACP_STEER_OUTPUT_LIMIT = 800;
+<<<<<<< HEAD
+=======
+export { SESSION_ID_RE } from "../../../sessions/session-id.js";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type AcpAction =
   | "spawn"
   | "cancel"

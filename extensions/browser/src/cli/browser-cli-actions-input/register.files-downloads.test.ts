@@ -31,10 +31,13 @@ vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
 );
 vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
 vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+<<<<<<< HEAD
 vi.spyOn(cliCoreApiModule, "resolveExistingUploadPaths").mockResolvedValue({
   ok: true,
   paths: ["/tmp/openclaw/uploads/a.pdf", "/tmp/openclaw/uploads/b.pdf"],
 });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const { registerBrowserActionInputCommands } = await import("./register.js");
 
@@ -51,11 +54,15 @@ function getLastRequestOptions(): { timeoutMs?: number } | undefined {
 describe("browser action input file/download commands", () => {
   beforeEach(() => {
     mocks.callBrowserRequest.mockClear();
+<<<<<<< HEAD
     vi.mocked(cliCoreApiModule.resolveExistingUploadPaths).mockClear();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
     getBrowserCliRuntime().exit.mockImplementation(() => {});
   });
 
+<<<<<<< HEAD
   it("arms uploads with normalized paths and element targeting options", async () => {
     const program = createActionInputProgram();
 
@@ -96,6 +103,8 @@ describe("browser action input file/download commands", () => {
     expect(getLastRequestOptions()?.timeoutMs).toBeGreaterThan(45000);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps the outer waitfordownload request open for the advertised default wait", async () => {
     const program = createActionInputProgram();
 

@@ -2,12 +2,19 @@
 import type { AssistantMessage, Tool } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { extractAssistantText } from "./embedded-agent-utils.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   buildAssistantHistoryTurn,
   buildStableCachePrefix,
   completeSimpleWithLiveTimeout,
   computeCacheHitRate,
+<<<<<<< HEAD
+=======
+  extractAssistantText,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   LIVE_CACHE_TEST_ENABLED,
   logLiveCache,
   resolveLiveDirectModel,

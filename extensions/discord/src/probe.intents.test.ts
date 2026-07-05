@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchDiscordApplicationId,
   fetchDiscordApplicationSummary,
+<<<<<<< HEAD
   probeDiscord,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveDiscordPrivilegedIntentsFromFlags,
 } from "./probe.js";
 import { jsonResponse } from "./test-http-helpers.js";
@@ -90,6 +93,7 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
     expect(calls).toBe(1);
   });
 
+<<<<<<< HEAD
   it("cancels failed getMe probe response bodies", async () => {
     const cancel = vi.fn(async () => undefined);
     const fetcher = withFetchPreconnect(
@@ -104,6 +108,8 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("derives application id from parseable tokens before probing REST", async () => {
     let calls = 0;
     const fetcher = withFetchPreconnect(async () => {

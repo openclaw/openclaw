@@ -5,6 +5,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { getCommandPathWithRootOptions, hasFlag, isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
+<<<<<<< HEAD
 import {
   resolvePrecomputedSubcommandHelpCommand,
   type PrecomputedSubcommandHelpName,
@@ -12,6 +13,10 @@ import {
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
 import { createGatewayStartupTrace } from "./cli/startup-trace.js";
+=======
+import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
+import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import {
   enableOpenClawCompileCache,
@@ -20,7 +25,11 @@ import {
 } from "./entry.compile-cache.js";
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
+<<<<<<< HEAD
 import { normalizeEnv } from "./infra/env.js";
+=======
+import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
@@ -46,7 +55,44 @@ function shouldForceReadOnlyAuthStore(argv: string[]): boolean {
   return false;
 }
 
+<<<<<<< HEAD
 const gatewayEntryStartupTrace = createGatewayStartupTrace(process.argv, "entry");
+=======
+function createGatewayEntryStartupTrace(argv: string[]) {
+  const enabled =
+    isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE) &&
+    argv.slice(2).includes("gateway");
+  const started = performance.now();
+  let last = started;
+  const emit = (name: string, durationMs: number, totalMs: number) => {
+    if (!enabled) {
+      return;
+    }
+    process.stderr.write(
+      `[gateway] startup trace: entry.${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms\n`,
+    );
+  };
+  return {
+    mark(name: string) {
+      const now = performance.now();
+      emit(name, now - last, now - started);
+      last = now;
+    },
+    async measure<T>(name: string, run: () => Promise<T>): Promise<T> {
+      const before = performance.now();
+      try {
+        return await run();
+      } finally {
+        const now = performance.now();
+        emit(name, now - before, now - started);
+        last = now;
+      }
+    },
+  };
+}
+
+const gatewayEntryStartupTrace = createGatewayEntryStartupTrace(process.argv);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 // Guard: only run entry-point logic when this file is the main module.
 // The bundler may import entry.js as a shared dependency when dist/index.js
@@ -199,19 +245,25 @@ function resolvePrecomputedCommandHelpName(argv: string[]): PrecomputedCommandHe
   return null;
 }
 
+<<<<<<< HEAD
 function resolvePrecomputedSubcommandHelpName(
   argv: string[],
 ): PrecomputedSubcommandHelpName | null {
   return resolvePrecomputedSubcommandHelpCommand(argv);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function tryHandlePrecomputedCommandHelpFastPath(
   argv: string[],
   deps: {
     outputPrecomputedBrowserHelpText?: OutputPrecomputedHelpText;
     outputPrecomputedSecretsHelpText?: OutputPrecomputedHelpText;
     outputPrecomputedNodesHelpText?: OutputPrecomputedHelpText;
+<<<<<<< HEAD
     outputPrecomputedSubcommandHelpText?: (commandName: string) => boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     loadRootHelpRenderOptionsForConfigSensitivePlugins?: (
       env?: NodeJS.ProcessEnv,
     ) => Promise<RootHelpRenderOptions | null>;
@@ -226,18 +278,25 @@ export async function tryHandlePrecomputedCommandHelpFastPath(
     return false;
   }
   const commandName = resolvePrecomputedCommandHelpName(argv);
+<<<<<<< HEAD
   const subcommandName = commandName ? null : resolvePrecomputedSubcommandHelpName(argv);
   if (!commandName && !subcommandName) {
+=======
+  if (!commandName) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return false;
   }
 
   try {
+<<<<<<< HEAD
     if (subcommandName) {
       const outputPrecomputedSubcommandHelpText =
         deps.outputPrecomputedSubcommandHelpText ??
         (await loadRootHelpMetadataModule()).outputPrecomputedSubcommandHelpText;
       return outputPrecomputedSubcommandHelpText(subcommandName);
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (commandName === "nodes") {
       const loadRootHelpRenderOptionsForConfigSensitivePlugins =
         deps.loadRootHelpRenderOptionsForConfigSensitivePlugins ??

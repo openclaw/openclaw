@@ -1,13 +1,21 @@
 // Slack tests cover send.upload plugin behavior.
 import type { WebClient } from "@slack/web-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import "./blocks.test-helpers.js";
+=======
+import { installSlackBlockTestMocks } from "./blocks.test-helpers.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   clearSlackThreadParticipationCache,
   hasSlackThreadParticipation,
 } from "./sent-thread-cache.js";
 
 // --- Module mocks (must precede dynamic import) ---
+<<<<<<< HEAD
+=======
+installSlackBlockTestMocks();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const loadOutboundMediaFromUrlMock = vi.hoisted(() =>
   vi.fn(async (_mediaUrl: string, _options?: unknown) => ({
     buffer: Buffer.from("fake-image"),

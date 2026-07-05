@@ -1,7 +1,16 @@
 // Agent consult runtime starts agent consultation flows from talk sessions.
 import { randomUUID } from "node:crypto";
+<<<<<<< HEAD
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { forkSessionEntryFromParent } from "../auto-reply/reply/session-fork.js";
+=======
+import path from "node:path";
+import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
+import {
+  forkSessionFromParent,
+  resolveParentForkDecision,
+} from "../auto-reply/reply/session-fork.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -40,12 +49,22 @@ export {
 
 type RealtimeVoiceAgentConsultDeps = {
   randomUUID: typeof randomUUID;
+<<<<<<< HEAD
   forkSessionEntryFromParent: typeof forkSessionEntryFromParent;
+=======
+  resolveParentForkDecision: typeof resolveParentForkDecision;
+  forkSessionFromParent: typeof forkSessionFromParent;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 const defaultRealtimeVoiceAgentConsultDeps: RealtimeVoiceAgentConsultDeps = {
   randomUUID,
+<<<<<<< HEAD
   forkSessionEntryFromParent,
+=======
+  resolveParentForkDecision,
+  forkSessionFromParent,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 let realtimeVoiceAgentConsultDeps = defaultRealtimeVoiceAgentConsultDeps;
@@ -127,7 +146,10 @@ function resolveRealtimeVoiceAgentDeliveryContext(params: {
 
 async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
   agentId: string;
+<<<<<<< HEAD
   cfg: OpenClawConfig;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sessionKey: string;
   spawnedBy?: string | null;
   contextMode?: RealtimeVoiceAgentConsultContextMode;
@@ -146,6 +168,7 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
     (!requesterAgentId || requesterAgentId === params.agentId);
   let forkDecisionWarning: string | undefined;
 
+<<<<<<< HEAD
   let patched: SessionEntry | null = null;
   if (shouldFork) {
     const forked = await realtimeVoiceAgentConsultDeps.forkSessionEntryFromParent({
@@ -177,6 +200,9 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
   }
 
   patched ??= await params.agentRuntime.session.patchSessionEntry({
+=======
+  const patched = await params.agentRuntime.session.patchSessionEntry({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     storePath: params.storePath,
     sessionKey: params.sessionKey,
     fallbackEntry: {
@@ -187,6 +213,42 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
       if (entry.sessionId?.trim()) {
         return { ...deliveryFields, updatedAt: now };
       }
+<<<<<<< HEAD
+=======
+      // Fork only from same-agent requester sessions. Cross-agent parent sessions may carry
+      // incompatible provider state, so they get a fresh consult session with spawnedBy linkage.
+      if (shouldFork) {
+        const parentEntry = params.agentRuntime.session.getSessionEntry({
+          storePath: params.storePath,
+          sessionKey: requesterSessionKey,
+        });
+        if (parentEntry?.sessionId?.trim()) {
+          const decision = await realtimeVoiceAgentConsultDeps.resolveParentForkDecision({
+            parentEntry,
+            storePath: params.storePath,
+          });
+          if (decision.status === "fork") {
+            const fork = await realtimeVoiceAgentConsultDeps.forkSessionFromParent({
+              parentEntry,
+              agentId: params.agentId,
+              sessionsDir: path.dirname(params.storePath),
+            });
+            if (fork) {
+              return {
+                ...deliveryFields,
+                sessionId: fork.sessionId,
+                sessionFile: fork.sessionFile,
+                spawnedBy: requesterSessionKey,
+                forkedFromParent: true,
+                updatedAt: now,
+              };
+            }
+          } else {
+            forkDecisionWarning = decision.message;
+          }
+        }
+      }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return {
         ...deliveryFields,
         sessionId: realtimeVoiceAgentConsultDeps.randomUUID(),
@@ -251,7 +313,10 @@ export async function consultRealtimeVoiceAgent(params: {
   });
   const sessionEntry = await resolveRealtimeVoiceAgentConsultSessionEntry({
     agentId,
+<<<<<<< HEAD
     cfg: params.cfg,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sessionKey: params.sessionKey,
     spawnedBy: params.spawnedBy,
     contextMode: params.contextMode,
@@ -264,17 +329,26 @@ export async function consultRealtimeVoiceAgent(params: {
     resolvedDeliveryContext ?? deliveryContextFromSession(sessionEntry);
   const sessionId = sessionEntry.sessionId;
 
+<<<<<<< HEAD
+=======
+  const sessionFile = params.agentRuntime.session.resolveSessionFilePath(sessionId, sessionEntry, {
+    agentId,
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   // Voice consults suppress verbose/reasoning output because the bridge needs a short,
   // speakable answer, not agent-run diagnostics or hidden reasoning artifacts.
   const result = await params.agentRuntime.runEmbeddedAgent({
     sessionId,
     sessionKey: params.sessionKey,
+<<<<<<< HEAD
     sessionTarget: {
       agentId,
       sessionId,
       sessionKey: params.sessionKey,
       storePath,
     },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sandboxSessionKey: resolveRealtimeVoiceAgentSandboxSessionKey(agentId, params.sessionKey),
     agentId,
     spawnedBy: params.spawnedBy,
@@ -287,6 +361,10 @@ export async function consultRealtimeVoiceAgent(params: {
       consultDeliveryContext?.threadId != null
         ? String(consultDeliveryContext.threadId)
         : undefined,
+<<<<<<< HEAD
+=======
+    sessionFile,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     workspaceDir,
     config: params.cfg,
     prompt: buildRealtimeVoiceAgentConsultPrompt({

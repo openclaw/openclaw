@@ -334,6 +334,7 @@ describe("handleToolExecutionStart read path checks", () => {
     expect(ctx.state.itemActiveIds.has("tool:tool-await-flush")).toBe(true);
     expect(ctx.state.itemActiveIds.has("command:tool-await-flush")).toBe(true);
   });
+<<<<<<< HEAD
 
   it("keeps processing tool start when progress callbacks throw", async () => {
     const { ctx, warn, onExecutionPhase, onAgentEvent } = createTestContext();
@@ -378,6 +379,8 @@ describe("handleToolExecutionStart read path checks", () => {
     expect(ctx.state.toolMetaById.has("tool-callback-rejects")).toBe(true);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("tool agent event callback failed"));
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("handleToolExecutionEnd cron mutation tracking", () => {

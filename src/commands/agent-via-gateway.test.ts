@@ -308,6 +308,7 @@ describe("agentCliCommand", () => {
     });
   });
 
+<<<<<<< HEAD
   it("reads a UTF-8 message file for gateway dispatch", async () => {
     await withTempStore(async ({ dir }) => {
       const messageFile = path.join(dir, "task.md");
@@ -380,6 +381,8 @@ describe("agentCliCommand", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.each(["/new", "/RESET", "/reset check status"] as const)(
     "uses backend admin authority for %s gateway commands",
     async (message) => {
@@ -1590,6 +1593,32 @@ describe("agentCliCommand", () => {
     });
   });
 
+<<<<<<< HEAD
+=======
+  it("does not run a fresh embedded session when a /compact control command times out", async () => {
+    await withTempStore(async () => {
+      callGateway.mockRejectedValue(createGatewayTimeoutError());
+
+      await expect(
+        agentCliCommand(
+          {
+            message: "/compact",
+            sessionId: "locked-session",
+            runId: "locked-run",
+          },
+          runtime,
+        ),
+      ).rejects.toThrow("gateway timeout");
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(
+        mockMessages(runtime.error).some((message) => message.includes("EMBEDDED FALLBACK")),
+      ).toBe(false);
+    });
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses the explicit session key agent for timeout fallback sessions", async () => {
     await withTempStore(async () => {
       callGateway.mockRejectedValue(createGatewayTimeoutError());
@@ -1766,6 +1795,7 @@ describe("agentCliCommand", () => {
     });
   });
 
+<<<<<<< HEAD
   it("preserves inline message whitespace for local embedded runs", async () => {
     await withTempStore(async () => {
       mockLocalAgentReply();
@@ -1787,6 +1817,8 @@ describe("agentCliCommand", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("passes explicit session keys to local embedded runs", async () => {
     await withTempStore(async () => {
       mockLocalAgentReply();
@@ -1880,6 +1912,7 @@ describe("agentCliCommand", () => {
       expect(fallbackOpts.oneShotCliRun).toBe(false);
     });
   });
+<<<<<<< HEAD
 
   for (const message of [
     "/compact",
@@ -1943,4 +1976,6 @@ describe("agentCliCommand", () => {
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(runtime.exit).not.toHaveBeenCalledWith(1);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

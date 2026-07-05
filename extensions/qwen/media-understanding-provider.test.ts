@@ -8,6 +8,7 @@ import { describeQwenVideo } from "./media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();
 
+<<<<<<< HEAD
 function oversizedJsonResponse(params: { chunkCount: number; chunkSize: number }): {
   response: Response;
   getReadCount: () => number;
@@ -41,6 +42,8 @@ function oversizedJsonResponse(params: { chunkCount: number; chunkSize: number }
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("describeQwenVideo", () => {
   it("builds the expected OpenAI-compatible video payload", async () => {
     const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
@@ -107,6 +110,7 @@ describe("describeQwenVideo", () => {
       `data:video/mp4;base64,${Buffer.from("video-bytes").toString("base64")}`,
     );
   });
+<<<<<<< HEAD
 
   it("bounds successful Qwen video JSON bodies instead of buffering the whole response", async () => {
     const streamed = oversizedJsonResponse({ chunkCount: 64, chunkSize: 1024 * 1024 });
@@ -145,4 +149,6 @@ describe("describeQwenVideo", () => {
       }),
     ).rejects.toThrow("Qwen video description failed: malformed JSON response");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

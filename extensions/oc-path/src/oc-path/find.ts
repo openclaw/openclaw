@@ -11,7 +11,10 @@ import { isMap, isScalar, isSeq, type Node, type Pair } from "yaml";
 import type { MdAst } from "./ast.js";
 import type { JsoncValue } from "./jsonc/ast.js";
 import type { JsonlAst, JsonlLine } from "./jsonl/ast.js";
+<<<<<<< HEAD
 import { pickJsonlLine } from "./jsonl/line.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { OcPath } from "./oc-path.js";
 import {
   MAX_TRAVERSAL_DEPTH,
@@ -365,7 +368,11 @@ const jsonlOps: WalkOps<JsonlAst> = {
     }
   },
   lookup(ast, key) {
+<<<<<<< HEAD
     const line = pickJsonlLine(ast, key);
+=======
+    const line = pickLine(ast, key);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (line === null) {
       return null;
     }
@@ -441,6 +448,40 @@ function topLevelLeafText(value: JsoncValue, key: string): string | null {
   return null;
 }
 
+<<<<<<< HEAD
+=======
+function pickLine(ast: JsonlAst, addr: string): JsonlLine | null {
+  if (addr === "$first") {
+    for (const l of ast.lines) {
+      if (l.kind === "value") {
+        return l;
+      }
+    }
+    return null;
+  }
+  if (addr === "$last") {
+    for (let i = ast.lines.length - 1; i >= 0; i--) {
+      const l = ast.lines[i];
+      if (l !== undefined && l.kind === "value") {
+        return l;
+      }
+    }
+    return null;
+  }
+  const m = /^L(\d+)$/.exec(addr);
+  if (m === null || m[1] === undefined) {
+    return null;
+  }
+  const target = Number(m[1]);
+  for (const l of ast.lines) {
+    if (l.line === target) {
+      return l;
+    }
+  }
+  return null;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // ---------- YAML walker ----------------------------------------------------
 
 function walkYaml(

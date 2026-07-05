@@ -1,7 +1,10 @@
 // Fetches Claude provider usage windows.
 import {
   buildUsageHttpErrorSnapshot,
+<<<<<<< HEAD
   discardUsageResponseBody,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   fetchJson,
   readUsageJson,
 } from "./provider-usage.fetch.shared.js";
@@ -86,7 +89,10 @@ async function fetchClaudeWebUsage(
     fetchFn,
   );
   if (!orgRes.ok) {
+<<<<<<< HEAD
     await discardUsageResponseBody(orgRes);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return null;
   }
 
@@ -107,7 +113,10 @@ async function fetchClaudeWebUsage(
     fetchFn,
   );
   if (!usageRes.ok) {
+<<<<<<< HEAD
     await discardUsageResponseBody(usageRes);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return null;
   }
 

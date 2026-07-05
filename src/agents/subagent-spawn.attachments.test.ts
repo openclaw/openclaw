@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
+<<<<<<< HEAD
 import { decodeStrictBase64 } from "./subagent-attachments.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
@@ -34,6 +37,10 @@ describe("decodeStrictBase64", () => {
   const maxBytes = 1024;
 
   it("valid base64 returns buffer with correct bytes", () => {
+<<<<<<< HEAD
+=======
+    const { decodeStrictBase64 } = subagentSpawnModule;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const input = "hello world";
     const encoded = Buffer.from(input).toString("base64");
     const result = decodeStrictBase64(encoded, maxBytes);
@@ -41,22 +48,42 @@ describe("decodeStrictBase64", () => {
   });
 
   it("empty string returns null", () => {
+<<<<<<< HEAD
+=======
+    const { decodeStrictBase64 } = subagentSpawnModule;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(decodeStrictBase64("", maxBytes)).toBeNull();
   });
 
   it("bad padding (length % 4 !== 0) returns null", () => {
+<<<<<<< HEAD
+=======
+    const { decodeStrictBase64 } = subagentSpawnModule;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(decodeStrictBase64("abc", maxBytes)).toBeNull();
   });
 
   it("non-base64 chars returns null", () => {
+<<<<<<< HEAD
+=======
+    const { decodeStrictBase64 } = subagentSpawnModule;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(decodeStrictBase64("!@#$", maxBytes)).toBeNull();
   });
 
   it("whitespace-only returns null (empty after strip)", () => {
+<<<<<<< HEAD
+=======
+    const { decodeStrictBase64 } = subagentSpawnModule;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(decodeStrictBase64("   ", maxBytes)).toBeNull();
   });
 
   it("pre-decode oversize guard: encoded string > maxEncodedBytes * 2 returns null", () => {
+<<<<<<< HEAD
+=======
+    const { decodeStrictBase64 } = subagentSpawnModule;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     // Pre-decode guard rejects obviously oversized payloads before allocating
     // the decoded buffer.
     const oversized = "A".repeat(2737);
@@ -64,12 +91,20 @@ describe("decodeStrictBase64", () => {
   });
 
   it("decoded byteLength exceeds maxDecodedBytes returns null", () => {
+<<<<<<< HEAD
+=======
+    const { decodeStrictBase64 } = subagentSpawnModule;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const bigBuf = Buffer.alloc(1025, 0x42);
     const encoded = bigBuf.toString("base64");
     expect(decodeStrictBase64(encoded, maxBytes)).toBeNull();
   });
 
   it("valid base64 at exact boundary returns Buffer", () => {
+<<<<<<< HEAD
+=======
+    const { decodeStrictBase64 } = subagentSpawnModule;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const exactBuf = Buffer.alloc(1024, 0x41);
     const encoded = exactBuf.toString("base64");
     const result = decodeStrictBase64(encoded, maxBytes);

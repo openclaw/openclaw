@@ -1,13 +1,19 @@
 /** Shared normalization for thinking, verbosity, tracing, reasoning, and usage directives. */
 import {
+<<<<<<< HEAD
   type FastMode,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   normalizeFastMode,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../../packages/normalization-core/src/string-coerce.js";
 
 export { normalizeFastMode };
+<<<<<<< HEAD
 export type { FastMode };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Canonical thinking level values accepted by chat commands and session state. */
 export type ThinkLevel =
@@ -23,8 +29,14 @@ export type VerboseLevel = "off" | "on" | "full";
 export type TraceLevel = "off" | "on" | "raw";
 export type NoticeLevel = "off" | "on" | "full";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
+<<<<<<< HEAD
 export type ReasoningLevel = "off" | "on" | "stream";
 type UsageDisplayLevel = "off" | "tokens" | "full";
+=======
+export type ElevatedMode = "off" | "ask" | "full";
+export type ReasoningLevel = "off" | "on" | "stream";
+export type UsageDisplayLevel = "off" | "tokens" | "full";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Minimal model catalog entry needed to choose thinking defaults. */
 export type ThinkingCatalogEntry = {
   provider: string;
@@ -99,6 +111,14 @@ export function isSessionDefaultDirectiveValue(raw?: string | null): boolean {
   return ["default", "inherit", "inherited", "clear", "reset", "unpin"].includes(key);
 }
 
+<<<<<<< HEAD
+=======
+/** Human-readable hint for xhigh support in command menus and errors. */
+export function formatXHighModelHint(): string {
+  return "provider models that advertise xhigh reasoning";
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Chooses the default thinking level for one provider/model catalog entry. */
 export function resolveThinkingDefaultForModel(params: {
   provider: string;
@@ -156,6 +176,14 @@ export function normalizeTraceLevel(raw?: string | null): TraceLevel | undefined
   return undefined;
 }
 
+<<<<<<< HEAD
+=======
+/** Normalizes notice visibility values. */
+export function normalizeNoticeLevel(raw?: string | null): NoticeLevel | undefined {
+  return normalizeOnOffFullLevel(raw);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Normalizes response usage display values. */
 export function normalizeUsageDisplay(raw?: string | null): UsageDisplayLevel | undefined {
   if (!raw) {
@@ -182,6 +210,7 @@ export function resolveResponseUsageMode(raw?: string | null): UsageDisplayLevel
   return normalizeUsageDisplay(raw) ?? "off";
 }
 
+<<<<<<< HEAD
 export type ResponseUsageInput = "on" | "off" | "tokens" | "full";
 export type ResponseUsageDefaultConfig =
   | ResponseUsageInput
@@ -213,6 +242,8 @@ export function resolveEffectiveResponseUsage(
   return resolveResponseUsageMode(configDefault);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Normalizes elevated execution policy values. */
 export function normalizeElevatedLevel(raw?: string | null): ElevatedLevel | undefined {
   if (!raw) {
@@ -234,6 +265,20 @@ export function normalizeElevatedLevel(raw?: string | null): ElevatedLevel | und
   return undefined;
 }
 
+<<<<<<< HEAD
+=======
+/** Collapses elevated levels into runtime execution mode. */
+export function resolveElevatedMode(level?: ElevatedLevel | null): ElevatedMode {
+  if (!level || level === "off") {
+    return "off";
+  }
+  if (level === "full") {
+    return "full";
+  }
+  return "ask";
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Normalizes reasoning visibility values. */
 export function normalizeReasoningLevel(raw?: string | null): ReasoningLevel | undefined {
   if (!raw) {

@@ -134,7 +134,10 @@ export async function loadSubagentSpawnModuleForTest(params: {
   loadSessionStoreMock?: MockFn;
   ensureContextEnginesInitializedMock?: MockFn;
   updateSessionStoreMock?: MockFn;
+<<<<<<< HEAD
   forkSessionEntryFromParentMock?: MockFn;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   forkSessionFromParentMock?: MockFn;
   resolveContextEngineMock?: MockFn;
   resolveParentForkDecisionMock?: MockFn;
@@ -216,6 +219,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
       params.dispatchGatewayMethodInProcessMock?.(...args),
     hasInProcessGatewayContext: () => Boolean(params.hasInProcessGatewayContextMock?.()),
     buildSubagentSystemPrompt: () => "system-prompt",
+<<<<<<< HEAD
     forkSessionEntryFromParent:
       params.forkSessionEntryFromParentMock ??
       (async () => {
@@ -246,6 +250,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
           },
         };
       }),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     forkSessionFromParent:
       params.forkSessionFromParentMock ??
       (async () => ({ sessionId: "forked-session-id", sessionFile: "/tmp/forked-session.jsonl" })),

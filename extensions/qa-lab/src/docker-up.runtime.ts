@@ -1,7 +1,10 @@
 // Qa Lab plugin module implements docker up behavior.
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+<<<<<<< HEAD
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { writeQaDockerHarnessFiles } from "./docker-harness.js";
 import {
   execCommand,
@@ -13,7 +16,10 @@ import {
   type FetchLike,
   type RunCommand,
 } from "./docker-runtime.js";
+<<<<<<< HEAD
 import { shellQuote } from "./shell-quote.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type QaDockerUpResult = {
   outputDir: string;
@@ -27,6 +33,7 @@ function resolveDefaultQaDockerDir(repoRoot: string) {
   return path.resolve(repoRoot, ".artifacts/qa-docker");
 }
 
+<<<<<<< HEAD
 async function isQaLabDockerHealthReachable(url: string, fetchImpl: FetchLike) {
   let response: Awaited<ReturnType<FetchLike>> | undefined;
   try {
@@ -76,6 +83,8 @@ async function runQaLabBuild(repoRoot: string, runCommand: RunCommand) {
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function runQaDockerUp(
   params: {
     repoRoot?: string;
@@ -103,17 +112,24 @@ export async function runQaDockerUp(
     params.gatewayPort != null,
   );
   const qaLabPort = await resolveHostPortImpl(params.qaLabPort ?? 43124, params.qaLabPort != null);
+<<<<<<< HEAD
   if (gatewayPort === qaLabPort) {
     throw new Error(
       `QA Lab gateway and UI host ports must be different. Both resolved to ${gatewayPort}.`,
     );
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const runCommand = deps?.runCommand ?? execCommand;
   const fetchImpl = deps?.fetchImpl ?? fetchHealthUrl;
   const sleepImpl = deps?.sleepImpl ?? sleep;
 
   if (!params.skipUiBuild) {
+<<<<<<< HEAD
     await runQaLabBuild(repoRoot, runCommand);
+=======
+    await runCommand("pnpm", ["qa:lab:build"], repoRoot);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   await writeQaDockerHarnessFiles({
@@ -170,7 +186,15 @@ export async function runQaDockerUp(
     sleepImpl,
   );
   let gatewayUrl = hostGatewayUrl;
+<<<<<<< HEAD
   if (!(await isQaLabDockerHealthReachable(`${hostGatewayUrl}healthz`, fetchImpl))) {
+=======
+  if (
+    !(await fetchImpl(`${hostGatewayUrl}healthz`)
+      .then((response) => response.ok)
+      .catch(() => false))
+  ) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const containerGatewayUrl = await resolveComposeServiceUrl(
       "openclaw-qa-gateway",
       18789,
@@ -189,6 +213,10 @@ export async function runQaDockerUp(
     composeFile,
     qaLabUrl,
     gatewayUrl,
+<<<<<<< HEAD
     stopCommand: `docker compose -f ${shellQuote(composeFile)} down`,
+=======
+    stopCommand: `docker compose -f ${composeFile} down`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }

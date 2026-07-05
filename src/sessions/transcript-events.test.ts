@@ -1,5 +1,6 @@
 // Transcript event tests cover transcript event parsing and compaction.
 import { afterEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import {
   emitInternalSessionTranscriptUpdate,
   emitSessionTranscriptUpdate,
@@ -7,6 +8,9 @@ import {
   onSessionTranscriptUpdate,
   type SessionTranscriptUpdate,
 } from "./transcript-events.js";
+=======
+import { emitSessionTranscriptUpdate, onSessionTranscriptUpdate } from "./transcript-events.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const cleanup: Array<() => void> = [];
 
@@ -50,6 +54,7 @@ describe("transcript events", () => {
     });
   });
 
+<<<<<<< HEAD
   it("does not expose identity-only updates to public listeners", () => {
     const listener = vi.fn();
     cleanup.push(onSessionTranscriptUpdate(listener));
@@ -130,6 +135,8 @@ describe("transcript events", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("drops invalid message sequence values", () => {
     const listener = vi.fn();
     cleanup.push(onSessionTranscriptUpdate(listener));

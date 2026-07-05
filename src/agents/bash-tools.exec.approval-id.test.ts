@@ -9,7 +9,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { sendMessage } from "../infra/outbound/message.js";
+<<<<<<< HEAD
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 import { createExecTool } from "./bash-tools.exec.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -35,6 +38,7 @@ vi.mock("../infra/outbound/message.js", () => ({
 }));
 
 vi.mock("../utils/message-channel.js", () => {
+<<<<<<< HEAD
   const INTERNAL_MESSAGE_CHANNEL = "webchat";
   const NATIVE_APPROVAL_CHANNELS = new Set([
     "webchat",
@@ -48,24 +52,38 @@ vi.mock("../utils/message-channel.js", () => {
     "telegram",
     "whatsapp",
   ]);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const normalizeMessageChannel = (raw?: string | null) => {
     const normalized = raw?.trim().toLowerCase();
     if (!normalized) {
       return undefined;
     }
+<<<<<<< HEAD
     if (normalized === "web") {
       return INTERNAL_MESSAGE_CHANNEL;
+=======
+    if (normalized === "web" || normalized === "webchat") {
+      return "internal";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     return normalized;
   };
   const isGatewayMessageChannel = (value: string) => Boolean(normalizeMessageChannel(value));
   return {
+<<<<<<< HEAD
     INTERNAL_MESSAGE_CHANNEL,
     isNativeApprovalChannel: (value?: string | null) =>
       typeof value === "string" && NATIVE_APPROVAL_CHANNELS.has(value),
     isDeliverableMessageChannel: (value: string) => {
       const channel = normalizeMessageChannel(value);
       return Boolean(channel && channel !== INTERNAL_MESSAGE_CHANNEL && channel !== "tui");
+=======
+    INTERNAL_MESSAGE_CHANNEL: "internal",
+    isDeliverableMessageChannel: (value: string) => {
+      const channel = normalizeMessageChannel(value);
+      return Boolean(channel && channel !== "internal" && channel !== "tui");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
     isGatewayMessageChannel,
     normalizeMessageChannel,
@@ -113,12 +131,20 @@ vi.mock("../infra/exec-approval-surface.js", () => ({
       kind: "enabled",
       channel,
       channelLabel:
+<<<<<<< HEAD
         channel === "tui" ? "terminal UI" : channel === "webchat" ? "Web UI" : "this platform",
+=======
+        channel === "tui" ? "terminal UI" : channel === "internal" ? "Web UI" : "this platform",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       accountId: params.accountId ?? undefined,
     };
   },
   supportsNativeExecApprovalClient: (channel?: string | null) =>
+<<<<<<< HEAD
     !channel || channel === "webchat" || channel === "tui",
+=======
+    !channel || channel === "internal" || channel === "tui",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("../infra/shell-env.js", () => ({
@@ -184,6 +210,10 @@ vi.mock("../process/supervisor/index.js", () => {
       },
       cancel: vi.fn(),
       cancelScope: vi.fn(),
+<<<<<<< HEAD
+=======
+      reconcileOrphans: vi.fn(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       getRecord: vi.fn(),
     }),
   };
@@ -404,7 +434,14 @@ function expectRecordFields(
 }
 
 describe("exec approvals", () => {
+<<<<<<< HEAD
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
+=======
+  let previousHome: string | undefined;
+  let previousUserProfile: string | undefined;
+  let previousBundledPluginsDir: string | undefined;
+  let previousDisableBundledPlugins: string | undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let tempRoot = "";
   let tempCaseIndex = 0;
 
@@ -413,6 +450,7 @@ describe("exec approvals", () => {
   });
 
   beforeEach(async () => {
+<<<<<<< HEAD
     envSnapshot = captureEnv([
       "HOME",
       "USERPROFILE",
@@ -426,14 +464,50 @@ describe("exec approvals", () => {
     setTestEnvValue("USERPROFILE", tempDir);
     deleteTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR");
     setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+=======
+    previousHome = process.env.HOME;
+    previousUserProfile = process.env.USERPROFILE;
+    previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    previousDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+    const tempDir = path.join(tempRoot, `case-${++tempCaseIndex}`);
+    await fs.mkdir(tempDir, { recursive: true });
+    process.env.HOME = tempDir;
+    // Windows uses USERPROFILE for os.homedir()
+    process.env.USERPROFILE = tempDir;
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     vi.mocked(callGatewayTool).mockReset();
     vi.mocked(sendMessage).mockClear();
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+<<<<<<< HEAD
     envSnapshot?.restore();
     envSnapshot = undefined;
+=======
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+    if (previousUserProfile === undefined) {
+      delete process.env.USERPROFILE;
+    } else {
+      process.env.USERPROFILE = previousUserProfile;
+    }
+    if (previousBundledPluginsDir === undefined) {
+      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    } else {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
+    }
+    if (previousDisableBundledPlugins === undefined) {
+      delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+    } else {
+      process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = previousDisableBundledPlugins;
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   afterAll(async () => {
@@ -976,7 +1050,11 @@ describe("exec approvals", () => {
     );
   });
 
+<<<<<<< HEAD
   it("continues the original agent session after approved gateway exec completes with a non-native external route", async () => {
+=======
+  it("continues the original agent session after approved gateway exec completes with an external route", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const agentCalls: Array<Record<string, unknown>> = [];
 
     mockAcceptedApprovalFlow({
@@ -989,15 +1067,25 @@ describe("exec approvals", () => {
       host: "gateway",
       ask: "always",
       approvalRunningNoticeMs: 0,
+<<<<<<< HEAD
       sessionKey: "agent:main:feishu:channel:123",
       elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
       messageProvider: "feishu",
+=======
+      sessionKey: "agent:main:discord:channel:123",
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+      messageProvider: "discord",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       currentChannelId: "123",
       accountId: "default",
       currentThreadTs: "456",
     });
 
+<<<<<<< HEAD
     const result = await tool.execute("call-gw-followup-feishu", {
+=======
+    const result = await tool.execute("call-gw-followup-discord", {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       command: "echo ok",
       workdir: process.cwd(),
     });
@@ -1005,10 +1093,17 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("approval-pending");
     await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
     expectRecordFields(agentCalls[0], {
+<<<<<<< HEAD
       sessionKey: "agent:main:feishu:channel:123",
       deliver: true,
       bestEffortDeliver: true,
       channel: "feishu",
+=======
+      sessionKey: "agent:main:discord:channel:123",
+      deliver: true,
+      bestEffortDeliver: true,
+      channel: "discord",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       to: "123",
       accountId: "default",
       threadId: "456",
@@ -1021,7 +1116,11 @@ describe("exec approvals", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("waits inline for native Discord approval and resumes the same session without a second user turn", async () => {
+=======
+  it("auto-continues the same Discord session after approval resolves without a second user turn", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const agentCalls: Array<Record<string, unknown>> = [];
     let resolveDecision: ((value: { decision: string }) => void) | undefined;
     const decisionPromise = new Promise<{ decision: string }>((resolve) => {
@@ -1054,6 +1153,7 @@ describe("exec approvals", () => {
       currentThreadTs: "456",
     });
 
+<<<<<<< HEAD
     let settled = false;
     const resultPromise = tool.execute("call-gw-followup-discord-delayed", {
       command: "printf delayed-ok",
@@ -1065,15 +1165,41 @@ describe("exec approvals", () => {
 
     await Promise.resolve();
     expect(settled).toBe(false);
+=======
+    const result = await tool.execute("call-gw-followup-discord-delayed", {
+      command: "printf delayed-ok",
+      workdir: process.cwd(),
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(agentCalls).toHaveLength(0);
 
     resolveDecision?.({ decision: "allow-once" });
 
+<<<<<<< HEAD
     const result = await resultPromise;
 
     expect(result.details.status).toBe("completed");
     expect(getResultText(result)).toContain("delayed-ok");
     expect(agentCalls).toHaveLength(0);
+=======
+    await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
+    expectRecordFields(agentCalls[0], {
+      sessionKey: "agent:main:discord:channel:123",
+      deliver: true,
+      bestEffortDeliver: true,
+      channel: "discord",
+      to: "123",
+      accountId: "default",
+      threadId: "456",
+    });
+    expect(typeof agentCalls[0]?.message).toBe("string");
+    expect(agentCalls[0]?.message).toContain(
+      "If the task requires more steps, continue from this result before replying to the user.",
+    );
+    expect(agentCalls[0]?.message).toContain("delayed-ok");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(sendMessage).not.toHaveBeenCalled();
   });
 

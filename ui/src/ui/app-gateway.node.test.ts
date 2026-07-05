@@ -820,6 +820,7 @@ describe("connectGateway", () => {
     expect(host.lastErrorCode).toBeNull();
   });
 
+<<<<<<< HEAD
   it("marks the visible session for one reconnect resume after close", () => {
     const host = createHost();
     host.currentSessionId = " session-before-reconnect ";
@@ -832,6 +833,8 @@ describe("connectGateway", () => {
     expect(host.reconnectResumeSessionId).toBe("session-before-reconnect");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("routes exec approval requested events with command spans", () => {
     const { host, client } = connectHostGateway();
 

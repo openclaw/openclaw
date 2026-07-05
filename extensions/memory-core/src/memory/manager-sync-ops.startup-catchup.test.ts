@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+<<<<<<< HEAD
 import { emitSessionTranscriptUpdate } from "openclaw/plugin-sdk/agent-harness-runtime";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   resolveSessionTranscriptsDirForAgent,
   type OpenClawConfig,
@@ -11,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type {
   MemorySource,
+<<<<<<< HEAD
   MemorySyncParams,
   MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -18,6 +22,10 @@ import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
+=======
+  MemorySyncProgressUpdate,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
@@ -33,11 +41,15 @@ type MemoryIndexEntry = {
 type SyncParams = {
   reason?: string;
   force?: boolean;
+<<<<<<< HEAD
   sessions?: MemorySyncParams["sessions"];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sessionFiles?: string[];
   progress?: (update: MemorySyncProgressUpdate) => void;
 };
 
+<<<<<<< HEAD
 type MemorySessionTranscriptUpdate = {
   agentId?: string;
   sessionFile?: string;
@@ -82,11 +94,16 @@ function restoreStartupEnv(): void {
   }
 }
 
+=======
+type SourceStateRow = { path: string; hash: string; mtime: number; size: number };
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
   protected readonly cfg = {} as OpenClawConfig;
   protected readonly agentId = "main";
   protected readonly workspaceDir = "/tmp/openclaw-test-workspace";
   protected readonly settings = {
+<<<<<<< HEAD
     chunking: {
       overlap: 0,
       tokens: 256,
@@ -106,6 +123,8 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
         enabled: false,
       },
     },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sync: {
       sessions: {
         deltaBytes: 100_000,
@@ -113,7 +132,11 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
         postCompactionForce: true,
       },
     },
+<<<<<<< HEAD
   } as unknown as ResolvedMemorySearchConfig;
+=======
+  } as ResolvedMemorySearchConfig;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   protected readonly batch = {
     enabled: false,
     wait: false,
@@ -128,8 +151,11 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
   protected db: DatabaseSync;
 
   readonly syncCalls: SyncParams[] = [];
+<<<<<<< HEAD
   readonly indexedPaths: string[] = [];
   readonly indexedContents: string[] = [];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   constructor(sourceRows: SourceStateRow[]) {
     super();
@@ -151,14 +177,18 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     return await this.markSessionStartupCatchupDirtyFiles();
   }
 
+<<<<<<< HEAD
   async runSyncForTest(params?: MemorySyncParams): Promise<void> {
     await this.runSync(params);
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   getDirtySessionFiles(): string[] {
     return Array.from(this.sessionsDirtyFiles);
   }
 
+<<<<<<< HEAD
   getPendingSessionTargets(): MemorySyncParams["sessions"] {
     return Array.from(this.sessionPendingTargets.values());
   }
@@ -196,10 +226,13 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     ).combineTargetSessionFiles(params);
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   isSessionsDirty(): boolean {
     return this.sessionsDirty;
   }
 
+<<<<<<< HEAD
   startTranscriptListener(): void {
     this.ensureSessionListener();
   }
@@ -209,6 +242,8 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     this.sessionUnsubscribe = null;
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   protected computeProviderKey(): string {
     return "test";
   }
@@ -217,7 +252,11 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     return [];
   }
 
+<<<<<<< HEAD
   protected async sync(params?: MemorySyncParams): Promise<void> {
+=======
+  protected async sync(params?: SyncParams): Promise<void> {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     this.syncCalls.push(params ?? {});
   }
 
@@ -240,12 +279,18 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
   protected assertRequiredProviderAvailable(): void {}
 
   protected async indexFile(
+<<<<<<< HEAD
     entry: MemoryIndexEntry,
     options: { source: MemorySource; content?: string },
   ): Promise<void> {
     this.indexedPaths.push(entry.path);
     this.indexedContents.push(options.content ?? "");
   }
+=======
+    _entry: MemoryIndexEntry,
+    _options: { source: MemorySource; content?: string },
+  ): Promise<void> {}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 describe("session startup catch-up", () => {
@@ -253,6 +298,7 @@ describe("session startup catch-up", () => {
 
   beforeEach(async () => {
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-startup-"));
+<<<<<<< HEAD
     setStartupStateDir(stateDir);
   });
 
@@ -262,6 +308,13 @@ describe("session startup catch-up", () => {
     restoreStartupEnv();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
+=======
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
@@ -431,6 +484,7 @@ describe("session startup catch-up", () => {
       openSpy.mockRestore();
     }
   });
+<<<<<<< HEAD
 
   it("does not fall back to full session sync when identity targets normalize away", async () => {
     await writeSessionFile("thread.jsonl");
@@ -719,4 +773,6 @@ describe("session startup catch-up", () => {
     expect(harness.getPendingSessionTargets()).toEqual([]);
     harness.stopTranscriptListener();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

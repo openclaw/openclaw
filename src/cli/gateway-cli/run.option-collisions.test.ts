@@ -1,6 +1,7 @@
 // Gateway run option collision tests cover gateway run flag registration boundaries.
 import path from "node:path";
 import { Command } from "commander";
+<<<<<<< HEAD
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
@@ -11,6 +12,13 @@ import {
   setTestEnvValue,
   withEnvAsync,
 } from "../../test-utils/env.js";
+=======
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ConfigFileSnapshot } from "../../config/types.js";
+import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
+import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
+import { withEnvAsync } from "../../test-utils/env.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import { installGatewayRunRuntimeHooks } from "./runtime-hooks.js";
@@ -101,11 +109,14 @@ const withoutGatewayAuthEnv = {
 };
 
 const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+<<<<<<< HEAD
 const serviceEnvSnapshot = captureEnv([
   "OPENCLAW_SERVICE_MARKER",
   "OPENCLAW_SERVICE_KIND",
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
 ]);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 vi.mock("../../config/config.js", () => ({
   getConfigPath: () => "/tmp/openclaw-test-missing-config.json",
@@ -297,6 +308,7 @@ describe("gateway run option collisions", () => {
     addGatewayRunCommand(gateway.command("run"), { beforeRun });
   });
 
+<<<<<<< HEAD
   afterAll(() => {
     serviceEnvSnapshot.restore();
   });
@@ -305,6 +317,9 @@ describe("gateway run option collisions", () => {
     delete process.env.OPENCLAW_SERVICE_MARKER;
     delete process.env.OPENCLAW_SERVICE_KIND;
     deleteTestEnvValue(GATEWAY_SERVICE_RUNTIME_PID_ENV);
+=======
+  beforeEach(() => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resetRuntimeCapture();
     configState.cfg = {};
     configState.snapshot = { config: {}, exists: false, sourceConfig: {}, valid: true };
@@ -1040,9 +1055,13 @@ describe("gateway run option collisions", () => {
         loadGlobalRuntimeDotEnvFiles.mockImplementation(() => {
           process.env.OPENCLAW_GATEWAY_TOKEN ??= "trusted-token";
           process.env.OPENCLAW_PROFILE ??= "dev";
+<<<<<<< HEAD
           if (process.env.OPENCLAW_WORKSPACE_DIR === undefined) {
             setTestEnvValue("OPENCLAW_WORKSPACE_DIR", "/tmp/openclaw-reset-workspace");
           }
+=======
+          process.env.OPENCLAW_WORKSPACE_DIR ??= "/tmp/openclaw-reset-workspace";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         });
 
         await prepareGatewayReset();
@@ -1066,7 +1085,11 @@ describe("gateway run option collisions", () => {
       };
       await prepareGatewayReset();
       loadGlobalRuntimeDotEnvFiles.mockImplementation(() => {
+<<<<<<< HEAD
         setTestEnvValue("OPENCLAW_STATE_DIR", "/tmp/openclaw-reset-retargeted");
+=======
+        process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-reset-retargeted";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         return {
           gatewayEnvAppliedKeys: [],
           stateEnvAppliedKeys: ["OPENCLAW_STATE_DIR"],
@@ -1098,7 +1121,11 @@ describe("gateway run option collisions", () => {
   ])("blocks trusted dotenv selector drift for %s after startup mutations", async (selector) => {
     await withEnvAsync({ [selector]: "/tmp/openclaw-reset-value" }, async () => {
       loadGlobalRuntimeDotEnvFiles.mockImplementation(() => {
+<<<<<<< HEAD
         setTestEnvValue(selector, "/tmp/openclaw-reset-retargeted");
+=======
+        process.env[selector] = "/tmp/openclaw-reset-retargeted";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
       const { reloadTrustedGatewayRunEnvironment } = await import("./pre-bootstrap.js");
 

@@ -234,7 +234,10 @@ export async function generateVoiceResponse(
     callId,
     phone: from,
     explicitSessionKey: sessionKey,
+<<<<<<< HEAD
     coreSession: coreConfig.session,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   const agentId = voiceConfig.agentId ?? "main";
   const toolsAllow = resolveVoiceAgentToolsAllow(cfg, agentId);
@@ -292,6 +295,13 @@ export async function generateVoiceResponse(
   }
   const sessionId = sessionEntry.sessionId;
 
+<<<<<<< HEAD
+=======
+  const sessionFile = agentRuntime.session.resolveSessionFilePath(sessionId, sessionEntry, {
+    agentId,
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   // Resolve thinking level
   const thinkLevel = agentRuntime.resolveThinkingDefault({ cfg, provider, model });
 
@@ -321,6 +331,7 @@ export async function generateVoiceResponse(
     const result = await agentRuntime.runEmbeddedAgent({
       sessionId,
       sessionKey: resolvedSessionKey,
+<<<<<<< HEAD
       sessionTarget: {
         agentId,
         sessionId,
@@ -330,6 +341,12 @@ export async function generateVoiceResponse(
       sandboxSessionKey: resolveVoiceSandboxSessionKey(agentId, resolvedSessionKey),
       agentId,
       messageProvider: "voice",
+=======
+      sandboxSessionKey: resolveVoiceSandboxSessionKey(agentId, resolvedSessionKey),
+      agentId,
+      messageProvider: "voice",
+      sessionFile,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       workspaceDir,
       config: cfg,
       prompt: userMessage,

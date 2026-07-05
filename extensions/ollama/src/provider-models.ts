@@ -1,16 +1,24 @@
 // Ollama provider module implements model/runtime integration.
+<<<<<<< HEAD
 import { createHash } from "node:crypto";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+=======
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
   OLLAMA_DEFAULT_COST,
   OLLAMA_DEFAULT_MAX_TOKENS,
+<<<<<<< HEAD
   OLLAMA_GLM52_CLOUD_MODEL_ID,
   OLLAMA_GLM52_CONTEXT_WINDOW,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./defaults.js";
 
 export type OllamaTagModel = {
@@ -78,14 +86,21 @@ export type OllamaModelShowInfo = {
 function buildOllamaModelShowCacheKey(
   apiBase: string,
   model: Pick<OllamaTagModel, "name" | "digest" | "modified_at">,
+<<<<<<< HEAD
   apiKey?: string,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ): string | undefined {
   const version = model.digest?.trim() || model.modified_at?.trim();
   if (!version) {
     return undefined;
   }
+<<<<<<< HEAD
   const authScope = apiKey ? createHash("sha256").update(apiKey).digest("hex") : "anonymous";
   return `${resolveOllamaApiBase(apiBase)}|${model.name}|${version}|${authScope}`;
+=======
+  return `${resolveOllamaApiBase(apiBase)}|${model.name}|${version}`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function setOllamaModelShowCacheEntry(key: string, value: Promise<OllamaModelShowInfo>): void {
@@ -147,11 +162,19 @@ export async function queryOllamaModelShowInfo(
       if (!response.ok) {
         return {};
       }
+<<<<<<< HEAD
       const data = await readProviderJsonResponse<{
         model_info?: Record<string, unknown>;
         capabilities?: unknown;
         parameters?: unknown;
       }>(response, "ollama-provider-models.show");
+=======
+      const data = (await response.json()) as {
+        model_info?: Record<string, unknown>;
+        capabilities?: unknown;
+        parameters?: unknown;
+      };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       let contextWindow: number | undefined;
       if (data.model_info) {
@@ -191,12 +214,20 @@ export async function queryOllamaModelShowInfo(
 async function queryOllamaModelShowInfoCached(
   apiBase: string,
   model: Pick<OllamaTagModel, "name" | "digest" | "modified_at">,
+<<<<<<< HEAD
   opts?: { apiKey?: string },
 ): Promise<OllamaModelShowInfo> {
   const normalizedApiBase = resolveOllamaApiBase(apiBase);
   const cacheKey = buildOllamaModelShowCacheKey(normalizedApiBase, model, opts?.apiKey);
   if (!cacheKey) {
     return await queryOllamaModelShowInfo(normalizedApiBase, model.name, opts);
+=======
+): Promise<OllamaModelShowInfo> {
+  const normalizedApiBase = resolveOllamaApiBase(apiBase);
+  const cacheKey = buildOllamaModelShowCacheKey(normalizedApiBase, model);
+  if (!cacheKey) {
+    return await queryOllamaModelShowInfo(normalizedApiBase, model.name);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   const cached = ollamaModelShowInfoCache.get(cacheKey);
@@ -204,7 +235,11 @@ async function queryOllamaModelShowInfoCached(
     return await cached;
   }
 
+<<<<<<< HEAD
   const pending = queryOllamaModelShowInfo(normalizedApiBase, model.name, opts).then((result) => {
+=======
+  const pending = queryOllamaModelShowInfo(normalizedApiBase, model.name).then((result) => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!hasCachedOllamaModelShowInfo(result)) {
       ollamaModelShowInfoCache.delete(cacheKey);
     }
@@ -225,7 +260,11 @@ export async function queryOllamaContextWindow(
 export async function enrichOllamaModelsWithContext(
   apiBase: string,
   models: OllamaTagModel[],
+<<<<<<< HEAD
   opts?: { apiKey?: string; concurrency?: number },
+=======
+  opts?: { concurrency?: number },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ): Promise<OllamaModelWithContext[]> {
   const concurrency = Math.max(1, Math.floor(opts?.concurrency ?? OLLAMA_SHOW_CONCURRENCY));
   const enriched: OllamaModelWithContext[] = [];
@@ -233,11 +272,15 @@ export async function enrichOllamaModelsWithContext(
     const batch = models.slice(index, index + concurrency);
     const batchResults = await Promise.all(
       batch.map(async (model) => {
+<<<<<<< HEAD
         const showInfo = await queryOllamaModelShowInfoCached(
           apiBase,
           model,
           opts?.apiKey ? { apiKey: opts.apiKey } : undefined,
         );
+=======
+        const showInfo = await queryOllamaModelShowInfoCached(apiBase, model);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         return Object.assign({}, model, {
           contextWindow: showInfo.contextWindow,
           capabilities: showInfo.capabilities,
@@ -255,10 +298,14 @@ export function isReasoningModelHeuristic(modelId: string): boolean {
 
 function isKnownOllamaCloudReasoningModel(modelId: string): boolean {
   const normalized = modelId.trim().toLowerCase();
+<<<<<<< HEAD
   return (
     normalized === OLLAMA_GLM52_CLOUD_MODEL_ID ||
     /^deepseek-v4-(?:flash|pro):cloud$/.test(normalized)
   );
+=======
+  return /^deepseek-v4-(?:flash|pro):cloud$/.test(normalized);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function buildOllamaModelDefinition(
@@ -286,11 +333,15 @@ export function buildOllamaModelDefinition(
     reasoning,
     input,
     cost: OLLAMA_DEFAULT_COST,
+<<<<<<< HEAD
     contextWindow:
       contextWindow ??
       (modelId.trim().toLowerCase() === OLLAMA_GLM52_CLOUD_MODEL_ID
         ? OLLAMA_GLM52_CONTEXT_WINDOW
         : OLLAMA_DEFAULT_CONTEXT_WINDOW),
+=======
+    contextWindow: contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
     compat,
   };
@@ -298,14 +349,20 @@ export function buildOllamaModelDefinition(
 
 export async function fetchOllamaModels(
   baseUrl: string,
+<<<<<<< HEAD
   opts?: { apiKey?: string },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ): Promise<{ reachable: boolean; models: OllamaTagModel[] }> {
   try {
     const apiBase = resolveOllamaApiBase(baseUrl);
     const { response, release } = await fetchWithSsrFGuard({
       url: `${apiBase}/api/tags`,
       init: {
+<<<<<<< HEAD
         headers: opts?.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : undefined,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         signal: AbortSignal.timeout(5000),
       },
       policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
@@ -315,10 +372,14 @@ export async function fetchOllamaModels(
       if (!response.ok) {
         return { reachable: true, models: [] };
       }
+<<<<<<< HEAD
       const data = await readProviderJsonResponse<OllamaTagsResponse>(
         response,
         "ollama-provider-models.tags",
       );
+=======
+      const data = (await response.json()) as OllamaTagsResponse;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const models = (data.models ?? []).filter((m) => m.name);
       return { reachable: true, models };
     } finally {
@@ -331,18 +392,28 @@ export async function fetchOllamaModels(
 
 export async function buildOllamaProvider(
   configuredBaseUrl?: string,
+<<<<<<< HEAD
   opts?: { apiKey?: string; quiet?: boolean },
 ): Promise<ModelProviderConfig> {
   const apiBase = resolveOllamaApiBase(configuredBaseUrl);
   const auth = opts?.apiKey ? { apiKey: opts.apiKey } : undefined;
   const { reachable, models } = await fetchOllamaModels(apiBase, auth);
+=======
+  opts?: { quiet?: boolean },
+): Promise<ModelProviderConfig> {
+  const apiBase = resolveOllamaApiBase(configuredBaseUrl);
+  const { reachable, models } = await fetchOllamaModels(apiBase);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!reachable && !opts?.quiet) {
     console.warn(`Ollama could not be reached at ${apiBase}.`);
   }
   const discovered = await enrichOllamaModelsWithContext(
     apiBase,
     models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
+<<<<<<< HEAD
     auth,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
   return {
     baseUrl: apiBase,

@@ -7,7 +7,10 @@ const mocks = vi.hoisted(() => ({
   callGatewayCli: vi.fn(async (_method: string, _opts: unknown, _params?: unknown) => ({
     ok: true,
   })),
+<<<<<<< HEAD
   emitReachableGatewayAuthDiagnostic: vi.fn(async (_params: unknown) => false),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   gatewayStatusCommand: vi.fn(async (_opts: unknown, _runtime: unknown) => {}),
   defaultRuntime: {
     log: vi.fn(),
@@ -18,8 +21,12 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
+<<<<<<< HEAD
 const { callGatewayCli, emitReachableGatewayAuthDiagnostic, gatewayStatusCommand, defaultRuntime } =
   mocks;
+=======
+const { callGatewayCli, gatewayStatusCommand, defaultRuntime } = mocks;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 vi.mock("../cli-utils.js", () => ({
   runCommandWithRuntime: async (
@@ -61,7 +68,10 @@ vi.mock("./call.js", () => ({
 vi.mock("./run-command.js", () => ({
   addGatewayRunCommand: (cmd: Command) =>
     cmd
+<<<<<<< HEAD
       .option("--port <port>", "Port for the gateway WebSocket")
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       .option("--token <token>", "Gateway token")
       .option("--password <password>", "Gateway password"),
 }));
@@ -71,8 +81,11 @@ vi.mock("../daemon-cli/register-service-commands.js", () => ({
 }));
 
 vi.mock("../../commands/health.js", () => ({
+<<<<<<< HEAD
   emitReachableGatewayAuthDiagnostic: (params: unknown) =>
     mocks.emitReachableGatewayAuthDiagnostic(params),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   formatHealthChannelLines: () => [],
 }));
 
@@ -146,7 +159,10 @@ describe("gateway register option collisions", () => {
 
   beforeEach(() => {
     callGatewayCli.mockClear();
+<<<<<<< HEAD
     emitReachableGatewayAuthDiagnostic.mockClear();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     gatewayStatusCommand.mockClear();
     defaultRuntime.log.mockClear();
     defaultRuntime.error.mockClear();
@@ -178,6 +194,7 @@ describe("gateway register option collisions", () => {
       },
     },
     {
+<<<<<<< HEAD
       name: "forwards --port to gateway probe",
       argv: ["gateway", "probe", "--port", "19080", "--json"],
       assert: () => {
@@ -230,6 +247,8 @@ describe("gateway register option collisions", () => {
       },
     },
     {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       name: "passes decimal usage-cost --days values",
       argv: ["gateway", "usage-cost", "--days", "7", "--json"],
       assert: () => {
@@ -253,6 +272,7 @@ describe("gateway register option collisions", () => {
     await sharedProgram.parseAsync(argv, { from: "user" });
     assert();
   });
+<<<<<<< HEAD
 
   it("uses the effective local port config for gateway health auth diagnostics", async () => {
     const authError = new Error("gateway auth required");
@@ -277,4 +297,6 @@ describe("gateway register option collisions", () => {
       json: true,
     });
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

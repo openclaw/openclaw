@@ -36,6 +36,7 @@ describe("resolveGroupSessionKey", () => {
       chatType: "group",
     });
   });
+<<<<<<< HEAD
 
   it("preserves empty opaque segments in originating group ids", () => {
     const ctx = {
@@ -61,4 +62,6 @@ describe("resolveGroupSessionKey", () => {
 
     expect(resolveGroupSessionKey(ctx as MsgContext)).toBeNull();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

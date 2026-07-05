@@ -12,11 +12,14 @@ import {
 } from "./public-surface-runtime.js";
 
 const tempDirs: string[] = [];
+<<<<<<< HEAD
 const noBundledPluginOverrideEnv = {
   ...process.env,
   OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
   OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
 } satisfies NodeJS.ProcessEnv;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 afterEach(() => {
   for (const tempDir of tempDirs.splice(0)) {
@@ -117,7 +120,10 @@ describe("bundled plugin public surface runtime", () => {
         bundledPluginsDirMode: "auto",
         dirName: "demo",
         artifactBasename: "api.js",
+<<<<<<< HEAD
         env: noBundledPluginOverrideEnv,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }),
     ).toBe(sourceModulePath);
   });

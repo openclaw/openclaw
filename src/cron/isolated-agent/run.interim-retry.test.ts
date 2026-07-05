@@ -1,7 +1,14 @@
 // Interim retry tests cover retry behavior for incomplete isolated cron runs.
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
+=======
+import {
+  makeIsolatedAgentTurnParams,
+  setupRunCronIsolatedAgentTurnSuite,
+} from "./run.suite-helpers.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   countActiveDescendantRunsMock,
   dispatchCronDeliveryMock,
@@ -45,7 +52,11 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
   const runTurnAndExpectOk = async (expectedFallbackCalls: number, expectedAgentCalls: number) => {
+<<<<<<< HEAD
     const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+=======
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(result.status).toBe("ok");
     expect(runWithModelFallbackMock).toHaveBeenCalledTimes(expectedFallbackCalls);
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(expectedAgentCalls);
@@ -118,7 +129,11 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     });
 
     mockRunCronFallbackPassthrough();
+<<<<<<< HEAD
     const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+=======
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("SYSTEM_RUN_DENIED: approval required");
@@ -151,7 +166,11 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     });
 
     mockRunCronFallbackPassthrough();
+<<<<<<< HEAD
     const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+=======
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("SYSTEM_RUN_DENIED: approval required");

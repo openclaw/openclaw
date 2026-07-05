@@ -7,6 +7,7 @@ const autoMigrateLegacyStateDir = vi.hoisted(() =>
 const autoMigrateLegacyState = vi.hoisted(() =>
   vi.fn(async () => ({ migrated: true, skipped: false, changes: ["imported"], warnings: [] })),
 );
+<<<<<<< HEAD
 const autoMigrateLegacyPluginDoctorState = vi.hoisted(() =>
   vi.fn(async () => ({
     migrated: true,
@@ -15,6 +16,8 @@ const autoMigrateLegacyPluginDoctorState = vi.hoisted(() =>
     warnings: [],
   })),
 );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const autoMigrateLegacyTaskStateSidecars = vi.hoisted(() =>
   vi.fn(async () => ({ migrated: true, skipped: false, changes: ["task-imported"], warnings: [] })),
 );
@@ -27,7 +30,10 @@ const readConfigFileSnapshot = vi.hoisted(() =>
     valid: true,
     config: { gateway: { mode: "local", port: 19091 } } as Record<string, unknown>,
     sourceConfig: { gateway: { mode: "local", port: 19091 } } as Record<string, unknown>,
+<<<<<<< HEAD
     parsed: { gateway: { mode: "local", port: 19091 } } as Record<string, unknown>,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     legacyIssues: [] as Array<{ path: string; message: string }>,
     warnings: [] as Array<{ path: string; message: string }>,
     issues: [] as Array<{ path: string; message: string }>,
@@ -38,7 +44,10 @@ const note = vi.hoisted(() => vi.fn());
 vi.mock("./doctor-state-migrations.js", () => ({
   autoMigrateLegacyState,
   autoMigrateLegacyStateDir,
+<<<<<<< HEAD
   autoMigrateLegacyPluginDoctorState,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   autoMigrateLegacyTaskStateSidecars,
 }));
 
@@ -152,6 +161,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
   });
 
+<<<<<<< HEAD
   it("runs plugin state migrations with resolved legacy config before config repair removes retired paths", async () => {
     const parsedConfig = { $include: "memory-search.json" };
     const resolvedConfig = {
@@ -270,13 +280,18 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(note).toHaveBeenCalledWith("- task-imported", "Doctor changes");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("limits invalid-config preflight to config-independent state migration", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       exists: true,
       valid: false,
       config: { cron: { store: "/tmp/legacy-cron.json" } },
       sourceConfig: { cron: { store: "/tmp/legacy-cron.json" } },
+<<<<<<< HEAD
       parsed: { cron: { store: "/tmp/legacy-cron.json" } },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       legacyIssues: [],
       warnings: [],
       issues: [{ path: "gateway", message: "invalid" }],

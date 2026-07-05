@@ -14,7 +14,10 @@ import {
   escapeTelegramHtml,
   limitTelegramRichHtmlNesting,
   markdownToTelegramRichHtml,
+<<<<<<< HEAD
   materializeTelegramRichHtmlLineBreaks,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sanitizeTelegramRichHtml,
   splitTelegramHtmlChunks,
   telegramHtmlToPlainTextFallback,
@@ -96,6 +99,7 @@ type TelegramApiWithRichRaw = Bot["api"] & {
   raw?: TelegramRichRawApi;
 };
 
+<<<<<<< HEAD
 const TELEGRAM_RICH_EMAIL_TOKEN_RE =
   /[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+/iu;
 
@@ -106,6 +110,8 @@ function shouldSkipTelegramRichEntityDetection(
   return options?.skipEntityDetection === true || TELEGRAM_RICH_EMAIL_TOKEN_RE.test(text);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function getTelegramRichRawApi(api: Bot["api"]): TelegramRichRawApi {
   const raw = (api as TelegramApiWithRichRaw).raw;
   if (raw) {
@@ -174,11 +180,15 @@ export function buildTelegramRichMarkdown(
   markdown: string,
   options?: TelegramRichMessageOptions,
 ): TelegramInputRichMessage {
+<<<<<<< HEAD
   const richOptions = {
     ...options,
     skipEntityDetection: shouldSkipTelegramRichEntityDetection(markdown, options),
   };
   return buildTelegramRichHtml(markdownToTelegramRichHtml(markdown, richOptions), richOptions);
+=======
+  return buildTelegramRichHtml(markdownToTelegramRichHtml(markdown, options), options);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function buildTelegramRichHtml(
@@ -186,7 +196,11 @@ export function buildTelegramRichHtml(
   options?: TelegramRichMessageOptions,
 ): TelegramInputRichMessage {
   const safeHtml = prepareTelegramRichHtml(html);
+<<<<<<< HEAD
   return shouldSkipTelegramRichEntityDetection(safeHtml, options)
+=======
+  return options?.skipEntityDetection === true
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ? { html: safeHtml, skip_entity_detection: true }
     : { html: safeHtml };
 }
@@ -202,6 +216,7 @@ export function buildTelegramRichMessage(
 }
 
 function prepareTelegramRichHtml(html: string): string {
+<<<<<<< HEAD
   // Materialize logical line breaks as <br> after sanitizing (so tag support is
   // settled) but before the nesting limit. Bot API 10.1 rich messages parse real
   // HTML, so bare newlines collapse; every rich send/edit/draft funnels through
@@ -210,6 +225,9 @@ function prepareTelegramRichHtml(html: string): string {
     materializeTelegramRichHtmlLineBreaks(sanitizeTelegramRichHtml(html)),
     TELEGRAM_RICH_NESTING_LIMIT,
   );
+=======
+  return limitTelegramRichHtmlNesting(sanitizeTelegramRichHtml(html), TELEGRAM_RICH_NESTING_LIMIT);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 const TELEGRAM_RICH_HTML_CHUNK_LIMITS = {
@@ -432,6 +450,7 @@ export function splitTelegramRichMessageTextChunks(params: {
   tableMode?: MarkdownTableMode;
   skipEntityDetection?: boolean;
 }): TelegramRichTextChunk[] {
+<<<<<<< HEAD
   const markdownOptions = {
     tableMode: params.tableMode,
     skipEntityDetection: shouldSkipTelegramRichEntityDetection(params.text, {
@@ -440,6 +459,15 @@ export function splitTelegramRichMessageTextChunks(params: {
   };
   const renderMarkdownChunk = (chunk: string) =>
     prepareTelegramRichHtml(markdownToTelegramRichHtml(chunk, markdownOptions));
+=======
+  const renderMarkdownChunk = (chunk: string) =>
+    prepareTelegramRichHtml(
+      markdownToTelegramRichHtml(chunk, {
+        tableMode: params.tableMode,
+        skipEntityDetection: params.skipEntityDetection,
+      }),
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const htmlChunks =
     params.textMode === "html"
       ? splitPreparedTelegramRichHtml({

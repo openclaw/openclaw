@@ -1,7 +1,10 @@
 // Ollama tests cover embedding provider plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const { fetchConfiguredLocalOriginWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchConfiguredLocalOriginWithSsrFGuardMock: vi.fn(
@@ -84,6 +87,7 @@ function firstGuardedFetchCall(): Record<string, unknown> {
   return call as Record<string, unknown>;
 }
 
+<<<<<<< HEAD
 function cancelTrackedResponse(
   text: string,
   init: ResponseInit,
@@ -106,6 +110,8 @@ function cancelTrackedResponse(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function expectEmbeddingFetch(
   fetchMock: ReturnType<typeof mockEmbeddingFetch>,
   url: string,
@@ -148,6 +154,7 @@ describe("ollama embedding provider", () => {
     expect(vector[1]).toBeCloseTo(0.8, 5);
   });
 
+<<<<<<< HEAD
   it("applies outputDimensionality before normalizing vectors", async () => {
     mockEmbeddingFetch([3, 4, 12]);
 
@@ -167,6 +174,8 @@ describe("ollama embedding provider", () => {
     expect(vector[1]).toBeCloseTo(0.8, 5);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("marks the configured Ollama origin for managed-proxy direct routing", async () => {
     const fetchMock = mockEmbeddingFetch([1, 0]);
 
@@ -359,6 +368,7 @@ describe("ollama embedding provider", () => {
     });
   });
 
+<<<<<<< HEAD
   it("bounds embed error bodies without using response.text()", async () => {
     const tracked = cancelTrackedResponse(`${"ollama embed unavailable ".repeat(1024)}tail`, {
       status: 503,
@@ -392,6 +402,8 @@ describe("ollama embedding provider", () => {
     expect(textSpy).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("reports malformed embed JSON with a provider-owned error", async () => {
     vi.stubGlobal(
       "fetch",
@@ -413,6 +425,7 @@ describe("ollama embedding provider", () => {
     });
 
     await expect(provider.embedQuery("hello")).rejects.toThrow(
+<<<<<<< HEAD
       "Ollama embed response: malformed JSON response",
     );
   });
@@ -447,6 +460,12 @@ describe("ollama embedding provider", () => {
     expect(jsonSpy).not.toHaveBeenCalled();
   });
 
+=======
+      "Ollama embed response returned malformed JSON",
+    );
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects non-number embedding values instead of zeroing them", async () => {
     vi.stubGlobal(
       "fetch",
@@ -714,6 +733,7 @@ describe("ollama embedding provider", () => {
     expect(headers?.Authorization).toBeUndefined();
   });
 
+<<<<<<< HEAD
   it("includes outputDimensionality in the memory embedding cache identity", async () => {
     const result = await ollamaMemoryEmbeddingProviderAdapter.create({
       config: {} as OpenClawConfig,
@@ -731,6 +751,8 @@ describe("ollama embedding provider", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("marks inline memory batches as local-server timeout work", async () => {
     const result = await ollamaMemoryEmbeddingProviderAdapter.create({
       config: {} as OpenClawConfig,

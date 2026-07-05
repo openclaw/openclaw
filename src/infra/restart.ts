@@ -1,14 +1,23 @@
 // Coordinates gateway restart requests across supported supervisors.
 import { spawnSync } from "node:child_process";
+<<<<<<< HEAD
 import os from "node:os";
 import path from "node:path";
 import { getRuntimeConfig } from "../config/config.js";
+=======
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { getRuntimeConfig } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+<<<<<<< HEAD
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -19,6 +28,9 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+=======
+import { replaceFileAtomicSync } from "./replace-file.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 import type { RestartAttempt } from "./restart.types.js";
 import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
@@ -32,11 +44,19 @@ const DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS = 30_000;
 export const DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS = 300_000;
 const RESTART_COOLDOWN_MS = 30_000;
 const LAUNCHCTL_ALREADY_LOADED_EXIT_CODE = 37;
+<<<<<<< HEAD
 const GATEWAY_RESTART_INTENT_KEY = "gateway-restart";
 const GATEWAY_RESTART_INTENT_TTL_MS = 60_000;
 
 const restartLog = createSubsystemLogger("restart");
 type GatewayRestartIntentDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_intent">;
+=======
+const GATEWAY_RESTART_INTENT_FILENAME = "gateway-restart-intent.json";
+const GATEWAY_RESTART_INTENT_TTL_MS = 60_000;
+const GATEWAY_RESTART_INTENT_MAX_BYTES = 1024;
+
+const restartLog = createSubsystemLogger("restart");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export { findGatewayPidsOnPortSync };
 
@@ -144,6 +164,26 @@ export type GatewayRestartIntent = {
   waitMs?: number;
 };
 
+<<<<<<< HEAD
+=======
+function resolveGatewayRestartIntentPath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveStateDir(env), GATEWAY_RESTART_INTENT_FILENAME);
+}
+
+function unlinkGatewayRestartIntentFileSync(intentPath: string): boolean {
+  try {
+    const stat = fs.lstatSync(intentPath);
+    if (!stat.isFile() || stat.nlink > 1) {
+      return false;
+    }
+    fs.unlinkSync(intentPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function normalizeRestartIntentPid(pid: number | undefined): number | null {
   return typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0 ? pid : null;
 }
@@ -160,6 +200,7 @@ export function writeGatewayRestartIntentSync(opts: {
   }
   const env = opts.env ?? process.env;
   try {
+<<<<<<< HEAD
     const reason = normalizeRestartIntentReason(opts.reason ?? opts.intent?.reason);
     const waitMs =
       typeof opts.intent?.waitMs === "number" &&
@@ -200,6 +241,28 @@ export function writeGatewayRestartIntentSync(opts: {
       },
       { env },
     );
+=======
+    const intentPath = resolveGatewayRestartIntentPath(env);
+    const reason = normalizeRestartIntentReason(opts.reason ?? opts.intent?.reason);
+    const payload: GatewayRestartIntentPayload = {
+      kind: "gateway-restart",
+      pid: targetPid,
+      createdAt: Date.now(),
+      ...(reason ? { reason } : {}),
+      ...(opts.intent?.force ? { force: true } : {}),
+      ...(typeof opts.intent?.waitMs === "number" &&
+      Number.isFinite(opts.intent.waitMs) &&
+      opts.intent.waitMs >= 0
+        ? { waitMs: Math.floor(opts.intent.waitMs) }
+        : {}),
+    };
+    replaceFileAtomicSync({
+      filePath: intentPath,
+      content: `${JSON.stringify(payload)}\n`,
+      mode: 0o600,
+      tempPrefix: ".gateway-restart-intent",
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return true;
   } catch (err) {
     restartLog.warn(`failed to write gateway restart intent: ${String(err)}`);
@@ -208,6 +271,7 @@ export function writeGatewayRestartIntentSync(opts: {
 }
 
 export function clearGatewayRestartIntentSync(env: NodeJS.ProcessEnv = process.env): void {
+<<<<<<< HEAD
   try {
     runOpenClawStateWriteTransaction(
       ({ db }) => {
@@ -259,6 +323,33 @@ function readGatewayRestartIntentPayloadSync(
         ...(reason ? { reason } : {}),
         ...(parsed.force ? { force: true } : {}),
         ...(typeof parsed.wait_ms === "number" ? { waitMs: Math.floor(parsed.wait_ms) } : {}),
+=======
+  unlinkGatewayRestartIntentFileSync(resolveGatewayRestartIntentPath(env));
+}
+
+function parseGatewayRestartIntent(raw: string): GatewayRestartIntentPayload | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<GatewayRestartIntentPayload>;
+    if (
+      parsed.kind === "gateway-restart" &&
+      typeof parsed.pid === "number" &&
+      Number.isFinite(parsed.pid) &&
+      typeof parsed.createdAt === "number" &&
+      Number.isFinite(parsed.createdAt) &&
+      (parsed.reason === undefined || typeof parsed.reason === "string") &&
+      (parsed.force === undefined || typeof parsed.force === "boolean") &&
+      (parsed.waitMs === undefined ||
+        (typeof parsed.waitMs === "number" && Number.isFinite(parsed.waitMs) && parsed.waitMs >= 0))
+    ) {
+      const reason = normalizeRestartIntentReason(parsed.reason);
+      return {
+        kind: "gateway-restart",
+        pid: parsed.pid,
+        createdAt: parsed.createdAt,
+        ...(reason ? { reason } : {}),
+        ...(parsed.force ? { force: true } : {}),
+        ...(typeof parsed.waitMs === "number" ? { waitMs: Math.floor(parsed.waitMs) } : {}),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       };
     }
   } catch {
@@ -276,8 +367,25 @@ export function consumeGatewayRestartIntentPayloadSync(
   env: NodeJS.ProcessEnv = process.env,
   now = Date.now(),
 ): GatewayRestartIntent | null {
+<<<<<<< HEAD
   const payload = readGatewayRestartIntentPayloadSync(env);
   clearGatewayRestartIntentSync(env);
+=======
+  const intentPath = resolveGatewayRestartIntentPath(env);
+  let raw: string;
+  try {
+    const stat = fs.lstatSync(intentPath);
+    if (!stat.isFile() || stat.size > GATEWAY_RESTART_INTENT_MAX_BYTES) {
+      return null;
+    }
+    raw = fs.readFileSync(intentPath, "utf8");
+  } catch {
+    return null;
+  } finally {
+    clearGatewayRestartIntentSync(env);
+  }
+  const payload = parseGatewayRestartIntent(raw);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!payload) {
     return null;
   }

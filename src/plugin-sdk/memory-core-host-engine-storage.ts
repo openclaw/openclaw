@@ -19,6 +19,7 @@ export {
   isTransientMemoryReadError,
   listMemoryFiles,
   loadSqliteVecExtension,
+<<<<<<< HEAD
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_CHUNKS_TABLE,
   MEMORY_INDEX_FTS_TABLE,
@@ -26,6 +27,8 @@ export {
   MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_INDEX_STATE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   normalizeExtraMemoryPaths,
   parseEmbedding,
   readMemoryFile,
@@ -71,8 +74,11 @@ export type {
   MemorySearchManager,
   MemorySearchRuntimeDebug,
   MemorySyncProgressUpdate,
+<<<<<<< HEAD
   MemorySessionSyncTarget,
   MemorySyncParams,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ResolvedMemoryBackendConfig,
   ResolvedQmdConfig,
   ResolvedQmdMcporterConfig,

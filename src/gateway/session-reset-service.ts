@@ -800,9 +800,14 @@ export async function emitGatewayBeforeResetPluginHook(params: {
       messages = await readSessionMessagesAsync(
         {
           agentId,
+<<<<<<< HEAD
           sessionEntry: params.entry,
           sessionId,
           sessionKey,
+=======
+          sessionFile,
+          sessionId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           storePath: params.storePath,
         },
         {

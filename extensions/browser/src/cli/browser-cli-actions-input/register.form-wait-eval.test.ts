@@ -36,6 +36,7 @@ function createActionInputProgram(): Command {
   return program;
 }
 
+<<<<<<< HEAD
 function getLastActionBody(): Record<string, unknown> | undefined {
   return (mocks.callBrowserRequest.mock.calls.at(-1)?.[1] as { body?: Record<string, unknown> })
     ?.body;
@@ -73,6 +74,8 @@ describe("browser action input fill command", () => {
   });
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("browser action input wait command", () => {
   beforeEach(() => {
     mocks.callBrowserRequest.mockClear();
@@ -136,6 +139,7 @@ describe("browser action input evaluate command", () => {
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
   });
 
+<<<<<<< HEAD
   it("sends evaluate function, ref, and target id to the act route", async () => {
     const program = createActionInputProgram();
 
@@ -161,6 +165,8 @@ describe("browser action input evaluate command", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("passes timeout-ms through to the evaluate action and outer request", async () => {
     const program = createActionInputProgram();
 

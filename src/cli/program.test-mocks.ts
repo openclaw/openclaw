@@ -110,3 +110,10 @@ vi.mock("./program/config-guard.js", () => ({
   ensureConfigReady: programMocks.ensureConfigReady,
 }));
 vi.mock("./preaction.js", () => ({ registerPreActionHooks: () => {} }));
+<<<<<<< HEAD
+=======
+
+export function installBaseProgramMocks() {}
+
+export function installSmokeProgramMocks() {}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

@@ -2,8 +2,13 @@
 // validation compatibility for cron jobs.
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { normalizeToolParameterSchema } from "../agent-tools-parameter-schema.js";
 import { createCronToolSchema } from "./cron-tool.js";
+=======
+import { normalizeToolParameterSchema } from "../agent-tools.schema.js";
+import { createCronToolSchema, CronToolSchema } from "./cron-tool.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Walk a TypeBox schema by dot-separated property path and return sorted keys. */
 function keysAt(schema: Record<string, unknown>, path: string): string[] {
@@ -28,15 +33,22 @@ function propertyAt(
   return cursor;
 }
 
+<<<<<<< HEAD
 describe("createCronToolSchema", () => {
+=======
+describe("CronToolSchema", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const schemaRecord = createCronToolSchema() as unknown as Record<string, unknown>;
   const providerSchemaRecord = normalizeToolParameterSchema(createCronToolSchema(), {
     modelProvider: "gemini",
   }) as unknown as Record<string, unknown>;
+<<<<<<< HEAD
   const jjccGeminiSchemaRecord = normalizeToolParameterSchema(createCronToolSchema(), {
     modelProvider: "jjcc",
     modelId: "gemini-3.1-pro-preview",
   }) as unknown as Record<string, unknown>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   // Regression: models like GPT-5.4 rely on these fields to populate job/patch.
   // If a field is removed from this list the test must be updated intentionally.
@@ -212,7 +224,11 @@ describe("createCronToolSchema", () => {
 
   it("accepts nullable cron patch clears in the runtime schema", () => {
     expect(
+<<<<<<< HEAD
       Value.Check(createCronToolSchema(), {
+=======
+      Value.Check(CronToolSchema, {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         action: "update",
         jobId: "job-1",
         patch: {
@@ -258,6 +274,7 @@ describe("createCronToolSchema", () => {
     expect(patchProps?.payload?.properties?.model?.description).toMatch(/null to clear/i);
   });
 
+<<<<<<< HEAD
   it("projects nullable cron fields for Gemini models behind OpenAI-compatible providers", () => {
     expect(propertyAt(jjccGeminiSchemaRecord, "job.agentId")).toMatchObject({
       type: "string",
@@ -274,6 +291,8 @@ describe("createCronToolSchema", () => {
     expect(JSON.stringify(jjccGeminiSchemaRecord)).not.toContain('"anyOf"');
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   // Regression guard: ensure no OpenAPI 3.0 incompatible keywords leak into the
   // serialized provider-facing cron tool schema.
   it("serialized provider schema contains no type-array or not/const keywords", () => {

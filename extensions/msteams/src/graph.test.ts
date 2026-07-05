@@ -92,6 +92,7 @@ function mockTextFetchResponse(body: string, init?: ResponseInit) {
   mockFetch(async () => textResponse(body, init));
 }
 
+<<<<<<< HEAD
 function graphStreamResponse(body: unknown): {
   response: Response;
   arrayBuffer: ReturnType<typeof vi.fn>;
@@ -119,6 +120,8 @@ function graphStreamResponse(body: unknown): {
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function graphCollection<T>(...items: T[]) {
   return { value: items };
 }
@@ -256,6 +259,7 @@ describe("msteams graph helpers", () => {
     );
   });
 
+<<<<<<< HEAD
   it("keeps successful Graph responses streaming for bounded JSON parsing", async () => {
     const { response, arrayBuffer } = graphStreamResponse(graphCollection(groupOne));
     mockFetch(async () => response);
@@ -270,6 +274,8 @@ describe("msteams graph helpers", () => {
     expect(arrayBuffer).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("posts Graph JSON to v1 and beta roots and treats empty mutation responses as undefined", async () => {
     mockFetch(async (input) => {
       if (requestUrl(input).startsWith("https://graph.microsoft.com/beta")) {

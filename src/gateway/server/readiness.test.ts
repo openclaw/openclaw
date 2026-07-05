@@ -68,7 +68,10 @@ function createReadinessHarness(params: {
   accounts?: Record<string, Partial<ChannelAccountSnapshot>>;
   getStartupPending?: () => boolean;
   getStartupPendingReason?: Parameters<typeof createReadinessChecker>[0]["getStartupPendingReason"];
+<<<<<<< HEAD
   getGatewayDraining?: Parameters<typeof createReadinessChecker>[0]["getGatewayDraining"];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   getEventLoopHealth?: Parameters<typeof createReadinessChecker>[0]["getEventLoopHealth"];
   shouldSkipChannelReadiness?: Parameters<
     typeof createReadinessChecker
@@ -84,7 +87,10 @@ function createReadinessHarness(params: {
       startedAt,
       getStartupPending: params.getStartupPending,
       getStartupPendingReason: params.getStartupPendingReason,
+<<<<<<< HEAD
       getGatewayDraining: params.getGatewayDraining,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       getEventLoopHealth: params.getEventLoopHealth,
       shouldSkipChannelReadiness: params.shouldSkipChannelReadiness,
       cacheTtlMs: params.cacheTtlMs,
@@ -180,6 +186,7 @@ describe("createReadinessChecker", () => {
     });
   });
 
+<<<<<<< HEAD
   it("reports not ready while the gateway command queue is draining for restart", () => {
     withReadinessClock(() => {
       const { manager, readiness } = createReadinessHarness({
@@ -209,6 +216,8 @@ describe("createReadinessChecker", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("ignores disabled and unconfigured channels", () => {
     withReadinessClock(() => {
       const { readiness } = createReadinessHarness({

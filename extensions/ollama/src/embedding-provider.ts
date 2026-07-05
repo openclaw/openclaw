@@ -6,10 +6,13 @@ import {
   normalizeOptionalSecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
+<<<<<<< HEAD
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   hasConfiguredSecretInput,
@@ -55,14 +58,20 @@ export type OllamaEmbeddingClient = {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   model: string;
+<<<<<<< HEAD
   outputDimensionality?: number;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
 
 type OllamaEmbeddingClientConfig = Omit<OllamaEmbeddingClient, "embedBatch">;
 
 export const DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";
+<<<<<<< HEAD
 const OLLAMA_EMBED_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const QUERY_INSTRUCTION_TEMPLATES = [
   {
@@ -80,10 +89,15 @@ const QUERY_INSTRUCTION_TEMPLATES = [
   },
 ] as const;
 
+<<<<<<< HEAD
 function sanitizeAndNormalizeEmbedding(vec: unknown[], outputDimensionality?: number): number[] {
   const selected =
     typeof outputDimensionality === "number" ? vec.slice(0, outputDimensionality) : vec;
   const sanitized = selected.map((value) => {
+=======
+function sanitizeAndNormalizeEmbedding(vec: unknown[]): number[] {
+  const sanitized = vec.map((value) => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (typeof value !== "number") {
       throw new Error("Ollama embed response contains a non-number embedding value");
     }
@@ -120,9 +134,20 @@ async function withRemoteHttpResponse<T>(params: {
 }
 
 async function readOllamaEmbeddingJsonResponse(
+<<<<<<< HEAD
   response: Response,
 ): Promise<{ embeddings?: unknown }> {
   const payload = await readProviderJsonResponse<unknown>(response, "Ollama embed response");
+=======
+  response: Pick<Response, "json">,
+): Promise<{ embeddings?: unknown }> {
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch (cause) {
+    throw new Error("Ollama embed response returned malformed JSON", { cause });
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
     throw new Error("Ollama embed response returned a non-object JSON payload");
   }
@@ -321,7 +346,10 @@ function resolveOllamaEmbeddingClient(
     headers,
     ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
     model,
+<<<<<<< HEAD
     outputDimensionality: options.outputDimensionality,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }
 
@@ -344,11 +372,15 @@ export async function createOllamaEmbeddingProvider(
       },
       onResponse: async (response) => {
         if (!response.ok) {
+<<<<<<< HEAD
           const detail = await readResponseTextLimited(
             response,
             OLLAMA_EMBED_ERROR_BODY_LIMIT_BYTES,
           ).catch(() => "unknown error");
           throw new Error(`Ollama embed HTTP ${response.status}: ${detail}`);
+=======
+          throw new Error(`Ollama embed HTTP ${response.status}: ${await response.text()}`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }
         return await readOllamaEmbeddingJsonResponse(response);
       },
@@ -366,7 +398,11 @@ export async function createOllamaEmbeddingProvider(
       if (!Array.isArray(embedding)) {
         throw new Error("Ollama embed response contains a non-array embedding");
       }
+<<<<<<< HEAD
       return sanitizeAndNormalizeEmbedding(embedding, client.outputDimensionality);
+=======
+      return sanitizeAndNormalizeEmbedding(embedding);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   };
 

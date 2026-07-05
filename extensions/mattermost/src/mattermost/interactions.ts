@@ -66,6 +66,13 @@ export function setInteractionCallbackUrl(accountId: string, url: string): void 
   callbackUrls.set(accountId, url);
 }
 
+<<<<<<< HEAD
+=======
+export function getInteractionCallbackUrl(accountId: string): string | undefined {
+  return callbackUrls.get(accountId);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type InteractionCallbackConfig = Pick<OpenClawConfig, "gateway" | "channels"> & {
   interactions?: {
     callbackBaseUrl?: string;

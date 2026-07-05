@@ -71,6 +71,10 @@ vi.mock("../channels/registry.js", () => ({
   CHAT_CHANNEL_ORDER: [],
   CHANNEL_IDS: [],
   listChatChannels: () => [],
+<<<<<<< HEAD
+=======
+  listChatChannelAliases: () => [],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   getChatChannelMeta: () => null,
   normalizeChatChannelId: () => null,
   normalizeChannelId: () => null,
@@ -762,11 +766,14 @@ describe("loadGatewayPlugins", () => {
         expect(opts.req.method).toBe("sessions.get");
         expect(opts.req.params).toEqual({ key: "s-legacy" });
         opts.respond(true, { messages: [{ id: "m-2" }] });
+<<<<<<< HEAD
       })
       .mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
         expect(opts.req.method).toBe("sessions.get");
         expect(opts.req.params).toEqual({ key: "s-limited", limit: 1_000 });
         opts.respond(true, { messages: [{ id: "m-3" }] });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
 
     await expect(runtime.getSessionMessages({ sessionKey: "s-read" })).resolves.toEqual({
@@ -775,6 +782,7 @@ describe("loadGatewayPlugins", () => {
     await expect(runtime.getSession({ sessionKey: "s-legacy" })).resolves.toEqual({
       messages: [{ id: "m-2" }],
     });
+<<<<<<< HEAD
     await expect(
       runtime.getSessionMessages({
         sessionKey: "s-limited",
@@ -783,6 +791,8 @@ describe("loadGatewayPlugins", () => {
     ).resolves.toEqual({
       messages: [{ id: "m-3" }],
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   test("times out while waiting for the first in-process gateway response", async () => {

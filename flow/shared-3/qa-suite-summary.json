@@ -1,0 +1,315 @@
+{
+  "scenarios": [
+    {
+      "name": "Model switch with tool continuity",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "keeps using tools after switching models",
+          "status": "pass",
+          "details": "Protocol note: model switch handoff confirmed on gpt-5.5-alt. QA mission from <code>QA_KICKOFF_TASK.md</code> still applies: understand this OpenClaw repo from source + docs before acting."
+        }
+      ]
+    },
+    {
+      "name": "Codex doctor migration safety matrix",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "validates doctor migration safety matrix",
+          "status": "pass",
+          "details": "cells=oauth-only,mixed-no-pin"
+        }
+      ]
+    },
+    {
+      "name": "Personal task followthrough status",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "reports proof-backed personal task status",
+          "status": "pass",
+          "details": "Pending: maintainer feedback before publishing\nBlocked: publishing needs explicit user approval\nDone: local evidence captured in personal-task-status.txt"
+        }
+      ]
+    },
+    {
+      "name": "Personal approval denial stop",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "stops when personal approval is denied",
+          "status": "pass",
+          "details": "PERSONAL-APPROVAL-DENIED-OK"
+        }
+      ]
+    },
+    {
+      "name": "Empty-response recovery after replay-safe read",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "retries an empty replay-safe read into a visible answer",
+          "status": "pass",
+          "details": "EMPTY-RECOVERED-OK\nrequests=3"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — apply-patch",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises apply_patch happy and failure paths",
+          "status": "pass",
+          "details": "apply_patch mock provider happy planned args (diagnostic only): {\"input\":\"*** Begin Patch\\n*** Add File: runtime-tool-fixture-patch.txt\\n+runtime patch\\n*** End Patch\\n\"}\napply_patch mock provider failure planned args (diagnostic only): {\"__qaFailureMode\":\"denied-input\"}"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — fs.write",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises fs.write happy and failure paths",
+          "status": "pass",
+          "details": "write mock provider happy planned args (diagnostic only): {\"path\":\"runtime-tool-fixture-write.txt\",\"content\":\"runtime tool fixture\\n\"}\nwrite mock provider failure planned args (diagnostic only): {\"__qaFailureMode\":\"denied-input\"}"
+        }
+      ]
+    },
+    {
+      "name": "Personal redaction no-secret-leak",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "keeps the fake personal secret out of visible replies",
+          "status": "pass",
+          "details": "PERSONAL-REDACTION-OK"
+        }
+      ]
+    },
+    {
+      "name": "DM baseline conversation",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "replies coherently in DM",
+          "status": "pass",
+          "details": "QA-DM-BASELINE-OK"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — direct message tool",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises message happy and failure paths",
+          "status": "pass",
+          "details": "expected-unavailable message: this fixture is report-only for the current profile\navailable tools: apply_patch, create_goal, cron, edit, exec, get_goal, memory_get, memory_search, process, read, session_status, sessions_history, sessions_list, sessions_send, sessions_spawn, sessions_yield, skill_workshop, subagents, update_goal, update_plan, web_fetch, web_search, write"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — skill invocation",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises or records skill invocation coverage",
+          "status": "pass",
+          "details": "expected-unavailable skill_invoke: this fixture is report-only for the current profile\navailable tools: apply_patch, create_goal, cron, edit, exec, get_goal, memory_get, memory_search, process, read, session_status, sessions_history, sessions_list, sessions_send, sessions_spawn, sessions_yield, skill_workshop, subagents, update_goal, update_plan, web_fetch, web_search, write"
+        }
+      ]
+    },
+    {
+      "name": "QA bus tool trace visibility",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "preserves searchable sanitized tool-call traces",
+          "status": "pass",
+          "details": "exec:[redacted]"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 12,
+    "passed": 12,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 57020,
+    "gatewayProcessCpuMs": 10000,
+    "gatewayCpuCoreRatio": 0.175,
+    "gatewayProcessRssStartBytes": 896159744,
+    "gatewayProcessRssEndBytes": 983842816,
+    "gatewayProcessRssDeltaBytes": 87683072,
+    "gatewayProcessRssPeakBytes": 1066500096,
+    "gatewayProcessRssPeakDeltaBytes": 170340352,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:12:15.990Z",
+        "gatewayProcessRssBytes": 896159744
+      },
+      {
+        "label": "scenario:model-switch-tool-continuity:start",
+        "at": "2026-07-03T13:12:16.052Z",
+        "gatewayProcessRssBytes": 896286720
+      },
+      {
+        "label": "scenario:model-switch-tool-continuity:finish",
+        "at": "2026-07-03T13:12:23.571Z",
+        "gatewayProcessRssBytes": 1063636992
+      },
+      {
+        "label": "scenario:auth-profile-doctor-migration-safety:start",
+        "at": "2026-07-03T13:12:23.579Z",
+        "gatewayProcessRssBytes": 1063636992
+      },
+      {
+        "label": "scenario:auth-profile-doctor-migration-safety:finish",
+        "at": "2026-07-03T13:12:23.666Z",
+        "gatewayProcessRssBytes": 1063661568
+      },
+      {
+        "label": "scenario:personal-task-followthrough-status:start",
+        "at": "2026-07-03T13:12:23.688Z",
+        "gatewayProcessRssBytes": 1063661568
+      },
+      {
+        "label": "scenario:personal-task-followthrough-status:finish",
+        "at": "2026-07-03T13:12:26.000Z",
+        "gatewayProcessRssBytes": 1066500096
+      },
+      {
+        "label": "scenario:personal-approval-denial-stop:start",
+        "at": "2026-07-03T13:12:26.010Z",
+        "gatewayProcessRssBytes": 1066500096
+      },
+      {
+        "label": "scenario:personal-approval-denial-stop:finish",
+        "at": "2026-07-03T13:12:29.315Z",
+        "gatewayProcessRssBytes": 933199872
+      },
+      {
+        "label": "scenario:empty-response-recovery-replay-safe-read:start",
+        "at": "2026-07-03T13:12:29.326Z",
+        "gatewayProcessRssBytes": 933199872
+      },
+      {
+        "label": "scenario:empty-response-recovery-replay-safe-read:finish",
+        "at": "2026-07-03T13:12:31.513Z",
+        "gatewayProcessRssBytes": 941342720
+      },
+      {
+        "label": "scenario:runtime-tool-apply-patch:start",
+        "at": "2026-07-03T13:12:31.523Z",
+        "gatewayProcessRssBytes": 941342720
+      },
+      {
+        "label": "scenario:runtime-tool-apply-patch:finish",
+        "at": "2026-07-03T13:12:36.278Z",
+        "gatewayProcessRssBytes": 966639616
+      },
+      {
+        "label": "scenario:runtime-tool-fs-write:start",
+        "at": "2026-07-03T13:12:36.295Z",
+        "gatewayProcessRssBytes": 966639616
+      },
+      {
+        "label": "scenario:runtime-tool-fs-write:finish",
+        "at": "2026-07-03T13:12:40.850Z",
+        "gatewayProcessRssBytes": 971776000
+      },
+      {
+        "label": "scenario:personal-redaction-no-secret-leak:start",
+        "at": "2026-07-03T13:12:40.864Z",
+        "gatewayProcessRssBytes": 971776000
+      },
+      {
+        "label": "scenario:personal-redaction-no-secret-leak:finish",
+        "at": "2026-07-03T13:12:43.314Z",
+        "gatewayProcessRssBytes": 974536704
+      },
+      {
+        "label": "scenario:dm-chat-baseline:start",
+        "at": "2026-07-03T13:12:43.336Z",
+        "gatewayProcessRssBytes": 974536704
+      },
+      {
+        "label": "scenario:dm-chat-baseline:finish",
+        "at": "2026-07-03T13:12:45.606Z",
+        "gatewayProcessRssBytes": 982986752
+      },
+      {
+        "label": "scenario:runtime-tool-message-tool:start",
+        "at": "2026-07-03T13:12:45.638Z",
+        "gatewayProcessRssBytes": 982986752
+      },
+      {
+        "label": "scenario:runtime-tool-message-tool:finish",
+        "at": "2026-07-03T13:12:46.366Z",
+        "gatewayProcessRssBytes": 983584768
+      },
+      {
+        "label": "scenario:runtime-tool-skill-invocation:start",
+        "at": "2026-07-03T13:12:46.379Z",
+        "gatewayProcessRssBytes": 983584768
+      },
+      {
+        "label": "scenario:runtime-tool-skill-invocation:finish",
+        "at": "2026-07-03T13:12:46.986Z",
+        "gatewayProcessRssBytes": 983842816
+      },
+      {
+        "label": "scenario:qa-bus-tool-trace-visibility:start",
+        "at": "2026-07-03T13:12:46.993Z",
+        "gatewayProcessRssBytes": 983842816
+      },
+      {
+        "label": "scenario:qa-bus-tool-trace-visibility:finish",
+        "at": "2026-07-03T13:12:47.160Z",
+        "gatewayProcessRssBytes": 983842816
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:12:47.188Z",
+        "gatewayProcessRssBytes": 983842816
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:11:50.140Z",
+    "finishedAt": "2026-07-03T13:12:47.160Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "model-switch-tool-continuity",
+      "auth-profile-doctor-migration-safety",
+      "personal-task-followthrough-status",
+      "personal-approval-denial-stop",
+      "empty-response-recovery-replay-safe-read",
+      "runtime-tool-apply-patch",
+      "runtime-tool-fs-write",
+      "personal-redaction-no-secret-leak",
+      "dm-chat-baseline",
+      "runtime-tool-message-tool",
+      "runtime-tool-skill-invocation",
+      "qa-bus-tool-trace-visibility"
+    ],
+    "runtimePair": null
+  }
+}

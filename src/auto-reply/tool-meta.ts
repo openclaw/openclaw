@@ -1,19 +1,44 @@
 /** Formats compact tool metadata labels for auto-reply progress/status messages. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+<<<<<<< HEAD
 import { resolveToolDisplay } from "../agents/tool-display.js";
 import { shortenHomeInString } from "../utils.js";
+=======
+import { formatToolSummary, resolveToolDisplay } from "../agents/tool-display.js";
+import { shortenHomeInString, shortenHomePath } from "../utils.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type ToolAggregateOptions = {
   markdown?: boolean;
 };
 
+<<<<<<< HEAD
+=======
+/** Shortens a filesystem path for display. */
+export function shortenPath(p: string): string {
+  return shortenHomePath(p);
+}
+
+/** Shortens user-home paths inside arbitrary tool metadata. */
+export function shortenMeta(meta: string): string {
+  if (!meta) {
+    return meta;
+  }
+  return shortenHomeInString(meta);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Formats one grouped tool-progress label from a tool name and metadata entries. */
 export function formatToolAggregate(
   toolName?: string,
   metas?: string[],
   options?: ToolAggregateOptions,
 ): string {
+<<<<<<< HEAD
   const filtered = (metas ?? []).filter(Boolean).map(shortenHomeInString);
+=======
+  const filtered = (metas ?? []).filter(Boolean).map(shortenMeta);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const display = resolveToolDisplay({ name: toolName });
   const normalizedToolName = normalizeLowercaseStringOrEmpty(toolName);
   const compactCommandSummary =
@@ -65,6 +90,16 @@ export function formatToolAggregate(
   return compactCommandSummary ? `${prefix} ${formattedMeta}` : `${prefix}: ${formattedMeta}`;
 }
 
+<<<<<<< HEAD
+=======
+/** Formats the prefix for a single tool event. */
+export function formatToolPrefix(toolName?: string, meta?: string) {
+  const extra = meta?.trim() ? shortenMeta(meta) : undefined;
+  const display = resolveToolDisplay({ name: toolName, meta: extra });
+  return formatToolSummary(display);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function formatMetaForDisplay(
   toolName: string | undefined,
   meta: string,

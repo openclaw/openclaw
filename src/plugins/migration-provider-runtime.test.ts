@@ -226,6 +226,10 @@ describe("migration provider runtime", () => {
     expect(mocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
       config: cfg,
       env: process.env,
+<<<<<<< HEAD
+=======
+      preferPersisted: false,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     const manifestParams = requireMockCallArg(
       mocks.loadPluginManifestRegistry,
@@ -288,6 +292,10 @@ describe("migration provider runtime", () => {
     expect(mocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
       config: {},
       env: process.env,
+<<<<<<< HEAD
+=======
+      preferPersisted: false,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       workspaceDir: undefined,
     });
     const manifestParams = requireMockCallArg(

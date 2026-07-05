@@ -31,11 +31,14 @@ import {
 } from "../utils/usage-format.js";
 import { formatErrorMessage } from "./errors.js";
 import { replaceFileAtomic } from "./replace-file.js";
+<<<<<<< HEAD
 import {
   addCostUsageTotals as addTotals,
   cloneCostUsageTotals as cloneTotals,
   createEmptyCostUsageTotals as emptyTotals,
 } from "./session-cost-usage-totals.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type {
   CostBreakdown,
   CostUsageTotals,
@@ -74,6 +77,23 @@ export type {
   UsageCacheStatus,
 } from "./session-cost-usage.types.js";
 
+<<<<<<< HEAD
+=======
+const emptyTotals = (): CostUsageTotals => ({
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  totalCost: 0,
+  inputCost: 0,
+  outputCost: 0,
+  cacheReadCost: 0,
+  cacheWriteCost: 0,
+  missingCostEntries: 0,
+});
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // Bump when the *meaning* of cached totals changes (not just their inputs), so durable
 // caches written by older builds are rebuilt instead of served stale. Bumped to 4:
 // unpriced (unknown) zero-cost usage now counts toward missingCostEntries, so a warm
@@ -161,6 +181,37 @@ type UsageCostCacheLockReadResult =
   | { state: "valid"; lock: UsageCostCacheLock }
   | { state: "malformed"; mtimeMs: number };
 
+<<<<<<< HEAD
+=======
+const cloneTotals = (totals: CostUsageTotals): CostUsageTotals => ({
+  input: totals.input,
+  output: totals.output,
+  cacheRead: totals.cacheRead,
+  cacheWrite: totals.cacheWrite,
+  totalTokens: totals.totalTokens,
+  totalCost: totals.totalCost,
+  inputCost: totals.inputCost,
+  outputCost: totals.outputCost,
+  cacheReadCost: totals.cacheReadCost,
+  cacheWriteCost: totals.cacheWriteCost,
+  missingCostEntries: totals.missingCostEntries,
+});
+
+const addTotals = (target: CostUsageTotals, source: CostUsageTotals): void => {
+  target.input += source.input;
+  target.output += source.output;
+  target.cacheRead += source.cacheRead;
+  target.cacheWrite += source.cacheWrite;
+  target.totalTokens += source.totalTokens;
+  target.totalCost += source.totalCost;
+  target.inputCost += source.inputCost;
+  target.outputCost += source.outputCost;
+  target.cacheReadCost += source.cacheReadCost;
+  target.cacheWriteCost += source.cacheWriteCost;
+  target.missingCostEntries += source.missingCostEntries;
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveUsageCostPricingFingerprint(config?: OpenClawConfig): string {
   return resolveModelCostConfigFingerprint(config);
 }
@@ -2525,8 +2576,11 @@ export async function loadSessionLogs(params: {
     }
   }
   const limit = params.limit ?? 50;
+<<<<<<< HEAD
   const boundedLimit = Number.isInteger(limit);
   const retentionLimit = limit * 2;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const resolveCost = createUsageCostResolver(params.config);
 
   for await (const parsed of readJsonlRecords(sessionFile)) {
@@ -2658,18 +2712,22 @@ export async function loadSessionLogs(params: {
         tokens,
         cost,
       });
+<<<<<<< HEAD
       // Timestamps can arrive out of order, so keep a bounded sorted window instead
       // of relying on transcript append order or retaining the whole file.
       if (boundedLimit && logs.length > retentionLimit) {
         logs.sort((a, b) => a.timestamp - b.timestamp);
         logs.splice(0, logs.length - limit);
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } catch {
       // Ignore malformed lines
     }
   }
 
   // Sort by timestamp and limit
+<<<<<<< HEAD
   if (boundedLimit) {
     logs.sort((a, b) => a.timestamp - b.timestamp);
     return logs.length > limit ? logs.slice(-limit) : logs;
@@ -2677,6 +2735,11 @@ export async function loadSessionLogs(params: {
 
   // Return most recent logs
   const sortedLogs = logs.toSorted((a, b) => a.timestamp - b.timestamp);
+=======
+  const sortedLogs = logs.toSorted((a, b) => a.timestamp - b.timestamp);
+
+  // Return most recent logs
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (sortedLogs.length > limit) {
     return sortedLogs.slice(-limit);
   }

@@ -13,6 +13,11 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 
+<<<<<<< HEAD
+=======
+export { normalizeToolParameterSchema };
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isObjectSchemaWithNoRequiredParams(schema: unknown): boolean {
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
     return false;
@@ -90,3 +95,14 @@ export function normalizeToolParameters(
     parameters,
   });
 }
+<<<<<<< HEAD
+=======
+
+/**
+ * @deprecated Use normalizeToolParameters with modelProvider instead.
+ * This function should only be used for Gemini providers.
+ */
+export function cleanToolSchemaForGemini(schema: Record<string, unknown>): unknown {
+  return normalizeToolParameterSchema(schema, { modelProvider: "gemini" });
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

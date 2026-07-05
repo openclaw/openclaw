@@ -39,6 +39,7 @@ describe("runDoctorLintChecks", () => {
     expect(result.findings.map((finding) => finding.checkId)).toEqual(["a"]);
   });
 
+<<<<<<< HEAD
   it("skips default-disabled checks unless explicitly selected", async () => {
     const defaultDisabled = normalizeHealthCheck({
       ...check("targeted", async () => [
@@ -90,6 +91,8 @@ describe("runDoctorLintChecks", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("supports single-run checks in lint mode", async () => {
     const runnable: RunnableHealthCheck = {
       id: "run-check",

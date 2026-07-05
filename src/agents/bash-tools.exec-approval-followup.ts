@@ -15,7 +15,10 @@ import {
 } from "../infra/outbound/best-effort-delivery.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+<<<<<<< HEAD
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { isGatewayMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
@@ -272,11 +275,29 @@ function buildAgentFollowupArgs(params: {
     deliver: deliveryTarget.deliver,
     ...(deliveryTarget.deliver ? { bestEffortDeliver: true as const } : {}),
     channel: deliveryTarget.deliver ? deliveryTarget.channel : fallbackChannel,
+<<<<<<< HEAD
     to: deliveryTarget.deliver ? deliveryTarget.to : params.turnSourceTo,
     accountId: deliveryTarget.deliver ? deliveryTarget.accountId : params.turnSourceAccountId,
     threadId: deliveryTarget.deliver
       ? deliveryTarget.threadId
       : stringifyRouteThreadId(params.turnSourceThreadId),
+=======
+    to: deliveryTarget.deliver
+      ? deliveryTarget.to
+      : sessionOnlyOriginChannel
+        ? params.turnSourceTo
+        : undefined,
+    accountId: deliveryTarget.deliver
+      ? deliveryTarget.accountId
+      : sessionOnlyOriginChannel
+        ? params.turnSourceAccountId
+        : undefined,
+    threadId: deliveryTarget.deliver
+      ? deliveryTarget.threadId
+      : sessionOnlyOriginChannel
+        ? params.turnSourceThreadId
+        : undefined,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     idempotencyKey:
       params.idempotencyKey ??
       buildExecApprovalFollowupIdempotencyKey({

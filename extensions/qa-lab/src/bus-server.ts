@@ -23,9 +23,12 @@ import type {
 
 const QA_HTTP_JSON_MAX_BODY_BYTES = 1024 * 1024;
 const QA_HTTP_JSON_BODY_TIMEOUT_MS = 5_000;
+<<<<<<< HEAD
 const QA_BUS_POLL_TIMEOUT_MAX_MS = 30_000;
 const QA_BUS_POLL_LIMIT_MAX = 500;
 const QA_BUS_SEARCH_LIMIT_MAX = 100;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export async function readQaJsonBody(req: IncomingMessage): Promise<unknown> {
   const text = (
@@ -60,6 +63,7 @@ export function writeQaRequestBodyLimitError(res: ServerResponse, error: unknown
   return true;
 }
 
+<<<<<<< HEAD
 function readOptionalIntegerField(
   input: Record<string, unknown>,
   field: string,
@@ -120,6 +124,8 @@ function normalizeQaBusSearchInput(input: Record<string, unknown>): QaBusSearchM
   } as QaBusSearchMessagesInput;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function closeQaHttpServer(server: Server): Promise<void> {
   let forceCloseTimer: NodeJS.Timeout | undefined;
   try {
@@ -209,12 +215,21 @@ export async function handleQaBusRequest(params: {
         return true;
       case "/v1/actions/search":
         writeJson(params.res, 200, {
+<<<<<<< HEAD
           messages: params.state.searchMessages(normalizeQaBusSearchInput(body)),
         });
         return true;
       case "/v1/poll": {
         const input = normalizeQaBusPollInput(body);
         const timeoutMs = input.timeoutMs ?? 0;
+=======
+          messages: params.state.searchMessages(body as unknown as QaBusSearchMessagesInput),
+        });
+        return true;
+      case "/v1/poll": {
+        const input = body as unknown as QaBusPollInput;
+        const timeoutMs = Math.max(0, Math.min(input.timeoutMs ?? 0, 30_000));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const accountId = normalizeAccountId(input.accountId);
         const initial = params.state.poll(input);
         const effectiveStartCursor = resolveQaBusPollStartCursor({

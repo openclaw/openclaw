@@ -8,6 +8,10 @@ import {
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
   resolveNextSameModelRateLimitRetryCount,
+<<<<<<< HEAD
+=======
+  resolveSameModelRateLimitBackoffMs,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveSameModelRateLimitRetryDelayMs,
 } from "./helpers.js";
 
@@ -87,6 +91,7 @@ describe("resolveFinalAssistantVisibleText", () => {
   });
 });
 
+<<<<<<< HEAD
 describe("resolveSameModelRateLimitRetryDelayMs", () => {
   it("waits 10s/20s/30s linearly before the 1st/2nd/3rd same-model retry", () => {
     expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 0 })).toBe(10_000);
@@ -104,6 +109,25 @@ describe("resolveSameModelRateLimitRetryDelayMs", () => {
     );
   });
 
+=======
+describe("resolveSameModelRateLimitBackoffMs", () => {
+  it("waits 10s/20s/30s linearly before the 1st/2nd/3rd same-model retry", () => {
+    expect(resolveSameModelRateLimitBackoffMs(0)).toBe(10_000);
+    expect(resolveSameModelRateLimitBackoffMs(1)).toBe(20_000);
+    expect(resolveSameModelRateLimitBackoffMs(2)).toBe(30_000);
+  });
+
+  it("caps at 60s if the retry count is ever raised further", () => {
+    expect(resolveSameModelRateLimitBackoffMs(10)).toBe(60_000);
+  });
+
+  it("is deterministic so RPM windows clear predictably", () => {
+    expect(resolveSameModelRateLimitBackoffMs(2)).toBe(resolveSameModelRateLimitBackoffMs(2));
+  });
+});
+
+describe("resolveSameModelRateLimitRetryDelayMs", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("honors a short provider Retry-After when it is longer than the fixed backoff", () => {
     expect(
       resolveSameModelRateLimitRetryDelayMs({

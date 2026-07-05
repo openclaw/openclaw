@@ -141,6 +141,33 @@ export function sanitizeIrcTarget(raw: string): string {
   return decoded;
 }
 
+<<<<<<< HEAD
+=======
+export function splitIrcText(text: string, maxChars = 350): string[] {
+  const cleaned = sanitizeIrcOutboundText(text);
+  if (!cleaned) {
+    return [];
+  }
+  if (cleaned.length <= maxChars) {
+    return [cleaned];
+  }
+  const chunks: string[] = [];
+  let remaining = cleaned;
+  while (remaining.length > maxChars) {
+    let splitAt = remaining.lastIndexOf(" ", maxChars);
+    if (splitAt < Math.floor(maxChars * 0.5)) {
+      splitAt = maxChars;
+    }
+    chunks.push(remaining.slice(0, splitAt).trim());
+    remaining = remaining.slice(splitAt).trimStart();
+  }
+  if (remaining) {
+    chunks.push(remaining);
+  }
+  return chunks.filter(Boolean);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function makeIrcMessageId() {
   return randomUUID();
 }

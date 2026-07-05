@@ -43,6 +43,7 @@ describe("telegram actions contract", () => {
     expect(capabilities?.includes("richText")).toBe(expected);
   });
 
+<<<<<<< HEAD
   it("advertises inline buttons when legacy Telegram capabilities are empty", () => {
     const capabilities = telegramPlugin.agentPrompt?.messageToolCapabilities?.({
       cfg: {
@@ -73,6 +74,8 @@ describe("telegram actions contract", () => {
     expect(capabilities).not.toContain("inlineButtons");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses the selected Telegram account's rich text setting", () => {
     const capabilities = telegramPlugin.agentPrompt?.messageToolCapabilities?.({
       cfg: {

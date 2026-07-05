@@ -34,8 +34,11 @@ import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
   pruneStaleEntries,
+<<<<<<< HEAD
   pruneStaleModelRunEntries,
   shouldRunModelRunPrune,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   shouldRunSessionEntryMaintenance,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
@@ -438,6 +441,7 @@ export function loadSessionStore(
   if (opts.runMaintenance) {
     const maintenance = opts.maintenanceConfig ?? resolveMaintenanceConfig();
     const beforeCount = Object.keys(store).length;
+<<<<<<< HEAD
     let modelRunPruned = 0;
     let pruned = 0;
     let capped = 0;
@@ -456,6 +460,11 @@ export function loadSessionStore(
       }
     }
     if (maintenance.mode === "enforce" && Object.keys(store).length > maintenance.maxEntries) {
+=======
+    let pruned = 0;
+    let capped = 0;
+    if (maintenance.mode === "enforce" && beforeCount > maintenance.maxEntries) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const preserveSessionKeys = collectSessionMaintenancePreserveKeys();
       pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
         log: false,
@@ -473,13 +482,20 @@ export function loadSessionStore(
         : 0;
     }
     const afterCount = Object.keys(store).length;
+<<<<<<< HEAD
     if (modelRunPruned > 0 || pruned > 0 || capped > 0) {
+=======
+    if (pruned > 0 || capped > 0) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       serializedFromDisk = undefined;
       log.info("applied load-time maintenance to session store", {
         storePath,
         before: beforeCount,
         after: afterCount,
+<<<<<<< HEAD
         modelRunPruned,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         pruned,
         capped,
         maxEntries: maintenance.maxEntries,

@@ -229,6 +229,7 @@ export function resolveEmbeddedAttemptToolConstructionPlan(params: {
   };
 }
 
+<<<<<<< HEAD
 function shouldCreateBundleRuntimeForAttempt(
   params: {
     toolsEnabled: boolean;
@@ -250,6 +251,11 @@ function shouldCreateBundleRuntimeForAttempt(
     return true;
   }
   return params.toolsAllow.some((toolName) => matchesAllowlist(normalizeToolName(toolName)));
+=======
+/** Returns whether the allowlist requires any built-in coding/OpenClaw tools. */
+export function shouldBuildCoreCodingToolsForAllowlist(toolsAllow?: string[]): boolean {
+  return resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow }).includeCoreTools;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /**
@@ -262,7 +268,24 @@ export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   disableTools?: boolean;
   toolsAllow?: string[];
 }): boolean {
+<<<<<<< HEAD
   return shouldCreateBundleRuntimeForAttempt(params, (normalized) => {
+=======
+  if (!params.toolsEnabled || params.disableTools === true) {
+    return false;
+  }
+  if (!params.toolsAllow) {
+    return true;
+  }
+  if (params.toolsAllow.length === 0) {
+    return false;
+  }
+  if (hasWildcardToolAllowlist(params.toolsAllow)) {
+    return true;
+  }
+  return params.toolsAllow.some((toolName) => {
+    const normalized = normalizeToolName(toolName);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return isBundleMcpAllowlistName(normalized) || isPluginGroupAllowlistName(normalized);
   });
 }
@@ -277,7 +300,24 @@ export function shouldCreateBundleLspRuntimeForAttempt(params: {
   disableTools?: boolean;
   toolsAllow?: string[];
 }): boolean {
+<<<<<<< HEAD
   return shouldCreateBundleRuntimeForAttempt(params, (normalized) => {
+=======
+  if (!params.toolsEnabled || params.disableTools === true) {
+    return false;
+  }
+  if (!params.toolsAllow) {
+    return true;
+  }
+  if (params.toolsAllow.length === 0) {
+    return false;
+  }
+  if (hasWildcardToolAllowlist(params.toolsAllow)) {
+    return true;
+  }
+  return params.toolsAllow.some((toolName) => {
+    const normalized = normalizeToolName(toolName);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return normalized.startsWith("lsp_");
   });
 }

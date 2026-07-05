@@ -19,8 +19,11 @@ import {
 } from "./legacy-runtime-model-providers.js";
 export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
 
+<<<<<<< HEAD
 const INHERITED_ACCOUNT_POLICY_KEYS = ["dmPolicy", "allowFrom", "groupPolicy", "groupAllowFrom"];
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Remove deprecated command config keys that no runtime reads anymore. */
 export function normalizeLegacyCommandsConfig(
   cfg: OpenClawConfig,
@@ -176,6 +179,7 @@ export function seedMissingDefaultAccountsFromSingleAccountBase(
     for (const key of keysToMove) {
       delete nextChannel[key];
     }
+<<<<<<< HEAD
     const inheritedPolicyKeys = INHERITED_ACCOUNT_POLICY_KEYS.filter((key) =>
       keysToMove.includes(key),
     );
@@ -204,6 +208,12 @@ export function seedMissingDefaultAccountsFromSingleAccountBase(
       }
     }
     nextChannel.accounts = nextAccounts;
+=======
+    nextChannel.accounts = {
+      ...rawAccounts,
+      [DEFAULT_ACCOUNT_ID]: defaultAccount,
+    };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     nextChannels[channelId] = nextChannel;
     channelsChanged = true;

@@ -15,6 +15,7 @@ function restoreEnvVar(name: string, value: string | undefined): void {
   }
 }
 
+<<<<<<< HEAD
 function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(payload), {
     status: 200,
@@ -23,6 +24,8 @@ function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function runChutesCatalog(params: { apiKey?: string; discoveryApiKey?: string }) {
   const provider = await registerSingleProviderPlugin(plugin);
   const result = await provider.catalog?.run({
@@ -52,9 +55,16 @@ async function withRealChutesDiscovery<T>(
   delete process.env.VITEST;
   delete process.env.NODE_ENV;
 
+<<<<<<< HEAD
   const fetchMock = vi
     .fn()
     .mockResolvedValue(jsonResponse({ data: [{ id: "chutes/private-model" }] }));
+=======
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({ data: [{ id: "chutes/private-model" }] }),
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   try {

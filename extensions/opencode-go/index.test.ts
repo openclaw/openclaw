@@ -87,11 +87,17 @@ describe("opencode-go provider plugin", () => {
       "deepseek-v4-pro",
       "glm-5",
       "glm-5.1",
+<<<<<<< HEAD
       "glm-5.2",
       "hy3-preview",
       "kimi-k2.5",
       "kimi-k2.6",
       "kimi-k2.7-code",
+=======
+      "hy3-preview",
+      "kimi-k2.5",
+      "kimi-k2.6",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "mimo-v2-omni",
       "mimo-v2.5",
       "mimo-v2-pro",
@@ -127,6 +133,7 @@ describe("opencode-go provider plugin", () => {
     expect(deepSeekFlash.provider).toBe("opencode-go");
     expect(deepSeekFlash.name).toBe("DeepSeek V4 Flash");
 
+<<<<<<< HEAD
     const glm52 = requireMapEntry(models, "glm-5.2");
     expect(glm52.api).toBe("openai-completions");
     expect(glm52.baseUrl).toBe("https://opencode.ai/zen/go/v1");
@@ -141,6 +148,8 @@ describe("opencode-go provider plugin", () => {
       cacheWrite: 0,
     });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const kimi = requireMapEntry(models, "kimi-k2.6");
     expect(kimi.api).toBe("openai-completions");
     expect(kimi.baseUrl).toBe("https://opencode.ai/zen/go/v1");
@@ -149,6 +158,7 @@ describe("opencode-go provider plugin", () => {
     expect(kimi.contextWindow).toBe(262_144);
     expect(kimi.maxTokens).toBe(65_536);
 
+<<<<<<< HEAD
     const kimiCode = requireMapEntry(models, "kimi-k2.7-code");
     expect(kimiCode.api).toBe("openai-completions");
     expect(kimiCode.baseUrl).toBe("https://opencode.ai/zen/go/v1");
@@ -162,6 +172,8 @@ describe("opencode-go provider plugin", () => {
       cacheWrite: 0,
     });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const minimax = requireMapEntry(models, "minimax-m2.7");
     expect(minimax.api).toBe("anthropic-messages");
     expect(minimax.baseUrl).toBe("https://opencode.ai/zen/go");
@@ -249,19 +261,27 @@ describe("opencode-go provider plugin", () => {
       throw new Error("expected OpenCode Go static provider");
     }
     const deepSeekPro = result.provider.models.find((model) => model.id === "deepseek-v4-pro");
+<<<<<<< HEAD
     const glm52 = result.provider.models.find((model) => model.id === "glm-5.2");
 
     expect(result.provider.models).toHaveLength(20);
+=======
+
+    expect(result.provider.models).toHaveLength(18);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(deepSeekPro).toMatchObject({
       provider: "opencode-go",
       contextWindow: 1_000_000,
       maxTokens: 384_000,
     });
+<<<<<<< HEAD
     expect(glm52).toMatchObject({
       provider: "opencode-go",
       contextWindow: 1_000_000,
       maxTokens: 131_072,
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("skips live OpenCode Go catalog discovery when no shared key is configured", async () => {
@@ -473,15 +493,24 @@ describe("opencode-go provider plugin", () => {
         provider: "opencode-go",
         model: {
           provider: "opencode-go",
+<<<<<<< HEAD
           id: "kimi-k2.7-code",
           name: "Kimi K2.7 Code",
+=======
+          id: "kimi-k2.6",
+          name: "Kimi K2.6",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           api: "openai-completions",
           baseUrl: "https://opencode.ai/zen/go/v1",
           reasoning: true,
           input: ["text", "image"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: 262_144,
+<<<<<<< HEAD
           maxTokens: 262_144,
+=======
+          maxTokens: 65_536,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
       } as never),
       "normalized Kimi model",

@@ -1,6 +1,7 @@
 /**
  * Tests channel inbound context and dispatch helper behavior.
  */
+<<<<<<< HEAD
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   buildChannelInboundEventContext,
@@ -14,6 +15,14 @@ declare module "./channel-inbound.js" {
   }
 }
 
+=======
+import { describe, expect, it } from "vitest";
+import {
+  buildChannelInboundEventContext,
+  type BuildChannelInboundEventContextParams,
+} from "./channel-inbound.js";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function createInboundParams(
   overrides: Partial<BuildChannelInboundEventContextParams> = {},
 ): BuildChannelInboundEventContextParams {
@@ -47,6 +56,7 @@ describe("channel-inbound public helpers", () => {
 
     expect(ctx.InboundEventKind).toBe("room_event");
   });
+<<<<<<< HEAD
 
   it("accepts plugin-augmented hook channel sender fields", () => {
     expectTypeOf<PluginHookChannelSenderContext["testUnionId"]>().toEqualTypeOf<
@@ -71,4 +81,6 @@ describe("channel-inbound public helpers", () => {
 
     expect(ctx.ChannelContext?.sender?.testUnionId).toBe("union-1");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

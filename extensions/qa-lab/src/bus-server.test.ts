@@ -60,6 +60,7 @@ async function pollQaBus(params: {
   return (await response.json()) as QaBusPollResult;
 }
 
+<<<<<<< HEAD
 async function postQaBusJson(baseUrl: string, path: string, body: unknown) {
   return await postQaBusRawJson(baseUrl, path, JSON.stringify(body));
 }
@@ -74,6 +75,8 @@ async function postQaBusRawJson(baseUrl: string, path: string, body: string) {
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("closeQaHttpServer", () => {
   it("closes idle keep-alive sockets so suite processes can exit", async () => {
     const server = createServer((_req, res) => {
@@ -136,6 +139,7 @@ describe("qa-bus server", () => {
       kind: "inbound-message",
     });
   });
+<<<<<<< HEAD
 
   it("rejects malformed poll numeric fields before long-polling", async () => {
     const state = createQaBusState();
@@ -215,6 +219,8 @@ describe("qa-bus server", () => {
       messages: [{ id: message.id }],
     });
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("handleQaBusRequest", () => {

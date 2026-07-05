@@ -229,8 +229,11 @@ async function deliverDiscordDirectMessageCompletion(params: {
   callGateway: typeof runtimeCallGateway;
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
+<<<<<<< HEAD
   isActive?: boolean;
   queueEmbeddedAgentMessageWithOutcome?: QueueEmbeddedAgentMessageWithOutcome;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sourceTool?: string;
 }) {
   const origin = {
@@ -242,6 +245,7 @@ async function deliverDiscordDirectMessageCompletion(params: {
     callGateway: params.callGateway,
     getRequesterSessionActivity: () => ({
       sessionId: "requester-session-dm",
+<<<<<<< HEAD
       isActive: params.isActive === true,
     }),
     getRuntimeConfig: () => ({}) as never,
@@ -249,6 +253,12 @@ async function deliverDiscordDirectMessageCompletion(params: {
     ...(params.queueEmbeddedAgentMessageWithOutcome
       ? { queueEmbeddedAgentMessageWithOutcome: params.queueEmbeddedAgentMessageWithOutcome }
       : {}),
+=======
+      isActive: false,
+    }),
+    getRuntimeConfig: () => ({}) as never,
+    sendMessage: params.sendMessage ?? runtimeSendMessage,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   return deliverSubagentAnnouncement({
@@ -1548,7 +1558,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
   );
 
+<<<<<<< HEAD
   it("accepts non-subagent session-only completion handoff when the in-process agent intentionally replies NO_REPLY", async () => {
+=======
+  it("accepts session-only completion handoff when the in-process agent intentionally replies NO_REPLY", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
       result: {
         payloads: [{ text: "NO_REPLY" }],
@@ -1572,7 +1586,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expectsCompletionMessage: true,
       bestEffortDeliver: true,
       directIdempotencyKey: "announce-local-silent",
+<<<<<<< HEAD
       sourceTool: "agent_harness_task",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     expectRecordFields(result, {
@@ -1587,6 +1604,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
+<<<<<<< HEAD
   it("rejects session-only subagent completion handoff when the parent only replies NO_REPLY", async () => {
     const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
       result: {
@@ -1628,6 +1646,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.each([
     {
       name: "accepted session spawn",
@@ -4573,6 +4593,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("preserves pending completion announce delivery without media fallback", async () => {
     const callGateway = createGatewayMock({
       runId: "subagent:child:ok",
@@ -4611,6 +4632,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not fail stale channel subagent completions only because the parent stayed private", async () => {
     const callGateway = createGatewayMock({
       result: {
@@ -4833,6 +4856,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("retries active direct subagent completion wake without forced message-tool mode", async () => {
     const callGateway = createGatewayMock({
       result: {
@@ -4885,6 +4909,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("falls back to the external requester route when completion origin is internal", async () => {
     const callGateway = createGatewayMock({
       result: {

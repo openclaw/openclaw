@@ -1,5 +1,6 @@
 // Create Dmg tests cover create dmg script behavior.
 import { spawnSync } from "node:child_process";
+<<<<<<< HEAD
 import {
   chmodSync,
   existsSync,
@@ -9,6 +10,9 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+=======
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -88,6 +92,7 @@ case "$command_name" in
     if [[ "\${HDIUTIL_DETACH_FAIL:-0}" == "1" ]]; then
       exit 9
     fi
+<<<<<<< HEAD
     detach_attempts_file="\${HDIUTIL_LOG}.detach-attempts"
     detach_attempts=0
     if [[ -f "$detach_attempts_file" ]]; then
@@ -98,6 +103,8 @@ case "$command_name" in
     if (( detach_attempts <= \${HDIUTIL_DETACH_FAIL_COUNT:-0} )); then
       exit 9
     fi
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ;;
   resize)
     if [[ "\${1:-}" == "-limits" ]]; then
@@ -195,6 +202,7 @@ describe("create-dmg plist validation", () => {
     expect(script).not.toContain('tell application "Finder" to close every window');
   });
 
+<<<<<<< HEAD
   it("fails malformed DMG resize slack before creating images", () => {
     const script = readFileSync(scriptPath, "utf8");
     const validationBlock = script.slice(
@@ -207,6 +215,8 @@ describe("create-dmg plist validation", () => {
     expect(validationBlock).toContain("must be a finite non-negative integer");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.runIf(process.platform === "darwin")(
     "fails before hdiutil when required plist keys are missing",
     () => {
@@ -245,6 +255,7 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
     expect(log).not.toContain(sibling);
   });
 
+<<<<<<< HEAD
   it("creates a caller-provided output directory before finalizing the DMG", () => {
     const app = makeValidApp();
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
@@ -262,6 +273,8 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
     expect(log).toContain(`${outputDir}${path.sep}.openclaw-dmg.`);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves an existing output when image creation fails", () => {
     const app = makeValidApp();
     const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
@@ -277,6 +290,7 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
     expect(readFileSync(tools.hdiutilLog, "utf8")).not.toContain("detach");
   });
 
+<<<<<<< HEAD
   it("fails before image creation when Finder layout values are malformed", () => {
     const app = makeValidApp();
     const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
@@ -313,6 +327,8 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
     expect(existsSync(tools.hdiutilLog) ? readFileSync(tools.hdiutilLog, "utf8") : "").toBe("");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves an existing output when verification fails", () => {
     const app = makeValidApp();
     const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
@@ -358,6 +374,7 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
     rmSync(path.dirname(mountPoint as string), { recursive: true, force: true });
   });
 
+<<<<<<< HEAD
   it("retries a delayed DMG detach before finalizing the artifact", () => {
     const app = makeValidApp();
     const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
@@ -380,6 +397,8 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
     expect(log).toContain("convert ");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("styles the private mount without closing unrelated Finder windows", () => {
     const app = makeValidApp();
     const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));

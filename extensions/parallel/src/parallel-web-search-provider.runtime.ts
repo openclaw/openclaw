@@ -1,10 +1,13 @@
 import { createRequire } from "node:module";
 import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
 import {
+<<<<<<< HEAD
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   DEFAULT_SEARCH_COUNT,
   mergeScopedSearchConfig,
   readCachedSearchPayload,
@@ -38,6 +41,7 @@ import {
 
 const PARALLEL_BASE_URL = "https://api.parallel.ai";
 const PARALLEL_SEARCH_PATHNAME = "/v1/search";
+<<<<<<< HEAD
 const PARALLEL_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 // Parallel's /v1/search returns a bounded result set, but the body is external
 // (web-search upstream) and untrusted. Cap the successful JSON read so a
@@ -45,6 +49,8 @@ const PARALLEL_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 // the runtime to buffer the whole payload before parsing. 16 MiB matches the
 // shared provider JSON cap (readProviderJsonResponse default).
 const PARALLEL_SEARCH_RESPONSE_LIMIT_BYTES = 16 * 1024 * 1024;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const require = createRequire(import.meta.url);
 const PLUGIN_VERSION = readPluginPackageVersion({ require });
@@ -155,6 +161,7 @@ async function runParallelSearch(params: {
     },
     async (res) => {
       if (!res.ok) {
+<<<<<<< HEAD
         const detail = await readResponseTextLimited(res, PARALLEL_ERROR_BODY_LIMIT_BYTES).catch(
           () => "",
         );
@@ -163,6 +170,16 @@ async function runParallelSearch(params: {
       return await readProviderJsonResponse<ParallelSearchResponse>(res, "Parallel API", {
         maxBytes: PARALLEL_SEARCH_RESPONSE_LIMIT_BYTES,
       });
+=======
+        const detail = await res.text().catch(() => "");
+        throw new Error(`Parallel API error (${res.status}): ${detail || res.statusText}`);
+      }
+      try {
+        return (await res.json()) as ParallelSearchResponse;
+      } catch (cause) {
+        throw new Error("Parallel API returned malformed JSON", { cause });
+      }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
   );
 }
@@ -288,8 +305,11 @@ export const testing = {
   resolveParallelConfig,
   resolveParallelSearchCount,
   resolveParallelSearchEndpoint,
+<<<<<<< HEAD
   PARALLEL_ERROR_BODY_LIMIT_BYTES,
   PARALLEL_SEARCH_RESPONSE_LIMIT_BYTES,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   USER_AGENT,
 } as const;
 

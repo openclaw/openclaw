@@ -63,7 +63,10 @@ export type TypingSignaler = {
   signalTextDelta: (text?: string) => Promise<void>;
   signalReasoningDelta: () => Promise<void>;
   signalToolStart: () => Promise<void>;
+<<<<<<< HEAD
   signalExecutionActivity?: () => Promise<void>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 /** Creates a typing signaler that starts or refreshes typing from stream events. */
@@ -157,6 +160,7 @@ export function createTypingSignaler(params: {
     typing.refreshTypingTtl();
   };
 
+<<<<<<< HEAD
   const signalExecutionActivity = async () => {
     if (disabled) {
       return;
@@ -167,6 +171,8 @@ export function createTypingSignaler(params: {
     typing.refreshTypingTtl();
   };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return {
     mode,
     shouldStartImmediately,
@@ -178,6 +184,9 @@ export function createTypingSignaler(params: {
     signalTextDelta,
     signalReasoningDelta,
     signalToolStart,
+<<<<<<< HEAD
     signalExecutionActivity,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }

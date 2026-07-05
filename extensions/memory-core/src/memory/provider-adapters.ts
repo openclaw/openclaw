@@ -2,9 +2,17 @@
 import {
   DEFAULT_LOCAL_MODEL,
   listMemoryEmbeddingProviders,
+<<<<<<< HEAD
   type MemoryEmbeddingProviderAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
 import { getProviderEnvVars } from "openclaw/plugin-sdk/provider-env-vars";
+=======
+  listRegisteredMemoryEmbeddingProviderAdapters,
+  type MemoryEmbeddingProviderAdapter,
+} from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
+import { getProviderEnvVars } from "openclaw/plugin-sdk/provider-env-vars";
+import { filterUnregisteredMemoryEmbeddingProviderAdapters } from "./provider-adapter-registration.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type BuiltinMemoryEmbeddingProviderDoctorMetadata = {
   providerId: string;
@@ -14,6 +22,11 @@ export type BuiltinMemoryEmbeddingProviderDoctorMetadata = {
   autoSelectPriority?: number;
 };
 
+<<<<<<< HEAD
+=======
+const builtinMemoryEmbeddingProviderAdapters = [] as const;
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export { DEFAULT_LOCAL_MODEL };
 
 function getBuiltinMemoryEmbeddingProviderAdapter(
@@ -22,6 +35,23 @@ function getBuiltinMemoryEmbeddingProviderAdapter(
   return listMemoryEmbeddingProviders().find((adapter) => adapter.id === id);
 }
 
+<<<<<<< HEAD
+=======
+export function registerBuiltInMemoryEmbeddingProviders(register: {
+  registerMemoryEmbeddingProvider: (adapter: MemoryEmbeddingProviderAdapter) => void;
+}): void {
+  // Only inspect providers already registered in the current load. Falling back
+  // to capability discovery here can recursively trigger plugin loading while
+  // memory-core itself is still registering.
+  for (const adapter of filterUnregisteredMemoryEmbeddingProviderAdapters({
+    builtinAdapters: builtinMemoryEmbeddingProviderAdapters,
+    registeredAdapters: listRegisteredMemoryEmbeddingProviderAdapters(),
+  })) {
+    register.registerMemoryEmbeddingProvider(adapter);
+  }
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function getBuiltinMemoryEmbeddingProviderDoctorMetadata(
   providerId: string,
 ): BuiltinMemoryEmbeddingProviderDoctorMetadata | null {

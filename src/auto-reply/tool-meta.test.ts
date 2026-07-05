@@ -2,7 +2,11 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
+<<<<<<< HEAD
 import { formatToolAggregate } from "./tool-meta.js";
+=======
+import { formatToolAggregate, formatToolPrefix, shortenMeta, shortenPath } from "./tool-meta.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 // Use path.resolve so inputs match the resolved HOME on every platform.
 const home = path.resolve("/Users/test");
@@ -12,6 +16,7 @@ function withHome<T>(run: () => T): T {
 }
 
 describe("tool meta formatting", () => {
+<<<<<<< HEAD
   it("shortens home paths with optional colon suffix", () => {
     withHome(() => {
       expect(formatToolAggregate("fs", [`${home}/a.txt`])).toContain("~/a.txt");
@@ -20,6 +25,22 @@ describe("tool meta formatting", () => {
         "cd ~/dir && ls",
       );
       expect(formatToolAggregate("fs", [""])).toBe("🧩 Fs");
+=======
+  it("shortens paths under HOME", () => {
+    withHome(() => {
+      expect(shortenPath(home)).toBe("~");
+      expect(shortenPath(`${home}/a/b.txt`)).toBe("~/a/b.txt");
+      expect(shortenPath("/opt/x")).toBe("/opt/x");
+    });
+  });
+
+  it("shortens meta strings with optional colon suffix", () => {
+    withHome(() => {
+      expect(shortenMeta(`${home}/a.txt`)).toBe("~/a.txt");
+      expect(shortenMeta(`${home}/a.txt:12`)).toBe("~/a.txt:12");
+      expect(shortenMeta(`cd ${home}/dir && ls`)).toBe("cd ~/dir && ls");
+      expect(shortenMeta("")).toBe("");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   });
 
@@ -58,4 +79,14 @@ describe("tool meta formatting", () => {
       expect(out).toBe("🛠️ elevated · `cd ~/dir && gemini 2>&1`");
     });
   });
+<<<<<<< HEAD
+=======
+
+  it("formats prefixes with default labels", () => {
+    withHome(() => {
+      expect(formatToolPrefix(undefined, undefined)).toBe("🧩 Tool");
+      expect(formatToolPrefix("x", `${home}/a.txt`)).toBe("🧩 X: ~/a.txt");
+    });
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

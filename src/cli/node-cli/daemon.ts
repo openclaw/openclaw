@@ -1,12 +1,21 @@
 // Node-host daemon lifecycle commands for install, status, start, stop, and restart.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize } from "../../../packages/terminal-core/src/theme.js";
+<<<<<<< HEAD
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   isGatewayDaemonRuntime,
 } from "../../commands/daemon-runtime.js";
 import { buildNodeInstallPlan } from "../../commands/node-daemon-install-helpers.js";
 import {
+=======
+import { buildNodeInstallPlan } from "../../commands/node-daemon-install-helpers.js";
+import {
+  DEFAULT_NODE_DAEMON_RUNTIME,
+  isNodeDaemonRuntime,
+} from "../../commands/node-daemon-runtime.js";
+import {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveNodeLaunchAgentLabel,
   resolveNodeSystemdServiceName,
   resolveNodeWindowsTaskName,
@@ -106,8 +115,13 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     return;
   }
 
+<<<<<<< HEAD
   const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_GATEWAY_DAEMON_RUNTIME;
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
+=======
+  const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_NODE_DAEMON_RUNTIME;
+  if (!isNodeDaemonRuntime(runtimeRaw)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     fail('Invalid --runtime (use "node" or "bun")');
     return;
   }
@@ -156,6 +170,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
         }
       },
     });
+<<<<<<< HEAD
   const warn = (message: string) => {
     if (json) {
       warnings.push(message);
@@ -163,6 +178,8 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       defaultRuntime.log(message);
     }
   };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   await installDaemonServiceAndEmit({
     serviceNoun: "Node",
@@ -174,7 +191,10 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       await service.install({
         env: process.env,
         stdout,
+<<<<<<< HEAD
         warn,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         programArguments,
         workingDirectory,
         environment,

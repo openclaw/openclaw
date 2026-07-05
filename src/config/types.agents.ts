@@ -1,6 +1,9 @@
 // Defines agent routing, model, and runtime configuration types.
 import type { ChatType } from "../channels/chat-type.js";
+<<<<<<< HEAD
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type {
   AgentContextLimitsConfig,
   AgentDefaultsConfig,
@@ -105,7 +108,11 @@ export type AgentConfig = {
   /** Optional per-agent default reasoning visibility. */
   reasoningDefault?: "on" | "off" | "stream";
   /** Optional per-agent default for fast mode. */
+<<<<<<< HEAD
   fastModeDefault?: FastMode;
+=======
+  fastModeDefault?: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /** Optional per-agent bootstrap/context injection mode override. */
   contextInjection?: AgentDefaultsConfig["contextInjection"];
   /** Optional per-agent max chars for each injected bootstrap file. */

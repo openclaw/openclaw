@@ -11,11 +11,15 @@ describe("check-docs-i18n-glossary", () => {
 
   it("rejects missing diff ref values", () => {
     expect(() => parseArgs(["--base", "--head", "HEAD"])).toThrow("--base requires a value");
+<<<<<<< HEAD
     expect(() => parseArgs(["--base", "-h", "--head", "HEAD"])).toThrow(
       "--base requires a value",
     );
     expect(() => parseArgs(["--head"])).toThrow("--head requires a value");
     expect(() => parseArgs(["--head", "-h"])).toThrow("--head requires a value");
+=======
+    expect(() => parseArgs(["--head"])).toThrow("--head requires a value");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(() => parseArgs(["--base", ""])).toThrow("--base requires a value");
   });
 });

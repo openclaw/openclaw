@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+<<<<<<< HEAD
+=======
+  isToolAllowedByPolicies,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
   resolveInheritedToolPolicyForSession,
@@ -11,7 +15,10 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "./subagent-capabilities.js";
+<<<<<<< HEAD
 import { isToolAllowedByPolicies } from "./tool-policy-match.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 
 export type WebSearchToolPolicyParams = {

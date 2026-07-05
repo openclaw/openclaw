@@ -504,7 +504,11 @@ export function buildEmbeddedRunPayloads(params: {
                 : []
         ).filter((text) => !shouldSuppressRawErrorText(text));
 
+<<<<<<< HEAD
   let hasUserFacingAssistantReply = hasSourceReplyPayload || deliveredSourceReplyViaMessageTool;
+=======
+  let hasUserFacingAssistantReply = hasSourceReplyPayload;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const hasUserFacingErrorReply = replyItems.some((item) => item.isError === true);
   let hasUserFacingFailureAcknowledgement = false;
   for (const text of answerTexts) {

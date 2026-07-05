@@ -58,7 +58,10 @@ function restoreProcessPlatformForTest(): void {
 }
 
 type ApprovalRequestPayload = {
+<<<<<<< HEAD
   approvalReviewerDeviceIds?: string[];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   commandSpans?: Array<{ startIndex: number; endIndex: number }>;
 };
 
@@ -160,6 +163,7 @@ describe("exec approval requests", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("passes approval reviewer devices into host approval registration payloads", async () => {
     vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
 
@@ -177,6 +181,8 @@ describe("exec approval requests", () => {
     expect(payload?.approvalReviewerDeviceIds).toEqual(["device-ios-reviewer"]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not generate command spans by default", async () => {
     vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
 

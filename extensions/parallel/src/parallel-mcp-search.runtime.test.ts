@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type EndpointCall = {
   url: string;
@@ -45,6 +48,7 @@ function jsonResponse(body: unknown, headers?: Record<string, string>): Response
   });
 }
 
+<<<<<<< HEAD
 function cancelTrackedResponse(
   text: string,
   init: ResponseInit,
@@ -67,6 +71,8 @@ function cancelTrackedResponse(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function readBody(call: EndpointCall): Record<string, unknown> {
   if (typeof call.init.body !== "string") {
     throw new Error("Expected a JSON string body.");
@@ -293,6 +299,7 @@ describe("runParallelMcpSearch", () => {
       /initialize failed \(500\)/,
     );
   });
+<<<<<<< HEAD
 
   it("bounds initialize error bodies without using response.text()", async () => {
     const tracked = cancelTrackedResponse(`${"parallel mcp unavailable ".repeat(1024)}tail`, {
@@ -335,4 +342,6 @@ describe("runParallelMcpSearch", () => {
     expect(streamed.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

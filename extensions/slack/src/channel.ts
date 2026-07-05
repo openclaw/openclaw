@@ -160,7 +160,11 @@ function getTokenForOperation(
   account: ResolvedSlackAccount,
   operation: "read" | "write",
 ): string | undefined {
+<<<<<<< HEAD
   const userToken = normalizeOptionalString(account.userToken);
+=======
+  const userToken = normalizeOptionalString(account.config.userToken);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const botToken = normalizeOptionalString(account.botToken);
   const allowUserWrites = account.config.userTokenReadOnly === false;
   if (operation === "read") {
@@ -414,7 +418,11 @@ const resolveSlackAllowlistGroupOverrides = createFlatAllowlistOverrideResolver(
 const resolveSlackAllowlistNames = createAccountScopedAllowlistNameResolver({
   resolveAccount: resolveSlackAccount,
   resolveToken: (account: ResolvedSlackAccount) =>
+<<<<<<< HEAD
     normalizeOptionalString(account.userToken) ?? normalizeOptionalString(account.botToken),
+=======
+    normalizeOptionalString(account.config.userToken) ?? normalizeOptionalString(account.botToken),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveNames: async ({ token, entries }) =>
     (await loadSlackResolveUsersModule()).resolveSlackUserAllowlist({ token, entries }),
 });
@@ -646,7 +654,11 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         if (kind === "group") {
           return resolveTargetsWithOptionalToken({
             token:
+<<<<<<< HEAD
               normalizeOptionalString(account.userToken) ??
+=======
+              normalizeOptionalString(account.config.userToken) ??
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               normalizeOptionalString(account.botToken),
             inputs,
             missingTokenNote: "missing Slack token",
@@ -661,7 +673,11 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         }
         return resolveTargetsWithOptionalToken({
           token:
+<<<<<<< HEAD
             normalizeOptionalString(account.userToken) ??
+=======
+            normalizeOptionalString(account.config.userToken) ??
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             normalizeOptionalString(account.botToken),
           inputs,
           missingTokenNote: "missing Slack token",
@@ -713,7 +729,11 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         const lines = [];
         const details: Record<string, unknown> = {};
         const botToken = account.botToken?.trim();
+<<<<<<< HEAD
         const userToken = account.userToken?.trim();
+=======
+        const userToken = account.config.userToken?.trim();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const { fetchSlackScopes } = await loadSlackScopesModule();
         const botScopes: SlackScopesResultShape = botToken
           ? await fetchSlackScopes(botToken, timeoutMs)
@@ -729,12 +749,18 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       },
       resolveAccountSnapshot: ({ account }) => {
         const mode = account.config.mode ?? "socket";
+<<<<<<< HEAD
         const credentialConfigured =
           mode === "http"
+=======
+        const configured =
+          (mode === "http"
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             ? resolveConfiguredFromRequiredCredentialStatuses(account, [
                 "botTokenStatus",
                 "signingSecretStatus",
               ])
+<<<<<<< HEAD
             : mode === "socket"
               ? resolveConfiguredFromRequiredCredentialStatuses(account, [
                   "botTokenStatus",
@@ -742,6 +768,12 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
                 ])
               : undefined;
         const configured = credentialConfigured ?? isSlackPluginAccountConfigured(account);
+=======
+            : resolveConfiguredFromRequiredCredentialStatuses(account, [
+                "botTokenStatus",
+                "appTokenStatus",
+              ])) ?? isSlackPluginAccountConfigured(account);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         return {
           accountId: account.accountId,
           name: account.name,

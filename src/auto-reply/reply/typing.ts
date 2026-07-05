@@ -39,6 +39,7 @@ export function createTypingController(params: {
   onCleanup?: () => void;
   typingIntervalSeconds?: number;
   typingTtlMs?: number;
+<<<<<<< HEAD
   keepalive?: boolean;
   silentToken?: string;
   log?: (message: string) => void;
@@ -50,6 +51,12 @@ export function createTypingController(params: {
     silentToken = SILENT_REPLY_TOKEN,
     log,
   } = params;
+=======
+  silentToken?: string;
+  log?: (message: string) => void;
+}): TypingController {
+  const { onReplyStart, onCleanup, silentToken = SILENT_REPLY_TOKEN, log } = params;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!onReplyStart && !onCleanup) {
     return {
       onReplyStart: async () => {},
@@ -209,10 +216,13 @@ export function createTypingController(params: {
     if (!onReplyStart) {
       return;
     }
+<<<<<<< HEAD
     if (!keepalive) {
       await ensureStart();
       return;
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (typingLoop.isRunning()) {
       return;
     }

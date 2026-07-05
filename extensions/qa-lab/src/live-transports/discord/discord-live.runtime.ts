@@ -15,10 +15,15 @@ import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtim
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chromium } from "playwright-core";
 import { z } from "zod";
+<<<<<<< HEAD
 import { createQaArtifactRunId } from "../../artifact-run-id.js";
 import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { isTruthyOptIn } from "../../mantis-options.runtime.js";
+=======
+import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
+import { startQaGatewayChild } from "../../gateway-child.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import {
   defaultQaModelForMode,
@@ -35,7 +40,10 @@ import {
   redactQaLiveLaneIssues,
 } from "../shared/live-artifacts.js";
 import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
+<<<<<<< HEAD
 import { assertLiveScenarioReply as assertDiscordScenarioReply } from "../shared/live-scenario-reply.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   collectLiveTransportStandardScenarioCoverage,
   selectLiveTransportScenarios,
@@ -385,6 +393,14 @@ function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof DISCORD_QA_ENV_KEY
   return value;
 }
 
+<<<<<<< HEAD
+=======
+function isTruthyOptIn(value: string | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveDiscordQaRuntimeEnv(env: NodeJS.ProcessEnv = process.env): DiscordQaRuntimeEnv {
   const voiceChannelId = env.OPENCLAW_QA_DISCORD_VOICE_CHANNEL_ID?.trim();
   const runtimeEnv = {
@@ -1480,6 +1496,25 @@ function matchesDiscordScenarioReply(params: {
   );
 }
 
+<<<<<<< HEAD
+=======
+function assertDiscordScenarioReply(params: {
+  expectedTextIncludes?: string[];
+  message: DiscordObservedMessage;
+}) {
+  if (!params.message.text.trim()) {
+    throw new Error(`reply message ${params.message.messageId} was empty`);
+  }
+  for (const expected of params.expectedTextIncludes ?? []) {
+    if (!params.message.text.includes(expected)) {
+      throw new Error(
+        `reply message ${params.message.messageId} missing expected text: ${expected}`,
+      );
+    }
+  }
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function assertDiscordApplicationCommandsRegistered(params: {
   applicationId: string;
   expectedCommandNames: string[];
@@ -1528,7 +1563,11 @@ export async function runDiscordQaLive(params: {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const outputDir =
     params.outputDir ??
+<<<<<<< HEAD
     path.join(repoRoot, ".artifacts", "qa-e2e", `discord-${createQaArtifactRunId()}`);
+=======
+    path.join(repoRoot, ".artifacts", "qa-e2e", `discord-${Date.now().toString(36)}`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   await fs.mkdir(outputDir, { recursive: true });
 
   const providerMode = normalizeQaProviderMode(
@@ -1863,7 +1902,10 @@ export async function runDiscordQaLive(params: {
     generatedAt: finishedAt,
     primaryModel,
     providerMode,
+<<<<<<< HEAD
     repoRoot,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     transportId: "discord",
   });
   await fs.writeFile(

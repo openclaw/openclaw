@@ -93,6 +93,7 @@ describe("engine/config/resolve", () => {
     expect(base.enabled).toBe(true);
   });
 
+<<<<<<< HEAD
   it("merges accounts.default into the default account config", () => {
     const cfg = {
       channels: {
@@ -118,6 +119,8 @@ describe("engine/config/resolve", () => {
     expect(base.config.groups).toEqual({ G1: { commandLevel: "safety" } });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("resolves base account info for named account", () => {
     const cfg = {
       channels: {

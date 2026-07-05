@@ -46,6 +46,15 @@ export function isAnthropicBedrockModel(modelId: string): boolean {
   return false;
 }
 
+<<<<<<< HEAD
+=======
+export function isOpenRouterAnthropicModelRef(provider: string, modelId: string): boolean {
+  return (
+    normalizeOptionalLowercaseString(provider) === "openrouter" && isAnthropicModelRef(modelId)
+  );
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function isAnthropicFamilyCacheTtlEligible(params: {
   provider: string;
   modelApi?: string;

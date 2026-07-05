@@ -13,8 +13,11 @@ export { normalizeOptionalString as trimToUndefined } from "../../packages/norma
 
 const ERROR_BODY_METADATA_LIMIT = 500;
 const PROVIDER_BINARY_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+<<<<<<< HEAD
 const PROVIDER_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const PROVIDER_TEXT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Returns a plain object view for provider JSON payloads when one exists. */
 export function asObject(value: unknown): Record<string, unknown> | undefined {
@@ -79,14 +82,18 @@ export async function readResponseTextLimited(
       // Stop the upstream body once the diagnostic budget is full.
       await reader.cancel().catch(() => {});
     }
+<<<<<<< HEAD
     try {
       reader.releaseLock();
     } catch {}
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   return text;
 }
 
+<<<<<<< HEAD
 /** Reads a successful provider text response under a byte cap. */
 export async function readProviderTextResponse(
   response: Response,
@@ -101,6 +108,8 @@ export async function readProviderTextResponse(
   return new TextDecoder().decode(bytes);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Formats common provider JSON error payload shapes into one readable detail string. */
 export function formatProviderErrorPayload(payload: unknown): string | undefined {
   const root = asObject(payload);
@@ -303,6 +312,7 @@ export async function assertOkOrThrowHttpError(response: Response, label: string
   throw await createProviderHttpError(response, label, { statusPrefix: "HTTP " });
 }
 
+<<<<<<< HEAD
 /**
  * Parses a provider JSON response under a byte cap and wraps malformed JSON with the caller's label.
  *
@@ -321,6 +331,12 @@ export async function readProviderJsonResponse<T>(
   });
   try {
     return JSON.parse(new TextDecoder().decode(bytes)) as T;
+=======
+/** Parses a provider JSON response and wraps malformed JSON with the caller's label. */
+export async function readProviderJsonResponse<T>(response: Response, label: string): Promise<T> {
+  try {
+    return (await response.json()) as T;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } catch (cause) {
     throw new Error(`${label}: malformed JSON response`, { cause });
   }

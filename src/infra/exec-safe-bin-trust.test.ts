@@ -5,6 +5,10 @@ import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withEnv } from "../test-utils/env.js";
 import {
+<<<<<<< HEAD
+=======
+  buildTrustedSafeBinDirs,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   getTrustedSafeBinDirs,
   isTrustedSafeBinPath,
   listWritableExplicitTrustedSafeBinDirs,
@@ -28,10 +32,16 @@ describe("exec safe bin trust", () => {
   });
 
   it("builds trusted dirs from defaults and explicit extra dirs", () => {
+<<<<<<< HEAD
     const dirs = getTrustedSafeBinDirs({
       baseDirs: ["/usr/bin"],
       extraDirs: ["/custom/bin", "/alt/bin", "/custom/bin"],
       refresh: true,
+=======
+    const dirs = buildTrustedSafeBinDirs({
+      baseDirs: ["/usr/bin"],
+      extraDirs: ["/custom/bin", "/alt/bin", "/custom/bin"],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     expect(dirs.has(path.resolve("/usr/bin"))).toBe(true);
@@ -89,10 +99,16 @@ describe("exec safe bin trust", () => {
         return;
       }
 
+<<<<<<< HEAD
       const dirs = getTrustedSafeBinDirs({
         baseDirs: [],
         extraDirs: [swapped],
         refresh: true,
+=======
+      const dirs = buildTrustedSafeBinDirs({
+        baseDirs: [],
+        extraDirs: [swapped],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
 
       expect(
@@ -115,10 +131,16 @@ describe("exec safe bin trust", () => {
         return;
       }
 
+<<<<<<< HEAD
       const dirs = getTrustedSafeBinDirs({
         baseDirs: [],
         extraDirs: [trustedDir],
         refresh: true,
+=======
+      const dirs = buildTrustedSafeBinDirs({
+        baseDirs: [],
+        extraDirs: [trustedDir],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
 
       expect(

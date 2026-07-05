@@ -14,7 +14,13 @@ import type {
   ContextEngineRuntimeSettings,
 } from "../../context-engine/types.js";
 import {
+<<<<<<< HEAD
   createFileBackedCompactionCheckpointStore,
+=======
+  captureCompactionCheckpointSnapshotAsync,
+  cleanupCompactionCheckpointSnapshot,
+  persistSessionCompactionCheckpoint,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   readSessionLeafStateFromTranscriptAsync,
   resolveCompactionCheckpointTranscriptPosition,
   resolveSessionCompactionCheckpointReason,
@@ -61,8 +67,11 @@ import { resolveModelAsync } from "./model.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 import { normalizeContextTokenBudget } from "./utils.js";
 
+<<<<<<< HEAD
 const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function shouldFallbackAfterHarnessCompaction(
   result: EmbeddedAgentCompactResult | undefined,
 ): boolean {
@@ -252,7 +261,11 @@ export async function compactEmbeddedAgentSession(
   const ceModelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
   const attemptNativeHarnessCompaction = shouldAttemptNativeHarnessCompaction({
     provider: ceProvider,
+<<<<<<< HEAD
     nativeHarnessCompaction: resolvedCompactionTarget.nativeHarnessCompaction,
+=======
+    contextProvider: resolvedCompactionTarget.contextProvider,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     selectedHarnessRuntime,
   });
   if (attemptNativeHarnessCompaction) {
@@ -352,7 +365,11 @@ export async function compactEmbeddedAgentSession(
         // are notified regardless of which engine is active.
         const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
         checkpointSnapshot = engineOwnsCompaction
+<<<<<<< HEAD
           ? await compactionCheckpointStore.captureSnapshot({
+=======
+          ? await captureCompactionCheckpointSnapshotAsync({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               sessionFile: params.sessionFile,
             })
           : null;
@@ -478,7 +495,11 @@ export async function compactEmbeddedAgentSession(
                 preferredLeafId: postCompactionLeafId,
                 transcriptState,
               });
+<<<<<<< HEAD
               const storedCheckpoint = await compactionCheckpointStore.persistCheckpoint({
+=======
+              const storedCheckpoint = await persistSessionCompactionCheckpoint({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 cfg: params.config,
                 sessionKey: params.sessionKey,
                 sessionId: postCompactionSessionId,
@@ -620,7 +641,11 @@ export async function compactEmbeddedAgentSession(
         };
       } finally {
         if (!checkpointSnapshotRetained) {
+<<<<<<< HEAD
           await compactionCheckpointStore.cleanupSnapshot(checkpointSnapshot);
+=======
+          await cleanupCompactionCheckpointSnapshot(checkpointSnapshot);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }
         await contextEngine.dispose?.();
       }
@@ -630,14 +655,22 @@ export async function compactEmbeddedAgentSession(
 
 function shouldAttemptNativeHarnessCompaction(params: {
   provider: string;
+<<<<<<< HEAD
   nativeHarnessCompaction?: boolean;
+=======
+  contextProvider?: string;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   selectedHarnessRuntime?: string | null;
 }): boolean {
   const selectedRuntime = normalizeOptionalAgentRuntimeId(params.selectedHarnessRuntime);
   if (!selectedRuntime || selectedRuntime === "auto" || selectedRuntime === "openclaw") {
     return false;
   }
+<<<<<<< HEAD
   return isOpenAIProvider(params.provider) ? params.nativeHarnessCompaction === true : true;
+=======
+  return isOpenAIProvider(params.provider) ? params.contextProvider !== undefined : true;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function buildCompactionContextEngineRuntimeContext(params: {

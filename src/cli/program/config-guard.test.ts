@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../../packages/terminal-core/src/note.js";
+<<<<<<< HEAD
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatCliCommand } from "../command-format.js";
 import { ensureConfigReady, testApi } from "./config-guard.js";
 
@@ -73,8 +76,15 @@ async function withCapturedStdout(run: () => Promise<void>): Promise<string> {
 
 describe("ensureConfigReady", () => {
   const resetConfigGuardStateForTests = testApi.resetConfigGuardStateForTests;
+<<<<<<< HEAD
   const tempRoots: string[] = [];
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
+=======
+  const originalHome = process.env.HOME;
+  const originalOpenClawHome = process.env.OPENCLAW_HOME;
+  const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
+  const tempRoots: string[] = [];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   async function runEnsureConfigReady(commandPath: string[], suppressDoctorStdout = false) {
     const runtime = makeRuntime();
@@ -100,8 +110,13 @@ describe("ensureConfigReady", () => {
   function useTempOpenClawHome(): string {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-guard-"));
     tempRoots.push(root);
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_HOME", root);
     deleteTestEnvValue("OPENCLAW_STATE_DIR");
+=======
+    process.env.OPENCLAW_HOME = root;
+    delete process.env.OPENCLAW_STATE_DIR;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return root;
   }
 
@@ -125,9 +140,19 @@ describe("ensureConfigReady", () => {
   }
 
   beforeEach(() => {
+<<<<<<< HEAD
     envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
     vi.clearAllMocks();
     resetConfigGuardStateForTests();
+=======
+    vi.clearAllMocks();
+    resetConfigGuardStateForTests();
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     for (const root of tempRoots.splice(0)) {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -140,8 +165,26 @@ describe("ensureConfigReady", () => {
   });
 
   afterEach(() => {
+<<<<<<< HEAD
     envSnapshot?.restore();
     envSnapshot = undefined;
+=======
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+    if (originalOpenClawHome === undefined) {
+      delete process.env.OPENCLAW_HOME;
+    } else {
+      process.env.OPENCLAW_HOME = originalOpenClawHome;
+    }
+    if (originalOpenClawStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     for (const root of tempRoots.splice(0)) {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -232,7 +275,11 @@ describe("ensureConfigReady", () => {
   it("runs doctor flow before agent commands when default exec approvals must move to a custom state dir", async () => {
     const root = useTempOpenClawHome();
     const stateDir = path.join(root, "custom-state");
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+=======
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     writeStateMarker(root, "exec-approvals.json");
 
     await runEnsureConfigReady(["agent"]);
@@ -270,9 +317,15 @@ describe("ensureConfigReady", () => {
   it("uses shared tilde expansion for OPENCLAW_HOME in the startup detector", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-guard-home-"));
     tempRoots.push(root);
+<<<<<<< HEAD
     setTestEnvValue("HOME", root);
     setTestEnvValue("OPENCLAW_HOME", "~/svc");
     deleteTestEnvValue("OPENCLAW_STATE_DIR");
+=======
+    process.env.HOME = root;
+    process.env.OPENCLAW_HOME = "~/svc";
+    delete process.env.OPENCLAW_STATE_DIR;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     writeLegacyTaskSidecarMarker(path.join(root, "svc"));
 
     await runEnsureConfigReady(["status"]);

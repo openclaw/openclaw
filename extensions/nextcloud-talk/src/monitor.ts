@@ -43,6 +43,7 @@ const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> 
     name: z.string(),
   }),
 });
+<<<<<<< HEAD
 const NextcloudTalkWebhookEnvelopeSchema = z.object({
   type: z.string().min(1),
   object: z
@@ -52,6 +53,8 @@ const NextcloudTalkWebhookEnvelopeSchema = z.object({
     .passthrough()
     .optional(),
 });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const WEBHOOK_ERRORS = {
   missingSignatureHeaders: "Missing signature headers",
   invalidBackend: "Invalid backend",
@@ -193,6 +196,7 @@ function decodeWebhookCreateMessage(params: {
   | { kind: "message"; message: NextcloudTalkInboundMessage }
   | { kind: "ignore" }
   | { kind: "invalid" } {
+<<<<<<< HEAD
   const envelope = safeParseJsonWithSchema(NextcloudTalkWebhookEnvelopeSchema, params.body);
   if (!envelope) {
     writeWebhookError(params.res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
@@ -204,11 +208,19 @@ function decodeWebhookCreateMessage(params: {
   if (envelope.object?.type && envelope.object.type !== "Note") {
     return { kind: "ignore" };
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const payload = parseWebhookPayload(params.body);
   if (!payload) {
     writeWebhookError(params.res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
     return { kind: "invalid" };
   }
+<<<<<<< HEAD
+=======
+  if (payload.type !== "Create") {
+    return { kind: "ignore" };
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return { kind: "message", message: payloadToInboundMessage(payload) };
 }
 

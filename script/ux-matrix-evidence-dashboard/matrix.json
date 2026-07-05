@@ -1,0 +1,35 @@
+{
+  "cells": [
+    {
+      "coverageIds": [
+        "qa.artifact-safety",
+        "tools.evidence",
+        "workspace.artifacts"
+      ],
+      "stage": "producer-artifact-fixture",
+      "status": "pass",
+      "surface": "qa-lab"
+    },
+    {
+      "coverageIds": [
+        "ui.control",
+        "gateway.control-ui-hosting"
+      ],
+      "stage": "screenshot-artifact",
+      "status": "pass",
+      "surface": "control-ui"
+    },
+    {
+      "coverageIds": [
+        "cli.entrypoint",
+        "cli.status-snapshots"
+      ],
+      "stage": "entrypoint-help",
+      "status": "pass",
+      "surface": "cli"
+    }
+  ],
+  "counts": {
+    "pass": 3
+  }
+}

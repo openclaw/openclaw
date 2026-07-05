@@ -1,7 +1,15 @@
 // Payload fallback tests cover fallback prompt payloads for isolated cron runs.
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
+=======
+import {
+  makeIsolatedAgentTurnJob,
+  makeIsolatedAgentTurnParams,
+  setupRunCronIsolatedAgentTurnSuite,
+} from "./run.suite-helpers.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   isCliProviderMock,
   loadRunCronIsolatedAgentTurn,
@@ -41,8 +49,13 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     const dispatchMessage = "SERIALIZATION_PROBE should not be wrapped";
 
     const result = await runCronIsolatedAgentTurn(
+<<<<<<< HEAD
       makeIsolatedAgentParamsFixture({
         job: makeIsolatedAgentJobFixture({
+=======
+      makeIsolatedAgentTurnParams({
+        job: makeIsolatedAgentTurnJob({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           payload: {
             kind: "agentTurn",
             message:
@@ -89,8 +102,13 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     }
 
     const result = await runCronIsolatedAgentTurn(
+<<<<<<< HEAD
       makeIsolatedAgentParamsFixture({
         job: makeIsolatedAgentJobFixture({ payload }),
+=======
+      makeIsolatedAgentTurnParams({
+        job: makeIsolatedAgentTurnJob({ payload }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }),
     );
 
@@ -124,7 +142,11 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     });
 
     const result = await runCronIsolatedAgentTurn(
+<<<<<<< HEAD
       makeIsolatedAgentParamsFixture({
+=======
+      makeIsolatedAgentTurnParams({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg: {
           agents: {
             defaults: {
@@ -157,7 +179,11 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     mockRunCronFallbackPassthrough();
 
     const result = await runCronIsolatedAgentTurn(
+<<<<<<< HEAD
       makeIsolatedAgentParamsFixture({
+=======
+      makeIsolatedAgentTurnParams({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg: {
           agents: {
             defaults: {

@@ -35,7 +35,10 @@ import {
 } from "./installed-plugin-index.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
+<<<<<<< HEAD
 import { fileFingerprint } from "./plugin-snapshot-fingerprint.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolvePluginCacheInputs } from "./roots.js";
 
 export type PluginRegistrySnapshot = InstalledPluginIndex;
@@ -206,6 +209,19 @@ function directoryChildFingerprint(directoryPath: string): unknown {
   }
 }
 
+<<<<<<< HEAD
+=======
+function fileFingerprint(filePath: string): unknown {
+  try {
+    const stat = fs.statSync(filePath, { bigint: true });
+    const kind = stat.isFile() ? "file" : stat.isDirectory() ? "dir" : "other";
+    return [filePath, kind, stat.size.toString(), stat.mtimeNs.toString(), stat.ctimeNs.toString()];
+  } catch {
+    return [filePath, "missing"];
+  }
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function findPluginRegistrySnapshotMemo(
   key: string | undefined,
 ): PluginRegistrySnapshotResult | undefined {

@@ -13,6 +13,10 @@ import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
+<<<<<<< HEAD
+=======
+import { CODEX_APP_SERVER_AUTH_MARKER } from "../agents/model-auth-markers.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   areRuntimeModelRefsEquivalent,
   shouldPreferActiveRuntimeAliasAuthLabel,
@@ -48,11 +52,14 @@ import {
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../tasks/task-status.js";
+<<<<<<< HEAD
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
 import {
   buildCodexSyntheticUsageAuth,
   shouldUseCodexSyntheticUsageForRuntime,
 } from "./codex-synthetic-usage.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
 
@@ -229,6 +236,18 @@ function resolveCodexSyntheticUsageAuthProfileId(params: {
   }
 }
 
+<<<<<<< HEAD
+=======
+function shouldUseCodexSyntheticUsage(params: {
+  provider?: string;
+  effectiveHarness?: string;
+}): boolean {
+  const harness = normalizeOptionalLowercaseString(params.effectiveHarness);
+  const provider = normalizeOptionalLowercaseString(params.provider);
+  return harness === "codex" && (provider === "openai" || provider === "codex");
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function formatSessionTaskLine(sessionKey: string): string | undefined {
   const snapshot = buildTaskStatusSnapshot(listTasksForSessionKeyForStatus(sessionKey));
   const task = snapshot.focus;
@@ -347,6 +366,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     params.workspaceDir ??
     sessionEntry?.spawnedWorkspaceDir ??
     resolveAgentWorkspaceDir(cfg, statusAgentId);
+<<<<<<< HEAD
   const selectedProvider = sessionEntry?.providerOverride?.trim() ?? provider;
   const selectedModel = sessionEntry?.modelOverride?.trim() ?? model;
   const parseSelectedProvider = Boolean(
@@ -360,22 +380,42 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
   });
   const selectedLookupProvider = modelRefs.selected.provider || selectedProvider || provider;
   const selectedLookupModel = modelRefs.selected.model || selectedModel || model;
+=======
+  const modelRefs = resolveSelectedAndActiveModel({
+    selectedProvider: provider,
+    selectedModel: model,
+    sessionEntry,
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const effectiveHarness =
     params.resolvedHarness ??
     (await resolveStatusHarnessId({
       cfg,
+<<<<<<< HEAD
       provider: selectedLookupProvider,
       model: selectedLookupModel,
+=======
+      provider,
+      model,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       agentId: statusAgentId,
       sessionKey,
       sessionEntry,
     }));
   const selectedStatusProvider = resolveStatusRuntimeProvider({
+<<<<<<< HEAD
     provider: selectedLookupProvider,
     effectiveHarness,
   });
   const selectedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
     provider: selectedLookupProvider,
+=======
+    provider,
+    effectiveHarness,
+  });
+  const selectedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
+    provider,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     harnessRuntime: effectiveHarness,
     config: cfg,
   });
@@ -418,12 +458,15 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     modelRefs.active.label,
     { config: cfg },
   );
+<<<<<<< HEAD
   const fallbackState = resolveActiveFallbackState({
     selectedModelRef: modelRefs.selected.label || "unknown",
     activeModelRef: modelRefs.active.label || "unknown",
     config: cfg,
     state: sessionEntry,
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (
     shouldPreferActiveRuntimeAliasAuthLabel({
       runtimeAliasModelEquivalent,
@@ -435,6 +478,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     // labels differ; prefer the active auth label so status matches execution.
     selectedModelAuth = activeModelAuth;
   }
+<<<<<<< HEAD
   const activeRuntimeIsAuthoritative =
     !modelRefs.activeDiffers ||
     fallbackState.active ||
@@ -452,6 +496,16 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       provider: usageStatusProvider,
       effectiveHarness,
     });
+=======
+  const usageAuthLabel = modelRefs.activeDiffers ? activeModelAuth : selectedModelAuth;
+  const selectedUsageCredentialType = resolveUsageCredentialType(usageAuthLabel);
+  const useCodexSyntheticUsage =
+    shouldUseCodexSyntheticUsage({
+      provider: activeStatusProvider,
+      effectiveHarness,
+    }) &&
+    (selectedUsageCredentialType === "oauth" || selectedUsageCredentialType === "token");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const codexUsageAuthProfileId = useCodexSyntheticUsage
     ? resolveCodexSyntheticUsageAuthProfileId({
         profileId: sessionEntry?.authProfileOverride,
@@ -461,8 +515,13 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     : undefined;
   const usageCredentialType = useCodexSyntheticUsage ? "token" : selectedUsageCredentialType;
   const currentUsageProvider =
+<<<<<<< HEAD
     resolveUsageProviderId(usageStatusProvider, { credentialType: usageCredentialType }) ??
     resolveUsageProviderId(usageProvider, { credentialType: usageCredentialType });
+=======
+    resolveUsageProviderId(activeStatusProvider, { credentialType: usageCredentialType }) ??
+    resolveUsageProviderId(activeProvider, { credentialType: usageCredentialType });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let usageLine: string | null = null;
   if (
     currentUsageProvider &&
@@ -485,7 +544,18 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           workspaceDir: statusWorkspaceDir,
           config: cfg,
           auth: useCodexSyntheticUsage
+<<<<<<< HEAD
             ? [buildCodexSyntheticUsageAuth({ authProfileId: codexUsageAuthProfileId })]
+=======
+            ? [
+                {
+                  provider: "openai",
+                  token: CODEX_APP_SERVER_AUTH_MARKER,
+                  ...(codexUsageAuthProfileId ? { authProfileId: codexUsageAuthProfileId } : {}),
+                  hookProvider: "codex",
+                },
+              ]
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             : undefined,
         }),
         new Promise<never>((_, reject) => {
@@ -566,7 +636,11 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       model,
       agentId: statusAgentId,
       sessionEntry,
+<<<<<<< HEAD
     }).mode;
+=======
+    }).enabled;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const agentFallbacksOverride = resolveAgentModelFallbacksOverride(cfg, statusAgentId);
   const configuredDefaultRef = resolveDefaultModelForAgent({
     cfg,
@@ -601,21 +675,41 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
   const selectedContextTokens = resolveStatusRuntimeContextTokens({
     cfg,
     provider: selectedStatusProvider,
+<<<<<<< HEAD
     model: modelRefs.selected.model || selectedLookupModel,
   });
   const statusAgentContextTokens =
     typeof contextTokens === "number" &&
     contextTokens > 0 &&
     (activeRuntimeIsAuthoritative ||
+=======
+    model,
+  });
+  const runtimeSnapshotHasFallbackProvenance =
+    !modelRefs.activeDiffers ||
+    hasSessionAutoModelFallbackProvenance(sessionEntry) ||
+    areRuntimeModelRefsEquivalent(modelRefs.active.label, modelRefs.selected.label, {
+      config: cfg,
+    });
+  const statusAgentContextTokens =
+    typeof contextTokens === "number" &&
+    contextTokens > 0 &&
+    (runtimeSnapshotHasFallbackProvenance ||
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       contextTokens === configuredContextTokens ||
       contextTokens === selectedContextTokens)
       ? contextTokens
       : undefined;
+<<<<<<< HEAD
   const statusRuntimeContextTokens = activeRuntimeIsAuthoritative
     ? (runtimeContextTokens ??
       (fallbackState.active && typeof contextTokens === "number" && contextTokens > 0
         ? contextTokens
         : undefined))
+=======
+  const statusRuntimeContextTokens = runtimeSnapshotHasFallbackProvenance
+    ? runtimeContextTokens
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     : undefined;
   return buildStatusMessage({
     config: cfg,

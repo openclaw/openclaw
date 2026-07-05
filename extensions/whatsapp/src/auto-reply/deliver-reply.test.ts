@@ -624,6 +624,7 @@ describe("deliverWebReply", () => {
     expect(warnContext.mediaUrl).toBe("http://example.com/img.jpg");
   });
 
+<<<<<<< HEAD
   it("delivers the opening text chunk when the first media fails on a multi-chunk reply", async () => {
     const msg = makeMsg();
     mockLoadedImageMedia();
@@ -650,6 +651,8 @@ describe("deliverWebReply", () => {
     expect(allReplies).not.toContain("boom");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("still attempts later media after the first media fails", async () => {
     vi.clearAllMocks();
     const msg = makeMsg();

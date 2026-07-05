@@ -7,6 +7,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   imessageApprovalCapability,
+<<<<<<< HEAD
+=======
+  imessageNativeApprovalAdapter,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   shouldSuppressLocalIMessageExecApprovalPrompt,
 } from "./approval-native.js";
 
@@ -111,7 +115,11 @@ describe("imessage approval capability", () => {
     const pluginRequest = buildPluginRequest("+15551230000");
 
     expect(
+<<<<<<< HEAD
       imessageApprovalCapability?.getActionAvailabilityState?.({
+=======
+      imessageNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         action: "approve",
@@ -254,7 +262,11 @@ describe("imessage approval capability", () => {
     const request = buildExecRequest("+15551230000");
 
     expect(
+<<<<<<< HEAD
       imessageApprovalCapability?.getActionAvailabilityState?.({
+=======
+      imessageNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         action: "approve",
@@ -397,7 +409,11 @@ describe("imessage approval capability", () => {
     });
 
     expect(
+<<<<<<< HEAD
       imessageApprovalCapability?.getActionAvailabilityState?.({
+=======
+      imessageNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         action: "approve",
@@ -439,7 +455,11 @@ describe("imessage approval capability", () => {
     });
 
     expect(
+<<<<<<< HEAD
       imessageApprovalCapability?.getActionAvailabilityState?.({
+=======
+      imessageNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         action: "approve",
@@ -447,7 +467,11 @@ describe("imessage approval capability", () => {
       }),
     ).toEqual({ kind: "disabled" });
     expect(
+<<<<<<< HEAD
       imessageApprovalCapability?.getActionAvailabilityState?.({
+=======
+      imessageNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "work",
         action: "approve",

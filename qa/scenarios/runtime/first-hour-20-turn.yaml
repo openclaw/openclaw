@@ -6,7 +6,11 @@ scenario:
   runtimeParityTier: standard
   coverage:
     primary:
+<<<<<<< HEAD
       - runtime.multi-turn-continuity
+=======
+      - runtime.first-hour-20
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     secondary:
       - runtime.long-context
   objective: Verify both runtimes preserve a same-session conversation across the required 20-turn maintainer gate.

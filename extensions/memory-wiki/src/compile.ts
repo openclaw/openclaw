@@ -214,9 +214,12 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
         .filter(
           (page) =>
             page.kind !== "report" &&
+<<<<<<< HEAD
             // concept/synthesis are intentionally durable references
             page.kind !== "concept" &&
             page.kind !== "synthesis" &&
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             !(
               isUnmanagedRawSourceSummary(page) &&
               !managedImportedSourcePagePaths.has(page.relativePath)
@@ -364,6 +367,7 @@ export type RefreshMemoryWikiIndexesResult = {
 
 async function collectMarkdownFiles(rootDir: string, relativeDir: string): Promise<string[]> {
   const dirPath = path.join(rootDir, relativeDir);
+<<<<<<< HEAD
   const entries = await fs
     .readdir(dirPath, { withFileTypes: true, recursive: true })
     .catch(() => []);
@@ -373,6 +377,12 @@ async function collectMarkdownFiles(rootDir: string, relativeDir: string): Promi
       const absPath = path.join(entry.parentPath ?? dirPath, entry.name);
       return path.relative(rootDir, absPath).split(path.sep).join("/");
     })
+=======
+  const entries = await fs.readdir(dirPath, { withFileTypes: true }).catch(() => []);
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+    .map((entry) => path.join(relativeDir, entry.name))
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     .filter((relativePath) => path.basename(relativePath) !== "index.md")
     .toSorted((left, right) => left.localeCompare(right));
 }

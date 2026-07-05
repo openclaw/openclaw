@@ -297,6 +297,7 @@ function mockLocalTokenEnvRefConfig(envTokenId = "MISSING_GATEWAY_TOKEN") {
 
 async function runGatewayStatus(
   runtime: ReturnType<typeof createRuntimeCapture>["runtime"],
+<<<<<<< HEAD
   opts: {
     timeout: string;
     json?: boolean;
@@ -305,6 +306,9 @@ async function runGatewayStatus(
     sshAuto?: boolean;
     sshIdentity?: string;
   },
+=======
+  opts: { timeout: string; json?: boolean; ssh?: string; sshAuto?: boolean; sshIdentity?: string },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ) {
   await gatewayStatusCommand(opts, asRuntimeEnv(runtime));
 }
@@ -921,6 +925,7 @@ describe("gateway-status command", () => {
     expect(requireProbeCall("ws://127.0.0.1:18789").timeoutMs).toBe(15_000);
   });
 
+<<<<<<< HEAD
   it("uses --port for the local loopback probe target", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
     probeGateway.mockClear();
@@ -992,6 +997,8 @@ describe("gateway-status command", () => {
     expect(requireProbeCall("wss://remote.example:18789").timeoutMs).toBe(15_000);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses configured handshake timeout as the default local probe budget", async () => {
     const { runtime } = createRuntimeCapture();
     probeGateway.mockClear();

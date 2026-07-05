@@ -234,7 +234,10 @@ describe("ollama setup", () => {
       "kimi-k2.5:cloud",
       "minimax-m2.7:cloud",
       "glm-5.1:cloud",
+<<<<<<< HEAD
       "glm-5.2:cloud",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "llama3:8b",
     ]);
     expect(result.config.models?.providers?.ollama?.baseUrl).toBe("http://127.0.0.1:11434");
@@ -286,9 +289,12 @@ describe("ollama setup", () => {
 
     const requestUrls = fetchMock.mock.calls.map((call) => requestUrl(call[0]));
     expect(requestUrls).toEqual(["https://ollama.com/api/tags"]);
+<<<<<<< HEAD
     expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
       "Bearer test-ollama-key",
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("rejects the local marker during cloud-only setup", async () => {
@@ -416,12 +422,16 @@ describe("ollama setup", () => {
     const models = result.config.models?.providers?.ollama?.models;
     const modelIds = models?.map((m) => m.id);
 
+<<<<<<< HEAD
     expect(modelIds).toEqual([
       "kimi-k2.5:cloud",
       "minimax-m2.7:cloud",
       "glm-5.1:cloud",
       "glm-5.2:cloud",
     ]);
+=======
+    expect(modelIds).toEqual(["kimi-k2.5:cloud", "minimax-m2.7:cloud", "glm-5.1:cloud"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(models?.find((model) => model.id === "kimi-k2.5:cloud")?.input).toEqual([
       "text",
       "image",
@@ -449,7 +459,10 @@ describe("ollama setup", () => {
       "kimi-k2.5:cloud",
       "minimax-m2.7:cloud",
       "glm-5.1:cloud",
+<<<<<<< HEAD
       "glm-5.2:cloud",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "qwen3-coder:480b-cloud",
       "gpt-oss:120b-cloud",
     ]);

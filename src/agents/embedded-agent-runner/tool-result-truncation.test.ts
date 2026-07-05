@@ -17,12 +17,21 @@ let calculateMaxToolResultCharsWithCap: typeof import("./tool-result-truncation.
 let resolveAutoLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveAutoLiveToolResultMaxChars;
 let getToolResultTextLength: typeof import("./tool-result-truncation.js").getToolResultTextLength;
 let truncateOversizedToolResultsInMessages: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInMessages;
+<<<<<<< HEAD
 let truncateOversizedToolResultsInSession: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInSession;
+=======
+let truncateOversizedToolResultsInRuntimeTranscript: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInRuntimeTranscript;
+let truncateOversizedToolResultsInSession: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInSession;
+let isOversizedToolResult: typeof import("./tool-result-truncation.js").isOversizedToolResult;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 let sessionLikelyHasOversizedToolResults: typeof import("./tool-result-truncation.js").sessionLikelyHasOversizedToolResults;
 let estimateToolResultReductionPotential: typeof import("./tool-result-truncation.js").estimateToolResultReductionPotential;
 let DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 let resolveLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultMaxChars;
+<<<<<<< HEAD
 let createToolResultPromptProjectionState: typeof import("./tool-result-truncation.js").createToolResultPromptProjectionState;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 let tmpDir: string | undefined;
 
 async function loadFreshToolResultTruncationModuleForTest() {
@@ -36,12 +45,21 @@ async function loadFreshToolResultTruncationModuleForTest() {
     resolveAutoLiveToolResultMaxChars,
     getToolResultTextLength,
     truncateOversizedToolResultsInMessages,
+<<<<<<< HEAD
     truncateOversizedToolResultsInSession,
+=======
+    truncateOversizedToolResultsInRuntimeTranscript,
+    truncateOversizedToolResultsInSession,
+    isOversizedToolResult,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sessionLikelyHasOversizedToolResults,
     estimateToolResultReductionPotential,
     DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
     resolveLiveToolResultMaxChars,
+<<<<<<< HEAD
     createToolResultPromptProjectionState,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } = await import("./tool-result-truncation.js"));
 }
 
@@ -169,6 +187,7 @@ describe("getToolResultTextLength", () => {
     expect(getToolResultTextLength(msg)).toBe(8);
   });
 
+<<<<<<< HEAD
   it("counts Codex protocol toolResult content blocks", () => {
     const msg = {
       role: "toolResult",
@@ -189,6 +208,8 @@ describe("getToolResultTextLength", () => {
     expect(getToolResultTextLength(msg)).toBe("codex output".length);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("returns zero for non-toolResult messages", () => {
     expect(getToolResultTextLength(makeAssistantMessage("hello"))).toBe(0);
   });
@@ -215,6 +236,7 @@ describe("truncateToolResultMessage", () => {
     }
     expect(getFirstToolResultText(result)).toContain("[persist-truncated]");
   });
+<<<<<<< HEAD
 
   it("truncates Codex protocol toolResult content blocks and mirrored content", () => {
     const oversized = "x".repeat(50_000);
@@ -248,6 +270,8 @@ describe("truncateToolResultMessage", () => {
     expect(String(firstBlock.text).length).toBeLessThan(oversized.length);
     expect(firstBlock.content).toBe(firstBlock.text);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("calculateMaxToolResultChars", () => {
@@ -300,6 +324,31 @@ describe("calculateMaxToolResultChars", () => {
   });
 });
 
+<<<<<<< HEAD
+=======
+describe("isOversizedToolResult", () => {
+  it("returns false for small tool results", () => {
+    const msg = makeToolResult("small content");
+    expect(isOversizedToolResult(msg, 200_000)).toBe(false);
+  });
+
+  it("returns true for oversized tool results", () => {
+    const msg = makeToolResult("x".repeat(500_000));
+    expect(isOversizedToolResult(msg, 128_000)).toBe(true);
+  });
+
+  it("honors an explicit higher maxChars override", () => {
+    const msg = makeToolResult("x".repeat(20_000));
+    expect(isOversizedToolResult(msg, 128_000, 24_000)).toBe(false);
+  });
+
+  it("returns false for non-toolResult messages", () => {
+    const msg = makeUserMessage("x".repeat(500_000));
+    expect(isOversizedToolResult(msg, 128_000)).toBe(false);
+  });
+});
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("sessionLikelyHasOversizedToolResults", () => {
   it("returns true for individually oversized tool results", () => {
     const messages: AgentMessage[] = [makeToolResult("x".repeat(500_000))];
@@ -492,6 +541,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
       medium.length * 3,
     );
   });
+<<<<<<< HEAD
 
   it("keeps prompt projections byte-stable as history grows", () => {
     const prefix = [
@@ -641,6 +691,30 @@ describe("truncateOversizedToolResultsInMessages", () => {
 });
 
 describe("truncateOversizedToolResultsInSession", () => {
+=======
+});
+
+describe("truncateOversizedToolResultsInSession", () => {
+  it("does not create session metadata for missing runtime transcripts", async () => {
+    const dir = await createTmpDir();
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(storePath, "{}\n", "utf8");
+
+    const result = await truncateOversizedToolResultsInRuntimeTranscript({
+      scope: {
+        agentId: "main",
+        sessionId: "missing-session",
+        sessionKey: "agent:main:missing",
+        storePath,
+      },
+      contextWindowTokens: 100,
+    });
+
+    expect(result.truncated).toBe(false);
+    expect(await fs.readFile(storePath, "utf8")).toBe("{}\n");
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("readably truncates aggregate medium tool results in a session file", async () => {
     // Persisted truncation rewrites JSONL directly and emits the transcript
     // update event instead of reopening through SessionManager internals.

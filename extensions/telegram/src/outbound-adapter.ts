@@ -2,7 +2,10 @@
 import type { OutboundDeliveryFormattingOptions } from "openclaw/plugin-sdk/channel-outbound";
 import {
   resolveOutboundSendDep,
+<<<<<<< HEAD
   sanitizeForPlainText,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type OutboundSendDeps,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
@@ -20,24 +23,45 @@ import {
   sendPayloadMediaSequenceOrFallback,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+<<<<<<< HEAD
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { splitTelegramHtmlChunks } from "./format.js";
 import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
+<<<<<<< HEAD
 import { loadTelegramSendModule, type TelegramSendModule } from "./send-runtime.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 
 export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
 export const TELEGRAM_POLL_OPTION_LIMIT = 10;
 
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
+<<<<<<< HEAD
 type TelegramSendOpts = Parameters<TelegramSendFn>[2];
 type TelegramReactionFn = typeof import("./send.js").reactMessageTelegram;
 type ResolveTelegramSendFn = (deps?: OutboundSendDeps) => Promise<TelegramSendFn>;
 type LoadTelegramSendModuleFn = () => Promise<TelegramSendModule>;
 
+=======
+type TelegramSendModule = typeof import("./send.js");
+type TelegramSendOpts = Parameters<TelegramSendFn>[2];
+type ResolveTelegramSendFn = (deps?: OutboundSendDeps) => Promise<TelegramSendFn>;
+type LoadTelegramSendModuleFn = () => Promise<TelegramSendModule>;
+
+let telegramSendModulePromise: Promise<typeof import("./send.js")> | undefined;
+
+async function loadTelegramSendModule(): Promise<TelegramSendModule> {
+  telegramSendModulePromise ??= import("./send.js");
+  return await telegramSendModulePromise;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function resolveDefaultTelegramSend(deps?: OutboundSendDeps): Promise<TelegramSendFn> {
   return (
     resolveOutboundSendDep<TelegramSendFn>(deps, "telegram") ??
@@ -116,12 +140,16 @@ export type CreateTelegramOutboundAdapterOptions = {
 
 export async function sendTelegramPayloadMessages(params: {
   send: TelegramSendFn;
+<<<<<<< HEAD
   react: TelegramReactionFn;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   to: string;
   payload: ReplyPayload;
   baseOpts: Omit<NonNullable<TelegramSendOpts>, "buttons" | "mediaUrl" | "quoteText">;
 }): Promise<Awaited<ReturnType<TelegramSendFn>>> {
   const telegramData = params.payload.channelData?.telegram as
+<<<<<<< HEAD
     | {
         buttons?: TelegramInlineButtons;
         quoteText?: string;
@@ -132,6 +160,12 @@ export async function sendTelegramPayloadMessages(params: {
     typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined;
   const reactionEmoji =
     typeof telegramData?.reaction?.emoji === "string" ? telegramData.reaction.emoji : undefined;
+=======
+    | { buttons?: TelegramInlineButtons; quoteText?: string }
+    | undefined;
+  const quoteText =
+    typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const presentation = normalizeMessagePresentation(params.payload.presentation);
   const text =
     resolveTelegramInteractiveTextFallback({
@@ -145,12 +179,16 @@ export async function sendTelegramPayloadMessages(params: {
     presentation,
     interactive: params.payload.interactive,
   });
+<<<<<<< HEAD
   const replyToMessageId = params.baseOpts.replyToMessageId;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const payloadOpts = {
     ...params.baseOpts,
     quoteText,
     ...(params.payload.audioAsVoice === true ? { asVoice: true } : {}),
   };
+<<<<<<< HEAD
   if (reactionEmoji) {
     if (typeof replyToMessageId !== "number") {
       throw new Error("Telegram reaction requires a reply target");
@@ -168,6 +206,8 @@ export async function sendTelegramPayloadMessages(params: {
   if (reactionEmoji && !text && mediaUrls.length === 0 && !buttons?.length) {
     return { messageId: String(replyToMessageId), chatId: params.to };
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   // Telegram allows reply_markup on media; attach buttons only to the first send.
   return await sendPayloadMediaSequenceOrFallback({
@@ -200,7 +240,10 @@ export function createTelegramOutboundAdapter(
     chunkerMode: "markdown",
     extractMarkdownImages: true,
     textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
+<<<<<<< HEAD
     sanitizeText: ({ text }) => sanitizeForPlainText(sanitizeAssistantVisibleText(text)),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     shouldSuppressLocalPayloadPrompt: options.shouldSuppressLocalPayloadPrompt,
     beforeDeliverPayload: options.beforeDeliverPayload,
     shouldTreatDeliveredTextAsVisible: options.shouldTreatDeliveredTextAsVisible,
@@ -307,10 +350,15 @@ export function createTelegramOutboundAdapter(
         ...params,
         resolveSend,
       });
+<<<<<<< HEAD
       const { reactMessageTelegram } = await loadSendModule();
       const result = await sendTelegramPayloadMessages({
         send,
         react: reactMessageTelegram,
+=======
+      const result = await sendTelegramPayloadMessages({
+        send,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         to: outboundTo,
         payload: params.payload,
         baseOpts: {

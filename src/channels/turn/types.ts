@@ -13,7 +13,10 @@ import type {
   InboundSourceModality,
   MentionSource,
   MsgContext,
+<<<<<<< HEAD
   SupplementalContextFacts,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "../../auto-reply/templating.js";
 import type { GroupKeyResolution } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -29,7 +32,10 @@ import type { InboundLastRouteUpdate, RecordInboundSession } from "../session.ty
 import type { ChannelBotLoopProtectionFacts } from "./bot-loop-protection.js";
 
 export type { InboundEventKind } from "../inbound-event/kind.js";
+<<<<<<< HEAD
 export type { SupplementalContextFacts } from "../../auto-reply/templating.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Admission decision for an inbound channel event before agent dispatch. */
 export type ChannelTurnAdmission =
@@ -221,6 +227,42 @@ export type CommandFacts = {
   authorized?: boolean;
 };
 
+<<<<<<< HEAD
+=======
+/** Quoted, forwarded, thread, and untrusted context facts attached to an inbound turn. */
+export type SupplementalContextFacts = {
+  quote?: {
+    id?: string;
+    fullId?: string;
+    body?: string;
+    sender?: string;
+    senderAllowed?: boolean;
+    isExternal?: boolean;
+    isQuote?: boolean;
+  };
+  forwarded?: {
+    from?: string;
+    fromType?: string;
+    fromId?: string;
+    date?: number;
+    senderAllowed?: boolean;
+  };
+  thread?: {
+    id?: string;
+    starterBody?: string;
+    historyBody?: string;
+    label?: string;
+    parentSessionKey?: string;
+    modelParentSessionKey?: string;
+    senderAllowed?: boolean;
+  };
+  untrustedContext?: Array<{ label: string; source?: string; type?: string; payload: unknown }>;
+  groupSystemPrompt?: string;
+  /** Prompt-like group metadata from user-controlled sources; never enters the system prompt. */
+  untrustedGroupSystemPrompt?: string;
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Inbound media facts supplied to the agent context. */
 export type InboundMediaFacts = {
   path?: string;

@@ -1601,10 +1601,13 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         command: ["python3", "-c", "print('hi')"],
         expected: "python3 -c requires explicit approval in strictInlineEval mode",
       },
+<<<<<<< HEAD
       {
         command: ["python3.13", "-c", "print('hi')"],
         expected: "python3.13 -c requires explicit approval in strictInlineEval mode",
       },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ] as const;
     setRuntimeConfigSnapshot({
       tools: {
@@ -1676,7 +1679,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           const tempDir = createFixtureDir("openclaw-inline-eval-bin-");
           const executablePath = createTempExecutable({
             dir: tempDir,
+<<<<<<< HEAD
             name: "python3.13",
+=======
+            name: "python3",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           });
           const { runCommand, sendInvokeResult } = await runSystemInvoke({
             preferMacAppExecHost: false,

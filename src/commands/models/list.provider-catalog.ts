@@ -28,7 +28,10 @@ import {
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
+<<<<<<< HEAD
   providerMatchesFilter,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveRuntimePluginDiscoveryProviders,
   runProviderCatalog,
   runProviderStaticCatalog,
@@ -51,6 +54,20 @@ function buildProviderCatalogEnvCacheFingerprint(env: NodeJS.ProcessEnv): string
   return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
 }
 
+<<<<<<< HEAD
+=======
+function providerMatchesFilter(params: {
+  provider: Pick<ProviderPlugin, "id" | "aliases" | "hookAliases">;
+  providerFilter: string;
+}): boolean {
+  return [
+    params.provider.id,
+    ...(params.provider.aliases ?? []),
+    ...(params.provider.hookAliases ?? []),
+  ].some((providerId) => normalizeProviderId(providerId) === params.providerFilter);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function collectMatchingContributionOwners(
   index: PluginRegistrySnapshot,
   contribution: "providers" | "cliBackends",

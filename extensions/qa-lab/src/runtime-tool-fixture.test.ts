@@ -268,6 +268,7 @@ describe("runtime tool fixture", () => {
     expect(details).toContain("read live provider failure planned args");
   });
 
+<<<<<<< HEAD
   it("allows async live runtime tool fixtures to prove the happy path with the planned call", async () => {
     const env = await makeEnv();
     await writeQaSessionTranscript(env, "agent:qa:runtime-tool:image_generate:happy", [
@@ -377,6 +378,8 @@ describe("runtime tool fixture", () => {
     ).rejects.toThrow("expected live happy-path tool call for image_generate");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("requires live failure fixtures to produce failure-shaped tool output", async () => {
     const env = await makeEnv();
     await writeQaSessionTranscript(env, "agent:qa:runtime-tool:read:happy", [
@@ -554,6 +557,7 @@ describe("runtime tool fixture", () => {
     expect(details).toContain("mock provider happy planned args (diagnostic only)");
   });
 
+<<<<<<< HEAD
   it("reports Codex-native async planned-only happy fixtures without dereferencing missing output", async () => {
     const env = await makeEnv({
       mock: { baseUrl: "http://127.0.0.1:9999" },
@@ -618,6 +622,8 @@ describe("runtime tool fixture", () => {
     expect(details).toContain('"__qaFailureMode":"denied-input"');
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("requires mock runtime tool fixtures to produce tool output", async () => {
     const env = await makeEnv({
       mock: { baseUrl: "http://127.0.0.1:9999" },
@@ -665,6 +671,7 @@ describe("runtime tool fixture", () => {
     ).rejects.toThrow("expected mock happy-path tool output for read");
   });
 
+<<<<<<< HEAD
   it("allows async mock runtime tool fixtures to prove the happy path with the planned call", async () => {
     const env = await makeEnv({
       mock: { baseUrl: "http://127.0.0.1:9999" },
@@ -720,6 +727,8 @@ describe("runtime tool fixture", () => {
     expect(details).toContain('"__qaFailureMode":"denied-input"');
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("accepts mock runtime tool fixtures only after planned calls return output", async () => {
     const env = await makeEnv({
       mock: { baseUrl: "http://127.0.0.1:9999" },

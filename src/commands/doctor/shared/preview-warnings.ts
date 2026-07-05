@@ -1,4 +1,5 @@
 // Doctor preview warning aggregation for config that can surprise users before repair.
+<<<<<<< HEAD
 import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAgentConfig } from "../../../agents/agent-scope-config.js";
 import {
@@ -6,12 +7,21 @@ import {
   resolveProviderToolPolicy,
   resolveProviderToolPolicyEntry,
 } from "../../../agents/provider-tool-policy.js";
+=======
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentConfig } from "../../../agents/agent-scope-config.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
+import { parseModelRef } from "../../../agents/model-selection-normalize.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { pickSandboxToolPolicy } from "../../../agents/sandbox-tool-policy.js";
 import {
   isToolAllowedByPolicies,
   isToolAllowedByPolicyName,
 } from "../../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
+<<<<<<< HEAD
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type {
   AgentToolsConfig,
@@ -21,6 +31,13 @@ import type {
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import { resolveDoctorPrimaryModelRef } from "./primary-model-ref.js";
+=======
+import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { AgentToolsConfig, ToolsConfig } from "../../../config/types.tools.js";
+import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
+import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type ChannelDoctorModule = typeof import("./channel-doctor.js");
 
@@ -96,6 +113,58 @@ function hasConfiguredSafeBins(cfg: OpenClawConfig): boolean {
 }
 
 type VisibleReplyPolicyProvenance = "default" | "global-explicit" | "group-explicit";
+<<<<<<< HEAD
+=======
+type ToolPolicyConfig = {
+  allow?: string[];
+  alsoAllow?: string[];
+  deny?: string[];
+  profile?: string;
+};
+
+function normalizeProviderPolicyKey(value: string): string {
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  const slashIndex = normalized.indexOf("/");
+  if (slashIndex <= 0) {
+    return normalizeProviderId(normalized);
+  }
+  const provider = normalizeProviderId(normalized.slice(0, slashIndex));
+  const modelId = normalized.slice(slashIndex + 1);
+  return modelId ? `${provider}/${modelId}` : provider;
+}
+
+function isCanonicalProviderPolicyKey(value: string): boolean {
+  return normalizeLowercaseStringOrEmpty(value) === normalizeProviderPolicyKey(value);
+}
+
+function resolveProviderToolPolicy(params: {
+  byProvider?: Record<string, ToolPolicyConfig>;
+  modelProvider: string;
+  modelId: string;
+}): ToolPolicyConfig | undefined {
+  if (!params.byProvider) {
+    return undefined;
+  }
+  const lookup = new Map<string, { canonical: boolean; value: ToolPolicyConfig }>();
+  for (const [key, value] of Object.entries(params.byProvider)) {
+    const normalized = normalizeProviderPolicyKey(key);
+    if (!normalized) {
+      continue;
+    }
+    const canonical = isCanonicalProviderPolicyKey(key);
+    const existing = lookup.get(normalized);
+    if (!existing || (canonical && !existing.canonical)) {
+      lookup.set(normalized, { canonical, value });
+    }
+  }
+
+  const provider = normalizeProviderPolicyKey(params.modelProvider);
+  const modelId = normalizeLowercaseStringOrEmpty(params.modelId);
+  const fullModelId = modelId ? `${provider}/${modelId}` : undefined;
+  return (fullModelId ? lookup.get(fullModelId)?.value : undefined) ?? lookup.get(provider)?.value;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveMessageToolAvailability(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -104,7 +173,11 @@ function resolveMessageToolAvailability(params: {
   runtimeAlsoAllow?: string[];
 }): boolean {
   const agentConfig = params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
+<<<<<<< HEAD
   const modelRef = resolveDoctorPrimaryModelRef(params.cfg, agentConfig?.model);
+=======
+  const modelRef = resolvePrimaryModelRef(params.cfg, agentConfig?.model);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const providerPolicy = resolveProviderToolPolicy({
     byProvider: params.globalTools?.byProvider,
     modelProvider: modelRef.provider,
@@ -145,6 +218,25 @@ function resolveMessageToolAvailability(params: {
 
 const SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW = ["message"];
 
+<<<<<<< HEAD
+=======
+function resolvePrimaryModelRef(
+  cfg: OpenClawConfig,
+  agentModel?: NonNullable<ReturnType<typeof resolveAgentConfig>>["model"],
+): { provider: string; model: string } {
+  const raw =
+    resolveAgentModelPrimaryValue(agentModel) ??
+    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ??
+    DEFAULT_MODEL;
+  return (
+    parseModelRef(raw, DEFAULT_PROVIDER, { allowPluginNormalization: false }) ?? {
+      provider: DEFAULT_PROVIDER,
+      model: DEFAULT_MODEL,
+    }
+  );
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveSourceReplyMessageToolAvailability(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -343,6 +435,7 @@ function readPreviewStringList(value: unknown): string[] | undefined {
     : undefined;
 }
 
+<<<<<<< HEAD
 function collectUncoveredConfiguredToolSectionGrantEntries(
   configuredEntries: ConfiguredToolSectionGrantEntry[],
   profilePolicy: ToolPolicyConfig | undefined,
@@ -360,6 +453,8 @@ function collectUncoveredConfiguredToolSectionGrantEntries(
     .filter((entry) => entry.grants.length > 0);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function formatProfileConfiguredSectionGrantAdvice(params: {
   pathLabel: string;
   grants: string[];
@@ -406,6 +501,7 @@ function collectProfileConfiguredToolSectionScopeWarnings(params: {
     ? tools.alsoAllow.filter((entry): entry is string => typeof entry === "string")
     : params.inheritedAlsoAllow;
   const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
+<<<<<<< HEAD
   if (!profilePolicy) {
     return [];
   }
@@ -413,6 +509,16 @@ function collectProfileConfiguredToolSectionScopeWarnings(params: {
     configuredEntries,
     profilePolicy,
   );
+=======
+  const uncoveredEntries = configuredEntries
+    .map((entry) => {
+      const grants = entry.grants.filter(
+        (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
+      );
+      return { grants, label: entry.label };
+    })
+    .filter((entry) => entry.grants.length > 0);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (uncoveredEntries.length === 0) {
     return [];
   }
@@ -460,6 +566,7 @@ function collectByProviderConfiguredToolSectionWarnings(params: {
     const alsoAllow =
       readPreviewStringList(policy.alsoAllow) ?? readPreviewStringList(inheritedPolicy?.alsoAllow);
     const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
+<<<<<<< HEAD
     if (!profilePolicy) {
       return [];
     }
@@ -467,6 +574,16 @@ function collectByProviderConfiguredToolSectionWarnings(params: {
       params.configuredEntries,
       profilePolicy,
     );
+=======
+    const uncoveredEntries = params.configuredEntries
+      .map((entry) => ({
+        ...entry,
+        grants: entry.grants.filter(
+          (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
+        ),
+      }))
+      .filter((entry) => entry.grants.length > 0);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (uncoveredEntries.length === 0) {
       return [];
     }
@@ -495,12 +612,21 @@ function resolveInheritedProviderPolicyForPreview(
   if (!inheritedByProvider) {
     return undefined;
   }
+<<<<<<< HEAD
   const normalized = normalizeToolProviderPolicyKey(providerKey);
   const slashIndex = normalized.indexOf("/");
   const modelProvider = slashIndex > 0 ? normalized.slice(0, slashIndex) : normalized;
   const modelId = slashIndex > 0 ? normalized.slice(slashIndex + 1) : undefined;
   const policy = resolveProviderToolPolicy({
     byProvider: inheritedByProvider,
+=======
+  const normalized = normalizeProviderPolicyKey(providerKey);
+  const slashIndex = normalized.indexOf("/");
+  const modelProvider = slashIndex > 0 ? normalized.slice(0, slashIndex) : normalized;
+  const modelId = slashIndex > 0 ? normalized.slice(slashIndex + 1) : "";
+  const policy = resolveProviderToolPolicy({
+    byProvider: inheritedByProvider as Record<string, ToolPolicyConfig>,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     modelProvider,
     modelId,
   });
@@ -512,8 +638,43 @@ function resolveProviderPolicyEntryForPreview(params: {
   modelProvider?: string;
   modelId?: string;
 }): { key: string; policy: Record<string, unknown> } | undefined {
+<<<<<<< HEAD
   const entry = resolveProviderToolPolicyEntry(params);
   return entry ? { key: entry.key, policy: entry.policy } : undefined;
+=======
+  if (!params.byProvider || !params.modelProvider) {
+    return undefined;
+  }
+  const lookup = new Map<
+    string,
+    { key: string; policy: Record<string, unknown>; canonical: boolean }
+  >();
+  for (const [key, value] of Object.entries(params.byProvider)) {
+    const policy = hasRecord(value) ? value : undefined;
+    if (!policy) {
+      continue;
+    }
+    const normalized = normalizeProviderPolicyKey(key);
+    if (!normalized) {
+      continue;
+    }
+    const canonical = isCanonicalProviderPolicyKey(key);
+    const existing = lookup.get(normalized);
+    if (!existing || (canonical && !existing.canonical)) {
+      lookup.set(normalized, { key, policy, canonical });
+    }
+  }
+  const provider = normalizeProviderPolicyKey(params.modelProvider);
+  const modelId = normalizeLowercaseStringOrEmpty(params.modelId);
+  const candidates = [...(modelId ? [`${provider}/${modelId}`] : []), provider];
+  for (const candidate of candidates) {
+    const match = lookup.get(candidate);
+    if (match) {
+      return { key: match.key, policy: match.policy };
+    }
+  }
+  return undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
@@ -569,6 +730,7 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
       readPreviewStringList(overridingPolicy?.alsoAllow) ??
       readPreviewStringList(inheritedPolicy.alsoAllow);
     const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
+<<<<<<< HEAD
     if (!profilePolicy) {
       return [];
     }
@@ -576,6 +738,16 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
       params.configuredEntries,
       profilePolicy,
     );
+=======
+    const uncoveredEntries = params.configuredEntries
+      .map((entry) => ({
+        ...entry,
+        grants: entry.grants.filter(
+          (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
+        ),
+      }))
+      .filter((entry) => entry.grants.length > 0);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (uncoveredEntries.length === 0) {
       return [];
     }
@@ -629,7 +801,11 @@ export function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig)
     const agentTools = hasRecord(agent.tools) ? agent.tools : undefined;
     const agentId = typeof agent.id === "string" ? agent.id : undefined;
     const agentConfig = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
+<<<<<<< HEAD
     const modelRef = resolveDoctorPrimaryModelRef(cfg, agentConfig?.model);
+=======
+    const modelRef = resolvePrimaryModelRef(cfg, agentConfig?.model);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const agentPath = `agents.list[${index}].tools`;
     const includeInheritedSections =
       agentTools !== undefined && typeof agentTools.profile !== "string";
@@ -907,3 +1083,16 @@ export async function collectDoctorPreviewNotes(params: {
 
   return { infoNotes, warningNotes: warnings };
 }
+<<<<<<< HEAD
+=======
+
+/** Collect warning notes only for callers that do not display info notes. */
+export async function collectDoctorPreviewWarnings(params: {
+  cfg: OpenClawConfig;
+  doctorFixCommand: string;
+  env?: NodeJS.ProcessEnv;
+  allowExec?: boolean;
+}): Promise<string[]> {
+  return (await collectDoctorPreviewNotes(params)).warningNotes;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

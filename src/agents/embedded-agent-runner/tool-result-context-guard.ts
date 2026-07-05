@@ -7,7 +7,14 @@ import type {
   ContextEngineRuntimeSettings,
 } from "../../context-engine/types.js";
 import type { AgentMessage } from "../runtime/index.js";
+<<<<<<< HEAD
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
+=======
+import {
+  CONTEXT_LIMIT_TRUNCATION_NOTICE,
+  formatContextLimitTruncationNotice,
+} from "./context-truncation-notice.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { log } from "./logger.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./run/midturn-precheck.js";
 import { shouldPreemptivelyCompactBeforePrompt } from "./run/preemptive-compaction.js";
@@ -52,10 +59,14 @@ type MidTurnPrecheckOptions = {
   onMidTurnPrecheck?: (request: MidTurnPrecheckRequest) => void;
 };
 
+<<<<<<< HEAD
 export {
   CONTEXT_LIMIT_TRUNCATION_NOTICE,
   formatContextLimitTruncationNotice,
 } from "./context-truncation-notice.js";
+=======
+export { CONTEXT_LIMIT_TRUNCATION_NOTICE, formatContextLimitTruncationNotice };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export function markTranscriptPromptText(message: AgentMessage, text: string): void {
   Object.defineProperty(message, TRANSCRIPT_PROMPT_TEXT_KEY, {

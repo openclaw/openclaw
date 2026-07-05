@@ -125,6 +125,21 @@ function formatFrontmatterValue(value: string): string {
   return value;
 }
 
+<<<<<<< HEAD
+=======
+/**
+ * Mark an AST as "dirty" — useful for callers that mutate the AST
+ * structurally and want emitMd() to re-render rather than round-trip.
+ *
+ * Currently a no-op flag — emitMd() decides based on `opts.mode`. Kept
+ * as an extension point for a future invariant where the AST tracks
+ * its own dirty state.
+ */
+export function markDirty(_ast: MdAst): void {
+  // intentionally empty
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // Re-export the frontmatter type for convenience so tests don't need
 // to import from ast.ts.
 export type { FrontmatterEntry };

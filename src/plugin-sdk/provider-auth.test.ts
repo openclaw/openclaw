@@ -287,6 +287,7 @@ describe("provider auth profile helpers", () => {
         token: "token;proxy-ep=proxy.individual.githubcopilot.com",
       }),
     ]);
+<<<<<<< HEAD
     const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(init.headers).toEqual(
       expect.objectContaining({
@@ -306,6 +307,8 @@ describe("provider auth profile helpers", () => {
       deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=javascript:alert(1);"),
     ).toBeNull();
     expect(deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=://bad;")).toBeNull();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("rejects Copilot token expiry values outside the supported date range", async () => {
@@ -337,6 +340,7 @@ describe("provider auth profile helpers", () => {
     ).rejects.toThrow("Copilot token response has invalid expires_at");
   });
 
+<<<<<<< HEAD
   it("cancels Copilot token exchange error bodies", async () => {
     vi.resetModules();
 
@@ -361,6 +365,8 @@ describe("provider auth profile helpers", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("refreshes cached Copilot tokens with out-of-range expiry values", async () => {
     vi.resetModules();
 

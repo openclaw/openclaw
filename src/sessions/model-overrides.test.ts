@@ -180,6 +180,7 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect((entry.updatedAt ?? 0) > before).toBe(true);
   });
 
+<<<<<<< HEAD
   it("sets liveModelSwitchPending when switching to default with runtime-only fields", () => {
     const entry: SessionEntry = {
       sessionId: "sess-96269",
@@ -213,6 +214,8 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.liveModelSwitchPending).toBe(true);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("marks non-default overrides with the provided source", () => {
     const entry: SessionEntry = {
       sessionId: "sess-5a",

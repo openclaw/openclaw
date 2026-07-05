@@ -39,7 +39,10 @@ export function registerMaintenanceCommands(program: Command) {
       "--severity-min <level>",
       "With --lint: drop findings below this severity (info|warning|error)",
     )
+<<<<<<< HEAD
     .option("--all", "With --lint: run all registered checks, including opt-in checks", false)
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     .option(
       "--skip <id>",
       "With --lint: skip a specific check id (repeatable)",
@@ -61,11 +64,17 @@ export function registerMaintenanceCommands(program: Command) {
             const exitCode = await runDoctorLintCli(defaultRuntime, {
               json: Boolean(opts.json),
               severityMin: typeof opts.severityMin === "string" ? opts.severityMin : undefined,
+<<<<<<< HEAD
               includeAllChecks: Boolean(opts.all),
               skipIds: Array.isArray(opts.skip) ? opts.skip : [],
               onlyIds: Array.isArray(opts.only) ? opts.only : [],
               allowExec: Boolean(opts.allowExec),
               deep: Boolean(opts.deep),
+=======
+              skipIds: Array.isArray(opts.skip) ? opts.skip : [],
+              onlyIds: Array.isArray(opts.only) ? opts.only : [],
+              allowExec: Boolean(opts.allowExec),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             });
             defaultRuntime.exit(exitCode);
           },
@@ -182,14 +191,20 @@ function hasLintOnlyDoctorOptions(opts: {
   readonly json?: boolean;
   readonly postUpgrade?: boolean;
   readonly severityMin?: unknown;
+<<<<<<< HEAD
   readonly all?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   readonly skip?: unknown;
   readonly only?: unknown;
 }): boolean {
   return (
     (opts.json === true && opts.postUpgrade !== true) ||
     typeof opts.severityMin === "string" ||
+<<<<<<< HEAD
     opts.all === true ||
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     (Array.isArray(opts.skip) && opts.skip.length > 0) ||
     (Array.isArray(opts.only) && opts.only.length > 0)
   );

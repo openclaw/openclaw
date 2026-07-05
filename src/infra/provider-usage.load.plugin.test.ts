@@ -3,6 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch } from "../test-utils/provider-usage-fetch.js";
 
 const resolveProviderUsageSnapshotWithPluginMock = vi.fn();
+<<<<<<< HEAD
 const { EnvHttpProxyAgent, envAgentSpy, loadUndiciRuntimeDeps, undiciFetch } = vi.hoisted(() => {
   const envAgentSpyLocal = vi.fn();
   const undiciFetchLocal = vi.fn();
@@ -27,15 +28,20 @@ const { EnvHttpProxyAgent, envAgentSpy, loadUndiciRuntimeDeps, undiciFetch } = v
     undiciFetch: undiciFetchLocal,
   };
 });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => ({}),
 }));
 
+<<<<<<< HEAD
 vi.mock("./net/undici-runtime.js", () => ({
   loadUndiciRuntimeDeps,
 }));
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.mock("../plugins/provider-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
     "../plugins/provider-runtime.js",
@@ -58,7 +64,10 @@ function requireFirstPluginUsageCall(): {
     token?: unknown;
     authProfileId?: unknown;
     timeoutMs?: unknown;
+<<<<<<< HEAD
     fetchFn?: unknown;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 } {
   const [call] = resolveProviderUsageSnapshotWithPluginMock.mock.calls;
@@ -76,11 +85,15 @@ function requireFirstPluginUsageCall(): {
       token?: unknown;
       authProfileId?: unknown;
       timeoutMs?: unknown;
+<<<<<<< HEAD
       fetchFn?: unknown;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
   };
 }
 
+<<<<<<< HEAD
 function requireFetchFn(value: unknown): typeof fetch {
   if (typeof value !== "function") {
     throw new Error("expected provider usage context fetch");
@@ -96,16 +109,21 @@ function requireUndiciFetchInit(): Record<string, unknown> {
   return init as Record<string, unknown>;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("provider-usage.load plugin boundary", () => {
   beforeAll(async () => {
     ({ loadProviderUsageSummary } = await import("./provider-usage.load.js"));
   });
 
   beforeEach(() => {
+<<<<<<< HEAD
     envAgentSpy.mockClear();
     loadUndiciRuntimeDeps.mockClear();
     undiciFetch.mockReset();
     EnvHttpProxyAgent.lastCreated = undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resolveProviderUsageSnapshotWithPluginMock.mockReset();
     resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue(null);
   });
@@ -125,7 +143,10 @@ describe("provider-usage.load plugin boundary", () => {
         now: usageNow,
         auth: [{ provider: "github-copilot", token: "copilot-token" }],
         fetch: mockFetch as unknown as typeof fetch,
+<<<<<<< HEAD
         env: {},
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }),
     ).resolves.toEqual({
       updatedAt: usageNow,
@@ -165,7 +186,10 @@ describe("provider-usage.load plugin boundary", () => {
             hookProvider: "codex",
           },
         ],
+<<<<<<< HEAD
         env: {},
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }),
     ).resolves.toEqual({
       updatedAt: usageNow,
@@ -184,6 +208,7 @@ describe("provider-usage.load plugin boundary", () => {
     expect(pluginCall.context?.token).toBe("codex-app-server");
     expect(pluginCall.context?.authProfileId).toBe("openai:work");
   });
+<<<<<<< HEAD
 
   it("passes an env proxy fetch into plugin usage context when no explicit fetch is supplied", async () => {
     undiciFetch.mockResolvedValueOnce(new Response("{}", { status: 200 }));
@@ -268,4 +293,6 @@ describe("provider-usage.load plugin boundary", () => {
     expect(envAgentSpy).not.toHaveBeenCalled();
     expect(undiciFetch).not.toHaveBeenCalled();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

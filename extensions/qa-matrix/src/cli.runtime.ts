@@ -3,7 +3,10 @@ import {
   printLiveTransportQaArtifacts,
   startLiveTransportQaOutputTee,
 } from "openclaw/plugin-sdk/qa-runtime";
+<<<<<<< HEAD
 import { ensureRepoBoundDirectory } from "./cli-paths.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { runMatrixQaLive } from "./runners/contract/runtime.js";
 import type { LiveTransportQaCommandOptions } from "./shared/live-transport-cli.js";
 import { resolveLiveTransportQaRunOptions } from "./shared/live-transport-cli.runtime.js";
@@ -58,6 +61,7 @@ export async function runQaMatrixCommand(opts: LiveTransportQaCommandOptions) {
     );
   }
 
+<<<<<<< HEAD
   const outputDir = await ensureRepoBoundDirectory(
     runOptions.repoRoot,
     runOptions.outputDir,
@@ -65,11 +69,18 @@ export async function runQaMatrixCommand(opts: LiveTransportQaCommandOptions) {
   );
   const checkedRunOptions = { ...runOptions, outputDir };
   const outputTee = await createMatrixQaCommandOutputTee(checkedRunOptions.outputDir);
+=======
+  const outputTee = await createMatrixQaCommandOutputTee(runOptions.outputDir);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let primaryError: unknown;
   let outputTeeError: unknown;
   try {
     process.stdout.write(`Matrix QA output: ${outputTee.outputPath}\n`);
+<<<<<<< HEAD
     const result = await runMatrixQaLive(checkedRunOptions);
+=======
+    const result = await runMatrixQaLive(runOptions);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     printLiveTransportQaArtifacts("Matrix QA", {
       report: result.reportPath,
       summary: result.summaryPath,

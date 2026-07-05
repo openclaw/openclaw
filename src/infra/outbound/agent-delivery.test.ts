@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   resolveOutboundChannelPlugin: vi.fn<() => unknown>(() => null),
+<<<<<<< HEAD
   resolveChannelTarget: vi.fn<() => Promise<unknown>>(async () => ({
     ok: true,
     target: {
@@ -13,6 +14,8 @@ const mocks = vi.hoisted(() => ({
       resolutionSource: "normalized",
     },
   })),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveOutboundTarget: vi.fn<() => { ok: true; to: string } | { ok: false; error: Error }>(
     () => ({ ok: true, to: "+1999" }),
   ),
@@ -91,6 +94,7 @@ vi.mock("./outbound-session.js", () => ({
   resolveOutboundSessionRoute: mocks.resolveOutboundSessionRoute,
 }));
 
+<<<<<<< HEAD
 vi.mock("./target-resolver.js", () => ({
   resolveChannelTarget: mocks.resolveChannelTarget,
 }));
@@ -101,6 +105,13 @@ vi.mock("../../utils/message-channel.js", () => ({
     ["directchat", "workspace", "telegram"].includes(channel),
   isGatewayMessageChannel: (channel: string) =>
     ["directchat", "workspace", "telegram", "webchat"].includes(channel),
+=======
+vi.mock("../../utils/message-channel.js", () => ({
+  INTERNAL_MESSAGE_CHANNEL: "webchat",
+  isDeliverableMessageChannel: (channel: string) => ["directchat", "workspace"].includes(channel),
+  isGatewayMessageChannel: (channel: string) =>
+    ["directchat", "workspace", "webchat"].includes(channel),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   normalizeMessageChannel: (value: string) => value.trim().toLowerCase(),
 }));
 
@@ -120,6 +131,7 @@ beforeAll(async () => {
 beforeEach(() => {
   mocks.resolveOutboundChannelPlugin.mockReset();
   mocks.resolveOutboundChannelPlugin.mockReturnValue(null);
+<<<<<<< HEAD
   mocks.resolveChannelTarget.mockReset();
   mocks.resolveChannelTarget.mockResolvedValue({
     ok: true,
@@ -132,6 +144,9 @@ beforeEach(() => {
   });
   mocks.resolveOutboundTarget.mockReset();
   mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "+1999" });
+=======
+  mocks.resolveOutboundTarget.mockClear();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   mocks.resolveOutboundSessionRoute.mockReset();
   mocks.resolveOutboundSessionRoute.mockResolvedValue(null);
   mocks.resolveSessionDeliveryTarget.mockClear();
@@ -338,6 +353,7 @@ describe("agent delivery helpers", () => {
     expect(plan.resolvedTo).toBe("1470130713209602050");
   });
 
+<<<<<<< HEAD
   it("resolves reserved explicit targets through directory-capable resolution before session routing", async () => {
     mocks.resolveOutboundChannelPlugin.mockReturnValue({
       messaging: { resolveOutboundSessionRoute: vi.fn(), targetResolver: {} },
@@ -513,6 +529,8 @@ describe("agent delivery helpers", () => {
     expect(resolved.resolvedTo).toBeUndefined();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("falls back to the original plan when session-route canonicalization fails", async () => {
     mocks.resolveOutboundChannelPlugin.mockReturnValue({
       messaging: { resolveOutboundSessionRoute: vi.fn() },

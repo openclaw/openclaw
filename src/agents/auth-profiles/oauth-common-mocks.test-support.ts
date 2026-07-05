@@ -46,6 +46,10 @@ vi.mock("./external-cli-sync.js", () => ({
     credential.expires - now > 5 * 60 * 1000,
   isSafeToUseExternalCliCredential: () => true,
   readExternalCliBootstrapCredential: () => null,
+<<<<<<< HEAD
+=======
+  readManagedExternalCliCredential: () => null,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveExternalCliAuthProfiles: () => [],
   shouldBootstrapFromExternalCliCredential: () => false,
   shouldReplaceStoredOAuthCredential: (existing: unknown, incoming: unknown) =>

@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import type {
@@ -5,6 +6,11 @@ import type {
   ForkSessionEntryFromParentResult,
 } from "../auto-reply/reply/session-fork.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+=======
+// Agent consult runtime tests cover consult session creation and runtime handoff.
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   setRealtimeVoiceAgentConsultDepsForTest,
   consultRealtimeVoiceAgent,
@@ -271,6 +277,7 @@ describe("realtime voice agent consult runtime", () => {
       maxTokens: 100_000,
       parentTokens: 100,
     }));
+<<<<<<< HEAD
     const forkSessionEntryFromParent = vi.fn(
       async (
         params: ForkSessionEntryFromParentParams,
@@ -312,6 +319,15 @@ describe("realtime voice agent consult runtime", () => {
     );
     setRealtimeVoiceAgentConsultDepsForTest({
       forkSessionEntryFromParent,
+=======
+    const forkSessionFromParent = vi.fn(async () => ({
+      sessionId: "forked-session",
+      sessionFile: "/tmp/forked.jsonl",
+    }));
+    setRealtimeVoiceAgentConsultDepsForTest({
+      resolveParentForkDecision,
+      forkSessionFromParent,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     await consultRealtimeVoiceAgent({
@@ -331,6 +347,7 @@ describe("realtime voice agent consult runtime", () => {
       userLabel: "Participant",
     });
 
+<<<<<<< HEAD
     expect(resolveParentForkDecision).not.toHaveBeenCalled();
     expect(forkSessionEntryFromParent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -341,6 +358,17 @@ describe("realtime voice agent consult runtime", () => {
       }),
     );
     expect(runtime.session.patchSessionEntry).not.toHaveBeenCalled();
+=======
+    expect(resolveParentForkDecision).toHaveBeenCalledWith({
+      parentEntry: sessionStore["agent:main:main"],
+      storePath: "/tmp/sessions.json",
+    });
+    expect(forkSessionFromParent).toHaveBeenCalledWith({
+      parentEntry: sessionStore["agent:main:main"],
+      agentId: "main",
+      sessionsDir: "/tmp",
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const forkedEntry = sessionStore["agent:main:subagent:google-meet:meet-1"];
     if (!forkedEntry) {
       throw new Error("Expected forked consult session entry");
@@ -355,6 +383,7 @@ describe("realtime voice agent consult runtime", () => {
     expectPositiveTimestamp(forkedEntry.updatedAt);
     const call = requireEmbeddedAgentCall(runEmbeddedAgent);
     expect(call.sessionId).toBe("forked-session");
+<<<<<<< HEAD
     expect(call.sessionFile).toBeUndefined();
     expect(call.sessionTarget).toMatchObject({
       agentId: "main",
@@ -424,6 +453,9 @@ describe("realtime voice agent consult runtime", () => {
       sessionKey: "agent:main:subagent:google-meet:meet-1",
       storePath: "/tmp/sessions.json",
     });
+=======
+    expect(call.sessionFile).toBe("/tmp/forked.jsonl");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(call.spawnedBy).toBe("agent:main:main");
   });
 

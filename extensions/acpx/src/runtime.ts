@@ -13,7 +13,10 @@ import {
   createFileSessionStore,
   decodeAcpxRuntimeHandleState,
   encodeAcpxRuntimeHandleState,
+<<<<<<< HEAD
   isRequestedModelUnsupportedError,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type AcpAgentRegistry,
   type AcpRuntimeDoctorReport,
   type AcpRuntimeEvent,
@@ -587,6 +590,7 @@ function withAcpxSessionOptions(input: OpenClawRuntimeEnsureInput): AcpxDelegate
   } as AcpxDelegateEnsureInput;
 }
 
+<<<<<<< HEAD
 function isAcpModelCapabilityMissingError(error: unknown): boolean {
   return isRequestedModelUnsupportedError(error) && error.reason === "missing-capability";
 }
@@ -607,6 +611,8 @@ async function ensureDelegateSessionWithModelFallback(
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function quoteShellArg(value: string): string {
   if (/^[A-Za-z0-9_./:=@+-]+$/.test(value)) {
     return value;
@@ -1010,7 +1016,11 @@ export class AcpxRuntime implements AcpRuntime {
           this.withCodexWrapperDiagnostics({
             command: stableLaunchCommand,
             fallbackCode: "ACP_SESSION_INIT_FAILED",
+<<<<<<< HEAD
             run: () => ensureDelegateSessionWithModelFallback(delegate, ensureInput),
+=======
+            run: () => delegate.ensureSession(withAcpxSessionOptions(ensureInput)),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           }),
       });
     }

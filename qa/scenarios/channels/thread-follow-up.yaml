@@ -6,7 +6,11 @@ scenario:
   coverage:
     primary:
       - channels.threads
+<<<<<<< HEAD
       - channels.thread-parent-child-placement
+=======
+      - thread-parent-child-placement
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     secondary:
       - channels.qa-channel
   objective: Verify the agent can keep follow-up work inside a thread and not leak context into the root channel.
@@ -24,7 +28,10 @@ scenario:
     kind: flow
     summary: Verify the agent can keep follow-up work inside a thread and not leak context into the root channel.
     config:
+<<<<<<< HEAD
       requiredChannelDriver: qa-channel
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       prompt: "@openclaw reply in one short sentence inside this thread only. Do not use ACP or any external runtime. Confirm you stayed in-thread."
 
 flow:

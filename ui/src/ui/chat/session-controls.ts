@@ -29,7 +29,10 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../session-key.ts";
+<<<<<<< HEAD
 import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import {
   formatInheritedThinkingLabel,
@@ -42,7 +45,11 @@ import {
   normalizeThinkLevel,
   resolveThinkingDefaultForModel,
 } from "../thinking.ts";
+<<<<<<< HEAD
 import type { FastMode, GatewayThinkingLevelOption, SessionsListResult } from "../types.ts";
+=======
+import type { GatewayThinkingLevelOption, SessionsListResult } from "../types.ts";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type ChatSessionSwitchHandler = (state: AppViewState, nextSessionKey: string) => void;
 type ChatSessionSelectSurface = "desktop" | "mobile" | "sidebar";
@@ -95,10 +102,14 @@ export function renderChatSessionSelect(
   const agentSelect = compact ? "" : renderChatAgentSelect(state, onSwitchSession, agentOptions);
   const sessionSwitcherOnly = options.sessionSwitcherOnly ?? false;
   const modelSelect = sessionSwitcherOnly ? "" : renderChatModelSelect(state);
+<<<<<<< HEAD
   // Quota is informational, not a control: show it whenever there is room
   // (hidden only in the collapsed/compact sidebar), independent of
   // sessionSwitcherOnly which suppresses the model *control* (#93041).
   const quotaPill = compact ? "" : renderChatQuotaPill(state);
+=======
+  const quotaPill = sessionSwitcherOnly ? "" : renderChatQuotaPill(state);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const surface = options.surface ?? "desktop";
   const selectedSessionLabel = resolveSelectedChatSessionLabel(state, sessionGroups);
   const pickerOpen = state.chatSessionPickerOpen && state.chatSessionPickerSurface === surface;
@@ -360,9 +371,15 @@ function appendChatSessionPickerResult(
 async function loadChatSessionPickerPage(
   state: AppViewState,
   options: { query?: string; offset?: number; append?: boolean } = {},
+<<<<<<< HEAD
 ): Promise<SessionsListResult | null> {
   if (!state.client || !state.connected) {
     return null;
+=======
+) {
+  if (!state.client || !state.connected) {
+    return;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   const query = normalizeOptionalString(options.query ?? state.chatSessionPickerAppliedQuery) ?? "";
   const requestId = beginChatSessionPickerSearchRequest(
@@ -374,7 +391,11 @@ async function loadChatSessionPickerPage(
     }),
   );
   if (requestId === null) {
+<<<<<<< HEAD
     return null;
+=======
+    return;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   state.chatSessionPickerLoading = true;
   state.chatSessionPickerError = null;
@@ -388,12 +409,17 @@ async function loadChatSessionPickerPage(
       ),
     );
     if (!isCurrentChatSessionPickerSearchRequest(state, requestId)) {
+<<<<<<< HEAD
       return null;
+=======
+      return;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     const previous = state.chatSessionPickerResult ?? state.sessionsResult;
     state.chatSessionPickerResult =
       options.append === true && previous ? appendChatSessionPickerResult(previous, page) : page;
     state.chatSessionPickerAppliedQuery = query;
+<<<<<<< HEAD
     return state.chatSessionPickerResult;
   } catch (err) {
     if (!isCurrentChatSessionPickerSearchRequest(state, requestId)) {
@@ -401,6 +427,13 @@ async function loadChatSessionPickerPage(
     }
     state.chatSessionPickerError = String(err);
     return null;
+=======
+  } catch (err) {
+    if (!isCurrentChatSessionPickerSearchRequest(state, requestId)) {
+      return;
+    }
+    state.chatSessionPickerError = String(err);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } finally {
     if (isCurrentChatSessionPickerSearchRequest(state, requestId)) {
       finishChatSessionPickerSearchRequest(state, requestId);
@@ -468,6 +501,7 @@ function updateChatSessionPickerSearchQuery(state: AppViewState, nextQuery: stri
 }
 
 async function loadMoreChatSessionPickerResults(state: AppViewState) {
+<<<<<<< HEAD
   let result = state.chatSessionPickerResult;
   let offset = resolveNextChatSessionOffset(result);
   let visibleCount = resolveChatSessionPickerRows(state, result).length;
@@ -490,6 +524,18 @@ async function loadMoreChatSessionPickerResults(state: AppViewState) {
     visibleCount = nextVisibleCount;
     offset = resolveNextChatSessionOffset(result);
   }
+=======
+  const result = state.chatSessionPickerResult;
+  const offset = resolveNextChatSessionOffset(result);
+  if (offset === null) {
+    return;
+  }
+  await loadChatSessionPickerPage(state, {
+    query: state.chatSessionPickerAppliedQuery,
+    offset,
+    append: true,
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function resolveChatSessionRow(
@@ -618,10 +664,16 @@ function renderChatSessionPickerPopover(
     state.chatSessionPickerQuery.trim() !== "" || state.chatSessionPickerAppliedQuery.trim() !== "";
   const loadMoreOffset = resolveNextChatSessionOffset(result);
   const shownCount = pickerRows.length;
+<<<<<<< HEAD
   const rawLoadedCount = result?.sessions.length ?? 0;
   const totalCount = result?.totalCount;
   const countLabel =
     rawLoadedCount === shownCount && typeof totalCount === "number" && Number.isFinite(totalCount)
+=======
+  const totalCount = result?.totalCount;
+  const countLabel =
+    typeof totalCount === "number" && Number.isFinite(totalCount)
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ? `${shownCount} / ${totalCount}`
       : String(shownCount);
 
@@ -906,7 +958,11 @@ type ChatThinkingSelectState = {
 };
 
 type ChatFastModeSelectState = {
+<<<<<<< HEAD
   currentOverride: "" | "on" | "off" | "auto";
+=======
+  currentOverride: "" | "on" | "off";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   disabled: boolean;
   options: ChatInlineSelectOption[];
   supported: boolean;
@@ -954,6 +1010,7 @@ function resolveChatFastModeSelectState(
     provider?.trim().toLowerCase() ??
     null;
   const currentOverride =
+<<<<<<< HEAD
     activeRow?.fastMode === "auto"
       ? "auto"
       : activeRow?.fastMode === true
@@ -961,6 +1018,9 @@ function resolveChatFastModeSelectState(
         : activeRow?.fastMode === false
           ? "off"
           : "";
+=======
+    activeRow?.fastMode === true ? "on" : activeRow?.fastMode === false ? "off" : "";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const supported = Boolean(
     (effectiveProvider && FAST_MODE_PROVIDER_IDS.has(effectiveProvider)) || currentOverride,
   );
@@ -978,12 +1038,28 @@ function resolveChatFastModeSelectState(
       { value: "", label: "Default" },
       { value: "on", label: "Fast" },
       { value: "off", label: "Standard" },
+<<<<<<< HEAD
       { value: "auto", label: "Auto" },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ],
     supported,
   };
 }
 
+<<<<<<< HEAD
+=======
+function sessionModelMatchesDefaults(
+  row: SessionsListResult["sessions"][number] | undefined,
+  defaults: SessionsListResult["defaults"] | undefined,
+): boolean {
+  return (
+    (!row?.modelProvider || row.modelProvider === defaults?.modelProvider) &&
+    (!row?.model || row.model === defaults?.model)
+  );
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function buildThinkingOptions(
   levels: readonly GatewayThinkingLevelOption[],
   currentOverride: string,
@@ -1022,14 +1098,26 @@ function resolveThinkingLevelOptions(
   model: string | null,
   catalog: readonly ThinkingCatalogEntry[],
 ): GatewayThinkingLevelOption[] {
+<<<<<<< HEAD
   const modelMatchesDefaults = sessionModelMatchesDefaults(activeRow, defaults);
+=======
+  const sessionModelMatchesDefaultsLocal =
+    (!activeRow?.modelProvider || activeRow.modelProvider === defaults?.modelProvider) &&
+    (!activeRow?.model || activeRow.model === defaults?.model);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const catalogEntry =
     provider && model
       ? catalog.find((entry) => entry.provider === provider && entry.id === model)
       : undefined;
   const explicitLevels =
     (activeRow?.thinkingLevels?.length ? activeRow.thinkingLevels : null) ??
+<<<<<<< HEAD
     (modelMatchesDefaults && defaults?.thinkingLevels?.length ? defaults.thinkingLevels : null);
+=======
+    (sessionModelMatchesDefaultsLocal && defaults?.thinkingLevels?.length
+      ? defaults.thinkingLevels
+      : null);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (explicitLevels) {
     if (catalogEntry?.reasoning === false && isOffOnlyThinkingLevels(explicitLevels)) {
       return [];
@@ -1038,7 +1126,13 @@ function resolveThinkingLevelOptions(
   }
   const explicitLabels =
     (activeRow?.thinkingOptions?.length ? activeRow.thinkingOptions : null) ??
+<<<<<<< HEAD
     (modelMatchesDefaults && defaults?.thinkingOptions?.length ? defaults.thinkingOptions : null);
+=======
+    (sessionModelMatchesDefaultsLocal && defaults?.thinkingOptions?.length
+      ? defaults.thinkingOptions
+      : null);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (catalogEntry?.reasoning === false) {
     if (!explicitLabels || explicitLabels.every(isOffThinkingOption)) {
       return [];
@@ -1123,7 +1217,11 @@ function renderChatModelReasoningSelect(params: {
   selectedThinkingValue: string;
   thinkingDisabled: boolean;
   thinkingOptions: ChatInlineSelectOption[];
+<<<<<<< HEAD
   onFastModeSelect: (value: "" | "on" | "off" | "auto") => Promise<unknown>;
+=======
+  onFastModeSelect: (value: "" | "on" | "off") => Promise<unknown>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   onModelSelect: (value: string) => Promise<unknown>;
   onThinkingSelect: (value: string) => Promise<unknown>;
 }) {
@@ -1270,7 +1368,11 @@ function renderChatModelReasoningSelect(params: {
                     fastMode.options,
                     (speed) => speed.value,
                     (speed) => {
+<<<<<<< HEAD
                       const speedValue = speed.value as "" | "on" | "off" | "auto";
+=======
+                      const speedValue = speed.value as "" | "on" | "off";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                       const speedSelected = speedValue === fastMode.currentOverride;
                       return html`
                         <button
@@ -1319,7 +1421,11 @@ function renderChatModelReasoningSelect(params: {
 function patchSessionFastMode(
   state: AppViewState,
   sessionKey: string,
+<<<<<<< HEAD
   fastMode: FastMode | undefined,
+=======
+  fastMode: boolean | undefined,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ) {
   const current = state.sessionsResult;
   if (!current) {
@@ -1333,15 +1439,23 @@ function patchSessionFastMode(
   };
 }
 
+<<<<<<< HEAD
 async function switchChatFastMode(state: AppViewState, nextFastMode: "" | "on" | "off" | "auto") {
+=======
+async function switchChatFastMode(state: AppViewState, nextFastMode: "" | "on" | "off") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!state.client || !state.connected) {
     return;
   }
   const targetSessionKey = state.sessionKey;
   const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === targetSessionKey);
   const previousFastMode = activeRow?.fastMode;
+<<<<<<< HEAD
   const next: FastMode | undefined =
     nextFastMode === "" ? undefined : nextFastMode === "auto" ? "auto" : nextFastMode === "on";
+=======
+  const next = nextFastMode === "" ? undefined : nextFastMode === "on";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (previousFastMode === next) {
     return;
   }

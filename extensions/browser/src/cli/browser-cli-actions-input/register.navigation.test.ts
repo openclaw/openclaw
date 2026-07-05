@@ -2,7 +2,10 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliResizeModule from "../browser-cli-resize.js";
+<<<<<<< HEAD
 import * as browserCliSharedModule from "../browser-cli-shared.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   createBrowserProgram,
   getBrowserCliRuntime,
@@ -11,6 +14,7 @@ import {
 import * as cliCoreApiModule from "../core-api.js";
 
 const mocks = vi.hoisted(() => ({
+<<<<<<< HEAD
   callBrowserRequest: vi.fn<
     (
       opts?: unknown,
@@ -22,6 +26,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
+=======
+  runBrowserResizeWithOutput: vi.fn(async () => {}),
+}));
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.spyOn(browserCliResizeModule, "runBrowserResizeWithOutput").mockImplementation(
   mocks.runBrowserResizeWithOutput,
 );
@@ -43,11 +52,15 @@ function createNavigationProgram(): Command {
 
 describe("browser navigation commands", () => {
   beforeEach(() => {
+<<<<<<< HEAD
     mocks.callBrowserRequest.mockClear();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mocks.runBrowserResizeWithOutput.mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
   });
 
+<<<<<<< HEAD
   it("sends navigate requests with the URL and target id", async () => {
     const program = createNavigationProgram();
 
@@ -88,6 +101,8 @@ describe("browser navigation commands", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects non-decimal resize dimensions before dispatch", async () => {
     const program = createNavigationProgram();
 

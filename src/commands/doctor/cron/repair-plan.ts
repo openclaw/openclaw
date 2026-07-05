@@ -5,17 +5,31 @@ import { normalizeCronJobInput } from "../../../cron/normalize.js";
 import type { CronJob } from "../../../cron/types.js";
 
 type CronLegacyIssueCounts = Partial<Record<string, number>>;
+<<<<<<< HEAD
+=======
+type CronLegacyIssueDetails = {
+  unresolvedAgentTurnShellToolPrompt?: string[];
+};
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function pluralize(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
+<<<<<<< HEAD
 function formatJobNameList(names: string[]): string {
+=======
+function formatJobNameList(names: string[] | undefined): string {
+  if (!names || names.length === 0) {
+    return "";
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const preview = names.slice(0, 5).map((name) => `\`${name}\``);
   const remaining = names.length - preview.length;
   return remaining > 0 ? `: ${preview.join(", ")} (+${remaining} more)` : `: ${preview.join(", ")}`;
 }
 
+<<<<<<< HEAD
 /**
  * Advisory for isolated agentTurn cron jobs that describe a command but cannot access shell tools.
  * These need operator attention, but `doctor --fix` cannot safely infer whether to grant tool
@@ -54,6 +68,13 @@ export function formatUnresolvedShellPromptAdvisory(names: string[]): string | n
 
 /** Convert legacy cron issue counts into doctor preview lines. */
 export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[] {
+=======
+/** Convert legacy cron issue counts into doctor preview lines. */
+export function formatLegacyIssuePreview(
+  issues: CronLegacyIssueCounts,
+  details: CronLegacyIssueDetails = {},
+): string[] {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const lines: string[] = [];
   if (issues.jobId) {
     lines.push(`- ${pluralize(issues.jobId, "job")} still uses legacy \`jobId\``);
@@ -85,6 +106,14 @@ export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[
       `- ${pluralize(issues.legacyAgentTurnCommandPayload, "job")} uses an agent prompt to run a shell command`,
     );
   }
+<<<<<<< HEAD
+=======
+  if (issues.unresolvedAgentTurnShellToolPrompt) {
+    lines.push(
+      `- ${pluralize(issues.unresolvedAgentTurnShellToolPrompt, "job")} asks an isolated agent for shell/process tools and needs manual command conversion${formatJobNameList(details.unresolvedAgentTurnShellToolPrompt)}`,
+    );
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (issues.legacyPayloadProvider) {
     lines.push(
       `- ${pluralize(issues.legacyPayloadProvider, "job")} still uses payload \`provider\` as a delivery alias`,

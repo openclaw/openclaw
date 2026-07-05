@@ -17,8 +17,13 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+<<<<<<< HEAD
 import { cancelActiveCronTaskRun } from "./cron-task-cancel.js";
 import { isChildlessNativeSubagentTask } from "./native-subagent-task.js";
+=======
+import { isChildlessCodexNativeSubagentTask } from "./codex-native-subagent-task.js";
+import { cancelActiveCronTaskRun } from "./cron-task-cancel.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -43,6 +48,10 @@ import {
   resetTaskRegistryRuntimeForTests,
   type TaskRegistryObserverEvent,
 } from "./task-registry.store.js";
+<<<<<<< HEAD
+=======
+import { summarizeTaskRecords } from "./task-registry.summary.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type {
   TaskDeliveryState,
   TaskDeliveryStatus,
@@ -50,6 +59,11 @@ import type {
   TaskEventRecord,
   TaskNotifyPolicy,
   TaskRecord,
+<<<<<<< HEAD
+=======
+  TaskRegistrySummary,
+  TaskRegistrySnapshot,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   TaskRuntime,
   TaskScopeKind,
   TaskStatus,
@@ -1251,15 +1265,20 @@ function canDeliverTaskToRequesterOrigin(task: TaskRecord): boolean {
   if (shouldRouteCompletionThroughRequesterSession(owner.sessionKey)) {
     return false;
   }
+<<<<<<< HEAD
   return canDeliverToRequesterOrigin(owner.requesterOrigin);
 }
 
 function canDeliverToRequesterOrigin(origin: TaskDeliveryState["requesterOrigin"]): boolean {
+=======
+  const origin = owner.requesterOrigin;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const channel = origin?.channel?.trim();
   const to = origin?.to?.trim();
   return Boolean(channel && to && isDeliverableMessageChannel(channel));
 }
 
+<<<<<<< HEAD
 function canDeliverParentReviewTaskToBoundDiscordThread(task: TaskRecord): boolean {
   if (!shouldUseParentReviewTaskTerminalMessage(task)) {
     return false;
@@ -1279,6 +1298,8 @@ function canDeliverParentReviewTaskToBoundDiscordThread(task: TaskRecord): boole
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveMissingOwnerDeliveryStatus(task: TaskRecord): TaskDeliveryStatus {
   return task.scopeKind === "system" ? "not_applicable" : "parent_missing";
 }
@@ -1362,15 +1383,23 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
       });
     }
     const shouldRouteParentReview = shouldUseParentReviewTaskTerminalMessage(latest);
+<<<<<<< HEAD
     const shouldDeliverParentReviewDirect = canDeliverParentReviewTaskToBoundDiscordThread(latest);
     const canDeliverDirect =
       canDeliverTaskToRequesterOrigin(latest) || shouldDeliverParentReviewDirect;
+=======
+    const canDeliverDirect = canDeliverTaskToRequesterOrigin(latest);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const directEventText = formatTaskTerminalMessage(latest);
     const sessionEventText = formatTaskTerminalMessage(
       latest,
       shouldRouteParentReview ? { surface: "parent_session" } : undefined,
     );
+<<<<<<< HEAD
     if ((shouldRouteParentReview && !shouldDeliverParentReviewDirect) || !canDeliverDirect) {
+=======
+    if (shouldRouteParentReview || !canDeliverDirect) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       try {
         queueTaskSystemEvent(latest, sessionEventText);
         if (latest.terminalOutcome === "blocked") {
@@ -1402,7 +1431,11 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         to: owner.requesterOrigin?.to ?? "",
         accountId: owner.requesterOrigin?.accountId,
         threadId: owner.requesterOrigin?.threadId,
+<<<<<<< HEAD
         content: shouldDeliverParentReviewDirect ? sessionEventText : directEventText,
+=======
+        content: directEventText,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         agentId: requesterAgentId,
         idempotencyKey,
         mirror: {
@@ -1523,6 +1556,45 @@ export async function maybeDeliverTaskStateChangeUpdate(
   }
 }
 
+<<<<<<< HEAD
+=======
+export function setTaskProgressById(params: {
+  taskId: string;
+  progressSummary?: string | null;
+  lastEventAt?: number;
+}): TaskRecord | null {
+  ensureTaskRegistryReady();
+  const patch: Partial<TaskRecord> = {};
+  if (params.progressSummary !== undefined) {
+    patch.progressSummary = normalizeTaskSummary(params.progressSummary);
+  }
+  if (params.lastEventAt != null) {
+    patch.lastEventAt = params.lastEventAt;
+  }
+  return updateTask(params.taskId, patch);
+}
+
+export function setTaskTimingById(params: {
+  taskId: string;
+  startedAt?: number;
+  endedAt?: number;
+  lastEventAt?: number;
+}): TaskRecord | null {
+  ensureTaskRegistryReady();
+  const patch: Partial<TaskRecord> = {};
+  if (params.startedAt != null) {
+    patch.startedAt = params.startedAt;
+  }
+  if (params.endedAt != null) {
+    patch.endedAt = params.endedAt;
+  }
+  if (params.lastEventAt != null) {
+    patch.lastEventAt = params.lastEventAt;
+  }
+  return updateTask(params.taskId, patch);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function setTaskCleanupAfterById(params: {
   taskId: string;
   cleanupAfter: number;
@@ -1978,6 +2050,25 @@ export function recordTaskProgressByRunId(params: {
   });
 }
 
+<<<<<<< HEAD
+=======
+export function markTaskTerminalByRunId(params: {
+  runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+  status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
+  startedAt?: number;
+  endedAt: number;
+  lastEventAt?: number;
+  error?: string;
+  progressSummary?: string | null;
+  terminalSummary?: string | null;
+  terminalOutcome?: TaskTerminalOutcome | null;
+}) {
+  return finalizeTaskRunByRunId(params);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function finalizeTaskRunByRunId(params: {
   runId: string;
   runtime?: TaskRuntime;
@@ -2092,7 +2183,11 @@ export async function cancelTaskById(params: {
           };
         }
       } else if (!childSessionKey) {
+<<<<<<< HEAD
         if (!isChildlessNativeSubagentTask(task)) {
+=======
+        if (!isChildlessCodexNativeSubagentTask(task)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           return {
             found: true,
             cancelled: false,
@@ -2207,6 +2302,21 @@ export function hasActiveTaskForChildSessionKey(params: {
   return false;
 }
 
+<<<<<<< HEAD
+=======
+export function getTaskRegistrySummary(): TaskRegistrySummary {
+  ensureTaskRegistryReady();
+  return summarizeTaskRecords(tasks.values());
+}
+
+export function getTaskRegistrySnapshot(): TaskRegistrySnapshot {
+  return {
+    tasks: listTaskRecords(),
+    deliveryStates: [...taskDeliveryStates.values()].map((state) => cloneTaskDeliveryState(state)),
+  };
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function getTaskById(taskId: string): TaskRecord | undefined {
   ensureTaskRegistryReady();
   const task = tasks.get(taskId.trim());
@@ -2260,6 +2370,14 @@ export function listTasksForAgentId(agentId: string): TaskRecord[] {
     .toSorted(compareTasksNewestFirst);
 }
 
+<<<<<<< HEAD
+=======
+export function findLatestTaskForOwnerKey(ownerKey: string): TaskRecord | undefined {
+  const task = listTasksForOwnerKey(ownerKey)[0];
+  return task ? cloneTaskRecord(task) : undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function findLatestTaskForFlowId(flowId: string): TaskRecord | undefined {
   const task = listTasksForFlowId(flowId)[0];
   return task ? cloneTaskRecord(task) : undefined;

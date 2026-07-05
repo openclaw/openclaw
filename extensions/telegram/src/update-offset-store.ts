@@ -2,7 +2,10 @@
 import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getTelegramRuntime } from "./runtime.js";
+<<<<<<< HEAD
 import { normalizeTelegramStateAccountId } from "./state-account-id.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 
 const STORE_VERSION = 3;
@@ -25,7 +28,15 @@ function isValidUpdateId(value: unknown): value is number {
 }
 
 export function normalizeTelegramUpdateOffsetAccountId(accountId?: string) {
+<<<<<<< HEAD
   return normalizeTelegramStateAccountId(accountId);
+=======
+  const trimmed = accountId?.trim();
+  if (!trimmed) {
+    return "default";
+  }
+  return trimmed.replace(/[^a-z0-9._-]+/gi, "_");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function openUpdateOffsetStore(env?: NodeJS.ProcessEnv): TelegramUpdateOffsetStore {

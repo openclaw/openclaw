@@ -1,7 +1,10 @@
 // Launchd tests cover macOS service plist generation and command handling.
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
 import {
   LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
@@ -15,11 +18,20 @@ import {
   disableCurrentOpenClawUpdateLaunchdJob,
   disableOpenClawUpdateLaunchdJob,
   findStaleOpenClawUpdateLaunchdJobs,
+<<<<<<< HEAD
+=======
+  isLaunchAgentListed,
+  isOpenClawUpdateLaunchdLabel,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   parseLaunchctlPrint,
   parseLaunchctlListOpenClawUpdateJobs,
   readLaunchAgentProgramArguments,
   readLaunchAgentRuntime,
   repairLaunchAgentBootstrap,
+<<<<<<< HEAD
+=======
+  removeOpenClawUpdateLaunchdJob,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
   stopLaunchAgent,
@@ -65,9 +77,12 @@ const cleanStaleGatewayProcessesSync = vi.hoisted(() =>
 const inspectPortUsage = vi.hoisted(() =>
   vi.fn(async () => ({ port: 18789, status: "free", listeners: [], hints: [] })),
 );
+<<<<<<< HEAD
 const probePortUsage = vi.hoisted(() =>
   vi.fn<typeof import("../infra/ports-probe.js").probePortUsage>(async () => "free"),
 );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const formatPortDiagnostics = vi.hoisted(() => vi.fn(() => ["Port 18789 is already in use."]));
 const defaultProgramArguments = ["node", "-e", "process.exit(0)"];
 
@@ -97,9 +112,15 @@ async function withProcessEnv<T>(
     previous.set(key, process.env[key]);
     const value = overrides[key];
     if (value === undefined) {
+<<<<<<< HEAD
       deleteTestEnvValue(key);
     } else {
       setTestEnvValue(key, value);
+=======
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   }
   try {
@@ -107,9 +128,15 @@ async function withProcessEnv<T>(
   } finally {
     for (const [key, value] of previous) {
       if (value === undefined) {
+<<<<<<< HEAD
         deleteTestEnvValue(key);
       } else {
         setTestEnvValue(key, value);
+=======
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     }
   }
@@ -265,10 +292,13 @@ vi.mock("../infra/ports.js", () => ({
   formatPortDiagnostics,
 }));
 
+<<<<<<< HEAD
 vi.mock("../infra/ports-probe.js", () => ({
   probePortUsage,
 }));
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
   const wrapped = {
@@ -361,8 +391,11 @@ beforeEach(() => {
   cleanStaleGatewayProcessesSync.mockReturnValue([]);
   inspectPortUsage.mockReset();
   inspectPortUsage.mockResolvedValue({ port: 18789, status: "free", listeners: [], hints: [] });
+<<<<<<< HEAD
   probePortUsage.mockReset();
   probePortUsage.mockResolvedValue("free");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   formatPortDiagnostics.mockReset();
   formatPortDiagnostics.mockReturnValue(["Port 18789 is already in use."]);
   launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReset();
@@ -463,6 +496,25 @@ describe("launchd runtime state", () => {
 });
 
 describe("launchctl list detection", () => {
+<<<<<<< HEAD
+=======
+  it("detects the resolved label in launchctl list", async () => {
+    state.listOutput = "123 0 ai.openclaw.gateway\n";
+    const listed = await isLaunchAgentListed({
+      env: { HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
+    });
+    expect(listed).toBe(true);
+  });
+
+  it("returns false when the label is missing", async () => {
+    state.listOutput = "123 0 com.other.service\n";
+    const listed = await isLaunchAgentListed({
+      env: { HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
+    });
+    expect(listed).toBe(false);
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("parses stale OpenClaw updater jobs from launchctl list", () => {
     const jobs = parseLaunchctlListOpenClawUpdateJobs(
       [
@@ -533,6 +585,27 @@ describe("launchctl list detection", () => {
     },
   );
 
+<<<<<<< HEAD
+=======
+  it("recognizes only OpenClaw updater launchd labels", () => {
+    expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.update.2026.5.12")).toBe(true);
+    expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.manual-update.1717168800")).toBe(true);
+    expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.gateway")).toBe(false);
+    expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.manual-update.gateway")).toBe(false);
+    expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.manual-update.profile")).toBe(false);
+    expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.manual-updater.1717168800")).toBe(false);
+    expect(isOpenClawUpdateLaunchdLabel("com.example.update")).toBe(false);
+  });
+
+  it.runIf(process.platform === "darwin")("removes legacy updater launchd jobs", async () => {
+    await expect(removeOpenClawUpdateLaunchdJob(" ai.openclaw.update.2026.5.12 ")).resolves.toBe(
+      true,
+    );
+
+    expect(state.launchctlCalls).toContainEqual(["remove", "ai.openclaw.update.2026.5.12"]);
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.runIf(process.platform === "darwin")(
     "disables the current legacy updater launchd job",
     async () => {
@@ -855,6 +928,7 @@ describe("launchd install", () => {
     expect(command?.environmentValueSources?.OPENAI_API_KEY).toBe("file");
   });
 
+<<<<<<< HEAD
   it("warns before overwriting a customized generated LaunchAgent env wrapper", async () => {
     const env = createDefaultLaunchdEnv();
     const wrapperPath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
@@ -930,6 +1004,8 @@ describe("launchd install", () => {
     expect(state.files.get(wrapperPath)).toBe(generatedWrapper);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("repairs a mangled label-derived service-env wrapper path on restart", async () => {
     const callerEnv = createDefaultLaunchdEnv();
     const serviceEnv = {
@@ -1196,6 +1272,7 @@ describe("launchd install", () => {
     expect(output).toContain("Stopped LaunchAgent");
   });
 
+<<<<<<< HEAD
   it("waits for the configured gateway port to finish releasing after bootout", async () => {
     const env = {
       ...createDefaultLaunchdEnv(),
@@ -1232,6 +1309,8 @@ describe("launchd install", () => {
     expect(probePortUsage).toHaveBeenCalledTimes(3);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("resolves the stop postcondition port from the stored LaunchAgent environment", async () => {
     const env = createDefaultLaunchdEnv();
     await installLaunchAgent({
@@ -1264,10 +1343,16 @@ describe("launchd install", () => {
       listeners: [],
       hints: [],
     });
+<<<<<<< HEAD
     probePortUsage.mockResolvedValue("busy");
     formatPortDiagnostics.mockReturnValue(["Port 19004 is held by pid 4242."]);
 
     await expect(runStopLaunchAgentWithFakeTimers({ env, stdout })).rejects.toThrow(
+=======
+    formatPortDiagnostics.mockReturnValue(["Port 19004 is held by pid 4242."]);
+
+    await expect(stopLaunchAgent({ env, stdout })).rejects.toThrow(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "gateway port 19004 is still busy after LaunchAgent stop\nPort 19004 is held by pid 4242.",
     );
 
@@ -1410,10 +1495,16 @@ describe("launchd install", () => {
       listeners: [],
       hints: [],
     });
+<<<<<<< HEAD
     probePortUsage.mockResolvedValue("busy");
     formatPortDiagnostics.mockReturnValue(["Port 19008 is held by pid 4242."]);
 
     await expect(runStopLaunchAgentWithFakeTimers({ env, stdout, disable: true })).rejects.toThrow(
+=======
+    formatPortDiagnostics.mockReturnValue(["Port 19008 is held by pid 4242."]);
+
+    await expect(stopLaunchAgent({ env, stdout, disable: true })).rejects.toThrow(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "gateway port 19008 is still busy after LaunchAgent stop\nPort 19008 is held by pid 4242.",
     );
 

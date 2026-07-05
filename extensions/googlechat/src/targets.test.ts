@@ -568,6 +568,7 @@ describe("verifyGoogleChatRequest", () => {
     });
     expect(release).toHaveBeenCalledOnce();
   });
+<<<<<<< HEAD
 
   describe("bounded JSON read (readProviderJsonResponse delegation)", () => {
     afterEach(() => {
@@ -701,4 +702,6 @@ describe("verifyGoogleChatRequest", () => {
       expect(release).toHaveBeenCalledOnce();
     });
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

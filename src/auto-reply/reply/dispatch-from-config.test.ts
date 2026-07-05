@@ -5269,7 +5269,10 @@ describe("dispatchReplyFromConfig", () => {
       Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "whatsapp:+15555550123",
+<<<<<<< HEAD
       AccountId: "default",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       MessageSid: "msg-1",
     });
     const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
@@ -5690,7 +5693,10 @@ describe("dispatchReplyFromConfig", () => {
       CommandBody: "hello",
       RawBody: "hello",
       Body: "hello",
+<<<<<<< HEAD
       AccountId: "default",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       MessageSid: "wa-msg-1",
       SessionKey: "agent:main:whatsapp:+15555550123",
       SuppressMessageReceivedHooks: true,
@@ -7040,7 +7046,10 @@ describe("dispatchReplyFromConfig", () => {
       Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "whatsapp:+15555550123",
+<<<<<<< HEAD
       AccountId: "default",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       MessageSid: "msg-dup",
     });
     const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
@@ -7066,7 +7075,10 @@ describe("dispatchReplyFromConfig", () => {
       Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "whatsapp:+15555550123",
+<<<<<<< HEAD
       AccountId: "default",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       MessageSid: "msg-dup-trace",
     });
     const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
@@ -8992,6 +9004,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("delivers fast auto progress in message-tool-only mode without verbose progress", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
@@ -9170,6 +9183,8 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("delivers verbose tool progress in message-tool-only mode", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {

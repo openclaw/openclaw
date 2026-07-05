@@ -3,6 +3,7 @@ import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodeExecutionTool } from "./code-execution.js";
 
+<<<<<<< HEAD
 function jsonResponse(payload: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(payload), {
     status: 200,
@@ -40,6 +41,32 @@ function installCodeExecutionFetch(payload?: Record<string, unknown>) {
         },
       ),
     ),
+=======
+function installCodeExecutionFetch(payload?: Record<string, unknown>) {
+  const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+    Promise.resolve({
+      ok: true,
+      json: () =>
+        Promise.resolve(
+          payload ?? {
+            output: [
+              { type: "code_interpreter_call" },
+              {
+                type: "message",
+                content: [
+                  {
+                    type: "output_text",
+                    text: "Mean: 42",
+                    annotations: [{ type: "url_citation", url: "https://example.com/data.csv" }],
+                  },
+                ],
+              },
+            ],
+            citations: ["https://example.com/data.csv"],
+          },
+        ),
+    } as Response),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
   global.fetch = withFetchPreconnect(mockFetch);
   return mockFetch;
@@ -191,7 +218,14 @@ describe("xai code_execution tool", () => {
 
   it("reports malformed code_execution JSON as a provider error", async () => {
     const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+<<<<<<< HEAD
       Promise.resolve(malformedJsonResponse()),
+=======
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.reject(new SyntaxError("Unexpected token")),
+      } as Response),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
     global.fetch = withFetchPreconnect(mockFetch);
     const tool = createCodeExecutionTool({
@@ -219,7 +253,14 @@ describe("xai code_execution tool", () => {
 
   it("rejects code_execution success JSON without answer text", async () => {
     const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+<<<<<<< HEAD
       Promise.resolve(jsonResponse({ output: [{ type: "code_interpreter_call" }] })),
+=======
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ output: [{ type: "code_interpreter_call" }] }),
+      } as Response),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
     global.fetch = withFetchPreconnect(mockFetch);
     const tool = createCodeExecutionTool({

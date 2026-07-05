@@ -1,9 +1,19 @@
 // Memory Core tests cover dreaming command plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+<<<<<<< HEAD
 import type { PluginCommandContext } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
 import { handleDreamingCommand } from "./dreaming-command.js";
+=======
+import type {
+  OpenClawPluginCommandDefinition,
+  PluginCommandContext,
+} from "openclaw/plugin-sdk/core";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { describe, expect, it, vi } from "vitest";
+import { registerDreamingCommand } from "./dreaming-command.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -19,6 +29,10 @@ function resolveStoredDreaming(config: OpenClawConfig): Record<string, unknown> 
 }
 
 function createHarness(initialConfig: OpenClawConfig = {}) {
+<<<<<<< HEAD
+=======
+  const registered: { command?: OpenClawPluginCommandDefinition } = {};
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let runtimeConfig: OpenClawConfig = initialConfig;
 
   const runtime = {
@@ -51,10 +65,26 @@ function createHarness(initialConfig: OpenClawConfig = {}) {
 
   const api = {
     runtime,
+<<<<<<< HEAD
   } as unknown as OpenClawPluginApi;
 
   return {
     api,
+=======
+    registerCommand: vi.fn((definition: OpenClawPluginCommandDefinition) => {
+      registered.command = definition;
+    }),
+  } as unknown as OpenClawPluginApi;
+
+  registerDreamingCommand(api);
+
+  if (!registered.command) {
+    throw new Error("memory-core did not register /dreaming");
+  }
+
+  return {
+    command: registered.command,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     runtime,
     getRuntimeConfig: () => runtimeConfig,
   };
@@ -77,6 +107,7 @@ function createCommandContext(
   };
 }
 
+<<<<<<< HEAD
 async function runDreamingCommand(
   harness: ReturnType<typeof createHarness>,
   args?: string,
@@ -89,6 +120,19 @@ describe("memory-core /dreaming command", () => {
   it("shows phase explanations when invoked without args", async () => {
     const harness = createHarness();
     const result = await runDreamingCommand(harness);
+=======
+describe("memory-core /dreaming command", () => {
+  it("registers with an enable/disable description", () => {
+    const { command } = createHarness();
+    expect(command.name).toBe("dreaming");
+    expect(command.acceptsArgs).toBe(true);
+    expect(command.description).toContain("Enable or disable");
+  });
+
+  it("shows phase explanations when invoked without args", async () => {
+    const { command } = createHarness();
+    const result = await command.handler(createCommandContext());
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(result.text).toContain("Usage: /dreaming status");
     expect(result.text).toContain("Dreaming status:");
@@ -99,7 +143,11 @@ describe("memory-core /dreaming command", () => {
   });
 
   it("persists global enablement under plugins.entries.memory-core.config.dreaming.enabled", async () => {
+<<<<<<< HEAD
     const harness = createHarness({
+=======
+    const { command, runtime, getRuntimeConfig } = createHarness({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       plugins: {
         entries: {
           "memory-core": {
@@ -118,16 +166,24 @@ describe("memory-core /dreaming command", () => {
       },
     });
 
+<<<<<<< HEAD
     const result = await runDreamingCommand(harness, "off");
 
     expect(harness.runtime.config.mutateConfigFile).toHaveBeenCalledTimes(1);
     const storedDreaming = resolveStoredDreaming(harness.getRuntimeConfig());
+=======
+    const result = await command.handler(createCommandContext("off"));
+
+    expect(runtime.config.mutateConfigFile).toHaveBeenCalledTimes(1);
+    const storedDreaming = resolveStoredDreaming(getRuntimeConfig());
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(storedDreaming.enabled).toBe(false);
     expect(storedDreaming.frequency).toBe("0 */6 * * *");
     expect(result.text).toContain("Dreaming disabled.");
   });
 
   it("blocks unscoped gateway callers from persisting dreaming config", async () => {
+<<<<<<< HEAD
     const harness = createHarness();
 
     const result = await runDreamingCommand(harness, "off", {
@@ -158,11 +214,53 @@ describe("memory-core /dreaming command", () => {
 
     expect(harness.runtime.config.mutateConfigFile).toHaveBeenCalledTimes(1);
     expect(resolveStoredDreaming(harness.getRuntimeConfig()).enabled).toBe(true);
+=======
+    const { command, runtime } = createHarness();
+
+    const result = await command.handler(
+      createCommandContext("off", {
+        gatewayClientScopes: [],
+      }),
+    );
+
+    expect(result.text).toContain("requires operator.admin");
+    expect(runtime.config.mutateConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("blocks write-scoped gateway callers from persisting dreaming config", async () => {
+    const { command, runtime } = createHarness();
+
+    const result = await command.handler(
+      createCommandContext("off", {
+        gatewayClientScopes: ["operator.write"],
+      }),
+    );
+
+    expect(result.text).toContain("requires operator.admin");
+    expect(runtime.config.mutateConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("allows admin-scoped gateway callers to persist dreaming config", async () => {
+    const { command, runtime, getRuntimeConfig } = createHarness();
+
+    const result = await command.handler(
+      createCommandContext("on", {
+        gatewayClientScopes: ["operator.admin"],
+      }),
+    );
+
+    expect(runtime.config.mutateConfigFile).toHaveBeenCalledTimes(1);
+    expect(resolveStoredDreaming(getRuntimeConfig()).enabled).toBe(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(result.text).toContain("Dreaming enabled.");
   });
 
   it("returns status without mutating config", async () => {
+<<<<<<< HEAD
     const harness = createHarness({
+=======
+    const { command, runtime } = createHarness({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       plugins: {
         entries: {
           "memory-core": {
@@ -181,12 +279,17 @@ describe("memory-core /dreaming command", () => {
       },
     });
 
+<<<<<<< HEAD
     const result = await runDreamingCommand(harness, "status");
+=======
+    const result = await command.handler(createCommandContext("status"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(result.text).toContain("Dreaming status:");
     expect(result.text).toContain("- enabled: off (America/Los_Angeles)");
     expect(result.text).toContain("- sweep cadence: 15 */8 * * *");
     expect(result.text).toContain("- promotion policy: score>=0.8, recalls>=3, uniqueQueries>=3");
+<<<<<<< HEAD
     expect(harness.runtime.config.mutateConfigFile).not.toHaveBeenCalled();
   });
 
@@ -196,5 +299,16 @@ describe("memory-core /dreaming command", () => {
 
     expect(result.text).toContain("Usage: /dreaming status");
     expect(harness.runtime.config.mutateConfigFile).not.toHaveBeenCalled();
+=======
+    expect(runtime.config.mutateConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("shows usage for invalid args and does not mutate config", async () => {
+    const { command, runtime } = createHarness();
+    const result = await command.handler(createCommandContext("unknown-mode"));
+
+    expect(result.text).toContain("Usage: /dreaming status");
+    expect(runtime.config.mutateConfigFile).not.toHaveBeenCalled();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

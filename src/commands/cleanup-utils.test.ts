@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+<<<<<<< HEAD
+=======
+import { applyAgentDefaultPrimaryModel } from "../plugins/provider-model-primary.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -69,6 +73,41 @@ describe("buildCleanupPlan", () => {
   });
 });
 
+<<<<<<< HEAD
+=======
+describe("applyAgentDefaultPrimaryModel", () => {
+  it("does not mutate when already set", () => {
+    const cfg = { agents: { defaults: { model: { primary: "a/b" } } } } as OpenClawConfig;
+    const result = applyAgentDefaultPrimaryModel({ cfg, model: "a/b" });
+    expect(result.changed).toBe(false);
+    expect(result.next).toBe(cfg);
+  });
+
+  it("normalizes legacy models", () => {
+    const cfg = { agents: { defaults: { model: { primary: "legacy" } } } } as OpenClawConfig;
+    const result = applyAgentDefaultPrimaryModel({
+      cfg,
+      model: "a/b",
+      legacyModels: new Set(["legacy"]),
+    });
+    expect(result.changed).toBe(false);
+    expect(result.next).toBe(cfg);
+  });
+
+  it("normalizes retired Google Gemini primary models before writing config", () => {
+    const cfg = { agents: { defaults: {} } } as OpenClawConfig;
+    const result = applyAgentDefaultPrimaryModel({
+      cfg,
+      model: "google/gemini-3-pro-preview",
+    });
+    expect(result.changed).toBe(true);
+    expect(result.next.agents?.defaults?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+    });
+  });
+});
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("cleanup path removals", () => {
   function createRuntimeMock() {
     return {

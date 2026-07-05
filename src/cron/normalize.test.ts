@@ -876,6 +876,7 @@ describe("normalizeCronJobPatch", () => {
     expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 
+<<<<<<< HEAD
   it("preserves null fallback lists so patches can clear the fallback override", () => {
     const normalized = normalizeCronJobPatch({
       payload: {
@@ -890,6 +891,8 @@ describe("normalizeCronJobPatch", () => {
     expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("promotes implicit text payloads with agentTurn hints to agentTurn patches", () => {
     const normalized = normalizeCronJobPatch({
       payload: {

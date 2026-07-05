@@ -130,6 +130,14 @@ export function findFinalTagMatches(text: string): FinalTagMatch[] {
   return matches;
 }
 
+<<<<<<< HEAD
+=======
+/** Returns true when text contains at least one valid `<final>` control tag. */
+export function containsFinalTag(text: string): boolean {
+  return findFinalTagMatches(text).length > 0;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Removes valid `<final>` tags while preserving their enclosed visible answer text. */
 export function stripFinalTags(text: string): string {
   let output = "";

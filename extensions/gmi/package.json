@@ -1,6 +1,10 @@
 {
   "name": "@openclaw/gmi-provider",
+<<<<<<< HEAD
   "version": "2026.6.10",
+=======
+  "version": "2026.6.8",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "description": "OpenClaw GMI Cloud provider plugin.",
   "repository": {
     "type": "git",
@@ -21,10 +25,17 @@
       "minHostVersion": ">=2026.6.8"
     },
     "compat": {
+<<<<<<< HEAD
       "pluginApi": ">=2026.6.10"
     },
     "build": {
       "openclawVersion": "2026.6.10",
+=======
+      "pluginApi": ">=2026.6.8"
+    },
+    "build": {
+      "openclawVersion": "2026.6.8",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "bundledDist": false
     },
     "release": {

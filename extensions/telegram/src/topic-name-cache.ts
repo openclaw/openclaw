@@ -163,6 +163,15 @@ async function hydrateTopicStoreState(state: TopicNameStoreState): Promise<void>
   await state.hydratePromise;
 }
 
+<<<<<<< HEAD
+=======
+async function getTopicStore(scope?: string): Promise<TopicNameStore> {
+  const state = getTopicStoreState(scope);
+  await hydrateTopicStoreState(state);
+  return state.store;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function nextUpdatedAt(scope?: string): number {
   const state = getTopicStoreState(scope);
   const now = Date.now();
@@ -217,6 +226,17 @@ export async function getTopicName(
   return entry?.name;
 }
 
+<<<<<<< HEAD
+=======
+export async function getTopicEntry(
+  chatId: number | string,
+  threadId: number | string,
+  scope?: string,
+): Promise<TopicEntry | undefined> {
+  return (await getTopicStore(scope)).get(cacheKey(chatId, threadId));
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function listTelegramLegacyTopicNameCacheEntries(params: {
   persistedPath: string;
   maxEntries?: number;
@@ -232,6 +252,21 @@ export async function listTelegramLegacyTopicNameCacheEntries(params: {
     .map(([key, entry]) => ({ key, value: entry }));
 }
 
+<<<<<<< HEAD
+=======
+export async function clearTopicNameCache(): Promise<void> {
+  const state = getTopicNameCacheState();
+  await Promise.all(
+    [...state.stores.values()].map((storeState) => storeState.persistentStore.clear()),
+  );
+  state.stores.clear();
+}
+
+export function topicNameCacheSize(scope?: string): number {
+  return getTopicStoreState(scope).store.size;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function resetTopicNameCacheForTest(): void {
   getTopicNameCacheState().stores.clear();
 }

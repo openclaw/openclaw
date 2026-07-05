@@ -142,9 +142,14 @@ export async function probeDiscord(
       elapsedMs: Date.now() - started,
     };
   }
+<<<<<<< HEAD
   let res: Response | undefined;
   try {
     res = await fetchWithTimeout(
+=======
+  try {
+    const res = await fetchWithTimeout(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       `${DISCORD_API_BASE}/users/@me`,
       { headers: { Authorization: `Bot ${normalized}` } },
       timeoutMs,
@@ -173,10 +178,13 @@ export async function probeDiscord(
       error: formatErrorMessage(err),
       elapsedMs: Date.now() - started,
     };
+<<<<<<< HEAD
   } finally {
     if (res?.bodyUsed !== true) {
       await res?.body?.cancel().catch(() => undefined);
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 

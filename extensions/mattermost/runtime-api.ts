@@ -46,7 +46,11 @@ export {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+<<<<<<< HEAD
 export { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+=======
+export { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export { formatInboundFromLabel } from "openclaw/plugin-sdk/channel-inbound";
 export { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";

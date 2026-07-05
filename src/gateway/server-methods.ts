@@ -9,11 +9,15 @@ import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
+<<<<<<< HEAD
 import {
   ADMIN_SCOPE,
   authorizeOperatorScopesForMethod,
   authorizeOperatorScopesForRequiredScope,
 } from "./method-scopes.js";
+=======
+import { ADMIN_SCOPE, authorizeOperatorScopesForMethod } from "./method-scopes.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodDescriptorsFromHandlers,
@@ -22,7 +26,10 @@ import {
   isCoreGatewayMethodClassified,
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
+<<<<<<< HEAD
 import { isOperatorScope } from "./operator-scopes.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import type {
   GatewayRequestHandler,
@@ -231,7 +238,10 @@ function authorizeGatewayMethod(
   method: string,
   client: GatewayRequestOptions["client"],
   params: unknown,
+<<<<<<< HEAD
   methodRegistry: GatewayMethodRegistry,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ) {
   // Pre-connect and health requests are allowed through; role/scope checks require the
   // authenticated connect metadata established by the gateway handshake.
@@ -256,10 +266,14 @@ function authorizeGatewayMethod(
   if (scopes.includes(ADMIN_SCOPE)) {
     return null;
   }
+<<<<<<< HEAD
   const registeredScope = methodRegistry.getScope(method);
   const scopeAuth = isOperatorScope(registeredScope)
     ? authorizeOperatorScopesForRequiredScope(registeredScope, scopes)
     : authorizeOperatorScopesForMethod(method, scopes, params);
+=======
+  const scopeAuth = authorizeOperatorScopesForMethod(method, scopes, params);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!scopeAuth.allowed) {
     return errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${scopeAuth.missingScope}`);
   }
@@ -639,6 +653,7 @@ export async function handleGatewayRequest(
   opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers },
 ): Promise<void> {
   const { req, respond, client, isWebchatConnect, context } = opts;
+<<<<<<< HEAD
   // Prefer the caller-attached registry when it owns the requested method so plugin dispatch
   // metadata newer than global runtime state still authorizes and dispatches correctly. When the
   // attached snapshot does not own the method, rebuild from the live plugin registry so plugin RPC
@@ -648,6 +663,11 @@ export async function handleGatewayRequest(
       ? opts.methodRegistry
       : createRequestGatewayMethodRegistry(opts.extraHandlers);
   const authError = authorizeGatewayMethod(req.method, client, req.params, methodRegistry);
+=======
+  const methodRegistry =
+    opts.methodRegistry ?? createRequestGatewayMethodRegistry(opts.extraHandlers);
+  const authError = authorizeGatewayMethod(req.method, client, req.params);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (authError) {
     respond(false, undefined, authError);
     return;

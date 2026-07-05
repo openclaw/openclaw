@@ -325,6 +325,7 @@ export function renderQaToolCoverageMarkdownReport(report: QaToolCoverageReport)
   ];
 
   for (const row of report.rows) {
+<<<<<<< HEAD
     const cells = [
       row.tool,
       row.bucket,
@@ -341,6 +342,11 @@ export function renderQaToolCoverageMarkdownReport(report: QaToolCoverageReport)
       row.tracking ?? "",
     ].map(escapeTableCell);
     lines.push(`| ${cells.join(" | ")} |`);
+=======
+    lines.push(
+      `| ${row.tool} | ${row.bucket} | ${row.expectedLayer} | ${row.capabilityLayer} | ${row.required ? "yes" : "no"} | ${row.fixtureCount} | ${row.openclaw} | ${row.codex} | ${row.drift} | ${row.codexDefaultImpact ?? ""} | ${row.qaImpact ?? ""} | ${row.action ?? ""} | ${row.tracking ?? ""} |`,
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   if (report.failures.length > 0) {
@@ -357,7 +363,10 @@ export function renderQaToolCoverageMarkdownReport(report: QaToolCoverageReport)
 
   return `${lines.join("\n").trimEnd()}\n`;
 }
+<<<<<<< HEAD
 
 function escapeTableCell(value: string): string {
   return value.replace(/\|/gu, "\\|").replace(/\s+/gu, " ").trim();
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

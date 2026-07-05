@@ -340,7 +340,11 @@ export async function deliverWebReply(params: {
         return;
       }
       const warning = "⚠️ Media failed.";
+<<<<<<< HEAD
       const fallbackTextParts = [caption ?? "", warning].filter(Boolean);
+=======
+      const fallbackTextParts = [remainingText.shift() ?? caption ?? "", warning].filter(Boolean);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const fallbackText = fallbackTextParts.join("\n");
       if (!fallbackText) {
         return;

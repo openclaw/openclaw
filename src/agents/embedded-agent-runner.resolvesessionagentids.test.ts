@@ -68,6 +68,7 @@ describe("resolveSessionAgentIds", () => {
     });
     expect(sessionAgentId).toBe("main");
   });
+<<<<<<< HEAD
 
   it("uses fallbackAgentId for unscoped channel session keys", () => {
     const { sessionAgentId } = resolveSessionAgentIds({
@@ -96,4 +97,6 @@ describe("resolveSessionAgentIds", () => {
     });
     expect(sessionAgentId).toBe("beta");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

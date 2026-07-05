@@ -5,7 +5,10 @@ import path from "node:path";
 import { Type } from "typebox";
 import { beforeAll, describe, expect, it } from "vitest";
 import { defineToolPlugin, getToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
+<<<<<<< HEAD
 import { VERSION } from "../version.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   buildToolPluginManifest,
   buildToolPluginPackageManifest,
@@ -343,7 +346,10 @@ describe("plugin authoring commands", () => {
       scripts: {
         "plugin:build": "npm run build && openclaw plugins build --entry ./dist/index.js",
         "plugin:validate": "npm run build && openclaw plugins validate --entry ./dist/index.js",
+<<<<<<< HEAD
         test: "vitest run --config ./vitest.config.ts",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
       openclaw: {
         extensions: ["./dist/index.js"],
@@ -364,6 +370,7 @@ describe("plugin authoring commands", () => {
     expect(fs.readFileSync(path.join(projectDir, "src/index.test.ts"), "utf8")).toContain(
       "getToolPluginMetadata",
     );
+<<<<<<< HEAD
     expect(fs.readFileSync(path.join(projectDir, "vitest.config.ts"), "utf8")).toContain(
       'include: ["src/**/*.test.ts"]',
     );
@@ -469,5 +476,7 @@ describe("plugin authoring commands", () => {
     expect(workflow).toContain(
       "openclaw/clawhub/.github/workflows/package-publish.yml@9d49df109d4ad3dc8a6ecf05d26b39f46d294721",
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

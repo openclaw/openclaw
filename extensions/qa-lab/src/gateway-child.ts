@@ -1,5 +1,9 @@
 // Qa Lab plugin module implements gateway child behavior.
+<<<<<<< HEAD
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+=======
+import { spawn, type ChildProcess } from "node:child_process";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { randomUUID } from "node:crypto";
 import { createWriteStream, existsSync, type WriteStream } from "node:fs";
 import fs from "node:fs/promises";
@@ -25,7 +29,11 @@ import {
   resolveQaRuntimeHostVersion,
 } from "./bundled-plugin-staging.js";
 import { assertRepoBoundPath, ensureRepoBoundDirectory } from "./cli-paths.js";
+<<<<<<< HEAD
 import { QaSuiteInfraError, toQaErrorObject } from "./errors.js";
+=======
+import { QaSuiteInfraError } from "./errors.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatQaGatewayLogsForError, redactQaGatewayDebugText } from "./gateway-log-redaction.js";
 import { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
 import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
@@ -50,7 +58,10 @@ import { stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
+<<<<<<< HEAD
 import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type { QaCliBackendAuthMode } from "./providers/env.js";
 const QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS = 5;
@@ -162,7 +173,11 @@ async function preserveQaGatewayDebugArtifacts(params: {
     [
       "Only sanitized gateway debug artifacts are preserved here.",
       "The full QA gateway runtime was not copied because it may contain credentials or auth tokens.",
+<<<<<<< HEAD
       "Original runtime temp root omitted because local temp paths can identify the runner.",
+=======
+      `Original runtime temp root: ${params.tempRoot}`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "",
     ].join("\n"),
     "utf8",
@@ -280,6 +295,7 @@ function createQaGatewayChildLogCollector() {
   };
 }
 
+<<<<<<< HEAD
 function monitorQaGatewayChildSpawnError(
   child: ChildProcess,
   output: { push(chunk: Buffer): void },
@@ -294,6 +310,8 @@ function monitorQaGatewayChildSpawnError(
   return () => spawnError;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function fetchLocalGatewayHealth(params: {
   baseUrl: string;
   healthPath: "/readyz" | "/healthz";
@@ -362,7 +380,10 @@ export const testing = {
   resolveQaRuntimeHostVersion,
   createQaGatewayChildLogCollector,
   createQaBundledPluginsDir,
+<<<<<<< HEAD
   signalQaGatewayChildProcessTree,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   stopQaGatewayChildProcessTree,
 };
 
@@ -392,6 +413,7 @@ function isQaGatewayChildProcessTreeAlive(child: ChildProcess) {
   }
 }
 
+<<<<<<< HEAD
 type QaGatewayTaskkillRunner = typeof spawnSync;
 
 function signalQaGatewayWindowsProcessTree(
@@ -426,14 +448,20 @@ function signalQaGatewayChildProcessTree(
   signal: NodeJS.Signals,
   runTaskkill: QaGatewayTaskkillRunner = spawnSync,
 ) {
+=======
+function signalQaGatewayChildProcessTree(child: ChildProcess, signal: NodeJS.Signals) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!child.pid) {
     return;
   }
   try {
     if (process.platform === "win32") {
+<<<<<<< HEAD
       if (signalQaGatewayWindowsProcessTree(child.pid, signal, runTaskkill)) {
         return;
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       child.kill(signal);
       return;
     }
@@ -539,11 +567,15 @@ async function waitForGatewayReady(params: {
     exitCode: number | null;
     signalCode: NodeJS.Signals | null;
   };
+<<<<<<< HEAD
   getSpawnError?: () => unknown;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   timeoutMs?: number;
 }) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < (params.timeoutMs ?? 60_000)) {
+<<<<<<< HEAD
     const spawnError = params.getSpawnError?.();
     if (spawnError) {
       throw new QaSuiteInfraError(
@@ -552,6 +584,8 @@ async function waitForGatewayReady(params: {
         { cause: spawnError },
       );
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (params.child.exitCode !== null || params.child.signalCode !== null) {
       throw new QaSuiteInfraError(
         "gateway_startup_unhealthy",
@@ -829,14 +863,20 @@ export async function startQaGatewayChild(params: {
         stderrLog.write(buffer);
       });
       child = attemptChild;
+<<<<<<< HEAD
       const getAttemptSpawnError = monitorQaGatewayChildSpawnError(attemptChild, output);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       try {
         await waitForGatewayReady({
           baseUrl,
           logs,
           child: attemptChild,
+<<<<<<< HEAD
           getSpawnError: getAttemptSpawnError,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           timeoutMs: 120_000,
         });
         const attemptRpcClient = await startQaGatewayRpcClient({
@@ -868,13 +908,20 @@ export async function startQaGatewayChild(params: {
                 baseUrl,
                 logs,
                 child: attemptChild,
+<<<<<<< HEAD
                 getSpawnError: getAttemptSpawnError,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 timeoutMs: QA_GATEWAY_CHILD_RPC_RETRY_HEALTH_TIMEOUT_MS,
               });
             }
           }
           if (!rpcReady) {
+<<<<<<< HEAD
             throw toQaErrorObject(
+=======
+            throw toLintErrorObject(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               lastRpcStartupError ?? new Error("qa gateway rpc client failed to start"),
               "Non-Error thrown",
             );
@@ -935,14 +982,20 @@ export async function startQaGatewayChild(params: {
         output.push(buffer);
         stderrLog.write(buffer);
       });
+<<<<<<< HEAD
       const getNextSpawnError = monitorQaGatewayChildSpawnError(nextChild, output);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       try {
         await waitForGatewayReady({
           baseUrl,
           logs,
           child: nextChild,
+<<<<<<< HEAD
           getSpawnError: getNextSpawnError,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           timeoutMs: 120_000,
         });
         const nextRpcClient = await startQaGatewayRpcClient({
@@ -974,13 +1027,20 @@ export async function startQaGatewayChild(params: {
                 baseUrl,
                 logs,
                 child: nextChild,
+<<<<<<< HEAD
                 getSpawnError: getNextSpawnError,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 timeoutMs: 15_000,
               });
             }
           }
           if (!rpcReady) {
+<<<<<<< HEAD
             throw toQaErrorObject(
+=======
+            throw toLintErrorObject(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               lastRpcStartupError ?? new Error("qa gateway rpc client failed to start"),
               "Non-Error thrown",
             );
@@ -1134,3 +1194,20 @@ export async function startQaGatewayChild(params: {
   }
 }
 export { testing as __testing };
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

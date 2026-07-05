@@ -1,3 +1,8 @@
+<<<<<<< HEAD
+=======
+// Subagent spawn context tests cover isolated, forked, lightweight, and
+// thread-bound bootstrap context preparation for child sessions.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,9 +17,13 @@ type GatewayRequest = { method?: string; params?: Record<string, unknown> };
 describe("sessions_spawn context modes", () => {
   const storePath = "/tmp/subagent-context-session-store.json";
   const callGatewayMock = vi.fn();
+<<<<<<< HEAD
   const loadSessionStoreMock = vi.fn();
   const updateSessionStoreMock = vi.fn();
   const forkSessionEntryFromParentMock = vi.fn();
+=======
+  const updateSessionStoreMock = vi.fn();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const forkSessionFromParentMock = vi.fn();
   const ensureContextEnginesInitializedMock = vi.fn();
   const resolveContextEngineMock = vi.fn();
@@ -25,9 +34,13 @@ describe("sessions_spawn context modes", () => {
   beforeAll(async () => {
     ({ spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
+<<<<<<< HEAD
       loadSessionStoreMock,
       updateSessionStoreMock,
       forkSessionEntryFromParentMock,
+=======
+      updateSessionStoreMock,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       forkSessionFromParentMock,
       ensureContextEnginesInitializedMock,
       resolveContextEngineMock,
@@ -37,9 +50,13 @@ describe("sessions_spawn context modes", () => {
 
   beforeEach(() => {
     callGatewayMock.mockReset();
+<<<<<<< HEAD
     loadSessionStoreMock.mockReset();
     updateSessionStoreMock.mockReset();
     forkSessionEntryFromParentMock.mockReset();
+=======
+    updateSessionStoreMock.mockReset();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     forkSessionFromParentMock.mockReset();
     ensureContextEnginesInitializedMock.mockReset();
     resolveContextEngineMock.mockReset();
@@ -48,13 +65,19 @@ describe("sessions_spawn context modes", () => {
   });
 
   function usePersistentStoreMock(store: SessionStore) {
+<<<<<<< HEAD
     loadSessionStoreMock.mockReturnValue(store);
+=======
+    // The spawn path mutates the session store in-place; this mock keeps that
+    // contract visible without touching disk.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     updateSessionStoreMock.mockImplementation(async (_storePath: unknown, mutator: unknown) => {
       if (typeof mutator !== "function") {
         throw new Error("missing session store mutator");
       }
       return await mutator(store);
     });
+<<<<<<< HEAD
     forkSessionEntryFromParentMock.mockImplementation(
       async (params: {
         agentId: string;
@@ -120,6 +143,8 @@ describe("sessions_spawn context modes", () => {
         };
       },
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   function requireAcceptedResult(result: Awaited<ReturnType<typeof spawnSubagentDirect>>) {
@@ -270,6 +295,11 @@ describe("sessions_spawn context modes", () => {
   });
 
   it("falls back to isolated context when requested fork is too large", async () => {
+<<<<<<< HEAD
+=======
+    // Forking very large transcripts would create expensive child context, so
+    // the accepted run records the downgrade in its note.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const store: SessionStore = {
       main: {
         sessionId: "parent-session-id",

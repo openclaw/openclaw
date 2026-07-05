@@ -2,7 +2,10 @@
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
+<<<<<<< HEAD
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
 import { normalizeToolName } from "../../agents/tool-policy.js";
@@ -161,6 +164,7 @@ function buildCronDeliveryTargetRuntimeContext(params: {
   ].join("\n");
 }
 
+<<<<<<< HEAD
 function resolveCliRuntimeToolsAllow(
   toolsAllow?: string[],
   toolsAllowIsDefault?: boolean,
@@ -174,6 +178,10 @@ function resolveCliRuntimeToolsAllow(
     return undefined;
   }
   return toolsAllow.some((toolName) => normalizeToolName(toolName) === "*")
+=======
+function resolveCliRuntimeToolsAllow(toolsAllow?: string[]): string[] | undefined {
+  return toolsAllow?.some((toolName) => normalizeToolName(toolName) === "*")
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ? undefined
     : toolsAllow;
 }
@@ -251,11 +259,14 @@ export function createCronPromptExecutor(params: {
   let fallbackProvider = params.liveSelection.provider;
   let fallbackModel = params.liveSelection.model;
   let runEndedAt = Date.now();
+<<<<<<< HEAD
   const fastModeStartedAtMs = Date.now();
   const fastModeAutoProgressState: FastModeAutoProgressState = {
     offAnnounced: false,
     resetAnnounced: false,
   };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.cronSession.sessionEntry.systemPromptReport,
   );
@@ -337,10 +348,14 @@ export function createCronPromptExecutor(params: {
             messageChannel,
             sourceReplyDeliveryMode,
             requireExplicitMessageTarget: params.sourceDelivery.messageTool.requireExplicitTarget,
+<<<<<<< HEAD
             toolsAllow: resolveCliRuntimeToolsAllow(
               params.agentPayload?.toolsAllow,
               params.agentPayload?.toolsAllowIsDefault,
             ),
+=======
+            toolsAllow: resolveCliRuntimeToolsAllow(params.agentPayload?.toolsAllow),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             abortSignal: params.abortSignal,
             onExecutionStarted: params.onExecutionStarted,
             onExecutionPhase: params.onExecutionPhase,
@@ -348,9 +363,12 @@ export function createCronPromptExecutor(params: {
             bootstrapContextRunKind: "cron",
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
+<<<<<<< HEAD
             fastModeStartedAtMs,
             fastModeAutoProgressState,
             isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           });
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
@@ -405,6 +423,7 @@ export function createCronPromptExecutor(params: {
           // still sharing real credential/account failures across auth profiles.
           authProfileFailurePolicy: "local_transient",
           thinkLevel: params.thinkLevel,
+<<<<<<< HEAD
           ...(() => {
             const fastModeState = resolveFastModeState({
               cfg: params.cfgWithAgentDefaults,
@@ -421,6 +440,15 @@ export function createCronPromptExecutor(params: {
               isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
             };
           })(),
+=======
+          fastMode: resolveFastModeState({
+            cfg: params.cfgWithAgentDefaults,
+            provider: providerOverride,
+            model: modelOverride,
+            agentId: params.agentId,
+            sessionEntry: params.cronSession.sessionEntry,
+          }).enabled,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           verboseLevel: params.resolvedVerboseLevel,
           timeoutMs: params.timeoutMs,
           runTimeoutOverrideMs: params.runTimeoutOverrideMs,

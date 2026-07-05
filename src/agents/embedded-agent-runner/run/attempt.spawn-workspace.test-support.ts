@@ -392,6 +392,7 @@ vi.mock("../../bootstrap-files.js", async () => {
   };
 });
 
+<<<<<<< HEAD
 vi.mock("../../workspace.js", async () => {
   const actual = await vi.importActual<typeof import("../../workspace.js")>("../../workspace.js");
   return {
@@ -400,6 +401,8 @@ vi.mock("../../workspace.js", async () => {
   };
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.mock("../../../skills/runtime/env-overrides.js", () => ({
   applySkillEnvOverrides: () => () => {},
   applySkillEnvOverridesFromSnapshot: () => () => {},

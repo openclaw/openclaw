@@ -69,6 +69,7 @@ describe("activation planner", () => {
           origin: "bundled",
         },
         {
+<<<<<<< HEAD
           id: "custom-harness-plugin",
           providers: [],
           channels: [],
@@ -93,6 +94,8 @@ describe("activation planner", () => {
           origin: "config",
         },
         {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           id: "demo-channel",
           channels: ["telegram"],
           providers: [],
@@ -169,6 +172,7 @@ describe("activation planner", () => {
     ).toEqual([]);
   });
 
+<<<<<<< HEAD
   it("plans manifest-owned custom harnesses and respects their activation policy", () => {
     expect(
       resolveManifestActivationPluginIds({
@@ -255,6 +259,8 @@ describe("activation planner", () => {
     ).toEqual([]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps ids-only provider, agent harness, channel, and route planning stable", () => {
     expect(
       resolveManifestActivationPluginIds({

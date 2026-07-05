@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 import fs from "node:fs/promises";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Integration-style tests for before_tool_call behavior.
  * Covers loop detection, diagnostics, plugin approval, and skill telemetry
@@ -28,7 +31,10 @@ import {
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+<<<<<<< HEAD
 import { createOpenClawCodingTools } from "./agent-tools.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { CRITICAL_THRESHOLD } from "./tool-loop-detection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -1846,6 +1852,7 @@ describe("before_tool_call requireApproval handling", () => {
 
     expect(onResolution).toHaveBeenCalledWith("cancelled");
   });
+<<<<<<< HEAD
 
   it("forwards turn source routing fields from ctx to plugin.approval.request", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
@@ -1946,6 +1953,8 @@ describe("before_tool_call requireApproval handling", () => {
     expect(requestParams.turnSourceAccountId).toBeUndefined();
     expect(requestParams.turnSourceThreadId).toBeUndefined();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("before_tool_call tool content private-data capture", () => {

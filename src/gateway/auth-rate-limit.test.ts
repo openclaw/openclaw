@@ -22,7 +22,10 @@ describe("auth rate limiter", () => {
       lockoutMs: number;
       exemptLoopback: boolean;
       pruneIntervalMs: number;
+<<<<<<< HEAD
       maxEntries: number;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }>,
   ) {
     limiter = createAuthRateLimiter({
@@ -160,6 +163,7 @@ describe("auth rate limiter", () => {
     expect(limiter.check("10.0.0.11").remaining).toBe(2);
   });
 
+<<<<<<< HEAD
   it("caps unique client entries under flood", () => {
     createLimiter({ maxEntries: 3, pruneIntervalMs: 0 });
 
@@ -241,6 +245,8 @@ describe("auth rate limiter", () => {
     expect(limiter.size()).toBe(expectedSize);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("treats ipv4 and ipv4-mapped ipv6 forms as the same client", () => {
     limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
     limiter.recordFailure("1.2.3.4");

@@ -18,7 +18,10 @@ import {
 } from "../../auto-reply/reply/inbound-text.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { ContextVisibilityMode } from "../../config/types.base.js";
+<<<<<<< HEAD
 import type { PluginHookChannelContext } from "../../plugins/hook-channel-context.types.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { shouldIncludeSupplementalContext } from "../../security/context-visibility.js";
 import type {
   AccessFacts,
@@ -77,7 +80,10 @@ export type BuildChannelInboundEventContextParams = {
   commandTurn?: CommandTurnContext;
   media?: InboundMediaFacts[];
   supplemental?: ChannelInboundSupplementalFacts;
+<<<<<<< HEAD
   channelContext?: PluginHookChannelContext;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   contextVisibility?: ContextVisibilityMode;
   finalize?: FinalizeInboundContextFn;
   finalizeOptions?: FinalizeInboundContextOptions;
@@ -486,7 +492,10 @@ export function buildChannelInboundEventContext(
     From: params.from,
     To: params.reply.to,
     SessionKey: params.route.dispatchSessionKey ?? params.route.routeSessionKey,
+<<<<<<< HEAD
     AgentId: params.route.agentId,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     AccountId: params.route.accountId ?? params.accountId,
     ParentSessionKey: params.route.parentSessionKey,
     ModelParentSessionKey: params.route.modelParentSessionKey,
@@ -495,7 +504,10 @@ export function buildChannelInboundEventContext(
     ReplyToId: params.reply.replyToId,
     ReplyToIdFull: params.reply.replyToIdFull,
     ChatType: params.conversation.kind,
+<<<<<<< HEAD
     ChatId: params.conversation.id,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ConversationLabel: params.conversation.label,
     GroupSubject: params.conversation.kind !== "direct" ? params.conversation.label : undefined,
     GroupSpace: params.conversation.spaceId,
@@ -517,7 +529,10 @@ export function buildChannelInboundEventContext(
     CommandTurn: commandTurn,
     MessageThreadId: params.reply.messageThreadId ?? params.conversation.threadId,
     NativeChannelId: params.reply.nativeChannelId ?? params.conversation.nativeChannelId,
+<<<<<<< HEAD
     ChannelContext: params.channelContext,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     OriginatingChannel: params.channel,
     OriginatingTo: params.reply.originatingTo ?? params.reply.to,
     ThreadParentId: params.reply.threadParentId ?? params.conversation.parentId,

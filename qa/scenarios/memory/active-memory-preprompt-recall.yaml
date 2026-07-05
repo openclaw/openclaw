@@ -28,7 +28,11 @@ scenario:
             queryMode: recent
             maxSummaryChars: 220
   successCriteria:
+<<<<<<< HEAD
     - With Active Memory off after doctor migrates the legacy session toggle, the session shows no Active Memory plugin activity.
+=======
+    - With Active Memory off, the session shows no Active Memory plugin activity.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     - With Active Memory on, plugin-owned evidence shows the Active Memory sub-agent searched memory before the main reply.
     - Live lane proves the first user-visible reply uses the recalled preference.
   docsRefs:
@@ -36,14 +40,20 @@ scenario:
     - docs/concepts/memory-search.md
   codeRefs:
     - extensions/active-memory/index.ts
+<<<<<<< HEAD
     - extensions/active-memory/doctor-contract-api.ts
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     - extensions/qa-lab/src/suite.ts
     - extensions/qa-lab/src/mock-openai-server.ts
   execution:
     kind: flow
     summary: Verify Active Memory stays off when session-toggled off, runs memory search/get when enabled, and helps a live model answer with the recalled preference in the first visible reply.
     config:
+<<<<<<< HEAD
       requiredChannelDriver: qa-channel
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       baselineConversationId: qa-active-memory-off
       activeConversationId: qa-active-memory-on
       memoryFact: "Stable QA movie night usual favorite snack preference: lemon pepper wings with blue cheese."
@@ -109,6 +119,7 @@ flow:
             - ref: toggleStorePath
             - expr: "`${JSON.stringify({ sessions: { [baselineSessionKey]: { disabled: true, updatedAt: Date.now() } } }, null, 2)}\\n`"
             - utf8
+<<<<<<< HEAD
         - call: runQaCli
           saveAs: doctorFixOutput
           args:
@@ -122,6 +133,8 @@ flow:
             expr: "String(doctorFixOutput).includes('Migrated 1 Active Memory session toggle entry')"
             message:
               expr: "`doctor --fix did not migrate the Active Memory session toggle: ${doctorFixOutput}`"
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         - set: requestCountBeforeBaseline
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
@@ -165,6 +178,14 @@ flow:
         - set: requestCountBeforeActive
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+<<<<<<< HEAD
+=======
+        - call: fs.writeFile
+          args:
+            - ref: toggleStorePath
+            - expr: "'{}\\n'"
+            - utf8
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         - set: activeStartIndex
           value:
             expr: "state.getSnapshot().messages.length"

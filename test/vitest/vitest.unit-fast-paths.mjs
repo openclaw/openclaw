@@ -102,7 +102,13 @@ export const forcedUnitFastTestFiles = [
   "src/crestodian/rescue-policy.test.ts",
   "src/crestodian/rescue-message.test.ts",
   "src/crestodian/tui-backend.test.ts",
+<<<<<<< HEAD
   "src/flows/channel-setup.status.test.ts",
+=======
+  "src/flows/channel-setup.test.ts",
+  "src/flows/channel-setup.status.test.ts",
+  "src/flows/doctor-health-contributions.test.ts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "src/flows/provider-flow.test.ts",
   "src/context-engine/context-engine.test.ts",
   "extensions/canvas/src/host/server.state-dir.test.ts",

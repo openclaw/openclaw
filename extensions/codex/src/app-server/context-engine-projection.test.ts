@@ -2,8 +2,11 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import {
+<<<<<<< HEAD
   CODEX_TURN_START_TEXT_INPUT_MAX_CHARS,
   fitCodexProjectedContextForTurnStart,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   projectContextEngineAssemblyForCodex,
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
@@ -199,6 +202,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText).not.toContain("[truncated ");
   });
 
+<<<<<<< HEAD
   it("fits projected context under the Codex turn input limit", () => {
     const result = projectContextEngineAssemblyForCodex({
       assembledMessages: [
@@ -367,6 +371,8 @@ describe("projectContextEngineAssemblyForCodex", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps the old conservative cap when no runtime budget is available", () => {
     expect(resolveCodexContextEngineProjectionMaxChars({})).toBe(24_000);
     expect(resolveCodexContextEngineProjectionMaxChars({ contextTokenBudget: 0 })).toBe(24_000);

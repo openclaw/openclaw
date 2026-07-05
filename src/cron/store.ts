@@ -144,6 +144,14 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
   return await loadCronJobsStore(storePath);
 }
 
+<<<<<<< HEAD
+=======
+/** Plugin-SDK alias for synchronously loading the cron store. */
+export function loadCronStoreSync(storePath: string): CronStoreFile {
+  return loadCronJobsStoreSync(storePath);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Plugin-SDK alias for saving the cron store. */
 export async function saveCronStore(
   storePath: string,

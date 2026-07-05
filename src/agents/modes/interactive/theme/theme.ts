@@ -9,6 +9,10 @@ import { getCapabilities } from "@earendil-works/pi-tui";
 import chalk from "chalk";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
+<<<<<<< HEAD
+=======
+import { parseStrictNonNegativeInteger } from "../../../../infra/parse-finite-number.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { getCustomThemesDir, getThemesDir } from "../../../config.js";
 import type { SourceInfo } from "../../../sessions/source-info.js";
 import { closeWatcher, watchWithErrorHandler } from "../../../utils/fs-watch.js";
@@ -575,6 +579,78 @@ function loadTheme(name: string, mode?: ColorMode): Theme {
   return createTheme(themeJson, mode);
 }
 
+<<<<<<< HEAD
+=======
+export type TerminalTheme = "dark" | "light";
+
+export interface RgbColor {
+  r: number;
+  g: number;
+  b: number;
+}
+
+export interface TerminalThemeDetection {
+  theme: TerminalTheme;
+  source: "terminal background" | "COLORFGBG" | "fallback";
+  detail: string;
+  confidence: "high" | "low";
+}
+
+export interface TerminalThemeDetectionOptions {
+  env?: NodeJS.ProcessEnv;
+}
+
+function getColorFgBgBackgroundIndex(colorfgbg: string): number | undefined {
+  const parts = colorfgbg.split(";");
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const bg = parseStrictNonNegativeInteger(parts[i].trim());
+    if (bg !== undefined && bg <= 255) {
+      return bg;
+    }
+  }
+  return undefined;
+}
+
+function getRgbColorLuminance({ r, g, b }: RgbColor): number {
+  const toLinear = (channel: number) => {
+    const value = channel / 255;
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
+}
+
+function getAnsiColorLuminance(index: number): number {
+  return getRgbColorLuminance(hexToRgb(ansi256ToHex(index)));
+}
+
+export function detectTerminalBackground(
+  options: TerminalThemeDetectionOptions = {},
+): TerminalThemeDetection {
+  const env = options.env ?? process.env;
+  const colorfgbg = env.COLORFGBG || "";
+  const bg = getColorFgBgBackgroundIndex(colorfgbg);
+  if (bg !== undefined) {
+    return {
+      theme: getAnsiColorLuminance(bg) >= 0.5 ? "light" : "dark",
+      source: "COLORFGBG",
+      detail: `background color index ${bg}`,
+      confidence: "high",
+    };
+  }
+
+  return {
+    theme: "dark",
+    source: "fallback",
+    detail: "no terminal background hint found",
+    confidence: "low",
+  };
+}
+
+export function getDefaultTheme(): string {
+  return detectTerminalBackground().theme;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // ============================================================================
 // Global Theme Instance
 // ============================================================================
@@ -588,7 +664,11 @@ export const theme: Theme = new Proxy({} as Theme, {
   get(_target, prop) {
     const t = (globalThis as Record<symbol, Theme>)[THEME_KEY];
     if (!t) {
+<<<<<<< HEAD
       throw new Error("Theme not initialized. Call setTheme() first.");
+=======
+      throw new Error("Theme not initialized. Call initTheme() first.");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     return (t as unknown as Record<string | symbol, unknown>)[prop];
   },
@@ -603,6 +683,25 @@ let themeWatcher: fs.FSWatcher | undefined;
 let themeReloadTimer: NodeJS.Timeout | undefined;
 const registeredThemes = new Map<string, Theme>();
 
+<<<<<<< HEAD
+=======
+export function initTheme(themeName?: string, enableWatcher = false): void {
+  const name = themeName ?? getDefaultTheme();
+  currentThemeName = name;
+  try {
+    setGlobalTheme(loadTheme(name));
+    if (enableWatcher) {
+      startThemeWatcher();
+    }
+  } catch {
+    // Theme is invalid - fall back to dark theme silently
+    currentThemeName = "dark";
+    setGlobalTheme(loadTheme("dark"));
+    // Don't start watcher for fallback theme
+  }
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function setTheme(
   name: string,
   enableWatcher = false,
@@ -708,6 +807,55 @@ export function stopThemeWatcher(): void {
 // HTML Export Helpers
 // ============================================================================
 
+<<<<<<< HEAD
+=======
+/**
+ * Convert a 256-color index to hex string.
+ * Indices 0-15: basic colors (approximate)
+ * Indices 16-231: 6x6x6 color cube
+ * Indices 232-255: grayscale ramp
+ */
+function ansi256ToHex(index: number): string {
+  // Basic colors (0-15) - approximate common terminal values
+  const basicColors = [
+    "#000000",
+    "#800000",
+    "#008000",
+    "#808000",
+    "#000080",
+    "#800080",
+    "#008080",
+    "#c0c0c0",
+    "#808080",
+    "#ff0000",
+    "#00ff00",
+    "#ffff00",
+    "#0000ff",
+    "#ff00ff",
+    "#00ffff",
+    "#ffffff",
+  ];
+  if (index < 16) {
+    return basicColors[index];
+  }
+
+  // Color cube (16-231): 6x6x6 = 216 colors
+  if (index < 232) {
+    const cubeIndex = index - 16;
+    const r = Math.floor(cubeIndex / 36);
+    const g = Math.floor((cubeIndex % 36) / 6);
+    const b = cubeIndex % 6;
+    const toHex = (n: number) => (n === 0 ? 0 : 55 + n * 40).toString(16).padStart(2, "0");
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+  }
+
+  // Grayscale (232-255): 24 shades
+  const gray = 8 + (index - 232) * 10;
+  const grayHex = gray.toString(16).padStart(2, "0");
+  return `#${grayHex}${grayHex}${grayHex}`;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // ============================================================================
 // TUI Helpers
 // ============================================================================

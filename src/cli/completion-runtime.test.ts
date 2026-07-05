@@ -2,8 +2,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+<<<<<<< HEAD
 import { describe, expect, it } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
+=======
+import { afterEach, describe, expect, it } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   formatCompletionReloadCommand,
   installCompletion,
@@ -13,6 +17,25 @@ import {
 } from "./completion-runtime.js";
 
 describe("completion-runtime", () => {
+<<<<<<< HEAD
+=======
+  const originalHome = process.env.HOME;
+  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+
+  afterEach(() => {
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+    if (originalStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalStateDir;
+    }
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("formats PowerShell reload commands with single-quoted paths", () => {
     expect(formatCompletionReloadCommand("powershell", "C:\\Users\\Ada\\profile.ps1")).toBe(
       ". 'C:\\Users\\Ada\\profile.ps1'",
@@ -71,6 +94,7 @@ describe("completion-runtime", () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-home-"));
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-state-bob's-"));
 
+<<<<<<< HEAD
     try {
       await withEnvAsync({ HOME: homeDir, OPENCLAW_STATE_DIR: stateDir }, async () => {
         const cachePath = resolveCompletionCachePath("powershell", "openclaw");
@@ -83,6 +107,21 @@ describe("completion-runtime", () => {
         const profile = await fs.readFile(profilePath, "utf-8");
         expect(profile).toBe(`# OpenClaw Completion\n. '${cachePath.replace(/'/g, "''")}'\n`);
       });
+=======
+    process.env.HOME = homeDir;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    try {
+      const cachePath = resolveCompletionCachePath("powershell", "openclaw");
+      await fs.mkdir(path.dirname(cachePath), { recursive: true });
+      await fs.writeFile(cachePath, "# powershell completion\n", "utf-8");
+
+      await installCompletion("powershell", true, "openclaw");
+
+      const profilePath = resolveCompletionProfilePath("powershell");
+      const profile = await fs.readFile(profilePath, "utf-8");
+      expect(profile).toBe(`# OpenClaw Completion\n. '${cachePath.replace(/'/g, "''")}'\n`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } finally {
       await fs.rm(homeDir, { recursive: true, force: true });
       await fs.rm(stateDir, { recursive: true, force: true });
@@ -93,12 +132,22 @@ describe("completion-runtime", () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-home-"));
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-state-"));
 
+<<<<<<< HEAD
     try {
       await withEnvAsync({ HOME: homeDir, OPENCLAW_STATE_DIR: stateDir }, async () => {
         await expect(installCompletion("zsh", true, "openclaw")).rejects.toThrow(
           "Completion cache not found",
         );
       });
+=======
+    process.env.HOME = homeDir;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    try {
+      await expect(installCompletion("zsh", true, "openclaw")).rejects.toThrow(
+        "Completion cache not found",
+      );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } finally {
       await fs.rm(homeDir, { recursive: true, force: true });
       await fs.rm(stateDir, { recursive: true, force: true });

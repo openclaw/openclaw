@@ -1,5 +1,8 @@
 // Test Live Cli Backend Docker tests cover test live cli backend docker script behavior.
+<<<<<<< HEAD
 import { spawnSync } from "node:child_process";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -31,6 +34,7 @@ describe("scripts/test-live-cli-backend-docker.sh", () => {
     expect(forwardedVars).toContain("OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS");
     expect(forwardedVars).toContain("OPENCLAW_TEST_CONSOLE");
   });
+<<<<<<< HEAD
 
   it("forwards advisory provider-skip controls into the Docker container", () => {
     const forwardedVars = readForwardedDockerEnvVars();
@@ -73,4 +77,6 @@ describe("scripts/test-live-cli-backend-docker.sh", () => {
     );
     expect(script).toContain(".claude.json | .claude/.credentials.json) ;;");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

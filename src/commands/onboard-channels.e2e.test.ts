@@ -1,6 +1,7 @@
 // Onboard channels e2e tests cover setup wizard adapters, plugin install hooks, and channel picker behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
+<<<<<<< HEAD
 import { getChannelSetupPlugin } from "../channels/plugins/setup-registry.js";
 import type { ChannelSetupWizardAdapter } from "../channels/plugins/setup-wizard-types.js";
 import {
@@ -8,6 +9,15 @@ import {
   loadChannelSetupPluginRegistrySnapshotForChannel,
 } from "../commands/channel-setup/plugin-install.js";
 import { resolveChannelSetupWizardAdapterForPlugin } from "../commands/channel-setup/registry.js";
+=======
+import {
+  ensureChannelSetupPluginInstalled,
+  loadChannelSetupPluginRegistrySnapshotForChannel,
+  reloadChannelSetupPluginRegistry,
+} from "../commands/channel-setup/plugin-install.js";
+import { getChannelSetupWizardAdapter } from "../commands/channel-setup/registry.js";
+import type { ChannelSetupWizardAdapter } from "../commands/channel-setup/types.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -358,7 +368,11 @@ function mockMSTeamsRegistrySnapshot(params?: { includeSetupWizard?: boolean }) 
 }
 
 function patchTelegramAdapter(overrides: ChannelSetupWizardAdapterPatch) {
+<<<<<<< HEAD
   const adapter = resolveChannelSetupWizardAdapterForPlugin(getChannelSetupPlugin("telegram"));
+=======
+  const adapter = getChannelSetupWizardAdapter("telegram");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!adapter) {
     throw new Error("missing setup adapter for telegram");
   }
@@ -611,6 +625,10 @@ vi.mock("../commands/channel-setup/plugin-install.js", async () => {
     })),
     // Allow tests to simulate an empty plugin registry during setup.
     loadChannelSetupPluginRegistrySnapshotForChannel: vi.fn(() => createEmptyPluginRegistry()),
+<<<<<<< HEAD
+=======
+    reloadChannelSetupPluginRegistry: vi.fn(() => {}),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 });
 
@@ -632,6 +650,10 @@ describe("setupChannels", () => {
       status: "installed",
     }));
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockClear();
+<<<<<<< HEAD
+=======
+    vi.mocked(reloadChannelSetupPluginRegistry).mockClear();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   it("continues Telegram setup when the plugin registry is empty", async () => {
     // Simulate missing registry entries (the scenario reported in #25545).
@@ -668,6 +690,10 @@ describe("setupChannels", () => {
     });
     expect(sawHardStop).toBe(false);
     expect(cfg.channels?.telegram?.botToken).toBe("123:token");
+<<<<<<< HEAD
+=======
+    expect(reloadChannelSetupPluginRegistry).not.toHaveBeenCalled();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("shows explicit dmScope config command in channel primer", async () => {

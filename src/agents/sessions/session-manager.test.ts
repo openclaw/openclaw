@@ -11,7 +11,10 @@ import { prepareSessionManagerForRun } from "../embedded-agent-runner/session-ma
 import { repairSessionFileIfNeeded } from "../session-file-repair.js";
 import {
   CURRENT_SESSION_VERSION,
+<<<<<<< HEAD
   findMostRecentSession,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   loadEntriesFromFile,
   SessionManager,
   type SessionEntry,
@@ -123,6 +126,7 @@ describe("SessionManager.open", () => {
     expect(entries.filter((entry) => entry.type === "session")).toHaveLength(1);
   });
 
+<<<<<<< HEAD
   it("continues a valid recent session when the header exceeds the first read chunk", async () => {
     const dir = await makeTempDir();
     const sessionFile = path.join(dir, "long-header-session.jsonl");
@@ -189,6 +193,8 @@ describe("SessionManager.open", () => {
     expect(findMostRecentSession(dir)).toBe(validSessionFile);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("still migrates old transcript versions while bypassing the warm cache", async () => {
     const dir = await makeTempDir();
     const sessionFile = path.join(dir, "session.jsonl");

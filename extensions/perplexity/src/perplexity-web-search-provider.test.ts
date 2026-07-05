@@ -1,7 +1,11 @@
 // Perplexity tests cover perplexity web search provider plugin behavior.
 import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
+<<<<<<< HEAD
 import { describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
+=======
+import { describe, expect, it } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createPerplexityWebSearchProvider } from "./perplexity-web-search-provider.js";
 import { testing } from "./perplexity-web-search-provider.runtime.js";
 
@@ -172,6 +176,7 @@ describe("perplexity web search provider", () => {
       testing.readPerplexityJsonResponse(new Response("{ nope"), "Perplexity"),
     ).rejects.toThrow("Perplexity: malformed JSON response");
   });
+<<<<<<< HEAD
 
   it("bounds successful Perplexity JSON bodies before parsing", async () => {
     const streamed = createStreamingResponse({
@@ -190,4 +195,6 @@ describe("perplexity web search provider", () => {
     expect(streamed.wasCanceled()).toBe(true);
     expect(jsonSpy).not.toHaveBeenCalled();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

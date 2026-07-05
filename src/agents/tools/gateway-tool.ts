@@ -19,8 +19,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import {
   buildRestartSuccessContinuation,
+<<<<<<< HEAD
   clearRestartSentinel,
   formatDoctorNonInteractiveHint,
+=======
+  formatDoctorNonInteractiveHint,
+  removeRestartSentinelFile,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
@@ -80,6 +85,12 @@ const ALLOWED_GATEWAY_CONFIG_PATHS = [
 ] as const;
 
 /** @internal Exposed for regression tests only; do not import from runtime code. */
+<<<<<<< HEAD
+=======
+export const ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST = ALLOWED_GATEWAY_CONFIG_PATHS;
+
+/** @internal Exposed for regression tests only; do not import from runtime code. */
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function assertGatewayConfigMutationAllowedForTest(params: {
   action: "config.apply" | "config.patch";
   currentConfig: Record<string, unknown>;
@@ -493,7 +504,11 @@ export function createGatewayTool(opts?: {
         log.info(
           `gateway tool: restart requested (delayMs=${delayMs ?? "default"}, reason=${reason ?? "none"})`,
         );
+<<<<<<< HEAD
         let sentinelWritten = false;
+=======
+        let sentinelPath: string | null = null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const scheduled = scheduleGatewaySigusr1Restart({
           delayMs,
           reason,
@@ -502,6 +517,7 @@ export function createGatewayTool(opts?: {
           sessionKey,
           emitHooks: {
             beforeEmit: async () => {
+<<<<<<< HEAD
               await writeRestartSentinel(payload);
               sentinelWritten = true;
             },
@@ -509,6 +525,12 @@ export function createGatewayTool(opts?: {
               if (sentinelWritten) {
                 await clearRestartSentinel();
               }
+=======
+              sentinelPath = await writeRestartSentinel(payload);
+            },
+            afterEmitRejected: async () => {
+              await removeRestartSentinelFile(sentinelPath);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             },
           },
         });

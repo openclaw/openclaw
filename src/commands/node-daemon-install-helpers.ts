@@ -9,7 +9,11 @@ import {
   resolveDaemonNodeBinDir,
 } from "./daemon-install-plan.shared.js";
 import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
+<<<<<<< HEAD
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
+=======
+import type { NodeDaemonRuntime } from "./node-daemon-runtime.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type NodeInstallPlan = {
   programArguments: string[];
@@ -37,7 +41,11 @@ export async function buildNodeInstallPlan(params: {
   tlsFingerprint?: string;
   nodeId?: string;
   displayName?: string;
+<<<<<<< HEAD
   runtime: GatewayDaemonRuntime;
+=======
+  runtime: NodeDaemonRuntime;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   devMode?: boolean;
   nodePath?: string;
   warn?: DaemonInstallWarnFn;

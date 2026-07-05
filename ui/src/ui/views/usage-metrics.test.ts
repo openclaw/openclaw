@@ -3,7 +3,10 @@ import { describe, expect, it, vi, afterEach } from "vitest";
 import {
   buildPeakErrorHours,
   buildUsageMosaicStats,
+<<<<<<< HEAD
   formatTokens,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   getHourAndWeekdayForUtcQuarterBucket,
   sessionTouchesSelectedHours,
 } from "./usage-metrics.ts";
@@ -412,6 +415,7 @@ describe("usage mosaic token buckets", () => {
     expect(sessionTouchesSelectedHours(session, [11], "utc")).toBe(true);
   });
 });
+<<<<<<< HEAD
 
 describe("formatTokens", () => {
   it("formats values below 1,000 verbatim", () => {
@@ -437,3 +441,5 @@ describe("formatTokens", () => {
     expect(formatTokens(2_500_000)).toBe("2.5M");
   });
 });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

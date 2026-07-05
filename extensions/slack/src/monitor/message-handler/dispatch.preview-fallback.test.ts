@@ -13,7 +13,10 @@ const finalizeSlackPreviewEditMock = vi.fn(async () => {});
 const postMessageMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
 const chatUpdateMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
 const recordInboundSessionMock = vi.fn(async () => undefined);
+<<<<<<< HEAD
 const recordSlackThreadParticipationMock = vi.fn();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const updateLastRouteMock = vi.fn(async () => {});
 const appendSlackStreamMock = vi.fn(async () => {});
 const startSlackStreamMock = vi.fn(async () => ({
@@ -339,7 +342,10 @@ function createPreparedSlackMessage(params?: {
   typingReaction?: string;
   ackReactionMessageTs?: string;
   ackReactionPromise?: Promise<boolean> | null;
+<<<<<<< HEAD
   relayIdentity?: { username?: string; iconUrl?: string; iconEmoji?: string };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }) {
   const routeSessionKey = params?.route?.sessionKey ?? "agent:agent-1:slack:C123";
   const mainSessionKey = params?.route?.mainSessionKey ?? "main";
@@ -374,7 +380,10 @@ function createPreparedSlackMessage(params?: {
       accountId: "default",
       config: params?.accountConfig ?? {},
     },
+<<<<<<< HEAD
     relayIdentity: params?.relayIdentity,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     message,
     route: {
       agentId: "agent-1",
@@ -833,7 +842,11 @@ vi.mock("../../limits.js", () => ({
 }));
 
 vi.mock("../../sent-thread-cache.js", () => ({
+<<<<<<< HEAD
   recordSlackThreadParticipation: recordSlackThreadParticipationMock,
+=======
+  recordSlackThreadParticipation: () => {},
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("../../stream-mode.js", () => ({
@@ -842,6 +855,10 @@ vi.mock("../../stream-mode.js", () => ({
     rendered: incoming,
     source: incoming,
   }),
+<<<<<<< HEAD
+=======
+  buildStatusFinalPreviewText: () => "status",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveSlackStreamingConfig: () => ({
     mode: mockedSlackStreamingMode,
     nativeStreaming: mockedNativeStreaming,
@@ -1230,7 +1247,10 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     postMessageMock.mockClear();
     chatUpdateMock.mockClear();
     recordInboundSessionMock.mockReset();
+<<<<<<< HEAD
     recordSlackThreadParticipationMock.mockReset();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     updateLastRouteMock.mockReset();
     appendSlackStreamMock.mockReset();
     startSlackStreamMock.mockReset();
@@ -1280,6 +1300,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
   });
 
+<<<<<<< HEAD
   it("uses the relay identity when the agent has no explicit Slack identity", async () => {
     const relayIdentity = { username: "Nik Team Claw" };
 
@@ -1301,6 +1322,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT, { identity: relayIdentity });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not create a Slack thread for top-level messages when replyToMode is off", async () => {
     mockedSlackStreamingMode = "off";
     mockedSlackIsThreadReply = false;
@@ -3530,6 +3553,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(session.stopped).toBe(true);
   });
 
+<<<<<<< HEAD
   it("routes pending native stream text through chunked sender for unexpected finalize failures", async () => {
     mockedNativeStreaming = true;
     const session = {
@@ -3591,6 +3615,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("routes all pending native stream text through chunked sender when an append flush fails", async () => {
     mockedNativeStreaming = true;
     mockedDispatchSequence = [

@@ -15,9 +15,12 @@ import type {
 /** Provider id for OpenAI-compatible remote embedding servers. */
 export const OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID = "openai-compatible";
 const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-responses"]);
+<<<<<<< HEAD
 const EMBEDDING_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const EMBEDDING_ERROR_BODY_MAX_CHARS = 1_000;
 const EMBEDDING_ERROR_TRUNCATED_SUFFIX = "... [truncated]";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Normalized OpenAI-compatible embedding client configuration. */
 export type OpenAICompatibleEmbeddingClient = {
@@ -292,6 +295,7 @@ async function readJsonResponse(response: Response): Promise<unknown> {
   }
 }
 
+<<<<<<< HEAD
 function concatBytes(chunks: Uint8Array[], totalLength: number): Uint8Array {
   const combined = new Uint8Array(totalLength);
   let offset = 0;
@@ -356,6 +360,8 @@ async function createEmbeddingHttpError(response: Response): Promise<Error> {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function postEmbeddingRequest(params: {
   client: OpenAICompatibleEmbeddingClient;
   input: string[];
@@ -383,7 +389,13 @@ async function postEmbeddingRequest(params: {
   });
   try {
     if (!response.ok) {
+<<<<<<< HEAD
       throw await createEmbeddingHttpError(response);
+=======
+      throw new Error(
+        `openai-compatible embeddings failed: HTTP ${response.status}: ${await response.text()}`,
+      );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     return readEmbeddingVectors(
       (await readJsonResponse(response)) as OpenAICompatibleEmbeddingResponse,

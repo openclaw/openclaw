@@ -6,10 +6,18 @@ import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   assertNoLegacyPluginDependencyStagingDebris,
   collectLegacyPluginDependencyStagingDebrisPaths,
+<<<<<<< HEAD
   LOCAL_BUILD_METADATA_DIST_PATHS,
   collectPackageDistInventory,
   isLegacyPluginDependencyInstallStagePath,
   readPackageDistInventoryIfPresent,
+=======
+  collectPackageDistInventoryErrors,
+  LOCAL_BUILD_METADATA_DIST_PATHS,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  collectPackageDistInventory,
+  isLegacyPluginDependencyInstallStagePath,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   writePackageDistInventory,
 } from "./package-dist-inventory.js";
 
@@ -23,9 +31,13 @@ describe("package dist inventory", () => {
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/current-BR6xv1a1.js",
       ]);
+<<<<<<< HEAD
       await expect(readPackageDistInventoryIfPresent(packageRoot)).resolves.toStrictEqual([
         "dist/current-BR6xv1a1.js",
       ]);
+=======
+      await expect(collectPackageDistInventoryErrors(packageRoot)).resolves.toStrictEqual([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       await fs.rm(currentFile);
       await fs.writeFile(
@@ -34,8 +46,14 @@ describe("package dist inventory", () => {
         "utf8",
       );
 
+<<<<<<< HEAD
       await expect(collectPackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/stale-CJUAgRQR.js",
+=======
+      await expect(collectPackageDistInventoryErrors(packageRoot)).resolves.toEqual([
+        "missing packaged dist file dist/current-BR6xv1a1.js",
+        "unexpected packaged dist file dist/stale-CJUAgRQR.js",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ]);
     });
   });
@@ -400,9 +418,15 @@ describe("package dist inventory", () => {
       await fs.mkdir(path.dirname(suffixedStageFile), { recursive: true });
       await fs.writeFile(suffixedStageFile, "{}", "utf8");
 
+<<<<<<< HEAD
       await expect(collectLegacyPluginDependencyStagingDebrisPaths(packageRoot)).resolves.toEqual([
         "dist/extensions/brave/.openclaw-install-stage",
         "dist/extensions/browser/.openclaw-install-stage-AbC123",
+=======
+      await expect(collectPackageDistInventoryErrors(packageRoot)).resolves.toEqual([
+        "unexpected packaged dist file dist/extensions/brave/.openclaw-install-stage/node_modules/typebox/build/compile/code.mjs",
+        "unexpected packaged dist file dist/extensions/browser/.openclaw-install-stage-AbC123/node_modules/playwright-core/package.json",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ]);
     });
   });
@@ -531,10 +555,19 @@ describe("package dist inventory", () => {
     });
   });
 
+<<<<<<< HEAD
   it("returns null when the inventory is missing", async () => {
     await withTempDir({ prefix: "openclaw-dist-inventory-missing-" }, async (packageRoot) => {
       await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
       await expect(readPackageDistInventoryIfPresent(packageRoot)).resolves.toBeNull();
+=======
+  it("fails closed when the inventory is missing", async () => {
+    await withTempDir({ prefix: "openclaw-dist-inventory-missing-" }, async (packageRoot) => {
+      await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
+      await expect(collectPackageDistInventoryErrors(packageRoot)).resolves.toEqual([
+        `missing package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`,
+      ]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   });
 

@@ -1,8 +1,17 @@
 // Feishu tests cover media plugin behavior.
+<<<<<<< HEAD
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
+=======
+import { realpathSync } from "node:fs";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { Readable } from "node:stream";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
@@ -12,10 +21,17 @@ const normalizeFeishuTargetMock = vi.hoisted(() => vi.fn());
 const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
 const runFfmpegMock = vi.hoisted(() => vi.fn());
+<<<<<<< HEAD
 const runFfprobeMock = vi.hoisted(() => vi.fn());
 
 const fileCreateMock = vi.hoisted(() => vi.fn());
 const imageCreateMock = vi.hoisted(() => vi.fn());
+=======
+
+const fileCreateMock = vi.hoisted(() => vi.fn());
+const imageCreateMock = vi.hoisted(() => vi.fn());
+const imageGetMock = vi.hoisted(() => vi.fn());
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const messageCreateMock = vi.hoisted(() => vi.fn());
 const messageResourceGetMock = vi.hoisted(() => vi.fn());
 const messageReplyMock = vi.hoisted(() => vi.fn());
@@ -50,15 +66,36 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   return {
     ...actual,
     runFfmpeg: runFfmpegMock,
+<<<<<<< HEAD
     runFfprobe: runFfprobeMock,
   };
 });
 
+=======
+  };
+});
+
+let downloadImageFeishu: typeof import("./media.js").downloadImageFeishu;
+let downloadMessageResourceFeishu: typeof import("./media.js").downloadMessageResourceFeishu;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 let saveMessageResourceFeishu: typeof import("./media.js").saveMessageResourceFeishu;
 let sanitizeFileNameForUpload: typeof import("./media.js").sanitizeFileNameForUpload;
 let sendMediaFeishu: typeof import("./media.js").sendMediaFeishu;
 let shouldSuppressFeishuTextForVoiceMedia: typeof import("./media.js").shouldSuppressFeishuTextForVoiceMedia;
 
+<<<<<<< HEAD
+=======
+function expectPathIsolatedToTmpRoot(pathValue: string, key: string): void {
+  expect(pathValue).not.toContain(key);
+  expect(pathValue).not.toContain("..");
+
+  const tmpRoot = realpathSync(resolvePreferredOpenClawTmpDir());
+  const resolved = path.resolve(pathValue);
+  const rel = path.relative(tmpRoot, resolved);
+  expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function expectMediaTimeoutClientConfigured(): void {
   const options = mockCallArg<{ httpTimeoutMs?: number }>(createFeishuClientMock, 0, 0);
   expect(options.httpTimeoutMs).toBe(FEISHU_MEDIA_HTTP_TIMEOUT_MS);
@@ -100,6 +137,7 @@ function callData<T>(
   return arg.data as T;
 }
 
+<<<<<<< HEAD
 async function withIsolatedHome<T>(run: () => Promise<T>): Promise<T> {
   const originalHome = process.env.HOME;
   return await withTempDir("openclaw-feishu-media-", async (tempHome) => {
@@ -119,6 +157,13 @@ async function withIsolatedHome<T>(run: () => Promise<T>): Promise<T> {
 describe("sendMediaFeishu msg_type routing", () => {
   beforeAll(async () => {
     ({
+=======
+describe("sendMediaFeishu msg_type routing", () => {
+  beforeAll(async () => {
+    ({
+      downloadImageFeishu,
+      downloadMessageResourceFeishu,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       saveMessageResourceFeishu,
       sanitizeFileNameForUpload,
       sendMediaFeishu,
@@ -149,6 +194,10 @@ describe("sendMediaFeishu msg_type routing", () => {
         },
         image: {
           create: imageCreateMock,
+<<<<<<< HEAD
+=======
+          get: imageGetMock,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
         message: {
           create: messageCreateMock,
@@ -186,12 +235,19 @@ describe("sendMediaFeishu msg_type routing", () => {
       contentType: "audio/ogg",
     });
 
+<<<<<<< HEAD
+=======
+    imageGetMock.mockResolvedValue(Buffer.from("image-bytes"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     messageResourceGetMock.mockResolvedValue(Buffer.from("resource-bytes"));
     runFfmpegMock.mockImplementation(async (args: string[]) => {
       await fs.writeFile(args.at(-1) ?? "", Buffer.from("opus-output"));
       return "";
     });
+<<<<<<< HEAD
     runFfprobeMock.mockResolvedValue("1.234\n");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("suppresses reply text only for voice-intent or native voice media", () => {
@@ -237,6 +293,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("audio");
   });
 
+<<<<<<< HEAD
   it("includes audio duration in the Feishu file upload", async () => {
     const audio = Buffer.from("opus");
     runFfprobeMock.mockResolvedValueOnce("2.345\n");
@@ -284,6 +341,8 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses msg_type=file for documents", async () => {
     await sendMediaFeishu({
       cfg: emptyConfig,
@@ -547,12 +606,68 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageReplyMock).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("rejects oversized message resource streams before saving the rest", async () => {
+=======
+  it("uses isolated temp paths for image downloads", async () => {
+    const imageKey = "img_v3_01abc123";
+    let capturedPath: string | undefined;
+
+    imageGetMock.mockResolvedValueOnce({
+      writeFile: async (tmpPath: string) => {
+        capturedPath = tmpPath;
+        await fs.writeFile(tmpPath, Buffer.from("image-data"));
+      },
+    });
+
+    const result = await downloadImageFeishu({
+      cfg: emptyConfig,
+      imageKey,
+    });
+
+    const request = mockCallArg<{ path?: { image_key?: string } }>(imageGetMock, 0, 0);
+    expect(request.path).toEqual({ image_key: imageKey });
+    expectMediaTimeoutClientConfigured();
+    expect(result.buffer).toEqual(Buffer.from("image-data"));
+    if (!capturedPath) {
+      throw new Error("expected Feishu image temp path");
+    }
+    expectPathIsolatedToTmpRoot(capturedPath, imageKey);
+  });
+
+  it("uses isolated temp paths for message resource downloads", async () => {
+    const fileKey = "file_v3_01abc123";
+    let capturedPath: string | undefined;
+
+    messageResourceGetMock.mockResolvedValueOnce({
+      writeFile: async (tmpPath: string) => {
+        capturedPath = tmpPath;
+        await fs.writeFile(tmpPath, Buffer.from("resource-data"));
+      },
+    });
+
+    const result = await downloadMessageResourceFeishu({
+      cfg: emptyConfig,
+      messageId: "om_123",
+      fileKey,
+      type: "image",
+    });
+
+    expect(result.buffer).toEqual(Buffer.from("resource-data"));
+    if (!capturedPath) {
+      throw new Error("expected Feishu resource temp path");
+    }
+    expectPathIsolatedToTmpRoot(capturedPath, fileKey);
+  });
+
+  it("rejects oversized message resource streams before buffering the rest", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     messageResourceGetMock.mockResolvedValueOnce({
       getReadableStream: () => Readable.from([Buffer.alloc(4), Buffer.alloc(4)]),
     });
 
     await expect(
+<<<<<<< HEAD
       withIsolatedHome(() =>
         saveMessageResourceFeishu({
           cfg: emptyConfig,
@@ -566,6 +681,19 @@ describe("sendMediaFeishu msg_type routing", () => {
   });
 
   it("rejects oversized writeFile resources before saving the temp file", async () => {
+=======
+      downloadMessageResourceFeishu({
+        cfg: emptyConfig,
+        messageId: "om_123",
+        fileKey: "file_v3_01abc123",
+        type: "file",
+        maxBytes: 7,
+      }),
+    ).rejects.toThrow(/Media exceeds/i);
+  });
+
+  it("rejects oversized writeFile downloads before reading the temp file", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     messageResourceGetMock.mockResolvedValueOnce({
       writeFile: async (tmpPath: string) => {
         await fs.writeFile(tmpPath, Buffer.alloc(8));
@@ -573,6 +701,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     await expect(
+<<<<<<< HEAD
       withIsolatedHome(() =>
         saveMessageResourceFeishu({
           cfg: emptyConfig,
@@ -588,11 +717,40 @@ describe("sendMediaFeishu msg_type routing", () => {
   it("rejects invalid file keys before calling feishu api", async () => {
     await expect(
       saveMessageResourceFeishu({
+=======
+      downloadMessageResourceFeishu({
+        cfg: emptyConfig,
+        messageId: "om_123",
+        fileKey: "file_v3_01abc123",
+        type: "file",
+        maxBytes: 7,
+      }),
+    ).rejects.toThrow(/Media exceeds/i);
+  });
+
+  it("rejects invalid image keys before calling feishu api", async () => {
+    await expect(
+      downloadImageFeishu({
+        cfg: emptyConfig,
+        imageKey: "a/../../bad",
+      }),
+    ).rejects.toThrow("invalid image_key");
+
+    expect(imageGetMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid file keys before calling feishu api", async () => {
+    await expect(
+      downloadMessageResourceFeishu({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg: emptyConfig,
         messageId: "om_123",
         fileKey: "x/../../bad",
         type: "file",
+<<<<<<< HEAD
         maxBytes: 30 * 1024 * 1024,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }),
     ).rejects.toThrow("invalid file_key");
 
@@ -677,7 +835,11 @@ describe("sanitizeFileNameForUpload", () => {
   });
 });
 
+<<<<<<< HEAD
 describe("saveMessageResourceFeishu", () => {
+=======
+describe("downloadMessageResourceFeishu", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   function httpStatusError(status: number): Error & { response: { status: number } } {
     return Object.assign(new Error(`Request failed with status code ${status}`), {
       response: { status },
@@ -702,6 +864,7 @@ describe("saveMessageResourceFeishu", () => {
   // Regression: Feishu API only supports type=image|file for messageResource.get.
   // Audio/video resources must use type=file, not type=audio (#8746).
   it("forwards provided type=file for non-image resources", async () => {
+<<<<<<< HEAD
     const result = await withIsolatedHome(() =>
       saveMessageResourceFeishu({
         cfg: emptyConfig,
@@ -711,6 +874,14 @@ describe("saveMessageResourceFeishu", () => {
         maxBytes: 1024,
       }),
     );
+=======
+    const result = await downloadMessageResourceFeishu({
+      cfg: emptyConfig,
+      messageId: "om_audio_msg",
+      fileKey: "file_key_audio",
+      type: "file",
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const request = mockCallArg<{
       params?: { type?: string };
@@ -719,12 +890,17 @@ describe("saveMessageResourceFeishu", () => {
     expect(request.path).toEqual({ message_id: "om_audio_msg", file_key: "file_key_audio" });
     expect(request.params).toEqual({ type: "file" });
     expectMediaTimeoutClientConfigured();
+<<<<<<< HEAD
     expect(result.saved.size).toBe("fake-audio-data".length);
+=======
+    expect(result.buffer).toBeInstanceOf(Buffer);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("image uses type=image", async () => {
     messageResourceGetMock.mockResolvedValue(Buffer.from("fake-image-data"));
 
+<<<<<<< HEAD
     const result = await withIsolatedHome(() =>
       saveMessageResourceFeishu({
         cfg: emptyConfig,
@@ -734,6 +910,14 @@ describe("saveMessageResourceFeishu", () => {
         maxBytes: 1024,
       }),
     );
+=======
+    const result = await downloadMessageResourceFeishu({
+      cfg: emptyConfig,
+      messageId: "om_img_msg",
+      fileKey: "img_key_1",
+      type: "image",
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const request = mockCallArg<{
       params?: { type?: string };
@@ -742,7 +926,11 @@ describe("saveMessageResourceFeishu", () => {
     expect(request.path).toEqual({ message_id: "om_img_msg", file_key: "img_key_1" });
     expect(request.params).toEqual({ type: "image" });
     expectMediaTimeoutClientConfigured();
+<<<<<<< HEAD
     expect(result.saved.size).toBe("fake-image-data".length);
+=======
+    expect(result.buffer).toBeInstanceOf(Buffer);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("extracts content-type and filename metadata from download headers", async () => {
@@ -754,6 +942,7 @@ describe("saveMessageResourceFeishu", () => {
       },
     });
 
+<<<<<<< HEAD
     const result = await withIsolatedHome(() =>
       saveMessageResourceFeishu({
         cfg: emptyConfig,
@@ -765,6 +954,16 @@ describe("saveMessageResourceFeishu", () => {
     );
 
     expect(result.saved.size).toBe("fake-video-data".length);
+=======
+    const result = await downloadMessageResourceFeishu({
+      cfg: emptyConfig,
+      messageId: "om_video_msg",
+      fileKey: "file_key_video",
+      type: "file",
+    });
+
+    expect(result.buffer).toEqual(Buffer.from("fake-video-data"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(result.contentType).toBe("video/mp4");
     expect(result.fileName).toBe("clip.mp4");
   });
@@ -779,6 +978,7 @@ describe("saveMessageResourceFeishu", () => {
       },
     });
 
+<<<<<<< HEAD
     const result = await withIsolatedHome(() =>
       saveMessageResourceFeishu({
         cfg: emptyConfig,
@@ -788,6 +988,14 @@ describe("saveMessageResourceFeishu", () => {
         maxBytes: 1024,
       }),
     );
+=======
+    const result = await downloadMessageResourceFeishu({
+      cfg: emptyConfig,
+      messageId: "om_ios_video_msg",
+      fileKey: "file_key_ios_video",
+      type: "file",
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const firstRequest = mockCallArg<{
       params?: { type?: string };
@@ -807,7 +1015,11 @@ describe("saveMessageResourceFeishu", () => {
       file_key: "file_key_ios_video",
     });
     expect(secondRequest.params).toEqual({ type: "media" });
+<<<<<<< HEAD
     expect(result.saved.size).toBe("fake-ios-video-data".length);
+=======
+    expect(result.buffer).toEqual(Buffer.from("fake-ios-video-data"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(result.contentType).toBe("video/mp4");
     expect(result.fileName).toBe("ios-video.mp4");
   });
@@ -819,6 +1031,7 @@ describe("saveMessageResourceFeishu", () => {
       .mockRejectedValueOnce(new Error("media retry failed"));
 
     await expect(
+<<<<<<< HEAD
       withIsolatedHome(() =>
         saveMessageResourceFeishu({
           cfg: emptyConfig,
@@ -828,6 +1041,14 @@ describe("saveMessageResourceFeishu", () => {
           maxBytes: 1024,
         }),
       ),
+=======
+      downloadMessageResourceFeishu({
+        cfg: emptyConfig,
+        messageId: "om_ios_video_msg",
+        fileKey: "file_key_ios_video",
+        type: "file",
+      }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ).rejects.toBe(originalError);
 
     expect(
@@ -848,6 +1069,7 @@ describe("saveMessageResourceFeishu", () => {
       messageResourceGetMock.mockRejectedValueOnce(originalError);
 
       await expect(
+<<<<<<< HEAD
         withIsolatedHome(() =>
           saveMessageResourceFeishu({
             cfg: emptyConfig,
@@ -857,6 +1079,14 @@ describe("saveMessageResourceFeishu", () => {
             maxBytes: 1024,
           }),
         ),
+=======
+        downloadMessageResourceFeishu({
+          cfg: emptyConfig,
+          messageId: scenario.messageId,
+          fileKey: scenario.fileKey,
+          type: scenario.type,
+        }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ).rejects.toBe(originalError);
 
       expect(messageResourceGetMock).toHaveBeenCalledTimes(1);
@@ -879,6 +1109,7 @@ describe("saveMessageResourceFeishu", () => {
       },
     });
 
+<<<<<<< HEAD
     const result = await withIsolatedHome(() =>
       saveMessageResourceFeishu({
         cfg: emptyConfig,
@@ -888,6 +1119,14 @@ describe("saveMessageResourceFeishu", () => {
         maxBytes: 1024,
       }),
     );
+=======
+    const result = await downloadMessageResourceFeishu({
+      cfg: emptyConfig,
+      messageId: "om_file_msg",
+      fileKey: "file_key_csv",
+      type: "file",
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(result.fileName).toBe(fileName);
   });
@@ -900,6 +1139,7 @@ describe("saveMessageResourceFeishu", () => {
       },
     });
 
+<<<<<<< HEAD
     const result = await withIsolatedHome(() =>
       saveMessageResourceFeishu({
         cfg: emptyConfig,
@@ -909,6 +1149,14 @@ describe("saveMessageResourceFeishu", () => {
         maxBytes: 1024,
       }),
     );
+=======
+    const result = await downloadMessageResourceFeishu({
+      cfg: emptyConfig,
+      messageId: "om_latin1_msg",
+      fileKey: "file_key_latin1",
+      type: "file",
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(result.fileName).toBe("café-Â©.txt");
   });
@@ -921,6 +1169,7 @@ describe("saveMessageResourceFeishu", () => {
       file_name: latin1LookingFileName,
     });
 
+<<<<<<< HEAD
     const result = await withIsolatedHome(() =>
       saveMessageResourceFeishu({
         cfg: emptyConfig,
@@ -930,12 +1179,27 @@ describe("saveMessageResourceFeishu", () => {
         maxBytes: 1024,
       }),
     );
+=======
+    const result = await downloadMessageResourceFeishu({
+      cfg: emptyConfig,
+      messageId: "om_json_file_msg",
+      fileKey: "file_key_json",
+      type: "file",
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(result.fileName).toBe(latin1LookingFileName);
   });
 
   it("saves message resource streams directly to the media store", async () => {
+<<<<<<< HEAD
     await withIsolatedHome(async () => {
+=======
+    const originalHome = process.env.HOME;
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-media-"));
+    try {
+      process.env.HOME = tempHome;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       messageResourceGetMock.mockResolvedValueOnce({
         getReadableStream: () => Readable.from([Buffer.from([0xff, 0xd8, 0xff, 0x00])]),
         headers: {
@@ -958,6 +1222,7 @@ describe("saveMessageResourceFeishu", () => {
       await expect(fs.readFile(result.saved.path)).resolves.toEqual(
         Buffer.from([0xff, 0xd8, 0xff, 0x00]),
       );
+<<<<<<< HEAD
     });
   });
 
@@ -965,6 +1230,25 @@ describe("saveMessageResourceFeishu", () => {
     const fileName = "武汉15座山登山信息汇总.csv";
     const latin1LookingFileName = Buffer.from(fileName, "utf8").toString("latin1");
     await withIsolatedHome(async () => {
+=======
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers CJK filenames from the inbound message payload fallback", async () => {
+    const originalHome = process.env.HOME;
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-media-"));
+    const fileName = "武汉15座山登山信息汇总.csv";
+    const latin1LookingFileName = Buffer.from(fileName, "utf8").toString("latin1");
+    try {
+      process.env.HOME = tempHome;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       messageResourceGetMock.mockResolvedValueOnce({
         getReadableStream: () => Readable.from([Buffer.from("a,b\n1,2\n")]),
         headers: { "content-type": "text/csv" },
@@ -980,6 +1264,17 @@ describe("saveMessageResourceFeishu", () => {
       });
 
       expect(result.saved.id).toMatch(/^武汉15座山登山信息汇总---[a-f0-9-]{36}\.csv$/);
+<<<<<<< HEAD
     });
+=======
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

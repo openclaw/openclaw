@@ -1,6 +1,10 @@
 // Restart method tests cover safe restart scheduling, deferral flags, and
 // response payloads returned by gateway.restart.request.
+<<<<<<< HEAD
 import { beforeEach, describe, expect, it, vi } from "vitest";
+=======
+import { describe, expect, it, vi } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { restartHandlers } from "./restart.js";
 
 const requestSafeGatewayRestart = vi.hoisted(() => vi.fn());
@@ -21,7 +25,11 @@ vi.mock("../../infra/restart-coordinator.js", () => ({
   requestSafeGatewayRestart: (opts: unknown) => requestSafeGatewayRestart(opts),
 }));
 
+<<<<<<< HEAD
 function invokeRestartRequest(params: unknown) {
+=======
+function invokeRestartRequest(params: Record<string, unknown>) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const respond = vi.fn();
   const handler = restartHandlers["gateway.restart.request"];
   return Promise.resolve(
@@ -59,10 +67,13 @@ function expectRestartRequest(skipDeferral: boolean) {
 }
 
 describe("gateway.restart.request handler", () => {
+<<<<<<< HEAD
   beforeEach(() => {
     requestSafeGatewayRestart.mockClear();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("defaults to skipDeferral: false when the param is absent", async () => {
     mockScheduledRestart({ safe: true, summary: "safe to restart now" });
 
@@ -94,6 +105,7 @@ describe("gateway.restart.request handler", () => {
 
     expectRestartRequest(false);
   });
+<<<<<<< HEAD
 
   it("rejects non-object params without scheduling a restart", async () => {
     const respond = await invokeRestartRequest("operator");
@@ -126,4 +138,6 @@ describe("gateway.restart.request handler", () => {
       ],
     ]);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

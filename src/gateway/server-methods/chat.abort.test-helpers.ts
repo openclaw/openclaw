@@ -3,7 +3,10 @@
  */
 import { vi } from "vitest";
 import type { Mock } from "vitest";
+<<<<<<< HEAD
 import type { ChatAbortMarker } from "../server-chat-state.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { GatewayRequestHandler, RespondFn } from "./types.js";
 
 export function createActiveRun(
@@ -38,7 +41,11 @@ type ChatAbortTestContext = Record<string, unknown> & {
   dedupe: Map<string, unknown>;
   agentDeltaSentAt: Map<string, number>;
   bufferedAgentEvents: Map<string, unknown>;
+<<<<<<< HEAD
   chatAbortedRuns: Map<string, ChatAbortMarker>;
+=======
+  chatAbortedRuns: Map<string, number>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   clearChatRunState: (runId: string) => void;
   removeChatRun: (
     ...args: unknown[]
@@ -63,7 +70,11 @@ export function createChatAbortContext(
     dedupe: new Map(),
     agentDeltaSentAt: new Map(),
     bufferedAgentEvents: new Map(),
+<<<<<<< HEAD
     chatAbortedRuns: new Map<string, ChatAbortMarker>(),
+=======
+    chatAbortedRuns: new Map<string, number>(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     removeChatRun: vi
       .fn()
       .mockImplementation((run: string) => ({ sessionKey: "main", clientRunId: run })),

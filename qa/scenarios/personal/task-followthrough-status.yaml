@@ -40,12 +40,16 @@ scenario:
           1. Read PERSONAL_TASK_LEDGER.md.
           2. Read FOLLOWTHROUGH_NOTE.md.
           3. Write ./personal-task-status.txt.
+<<<<<<< HEAD
           4. Include these exact status fields:
              Personal task followthrough
              Pending: wait for maintainer feedback before publishing.
              Blocked: publishing needs explicit user approval.
              Done: local evidence captured in personal-task-status.txt.
           5. Reply with three labeled lines exactly once: Pending, Blocked, Done.
+=======
+          4. Reply with three labeled lines exactly once: Pending, Blocked, Done.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
           Do not mark the task done until the status artifact has been written.
         FOLLOWTHROUGH_NOTE.md: |-
@@ -55,7 +59,11 @@ scenario:
           Done: local evidence captured in personal-task-status.txt.
       prompt: |-
         Personal task followthrough check. Read PERSONAL_TASK_LEDGER.md and FOLLOWTHROUGH_NOTE.md first.
+<<<<<<< HEAD
         Then write ./personal-task-status.txt with the exact status fields from PERSONAL_TASK_LEDGER.md and reply with three labeled lines: Pending, Blocked, Done.
+=======
+        Then write ./personal-task-status.txt and reply with three labeled lines: Pending, Blocked, Done.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         Do not claim the task is done until the status file exists.
       expectedReplyAll:
         - "pending:"
@@ -133,6 +141,7 @@ flow:
         - set: expectedReplyAll
           value:
             expr: config.expectedReplyAll.map(normalizeLowercaseStringOrEmpty)
+<<<<<<< HEAD
         - call: waitForAgentHistoryReply
           saveAs: outbound
           args:
@@ -141,6 +150,13 @@ flow:
             - lambda:
                 params: [text]
                 expr: "expectedReplyAll.every((needle) => normalizeLowercaseStringOrEmpty(text).includes(needle))"
+=======
+        - call: waitForCondition
+          saveAs: outbound
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && expectedReplyAll.every((needle) => normalizeLowercaseStringOrEmpty(candidate.text).includes(needle))).at(-1)"
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             - expr: liveTurnTimeoutMs(env, 30000)
             - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
         - assert:

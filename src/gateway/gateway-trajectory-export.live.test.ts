@@ -6,7 +6,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
+<<<<<<< HEAD
 import { setTestEnvValue } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { GatewayClient } from "./client.js";
 import {
   connectTestGatewayClient,
@@ -466,14 +469,22 @@ describeLive("gateway live trajectory export", () => {
       } else if (!process.env.OPENAI_BASE_URL?.trim()) {
         delete process.env.OPENAI_BASE_URL;
       }
+<<<<<<< HEAD
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+=======
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
       process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
       process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
       process.env.OPENCLAW_SKIP_CHANNELS = "1";
       process.env.OPENCLAW_SKIP_CRON = "1";
       process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
+<<<<<<< HEAD
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+=======
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       process.env.OPENCLAW_TRAJECTORY = "1";
       process.env.OPENCLAW_TRAJECTORY_DIR = trajectoryDir;
 

@@ -27,7 +27,10 @@ function firstAttemptParams(): {
   modelRun?: boolean;
   promptMode?: string;
   promptCacheKey?: string;
+<<<<<<< HEAD
   suppressLiveStreamOutput?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } {
   const call = mockedRunEmbeddedAttempt.mock.calls[0] as
     | [
@@ -36,7 +39,10 @@ function firstAttemptParams(): {
           modelRun?: boolean;
           promptMode?: string;
           promptCacheKey?: string;
+<<<<<<< HEAD
           suppressLiveStreamOutput?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
       ]
     | undefined;
@@ -89,9 +95,12 @@ describe("runEmbeddedAgent cron before_agent_reply seam", () => {
     expect(hookContext?.sessionKey).toBe("test-key");
     expect(hookContext?.workspaceDir).toBe("/tmp/workspace");
     expect(hookContext?.trigger).toBe("cron");
+<<<<<<< HEAD
     expect(hookContext?.senderId).toBeUndefined();
     expect(hookContext?.chatId).toBeUndefined();
     expect(hookContext?.channel).toBeUndefined();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.text).toBe("dreaming claimed");
   });
@@ -189,6 +198,7 @@ describe("runEmbeddedAgent cron before_agent_reply seam", () => {
 
     expect(firstAttemptParams().promptCacheKey).toBe("cron-cache-key");
   });
+<<<<<<< HEAD
 
   it("forwards suppressed live stream output into the embedded attempt", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
@@ -200,4 +210,6 @@ describe("runEmbeddedAgent cron before_agent_reply seam", () => {
 
     expect(firstAttemptParams().suppressLiveStreamOutput).toBe(true);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

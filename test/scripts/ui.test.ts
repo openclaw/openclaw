@@ -111,6 +111,7 @@ describe("scripts/ui windows spawn behavior", () => {
     ).toThrow(/unsafe windows cmd\.exe argument/i);
   });
 
+<<<<<<< HEAD
   it("uses a trusted cmd.exe path when no explicit Windows launcher is injected", () => {
     expect(
       resolveSpawnCall(
@@ -125,6 +126,8 @@ describe("scripts/ui windows spawn behavior", () => {
     ).toBe("D:\\Windows\\System32\\cmd.exe");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("routes Windows Corepack pnpm entrypoints through node", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-runner-"));
     const npmExecPath = path.join(tempDir, "pnpm.mjs");
@@ -257,6 +260,7 @@ describe("scripts/ui windows spawn behavior", () => {
       }
     },
   );
+<<<<<<< HEAD
 
   it.runIf(process.platform !== "win32")(
     "cleans pnpm descendants before forwarding wrapper SIGTERM",
@@ -326,3 +330,6 @@ function pidAlive(pid: number): boolean {
     return false;
   }
 }
+=======
+});
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

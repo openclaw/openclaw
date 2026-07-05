@@ -23,7 +23,10 @@ import type {
   PluginRuntime as CorePluginRuntime,
 } from "openclaw/plugin-sdk/core";
 import * as providerEntrySdk from "openclaw/plugin-sdk/provider-entry";
+<<<<<<< HEAD
 import type { GetReplyOptions as ReplyRuntimeGetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import * as zalouserSdk from "openclaw/plugin-sdk/zalouser";
 import ts from "typescript";
 import { beforeAll, describe, expect, expectTypeOf, it } from "vitest";
@@ -626,8 +629,11 @@ describe("plugin-sdk subpath exports", () => {
         "clearHistoryEntriesIfEnabled",
         "recordPendingHistoryEntryIfEnabled",
         "DEFAULT_GROUP_HISTORY_LIMIT",
+<<<<<<< HEAD
         "requestedSessionId",
         "resumeRequestedSession",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ],
     });
     expectSourceMentions("account-helpers", ["createAccountListHelpers"]);
@@ -1340,11 +1346,14 @@ describe("plugin-sdk subpath exports", () => {
     expectTypeOf<CoreOpenClawPluginApi>().toMatchTypeOf<SharedOpenClawPluginApi>();
     expectTypeOf<CorePluginRuntime>().toMatchTypeOf<SharedPluginRuntime>();
     expectTypeOf<CoreChannelMessageActionContext>().toMatchTypeOf<SharedChannelMessageActionContext>();
+<<<<<<< HEAD
     type PrivateResumeOptionKeys = Extract<
       keyof ReplyRuntimeGetReplyOptions,
       "requestedSessionId" | "resumeRequestedSession"
     >;
     expectTypeOf<PrivateResumeOptionKeys>().toEqualTypeOf<never>();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("keeps runtime entry subpaths importable", async () => {

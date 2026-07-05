@@ -16,16 +16,28 @@ describe("formatDiscordReplySkip", () => {
     );
   });
 
+<<<<<<< HEAD
   it("renders the internal-only-payload reason with the same shape", () => {
     expect(
       formatDiscordReplySkip({
         kind: "block",
         reason: "internal-only payload",
+=======
+  it("renders the reasoning-payload reason with the same shape", () => {
+    expect(
+      formatDiscordReplySkip({
+        kind: "block",
+        reason: "reasoning payload",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         target: "channel:456",
         sessionKey: "agent:friday:discord:channel:456",
       }),
     ).toBe(
+<<<<<<< HEAD
       "discord block reply skipped (internal-only payload): target=channel:456 session=agent:friday:discord:channel:456",
+=======
+      "discord block reply skipped (reasoning payload): target=channel:456 session=agent:friday:discord:channel:456",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
   });
 
@@ -43,11 +55,19 @@ describe("formatDiscordReplySkip", () => {
     expect(
       formatDiscordReplySkip({
         kind: "tool",
+<<<<<<< HEAD
         reason: "internal-only payload",
         target: "channel:c1",
         sessionKey: "",
       }),
     ).toBe("discord tool reply skipped (internal-only payload): target=channel:c1");
+=======
+        reason: "reasoning payload",
+        target: "channel:c1",
+        sessionKey: "",
+      }),
+    ).toBe("discord tool reply skipped (reasoning payload): target=channel:c1");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("preserves the kind discriminant in the message prefix", () => {

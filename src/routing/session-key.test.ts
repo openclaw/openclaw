@@ -1,11 +1,18 @@
 // Routing session key tests cover route-derived session key behavior.
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { resolveSessionStoreAgentId } from "../gateway/session-store-key.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import {
   getSubagentDepth,
   isCronSessionKey,
   parseThreadSessionSuffix,
+<<<<<<< HEAD
+=======
+  resolveThreadParentSessionKey,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "../sessions/session-key-utils.js";
 import {
   agentSessionKeysMatchByRequestKey,
@@ -130,11 +137,15 @@ describe("isCronSessionKey", () => {
 
 describe("deriveSessionChatTypeFromKey", () => {
   it.each([
+<<<<<<< HEAD
     { key: "agent:main:direct:user1", expected: "direct" },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     { key: "agent:main:discord:direct:user1", expected: "direct" },
     { key: "agent:main:telegram:group:g1", expected: "group" },
     { key: "agent:main:discord:channel:c1", expected: "channel" },
     { key: "agent:main:discord:guild-123:channel-456", expected: "channel" },
+<<<<<<< HEAD
     { key: "agent:main:channel:legacy-room", expected: "channel" },
     { key: "agent:main:channel:!room:example.org", expected: "channel" },
     { key: "agent:main:channel:direct:user", expected: "channel" },
@@ -153,6 +164,11 @@ describe("deriveSessionChatTypeFromKey", () => {
     { key: "agent:main:dm:account:group:room", expected: "unknown" },
     { key: "agent:main:demo::channel:room", expected: "unknown" },
     { key: "agent::demo:direct:user", expected: "unknown" },
+=======
+    { key: "agent:main:whatsapp:123@g.us", expected: "group" },
+    { key: "agent:main:telegram:dm:123456", expected: "direct" },
+    { key: "telegram:dm:123456", expected: "direct" },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     { key: "agent:main:main", expected: "unknown" },
     { key: "agent:main", expected: "unknown" },
     { key: "", expected: "unknown" },
@@ -160,7 +176,11 @@ describe("deriveSessionChatTypeFromKey", () => {
     expect(deriveSessionChatTypeFromKey(key)).toBe(expected);
   });
 
+<<<<<<< HEAD
   it("uses plugin-owned legacy chat-type hooks after canonical parsing", () => {
+=======
+  it("uses plugin-owned legacy chat-type hooks after generic token parsing", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(
       deriveSessionChatTypeFromKey("legacy-room:abc", [
         (sessionKey) => (sessionKey.startsWith("legacy-room:") ? "channel" : undefined),
@@ -180,6 +200,14 @@ describe("thread session suffix parsing", () => {
         "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
       threadId: undefined,
     });
+<<<<<<< HEAD
+=======
+    expect(
+      resolveThreadParentSessionKey(
+        "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      ),
+    ).toBeNull();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("does not treat telegram :topic: as a generic thread suffix", () => {
@@ -187,6 +215,10 @@ describe("thread session suffix parsing", () => {
       baseSessionKey: "agent:main:telegram:group:-100123:topic:77",
       threadId: undefined,
     });
+<<<<<<< HEAD
+=======
+    expect(resolveThreadParentSessionKey("agent:main:telegram:group:-100123:topic:77")).toBeNull();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("parses mixed-case :thread: markers without lowercasing the stored key", () => {
@@ -214,6 +246,7 @@ describe("session key canonicalization", () => {
         }),
     },
     {
+<<<<<<< HEAD
       name: "preserves empty segments inside opaque agent-scoped tails",
       run: () => {
         expect(parseAgentSessionKey("agent:voice:room::part")).toEqual({
@@ -224,6 +257,8 @@ describe("session key canonicalization", () => {
       },
     },
     {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       name: "does not double-prefix already-qualified agent keys",
       run: () =>
         expect(

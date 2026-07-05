@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 // PR Context And Evidence Policy tests cover GitHub PR-body policy behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
@@ -17,6 +18,23 @@ const blankTemplateBody = readFileSync(
   "utf8",
 );
 
+=======
+// Real Behavior Proof Policy tests cover real behavior proof policy script behavior.
+import { describe, expect, it, vi } from "vitest";
+import {
+  MOCK_ONLY_PROOF_LABEL,
+  NEEDS_REAL_BEHAVIOR_PROOF_LABEL,
+  PROOF_OVERRIDE_LABEL,
+  PROOF_SUPPLIED_LABEL,
+  evaluateClawSweeperExactHeadProof,
+  evaluateRealBehaviorProof,
+  hasClawSweeperExactHeadProof,
+  isMaintainerTeamMember,
+  labelsForRealBehaviorProof,
+  readBoundedGitHubApiJson,
+} from "../../scripts/github/real-behavior-proof-policy.mjs";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function externalPr(body: string, overrides: Record<string, unknown> = {}) {
   return {
     body,
@@ -32,6 +50,7 @@ function externalPr(body: string, overrides: Record<string, unknown> = {}) {
 
 function proofBody(evidence: string, overrides: Record<string, string> = {}) {
   const fields = {
+<<<<<<< HEAD
     problem: "The gateway dropped the configured Discord channel during startup.",
     evidence,
     ...overrides,
@@ -44,6 +63,25 @@ function proofBody(evidence: string, overrides: Record<string, string> = {}) {
     "## Evidence",
     "",
     fields.evidence,
+=======
+    behavior: "Gateway startup no longer drops the configured Discord channel.",
+    environment: "macOS 15.4, Node 24, local OpenClaw gateway with a redacted Discord token.",
+    steps: "pnpm openclaw gateway restart, then pnpm openclaw gateway status",
+    evidence,
+    observedResult: "The gateway stayed connected and the Discord channel showed ready.",
+    notTested: "No known gaps.",
+    ...overrides,
+  };
+  return [
+    "## Real behavior proof",
+    "",
+    `- Behavior or issue addressed: ${fields.behavior}`,
+    `- Real environment tested: ${fields.environment}`,
+    `- Exact steps or command run after this patch: ${fields.steps}`,
+    `- Evidence after fix: ${fields.evidence}`,
+    `- Observed result after fix: ${fields.observedResult}`,
+    `- What was not tested: ${fields.notTested}`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ].join("\n");
 }
 
@@ -108,17 +146,30 @@ describe("real-behavior-proof-policy", () => {
     ["Terminal transcript:", "```text", "$ openclaw gateway status", "discord ready", "```"].join(
       "\n",
     ),
+<<<<<<< HEAD
   ])("passes external PRs with evidence: %s", (evidence) => {
     const evaluation = evaluatePullRequestContext({
+=======
+  ])("passes external PRs with real after-fix evidence: %s", (evidence) => {
+    const evaluation = evaluateRealBehaviorProof({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       pullRequest: externalPr(proofBody(evidence)),
     });
 
     expect(evaluation.status).toBe("passed");
+<<<<<<< HEAD
     expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
   it("passes CRLF-formatted external PRs with screenshot proof", () => {
     const evaluation = evaluatePullRequestContext({
+=======
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+  });
+
+  it("passes CRLF-formatted external PRs with screenshot proof", () => {
+    const evaluation = evaluateRealBehaviorProof({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       pullRequest: externalPr(
         proofBody("![after](https://github.com/user-attachments/assets/gateway-ready)").replace(
           /\n/g,
@@ -128,6 +179,7 @@ describe("real-behavior-proof-policy", () => {
     });
 
     expect(evaluation.status).toBe("passed");
+<<<<<<< HEAD
     expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
@@ -239,6 +291,20 @@ describe("real-behavior-proof-policy", () => {
   });
 
   it("accepts Markdown headings copied inside fenced evidence", () => {
+=======
+    expect(evaluation.fields).toStrictEqual({
+      behavior: "Gateway startup no longer drops the configured Discord channel.",
+      evidence: "![after](https://github.com/user-attachments/assets/gateway-ready)",
+      environment: "macOS 15.4, Node 24, local OpenClaw gateway with a redacted Discord token.",
+      notTested: "No known gaps.",
+      observedResult: "The gateway stayed connected and the Discord channel showed ready.",
+      steps: "pnpm openclaw gateway restart, then pnpm openclaw gateway status",
+    });
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+  });
+
+  it("keeps proof fields after Markdown headings copied inside fenced output", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const body = proofBody(
       [
         "Terminal transcript:",
@@ -257,6 +323,7 @@ describe("real-behavior-proof-policy", () => {
         "discord ready",
         "```",
       ].join("\n"),
+<<<<<<< HEAD
     );
     const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(body),
@@ -267,6 +334,27 @@ describe("real-behavior-proof-policy", () => {
   });
 
   it("uses the latest Evidence section when duplicates exist", () => {
+=======
+      {
+        observedResult: "Plugin rules appear after the plugin boundary.",
+        notTested: "Live model attribution smoke.",
+      },
+    );
+    const evaluation = evaluateRealBehaviorProof({
+      pullRequest: externalPr(body),
+    });
+
+    expect(evaluation.fields?.evidence).toContain("openclaw gateway status");
+    expect(evaluation.status).toBe("passed");
+    expect(evaluation.fields?.observedResult).toBe(
+      "Plugin rules appear after the plugin boundary.",
+    );
+    expect(evaluation.fields?.notTested).toBe("Live model attribution smoke.");
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+  });
+
+  it("uses the latest real behavior proof section when duplicates exist", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const validProof = proofBody(
       [
         "Terminal transcript:",
@@ -277,6 +365,7 @@ describe("real-behavior-proof-policy", () => {
         "```",
       ].join("\n"),
     );
+<<<<<<< HEAD
     const testEvidence = proofBody("Focused tests passed: 2 files, 36 tests.");
 
     const laterValid = evaluatePullRequestContext({
@@ -287,25 +376,53 @@ describe("real-behavior-proof-policy", () => {
     const laterInvalid = evaluatePullRequestContext({
       pullRequest: externalPr(
         [validProof, "## Evidence", "<!-- Add the most useful validation evidence. -->"].join(
+=======
+    const mockOnlyProof = proofBody("Focused tests passed: 2 files, 36 tests.", {
+      steps: "pnpm test",
+      observedResult: "CI passes.",
+    });
+
+    const laterValid = evaluateRealBehaviorProof({
+      pullRequest: externalPr(
+        [mockOnlyProof, "## Summary", "- Keep the detailed proof below.", validProof].join("\n\n"),
+      ),
+    });
+    const laterInvalid = evaluateRealBehaviorProof({
+      pullRequest: externalPr(
+        [validProof, "## Summary", "- Latest edit replaced proof with tests.", mockOnlyProof].join(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           "\n\n",
         ),
       ),
     });
 
     expect(laterValid.status).toBe("passed");
+<<<<<<< HEAD
     expect(labelsForPullRequestContext(laterValid)).toEqual([]);
     expect(laterInvalid.status).toBe("missing");
     expect(laterInvalid.missingSections).toEqual(["Evidence"]);
+=======
+    expect(laterValid.fields?.evidence).toContain("openclaw doctor --non-interactive");
+    expect(labelsForRealBehaviorProof(laterValid)).toEqual([PROOF_SUPPLIED_LABEL]);
+    expect(laterInvalid.status).toBe("mock_only");
+    expect(labelsForRealBehaviorProof(laterInvalid)).toEqual([MOCK_ONLY_PROOF_LABEL]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("accepts out-of-scope follow-ups as not-tested proof detail", () => {
     const body = [
+<<<<<<< HEAD
       "## What Problem This Solves",
       "",
       "Cron validation should retain the configured low thinking level.",
       "",
       "## Evidence",
       "",
+=======
+      "## Real behavior proof",
+      "",
+      "- Behavior addressed: Cron validation keeps Google Gemini 3 low thinking.",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "- Real environment tested: Local macOS source checkout, Node 24.",
       "- Exact steps or command run after this patch:",
       "  1. Built the local checkout with `node scripts/build-all.mjs`.",
@@ -321,22 +438,39 @@ describe("real-behavior-proof-policy", () => {
       "- No live systemd cron schedule was tested.",
       "- No real Google provider request was sent.",
     ].join("\n");
+<<<<<<< HEAD
     const evaluation = evaluatePullRequestContext({
+=======
+    const evaluation = evaluateRealBehaviorProof({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       pullRequest: externalPr(body),
     });
 
     expect(evaluation.status).toBe("passed");
+<<<<<<< HEAD
     expect(labelsForPullRequestContext(evaluation)).toEqual([]);
+=======
+    expect(evaluation.fields?.notTested).toBe(
+      "- No live systemd cron schedule was tested.\n- No real Google provider request was sent.",
+    );
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("accepts source PR proof when explicit gaps live in out-of-scope follow-ups", () => {
     const body = [
+<<<<<<< HEAD
       "## What Problem This Solves",
       "",
       "Cron validation downgraded Google Gemini 3 low thinking to off.",
       "",
       "## Evidence",
       "",
+=======
+      "## Real behavior proof",
+      "",
+      '- Behavior addressed: Cron/provider thinking validation no longer downgrades `google/gemini-3-flash-preview` `thinkingDefault: "low"` to `"off"` when cached catalog metadata says `reasoning:false` but the Google provider policy says Gemini 3 supports low thinking.',
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "- Real environment tested: Local macOS source checkout, Node v24.8.0, OpenClaw 2026.5.21 (c8a35c4), local `openclaw` shim pointed at the freshly built checkout. No channel credentials or provider API keys were used.",
       "- Exact steps or command run after this patch:",
       "  1. Built the local checkout with `node scripts/build-all.mjs`.",
@@ -355,29 +489,58 @@ describe("real-behavior-proof-policy", () => {
       "- No catalog refresh or provider model-list behavior is changed in this PR.",
       "- No channel, gateway allowlist, credential, or auth-profile behavior is changed in this PR.",
     ].join("\n");
+<<<<<<< HEAD
     const evaluation = evaluatePullRequestContext({
+=======
+    const evaluation = evaluateRealBehaviorProof({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       pullRequest: externalPr(body),
     });
 
     expect(evaluation.status).toBe("passed");
+<<<<<<< HEAD
     expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
   it("fails external PRs without required context and evidence", () => {
     const evaluation = evaluatePullRequestContext({
+=======
+    expect(evaluation.fields?.notTested).toBe(
+      [
+        "- No live systemd cron schedule is added in this PR.",
+        "- No real Google provider request is sent in this PR.",
+        "- No catalog refresh or provider model-list behavior is changed in this PR.",
+        "- No channel, gateway allowlist, credential, or auth-profile behavior is changed in this PR.",
+      ].join("\n"),
+    );
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+  });
+
+  it("fails external PRs without a real behavior proof section", () => {
+    const evaluation = evaluateRealBehaviorProof({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       pullRequest: externalPr("## Summary\n\n- Fixed startup."),
     });
 
     expect(evaluation.status).toBe("missing");
+<<<<<<< HEAD
     expect(labelsForPullRequestContext(evaluation)).toEqual([NEEDS_PR_CONTEXT_LABEL]);
   });
 
   it("fails external PRs that say the changed behavior was not tested", () => {
     const evaluation = evaluatePullRequestContext({
+=======
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([NEEDS_REAL_BEHAVIOR_PROOF_LABEL]);
+  });
+
+  it("fails external PRs that say the changed behavior was not tested", () => {
+    const evaluation = evaluateRealBehaviorProof({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       pullRequest: externalPr(proofBody("not tested")),
     });
 
     expect(evaluation.status).toBe("missing");
+<<<<<<< HEAD
     expect(labelsForPullRequestContext(evaluation)).toEqual([NEEDS_PR_CONTEXT_LABEL]);
   });
 
@@ -393,11 +556,102 @@ describe("real-behavior-proof-policy", () => {
   it("skips maintainer and bot PRs but requires context from external PRs", () => {
     expect(
       evaluatePullRequestContext({
+=======
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([NEEDS_REAL_BEHAVIOR_PROOF_LABEL]);
+  });
+
+  it.each([
+    "not tested",
+    "not tested.",
+    "- not tested",
+    "- not tested.",
+    "did not test",
+    "did not test.",
+    "could not test",
+    "could not test.",
+  ])("fails external PRs with fenced missing-proof field values: %s", (missingProof) => {
+    const evidence = [
+      "Terminal transcript:",
+      "```text",
+      "$ openclaw gateway status",
+      "discord ready",
+      "```",
+    ].join("\n");
+    const notTested = ["```text", missingProof, "```"].join("\n");
+
+    const evaluation = evaluateRealBehaviorProof({
+      pullRequest: externalPr(proofBody(evidence, { notTested })),
+    });
+
+    expect(evaluation.status).toBe("missing");
+    expect(evaluation.missingFields).toEqual(["notTested"]);
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([NEEDS_REAL_BEHAVIOR_PROOF_LABEL]);
+  });
+
+  it("fails external PRs whose proof is only tests, mocks, snapshots, lint, typecheck, or CI", () => {
+    const evaluation = evaluateRealBehaviorProof({
+      pullRequest: externalPr(
+        proofBody("pnpm test passed and Vitest mocks cover the branch.", {
+          steps: "pnpm test",
+          observedResult: "CI passes.",
+        }),
+      ),
+    });
+
+    expect(evaluation.status).toBe("mock_only");
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([MOCK_ONLY_PROOF_LABEL]);
+  });
+
+  it("fails external PRs whose only copied output is a fenced test or CI transcript", () => {
+    const evaluation = evaluateRealBehaviorProof({
+      pullRequest: externalPr(
+        proofBody(["```text", "$ pnpm test", "CI passed with Vitest mocks", "```"].join("\n"), {
+          steps: "pnpm test",
+          observedResult: "CI passes.",
+        }),
+      ),
+    });
+
+    expect(evaluation.status).toBe("mock_only");
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([MOCK_ONLY_PROOF_LABEL]);
+  });
+
+  it("fails external PRs whose terminal label only contains test or CI output", () => {
+    const evaluation = evaluateRealBehaviorProof({
+      pullRequest: externalPr(
+        proofBody(
+          [
+            "Terminal transcript:",
+            "```text",
+            "$ pnpm test",
+            "CI passed with Vitest mocks",
+            "```",
+          ].join("\n"),
+          {
+            steps: "pnpm test",
+            observedResult: "CI passes.",
+          },
+        ),
+      ),
+    });
+
+    expect(evaluation.status).toBe("mock_only");
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([MOCK_ONLY_PROOF_LABEL]);
+  });
+
+  it("passes maintainer, bot, and override cases", () => {
+    expect(
+      evaluateRealBehaviorProof({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         pullRequest: externalPr("", { author_association: "MEMBER" }),
       }).status,
     ).toBe("skipped");
     expect(
+<<<<<<< HEAD
       evaluatePullRequestContext({
+=======
+      evaluateRealBehaviorProof({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         pullRequest: externalPr("", {
           user: {
             login: "renovate[bot]",
@@ -407,10 +661,17 @@ describe("real-behavior-proof-policy", () => {
       }).status,
     ).toBe("skipped");
     expect(
+<<<<<<< HEAD
       evaluatePullRequestContext({
         pullRequest: externalPr("", { labels: [{ name: PROOF_OVERRIDE_LABEL }] }),
       }).status,
     ).toBe("missing");
+=======
+      evaluateRealBehaviorProof({
+        pullRequest: externalPr("", { labels: [{ name: PROOF_OVERRIDE_LABEL }] }),
+      }).status,
+    ).toBe("override");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("accepts ClawSweeper pass verdict comments only for the exact PR head", () => {
@@ -570,6 +831,7 @@ describe("isMaintainerTeamMember", () => {
     expect(await isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch })).toBe(false);
   });
 
+<<<<<<< HEAD
   it("cancels 404 membership response bodies", async () => {
     let canceled = false;
     const response = new Response(
@@ -586,6 +848,8 @@ describe("isMaintainerTeamMember", () => {
     expect(canceled).toBe(true);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("returns false when the token, org, or login is missing", async () => {
     const fetch = vi.fn();
     expect(await isMaintainerTeamMember({ org: "o", login: "u", fetch })).toBe(false);
@@ -601,6 +865,7 @@ describe("isMaintainerTeamMember", () => {
     ).rejects.toThrow(/500/);
   });
 
+<<<<<<< HEAD
   it("cancels unexpected HTTP error response bodies", async () => {
     let canceled = false;
     const response = new Response(
@@ -619,6 +884,8 @@ describe("isMaintainerTeamMember", () => {
     expect(canceled).toBe(true);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("aborts stalled membership fetches", async () => {
     const fetch = vi.fn((_url: string, init: RequestInit) => {
       return new Promise((_resolve, reject) => {

@@ -14,7 +14,10 @@ import {
   type InstalledPluginIndexRecordStoreOptions,
 } from "../plugins/installed-plugin-index-records.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
+<<<<<<< HEAD
 import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { listManagedPluginNpmRootsSync } from "../plugins/npm-project-roots.js";
 import {
   auditOpenClawPeerDependenciesInManagedNpmRoot,
@@ -127,9 +130,12 @@ function listStaleManagedNpmBundledPlugins(
         continue;
       }
       const packageDir = path.join(npmRoot, "node_modules", ...packageName.split("/"));
+<<<<<<< HEAD
       if (hasRetainedManagedNpmInstallMarker(packageDir)) {
         continue;
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const pluginId = readPluginManifestId(packageDir);
       if (!pluginId || pluginId !== bundled.pluginId) {
         continue;

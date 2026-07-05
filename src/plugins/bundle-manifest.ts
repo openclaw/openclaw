@@ -1,4 +1,8 @@
 /** Reads Codex/Claude/Cursor bundle manifests into OpenClaw plugin manifest metadata. */
+<<<<<<< HEAD
+=======
+import fs from "node:fs";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -16,7 +20,10 @@ import {
   normalizeManifestActivation,
   PLUGIN_MANIFEST_FILENAME,
 } from "./manifest.js";
+<<<<<<< HEAD
 import { pluginScanExistsSync } from "./plugin-scan-existence-cache.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Relative manifest path for Codex-style plugin bundles. */
 export const CODEX_BUNDLE_MANIFEST_RELATIVE_PATH = ".codex-plugin/plugin.json";
@@ -139,7 +146,11 @@ function resolveCodexSkillDirs(raw: Record<string, unknown>, rootDir: string): s
   if (declared.length > 0) {
     return declared;
   }
+<<<<<<< HEAD
   return pluginScanExistsSync(path.join(rootDir, "skills")) ? ["skills"] : [];
+=======
+  return fs.existsSync(path.join(rootDir, "skills")) ? ["skills"] : [];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function resolveCodexHookDirs(raw: Record<string, unknown>, rootDir: string): string[] {
@@ -147,18 +158,30 @@ function resolveCodexHookDirs(raw: Record<string, unknown>, rootDir: string): st
   if (declared.length > 0) {
     return declared;
   }
+<<<<<<< HEAD
   return pluginScanExistsSync(path.join(rootDir, "hooks")) ? ["hooks"] : [];
+=======
+  return fs.existsSync(path.join(rootDir, "hooks")) ? ["hooks"] : [];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function resolveCursorSkillsRootDirs(raw: Record<string, unknown>, rootDir: string): string[] {
   const declared = normalizeBundlePathList(raw.skills);
+<<<<<<< HEAD
   const defaults = pluginScanExistsSync(path.join(rootDir, "skills")) ? ["skills"] : [];
+=======
+  const defaults = fs.existsSync(path.join(rootDir, "skills")) ? ["skills"] : [];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return mergeBundlePathLists(defaults, declared);
 }
 
 function resolveCursorCommandRootDirs(raw: Record<string, unknown>, rootDir: string): string[] {
   const declared = normalizeBundlePathList(raw.commands);
+<<<<<<< HEAD
   const defaults = pluginScanExistsSync(path.join(rootDir, ".cursor", "commands"))
+=======
+  const defaults = fs.existsSync(path.join(rootDir, ".cursor", "commands"))
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ? [".cursor/commands"]
     : [];
   return mergeBundlePathLists(defaults, declared);
@@ -173,31 +196,47 @@ function resolveCursorSkillDirs(raw: Record<string, unknown>, rootDir: string): 
 
 function resolveCursorAgentDirs(raw: Record<string, unknown>, rootDir: string): string[] {
   const declared = normalizeBundlePathList(raw.subagents ?? raw.agents);
+<<<<<<< HEAD
   const defaults = pluginScanExistsSync(path.join(rootDir, ".cursor", "agents"))
     ? [".cursor/agents"]
     : [];
+=======
+  const defaults = fs.existsSync(path.join(rootDir, ".cursor", "agents")) ? [".cursor/agents"] : [];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return mergeBundlePathLists(defaults, declared);
 }
 
 function hasCursorHookCapability(raw: Record<string, unknown>, rootDir: string): boolean {
   return (
     hasInlineCapabilityValue(raw.hooks) ||
+<<<<<<< HEAD
     pluginScanExistsSync(path.join(rootDir, ".cursor", "hooks.json"))
+=======
+    fs.existsSync(path.join(rootDir, ".cursor", "hooks.json"))
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
 }
 
 function hasCursorRulesCapability(raw: Record<string, unknown>, rootDir: string): boolean {
   return (
+<<<<<<< HEAD
     hasInlineCapabilityValue(raw.rules) ||
     pluginScanExistsSync(path.join(rootDir, ".cursor", "rules"))
+=======
+    hasInlineCapabilityValue(raw.rules) || fs.existsSync(path.join(rootDir, ".cursor", "rules"))
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
 }
 
 function hasCursorMcpCapability(raw: Record<string, unknown>, rootDir: string): boolean {
+<<<<<<< HEAD
   return (
     hasInlineCapabilityValue(raw.mcpServers) ||
     pluginScanExistsSync(path.join(rootDir, ".mcp.json"))
   );
+=======
+  return hasInlineCapabilityValue(raw.mcpServers) || fs.existsSync(path.join(rootDir, ".mcp.json"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function resolveClaudeComponentPaths(
@@ -208,7 +247,11 @@ function resolveClaudeComponentPaths(
 ): string[] {
   const declared = normalizeBundlePathList(raw[key]);
   const existingDefaults = defaults.filter((candidate) =>
+<<<<<<< HEAD
     pluginScanExistsSync(path.join(rootDir, candidate)),
+=======
+    fs.existsSync(path.join(rootDir, candidate)),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
   return mergeBundlePathLists(existingDefaults, declared);
 }
@@ -251,7 +294,11 @@ function resolveClaudeOutputStylePaths(raw: Record<string, unknown>, rootDir: st
 }
 
 function resolveClaudeSettingsFiles(_raw: Record<string, unknown>, rootDir: string): string[] {
+<<<<<<< HEAD
   return pluginScanExistsSync(path.join(rootDir, "settings.json")) ? ["settings.json"] : [];
+=======
+  return fs.existsSync(path.join(rootDir, "settings.json")) ? ["settings.json"] : [];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function hasClaudeHookCapability(raw: Record<string, unknown>, rootDir: string): boolean {
@@ -266,6 +313,7 @@ function buildCodexCapabilities(raw: Record<string, unknown>, rootDir: string): 
   if (resolveCodexHookDirs(raw, rootDir).length > 0) {
     capabilities.push("hooks");
   }
+<<<<<<< HEAD
   if (
     hasInlineCapabilityValue(raw.mcpServers) ||
     pluginScanExistsSync(path.join(rootDir, ".mcp.json"))
@@ -273,6 +321,12 @@ function buildCodexCapabilities(raw: Record<string, unknown>, rootDir: string): 
     capabilities.push("mcpServers");
   }
   if (hasInlineCapabilityValue(raw.apps) || pluginScanExistsSync(path.join(rootDir, ".app.json"))) {
+=======
+  if (hasInlineCapabilityValue(raw.mcpServers) || fs.existsSync(path.join(rootDir, ".mcp.json"))) {
+    capabilities.push("mcpServers");
+  }
+  if (hasInlineCapabilityValue(raw.apps) || fs.existsSync(path.join(rootDir, ".app.json"))) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     capabilities.push("apps");
   }
   return capabilities;
@@ -425,6 +479,7 @@ export function loadBundleManifest(params: {
 }
 
 export function detectBundleManifestFormat(rootDir: string): PluginBundleFormat | null {
+<<<<<<< HEAD
   if (pluginScanExistsSync(path.join(rootDir, CODEX_BUNDLE_MANIFEST_RELATIVE_PATH))) {
     return "codex";
   }
@@ -435,11 +490,27 @@ export function detectBundleManifestFormat(rootDir: string): PluginBundleFormat 
     return "claude";
   }
   if (pluginScanExistsSync(path.join(rootDir, PLUGIN_MANIFEST_FILENAME))) {
+=======
+  if (fs.existsSync(path.join(rootDir, CODEX_BUNDLE_MANIFEST_RELATIVE_PATH))) {
+    return "codex";
+  }
+  if (fs.existsSync(path.join(rootDir, CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH))) {
+    return "cursor";
+  }
+  if (fs.existsSync(path.join(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH))) {
+    return "claude";
+  }
+  if (fs.existsSync(path.join(rootDir, PLUGIN_MANIFEST_FILENAME))) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return null;
   }
   if (
     DEFAULT_PLUGIN_ENTRY_CANDIDATES.some((candidate) =>
+<<<<<<< HEAD
       pluginScanExistsSync(path.join(rootDir, candidate)),
+=======
+      fs.existsSync(path.join(rootDir, candidate)),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     )
   ) {
     return null;
@@ -453,7 +524,11 @@ export function detectBundleManifestFormat(rootDir: string): PluginBundleFormat 
     path.join(rootDir, ".lsp.json"),
     path.join(rootDir, "settings.json"),
   ];
+<<<<<<< HEAD
   if (manifestlessClaudeMarkers.some((candidate) => pluginScanExistsSync(candidate))) {
+=======
+  if (manifestlessClaudeMarkers.some((candidate) => fs.existsSync(candidate))) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return "claude";
   }
   return null;

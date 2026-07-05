@@ -1,5 +1,8 @@
 // Test Live Codex Harness Docker tests cover test live codex harness docker script behavior.
+<<<<<<< HEAD
 import { spawnSync } from "node:child_process";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -126,6 +129,7 @@ describe("scripts/test-live-codex-harness-docker.sh", () => {
     expect(script).toContain('tail -c 262144 "$codex_preflight_log"');
     expect(script).not.toContain('cat "$codex_preflight_log"');
   });
+<<<<<<< HEAD
 
   it("rejects invalid setup timeout values before auth or Docker setup", () => {
     const result = spawnSync("bash", [SCRIPT_PATH], {
@@ -143,4 +147,6 @@ describe("scripts/test-live-codex-harness-docker.sh", () => {
     expect(result.stderr).not.toContain("requires ~/.codex/auth.json");
     expect(result.stderr).not.toContain("docker");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

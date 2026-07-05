@@ -8,7 +8,10 @@ import path from "node:path";
 import { URL } from "node:url";
 import { detectMime } from "@openclaw/media-core/mime";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
+<<<<<<< HEAD
 import { toErrorObject } from "../infra/errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   canonicalPathFromExistingAncestor,
   root as fsRoot,
@@ -27,8 +30,13 @@ import {
   REQUIRED_PARAM_GROUPS,
   assertRequiredParams,
   getToolParamsRecord,
+<<<<<<< HEAD
   normalizeFileToolPathParam,
   normalizeFileToolPathParamsFromKeys,
+=======
+  stripMalformedXmlArgValueSuffix,
+  stripMalformedXmlArgValueSuffixFromKeys,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
@@ -653,7 +661,11 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
     execute: async (toolCallId, args, signal, onUpdate) => {
       const record = getToolParamsRecord(args);
       const normalizedRecord = record
+<<<<<<< HEAD
         ? normalizeFileToolPathParamsFromKeys(record, ["path"])
+=======
+        ? stripMalformedXmlArgValueSuffixFromKeys(record, ["path"])
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         : undefined;
       assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.write, tool.name);
       const filePath =
@@ -738,7 +750,11 @@ async function assertSandboxPathWithinAnyRoot(params: {
       firstRootEscapeError ??= error;
     }
   }
+<<<<<<< HEAD
   throw toErrorObject(
+=======
+  throw toLintErrorObject(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     firstRootEscapeError ?? new Error("Path guard has no configured roots."),
     "Non-Error thrown",
   );
@@ -771,7 +787,11 @@ export function wrapToolWorkspaceRootGuardWithOptions(
         if (typeof rawFilePath !== "string" || !rawFilePath.trim()) {
           continue;
         }
+<<<<<<< HEAD
         const filePath = normalizeFileToolPathParam(rawFilePath);
+=======
+        const filePath = stripMalformedXmlArgValueSuffix(rawFilePath);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         if (!filePath.trim()) {
           throw malformedXmlArgValuePathError(key);
         }
@@ -887,7 +907,11 @@ export function createOpenClawReadTool(
     execute: async (toolCallId, params, signal) => {
       const record = getToolParamsRecord(params);
       const normalizedRecord = record
+<<<<<<< HEAD
         ? normalizeFileToolPathParamsFromKeys(record, ["path"])
+=======
+        ? stripMalformedXmlArgValueSuffixFromKeys(record, ["path"])
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         : undefined;
       assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.read, base.name);
       const result = await executeReadWithAdaptivePaging({
@@ -1128,3 +1152,20 @@ function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoExcept
   error.code = code;
   return error;
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

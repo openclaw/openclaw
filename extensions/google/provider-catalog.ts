@@ -36,6 +36,7 @@ const GOOGLE_GEMINI_TEXT_MODELS: ModelDefinitionConfig[] = [
     maxTokens: 65_536,
   },
   {
+<<<<<<< HEAD
     id: "gemini-3.5-flash",
     name: "Gemini 3.5 Flash",
     reasoning: true,
@@ -45,6 +46,8 @@ const GOOGLE_GEMINI_TEXT_MODELS: ModelDefinitionConfig[] = [
     maxTokens: 65_536,
   },
   {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     id: "gemini-3.1-pro-preview",
     name: "Gemini 3.1 Pro Preview",
     reasoning: true,

@@ -189,6 +189,7 @@ describe("zai provider plugin", () => {
     ).toEqual(registered);
   });
 
+<<<<<<< HEAD
   it("falls back to manifest baseUrl when both providerConfig and template model are unavailable", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
@@ -209,6 +210,8 @@ describe("zai provider plugin", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("still synthesizes unknown GLM-5 variants from the GLM-4.7 template", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const template = createGlm47Template();
@@ -280,6 +283,7 @@ describe("zai provider plugin", () => {
     expect(capturedPayload).not.toHaveProperty("tool_stream");
   });
 
+<<<<<<< HEAD
   it("exposes full GLM-5.2 thinking levels while keeping older GLM models binary", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
@@ -314,6 +318,8 @@ describe("zai provider plugin", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("maps thinking off to Z.AI thinking disabled", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     let capturedPayload: Record<string, unknown> | undefined;
@@ -346,6 +352,7 @@ describe("zai provider plugin", () => {
     expect(capturedPayload?.thinking).toEqual({ type: "disabled" });
   });
 
+<<<<<<< HEAD
   it("keeps minimal thinking enabled for binary GLM models", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     let capturedPayload: Record<string, unknown> | undefined;
@@ -414,6 +421,8 @@ describe("zai provider plugin", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("enables Z.AI preserved thinking only when requested", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     let capturedPayload: Record<string, unknown> | undefined;

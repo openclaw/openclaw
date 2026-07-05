@@ -1,6 +1,14 @@
 // Coverage for bootstrap routing across canonical and effective workspaces.
 import { describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { resolveAttemptWorkspaceBootstrapRouting } from "./attempt-bootstrap-routing.js";
+=======
+import {
+  hasBootstrapFileContent,
+  resolveBootstrapContextTargets,
+  resolveAttemptWorkspaceBootstrapRouting,
+} from "./attempt-bootstrap-routing.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("runEmbeddedAttempt bootstrap routing", () => {
   it("resolves bootstrap pending from the canonical workspace instead of a copied sandbox", async () => {
@@ -96,16 +104,23 @@ describe("runEmbeddedAttempt bootstrap routing", () => {
     expect(routing.includeBootstrapInRuntimeContext).toBe(false);
   });
 
+<<<<<<< HEAD
   it("does not treat empty hook-provided BOOTSTRAP.md as pending bootstrap context", async () => {
     const routing = await resolveAttemptWorkspaceBootstrapRouting({
       isWorkspaceBootstrapPending: vi.fn(async () => false),
       bootstrapFiles: [
+=======
+  it("does not treat empty hook-provided BOOTSTRAP.md as pending bootstrap context", () => {
+    expect(
+      hasBootstrapFileContent([
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         {
           name: "BOOTSTRAP.md",
           path: "/tmp/openclaw-workspace/BOOTSTRAP.md",
           content: "   ",
           missing: false,
         },
+<<<<<<< HEAD
       ],
       trigger: "user",
       isPrimaryRun: true,
@@ -118,5 +133,27 @@ describe("runEmbeddedAttempt bootstrap routing", () => {
     expect(routing.bootstrapMode).toBe("none");
     expect(routing.includeBootstrapInSystemContext).toBe(false);
     expect(routing.includeBootstrapInRuntimeContext).toBe(false);
+=======
+      ]),
+    ).toBe(false);
+  });
+
+  it("keeps BOOTSTRAP.md in Project Context for full bootstrap turns", () => {
+    expect(resolveBootstrapContextTargets({ bootstrapMode: "full" })).toEqual({
+      includeBootstrapInSystemContext: true,
+      includeBootstrapInRuntimeContext: false,
+    });
+  });
+
+  it("excludes BOOTSTRAP.md from every context outside full bootstrap turns", () => {
+    expect(resolveBootstrapContextTargets({ bootstrapMode: "limited" })).toEqual({
+      includeBootstrapInSystemContext: false,
+      includeBootstrapInRuntimeContext: false,
+    });
+    expect(resolveBootstrapContextTargets({ bootstrapMode: "none" })).toEqual({
+      includeBootstrapInSystemContext: false,
+      includeBootstrapInRuntimeContext: false,
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

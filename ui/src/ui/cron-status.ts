@@ -6,6 +6,7 @@ export type CronJobLastRunStatus = CronRunStatus | "unknown";
 export function resolveCronJobLastRunStatus(job: CronJob): CronJobLastRunStatus {
   return job.state?.lastRunStatus ?? job.state?.lastStatus ?? "unknown";
 }
+<<<<<<< HEAD
 
 // Overview "failed cron" surfaces track current actionability, so a failure only
 // counts while the job is still enabled. Disabled jobs keep their historical
@@ -14,3 +15,5 @@ export function resolveCronJobLastRunStatus(job: CronJob): CronJobLastRunStatus 
 export function isCronJobActiveFailure(job: CronJob): boolean {
   return job.enabled && resolveCronJobLastRunStatus(job) === "error";
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

@@ -10,6 +10,10 @@ import {
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+<<<<<<< HEAD
+=======
+  applyDeepInfraProviderConfig,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   applyDeepInfraConfig,
   DEEPINFRA_BASE_URL,
   DEEPINFRA_DEFAULT_MODEL_REF,
@@ -35,6 +39,56 @@ describe("DeepInfra provider config", () => {
     });
   });
 
+<<<<<<< HEAD
+=======
+  describe("applyDeepInfraProviderConfig", () => {
+    it("does not set provider models (discovery populates them at runtime)", () => {
+      const result = applyDeepInfraProviderConfig(emptyCfg, DEEPINFRA_DEFAULT_MODEL_REF);
+      expect(result.models?.providers?.deepinfra).toBeUndefined();
+    });
+
+    it("sets DeepInfra alias on the provided model ref", () => {
+      const result = applyDeepInfraProviderConfig(emptyCfg, DEEPINFRA_DEFAULT_MODEL_REF);
+      const agentModel = result.agents?.defaults?.models?.[DEEPINFRA_DEFAULT_MODEL_REF];
+      expect(agentModel).toEqual({ alias: "DeepInfra" });
+    });
+
+    it("attaches the alias to a non-default model ref when provided", () => {
+      const fallbackRef = "deepinfra/other/awesome-model";
+      const result = applyDeepInfraProviderConfig(emptyCfg, fallbackRef);
+      expect(result.agents?.defaults?.models?.[fallbackRef]?.alias).toBe("DeepInfra");
+      expect(result.agents?.defaults?.models?.[DEEPINFRA_DEFAULT_MODEL_REF]).toBeUndefined();
+    });
+
+    it("preserves existing alias if already set", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              [DEEPINFRA_DEFAULT_MODEL_REF]: { alias: "My Custom Alias" },
+            },
+          },
+        },
+      };
+      const result = applyDeepInfraProviderConfig(cfg, DEEPINFRA_DEFAULT_MODEL_REF);
+      const agentModel = result.agents?.defaults?.models?.[DEEPINFRA_DEFAULT_MODEL_REF];
+      expect(agentModel?.alias).toBe("My Custom Alias");
+    });
+
+    it("does not change the default model selection", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5" },
+          },
+        },
+      };
+      const result = applyDeepInfraProviderConfig(cfg, DEEPINFRA_DEFAULT_MODEL_REF);
+      expect(resolveAgentModelPrimaryValue(result.agents?.defaults?.model)).toBe("openai/gpt-5");
+    });
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   describe("applyDeepInfraConfig", () => {
     it("sets the provided model ref as the primary default", () => {
       const result = applyDeepInfraConfig(emptyCfg, DEEPINFRA_DEFAULT_MODEL_REF);
@@ -55,6 +109,7 @@ describe("DeepInfra provider config", () => {
       expect(resolveAgentModelPrimaryValue(result.agents?.defaults?.model)).toBe(fallbackRef);
       expect(result.agents?.defaults?.models?.[fallbackRef]?.alias).toBe("DeepInfra");
     });
+<<<<<<< HEAD
 
     it("preserves an existing alias on the selected model", () => {
       const cfg: OpenClawConfig = {
@@ -71,6 +126,8 @@ describe("DeepInfra provider config", () => {
         "My Custom Alias",
       );
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   describe("env var resolution", () => {

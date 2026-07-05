@@ -28,6 +28,10 @@ import {
   listPluginInstallWholeRecordPaths,
   resolveConfigReloadMetadata,
   resolveGatewayReloadSettings,
+<<<<<<< HEAD
+=======
+  shouldInvalidateSkillsSnapshotForPaths,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   startGatewayConfigReloader,
 } from "./config-reload.js";
 
@@ -160,7 +164,11 @@ describe("buildGatewayReloadPlan", () => {
       resolveAccount: () => ({}),
     },
     reload: {
+<<<<<<< HEAD
       configPrefixes: ["web", "channels.whatsapp.accounts", "channels.whatsapp.selfChatMode"],
+=======
+      configPrefixes: ["web", "channels.whatsapp.accounts"],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       noopPrefixes: ["channels.whatsapp"],
     },
   };
@@ -235,6 +243,7 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toStrictEqual([]);
   });
 
+<<<<<<< HEAD
   it("restarts the WhatsApp channel when selfChatMode changes (configPrefix wins over broad noop prefix)", () => {
     const plan = buildGatewayReloadPlan(["channels.whatsapp.selfChatMode"]);
     expect(plan.restartGateway).toBe(false);
@@ -243,6 +252,8 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toStrictEqual([]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps other channels.whatsapp.* changes as hot no-ops", () => {
     const plan = buildGatewayReloadPlan(["channels.whatsapp.replyToMode"]);
     expect(plan.restartGateway).toBe(false);
@@ -1875,6 +1886,46 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
   });
 });
 
+<<<<<<< HEAD
+=======
+describe("shouldInvalidateSkillsSnapshotForPaths", () => {
+  it.each([
+    "skills",
+    "skills.allowBundled",
+    "skills.entries",
+    "skills.entries.himalaya",
+    "skills.entries.himalaya.enabled",
+    "skills.profile",
+  ])("returns true for skills path %s", (path) => {
+    expect(shouldInvalidateSkillsSnapshotForPaths([path])).toBe(true);
+  });
+
+  it.each([
+    "tools.profile",
+    "agents.defaults.model",
+    "gateway.port",
+    "skillset.allowBundled",
+    "channels.telegram.enabled",
+  ])("returns false for unrelated path %s", (path) => {
+    expect(shouldInvalidateSkillsSnapshotForPaths([path])).toBe(false);
+  });
+
+  it("returns true when any path in the list matches", () => {
+    expect(
+      shouldInvalidateSkillsSnapshotForPaths([
+        "gateway.port",
+        "skills.allowBundled",
+        "channels.telegram.enabled",
+      ]),
+    ).toBe(true);
+  });
+
+  it("returns false for empty input", () => {
+    expect(shouldInvalidateSkillsSnapshotForPaths([])).toBe(false);
+  });
+});
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("startGatewayConfigReloader skills invalidation", () => {
   beforeEach(() => {
     vi.useFakeTimers();

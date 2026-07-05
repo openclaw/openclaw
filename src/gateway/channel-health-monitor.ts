@@ -145,6 +145,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             restartsThisHour: [],
           };
 
+<<<<<<< HEAD
           const continuingPendingRestart =
             status.running !== true &&
             status.restartPending === true &&
@@ -154,11 +155,18 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           // restartPending; the next monitor pass must finish that same recovery
           // instead of waiting behind this monitor's fresh-restart cooldown.
           if (!continuingPendingRestart && now - record.lastRestartAt <= cooldownMs) {
+=======
+          if (now - record.lastRestartAt <= cooldownMs) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             continue;
           }
 
           pruneOldRestarts(record, now);
+<<<<<<< HEAD
           if (!continuingPendingRestart && record.restartsThisHour.length >= maxRestartsPerHour) {
+=======
+          if (record.restartsThisHour.length >= maxRestartsPerHour) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             log.warn?.(
               `[${channelId}:${accountId}] health-monitor: hit ${maxRestartsPerHour} restarts/hour limit, skipping`,
             );
@@ -169,11 +177,17 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
 
+<<<<<<< HEAD
           if (!continuingPendingRestart) {
             record.lastRestartAt = now;
             record.restartsThisHour.push({ at: now });
             restartRecords.set(key, record);
           }
+=======
+          record.lastRestartAt = now;
+          record.restartsThisHour.push({ at: now });
+          restartRecords.set(key, record);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
           try {
             if (status.running) {

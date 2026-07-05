@@ -18,7 +18,11 @@ import { parseClawHubPluginSpec } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { buildClawHubPluginInstallRecordFields } from "../plugins/clawhub-install-records.js";
+<<<<<<< HEAD
 import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../plugins/clawhub.js";
+=======
+import { installPluginFromClawHub } from "../plugins/clawhub.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { installPluginFromGitSpec, parseGitPluginSpec } from "../plugins/git-install.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
@@ -43,7 +47,10 @@ import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trac
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
+<<<<<<< HEAD
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatCliCommand } from "./command-format.js";
 import { looksLikeLocalInstallSpec } from "./install-spec.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
@@ -81,6 +88,7 @@ type ConfigSnapshotForInstallExecution = ConfigSnapshotForInstallPersist & {
   pluginMutation: ConfigMutationPreflight;
 };
 
+<<<<<<< HEAD
 function isClawHubBlockedCliFailure(result: { code?: string; warning?: string }): boolean {
   return (
     result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_DOWNLOAD_BLOCKED &&
@@ -89,6 +97,8 @@ function isClawHubBlockedCliFailure(result: { code?: string; warning?: string })
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveInstallMode(force?: boolean): "install" | "update" {
   return force ? "update" : "install";
 }
@@ -863,7 +873,10 @@ export async function loadConfigForInstall(
 export async function runPluginInstallCommand(params: {
   raw: string;
   opts: InstallSafetyOverrides & {
+<<<<<<< HEAD
     acknowledgeClawHubRisk?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     force?: boolean;
     link?: boolean;
     pin?: boolean;
@@ -1004,9 +1017,13 @@ export async function runPluginInstallCommand(params: {
       logger: createPluginInstallLogger(runtime),
     });
     if (!result.ok) {
+<<<<<<< HEAD
       if (!isClawHubBlockedCliFailure(result)) {
         runtime.error(result.error);
       }
+=======
+      runtime.error(result.error);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return runtime.exit(1);
     }
 
@@ -1313,19 +1330,26 @@ export async function runPluginInstallCommand(params: {
   if (clawhubSpec) {
     const result = await installPluginFromClawHub({
       ...safetyOverrides,
+<<<<<<< HEAD
       ...resolveClawHubRiskAcknowledgementCliOptions({
         acknowledgeClawHubRisk: opts.acknowledgeClawHubRisk,
         action: "installing",
       }),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       mode: installMode,
       spec: raw,
       extensionsDir,
       logger: createPluginInstallLogger(runtime),
     });
     if (!result.ok) {
+<<<<<<< HEAD
       if (!isClawHubBlockedCliFailure(result)) {
         runtime.error(result.error);
       }
+=======
+      runtime.error(result.error);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return runtime.exit(1);
     }
 

@@ -8,7 +8,10 @@ import { access as fsAccess, readFile as fsReadFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+<<<<<<< HEAD
 import { toErrorObject } from "../../../infra/errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
 import type { ImageContent, Model, TextContent } from "../../../llm/types.js";
 import {
@@ -410,7 +413,11 @@ export function createReadToolDefinition(
           } catch (error: unknown) {
             signal?.removeEventListener("abort", onAbort);
             if (!aborted) {
+<<<<<<< HEAD
               reject(toErrorObject(error, "Non-Error rejection"));
+=======
+              reject(toLintErrorObject(error, "Non-Error rejection"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             }
           }
         })();
@@ -452,3 +459,20 @@ export function createReadTool(
 ): AgentTool<typeof readSchema> {
   return wrapToolDefinition(createReadToolDefinition(cwd, options));
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

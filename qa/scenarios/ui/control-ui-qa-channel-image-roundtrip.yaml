@@ -6,7 +6,11 @@ scenario:
   coverage:
     primary:
       - ui.control
+<<<<<<< HEAD
       - ui.dashboard-auth-bootstrap
+=======
+      - dashboard-open-auth-bootstrap
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     secondary:
       - media.image-understanding
       - channels.qa-channel
@@ -30,7 +34,10 @@ scenario:
     kind: flow
     summary: Open the Control UI on a qa-channel session with the generic QA web driver, inject text and image turns through qa-channel, and verify the replies in both the transport log and the UI transcript.
     config:
+<<<<<<< HEAD
       requiredChannelDriver: qa-channel
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       conversationId: control-ui-e2e
       textPrompt: "Control UI bridge check. Marker exact marker: `ui bridge armed`"
       uiExpectedNeedle: ui bridge armed

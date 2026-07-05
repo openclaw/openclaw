@@ -11,9 +11,12 @@ const TWILIO_MESSAGING_URL = "https://messaging.twilio.com/v1";
 const TWILIO_API_HOSTNAME = "api.twilio.com";
 const TWILIO_MESSAGING_HOSTNAME = "messaging.twilio.com";
 const TWILIO_API_TIMEOUT_MS = 30_000;
+<<<<<<< HEAD
 const TWILIO_API_SUCCESS_BODY_LIMIT_BYTES = 1 * 1024 * 1024;
 const TWILIO_API_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const TRUNCATED_RESPONSE_SUFFIX = "... [truncated]";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const WEBHOOK_BODY_LIMIT_BYTES = 32 * 1024;
 const WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 
@@ -268,6 +271,7 @@ function basicAuthHeader(account: ResolvedSmsAccount): string {
   return `Basic ${Buffer.from(`${account.accountSid}:${account.authToken}`).toString("base64")}`;
 }
 
+<<<<<<< HEAD
 function appendTruncatedResponseSuffix(text: string): string {
   return `${text.trimEnd()}${TRUNCATED_RESPONSE_SUFFIX}`;
 }
@@ -323,6 +327,8 @@ async function readTwilioApiResponseText(response: Response): Promise<string> {
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function normalizeRequestHeaders(headers: HeadersInit | undefined): Record<string, string> {
   if (!headers) {
     return {};
@@ -356,7 +362,11 @@ async function requestTwilioApi(params: {
     return {
       ok: response.ok,
       status: response.status,
+<<<<<<< HEAD
       text: await readTwilioApiResponseText(response),
+=======
+      text: await response.text(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
   }
 
@@ -372,7 +382,11 @@ async function requestTwilioApi(params: {
     return {
       ok: guarded.response.ok,
       status: guarded.response.status,
+<<<<<<< HEAD
       text: await readTwilioApiResponseText(guarded.response),
+=======
+      text: await guarded.response.text(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
   } finally {
     await guarded.release();

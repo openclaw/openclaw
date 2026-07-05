@@ -47,6 +47,7 @@ function firstCallOptions(mock: { mock: { calls: unknown[][] } }) {
   return mock.mock.calls[0]?.[0];
 }
 
+<<<<<<< HEAD
 type UpdateFinalizeCommandOptions = {
   acknowledgeClawHubRisk?: boolean;
   json?: boolean;
@@ -54,6 +55,8 @@ type UpdateFinalizeCommandOptions = {
   restart?: boolean;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("update cli option collisions", () => {
   beforeEach(() => {
     updateCommand.mockClear();
@@ -79,6 +82,7 @@ describe("update cli option collisions", () => {
       },
     },
     {
+<<<<<<< HEAD
       name: "forwards parent-captured options to hidden `update finalize`",
       argv: [
         "update",
@@ -98,6 +102,22 @@ describe("update cli option collisions", () => {
         expect(opts?.timeout).toBe("17");
         expect(opts?.restart).toBe(false);
         expect(opts?.acknowledgeClawHubRisk).toBe(true);
+=======
+      name: "forwards parent-captured --json/--timeout to hidden `update finalize`",
+      argv: ["update", "finalize", "--json", "--timeout", "17"],
+      assert: () => {
+        expect(updateFinalizeCommand).toHaveBeenCalledTimes(1);
+        const opts = firstCallOptions(updateFinalizeCommand);
+        expect(
+          (opts as { json?: boolean; timeout?: string; restart?: boolean } | undefined)?.json,
+        ).toBe(true);
+        expect(
+          (opts as { json?: boolean; timeout?: string; restart?: boolean } | undefined)?.timeout,
+        ).toBe("17");
+        expect(
+          (opts as { json?: boolean; timeout?: string; restart?: boolean } | undefined)?.restart,
+        ).toBe(false);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     },
     {

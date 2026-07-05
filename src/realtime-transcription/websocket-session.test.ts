@@ -224,6 +224,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     }
   });
 
+<<<<<<< HEAD
   it("preserves connect failures when the error callback throws", async () => {
     vi.useFakeTimers();
     const previousDebugProxyEnabled = process.env.OPENCLAW_DEBUG_PROXY_ENABLED;
@@ -267,6 +268,8 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not open a socket when closed while async connection resolves", async () => {
     const seenAuthHeaders: Array<string | string[] | undefined> = [];
     let resolveUrl!: (url: string) => void;
@@ -352,6 +355,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     session.close();
   });
 
+<<<<<<< HEAD
   it("keeps error callback failures inside websocket message dispatch", async () => {
     const server = await createRealtimeServer({ initialText: "{not json" });
     const onError = vi.fn((_error: Error) => {
@@ -381,6 +385,8 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     session.close();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("reports pre-ready closes separately from connection timeouts", async () => {
     const server = await createRealtimeServer({ closeOnConnection: true });
     const onError = vi.fn();

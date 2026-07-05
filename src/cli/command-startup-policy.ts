@@ -7,6 +7,33 @@ export function shouldBypassConfigGuardForCommandPath(commandPath: string[]): bo
   return resolveCliCommandPathPolicy(commandPath).bypassConfigGuard;
 }
 
+<<<<<<< HEAD
+=======
+export function shouldSkipRouteConfigGuardForCommandPath(params: {
+  commandPath: string[];
+  suppressDoctorStdout: boolean;
+}): boolean {
+  const routeConfigGuard = resolveCliCommandPathPolicy(params.commandPath).routeConfigGuard;
+  return (
+    routeConfigGuard === "always" ||
+    (routeConfigGuard === "when-suppressed" && params.suppressDoctorStdout)
+  );
+}
+
+export function shouldLoadPluginsForCommandPath(params: {
+  argv?: string[];
+  commandPath: string[];
+  jsonOutputMode: boolean;
+}): boolean {
+  return shouldLoadPlugins({
+    loadPlugins: resolveCliCommandPathPolicy(params.commandPath).loadPlugins,
+    argv: params.argv,
+    commandPath: params.commandPath,
+    jsonOutputMode: params.jsonOutputMode,
+  });
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function shouldLoadPlugins(params: {
   argv?: string[];
   commandPath: string[];
@@ -25,6 +52,23 @@ function shouldLoadPlugins(params: {
   return loadPlugins === "always" || (loadPlugins === "text-only" && !params.jsonOutputMode);
 }
 
+<<<<<<< HEAD
+=======
+export function shouldHideCliBannerForCommandPath(
+  commandPath: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return (
+    isTruthyEnvValue(env.OPENCLAW_HIDE_BANNER) ||
+    resolveCliCommandPathPolicy(commandPath).hideBanner
+  );
+}
+
+export function shouldEnsureCliPathForCommandPath(commandPath: string[]): boolean {
+  return commandPath.length === 0 || resolveCliCommandPathPolicy(commandPath).ensureCliPath;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function resolveCliStartupPolicy(params: {
   argv?: string[];
   commandPath: string[];

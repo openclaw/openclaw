@@ -76,7 +76,10 @@ class MockWebSocket {
   autoCloseOnClose = true;
   readyState = MockWebSocket.CONNECTING;
   readonly options: unknown;
+<<<<<<< HEAD
   _socket?: { getPeerCertificate: () => { fingerprint256?: string } };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   constructor(_url: string, options?: unknown) {
     this.options = options;
@@ -86,6 +89,7 @@ class MockWebSocket {
     }
   }
 
+<<<<<<< HEAD
   setPeerFingerprint(fingerprint256: string): void {
     Object.defineProperty(this, "_socket", {
       configurable: true,
@@ -93,6 +97,8 @@ class MockWebSocket {
     });
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   on(event: "open", handler: WsEventHandlers["open"]): void;
   on(event: "message", handler: WsEventHandlers["message"]): void;
   on(event: "close", handler: WsEventHandlers["close"]): void;
@@ -723,12 +729,15 @@ describe("GatewayClient close handling", () => {
     expect(onClose).toHaveBeenCalledWith(
       1008,
       "unauthorized: DEVICE token mismatch (rotate/reissue device token)",
+<<<<<<< HEAD
       {
         phase: "pre-hello",
         socketOpened: false,
         transportValidated: false,
         transientPreHelloCleanClose: false,
       },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
     client.stop();
   });
@@ -746,12 +755,16 @@ describe("GatewayClient close handling", () => {
     expect(logDebugMock).toHaveBeenCalledWith(
       expect.stringContaining("failed clearing stale device-auth token"),
     );
+<<<<<<< HEAD
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch", {
       phase: "pre-hello",
       socketOpened: false,
       transportValidated: false,
       transientPreHelloCleanClose: false,
     });
+=======
+    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     client.stop();
   });
 
@@ -763,6 +776,7 @@ describe("GatewayClient close handling", () => {
     getLatestWs().emitClose(1008, "unauthorized: signature invalid");
 
     expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
+<<<<<<< HEAD
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid", {
       phase: "pre-hello",
       socketOpened: false,
@@ -817,6 +831,9 @@ describe("GatewayClient close handling", () => {
     expect(logDebugMock).toHaveBeenCalledWith(
       "gateway client close handler error: Error: close callback failed",
     );
+=======
+    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     client.stop();
   });
 
@@ -878,8 +895,11 @@ describe("GatewayClient close handling", () => {
       );
       expect(onClose).toHaveBeenCalledWith(1000, "", {
         phase: "pre-hello",
+<<<<<<< HEAD
         socketOpened: true,
         transportValidated: true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         transientPreHelloCleanClose: true,
       });
 
@@ -964,6 +984,7 @@ describe("GatewayClient close handling", () => {
 
       expect(onClose).toHaveBeenNthCalledWith(1, 1000, "", {
         phase: "pre-hello",
+<<<<<<< HEAD
         socketOpened: true,
         transportValidated: true,
         transientPreHelloCleanClose: true,
@@ -974,6 +995,11 @@ describe("GatewayClient close handling", () => {
         transportValidated: true,
         transientPreHelloCleanClose: true,
       });
+=======
+        transientPreHelloCleanClose: true,
+      });
+      expect(onClose).toHaveBeenNthCalledWith(2, 1000, "");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(onConnectError).toHaveBeenCalledOnce();
       expect(onConnectError.mock.calls[0]?.[0]).toMatchObject({
         message: "gateway closed (1000): ",
@@ -1100,12 +1126,16 @@ describe("GatewayClient close handling", () => {
     getLatestWs().emitClose(1008, "unauthorized: device token mismatch");
 
     expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
+<<<<<<< HEAD
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch", {
       phase: "pre-hello",
       socketOpened: false,
       transportValidated: false,
       transientPreHelloCleanClose: false,
     });
+=======
+    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     client.stop();
   });
 });
@@ -1310,6 +1340,7 @@ describe("GatewayClient connect auth payload", () => {
     }
   });
 
+<<<<<<< HEAD
   it("keeps hello callback errors inside connect dispatch", async () => {
     const onHelloOk = vi.fn(() => {
       throw new Error("hello callback failed");
@@ -1339,6 +1370,8 @@ describe("GatewayClient connect auth payload", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   function emitConnectFailure(
     ws: MockWebSocket,
     connectId: string | undefined,
@@ -1843,6 +1876,7 @@ describe("GatewayClient connect auth payload", () => {
     });
   });
 
+<<<<<<< HEAD
   it("keeps reconnect paused callback errors inside close dispatch", async () => {
     const onReconnectPaused = vi.fn(() => {
       throw new Error("paused callback failed");
@@ -1879,6 +1913,8 @@ describe("GatewayClient connect auth payload", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not auto-reconnect on CLIENT_VERSION_MISMATCH connect failures", async () => {
     const onReconnectPaused = vi.fn();
     const client = new GatewayClient({

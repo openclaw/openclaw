@@ -15,6 +15,16 @@ type MentionEntity = {
   };
 };
 
+<<<<<<< HEAD
+=======
+type MentionInfo = {
+  /** User/bot ID (e.g., "28:xxx" or AAD object ID) */
+  id: string;
+  /** Display name */
+  name: string;
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Check whether an ID looks like a valid Teams user/bot identifier.
  * Accepts:
@@ -75,3 +85,36 @@ export function parseMentions(text: string): {
     entities,
   };
 }
+<<<<<<< HEAD
+=======
+
+/**
+ * Build mention entities array from a list of mentions.
+ * Use this when you already have the mention info and formatted text.
+ */
+export function buildMentionEntities(mentions: MentionInfo[]): MentionEntity[] {
+  return mentions.map((mention) => ({
+    type: "mention",
+    text: `<at>${mention.name}</at>`,
+    mentioned: {
+      id: mention.id,
+      name: mention.name,
+    },
+  }));
+}
+
+/**
+ * Format text with mentions using <at> tags.
+ * This is a convenience function when you want to manually format mentions.
+ */
+export function formatMentionText(text: string, mentions: MentionInfo[]): string {
+  let formatted = text;
+  for (const mention of mentions) {
+    // Replace @Name or @name with <at>Name</at>
+    const escapedName = mention.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const namePattern = new RegExp(`@${escapedName}`, "gi");
+    formatted = formatted.replace(namePattern, `<at>${mention.name}</at>`);
+  }
+  return formatted;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

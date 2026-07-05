@@ -152,6 +152,18 @@ export async function resolveAgentTurnAttachments(params: {
   return { attachments: results, recentHistoryImages: resolvedHistoryImages };
 }
 
+<<<<<<< HEAD
+=======
+/** Resolves only the attachment payloads for callers that do not need history metadata. */
+export async function resolveAgentAttachments(params: {
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+  runtime?: AgentTurnAttachmentRuntime;
+}): Promise<AgentTurnAttachment[]> {
+  return (await resolveAgentTurnAttachments(params)).attachments;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Converts inline image content into ACP attachment payloads. */
 export function resolveInlineAgentImageAttachments(
   images: Array<{ data: string; mimeType: string }> | undefined,

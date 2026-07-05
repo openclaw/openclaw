@@ -8,10 +8,14 @@ import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vite
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
+<<<<<<< HEAD
 import {
   emitInternalSessionTranscriptUpdate,
   emitSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
+=======
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectOk,
@@ -523,6 +527,7 @@ describe("session.message websocket events", () => {
     });
   });
 
+<<<<<<< HEAD
   test("broadcasts identity-only transcript updates to live session listeners", async () => {
     const storePath = await createSessionStoreFile();
     await writeSessionStore({
@@ -561,6 +566,8 @@ describe("session.message websocket events", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   test("includes live usage metadata on session.message transcript events", async () => {
     const storePath = await createSessionStoreFile();
     await writeSessionStore({

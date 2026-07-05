@@ -8,9 +8,12 @@ const pluginRegistryMocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
   resolvePluginMetadataSnapshot: vi.fn(),
 }));
+<<<<<<< HEAD
 const officialCatalogMocks = vi.hoisted(() => ({
   listOfficialExternalProviderCatalogEntries: vi.fn(),
 }));
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 vi.mock("./manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex:
@@ -38,11 +41,14 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: pluginRegistryMocks.loadPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot: pluginRegistryMocks.resolvePluginMetadataSnapshot,
 }));
+<<<<<<< HEAD
 vi.mock("./official-external-plugin-catalog.js", () => ({
   getOfficialExternalPluginCatalogManifest: (entry: { openclaw?: unknown }) => entry.openclaw,
   listOfficialExternalProviderCatalogEntries:
     officialCatalogMocks.listOfficialExternalProviderCatalogEntries,
 }));
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 vi.resetModules();
 
@@ -52,7 +58,10 @@ const {
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
   resolveManifestProviderOnboardAuthFlags,
+<<<<<<< HEAD
   resolveProviderOnboardAuthFlags,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } = await import("./provider-auth-choices.js");
 const { resetProviderAuthAliasMapCacheForTest, resolveProviderIdForAuth } =
   await import("../agents/provider-auth-aliases.js");
@@ -128,8 +137,11 @@ describe("provider auth choice manifest helpers", () => {
       (params?: { pluginMetadataSnapshot?: unknown }) =>
         params?.pluginMetadataSnapshot ?? pluginRegistryMocks.loadPluginMetadataSnapshot(params),
     );
+<<<<<<< HEAD
     officialCatalogMocks.listOfficialExternalProviderCatalogEntries.mockReset();
     officialCatalogMocks.listOfficialExternalProviderCatalogEntries.mockReturnValue([]);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resetProviderAuthAliasMapCacheForTest();
   });
 
@@ -169,6 +181,7 @@ describe("provider auth choice manifest helpers", () => {
     });
   });
 
+<<<<<<< HEAD
   it("keeps installed manifest flags ahead of official cold-install flags", () => {
     setSingleManifestProviderAuthChoices("cerebras", [
       createProviderAuthChoice({
@@ -233,6 +246,8 @@ describe("provider auth choice manifest helpers", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.each([
     {
       name: "deduplicates flag metadata by option key + flag",

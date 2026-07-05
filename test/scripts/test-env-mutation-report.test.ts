@@ -142,20 +142,31 @@ describe("collectTestEnvMutationReport", () => {
     expect(report.summary.allowedFindingCount).toBe(2);
   });
 
+<<<<<<< HEAD
   it("prints CLI help without scanning the repository", () => {
+=======
+  it("rejects missing CLI repo roots instead of scanning zero files", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const result = spawnSync(
       process.execPath,
       [
         "--import",
         "tsx",
         path.join(process.cwd(), "scripts/test-env-mutation-report.ts"),
+<<<<<<< HEAD
         "--help",
+=======
+        "--",
+        "--repo-root",
+        "--json",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ],
       {
         encoding: "utf8",
       },
     );
 
+<<<<<<< HEAD
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Usage:");
     expect(result.stdout).toContain("pnpm test:env-mutations:report");
@@ -208,5 +219,9 @@ describe("collectTestEnvMutationReport", () => {
       expect(result.stderr).toContain("--limit expects a non-negative integer");
       expect(result.stdout).not.toContain("Scanned files:");
     }
+=======
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("--repo-root expects a path");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

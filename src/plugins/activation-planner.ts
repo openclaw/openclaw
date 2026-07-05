@@ -4,11 +4,15 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizePluginsConfig } from "./config-state.js";
+<<<<<<< HEAD
 import {
   hasExplicitManifestOwnerTrust,
   isBundledManifestOwner,
   passesManifestOwnerBasePolicy,
 } from "./manifest-owner-policy.js";
+=======
+import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginManifestActivationCapability } from "./manifest.js";
@@ -67,7 +71,10 @@ type ResolveManifestActivationPlanParams = {
   onlyPluginIds?: readonly string[];
   manifestRecords?: readonly PluginManifestRecord[];
   allowRestrictiveAllowlistBypass?: boolean;
+<<<<<<< HEAD
   requireExplicitManifestOwnerTrust?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 /** Returns a deterministic activation plan without importing plugin runtime modules. */
@@ -75,6 +82,10 @@ export function resolveManifestActivationPlan(
   params: ResolveManifestActivationPlanParams,
 ): PluginActivationPlan {
   const onlyPluginIdSet = createPluginIdScopeSet(normalizePluginIdScope(params.onlyPluginIds));
+<<<<<<< HEAD
+=======
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const registry = params.manifestRecords
     ? { plugins: params.manifestRecords, diagnostics: [] }
     : loadPluginManifestRegistryForPluginRegistry({
@@ -83,7 +94,10 @@ export function resolveManifestActivationPlan(
         env: params.env,
         includeDisabled: true,
       });
+<<<<<<< HEAD
   const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const entries = registry.plugins
     .flatMap((plugin) => {
       if (params.origin && plugin.origin !== params.origin) {
@@ -101,6 +115,7 @@ export function resolveManifestActivationPlan(
       ) {
         return [];
       }
+<<<<<<< HEAD
       if (
         params.requireExplicitManifestOwnerTrust &&
         !hasExplicitActivationPlannerManifestOwnerTrust({
@@ -110,6 +125,8 @@ export function resolveManifestActivationPlan(
       ) {
         return [];
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const reasons = listManifestActivationTriggerReasons(plugin, params.trigger);
       if (reasons.length === 0) {
         return [];
@@ -139,6 +156,7 @@ export function resolveManifestActivationPluginIds(
   return [...resolveManifestActivationPlan(params).pluginIds];
 }
 
+<<<<<<< HEAD
 function hasExplicitActivationPlannerManifestOwnerTrust(params: {
   plugin: Pick<PluginManifestRecord, "id" | "origin">;
   normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
@@ -156,6 +174,8 @@ function hasExplicitActivationPlannerManifestOwnerTrust(params: {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function listManifestActivationTriggerReasons(
   plugin: PluginManifestRecord,
   trigger: PluginActivationPlannerTrigger,

@@ -1,6 +1,9 @@
 // Firecrawl plugin module implements firecrawl client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+<<<<<<< HEAD
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   markdownToText,
@@ -42,7 +45,10 @@ const SCRAPE_CACHE = new Map<
 >();
 const DEFAULT_SEARCH_COUNT = 5;
 const DEFAULT_SCRAPE_MAX_CHARS = 50_000;
+<<<<<<< HEAD
 const FIRECRAWL_SCRAPE_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const ALLOWED_FIRECRAWL_HOSTS = new Set(["api.firecrawl.dev"]);
 const FIRECRAWL_SELF_HOSTED_PRIVATE_ERROR =
   "Firecrawl custom baseUrl must target a private or internal self-hosted endpoint.";
@@ -67,9 +73,18 @@ type FirecrawlSearchItem = {
 async function readFirecrawlJsonResponse(
   response: Response,
   label: string,
+<<<<<<< HEAD
   opts?: { maxBytes?: number },
 ): Promise<Record<string, unknown>> {
   return await readProviderJsonResponse<Record<string, unknown>>(response, label, opts);
+=======
+): Promise<Record<string, unknown>> {
+  try {
+    return (await response.json()) as Record<string, unknown>;
+  } catch (cause) {
+    throw new Error(`${label}: malformed JSON response`, { cause });
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export type FirecrawlSearchParams = {
@@ -86,7 +101,10 @@ export type FirecrawlScrapeParams = {
   cfg?: OpenClawConfig;
   url: string;
   extractMode: "markdown" | "text";
+<<<<<<< HEAD
   access?: "credential" | "keyless";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   maxChars?: number;
   onlyMainContent?: boolean;
   maxAgeMs?: number;
@@ -184,7 +202,11 @@ async function postFirecrawlJson<T>(
     url: string;
     mode?: FirecrawlEndpointMode;
     timeoutSeconds: number;
+<<<<<<< HEAD
     apiKey?: string;
+=======
+    apiKey: string;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     body: Record<string, unknown>;
     errorLabel: string;
   },
@@ -201,10 +223,15 @@ async function postFirecrawlJson<T>(
       init: {
         method: "POST",
         headers: {
+<<<<<<< HEAD
           "Content-Type": "application/json",
           // Hosted Firecrawl accepts starter scrape requests without a token.
           // Send one only when configured so higher-limit accounts still apply.
           ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+=======
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
         body: JSON.stringify(params.body),
       },
@@ -219,9 +246,17 @@ async function postFirecrawlJson<T>(
         const readJsonPayload = async (): Promise<Record<string, unknown> | null> => {
           const candidate = response as Response & { clone?: () => Response };
           const jsonResponse = typeof candidate.clone === "function" ? candidate.clone() : response;
+<<<<<<< HEAD
           try {
             const body = await readResponseText(jsonResponse, { maxBytes: 64_000 });
             const payload = JSON.parse(body.text) as unknown;
+=======
+          if (typeof jsonResponse.json !== "function") {
+            return null;
+          }
+          try {
+            const payload = await jsonResponse.json();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             return payload && typeof payload === "object" && !Array.isArray(payload)
               ? (payload as Record<string, unknown>)
               : null;
@@ -522,9 +557,13 @@ export async function runFirecrawlScrape(
   assertFirecrawlScrapeTargetAllowed(params.url);
 
   const apiKey = resolveFirecrawlApiKey(params.cfg);
+<<<<<<< HEAD
   // Hosted v2/scrape accepts starter requests without a bearer token.
   // Only the selected web_fetch provider opts into that access mode.
   if (!apiKey && params.access !== "keyless") {
+=======
+  if (!apiKey) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     throw new Error(
       "firecrawl_scrape needs a Firecrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure plugins.entries.firecrawl.config.webFetch.apiKey.",
     );
@@ -576,10 +615,14 @@ export async function runFirecrawlScrape(
       },
     },
     async (response) => {
+<<<<<<< HEAD
       const payloadLocal = await readFirecrawlJsonResponse(response, "Firecrawl fetch failed", {
         // Scrape can legitimately return page bodies before maxChars truncates parsed output.
         maxBytes: FIRECRAWL_SCRAPE_RESPONSE_MAX_BYTES,
       });
+=======
+      const payloadLocal = await readFirecrawlJsonResponse(response, "Firecrawl fetch failed");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (payloadLocal.success === false) {
         const detail =
           typeof payloadLocal.error === "string"
@@ -613,7 +656,10 @@ export const testing = {
   assertFirecrawlScrapeTargetAllowed,
   parseFirecrawlScrapePayload,
   postFirecrawlJson,
+<<<<<<< HEAD
   readFirecrawlJsonResponse,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveEndpoint,
   validateFirecrawlBaseUrl,
   resolveSearchItems,

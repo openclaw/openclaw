@@ -12,7 +12,11 @@ import {
 } from "./model-compat.js";
 
 export { buildXaiProvider } from "./provider-catalog.js";
+<<<<<<< HEAD
 export { applyXaiConfig, applyXaiProviderConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
+=======
+export { applyXaiConfig, applyXaiProviderConfig } from "./onboard.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export { buildXaiImageGenerationProvider } from "./image-generation-provider.js";
 export {
   buildXaiCatalogModels,
@@ -22,6 +26,10 @@ export {
   XAI_DEFAULT_CONTEXT_WINDOW,
   XAI_DEFAULT_IMAGE_MODEL,
   XAI_DEFAULT_MODEL_ID,
+<<<<<<< HEAD
+=======
+  XAI_DEFAULT_MODEL_REF,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   XAI_DEFAULT_MAX_TOKENS,
   XAI_IMAGE_MODELS,
 } from "./model-definitions.js";

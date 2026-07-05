@@ -116,8 +116,11 @@ function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
 
 export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
   const args = buildDaemonArgs(opts);
+<<<<<<< HEAD
   // The executable is operator-selected or setup-discovered signal-cli.
   // Runtime message content only flows through the daemon HTTP API, not argv.
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const child = spawn(opts.cliPath, args, {
     stdio: ["ignore", "pipe", "pipe"],
   });

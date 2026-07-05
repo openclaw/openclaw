@@ -29,6 +29,7 @@ function expectExplicitDefaultAccountSelection(
   expect(account.appId).toBe(appId);
 }
 
+<<<<<<< HEAD
 function setTestEnvValue(key: string, value: string | undefined): () => void {
   const prev = process.env[key];
   if (value === undefined) {
@@ -53,6 +54,23 @@ function withEnvVar(key: string, value: string | undefined, run: () => void): vo
     run();
   } finally {
     restore();
+=======
+function withEnvVar(key: string, value: string | undefined, run: () => void) {
+  const prev = process.env[key];
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
+  try {
+    run();
+  } finally {
+    if (prev === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = prev;
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 
@@ -223,7 +241,12 @@ describe("resolveFeishuCredentials", () => {
 
   it("resolves env SecretRef objects when unresolved refs are allowed", () => {
     const key = "FEISHU_APP_SECRET_TEST";
+<<<<<<< HEAD
     const restore = setTestEnvValue(key, " secret_from_env ");
+=======
+    const prev = process.env[key];
+    process.env[key] = " secret_from_env ";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     try {
       const creds = resolveFeishuCredentials(
@@ -242,13 +265,26 @@ describe("resolveFeishuCredentials", () => {
         domain: "feishu",
       });
     } finally {
+<<<<<<< HEAD
       restore();
+=======
+      if (prev === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = prev;
+      }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
   it("resolves env SecretRef with custom provider alias when unresolved refs are allowed", () => {
     const key = "FEISHU_APP_SECRET_CUSTOM_PROVIDER_TEST";
+<<<<<<< HEAD
     const restore = setTestEnvValue(key, " secret_from_env_alias ");
+=======
+    const prev = process.env[key];
+    process.env[key] = " secret_from_env_alias ";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     try {
       const creds = resolveFeishuCredentials(
@@ -261,7 +297,15 @@ describe("resolveFeishuCredentials", () => {
 
       expect(creds?.appSecret).toBe("secret_from_env_alias");
     } finally {
+<<<<<<< HEAD
       restore();
+=======
+      if (prev === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = prev;
+      }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 

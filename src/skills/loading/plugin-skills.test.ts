@@ -474,6 +474,7 @@ describe("publishPluginSkills", () => {
     expect(fsSync.readlinkSync(path.join(managedDir, "my-skill"))).toBe(dir2);
   });
 
+<<<<<<< HEAD
   it("replaces owned generated symlinks when the previous target disappeared", async () => {
     const staleParent = await tempDirs.make("plugin-skills-stale-");
     const currentParent = await tempDirs.make("plugin-skills-current-");
@@ -491,6 +492,8 @@ describe("publishPluginSkills", () => {
     expect(fsSync.readlinkSync(linkPath)).toBe(currentDir);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("replaces generated Windows directory entries before publishing a current skill", async () => {
     const skillParent = await tempDirs.make("plugin-skills-");
     const managedDir = await tempDirs.make("managed-skills-");

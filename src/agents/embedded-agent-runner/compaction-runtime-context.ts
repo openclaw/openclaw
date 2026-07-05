@@ -12,12 +12,15 @@ import {
   type ActiveProcessSessionReference,
 } from "../bash-process-references.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
+<<<<<<< HEAD
 import { DEFAULT_PROVIDER } from "../defaults.js";
 import {
   buildModelAliasIndex,
   inferUniqueProviderFromConfiguredModels,
   resolveModelRefFromString,
 } from "../model-selection-shared.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   openAIProviderUsesCodexRuntimeByDefault,
   resolveSelectedOpenAIRuntimeProvider,
@@ -70,7 +73,10 @@ export function resolveEmbeddedCompactionTarget(params: {
   provider: string | undefined;
   runtimeProvider?: string;
   contextProvider?: string;
+<<<<<<< HEAD
   nativeHarnessCompaction?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   model: string | undefined;
   authProfileId: string | undefined;
 } {
@@ -100,7 +106,10 @@ export function resolveEmbeddedCompactionTarget(params: {
     return {
       runtimeProvider: routedRuntimeProvider,
       contextProvider: useCodexHarnessRuntime ? routedRuntimeProvider : undefined,
+<<<<<<< HEAD
       ...(useCodexHarnessRuntime ? { nativeHarnessCompaction: true } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
   };
   if (!override) {
@@ -119,7 +128,13 @@ export function resolveEmbeddedCompactionTarget(params: {
     // When switching provider via override, drop the primary auth profile to
     // avoid sending the wrong credentials.
     const authProfileId =
+<<<<<<< HEAD
       overrideProvider !== provider ? undefined : (params.authProfileId ?? undefined);
+=======
+      overrideProvider !== (params.provider ?? "")?.trim()
+        ? undefined
+        : (params.authProfileId ?? undefined);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return {
       provider: overrideProvider,
       ...resolveTargetProviders(overrideProvider, authProfileId),
@@ -127,6 +142,7 @@ export function resolveEmbeddedCompactionTarget(params: {
       authProfileId,
     };
   }
+<<<<<<< HEAD
   const config = params.config ?? {};
   const currentProvider = provider?.trim();
   if (
@@ -180,6 +196,8 @@ export function resolveEmbeddedCompactionTarget(params: {
       authProfileId,
     };
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const authProfileId = params.authProfileId ?? undefined;
   return {
     provider,
@@ -189,6 +207,7 @@ export function resolveEmbeddedCompactionTarget(params: {
   };
 }
 
+<<<<<<< HEAD
 function normalizeCompactionConfigKey(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -225,6 +244,8 @@ function hasBareConfiguredModelForProvider(params: {
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function shouldUseCodexRuntimeProviderForCompaction(params: {
   config?: OpenClawConfig;
   provider: string;

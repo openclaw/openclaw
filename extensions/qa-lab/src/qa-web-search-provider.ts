@@ -9,7 +9,10 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 
 export const QA_LAB_WEB_SEARCH_PROVIDER_ID = "qa-lab-search";
+<<<<<<< HEAD
 export const QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY = "OPENCLAW_QA_WEB_SEARCH_DENIED_INPUT";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const QaLabWebSearchSchema = {
   type: "object",
@@ -65,9 +68,12 @@ export function createQaLabWebSearchProvider(): WebSearchProviderPlugin {
       parameters: QaLabWebSearchSchema,
       execute: async (args) => {
         const query = readStringParam(args, "query", { required: true });
+<<<<<<< HEAD
         if (query === QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY) {
           throw new Error("QA Lab web_search denied input sentinel");
         }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const count =
           readPositiveIntegerParam(args, "count", {
             max: MAX_SEARCH_COUNT,

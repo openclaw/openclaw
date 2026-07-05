@@ -1,11 +1,17 @@
 // ChatGPT Responses provider tests cover stream handling and timeout behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
 import type { Context, Model } from "../types.js";
 import {
   extractOpenAICodexAccountId,
   parseSSEForTest,
+=======
+import type { Context, Model } from "../types.js";
+import {
+  extractOpenAICodexAccountId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resetOpenAICodexWebSocketDebugStats,
   streamOpenAICodexResponses,
 } from "./openai-chatgpt-responses.js";
@@ -405,6 +411,7 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(result.errorMessage).toContain("Request timed out after 5ms");
   });
 
+<<<<<<< HEAD
   it("strips the internal cache boundary marker from request instructions", async () => {
     let capturedPayload: { instructions?: string } | undefined;
     const stream = streamOpenAICodexResponses(
@@ -459,6 +466,8 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(capturedPayload?.instructions).toBe("You are a helpful assistant.");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("prefers promptCacheKey over sessionId for request cache affinity", async () => {
     let payload: unknown;
     vi.stubGlobal(
@@ -561,6 +570,7 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
+<<<<<<< HEAD
 
   it("bounds non-OK ChatGPT response bodies before formatting API errors", async () => {
     const chunkSize = 1024 * 1024;
@@ -652,4 +662,6 @@ describe("parseSSEForTest", () => {
     expect(pullCount).toBeGreaterThanOrEqual(17);
     expect(pullCount).toBeLessThanOrEqual(20);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

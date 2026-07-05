@@ -271,7 +271,10 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.provider).toBe("openai");
     expect(result.runtimeProvider).toBeUndefined();
     expect(result.contextProvider).toBeUndefined();
+<<<<<<< HEAD
     expect(result.nativeHarnessCompaction).toBe(true);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(result.model).toBe("gpt-5.5");
     expect(result.authProfileId).toBeUndefined();
   });
@@ -316,10 +319,14 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       config: {
         models: {
           providers: {
+<<<<<<< HEAD
             openai: {
               baseUrl: "https://example.test/v1",
               models: [{ id: "gpt-5.5" }],
             },
+=======
+            openai: { models: [{ id: "gpt-5.5" }] },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           },
         },
       } as unknown as OpenClawConfig,
@@ -332,7 +339,10 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.provider).toBe("openai");
     expect(result.runtimeProvider).toBeUndefined();
     expect(result.contextProvider).toBeUndefined();
+<<<<<<< HEAD
     expect(result.nativeHarnessCompaction).toBeUndefined();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(result.model).toBe("gpt-5.5");
     expect(result.authProfileId).toBeUndefined();
   });
@@ -392,11 +402,15 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.provider).toBe("openai");
     expect(result.runtimeProvider).toBeUndefined();
     expect(result.contextProvider).toBeUndefined();
+<<<<<<< HEAD
     expect(result.nativeHarnessCompaction).toBe(true);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(result.model).toBe("gpt-5.4-mini");
     expect(result.authProfileId).toBeUndefined();
   });
 
+<<<<<<< HEAD
   it("resolves compaction.model alias to canonical model ref on same provider (#90340)", () => {
     const result = resolveEmbeddedCompactionTarget({
       config: {
@@ -553,6 +567,8 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBe("openai:default");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("leaves non-openai providers unchanged", () => {
     const result = resolveEmbeddedCompactionTarget({
       provider: "anthropic",

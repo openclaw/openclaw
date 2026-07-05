@@ -1,5 +1,9 @@
 /** Formatting helpers for model-list terminal tables. */
 import { isRich as isRichTerminal, theme } from "../../../packages/terminal-core/src/theme.js";
+<<<<<<< HEAD
+=======
+export { maskApiKey } from "../../utils/mask-api-key.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Enables rich formatting only for non-machine-readable output. */
 export const isRich = (opts?: { json?: boolean; plain?: boolean }) =>

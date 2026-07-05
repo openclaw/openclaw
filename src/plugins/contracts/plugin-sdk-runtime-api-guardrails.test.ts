@@ -355,6 +355,7 @@ describe("runtime api guardrails", () => {
     }
   });
 
+<<<<<<< HEAD
   it("keeps the composed hook-runner registry internal", () => {
     const pluginRuntime = readFileSync(resolve(ROOT_DIR, "plugin-sdk/plugin-runtime.ts"), "utf8");
     const hookRunnerGlobal = readFileSync(
@@ -371,6 +372,8 @@ describe("runtime api guardrails", () => {
     expect(hookRegistryTypes).not.toContain("trustedToolPolicies");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps Slack's narrow runtime-setter entrypoint pinned to a single export", () => {
     // Regression for #69317. The bundled channel entry's runtime.specifier
     // now points at runtime-setter-api.ts. The whole point of that file is

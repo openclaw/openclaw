@@ -370,24 +370,30 @@ describe("Codex app-server native code mode config", () => {
       config: {
         "features.hooks": true,
         apps: { _default: { enabled: false } },
+<<<<<<< HEAD
         mcp_servers: {
           local_docs: {
             command: "node",
             args: ["/opt/local-docs-mcp/dist/index.js"],
           },
         },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     });
 
     expect(request.config).toEqual({
       "features.hooks": true,
       apps: { _default: { enabled: false } },
+<<<<<<< HEAD
       mcp_servers: {
         local_docs: {
           command: "node",
           args: ["/opt/local-docs-mcp/dist/index.js"],
         },
       },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,

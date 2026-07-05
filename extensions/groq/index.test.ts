@@ -36,12 +36,18 @@ describe("groq provider compat", () => {
     if (!provider) {
       throw new Error("Expected Groq provider");
     }
+<<<<<<< HEAD
     expect(provider).toMatchObject({
+=======
+    expect(provider).toEqual({
+      auth: [],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       docsPath: "/providers/groq",
       envVars: ["GROQ_API_KEY"],
       id: "groq",
       label: "Groq",
     });
+<<<<<<< HEAD
     expect(provider.auth).toHaveLength(1);
     expect(provider.auth[0]).toMatchObject({
       id: "api-key",
@@ -52,6 +58,8 @@ describe("groq provider compat", () => {
         groupId: "groq",
       },
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(captured.mediaUnderstandingProviders).toHaveLength(1);
     const [mediaProvider] = captured.mediaUnderstandingProviders;
     if (!mediaProvider) {

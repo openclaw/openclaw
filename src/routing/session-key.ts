@@ -1,8 +1,12 @@
 // Routing session key helpers build stable session keys from route targets.
+<<<<<<< HEAD
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+=======
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ChatType } from "../channels/chat-type.js";
 import {
   isCronRunSessionKey,
@@ -18,10 +22,15 @@ export {
   isAcpSessionKey,
   isSubagentSessionKey,
   parseAgentSessionKey,
+<<<<<<< HEAD
   parseSessionDeliveryRoute,
   parseThreadSessionSuffix,
   type ParsedAgentSessionKey,
   type ParsedSessionDeliveryRoute,
+=======
+  parseThreadSessionSuffix,
+  type ParsedAgentSessionKey,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "../sessions/session-key-utils.js";
 export {
   DEFAULT_ACCOUNT_ID,
@@ -196,11 +205,14 @@ export function normalizeAgentId(value: string | undefined | null): string {
   );
 }
 
+<<<<<<< HEAD
 export function normalizeOptionalAgentId(value: unknown): string | undefined {
   const trimmed = normalizeOptionalString(value);
   return trimmed ? normalizeAgentId(trimmed) : undefined;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function isValidAgentId(value: string | undefined | null): boolean {
   const trimmed = (value ?? "").trim();
   return Boolean(trimmed) && VALID_ID_RE.test(trimmed);

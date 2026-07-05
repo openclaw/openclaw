@@ -2,6 +2,7 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { describe, expect, it } from "vitest";
 import {
+<<<<<<< HEAD
   normalizeDiffViewerPayloadLanguages,
   normalizeSupportedLanguageHint,
 } from "./language-hints.js";
@@ -13,6 +14,15 @@ async function normalizeHints(values: readonly string[], options = {}) {
 describe("normalizeSupportedLanguageHint", () => {
   it("keeps supported languages", async () => {
     await expect(normalizeHints(["typescript", "cpp", "text"])).resolves.toEqual([
+=======
+  filterSupportedLanguageHints,
+  normalizeDiffViewerPayloadLanguages,
+} from "./language-hints.js";
+
+describe("filterSupportedLanguageHints", () => {
+  it("keeps supported languages", async () => {
+    await expect(filterSupportedLanguageHints(["typescript", "cpp", "text"])).resolves.toEqual([
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "typescript",
       "cpp",
       "text",
@@ -21,7 +31,11 @@ describe("normalizeSupportedLanguageHint", () => {
 
   it("normalizes common aliases to base viewer languages", async () => {
     await expect(
+<<<<<<< HEAD
       normalizeHints(["ts", "c++", "c#", "bash", "dockerfile", "rb", "kt", "ps1"]),
+=======
+      filterSupportedLanguageHints(["ts", "c++", "c#", "bash", "dockerfile", "rb", "kt", "ps1"]),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ).resolves.toEqual([
       "typescript",
       "cpp",
@@ -36,7 +50,11 @@ describe("normalizeSupportedLanguageHint", () => {
 
   it("keeps mainstream languages in the base viewer without the language pack", async () => {
     await expect(
+<<<<<<< HEAD
       normalizeHints([
+=======
+      filterSupportedLanguageHints([
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         "ruby",
         "swift",
         "kotlin",
@@ -61,11 +79,16 @@ describe("normalizeSupportedLanguageHint", () => {
   });
 
   it("drops uncommon languages without the language pack", async () => {
+<<<<<<< HEAD
     await expect(normalizeSupportedLanguageHint("abap")).resolves.toBeUndefined();
+=======
+    await expect(filterSupportedLanguageHints(["abap"])).resolves.toEqual(["text"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("keeps uncommon languages when the language pack is available", async () => {
     await expect(
+<<<<<<< HEAD
       normalizeSupportedLanguageHint("abap", { languagePackAvailable: true }),
     ).resolves.toBe("abap");
   });
@@ -79,6 +102,20 @@ describe("normalizeSupportedLanguageHint", () => {
       "typescript",
       undefined,
     ]);
+=======
+      filterSupportedLanguageHints(["abap"], { languagePackAvailable: true }),
+    ).resolves.toEqual(["abap"]);
+  });
+
+  it("drops invalid languages and falls back to text", async () => {
+    await expect(filterSupportedLanguageHints(["not-a-real-language"])).resolves.toEqual(["text"]);
+  });
+
+  it("keeps valid languages when invalid hints are mixed in", async () => {
+    await expect(
+      filterSupportedLanguageHints(["typescript", "not-a-real-language"]),
+    ).resolves.toEqual(["typescript"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });
 

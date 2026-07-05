@@ -1,6 +1,9 @@
 // Parses inline reply directives into typed execution and routing options.
 import type { ExecAsk, ExecSecurity, ExecTarget } from "../../infra/exec-approvals.js";
+<<<<<<< HEAD
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { extractModelDirective } from "../model.js";
 import { isSessionDefaultDirectiveValue } from "../thinking.js";
 import type {
@@ -37,7 +40,11 @@ export type InlineDirectives = {
   traceLevel?: TraceLevel;
   rawTraceLevel?: string;
   hasFastDirective: boolean;
+<<<<<<< HEAD
   fastMode?: FastMode;
+=======
+  fastMode?: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   rawFastMode?: string;
   clearFastMode: boolean;
   hasReasoningDirective: boolean;
@@ -174,6 +181,7 @@ export function parseInlineDirectives(
     hasDirective: hasQueueDirective,
     hasOptions: hasQueueOptions,
   } = extractQueueDirective(modelCleaned);
+<<<<<<< HEAD
   const hasAnyDirective =
     hasThinkDirective ||
     hasVerboseDirective ||
@@ -188,6 +196,12 @@ export function parseInlineDirectives(
   // Later directives see text cleaned by earlier directives; preserve that ordering.
   return {
     cleaned: hasAnyDirective ? queueCleaned : body.trim(),
+=======
+
+  // Later directives see text cleaned by earlier directives; preserve that ordering.
+  return {
+    cleaned: queueCleaned,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     hasThinkDirective,
     thinkLevel,
     rawThinkLevel,

@@ -1,5 +1,8 @@
 // Whatsapp plugin module implements monitor behavior.
+<<<<<<< HEAD
 import type { WAMessageKey } from "baileys";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
@@ -28,6 +31,7 @@ import {
 } from "../connection-controller.js";
 import { resolveWhatsAppInboundPolicy } from "../inbound-policy.js";
 import { normalizeWebInboundMessage } from "../inbound/message-aliases.js";
+<<<<<<< HEAD
 import {
   attachWebInboxToSocket,
   readWhatsAppBaileysCacheEntry,
@@ -35,6 +39,9 @@ import {
   type WhatsAppBaileysMessageCache,
   type WhatsAppGroupMetadataCache,
 } from "../inbound/monitor.js";
+=======
+import { attachWebInboxToSocket, type WhatsAppGroupMetadataCache } from "../inbound/monitor.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { WebInboundMessageInput } from "../inbound/types.js";
 import {
   newConnectionId,
@@ -200,8 +207,11 @@ export async function monitorWebChannel(
   >();
   const groupMemberNames = new Map<string, Map<string, string>>();
   const groupMetadataCache: WhatsAppGroupMetadataCache = new Map();
+<<<<<<< HEAD
   const recentMessageKeys: WhatsAppBaileysMessageCache = new Map();
   const baileysGroupMetaCache: WhatsAppBaileysGroupMetadataCache = new Map();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const echoTracker = createEchoTracker({ maxItems: 100, logVerbose });
 
   const sleep =
@@ -277,6 +287,7 @@ export async function monitorWebChannel(
       try {
         connection = await controller.openConnection({
           connectionId,
+<<<<<<< HEAD
           getMessage: async (key: WAMessageKey) =>
             key.id && key.remoteJid
               ? readWhatsAppBaileysCacheEntry(recentMessageKeys, `${key.remoteJid}:${key.id}`)
@@ -285,6 +296,8 @@ export async function monitorWebChannel(
             const meta = readWhatsAppBaileysCacheEntry(baileysGroupMetaCache, jid);
             return meta?.participants?.length ? meta : undefined;
           },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           createListener: async ({ sock, connection: connectionLocal }) => {
             const onMessage = createWebOnMessageHandler({
               cfg,
@@ -320,8 +333,11 @@ export async function monitorWebChannel(
               disconnectRetryPolicy: reconnectPolicy,
               disconnectRetryAbortSignal: controller.getDisconnectRetryAbortSignal(),
               groupMetadataCache,
+<<<<<<< HEAD
               recentMessageKeys,
               baileysGroupMetaCache,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               onMessage: async (msg: WebInboundMessageInput) => {
                 const normalized = normalizeWebInboundMessage(msg);
                 const inboundAt = Date.now();

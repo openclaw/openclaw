@@ -40,6 +40,7 @@ export async function getSessionsHandlers() {
   return (await import("../server-methods/sessions.js")).sessionsHandlers;
 }
 
+<<<<<<< HEAD
 export function createLinearSessionTranscript(sessionId: string, contents: string[]): string {
   const records: Array<Record<string, unknown>> = [
     {
@@ -62,6 +63,8 @@ export function createLinearSessionTranscript(sessionId: string, contents: strin
   return `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   let reject!: (reason?: unknown) => void;
@@ -384,6 +387,7 @@ export function setupGatewaySessionsTestHarness() {
     await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
     await fs.mkdir(path.dirname(workStorePath), { recursive: true });
     if (withTranscripts) {
+<<<<<<< HEAD
       await fs.writeFile(
         mainTranscript,
         createLinearSessionTranscript("sess-main-global", ["main one", "main two"]),
@@ -394,6 +398,10 @@ export function setupGatewaySessionsTestHarness() {
         createLinearSessionTranscript("sess-work-global", ["work one", "work two"]),
         "utf-8",
       );
+=======
+      await fs.writeFile(mainTranscript, "main one\nmain two\n", "utf-8");
+      await fs.writeFile(workTranscript, "work one\nwork two\n", "utf-8");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     await fs.writeFile(
       mainStorePath,

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscordApiError, fetchDiscord, requestDiscord } from "./api.js";
 import { jsonResponse } from "./test-http-helpers.js";
 
+<<<<<<< HEAD
 function cancelTrackedResponse(
   text: string,
   init: ResponseInit,
@@ -27,6 +28,8 @@ function cancelTrackedResponse(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("fetchDiscord", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -70,6 +73,7 @@ describe("fetchDiscord", () => {
     ).rejects.toThrow("Discord API /users/@me/guilds failed (404): Not Found");
   });
 
+<<<<<<< HEAD
   it("bounds Discord API error bodies without using response.text()", async () => {
     const tracked = cancelTrackedResponse(`${"discord api unavailable ".repeat(1024)}tail`, {
       status: 503,
@@ -95,6 +99,8 @@ describe("fetchDiscord", () => {
     expect(textSpy).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("sanitizes Cloudflare HTML rate limits and applies a fallback cooldown", async () => {
     const fetcher = withFetchPreconnect(
       async () =>

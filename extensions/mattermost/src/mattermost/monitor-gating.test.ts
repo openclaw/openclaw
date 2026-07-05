@@ -59,6 +59,7 @@ describe("mattermost monitor gating", () => {
     });
   });
 
+<<<<<<< HEAD
   it("processes engaged thread follow-ups without a mention", () => {
     const resolveRequireMention = vi.fn(() => true);
 
@@ -137,6 +138,8 @@ describe("mattermost monitor gating", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("bypasses mention for authorized control commands and allows direct chats", () => {
     const resolveRequireMention = vi.fn(() => true);
 

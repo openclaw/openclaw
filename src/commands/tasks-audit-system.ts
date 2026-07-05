@@ -103,6 +103,7 @@ export function buildTaskSystemAuditFindings(params: {
     },
   };
 }
+<<<<<<< HEAD
 
 type TaskSystemAuditResult = ReturnType<typeof buildTaskSystemAuditFindings>;
 
@@ -140,3 +141,5 @@ export function buildTaskSystemAuditJsonPayload(
     findings: displayed,
   };
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

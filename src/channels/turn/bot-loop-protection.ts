@@ -4,6 +4,10 @@ import {
   resolvePairLoopGuardSettings,
   type PairLoopGuardConfig,
   type PairLoopGuardResult,
+<<<<<<< HEAD
+=======
+  type PairLoopGuardSnapshotEntry,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "../../plugin-sdk/pair-loop-guard-runtime.js";
 
 /** Facts used to detect repeated bot-to-bot channel reply loops. */
@@ -42,3 +46,11 @@ export function recordChannelBotPairLoopAndCheckSuppression(
 export function clearChannelBotPairLoopGuardForTests(): void {
   channelBotPairLoopGuard.clear();
 }
+<<<<<<< HEAD
+=======
+
+/** Lists tracked bot-loop pairs for isolated tests. */
+export function listTrackedChannelBotPairsForTests(): PairLoopGuardSnapshotEntry[] {
+  return channelBotPairLoopGuard.snapshot();
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

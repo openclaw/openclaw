@@ -3,6 +3,7 @@ import type {
   HealthCheckInput,
   HealthCheckRunResult,
   RegisteredHealthCheck,
+<<<<<<< HEAD
   SplitHealthCheckInput,
 } from "./health-check-runner-types.js";
 import type { HealthRepairContext } from "./health-checks.js";
@@ -10,12 +11,23 @@ import type { HealthRepairContext } from "./health-checks.js";
 // Adapts legacy split detect/repair checks and newer runnable checks to one runner contract.
 /** Wraps a detect/repair health check in the runnable health-check contract. */
 export function defineSplitHealthCheck(check: SplitHealthCheckInput): RegisteredHealthCheck {
+=======
+} from "./health-check-runner-types.js";
+import type { HealthCheck, HealthRepairContext } from "./health-checks.js";
+
+// Adapts legacy split detect/repair checks and newer runnable checks to one runner contract.
+/** Wraps a detect/repair health check in the runnable health-check contract. */
+export function defineSplitHealthCheck(check: HealthCheck): RegisteredHealthCheck {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return {
     id: check.id,
     kind: check.kind,
     description: check.description,
     source: check.source,
+<<<<<<< HEAD
     defaultEnabled: check.defaultEnabled,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sourceContract: "split",
     detect: (ctx, scope) => check.detect(ctx, scope),
     repair:
@@ -75,7 +87,10 @@ export function normalizeHealthCheck(check: HealthCheckInput): RegisteredHealthC
       kind: check.kind,
       description: check.description,
       source: check.source,
+<<<<<<< HEAD
       defaultEnabled: check.defaultEnabled,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sourceContract: "run",
       async detect(ctx, scope) {
         const result = await check.run({ ...ctx, repair: false }, scope);

@@ -1,0 +1,7 @@
+{
+  "kind": "openclaw.qa.ux-matrix",
+  "run": {
+    "scenarioId": "ux-matrix-evidence-dashboard",
+    "status": "pass"
+  }
+}

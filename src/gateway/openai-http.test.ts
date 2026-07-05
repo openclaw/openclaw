@@ -2313,6 +2313,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     },
   );
 
+<<<<<<< HEAD
   it("buffers replaceable assistant events for streaming chat completions", async () => {
     const port = enabledPort;
     agentCommand.mockClear();
@@ -2388,6 +2389,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(allContent).toBe("final answer");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("includes usage in final stream chunk when stream_options.include_usage=true", async () => {
     const port = enabledPort;
     agentCommand.mockClear();

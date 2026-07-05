@@ -4,7 +4,10 @@
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+<<<<<<< HEAD
 import type { FastMode } from "../../auto-reply/thinking.shared.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
@@ -14,7 +17,10 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { CliBackendExecutionMode } from "../../plugins/cli-backend.types.js";
+<<<<<<< HEAD
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type {
   PersistedUserTurnMessage,
@@ -30,7 +36,10 @@ import type {
   CurrentInboundPromptContext,
   EmbeddedRunTrigger,
 } from "../embedded-agent-runner/run/params.js";
+<<<<<<< HEAD
 import type { FastModeAutoProgressState } from "../fast-mode.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
 /** Input contract for one CLI-backed agent run. */
@@ -65,6 +74,7 @@ export type RunCliAgentParams = {
   provider: string;
   model?: string;
   thinkLevel?: ThinkLevel;
+<<<<<<< HEAD
   fastMode?: FastMode;
   /** Stable outer-run start time for auto fast-mode cutoff across retries/fallbacks. */
   fastModeStartedAtMs?: number;
@@ -74,6 +84,8 @@ export type RunCliAgentParams = {
   fastModeAutoProgressState?: FastModeAutoProgressState;
   /** True when the outer model fallback loop has reached its final candidate. */
   isFinalFallbackAttempt?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   timeoutMs: number;
   /**
    * Explicit run timeout, in milliseconds, when the caller can distinguish a
@@ -112,8 +124,11 @@ export type RunCliAgentParams = {
   messageChannel?: string;
   messageProvider?: string;
   currentChannelId?: string;
+<<<<<<< HEAD
   chatId?: string;
   channelContext?: PluginHookChannelContext;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   currentThreadTs?: string;
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;
@@ -122,8 +137,11 @@ export type RunCliAgentParams = {
   senderId?: string | null;
   /** Trusted sender identity bit for channel action auth. */
   senderIsOwner?: boolean;
+<<<<<<< HEAD
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /** Runtime tool allow-list. CLI harnesses fail closed when this is set. */
   toolsAllow?: string[];
   disableTools?: boolean;

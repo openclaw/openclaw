@@ -96,9 +96,15 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     if (/^[-*+]\s*(\[[\sXx]?\]\s*)?$/.test(trimmed)) {
       continue;
     }
+<<<<<<< HEAD
     // Ignore markdown fence markers and HTML comments that only document the
     // workspace template; neither carries heartbeat task semantics.
     if (/^```[A-Za-z0-9_-]*$/.test(trimmed) || /^<!--.*-->$/.test(trimmed)) {
+=======
+    // Ignore markdown fence markers that were added for doc rendering but do
+    // not carry task semantics in the workspace template body.
+    if (/^```[A-Za-z0-9_-]*$/.test(trimmed)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       continue;
     }
     // Found a non-empty, non-comment line - there's actionable content

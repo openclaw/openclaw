@@ -11,7 +11,10 @@ type CapturedReplyPayload = {
   isError?: boolean;
   mediaUrl?: string;
   mediaUrls?: string[];
+<<<<<<< HEAD
   replyToId?: string | null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 type CapturedDispatchParams = {
@@ -721,7 +724,10 @@ describe("whatsapp inbound dispatch", () => {
       agentId: "main",
       to: "+1000",
       info: { kind: "final" },
+<<<<<<< HEAD
       replyToId: null,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     expectRecordFields(requireRecord(durableParams.payload, "durable payload"), {
       text: "final payload",
@@ -736,6 +742,7 @@ describe("whatsapp inbound dispatch", () => {
     });
   });
 
+<<<<<<< HEAD
   it.each([
     {
       name: "uses resolved final payload reply targets",
@@ -799,6 +806,8 @@ describe("whatsapp inbound dispatch", () => {
     expect(deliverReply).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not fall back when durable WhatsApp delivery suppresses a send", async () => {
     deliverInboundReplyWithMessageSendContextMock.mockResolvedValueOnce({
       status: "handled_no_send",

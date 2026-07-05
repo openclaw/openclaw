@@ -29,7 +29,10 @@ const RUNNING_FROM_BUILT_ARTIFACT =
 type PluginDoctorContractModule = {
   legacyConfigRules?: unknown;
   normalizeCompatibilityConfig?: unknown;
+<<<<<<< HEAD
   resolveSessionStoreAgentIds?: unknown;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sessionRouteStateOwners?: unknown;
   stateMigrations?: unknown;
 };
@@ -43,15 +46,21 @@ type PluginDoctorCompatibilityNormalizer = (params: {
   cfg: OpenClawConfig;
 }) => PluginDoctorCompatibilityMutation;
 
+<<<<<<< HEAD
 type PluginDoctorSessionStoreAgentIdsResolver = (params: {
   cfg: OpenClawConfig;
 }) => readonly string[];
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type PluginDoctorContractEntry = {
   pluginId: string;
   rules: LegacyConfigRule[];
   normalizeCompatibilityConfig?: PluginDoctorCompatibilityNormalizer;
+<<<<<<< HEAD
   resolveSessionStoreAgentIds?: PluginDoctorSessionStoreAgentIdsResolver;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sessionRouteStateOwners: DoctorSessionRouteStateOwner[];
   stateMigrations: PluginDoctorStateMigration[];
 };
@@ -143,6 +152,7 @@ function coerceNormalizeCompatibilityConfig(
   return typeof value === "function" ? (value as PluginDoctorCompatibilityNormalizer) : undefined;
 }
 
+<<<<<<< HEAD
 function coerceSessionStoreAgentIdsResolver(
   value: unknown,
 ): PluginDoctorSessionStoreAgentIdsResolver | undefined {
@@ -151,6 +161,8 @@ function coerceSessionStoreAgentIdsResolver(
     : undefined;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isDoctorSessionRouteStateOwner(value: unknown): value is DoctorSessionRouteStateOwner {
   if (!value || typeof value !== "object") {
     return false;
@@ -336,10 +348,13 @@ function loadPluginDoctorContractEntry(
     mod.normalizeCompatibilityConfig ??
       (mod as { default?: PluginDoctorContractModule }).default?.normalizeCompatibilityConfig,
   );
+<<<<<<< HEAD
   const resolveSessionStoreAgentIds = coerceSessionStoreAgentIdsResolver(
     mod.resolveSessionStoreAgentIds ??
       (mod as { default?: PluginDoctorContractModule }).default?.resolveSessionStoreAgentIds,
   );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const sessionRouteStateOwners = coerceDoctorSessionRouteStateOwners(
     mod.sessionRouteStateOwners ??
       (mod as { default?: PluginDoctorContractModule }).default?.sessionRouteStateOwners,
@@ -351,7 +366,10 @@ function loadPluginDoctorContractEntry(
   if (
     rules.length === 0 &&
     !normalizeCompatibilityConfig &&
+<<<<<<< HEAD
     !resolveSessionStoreAgentIds &&
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sessionRouteStateOwners.length === 0 &&
     stateMigrations.length === 0
   ) {
@@ -361,7 +379,10 @@ function loadPluginDoctorContractEntry(
     pluginId: record.id,
     rules,
     normalizeCompatibilityConfig,
+<<<<<<< HEAD
     resolveSessionStoreAgentIds,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sessionRouteStateOwners,
     stateMigrations,
   };
@@ -391,8 +412,11 @@ function resolvePluginDoctorContracts(params?: {
     if (
       scopedPluginIds &&
       !scopedPluginIds.has(record.id) &&
+<<<<<<< HEAD
       !(record.packageName && scopedPluginIds.has(record.packageName)) &&
       !record.legacyPluginIds?.some((pluginId) => scopedPluginIds.has(pluginId)) &&
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       !record.channels.some((channelId) => scopedPluginIds.has(channelId)) &&
       !record.providers.some((providerId) => scopedPluginIds.has(providerId))
     ) {
@@ -444,6 +468,7 @@ export function listPluginDoctorSessionRouteStateOwners(params?: {
   return [...owners.values()].toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
+<<<<<<< HEAD
 /** Resolve plugin-owned agent IDs whose core session stores need migration. */
 export function listPluginDoctorSessionStoreAgentIds(params?: {
   config?: OpenClawConfig;
@@ -468,6 +493,8 @@ export function listPluginDoctorSessionStoreAgentIds(params?: {
   return [...agentIds].toSorted();
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function listPluginDoctorStateMigrationEntries(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;

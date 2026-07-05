@@ -371,6 +371,7 @@ select {
   border-right-color: transparent;
 }
 
+<<<<<<< HEAD
 .app-shell--evidence-focus .sidebar {
   width: 0;
   min-width: 0;
@@ -392,6 +393,8 @@ select {
   overflow-y: auto;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 .sidebar-panel-tabs {
   display: flex;
   gap: 6px;
@@ -1543,6 +1546,7 @@ select {
   border: 1px solid var(--border);
 }
 
+<<<<<<< HEAD
 /* --- Evidence view --- */
 .evidence-view {
   display: flex;
@@ -2187,6 +2191,8 @@ button.evidence-matrix-cell {
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /* --- Events view --- */
 .events-view {
   display: flex;

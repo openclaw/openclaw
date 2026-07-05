@@ -5,9 +5,13 @@ import { formatRelativeTimestamp, parseSessionKeyParts } from "../format.ts";
 import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
+<<<<<<< HEAD
 import { shortenSessionKeyForCell } from "../session-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../session-goal.ts";
 import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
+=======
+import { formatGoalDetail, formatGoalSummary } from "../session-goal.ts";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isSessionRunActive } from "../session-run-state.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import {
@@ -20,7 +24,10 @@ import type {
   GatewaySessionRow,
   SessionRunStatus,
   GatewayThinkingLevelOption,
+<<<<<<< HEAD
   FastMode,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../types.ts";
@@ -68,7 +75,11 @@ export type SessionsProps = {
     patch: {
       label?: string | null;
       thinkingLevel?: string | null;
+<<<<<<< HEAD
       fastMode?: FastMode | null;
+=======
+      fastMode?: boolean | null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       verboseLevel?: string | null;
       reasoningLevel?: string | null;
     },
@@ -89,7 +100,11 @@ export type SessionsProps = {
 
 const DEFAULT_THINK_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
 const VERBOSE_LEVEL_VALUES = ["", "off", "on", "full"] as const;
+<<<<<<< HEAD
 const FAST_LEVEL_VALUES = ["", "auto", "on", "off"] as const;
+=======
+const FAST_LEVEL_VALUES = ["", "on", "off"] as const;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
 const PAGE_SIZES = [10, 25, 50, 100] as const;
 
@@ -100,10 +115,24 @@ function getAgentIdentity(
   return Object.hasOwn(agentIdentityById, agentId) ? (agentIdentityById[agentId] ?? null) : null;
 }
 
+<<<<<<< HEAD
+=======
+function rowMatchesSessionDefaults(
+  row: GatewaySessionRow,
+  defaults: SessionsListResult["defaults"] | undefined,
+): boolean {
+  return (
+    (!row.modelProvider || row.modelProvider === defaults?.modelProvider) &&
+    (!row.model || row.model === defaults?.model)
+  );
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveThinkLevelOptions(
   row: GatewaySessionRow,
   defaults?: SessionsListResult["defaults"],
 ): readonly { value: string; label: string }[] {
+<<<<<<< HEAD
   const modelMatchesDefaults = sessionModelMatchesDefaults(row, defaults);
   const defaultLabel = formatInheritedThinkingLabel(
     row.thinkingDefault ?? (modelMatchesDefaults ? defaults?.thinkingDefault : undefined),
@@ -115,6 +144,19 @@ function resolveThinkLevelOptions(
       : (row.thinkingOptions?.length
           ? row.thinkingOptions
           : modelMatchesDefaults && defaults?.thinkingOptions?.length
+=======
+  const sessionModelMatchesDefaults = rowMatchesSessionDefaults(row, defaults);
+  const defaultLabel = formatInheritedThinkingLabel(
+    row.thinkingDefault ?? (sessionModelMatchesDefaults ? defaults?.thinkingDefault : undefined),
+  );
+  const options: readonly GatewayThinkingLevelOption[] = row.thinkingLevels?.length
+    ? row.thinkingLevels
+    : sessionModelMatchesDefaults && defaults?.thinkingLevels?.length
+      ? defaults.thinkingLevels
+      : (row.thinkingOptions?.length
+          ? row.thinkingOptions
+          : sessionModelMatchesDefaults && defaults?.thinkingOptions?.length
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             ? defaults.thinkingOptions
             : DEFAULT_THINK_LEVELS
         ).map((label) => ({
@@ -797,6 +839,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
     resolveThinkLevelOptions(row, props.result?.defaults),
     thinking,
   );
+<<<<<<< HEAD
   const fastMode =
     row.fastMode === "auto"
       ? "auto"
@@ -805,6 +848,9 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         : row.fastMode === false
           ? "off"
           : "";
+=======
+  const fastMode = row.fastMode === true ? "on" : row.fastMode === false ? "off" : "";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const fastLevels = withCurrentLabeledOption(buildFastLevelOptions(), fastMode);
   const verbose = row.verboseLevel ?? "";
   const verboseLevels = withCurrentLabeledOption(buildVerboseLevelOptions(), verbose);
@@ -826,6 +872,12 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   });
   const displayName = normalizeOptionalString(row.displayName) ?? null;
   const trimmedLabel = normalizeOptionalString(row.label) ?? "";
+<<<<<<< HEAD
+=======
+  const showDisplayName = Boolean(
+    displayName && displayName !== row.key && displayName !== trimmedLabel,
+  );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const keyParts = parseSessionKeyParts(row.key);
   const agentIdentity = keyParts
     ? getAgentIdentity(props.agentIdentityById, keyParts.agentId)
@@ -836,6 +888,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
     identityName && keyParts
       ? `${identityEmoji ? `${identityEmoji} ` : ""}${identityName} (${keyParts.channel})`
       : null;
+<<<<<<< HEAD
   // Hover: show raw key only for fallback rows (no identity), identity rows keep visible label
   const hoverTitle = friendlyKeyLabel ?? row.key;
   // Cell: use friendlyKeyLabel or shortened fallback (not resolveSessionDisplayName to avoid promoting displayName)
@@ -844,6 +897,9 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const showDisplayName = Boolean(
     displayName && displayName !== row.key && displayName !== trimmedLabel,
   );
+=======
+  const keyCellTitle = friendlyKeyLabel ?? row.key;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const canLink = row.kind !== "global";
   const captured = props.workboardSessionKeys?.has(row.key) === true;
   const captureBusy = props.workboardBusySessionKey === row.key;
@@ -906,7 +962,11 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       <td class="data-table-key-col">
         <div
           class=${friendlyKeyLabel ? "session-key-cell" : "mono session-key-cell"}
+<<<<<<< HEAD
           title=${hoverTitle}
+=======
+          title=${keyCellTitle}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         >
           ${canLink
             ? html`<a
@@ -928,9 +988,15 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                     props.onNavigateToChat(row.key);
                   }
                 }}
+<<<<<<< HEAD
                 >${keyCellTitle}</a
               >`
             : keyCellTitle}
+=======
+                >${friendlyKeyLabel ?? row.key}</a
+              >`
+            : (friendlyKeyLabel ?? row.key)}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           ${showDisplayName
             ? html`<span class="muted session-key-display-name">${displayName}</span>`
             : nothing}
@@ -1009,9 +1075,13 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
           style="padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 90px;"
           @change=${(e: Event) => {
             const value = (e.target as HTMLSelectElement).value;
+<<<<<<< HEAD
             props.onPatch(row.key, {
               fastMode: value === "" ? null : value === "auto" ? "auto" : value === "on",
             });
+=======
+            props.onPatch(row.key, { fastMode: value === "" ? null : value === "on" });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           }}
         >
           ${fastLevels.map(
@@ -1086,7 +1156,11 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                     <div class="session-details-panel__eyebrow">
                       ${t("sessionsView.sessionDetails")}
                     </div>
+<<<<<<< HEAD
                     <div class="session-details-panel__title">${keyCellTitle}</div>
+=======
+                    <div class="session-details-panel__title">${friendlyKeyLabel ?? row.key}</div>
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                     ${showDisplayName
                       ? html`
                           <div class="muted session-details-panel__subtitle">${displayName}</div>

@@ -118,6 +118,7 @@ describe("codesign-mac-app temp file hygiene", () => {
     expect(entitlementTemps(tempRoot)).toEqual([]);
   });
 
+<<<<<<< HEAD
   it("rejects unknown options before app validation", () => {
     const tempRoot = makeTempDir("openclaw-codesign-unknown-");
     const result = runCodesign(["--wat"], tempRoot);
@@ -138,6 +139,8 @@ describe("codesign-mac-app temp file hygiene", () => {
     expect(entitlementTemps(tempRoot)).toEqual([]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("cleans entitlement temp files when signing fails", () => {
     const tempRoot = makeTempDir("openclaw-codesign-fail-");
     const app = path.join(tempRoot, "Fake.app");

@@ -28,7 +28,10 @@ export function buildGatewayConnectionDetailsWithResolvers(
     configPath?: string;
     urlSource?: "cli" | "env";
     ignoreEnvUrlOverride?: boolean;
+<<<<<<< HEAD
     localPortOverride?: number;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } = {},
   resolvers: GatewayConnectionDetailResolvers = {},
 ): GatewayConnectionDetails {
@@ -41,15 +44,23 @@ export function buildGatewayConnectionDetailsWithResolvers(
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const tlsEnabled = config.gateway?.tls?.enabled === true;
   const localPort =
+<<<<<<< HEAD
     options.localPortOverride ??
     resolvers.resolveGatewayPort?.(config, process.env) ??
     resolveGatewayPort(config);
+=======
+    resolvers.resolveGatewayPort?.(config, process.env) ?? resolveGatewayPort(config);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const bindMode = config.gateway?.bind ?? "loopback";
   const scheme = tlsEnabled ? "wss" : "ws";
   const localUrl = `${scheme}://127.0.0.1:${localPort}`;
   const cliUrlOverride = normalizeOptionalString(options.url);
   const envUrlOverride =
+<<<<<<< HEAD
     cliUrlOverride || options.ignoreEnvUrlOverride || options.localPortOverride !== undefined
+=======
+    cliUrlOverride || options.ignoreEnvUrlOverride
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ? undefined
       : normalizeOptionalString(process.env.OPENCLAW_GATEWAY_URL);
   const urlOverride = cliUrlOverride ?? envUrlOverride;

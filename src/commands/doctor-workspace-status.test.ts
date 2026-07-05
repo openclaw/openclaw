@@ -205,6 +205,7 @@ describe("noteWorkspaceStatus", () => {
     }
   });
 
+<<<<<<< HEAD
   it("uses package-version update commands for exact npm plugin drift", async () => {
     const noteSpy = await runNoteWorkspaceStatusForTest(
       createPluginLoadResult({
@@ -253,6 +254,8 @@ describe("noteWorkspaceStatus", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("omits plugin version drift when no daemon status report is supplied", async () => {
     const noteSpy = await runNoteWorkspaceStatusForTest(
       createPluginLoadResult({

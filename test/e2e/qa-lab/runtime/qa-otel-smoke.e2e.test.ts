@@ -1,12 +1,17 @@
 // QA OTEL Smoke tests cover QA Lab telemetry evidence.
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
+<<<<<<< HEAD
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+=======
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createConnection as createNetConnection } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { gzipSync } from "node:zlib";
+<<<<<<< HEAD
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../../../scripts/lib/windows-taskkill.mjs";
@@ -21,6 +26,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+=======
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import { testing } from "./qa-otel-smoke-runtime.js";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("qa-otel-smoke receiver bounds", () => {
   let configuredBodyLimitLoad: ReturnType<typeof spawnSync>;
 
@@ -53,7 +63,10 @@ describe("qa-otel-smoke receiver bounds", () => {
       },
       childExitCode: 0,
       disallowedBodyNeedles: ["OTEL-QA-SECRET"],
+<<<<<<< HEAD
       logsExporter: "otlp",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       logRecords: [
         {
           body: "diagnostics-otel: logs exporter enabled",
@@ -94,8 +107,11 @@ describe("qa-otel-smoke receiver bounds", () => {
           logCount: 1,
         },
       ],
+<<<<<<< HEAD
       stdoutLogLines: [],
       stdoutLogRecords: [],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       spans: [
         { name: "openclaw.run", parent: false, attributes: {} },
         { name: "openclaw.harness.run", parent: true, attributes: {} },
@@ -124,6 +140,7 @@ describe("qa-otel-smoke receiver bounds", () => {
         "--provider-mode",
         "mock-openai",
         "--scenario",
+<<<<<<< HEAD
         "otel-stdout-log-smoke",
         "--logs-exporter",
         "stdout",
@@ -200,6 +217,17 @@ describe("qa-otel-smoke receiver bounds", () => {
     );
   });
 
+=======
+        "otel-trace-smoke",
+      ]),
+    ).toMatchObject({
+      collectorMode: "docker",
+      providerMode: "mock-openai",
+      scenarioId: "otel-trace-smoke",
+    });
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("parses body-size limit env values as strict positive integers", () => {
     expect(testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, {})).toBe(64);
     expect(
@@ -222,6 +250,7 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(configuredBodyLimitLoad.stderr).not.toContain("ReferenceError");
   });
 
+<<<<<<< HEAD
   it("scrubs inherited OpenTelemetry exporter env before running the QA suite", () => {
     vi.stubEnv("OTEL_SDK_DISABLED", "true");
     vi.stubEnv("OTEL_TRACES_EXPORTER", "none");
@@ -256,6 +285,8 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(env.OTEL_SERVICE_NAME).toBe("openclaw-qa-lab-otel-smoke");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects identity OTLP bodies above the decoded byte ceiling", () => {
     expect(() => testing.decodeRequestBody(Buffer.alloc(65), undefined, 64)).toThrow(
       "OTLP request body exceeded 64 bytes: 65 bytes",
@@ -391,7 +422,10 @@ describe("qa-otel-smoke receiver bounds", () => {
       bodyText: {},
       childExitCode: 0,
       disallowedBodyNeedles: [],
+<<<<<<< HEAD
       logsExporter: "otlp",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       logRecords: [],
       metrics: [],
       requests: [
@@ -406,8 +440,11 @@ describe("qa-otel-smoke receiver bounds", () => {
           logCount: 0,
         },
       ],
+<<<<<<< HEAD
       stdoutLogLines: [],
       stdoutLogRecords: [],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       spans: [],
     });
 
@@ -422,6 +459,7 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(assertion.failures).toEqual([]);
   });
 
+<<<<<<< HEAD
   it("allows stdout diagnostic logs without OTLP log requests", () => {
     const input = makePassingSmokeAssertionInput();
     input.logsExporter = "stdout";
@@ -493,6 +531,8 @@ describe("qa-otel-smoke receiver bounds", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("still fails when OTLP log payload text leaks scenario content", () => {
     const input = makePassingSmokeAssertionInput();
     input.bodyText = {
@@ -506,6 +546,7 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(assertion.leakContexts.logs?.[0]).toContain("[needle]");
   });
 
+<<<<<<< HEAD
   it("still fails when stdout diagnostic log payload text leaks scenario content", () => {
     const input = makePassingSmokeAssertionInput();
     input.logsExporter = "stdout";
@@ -539,6 +580,8 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(assertion.leakContexts.logs?.[0]).toContain("[needle]");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("still requires OTLP log records to carry trace correlation", () => {
     const input = makePassingSmokeAssertionInput();
     input.logRecords = [
@@ -586,6 +629,7 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(output.text()).not.toContain("DO_NOT_RETAIN_COLLECTOR_PREFIX");
   });
 
+<<<<<<< HEAD
   it("streams gateway stdout artifact records without requiring them in the tail", async () => {
     const tempRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-qa-otel-stdout-stream-"));
     const logPath = path.join(tempRoot, "gateway.stdout.log");
@@ -645,6 +689,8 @@ describe("qa-otel-smoke receiver bounds", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("times out and kills a wedged QA suite child with a detached gateway", async () => {
     if (process.platform === "win32") {
       return;
@@ -691,6 +737,7 @@ describe("qa-otel-smoke receiver bounds", () => {
     }
   });
 
+<<<<<<< HEAD
   it("clamps oversized QA suite child timers before scheduling", async () => {
     const child = spawn(
       process.execPath,
@@ -701,6 +748,8 @@ describe("qa-otel-smoke receiver bounds", () => {
     await expect(testing.waitForChild(child, MAX_TIMER_TIMEOUT_MS + 1, 100)).resolves.toBe(0);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses taskkill for Windows QA suite timeout cleanup", () => {
     const kill = vi.fn();
     const runTaskkill = vi.fn(() => ({ status: 0 }));
@@ -713,12 +762,17 @@ describe("qa-otel-smoke receiver bounds", () => {
       runTaskkill as never,
     );
 
+<<<<<<< HEAD
     expect(runTaskkill).toHaveBeenCalledWith(expectedTaskkillPath(), ["/PID", "1234", "/T", "/F"], {
+=======
+    expect(runTaskkill).toHaveBeenCalledWith("taskkill", ["/PID", "1234", "/T", "/F"], {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       stdio: "ignore",
     });
     expect(kill).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("moves Docker collector telemetry off the default host port", async () => {
     const child = new EventEmitter() as EventEmitter & {
       stderr: EventEmitter;
@@ -760,6 +814,8 @@ describe("qa-otel-smoke receiver bounds", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("cleans Docker collector containers and temp config after readiness failures", async () => {
     const tempRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-qa-otel-collector-"));
     const collectorDir = path.join(tempRoot, "collector");
@@ -770,7 +826,10 @@ describe("qa-otel-smoke receiver bounds", () => {
     child.stderr = new EventEmitter();
     child.stdout = new EventEmitter();
     const stopDockerContainer = vi.fn(async () => {});
+<<<<<<< HEAD
     const ports = [4318, 45679];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     try {
       await expect(
@@ -780,7 +839,11 @@ describe("qa-otel-smoke receiver bounds", () => {
             return collectorDir;
           },
           randomUUID: () => "00000000-0000-4000-8000-000000000000",
+<<<<<<< HEAD
           reserveLocalPort: async () => ports.shift() ?? 49999,
+=======
+          reserveLocalPort: async () => 4318,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           spawn: vi.fn(() => child) as never,
           stopDockerContainer,
           waitForLocalPort: async () => {
@@ -807,7 +870,10 @@ describe("qa-otel-smoke receiver bounds", () => {
     };
     child.stderr = new EventEmitter();
     child.stdout = new EventEmitter();
+<<<<<<< HEAD
     const ports = [4318, 45679];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     try {
       let thrown: unknown;
@@ -818,7 +884,11 @@ describe("qa-otel-smoke receiver bounds", () => {
             return collectorDir;
           },
           randomUUID: () => "00000000-0000-4000-8000-000000000000",
+<<<<<<< HEAD
           reserveLocalPort: async () => ports.shift() ?? 49999,
+=======
+          reserveLocalPort: async () => 4318,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           spawn: vi.fn(() => child) as never,
           stopDockerContainer: vi.fn(async () => {}),
           waitForLocalPort: async (_port, _timeout, readFailure) => {

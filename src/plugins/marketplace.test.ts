@@ -215,6 +215,7 @@ function expectFetchDownloadCall(url = "https://example.com/frontend-design.tgz"
   expect(input.auditContext).toBe("marketplace-plugin-download");
 }
 
+<<<<<<< HEAD
 function cancelTrackedResponse(init?: ResponseInit): {
   response: Response;
   wasCanceled: () => boolean;
@@ -234,6 +235,8 @@ function cancelTrackedResponse(init?: ResponseInit): {
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function expectRemoteMarketplaceInstallResult(result: unknown) {
   expectRemoteCloneCommand();
   expect(String(installPluginInput().path)).toMatch(/[\\/]repo[\\/]plugins[\\/]frontend-design$/);
@@ -715,6 +718,7 @@ describe("marketplace plugins", () => {
     });
   });
 
+<<<<<<< HEAD
   it("cancels archive download error bodies before returning structured HTTP errors", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
       const tracked = cancelTrackedResponse({
@@ -751,6 +755,8 @@ describe("marketplace plugins", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("returns a structured error for invalid archive URLs", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
       const manifestPath = await writeMarketplaceManifest(rootDir, {
@@ -902,12 +908,19 @@ describe("marketplace plugins", () => {
   it("rejects non-streaming archive responses before buffering them", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
       const arrayBuffer = vi.fn(async () => new Uint8Array([1, 2, 3]).buffer);
+<<<<<<< HEAD
       const cancel = vi.fn(async () => undefined);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       fetchWithSsrFGuardMock.mockResolvedValueOnce({
         response: {
           ok: true,
           status: 200,
+<<<<<<< HEAD
           body: { cancel } as unknown as Response["body"],
+=======
+          body: {} as Response["body"],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           headers: new Headers(),
           arrayBuffer,
         } as unknown as Response,
@@ -935,7 +948,10 @@ describe("marketplace plugins", () => {
           "streaming response body unavailable",
       });
       expect(arrayBuffer).not.toHaveBeenCalled();
+<<<<<<< HEAD
       expect(cancel).toHaveBeenCalledTimes(1);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(installPluginFromPathMock).not.toHaveBeenCalled();
     });
   });
@@ -990,15 +1006,21 @@ describe("marketplace plugins", () => {
           "download too large: 268435457 bytes (limit: 268435456 bytes)",
       });
       expect(arrayBuffer).not.toHaveBeenCalled();
+<<<<<<< HEAD
       expect(reader.cancel).toHaveBeenCalledTimes(1);
       expect(reader.releaseLock).toHaveBeenCalledTimes(1);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(installPluginFromPathMock).not.toHaveBeenCalled();
     });
   });
 
   it("rejects malformed archive content-length headers before streaming", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
+<<<<<<< HEAD
       const cancel = vi.fn(async () => undefined);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const reader = {
         read: vi.fn(),
         cancel: vi.fn(async () => undefined),
@@ -1010,7 +1032,10 @@ describe("marketplace plugins", () => {
           status: 200,
           body: {
             getReader: () => reader,
+<<<<<<< HEAD
             cancel,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           } as unknown as Response["body"],
           headers: new Headers({ "content-length": "1e9" }),
         } as unknown as Response,
@@ -1038,6 +1063,7 @@ describe("marketplace plugins", () => {
           "invalid content-length header: 1e9",
       });
       expect(reader.read).not.toHaveBeenCalled();
+<<<<<<< HEAD
       expect(reader.cancel).not.toHaveBeenCalled();
       expect(cancel).toHaveBeenCalledTimes(1);
       expect(installPluginFromPathMock).not.toHaveBeenCalled();
@@ -1088,6 +1114,8 @@ describe("marketplace plugins", () => {
       expect(reader.read).not.toHaveBeenCalled();
       expect(reader.cancel).not.toHaveBeenCalled();
       expect(cancel).toHaveBeenCalledTimes(1);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(installPluginFromPathMock).not.toHaveBeenCalled();
     });
   });

@@ -859,6 +859,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(JSON.parse(lines[4])).toEqual(deliveryMirror);
   });
 
+<<<<<<< HEAD
   it("inserts missing Responses message-tool results before delivery mirrors", async () => {
     const { file } = await createTempSessionPath();
     const { header, message } = buildSessionHeaderAndMessage();
@@ -919,6 +920,8 @@ describe("repairSessionFileIfNeeded", () => {
     expect(JSON.parse(lines[4])).toEqual(deliveryMirror);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not duplicate code-mode tool results that are already persisted", async () => {
     const { file } = await createTempSessionPath();
     const { header, message } = buildSessionHeaderAndMessage();

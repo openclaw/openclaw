@@ -65,6 +65,7 @@ export type ProviderStreamFamily =
 
 type ProviderStreamFamilyHooks = Pick<ProviderPlugin, "wrapStreamFn">;
 
+<<<<<<< HEAD
 function hasFastModeParam(extraParams: Record<string, unknown> | undefined): boolean {
   return Boolean(
     extraParams &&
@@ -83,6 +84,8 @@ function resolveBooleanFastMode(
   return typeof raw === "boolean" ? raw : undefined;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Builds provider hook objects for one supported stream-wrapper family. */
 export function buildProviderStreamFamilyHooks(
   /**
@@ -122,7 +125,11 @@ export function buildProviderStreamFamilyHooks(
     case "minimax-fast-mode":
       return {
         wrapStreamFn: (ctx: ProviderWrapStreamFnContext) =>
+<<<<<<< HEAD
           createMinimaxFastModeWrapper(ctx.streamFn, () => resolveBooleanFastMode(ctx.extraParams)),
+=======
+          createMinimaxFastModeWrapper(ctx.streamFn, ctx.extraParams?.fastMode === true),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       };
     case "openai-responses-defaults":
       return {
@@ -131,10 +138,15 @@ export function buildProviderStreamFamilyHooks(
           // before payload-shape and context-management compatibility rewrites.
           let nextStreamFn = createOpenAIAttributionHeadersWrapper(ctx.streamFn);
 
+<<<<<<< HEAD
           if (hasFastModeParam(ctx.extraParams)) {
             nextStreamFn = createOpenAIFastModeWrapper(nextStreamFn, () =>
               resolveOpenAIFastMode(ctx.extraParams),
             );
+=======
+          if (resolveOpenAIFastMode(ctx.extraParams)) {
+            nextStreamFn = createOpenAIFastModeWrapper(nextStreamFn);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           }
 
           const serviceTier = resolveOpenAIServiceTier(ctx.extraParams);

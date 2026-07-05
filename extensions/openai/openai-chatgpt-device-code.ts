@@ -3,7 +3,10 @@ import {
   positiveSecondsToSafeMilliseconds,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
+<<<<<<< HEAD
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveCodexAccessTokenExpiry } from "./openai-chatgpt-auth-identity.js";
 import { trimNonEmptyString } from "./openai-chatgpt-shared.js";
 
@@ -13,8 +16,11 @@ const OPENAI_CODEX_DEVICE_CODE_TIMEOUT_MS = 15 * 60_000;
 const OPENAI_CODEX_DEVICE_CODE_DEFAULT_INTERVAL_MS = 5_000;
 const OPENAI_CODEX_DEVICE_CODE_MIN_INTERVAL_MS = 1_000;
 const OPENAI_CODEX_DEVICE_CALLBACK_URL = `${OPENAI_AUTH_BASE_URL}/deviceauth/callback`;
+<<<<<<< HEAD
 const OPENAI_CODEX_DEVICE_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const OPENAI_CODEX_DEVICE_JSON_BODY_LIMIT_BYTES = 256 * 1024;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function resolveOpenAICodexDeviceCodeHeaders(contentType: string): Record<string, string> {
   const version = process.env.OPENCLAW_VERSION?.trim();
@@ -123,6 +129,7 @@ function formatDeviceCodeError(params: {
     : `${params.prefix}: HTTP ${params.status}`;
 }
 
+<<<<<<< HEAD
 async function readOpenAICodexDeviceBody(response: Response): Promise<string> {
   return await readResponseTextLimited(
     response,
@@ -132,6 +139,8 @@ async function readOpenAICodexDeviceBody(response: Response): Promise<string> {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function requestOpenAICodexDeviceCode(fetchFn: typeof fetch): Promise<RequestedDeviceCode> {
   const response = await fetchFn(`${OPENAI_AUTH_BASE_URL}/api/accounts/deviceauth/usercode`, {
     method: "POST",
@@ -141,7 +150,11 @@ async function requestOpenAICodexDeviceCode(fetchFn: typeof fetch): Promise<Requ
     }),
   });
 
+<<<<<<< HEAD
   const bodyText = await readOpenAICodexDeviceBody(response);
+=======
+  const bodyText = await response.text();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!response.ok) {
     if (response.status === 404) {
       throw new Error(
@@ -192,7 +205,11 @@ async function pollOpenAICodexDeviceCode(params: {
       }),
     });
 
+<<<<<<< HEAD
     const bodyText = await readOpenAICodexDeviceBody(response);
+=======
+    const bodyText = await response.text();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (response.ok) {
       const body = parseJsonObject(bodyText) as DeviceCodeTokenPayload | null;
       const authorizationCode = trimNonEmptyString(body?.authorization_code);
@@ -242,7 +259,11 @@ async function exchangeOpenAICodexDeviceCode(params: {
     }),
   });
 
+<<<<<<< HEAD
   const bodyText = await readOpenAICodexDeviceBody(response);
+=======
+  const bodyText = await response.text();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!response.ok) {
     throw new Error(
       formatDeviceCodeError({

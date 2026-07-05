@@ -1,6 +1,10 @@
 // Covers plugin-backed memory state registration and reset behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import {
+<<<<<<< HEAD
+=======
+  resetMemoryPluginState,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   buildMemoryPromptSection,
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
@@ -362,7 +366,11 @@ describe("memory plugin state", () => {
     });
     const snapshot = createMemoryStateSnapshot();
 
+<<<<<<< HEAD
     clearMemoryPluginState();
+=======
+    resetMemoryPluginState();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expectClearedMemoryState();
 
     restoreMemoryPluginState(snapshot);

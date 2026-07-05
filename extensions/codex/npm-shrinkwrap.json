@@ -1,12 +1,20 @@
 {
   "name": "@openclaw/codex",
+<<<<<<< HEAD
   "version": "2026.6.10",
+=======
+  "version": "2026.6.8",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/codex",
+<<<<<<< HEAD
       "version": "2026.6.10",
+=======
+      "version": "2026.6.8",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "dependencies": {
         "@openai/codex": "0.139.0",
         "typebox": "1.1.39",

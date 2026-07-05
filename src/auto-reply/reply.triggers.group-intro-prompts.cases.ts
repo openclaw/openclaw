@@ -55,7 +55,11 @@ export function registerGroupIntroPromptCases(): void {
           Provider: "whatsapp",
         },
         expected: [
+<<<<<<< HEAD
           "You are in a WhatsApp group chat. Your text replies are automatically sent to this group chat. For ordinary text, do not use the message tool to send to this same destination; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this same group/topic.",
+=======
+          "You are in a WhatsApp group chat. Your text replies are automatically sent to this group chat. For ordinary text, do not use the message tool to send to this same group; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this same group/topic.",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           groupParticipationNote,
           groupSilentNote,
           groupSilentProseGuard,
@@ -82,6 +86,7 @@ export function registerGroupIntroPromptCases(): void {
         forbidden: ["Avoid Markdown tables"],
       },
       {
+<<<<<<< HEAD
         name: "mattermost-channel",
         message: {
           Body: "release status",
@@ -102,6 +107,8 @@ export function registerGroupIntroPromptCases(): void {
         forbidden: ["Mattermost group chat"],
       },
       {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         name: "whatsapp-always-on",
         setup: (cfg) => {
           cfg.channels ??= {};

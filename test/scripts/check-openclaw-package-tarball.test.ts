@@ -76,6 +76,7 @@ function withTarball(
 }
 
 describe("check-openclaw-package-tarball", () => {
+<<<<<<< HEAD
   it("prints help before touching tarball state", () => {
     const result = spawnSync("node", [CHECK_SCRIPT, "--help"], { encoding: "utf8" });
 
@@ -102,6 +103,8 @@ describe("check-openclaw-package-tarball", () => {
     expect(extra.stderr).not.toContain("OpenClaw package tarball does not exist");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.runIf(process.platform !== "win32")(
     "removes the extract dir when tar extraction fails",
     () => {
@@ -271,6 +274,7 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
+<<<<<<< HEAD
   it("rejects CommonJS require chunks omitted from the postinstall inventory", () => {
     withTarball(
       ["dist/index.cjs"],
@@ -372,6 +376,8 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects missing Control UI assets", () => {
     withTarball(
       ["dist/index.js"],

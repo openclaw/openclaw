@@ -1,19 +1,45 @@
+<<<<<<< HEAD
 // Covers Tailscale whois, Serve, and Funnel helpers.
+=======
+// Covers Tailscale install, whois, Serve, and Funnel helpers.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import * as tailscale from "./tailscale.js";
 
 const {
+<<<<<<< HEAD
+=======
+  ensureGoInstalled,
+  ensureTailscaledInstalled,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   getTailnetHostname,
   getTestTailscaleBinaryOverride,
   readTailscaleWhoisIdentity,
   enableTailscaleServe,
   disableTailscaleServe,
+<<<<<<< HEAD
+=======
+  ensureFunnel,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   hasTailscaleFunnelRouteForPort,
   tailscaleFunnelStatusCoversPort,
 } = tailscale;
 const tailscaleBin = "tailscale";
 
+<<<<<<< HEAD
+=======
+function createRuntimeWithExitError() {
+  return {
+    error: vi.fn(),
+    log: vi.fn(),
+    exit: ((code: number) => {
+      throw new Error(`exit ${code}`);
+    }) as (code: number) => never,
+  };
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function expectExecCall(
   exec: ReturnType<typeof vi.fn>,
   callNumber: number,
@@ -156,6 +182,55 @@ describe("tailscale helpers", () => {
     expect(getTestTailscaleBinaryOverride()).toBeNull();
   });
 
+<<<<<<< HEAD
+=======
+  it.each([
+    {
+      name: "ensureGoInstalled installs when missing and user agrees",
+      fn: ensureGoInstalled,
+      missingError: new Error("no go"),
+      installCommand: ["brew", ["install", "go"]] as const,
+      promptResult: true,
+    },
+    {
+      name: "ensureTailscaledInstalled installs when missing and user agrees",
+      fn: ensureTailscaledInstalled,
+      missingError: new Error("missing"),
+      installCommand: ["brew", ["install", "tailscale"]] as const,
+      promptResult: true,
+    },
+  ])("$name", async ({ fn, missingError, installCommand, promptResult }) => {
+    const exec = vi.fn().mockRejectedValueOnce(missingError).mockResolvedValue({});
+    const prompt = vi.fn().mockResolvedValue(promptResult);
+    const runtime = createRuntimeWithExitError();
+    await fn(exec as never, prompt, runtime);
+    expect(exec).toHaveBeenCalledWith(installCommand[0], installCommand[1]);
+  });
+
+  it.each([
+    {
+      name: "ensureGoInstalled exits when missing and user declines install",
+      fn: ensureGoInstalled,
+      missingError: new Error("no go"),
+      errorMessage: "Go is required to build tailscaled from source. Aborting.",
+    },
+    {
+      name: "ensureTailscaledInstalled exits when missing and user declines install",
+      fn: ensureTailscaledInstalled,
+      missingError: new Error("missing"),
+      errorMessage: "tailscaled is required for user-space funnel. Aborting.",
+    },
+  ])("$name", async ({ fn, missingError, errorMessage }) => {
+    const exec = vi.fn().mockRejectedValueOnce(missingError);
+    const prompt = vi.fn().mockResolvedValue(false);
+    const runtime = createRuntimeWithExitError();
+
+    await expect(fn(exec as never, prompt, runtime)).rejects.toThrow("exit 1");
+    expect(runtime.error).toHaveBeenCalledWith(errorMessage);
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("enableTailscaleServe attempts normal first, then sudo", async () => {
     const exec = vi
       .fn()
@@ -232,6 +307,71 @@ describe("tailscale helpers", () => {
     });
   });
 
+<<<<<<< HEAD
+=======
+  it("ensureFunnel uses fallback for enabling", async () => {
+    const exec = vi
+      .fn()
+      .mockResolvedValueOnce({ stdout: JSON.stringify({ BackendState: "Running" }) }) // status
+      .mockRejectedValueOnce(new Error("permission denied")) // enable normal
+      .mockResolvedValueOnce({ stdout: "" }); // enable sudo
+
+    const runtime = {
+      error: vi.fn(),
+      log: vi.fn(),
+      exit: vi.fn() as unknown as (code: number) => never,
+    };
+    const prompt = vi.fn();
+
+    await ensureFunnel(8080, exec as never, runtime, prompt);
+
+    expect(exec).toHaveBeenCalledTimes(3);
+    expectExecCall(exec, 1, tailscaleBin, ["funnel", "status", "--json"]);
+    expectExecCall(exec, 2, tailscaleBin, ["funnel", "--yes", "--bg", "8080"], {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    });
+    expectExecCall(exec, 3, "sudo", ["-n", tailscaleBin, "funnel", "--yes", "--bg", "8080"], {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    });
+  });
+
+  it("ensureFunnel accepts noisy JSON status output", async () => {
+    const exec = vi
+      .fn()
+      .mockResolvedValueOnce({
+        stdout: 'warning: stale state\n{"BackendState":"Running"}\n',
+      })
+      .mockResolvedValueOnce({ stdout: "" });
+    const runtime = createRuntimeWithExitError();
+    const prompt = vi.fn();
+
+    await ensureFunnel(8080, exec as never, runtime, prompt);
+
+    expect(exec).toHaveBeenCalledTimes(2);
+    expectExecCall(exec, 2, tailscaleBin, ["funnel", "--yes", "--bg", "8080"], {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    });
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
+  it("ensureFunnel treats malformed status output as a failure", async () => {
+    const exec = vi.fn().mockResolvedValueOnce({ stdout: "warning: stale state\n{not json}\n" });
+    const runtime = createRuntimeWithExitError();
+    const prompt = vi.fn();
+
+    await expect(ensureFunnel(8080, exec as never, runtime, prompt)).rejects.toThrow("exit 1");
+
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(prompt).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Failed to enable Tailscale Funnel. Is it allowed on your tailnet?",
+    );
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("enableTailscaleServe skips sudo on non-permission errors", async () => {
     const exec = vi.fn().mockRejectedValueOnce(new Error("boom"));
 

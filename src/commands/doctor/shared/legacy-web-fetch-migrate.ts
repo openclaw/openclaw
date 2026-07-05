@@ -76,6 +76,19 @@ function migratePluginWebFetchConfig(params: {
   );
 }
 
+<<<<<<< HEAD
+=======
+/** List legacy tools.web.fetch.firecrawl config paths present in raw config. */
+export function listLegacyWebFetchConfigPaths(raw: unknown): string[] {
+  const fetch = resolveLegacyFetchConfig(raw);
+  const firecrawl = fetch ? copyLegacyFirecrawlFetchConfig(fetch) : undefined;
+  if (!firecrawl) {
+    return [];
+  }
+  return Object.keys(firecrawl).map((key) => `tools.web.fetch.firecrawl.${key}`);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Move legacy Firecrawl web-fetch config into plugins.entries.firecrawl.config.webFetch. */
 export function migrateLegacyWebFetchConfig<T>(raw: T): { config: T; changes: string[] } {
   if (!isRecord(raw) || !hasMappedLegacyWebFetchConfig(raw)) {

@@ -715,6 +715,7 @@ export async function runExecProcess(opts: {
 
   const timeoutMs = resolveExecTimeoutMs(opts.timeoutSec);
   let sandboxFinalizeToken: unknown;
+<<<<<<< HEAD
   let sandboxFinalized = false;
   const finalizeSandboxExec = async (params: {
     status: "completed" | "failed";
@@ -730,6 +731,8 @@ export async function runExecProcess(opts: {
       token: sandboxFinalizeToken,
     });
   };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const spawnSpec:
     | {
@@ -876,6 +879,7 @@ export async function runExecProcess(opts: {
       } catch (retryErr) {
         markExited(session, null, null, "failed");
         maybeNotifyOnExit(session, "failed");
+<<<<<<< HEAD
         await finalizeSandboxExec({
           status: "failed",
           exitCode: null,
@@ -883,6 +887,8 @@ export async function runExecProcess(opts: {
         }).catch((finalizeErr: unknown) => {
           logWarn(`exec: sandbox finalize after spawn failure failed (${String(finalizeErr)}).`);
         });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         emitExecProcessCompleted({
           command: opts.command,
           mode: "child",
@@ -899,6 +905,7 @@ export async function runExecProcess(opts: {
     } else {
       markExited(session, null, null, "failed");
       maybeNotifyOnExit(session, "failed");
+<<<<<<< HEAD
       await finalizeSandboxExec({
         status: "failed",
         exitCode: null,
@@ -906,6 +913,8 @@ export async function runExecProcess(opts: {
       }).catch((finalizeErr: unknown) => {
         logWarn(`exec: sandbox finalize after spawn failure failed (${String(finalizeErr)}).`);
       });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       emitExecProcessCompleted({
         command: opts.command,
         mode: spawnSpec.mode,
@@ -944,11 +953,22 @@ export async function runExecProcess(opts: {
       if (!session.child && session.stdin) {
         session.stdin.destroyed = true;
       }
+<<<<<<< HEAD
       await finalizeSandboxExec({
         status: outcome.status,
         exitCode: exit.exitCode ?? null,
         timedOut: exit.timedOut,
       });
+=======
+      if (opts.sandbox?.finalizeExec) {
+        await opts.sandbox.finalizeExec({
+          status: outcome.status,
+          exitCode: exit.exitCode ?? null,
+          timedOut: exit.timedOut,
+          token: sandboxFinalizeToken,
+        });
+      }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       emitExecProcessCompleted({
         command: opts.command,
         mode: usingPty ? "pty" : "child",

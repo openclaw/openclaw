@@ -1,7 +1,10 @@
 /**
  * Waits for completion-required async tasks before finalizing an attempt.
  */
+<<<<<<< HEAD
 import { toErrorObject } from "../../../infra/errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { isTerminalTaskStatus } from "../../../tasks/task-executor-policy.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
@@ -78,7 +81,11 @@ async function sleepWithAbort(
       },
       (err: unknown) => {
         signal.removeEventListener("abort", onAbort);
+<<<<<<< HEAD
         reject(toErrorObject(err, "Non-Error rejection"));
+=======
+        reject(toLintErrorObject(err, "Non-Error rejection"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     );
   });
@@ -246,3 +253,20 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
     }
   }
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

@@ -1039,6 +1039,7 @@ describe("image dimension errors", () => {
 });
 
 describe("classifyAssistantFailoverReason", () => {
+<<<<<<< HEAD
   const opencodeGoStalledStreamError = {
     role: "assistant" as const,
     api: "openai-completions" as const,
@@ -1071,6 +1072,8 @@ describe("classifyAssistantFailoverReason", () => {
     ).toBeNull();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses structured assistant error bodies for model-not-found 400s", () => {
     expect(
       classifyAssistantFailoverReason({

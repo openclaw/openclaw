@@ -24,6 +24,7 @@ function jsonResponse(value: unknown, init?: ResponseInit): Response {
   });
 }
 
+<<<<<<< HEAD
 function boundedTextErrorResponse(body: string, status = 502): {
   response: Response;
   cancel: ReturnType<typeof vi.fn>;
@@ -60,6 +61,8 @@ function boundedTextErrorResponse(body: string, status = 502): {
   return { response, cancel, releaseLock, text };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function requestUrl(input: RequestInfo | URL): string {
   if (typeof input === "string") {
     return input;
@@ -216,6 +219,7 @@ describe("OpenRouter OAuth", () => {
     ).rejects.toThrow("OpenRouter OAuth key exchange failed (400): Invalid code");
   });
 
+<<<<<<< HEAD
   it("bounds OpenRouter OAuth exchange error bodies without requiring response.text()", async () => {
     const errorResponse = boundedTextErrorResponse(
       `${"openrouter denied ".repeat(1024)}tail-marker`,
@@ -243,6 +247,8 @@ describe("OpenRouter OAuth", () => {
     expect(errorResponse.releaseLock).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("stores a browser OAuth result as the default OpenRouter API-key profile", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       jsonResponse({ key: "sk-or-v1-test", user_id: "user-1" }),

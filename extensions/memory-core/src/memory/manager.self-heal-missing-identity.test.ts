@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+<<<<<<< HEAD
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
 import type { MemoryIndexManager } from "./manager.js";
@@ -16,6 +19,7 @@ const createEmbeddingProviderMock = vi.hoisted(() =>
     providerUnavailableReason: "No embeddings provider available.",
   })),
 );
+<<<<<<< HEAD
 const originalSelfHealStateDir = process.env.OPENCLAW_STATE_DIR;
 
 function setSelfHealStateDir(stateDir: string): void {
@@ -29,6 +33,8 @@ function restoreSelfHealStateDir(): void {
     Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalSelfHealStateDir);
   }
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: createEmbeddingProviderMock,
@@ -62,8 +68,12 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
     workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Alpha topic\n\nKeep this note.");
+<<<<<<< HEAD
     setSelfHealStateDir(path.join(workspaceDir, "state"));
     indexPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+=======
+    indexPath = path.join(workspaceDir, "index.sqlite");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   afterEach(async () => {
@@ -72,7 +82,10 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
       manager = null;
     }
     await closeAllMemorySearchManagers();
+<<<<<<< HEAD
     restoreSelfHealStateDir();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   afterAll(async () => {
@@ -87,8 +100,13 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
   ): Promise<MemoryIndexManager> {
     const store =
       params.vectorEnabled === undefined
+<<<<<<< HEAD
         ? undefined
         : { vector: { enabled: params.vectorEnabled } };
+=======
+        ? { path: indexPath }
+        : { path: indexPath, vector: { enabled: params.vectorEnabled } };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const cfg = {
       memory: { backend: "builtin" },
       agents: {
@@ -114,11 +132,18 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
   }
 
   async function seedChunksWithNoMeta(model = "fts-only"): Promise<void> {
+<<<<<<< HEAD
     await fs.mkdir(path.dirname(indexPath), { recursive: true });
     const db = new DatabaseSync(indexPath);
     db.exec(`
       CREATE TABLE IF NOT EXISTS memory_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS memory_index_chunks (
+=======
+    const db = new DatabaseSync(indexPath);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS chunks (
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         id TEXT PRIMARY KEY,
         path TEXT NOT NULL,
         source TEXT NOT NULL DEFAULT 'memory',
@@ -130,6 +155,7 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
         embedding TEXT NOT NULL,
         updated_at INTEGER NOT NULL
       );
+<<<<<<< HEAD
       CREATE TABLE IF NOT EXISTS memory_index_sources (
         path TEXT NOT NULL,
         source TEXT NOT NULL DEFAULT 'memory',
@@ -141,6 +167,18 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
       INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
         VALUES ('chunk-1', 'MEMORY.md', 'memory', 1, 3, 'hash-1', '${model}', 'Alpha topic keep note', '[]', ${Date.now()});
       INSERT INTO memory_index_sources (path, source, hash, mtime, size)
+=======
+      CREATE TABLE IF NOT EXISTS files (
+        path TEXT PRIMARY KEY,
+        source TEXT NOT NULL DEFAULT 'memory',
+        hash TEXT NOT NULL,
+        mtime INTEGER NOT NULL,
+        size INTEGER NOT NULL
+      );
+      INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+        VALUES ('chunk-1', 'MEMORY.md', 'memory', 1, 3, 'hash-1', '${model}', 'Alpha topic keep note', '[]', ${Date.now()});
+      INSERT INTO files (path, source, hash, mtime, size)
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         VALUES ('MEMORY.md', 'memory', 'hash-1', ${Date.now()}, 100);
     `);
     db.close();

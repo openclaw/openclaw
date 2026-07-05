@@ -433,6 +433,7 @@ describe("channel-streaming", () => {
     ).toBe("✍️ Write: /tmp/demo/style.css");
     expect(
       formatChannelProgressDraftLine({
+<<<<<<< HEAD
         event: "item",
         itemKind: "status",
         title: "Fast",
@@ -441,6 +442,8 @@ describe("channel-streaming", () => {
     ).toBe("💨Fast: auto-off(75s>=60s)");
     expect(
       formatChannelProgressDraftLine({
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         event: "patch",
         modified: ["/tmp/demo/index.html", "/tmp/demo/style.css"],
       }),
@@ -609,16 +612,26 @@ describe("channel-streaming", () => {
     expect(updated[0]).toMatchObject({
       id: "tool:call-1-output",
       kind: "command-output",
+<<<<<<< HEAD
       detail: "install dependencies",
       status: "completed",
       text: "🛠️ install dependencies",
+=======
+      detail: "completed",
+      status: "completed",
+      text: "🛠️ completed",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     expect(
       formatChannelProgressDraftText({
         lines: updated,
         entry: { streaming: { progress: { label: false } } },
       }),
+<<<<<<< HEAD
     ).toBe("🛠️ install dependencies");
+=======
+    ).toBe("🛠️ completed");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const recoveredItemLine = buildChannelProgressDraftLine({
       event: "item",
@@ -640,6 +653,7 @@ describe("channel-streaming", () => {
     if (!recoveredItemLine || !recoveredCommandLine) {
       throw new Error("expected recovered command progress lines");
     }
+<<<<<<< HEAD
     const recoveredUpdated = mergeChannelProgressDraftLine(
       [recoveredItemLine],
       recoveredCommandLine,
@@ -654,6 +668,21 @@ describe("channel-streaming", () => {
       },
     ]);
     expect(recoveredUpdated[0]).not.toHaveProperty("detail");
+=======
+    expect(
+      mergeChannelProgressDraftLine([recoveredItemLine], recoveredCommandLine, {
+        maxLines: 4,
+      }),
+    ).toMatchObject([
+      {
+        id: "command-2",
+        kind: "command-output",
+        detail: "completed",
+        status: "completed",
+        text: "🛠️ completed",
+      },
+    ]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("starts progress drafts after five seconds or a second work event", async () => {

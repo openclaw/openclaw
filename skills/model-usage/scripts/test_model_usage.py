@@ -7,6 +7,7 @@ import argparse
 from datetime import date, timedelta
 from unittest import TestCase, main
 
+<<<<<<< HEAD
 from model_usage import (
     aggregate_costs,
     coerce_finite_cost,
@@ -15,6 +16,9 @@ from model_usage import (
     pick_current_model,
     positive_int,
 )
+=======
+from model_usage import filter_by_days, positive_int
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 
 class TestModelUsage(TestCase):
@@ -42,6 +46,7 @@ class TestModelUsage(TestCase):
         self.assertEqual(filtered[0]["date"], (today - timedelta(days=1)).strftime("%Y-%m-%d"))
         self.assertEqual(filtered[1]["date"], today.strftime("%Y-%m-%d"))
 
+<<<<<<< HEAD
     def test_coerce_finite_cost_accepts_numbers_and_numeric_strings(self):
         self.assertEqual(coerce_finite_cost(2), 2.0)
         self.assertEqual(coerce_finite_cost(1.75), 1.75)
@@ -147,6 +152,8 @@ class TestModelUsage(TestCase):
         self.assertEqual(day, "2026-05-25")
         self.assertIsNone(cost)
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 if __name__ == "__main__":
     main()

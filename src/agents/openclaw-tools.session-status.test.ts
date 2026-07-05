@@ -99,6 +99,7 @@ function installScopedSessionStores(syncUpdates = false) {
 async function createSessionsModuleMock() {
   const actual =
     await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
+<<<<<<< HEAD
   const resolveMockStorePath = (_store: string | undefined, opts?: { agentId?: string }) =>
     opts?.agentId === "support" ? "/tmp/support/sessions.json" : "/tmp/main/sessions.json";
   const cloneEntry = (entry: SessionEntry): SessionEntry => structuredClone(entry);
@@ -170,6 +171,11 @@ async function createSessionsModuleMock() {
           }
         : null;
     },
+=======
+  return {
+    ...actual,
+    loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     updateSessionStore: async (
       storePath: string,
       mutator: (store: Record<string, unknown>) => Promise<void> | void,
@@ -179,7 +185,12 @@ async function createSessionsModuleMock() {
       updateSessionStoreMock(storePath, store);
       return store;
     },
+<<<<<<< HEAD
     resolveStorePath: resolveMockStorePath,
+=======
+    resolveStorePath: (_store: string | undefined, opts?: { agentId?: string }) =>
+      opts?.agentId === "support" ? "/tmp/support/sessions.json" : "/tmp/main/sessions.json",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }
 
@@ -605,6 +616,7 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("main");
   });
 
+<<<<<<< HEAD
   it("resolves webchat sessionKey=current to the full requester main key (#89773)", async () => {
     resetSessionStore({
       main: {
@@ -698,6 +710,8 @@ describe("session_status tool", () => {
     expect(details.statusText).toContain("OpenClaw");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses runSessionKey thinking level for implicit no-arg status lookups (#82669)", async () => {
     resetSessionStore({
       "agent:main:telegram:default:direct:1234": {
@@ -1258,6 +1272,7 @@ describe("session_status tool", () => {
     expect(saved.sessionId).toMatch(UUID_RE);
   });
 
+<<<<<<< HEAD
   it("preserves an existing legacy main row when implicit fallback mutates model state", async () => {
     resetSessionStore({
       main: {
@@ -1293,6 +1308,8 @@ describe("session_status tool", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("fires session:patch when session_status changes the persisted session model", async () => {
     const events: InternalHookEvent[] = [];
     registerInternalHook("session:patch", async (event) => {

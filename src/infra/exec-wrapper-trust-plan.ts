@@ -42,6 +42,10 @@ function finalizeExecWrapperTrustPlan(
   policyArgv: string[],
   wrapperChain: string[],
   policyBlocked: boolean,
+<<<<<<< HEAD
+=======
+  blockedWrapper?: string,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ): ExecWrapperTrustPlan {
   const rawExecutable = argv[0]?.trim() ?? "";
   const shellWrapperExecutable =
@@ -56,6 +60,12 @@ function finalizeExecWrapperTrustPlan(
       ? extractBindableShellWrapperInlineCommand(argv)
       : null,
   };
+<<<<<<< HEAD
+=======
+  if (blockedWrapper !== undefined) {
+    plan.blockedWrapper = blockedWrapper;
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return plan;
 }
 

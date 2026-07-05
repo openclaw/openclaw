@@ -39,7 +39,10 @@ import {
 import { formatPosixMode, isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+<<<<<<< HEAD
 import { withPluginScanExistenceCache } from "./plugin-scan-existence-cache.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolvePluginSourceRoots } from "./roots.js";
 import {
   normalizePluginDependencySpecs,
@@ -810,6 +813,7 @@ function discoverBundleInRoot(params: {
   seen: Set<string>;
   realpathCache: Map<string, string>;
 }): "added" | "invalid" | "none" {
+<<<<<<< HEAD
   return withPluginScanExistenceCache(() => {
     const bundleFormat = detectBundleManifestFormat(params.rootDir);
     if (!bundleFormat) {
@@ -856,6 +860,52 @@ function discoverBundleInRoot(params: {
     });
     return "added";
   });
+=======
+  const bundleFormat = detectBundleManifestFormat(params.rootDir);
+  if (!bundleFormat) {
+    return "none";
+  }
+  const rootRealPath = safeRealpathSync(params.rootDir, params.realpathCache) ?? undefined;
+  const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+    origin: params.origin,
+    rootDir: params.rootDir,
+    env: params.env,
+    realpathCache: params.realpathCache,
+  });
+  const bundleManifest = loadBundleManifest({
+    rootDir: params.rootDir,
+    ...(rootRealPath !== undefined ? { rootRealPath } : {}),
+    bundleFormat,
+    rejectHardlinks,
+  });
+  if (!bundleManifest.ok) {
+    params.diagnostics.push({
+      level: "error",
+      message: bundleManifest.error,
+      source: bundleManifest.manifestPath,
+    });
+    return "invalid";
+  }
+  addCandidate({
+    candidates: params.candidates,
+    diagnostics: params.diagnostics,
+    seen: params.seen,
+    idHint: bundleManifest.manifest.id,
+    source: params.rootDir,
+    rootDir: params.rootDir,
+    origin: params.origin,
+    format: "bundle",
+    bundleFormat,
+    ownershipUid: params.ownershipUid,
+    workspaceDir: params.workspaceDir,
+    manifest: params.manifest,
+    packageDir: params.rootDir,
+    bundledManifestId: bundleManifest.manifest.id,
+    bundledManifestPath: bundleManifest.manifestPath,
+    realpathCache: params.realpathCache,
+  });
+  return "added";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function addLegacyNpmDeclarationDiagnostic(params: {

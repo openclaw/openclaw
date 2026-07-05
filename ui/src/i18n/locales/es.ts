@@ -63,6 +63,10 @@ export const es: TranslationMap = {
     docs: "Documentación",
     theme: "Tema",
     colorMode: "Modo de color",
+<<<<<<< HEAD
+=======
+    colorModeOption: "Modo de color: {mode}",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resources: "Recursos",
     search: "Buscar",
     save: "Guardar",
@@ -200,7 +204,10 @@ export const es: TranslationMap = {
     inherit: "heredar",
     defaultOption: "Predeterminado ({value})",
     offExplicit: "desactivado (explícito)",
+<<<<<<< HEAD
     auto: "auto",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     on: "activado",
     off: "apagado",
     full: "completo",
@@ -1449,7 +1456,10 @@ export const es: TranslationMap = {
     jaJP: "日本語 (japonés)",
     ko: "한국어 (coreano)",
     fr: "Français (francés)",
+<<<<<<< HEAD
     hi: "हिन्दी (hindi)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ar: "العربية (árabe)",
     it: "Italiano (italiano)",
     tr: "Türkçe (turco)",
@@ -1460,7 +1470,10 @@ export const es: TranslationMap = {
     vi: "Tiếng Việt (vietnamita)",
     nl: "Nederlands (neerlandés)",
     fa: "فارسی (persa)",
+<<<<<<< HEAD
     ru: "Русский (ruso)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   cron: {
     quickCreate: {
@@ -1632,7 +1645,10 @@ export const es: TranslationMap = {
       nextHeartbeat: "Próximo latido",
       wakeModeHelp: "Ahora se activa inmediatamente. Próximo latido espera el siguiente ciclo.",
       payloadKind: "¿Qué debe ejecutarse?",
+<<<<<<< HEAD
       command: "Command",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       systemEvent: "Publicar mensaje en la línea de tiempo principal",
       agentTurn: "Ejecutar tarea del asistente (aislada)",
       systemEventHelp:

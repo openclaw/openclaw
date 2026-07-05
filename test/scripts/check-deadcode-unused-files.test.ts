@@ -4,7 +4,10 @@ import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+<<<<<<< HEAD
 import { pathToFileURL } from "node:url";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { describe, expect, it } from "vitest";
 import {
   checkUnusedFiles,
@@ -66,6 +69,7 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
   throw new Error(`process still alive: ${pid}`);
 }
 
+<<<<<<< HEAD
 function waitForChildClose(
   child: ReturnType<typeof spawn>,
   timeoutMs = 5_000,
@@ -81,6 +85,8 @@ function waitForChildClose(
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("check-deadcode-unused-files", () => {
   it("parses the compact Knip unused-file section", () => {
     expect(
@@ -382,6 +388,7 @@ src/a.ts: src/a.ts
     },
   );
 
+<<<<<<< HEAD
   it.skipIf(process.platform === "win32")(
     "cleans active Knip descendants before forwarding parent SIGTERM",
     async () => {
@@ -447,6 +454,8 @@ src/a.ts: src/a.ts
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps output delivered after process exit but before stdio close", async () => {
     const child = new FakeKnipProcess();
     const resultPromise = runKnipUnusedFiles({

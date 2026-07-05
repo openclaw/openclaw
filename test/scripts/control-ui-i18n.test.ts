@@ -1,4 +1,5 @@
 // Control Ui I18N tests cover control ui i18n script behavior.
+<<<<<<< HEAD
 import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -7,6 +8,14 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { appendBoundedProcessOutput, runProcess } from "../../scripts/control-ui-i18n.ts";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
+=======
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import process from "node:process";
+import { describe, expect, it } from "vitest";
+import { appendBoundedProcessOutput, runProcess } from "../../scripts/control-ui-i18n.ts";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function processIsAlive(pid: number): boolean {
   try {
@@ -30,6 +39,7 @@ async function waitForProcessExit(pid: number, timeoutMs = 1_000): Promise<void>
   throw new Error(`process ${pid} was still alive after ${timeoutMs}ms`);
 }
 
+<<<<<<< HEAD
 async function waitForChildClose(
   child: ReturnType<typeof spawn>,
   timeoutMs = 2_000,
@@ -45,6 +55,8 @@ async function waitForChildClose(
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("control-ui-i18n process runner", () => {
   it("keeps a bounded process output tail", () => {
     const first = appendBoundedProcessOutput({ text: "", truncatedChars: 0 }, "abcdef", 5);
@@ -84,8 +96,12 @@ describe("control-ui-i18n process runner", () => {
   it.runIf(process.platform !== "win32")(
     "kills descendant processes after the process timeout",
     async () => {
+<<<<<<< HEAD
       const tempDirs = createTempDirTracker();
       const tempDir = tempDirs.make("openclaw-control-ui-i18n-timeout-");
+=======
+      const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-control-ui-i18n-timeout-"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       try {
         const markerPath = path.join(tempDir, "grandchild.pid");
         const grandchildScript = [
@@ -112,6 +128,7 @@ describe("control-ui-i18n process runner", () => {
         const grandchildPid = Number(readFileSync(markerPath, "utf8"));
         await waitForProcessExit(grandchildPid);
       } finally {
+<<<<<<< HEAD
         tempDirs.cleanup();
       }
     },
@@ -219,6 +236,9 @@ describe("control-ui-i18n process runner", () => {
         }
       } finally {
         tempDirs.cleanup();
+=======
+        rmSync(tempDir, { force: true, recursive: true });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     },
   );

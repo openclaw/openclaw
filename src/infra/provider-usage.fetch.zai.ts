@@ -1,7 +1,10 @@
 // Fetches and normalizes Z.ai provider usage records.
 import {
   buildUsageHttpErrorSnapshot,
+<<<<<<< HEAD
   discardUsageResponseBody,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   fetchJson,
   readUsageJson,
 } from "./provider-usage.fetch.shared.js";
@@ -44,7 +47,10 @@ export async function fetchZaiUsage(
   );
 
   if (!res.ok) {
+<<<<<<< HEAD
     await discardUsageResponseBody(res);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return buildUsageHttpErrorSnapshot({
       provider: "zai",
       status: res.status,

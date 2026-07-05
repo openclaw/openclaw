@@ -1,6 +1,10 @@
 // Whatsapp plugin module implements approval reactions behavior.
 import type { WAMessage } from "baileys";
 import {
+<<<<<<< HEAD
+=======
+  buildApprovalReactionHint,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   createApprovalReactionTargetStore,
   listApprovalReactionBindings,
   resolveApprovalReactionTarget,
@@ -26,16 +30,23 @@ type WhatsAppApprovalReactionResolution = {
 type WhatsAppApprovalReactionTarget = ApprovalReactionTargetRecord;
 
 type WhatsAppApprovalReactionEvent = {
+<<<<<<< HEAD
   remoteJids: string[];
+=======
+  remoteJid: string;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   messageId: string;
   actorJid: string;
   reactionKey: string;
 };
 
+<<<<<<< HEAD
 type ResolvedWhatsAppApprovalReactionTarget = WhatsAppApprovalReactionResolution & {
   remoteJid: string;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 let resolverRuntimePromise: Promise<typeof import("./approval-resolver.js")> | undefined;
 
 const whatsappApprovalReactionTargets =
@@ -67,6 +78,7 @@ function buildReactionTargetKey(params: {
   return `${accountId}:${remoteJid}:${messageId}`;
 }
 
+<<<<<<< HEAD
 function addCandidateRemoteJid(target: string[], value: string | null | undefined): void {
   const remoteJid = value?.trim();
   if (remoteJid && !target.includes(remoteJid)) {
@@ -74,6 +86,8 @@ function addCandidateRemoteJid(target: string[], value: string | null | undefine
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function reportPersistentApprovalReactionError(error: unknown): void {
   try {
     getOptionalWhatsAppRuntime()
@@ -104,6 +118,15 @@ export function listWhatsAppApprovalReactionBindings(
   return listApprovalReactionBindings({ allowedDecisions });
 }
 
+<<<<<<< HEAD
+=======
+export function buildWhatsAppApprovalReactionHint(
+  allowedDecisions: readonly ExecApprovalReplyDecision[],
+): string | null {
+  return buildApprovalReactionHint({ allowedDecisions });
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function normalizeApprovalDecision(value: string): ExecApprovalReplyDecision | null {
   const normalized = value.trim().toLowerCase();
   if (normalized === "always") {
@@ -239,6 +262,7 @@ export async function resolveWhatsAppApprovalReactionTargetWithPersistence(param
   });
 }
 
+<<<<<<< HEAD
 async function resolveWhatsAppApprovalReactionTargetFromCandidates(params: {
   accountId: string;
   observedRemoteJids: readonly string[];
@@ -275,6 +299,8 @@ async function resolveWhatsAppApprovalReactionTargetFromCandidates(params: {
   return null;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function readWhatsAppApprovalReactionEvent(params: {
   msg: WAMessage;
   selfJid?: string | null;
@@ -284,19 +310,31 @@ function readWhatsAppApprovalReactionEvent(params: {
   const reaction = msg.message?.reactionMessage;
   const reactionKey = reaction?.text?.trim() ?? "";
   const messageId = reaction?.key?.id?.trim() ?? "";
+<<<<<<< HEAD
   const remoteJids: string[] = [];
   addCandidateRemoteJid(remoteJids, reaction?.key?.remoteJid);
   addCandidateRemoteJid(remoteJids, msg.key?.remoteJid);
+=======
+  const remoteJid = (reaction?.key?.remoteJid ?? msg.key?.remoteJid ?? "").trim();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const actorJid =
     msg.key?.participant?.trim() ||
     (msg.key?.fromMe
       ? (params.selfLid?.trim() ?? params.selfJid?.trim() ?? "")
       : (msg.key?.remoteJid?.trim() ?? ""));
+<<<<<<< HEAD
   if (!reactionKey || !messageId || remoteJids.length === 0 || !actorJid) {
     return null;
   }
   return {
     remoteJids,
+=======
+  if (!reactionKey || !messageId || !remoteJid || !actorJid) {
+    return null;
+  }
+  return {
+    remoteJid,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     messageId,
     actorJid,
     reactionKey,
@@ -311,7 +349,10 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
   selfJid?: string | null;
   selfLid?: string | null;
   resolveInboundJid: (jid: string | null | undefined) => Promise<string | null>;
+<<<<<<< HEAD
   resolveReactionTargetJids?: (jid: string) => Promise<readonly string[]>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   logVerboseMessage?: (message: string) => void;
 }): Promise<boolean> {
   const event = readWhatsAppApprovalReactionEvent({
@@ -322,6 +363,7 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
   if (!event) {
     return false;
   }
+<<<<<<< HEAD
   const target = await resolveWhatsAppApprovalReactionTargetFromCandidates({
     accountId: params.accountId,
     observedRemoteJids: event.remoteJids,
@@ -329,6 +371,13 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
     reactionKey: event.reactionKey,
     resolveReactionTargetJids: params.resolveReactionTargetJids,
     logVerboseMessage: params.logVerboseMessage,
+=======
+  const target = await resolveWhatsAppApprovalReactionTargetWithPersistence({
+    accountId: params.accountId,
+    remoteJid: event.remoteJid,
+    messageId: event.messageId,
+    reactionKey: event.reactionKey,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   if (!target) {
     return false;
@@ -381,7 +430,11 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
     if (isApprovalNotFoundError(error)) {
       unregisterWhatsAppApprovalReactionTarget({
         accountId: params.accountId,
+<<<<<<< HEAD
         remoteJid: target.remoteJid,
+=======
+        remoteJid: event.remoteJid,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         messageId: event.messageId,
       });
       params.logVerboseMessage?.(

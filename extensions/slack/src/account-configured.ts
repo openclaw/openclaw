@@ -11,6 +11,7 @@ export function isSlackPluginAccountConfigured(account: ResolvedSlackAccount): b
   if (mode === "http") {
     return hasConfiguredAccountValue(account.config.signingSecret);
   }
+<<<<<<< HEAD
   if (mode === "relay") {
     const relay = account.config.relay;
     return (
@@ -19,5 +20,7 @@ export function isSlackPluginAccountConfigured(account: ResolvedSlackAccount): b
       hasConfiguredAccountValue(relay?.gatewayId)
     );
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return Boolean(account.appToken?.trim());
 }

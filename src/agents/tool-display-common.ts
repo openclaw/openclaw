@@ -3,14 +3,23 @@
  * Redacts and summarizes arguments into short labels/details for chat and UI
  * tool update streams.
  */
+<<<<<<< HEAD
 import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+=======
+import {
+  asOptionalObjectRecord as asRecord,
+} from "@openclaw/normalization-core/record-coerce";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { parseStrictFiniteNumber } from "../infra/parse-finite-number.js";
 import { redactToolPayloadText } from "../logging/redact.js";
+<<<<<<< HEAD
 import { sliceUtf16Safe } from "../shared/utf16-slice.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
 
 type ToolDisplayActionSpec = {
@@ -135,7 +144,11 @@ function coerceDisplayValue(
     const firstLine = redactToolPayloadText(rawLine);
     if (firstLine.length > maxStringChars) {
       const half = Math.floor((maxStringChars - 1) / 2);
+<<<<<<< HEAD
       return `${sliceUtf16Safe(firstLine, 0, half)}…${sliceUtf16Safe(firstLine, -(maxStringChars - 1 - half))}`;
+=======
+      return `${firstLine.slice(0, half)}…${firstLine.slice(-(maxStringChars - 1 - half))}`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     return firstLine;
   }

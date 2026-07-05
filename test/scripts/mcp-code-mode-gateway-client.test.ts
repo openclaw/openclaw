@@ -140,12 +140,15 @@ describe("MCP code-mode gateway Docker client result validation", () => {
     expect(() =>
       validateMcpCodeModeResult(okResponse, {
         ...okMentions,
+<<<<<<< HEAD
         apiFileList: 0,
       }),
     ).toThrow("session log lacks API.list usage");
     expect(() =>
       validateMcpCodeModeResult(okResponse, {
         ...okMentions,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         mcpTool: 0,
       }),
     ).toThrow("session log lacks fixture__lookup_note call");

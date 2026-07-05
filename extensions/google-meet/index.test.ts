@@ -855,7 +855,11 @@ describe("google-meet plugin", () => {
   });
 
   it("registers the node-host command used by chrome-node transport", () => {
+<<<<<<< HEAD
     const { nodeHostCommands, nodeInvokePolicies } = setup();
+=======
+    const { nodeHostCommands } = setup();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const command = nodeHostCommands.find(
       (entry): entry is Record<string, unknown> =>
@@ -865,6 +869,7 @@ describe("google-meet plugin", () => {
       throw new Error("expected googlemeet.chrome node host command");
     }
     expect(command.cap).toBe("google-meet");
+<<<<<<< HEAD
     expect(command.dangerous).toBe(true);
     expect(typeof command.handle).toBe("function");
     expect(nodeInvokePolicies).toHaveLength(1);
@@ -872,6 +877,9 @@ describe("google-meet plugin", () => {
       commands: ["googlemeet.chrome"],
       dangerous: true,
     });
+=======
+    expect(typeof command.handle).toBe("function");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("keeps the agent tool visible on non-macOS hosts but blocks local Chrome talk-back joins", async () => {
@@ -2245,9 +2253,12 @@ describe("google-meet plugin", () => {
     try {
       const { methods, runCommandWithTimeout } = setup({
         defaultMode: "transcribe",
+<<<<<<< HEAD
         chrome: {
           browserProfile: "meet-devtools",
         },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
       const callGatewayFromCli = mockLocalMeetBrowserRequest({
         inCall: true,
@@ -3437,12 +3448,16 @@ describe("google-meet plugin", () => {
       },
     );
     chromeTransportTesting.setDepsForTest({ callGatewayFromCli });
+<<<<<<< HEAD
     const { tools, nodesInvoke } = setup({
       defaultTransport: "chrome",
       chrome: {
         browserProfile: "meet-devtools",
       },
     });
+=======
+    const { tools, nodesInvoke } = setup({ defaultTransport: "chrome" });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const tool = tools[0] as {
       execute: (
         id: string,
@@ -3472,7 +3487,10 @@ describe("google-meet plugin", () => {
     expect(focusCall[0]).toBe("browser.request");
     expect(requireRecord(focusCall[2], "focus request").method).toBe("POST");
     expect(requireRecord(focusCall[2], "focus request").path).toBe("/tabs/focus");
+<<<<<<< HEAD
     expect(requireRecord(focusCall[2], "focus request").query).toBeUndefined();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(focusCall[3]).toEqual({ progress: false });
     expect(nodesInvoke).not.toHaveBeenCalled();
   });

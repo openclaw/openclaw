@@ -1,5 +1,9 @@
 // Qa Matrix tests cover cli plugin behavior.
+<<<<<<< HEAD
 import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
+=======
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -123,6 +127,7 @@ describe("matrix qa cli runtime", () => {
     await expectPathMissing(outputPath);
   });
 
+<<<<<<< HEAD
   it.runIf(process.platform !== "win32")(
     "rejects output dirs that traverse repo-local symlinks",
     async () => {
@@ -145,6 +150,8 @@ describe("matrix qa cli runtime", () => {
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves the Matrix QA failure when output log cleanup also fails", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-cli-"));
     tmpDirs.push(repoRoot);

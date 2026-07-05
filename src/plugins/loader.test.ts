@@ -2,7 +2,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
+=======
+import { listAgentHarnessIds } from "../agents/harness/registry.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import {
@@ -31,7 +35,11 @@ import { withEnv } from "../test-utils/env.js";
 import { buildPluginApi } from "./api-builder.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";
+<<<<<<< HEAD
 import { getCompactionProvider } from "./compaction-provider.js";
+=======
+import { listCompactionProviderIds } from "./compaction-provider.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   getEmbeddingProvider,
   listEmbeddingProviders,
@@ -53,7 +61,10 @@ import {
   claimPluginInteractiveCallbackDedupe,
   commitPluginInteractiveCallbackDedupe,
 } from "./interactive-state.js";
+<<<<<<< HEAD
 import { warnWhenAllowlistIsOpen } from "./loader-provenance.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   testing,
   clearPluginLoaderCache,
@@ -117,10 +128,13 @@ type PluginStartupTraceDetail = {
   metrics: ReadonlyArray<readonly [string, number | string]>;
 };
 
+<<<<<<< HEAD
 function listRegisteredAgentHarnessIdsForTest(): string[] {
   return listRegisteredAgentHarnesses().map((entry) => entry.harness.id);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
   let count = 0;
   for (const item of items) {
@@ -2780,7 +2794,11 @@ module.exports = { id: "throws-after-import", register() {} };`,
       },
       onlyPluginIds: ["codex-harness"],
     });
+<<<<<<< HEAD
     expect(listRegisteredAgentHarnessIdsForTest()).toEqual(["codex"]);
+=======
+    expect(listAgentHarnessIds()).toEqual(["codex"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     loadOpenClawPlugins({
       cache: false,
@@ -2791,7 +2809,11 @@ module.exports = { id: "throws-after-import", register() {} };`,
         },
       },
     });
+<<<<<<< HEAD
     expect(listRegisteredAgentHarnessIdsForTest()).toStrictEqual([]);
+=======
+    expect(listAgentHarnessIds()).toStrictEqual([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("rejects malformed plugin agent harness registrations", () => {
@@ -2822,7 +2844,11 @@ module.exports = { id: "throws-after-import", register() {} };`,
       onlyPluginIds: ["bad-harness"],
     });
 
+<<<<<<< HEAD
     expect(listRegisteredAgentHarnessIdsForTest()).toStrictEqual([]);
+=======
+    expect(listAgentHarnessIds()).toStrictEqual([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const diagnostic = registry.diagnostics.find(
       (entry) =>
         entry.level === "error" &&
@@ -5013,7 +5039,11 @@ module.exports = { id: "throws-after-import", register() {} };`,
             pluginId: "compaction-provider-malformed",
             message: 'compaction provider "broken-compaction" registration missing summarize',
           });
+<<<<<<< HEAD
           expect(getCompactionProvider("broken-compaction")).toBeUndefined();
+=======
+          expect(listCompactionProviderIds()).not.toContain("broken-compaction");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
       },
       {
@@ -8627,6 +8657,7 @@ module.exports = {
     });
   });
 
+<<<<<<< HEAD
   it("warns when plugins.allow entries do not match any discovered plugin ids", () => {
     useNoBundledPlugins();
     clearPluginLoaderCache();
@@ -8828,6 +8859,8 @@ module.exports = {
     expect(message).toContain("openclaw plugins inspect <id>");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("handles workspace-discovered plugins according to trust and precedence", () => {
     useNoBundledPlugins();
     const scenarios = [

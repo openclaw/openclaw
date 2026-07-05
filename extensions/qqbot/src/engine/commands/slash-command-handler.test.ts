@@ -27,6 +27,7 @@ function createStreamingMessage(): QueuedMessage {
   };
 }
 
+<<<<<<< HEAD
 function createGroupStopMessage(): QueuedMessage {
   return {
     type: "group",
@@ -48,6 +49,8 @@ function createDmStopMessage(): QueuedMessage {
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function createAccount(): GatewayAccount {
   return {
     accountId: "default",
@@ -61,10 +64,13 @@ function createAccount(): GatewayAccount {
   };
 }
 
+<<<<<<< HEAD
 function authorizeGroupCommands(account: GatewayAccount): void {
   account.config.groupAllowFrom = ["TRUSTED_OPENID"];
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("trySlashCommand", () => {
   beforeEach(() => {
     vi.mocked(sendText).mockClear();
@@ -105,6 +111,7 @@ describe("trySlashCommand", () => {
     expect(qqbot?.streaming).toBe(true);
     expect(vi.mocked(sendText).mock.calls.at(0)?.[1]).toContain("已开启");
   });
+<<<<<<< HEAD
 
   it("keeps group /stop urgent when command level is strict", async () => {
     const account = createAccount();
@@ -178,4 +185,6 @@ describe("trySlashCommand", () => {
 
     expect(result).toBe("urgent");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

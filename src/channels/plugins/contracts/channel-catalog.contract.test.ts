@@ -46,6 +46,7 @@ describeChannelCatalogEntryContract({
 
 describeChannelCatalogEntryContract({
   channelId: "yuanbao",
+<<<<<<< HEAD
   npmSpec: "openclaw-plugin-yuanbao@2.15.0",
   alias: "yb",
 });
@@ -55,3 +56,8 @@ describeChannelCatalogEntryContract({
   npmSpec: "@zalo-platforms/openclaw-zaloclawbot@0.1.4",
   alias: "zaloclawbot",
 });
+=======
+  npmSpec: "openclaw-plugin-yuanbao@2.13.1",
+  alias: "yb",
+});
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

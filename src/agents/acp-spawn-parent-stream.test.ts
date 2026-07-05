@@ -509,6 +509,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
+<<<<<<< HEAD
   it("relays the latest replaceable assistant snapshot instead of superseded drafts", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-replaceable-assistant",
@@ -555,6 +556,8 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("relays commentary-phase assistant text in parent progress mode by default", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-commentary-default",

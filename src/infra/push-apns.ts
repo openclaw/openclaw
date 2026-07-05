@@ -9,7 +9,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import type { DeviceIdentity } from "./device-identity.js";
+<<<<<<< HEAD
 import { formatErrorMessage, toErrorObject } from "./errors.js";
+=======
+import { formatErrorMessage } from "./errors.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
 import {
   APNS_HTTP2_CANCEL_CODE,
@@ -45,7 +49,11 @@ type RelayApnsRegistration = {
   sendGrant: string;
   installationId: string;
   topic: string;
+<<<<<<< HEAD
   environment: ApnsEnvironment;
+=======
+  environment: "production";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   distribution: "official";
   updatedAtMs: number;
   relayOrigin?: string;
@@ -350,7 +358,11 @@ function normalizeRelayRegistration(
     !sendGrant ||
     !installationId ||
     !isValidTopic(topic) ||
+<<<<<<< HEAD
     !environment ||
+=======
+    environment !== "production" ||
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     distribution !== "official"
   ) {
     return null;
@@ -465,8 +477,13 @@ export async function registerApnsRegistration(
       const environment = normalizeApnsEnvironment(params.environment);
       const distribution = normalizeDistribution(params.distribution);
       const relayOrigin = normalizeRelayOrigin(params.relayOrigin);
+<<<<<<< HEAD
       if (!environment) {
         throw new Error("relay registrations must use valid APNs environment");
+=======
+      if (environment !== "production") {
+        throw new Error("relay registrations must use production environment");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
       if (distribution !== "official") {
         throw new Error("relay registrations must use official distribution");
@@ -506,6 +523,23 @@ export async function registerApnsRegistration(
   });
 }
 
+<<<<<<< HEAD
+=======
+/** Backward-compatible helper for storing a direct APNs token registration. */
+export async function registerApnsToken(params: {
+  nodeId: string;
+  token: string;
+  topic: string;
+  environment?: unknown;
+  baseDir?: string;
+}): Promise<DirectApnsRegistration> {
+  return (await registerApnsRegistration({
+    ...params,
+    transport: "direct",
+  })) as DirectApnsRegistration;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Loads one normalized APNs registration by node id. */
 export async function loadApnsRegistration(
   nodeId: string,
@@ -539,6 +573,26 @@ export async function loadApnsRegistrations(
   return registrations;
 }
 
+<<<<<<< HEAD
+=======
+/** Removes a stored APNs registration by node id. */
+export async function clearApnsRegistration(nodeId: string, baseDir?: string): Promise<boolean> {
+  const normalizedNodeId = normalizeNodeId(nodeId);
+  if (!normalizedNodeId) {
+    return false;
+  }
+  return await withLock(async () => {
+    const state = await loadRegistrationsState(baseDir);
+    if (!(normalizedNodeId in state.registrationsByNodeId)) {
+      return false;
+    }
+    delete state.registrationsByNodeId[normalizedNodeId];
+    await persistRegistrationsState(state, baseDir);
+    return true;
+  });
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isSameApnsRegistration(a: ApnsRegistration, b: ApnsRegistration): boolean {
   if (
     a.nodeId !== b.nodeId ||
@@ -558,7 +612,10 @@ function isSameApnsRegistration(a: ApnsRegistration, b: ApnsRegistration): boole
       a.sendGrant === b.sendGrant &&
       a.installationId === b.installationId &&
       a.distribution === b.distribution &&
+<<<<<<< HEAD
       a.relayOrigin === b.relayOrigin &&
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       a.tokenDebugSuffix === b.tokenDebugSuffix
     );
   }
@@ -701,7 +758,11 @@ async function sendApnsRequest(params: {
       }
       settled = true;
       client.destroy();
+<<<<<<< HEAD
       reject(toErrorObject(err, "Non-Error rejection"));
+=======
+      reject(toLintErrorObject(err, "Non-Error rejection"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
     const finish = (result: { status: number; apnsId?: string; body: string }) => {
       if (settled) {
@@ -839,7 +900,11 @@ function toPushResult(params: {
         "tokenSuffix" in response ? response : undefined,
       ),
     topic: params.registration.topic,
+<<<<<<< HEAD
     environment: response.environment ?? params.registration.environment,
+=======
+    environment: params.registration.transport === "relay" ? "production" : response.environment,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     transport: params.registration.transport,
   };
 }
@@ -1189,3 +1254,20 @@ export async function sendApnsExecApprovalResolvedWake(
 }
 
 export { type ApnsRelayConfig, resolveApnsRelayConfigFromEnv };
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

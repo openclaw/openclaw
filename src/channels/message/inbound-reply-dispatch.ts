@@ -275,10 +275,15 @@ export async function recordChannelMessageReplyDispatch(
     recordInboundSession: params.recordInboundSession,
     dispatchReplyWithBufferedBlockDispatcher: params.dispatchReplyWithBufferedBlockDispatcher,
     delivery: {
+<<<<<<< HEAD
       preparePayload: (payload): OutboundReplyPayload =>
         payload && typeof payload === "object"
           ? normalizeOutboundReplyPayload(payload)
           : {},
+=======
+      preparePayload: (payload) =>
+        payload && typeof payload === "object" ? normalizeOutboundReplyPayload(payload) : {},
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       deliver: async (payload, info) => {
         if (params.durable) {
           const durable = await deliverInboundReplyWithMessageSendContext({

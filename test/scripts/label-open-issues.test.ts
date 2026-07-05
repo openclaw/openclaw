@@ -16,6 +16,7 @@ describe("label-open-issues helpers", () => {
     vi.useRealTimers();
   });
 
+<<<<<<< HEAD
   it("parses CLI options strictly before external calls", () => {
     expect(testing.parseArgs(["--dry-run", "--limit", "2", "--model", "gpt-5.5"])).toEqual({
       dryRun: true,
@@ -32,6 +33,8 @@ describe("label-open-issues helpers", () => {
     expect(() => testing.parseArgs(["--wat"])).toThrow("Unknown argument: --wat");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("classifies items from OpenAI structured response text", async () => {
     const response = new Response(
       JSON.stringify({
@@ -88,6 +91,7 @@ describe("label-open-issues helpers", () => {
   });
 
   it("times out stalled OpenAI classification body reads", async () => {
+<<<<<<< HEAD
     let canceled = false;
     const response = new Response(
       new ReadableStream({
@@ -100,6 +104,9 @@ describe("label-open-issues helpers", () => {
       }),
       { status: 200 },
     );
+=======
+    const response = new Response(new ReadableStream({}), { status: 200 });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     vi.useFakeTimers();
     const request = testing.classifyItem(labelItem, "issue", {
       apiKey: "test-key",
@@ -114,6 +121,7 @@ describe("label-open-issues helpers", () => {
     await vi.advanceTimersByTimeAsync(5);
 
     await rejection;
+<<<<<<< HEAD
     await Promise.resolve();
     expect(canceled).toBe(true);
   });
@@ -147,6 +155,8 @@ describe("label-open-issues helpers", () => {
     await rejection;
     await Promise.resolve();
     expect(canceled).toBe(true);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("bounds OpenAI error response bodies", async () => {

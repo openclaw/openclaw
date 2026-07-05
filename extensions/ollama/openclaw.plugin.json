@@ -1,6 +1,9 @@
 {
   "id": "ollama",
+<<<<<<< HEAD
   "icon": "https://cdn.simpleicons.org/ollama",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "activation": {
     "onStartup": false
   },
@@ -127,6 +130,7 @@
               "supportsTools": true,
               "supportsUsageInStreaming": true
             }
+<<<<<<< HEAD
           },
           {
             "id": "glm-5.2:cloud",
@@ -145,6 +149,8 @@
               "supportsTools": true,
               "supportsUsageInStreaming": true
             }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           }
         ]
       }

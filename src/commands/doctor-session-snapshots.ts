@@ -12,14 +12,20 @@ import {
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+<<<<<<< HEAD
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { writeTextAtomic } from "../infra/json-files.js";
 import { resolveBundledSkillsDir } from "../skills/loading/bundled-dir.js";
 import { shortenHomePath } from "../utils.js";
 
+<<<<<<< HEAD
 const SESSION_SNAPSHOTS_CHECK_ID = "core/doctor/session-snapshots";
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type SnapshotPathSource =
   | "skillsSnapshot.prompt"
   | "skillsSnapshot.resolvedSkills"
@@ -37,10 +43,13 @@ type StaleSessionSnapshotPathFinding = {
   expectedPath: string;
 };
 
+<<<<<<< HEAD
 export type SessionSnapshotHealthIssue = StaleSessionSnapshotPathFinding & {
   storePath: string;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function decodeXmlText(value: string): string {
   return value
     .replace(/&lt;/g, "<")
@@ -293,6 +302,7 @@ function loadSessionStoreForSnapshotScan(storePath: string): Record<string, Sess
   return store;
 }
 
+<<<<<<< HEAD
 export async function detectSessionSnapshotHealthIssues(params?: {
   storePaths?: string[];
   bundledSkillsDir?: string;
@@ -359,6 +369,8 @@ export function sessionSnapshotIssueToRepairEffect(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Replaces stale paths in raw, JSON-escaped, and XML-escaped prompt text. */
 function replaceStalePathsInText(text: string, finding: StaleSessionSnapshotPathFinding): string {
   const jsonEscaped = JSON.stringify(finding.cachedPath).slice(1, -1);

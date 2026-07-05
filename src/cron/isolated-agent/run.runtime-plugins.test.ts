@@ -1,7 +1,14 @@
 // Runtime plugin tests cover plugin availability during isolated cron runs.
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
+=======
+import {
+  makeIsolatedAgentTurnParams,
+  setupRunCronIsolatedAgentTurnSuite,
+} from "./run.suite-helpers.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   loadRunCronIsolatedAgentTurn,
   ensureRuntimePluginsLoadedMock,
@@ -15,7 +22,11 @@ describe("runCronIsolatedAgentTurn runtime plugins loading", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
   it("loads runtime plugins eagerly using the lazily loaded module", async () => {
+<<<<<<< HEAD
     const params = makeIsolatedAgentParamsFixture();
+=======
+    const params = makeIsolatedAgentTurnParams();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const result = await runCronIsolatedAgentTurn(params);
 

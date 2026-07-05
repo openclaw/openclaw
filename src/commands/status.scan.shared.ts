@@ -2,7 +2,10 @@
 // This file owns the cross-command contracts reused by normal, JSON, and status-all scans.
 
 import { existsSync } from "node:fs";
+<<<<<<< HEAD
 import type { DatabaseSync } from "node:sqlite";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import {
   normalizeOptionalLowercaseString,
@@ -17,6 +20,7 @@ import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connectio
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
 import type { GatewayProbeResult, probeGateway as probeGatewayFn } from "../gateway/probe.js";
+<<<<<<< HEAD
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   MEMORY_INDEX_CHUNKS_TABLE,
@@ -24,16 +28,26 @@ import {
   MEMORY_INDEX_SOURCES_TABLE,
   type MemoryProviderStatus,
 } from "../memory-host-sdk/engine-storage.js";
+=======
+import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 import { pickGatewaySelfPresence } from "./gateway-presence.js";
 import { isProbeReachable } from "./gateway-status/helpers.js";
+<<<<<<< HEAD
+=======
+export { pickGatewaySelfPresence } from "./gateway-presence.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const gatewayProbeModuleLoader = createLazyImportLoader(() => import("./status.gateway-probe.js"));
 const probeGatewayModuleLoader = createLazyImportLoader(() => import("../gateway/probe.js"));
 const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
+<<<<<<< HEAD
 const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function loadGatewayProbeModule() {
   return gatewayProbeModuleLoader.load();
@@ -47,6 +61,7 @@ function loadGatewayCallModule() {
   return gatewayCallModuleLoader.load();
 }
 
+<<<<<<< HEAD
 function hasBuiltInMemoryState(databasePath: string): boolean {
   if (!existsSync(databasePath)) {
     return false;
@@ -111,6 +126,8 @@ function hasBuiltInMemoryState(databasePath: string): boolean {
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type MemoryStatusSnapshot = MemoryProviderStatus & {
   agentId: string;
 };
@@ -382,12 +399,18 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   cfg: OpenClawConfig;
   agentStatus: { defaultId?: string | null };
   memoryPlugin: MemoryPluginStatus;
+<<<<<<< HEAD
   resolveMemoryConfig: (
     cfg: OpenClawConfig,
     agentId: string,
   ) => { store: { databasePath: string } } | null;
   getMemorySearchManager: StatusMemorySearchManagerResolver;
   requireDefaultDatabasePath?: (agentId: string) => string | null;
+=======
+  resolveMemoryConfig: (cfg: OpenClawConfig, agentId: string) => { store: { path: string } } | null;
+  getMemorySearchManager: StatusMemorySearchManagerResolver;
+  requireDefaultStore?: (agentId: string) => string | null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }): Promise<MemoryStatusSnapshot | null> {
   const { cfg, agentStatus, memoryPlugin } = params;
   if (!memoryPlugin.enabled || !memoryPlugin.slot) {
@@ -400,9 +423,18 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
     return await resolveMemoryManagerStatusSnapshot(params, agentId);
   }
 
+<<<<<<< HEAD
   const hasExplicitConfig = hasExplicitMemorySearchConfig(cfg, agentId);
   const defaultDatabasePath = params.requireDefaultDatabasePath?.(agentId);
   if (defaultDatabasePath && !hasExplicitConfig && !hasBuiltInMemoryState(defaultDatabasePath)) {
+=======
+  const defaultStorePath = params.requireDefaultStore?.(agentId);
+  if (
+    defaultStorePath &&
+    !hasExplicitMemorySearchConfig(cfg, agentId) &&
+    !existsSync(defaultStorePath)
+  ) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     // Avoid instantiating built-in memory for users who never created the default store.
     return null;
   }
@@ -411,7 +443,11 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
     return null;
   }
   const shouldInspectStore =
+<<<<<<< HEAD
     hasExplicitConfig || hasBuiltInMemoryState(resolvedMemory.store.databasePath);
+=======
+    hasExplicitMemorySearchConfig(cfg, agentId) || existsSync(resolvedMemory.store.path);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!shouldInspectStore) {
     return null;
   }

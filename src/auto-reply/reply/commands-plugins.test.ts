@@ -79,9 +79,12 @@ vi.mock("../../infra/clawhub.js", () => ({
 }));
 
 vi.mock("../../plugins/clawhub.js", () => ({
+<<<<<<< HEAD
   CLAWHUB_INSTALL_ERROR_CODE: {
     CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED: "clawhub_risk_acknowledgement_required",
   },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   installPluginFromClawHub: vi.fn(),
 }));
 

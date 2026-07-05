@@ -3,6 +3,11 @@
  *
  * Binds shared detached media-task lifecycle behavior to image_generate labels and completion messages.
  */
+<<<<<<< HEAD
+=======
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AgentGeneratedAttachment } from "../generated-attachments.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { IMAGE_GENERATION_TASK_KIND } from "../image-generation-task-status.js";
 import {
   createMediaGenerationTaskLifecycle,
@@ -44,3 +49,20 @@ export const completeImageGenerationTaskRun = (
 export const failImageGenerationTaskRun = (
   ...params: Parameters<typeof imageGenerationTaskLifecycle.failTaskRun>
 ) => imageGenerationTaskLifecycle.failTaskRun(...params);
+<<<<<<< HEAD
+=======
+
+/** Wakes the requester session with image generation completion or failure. */
+export async function wakeImageGenerationTaskCompletion(params: {
+  config?: OpenClawConfig;
+  handle: ImageGenerationTaskHandle | null;
+  status: "ok" | "error";
+  statusLabel: string;
+  result: string;
+  attachments?: AgentGeneratedAttachment[];
+  mediaUrls?: string[];
+  statsLine?: string;
+}) {
+  return await imageGenerationTaskLifecycle.wakeTaskCompletion(params);
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

@@ -1,5 +1,8 @@
 // Qa Lab tests cover node exec plugin behavior.
+<<<<<<< HEAD
 import path from "node:path";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { describe, expect, it } from "vitest";
 import { resolveQaNodeExecPath } from "./node-exec.js";
 
@@ -41,6 +44,7 @@ describe("resolveQaNodeExecPath", () => {
     ).resolves.toBe("/usr/local/bin/node");
   });
 
+<<<<<<< HEAD
   it("uses trusted Windows where.exe when resolving node from PATH", async () => {
     await expect(
       resolveQaNodeExecPath({
@@ -64,6 +68,8 @@ describe("resolveQaNodeExecPath", () => {
     ).resolves.toBe(String.raw`D:\nodejs\node.exe`);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("throws a clear error when node is unavailable", async () => {
     await expect(
       resolveQaNodeExecPath({

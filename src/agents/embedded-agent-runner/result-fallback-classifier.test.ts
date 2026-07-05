@@ -1,6 +1,9 @@
 // Coverage for deciding when embedded run results should trigger model fallback.
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../auto-reply/reply/agent-runner-failure-copy.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./result-fallback-classifier.js";
 
 describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
@@ -50,6 +53,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
+<<<<<<< HEAD
   it("classifies generic external runner failure text as fallback-worthy", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "claude-cli",
@@ -194,6 +198,8 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     expect(result).toBeNull();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves hook block results with auth-like error payload text", () => {
     // Hook policy blocks are intentional local decisions, not provider failures
     // that should rotate models.

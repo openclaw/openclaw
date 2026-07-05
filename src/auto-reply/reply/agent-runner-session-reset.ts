@@ -1,4 +1,5 @@
 // Handles session reset requests produced during agent runner execution.
+<<<<<<< HEAD
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -8,6 +9,21 @@ import { persistSessionResetLifecycle } from "../../config/sessions/session-acce
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { defaultRuntime } from "../../runtime.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
+=======
+import fs from "node:fs";
+import type { SessionEntry } from "../../config/sessions.js";
+import {
+  resolveAgentIdFromSessionKey,
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+  resolveSessionTranscriptPath,
+  updateSessionStore,
+} from "../../config/sessions.js";
+import { generateSecureUuid } from "../../infra/secure-random.js";
+import { defaultRuntime } from "../../runtime.js";
+import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
+import { replayRecentUserAssistantMessages } from "./session-transcript-replay.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type ResetSessionOptions = {
   failureLabel: string;
@@ -17,7 +33,11 @@ type ResetSessionOptions = {
 
 const deps = {
   generateSecureUuid,
+<<<<<<< HEAD
   persistSessionResetLifecycle,
+=======
+  updateSessionStore,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   refreshQueuedFollowupSession,
   error: (message: string) => defaultRuntime.error(message),
 };
@@ -25,7 +45,11 @@ const deps = {
 export function setAgentRunnerSessionResetTestDeps(overrides?: Partial<typeof deps>): void {
   Object.assign(deps, {
     generateSecureUuid,
+<<<<<<< HEAD
     persistSessionResetLifecycle,
+=======
+    updateSessionStore,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     refreshQueuedFollowupSession,
     error: (message: string) => defaultRuntime.error(message),
     ...overrides,
@@ -91,6 +115,7 @@ export async function resetReplyRunSession(params: {
   nextEntry.sessionFile = nextSessionFile;
   params.activeSessionStore[params.sessionKey] = nextEntry;
   try {
+<<<<<<< HEAD
     await deps.persistSessionResetLifecycle({
       agentId,
       cleanupPreviousTranscript: params.options.cleanupTranscripts,
@@ -100,12 +125,26 @@ export async function resetReplyRunSession(params: {
       previousSessionId: prevSessionId,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
+=======
+    await deps.updateSessionStore(params.storePath, (store) => {
+      store[params.sessionKey!] = nextEntry;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   } catch (err) {
     deps.error(
       `Failed to persist session reset after ${params.options.failureLabel} (${params.sessionKey}): ${String(err)}`,
     );
   }
+<<<<<<< HEAD
+=======
+  // Silent rotations (compaction/role-ordering) fire without user intent, so
+  // preserve recent user/assistant turns for direct-chat continuity.
+  await replayRecentUserAssistantMessages({
+    sourceTranscript: prevEntry.sessionFile,
+    targetTranscript: nextSessionFile,
+    newSessionId: nextSessionId,
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   params.followupRun.run.sessionId = nextSessionId;
   params.followupRun.run.sessionFile = nextSessionFile;
   deps.refreshQueuedFollowupSession({
@@ -117,5 +156,27 @@ export async function resetReplyRunSession(params: {
   params.onActiveSessionEntry(nextEntry);
   params.onNewSession(nextSessionId, nextSessionFile);
   deps.error(params.options.buildLogMessage(nextSessionId));
+<<<<<<< HEAD
+=======
+  if (params.options.cleanupTranscripts && prevSessionId) {
+    const transcriptCandidates = new Set<string>();
+    const resolved = resolveSessionFilePath(
+      prevSessionId,
+      prevEntry,
+      resolveSessionFilePathOptions({ agentId, storePath: params.storePath }),
+    );
+    if (resolved) {
+      transcriptCandidates.add(resolved);
+    }
+    transcriptCandidates.add(resolveSessionTranscriptPath(prevSessionId, agentId));
+    for (const candidate of transcriptCandidates) {
+      try {
+        fs.unlinkSync(candidate);
+      } catch {
+        // Best-effort cleanup.
+      }
+    }
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return true;
 }

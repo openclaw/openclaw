@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -13,6 +14,8 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   consumeGatewayRestartIntentPayloadSync,
   consumeGatewayRestartIntentSync,
@@ -20,7 +23,10 @@ import {
 } from "./restart.js";
 
 const tempDirs: string[] = [];
+<<<<<<< HEAD
 type GatewayRestartIntentDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_intent">;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function createIntentEnv(): NodeJS.ProcessEnv {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-restart-intent-"));
@@ -31,6 +37,7 @@ function createIntentEnv(): NodeJS.ProcessEnv {
   };
 }
 
+<<<<<<< HEAD
 function legacyIntentPath(env: NodeJS.ProcessEnv): string {
   return path.join(env.OPENCLAW_STATE_DIR ?? "", "gateway-restart-intent.json");
 }
@@ -79,6 +86,14 @@ function insertIntentRow(
 describe("gateway restart intent", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
+=======
+function intentPath(env: NodeJS.ProcessEnv): string {
+  return path.join(env.OPENCLAW_STATE_DIR ?? "", "gateway-restart-intent.json");
+}
+
+describe("gateway restart intent", () => {
+  afterEach(() => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { force: true, recursive: true });
     }
@@ -90,8 +105,12 @@ describe("gateway restart intent", () => {
     expect(writeGatewayRestartIntentSync({ env, targetPid: process.pid })).toBe(true);
 
     expect(consumeGatewayRestartIntentSync(env)).toBe(true);
+<<<<<<< HEAD
     expect(readIntentRow(env)).toBeUndefined();
     expect(fs.existsSync(legacyIntentPath(env))).toBe(false);
+=======
+    expect(fs.existsSync(intentPath(env))).toBe(false);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("rejects an intent for a different process", () => {
@@ -100,6 +119,7 @@ describe("gateway restart intent", () => {
     expect(writeGatewayRestartIntentSync({ env, targetPid: process.pid + 1 })).toBe(true);
 
     expect(consumeGatewayRestartIntentSync(env)).toBe(false);
+<<<<<<< HEAD
     expect(readIntentRow(env)).toBeUndefined();
     expect(fs.existsSync(legacyIntentPath(env))).toBe(false);
   });
@@ -118,6 +138,25 @@ describe("gateway restart intent", () => {
 
     expect(consumeGatewayRestartIntentSync(env)).toBe(false);
     expect(readIntentRow(env)).toBeUndefined();
+=======
+    expect(fs.existsSync(intentPath(env))).toBe(false);
+  });
+
+  it("rejects oversized intent files before parsing", () => {
+    const env = createIntentEnv();
+    fs.writeFileSync(intentPath(env), "x".repeat(2048), { encoding: "utf8", mode: 0o600 });
+
+    expect(consumeGatewayRestartIntentSync(env)).toBe(false);
+    expect(fs.existsSync(intentPath(env))).toBe(false);
+  });
+
+  it("writes intent files with owner-only permissions", () => {
+    const env = createIntentEnv();
+
+    expect(writeGatewayRestartIntentSync({ env, targetPid: process.pid })).toBe(true);
+
+    expect(fs.statSync(intentPath(env)).mode & 0o777).toBe(0o600);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("round-trips restart reason, force, and wait options", () => {
@@ -137,6 +176,7 @@ describe("gateway restart intent", () => {
       force: true,
       waitMs: 12_345,
     });
+<<<<<<< HEAD
     expect(readIntentRow(env)).toBeUndefined();
     expect(fs.existsSync(legacyIntentPath(env))).toBe(false);
   });
@@ -165,5 +205,25 @@ describe("gateway restart intent", () => {
       reason: "second",
     });
     expect(consumeGatewayRestartIntentPayloadSync(env)).toEqual({ reason: "second" });
+=======
+    expect(fs.existsSync(intentPath(env))).toBe(false);
+  });
+
+  it("does not follow an existing intent-path symlink when writing", () => {
+    const env = createIntentEnv();
+    const targetPath = path.join(env.OPENCLAW_STATE_DIR ?? "", "attacker-target.txt");
+    fs.writeFileSync(targetPath, "keep", "utf8");
+    try {
+      fs.symlinkSync(targetPath, intentPath(env));
+    } catch {
+      return;
+    }
+
+    expect(writeGatewayRestartIntentSync({ env, targetPid: process.pid })).toBe(true);
+
+    expect(fs.readFileSync(targetPath, "utf8")).toBe("keep");
+    expect(fs.lstatSync(intentPath(env)).isSymbolicLink()).toBe(false);
+    expect(consumeGatewayRestartIntentSync(env)).toBe(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

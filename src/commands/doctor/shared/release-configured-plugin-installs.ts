@@ -1,4 +1,8 @@
 // Release-era repair for configs that imply official plugin installs before install records existed.
+<<<<<<< HEAD
+=======
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeNullableString as normalizeId } from "@openclaw/normalization-core/string-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import { listPotentialConfiguredChannelPresenceSignals } from "../../../channels/config-presence.js";
@@ -11,6 +15,7 @@ import {
   createDeferredConfiguredPluginRepairDoctorResult,
   type UpdatePostInstallDoctorResult,
 } from "../../../infra/update-doctor-result.js";
+<<<<<<< HEAD
 import { collectConfiguredSpeechProviderIds } from "../../../plugins/gateway-startup-speech-providers.js";
 import {
   getOfficialExternalPluginCatalogEntry,
@@ -23,6 +28,12 @@ import {
 } from "../../../plugins/web-search-install-catalog.js";
 import { VERSION } from "../../../version.js";
 import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
+=======
+import { getOfficialExternalPluginCatalogEntry } from "../../../plugins/official-external-plugin-catalog.js";
+import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
+import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search-install-catalog.js";
+import { VERSION } from "../../../version.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { repairMissingPluginInstallsForIds } from "./missing-configured-plugin-install.js";
 import { asObjectRecord } from "./object.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
@@ -150,6 +161,69 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv
   return [...ids].toSorted((left, right) => left.localeCompare(right));
 }
 
+<<<<<<< HEAD
+=======
+function collectConfiguredProviderIds(cfg: OpenClawConfig): Set<string> {
+  const ids = new Set<string>();
+  const add = (value: unknown) => {
+    const id = normalizeId(value);
+    if (id) {
+      ids.add(id.toLowerCase());
+    }
+  };
+  for (const profile of Object.values(asObjectRecord(cfg.auth?.profiles) ?? {})) {
+    add(asObjectRecord(profile)?.provider);
+  }
+  for (const providerId of Object.keys(asObjectRecord(cfg.models?.providers) ?? {})) {
+    add(providerId);
+  }
+  const modelByChannel = asObjectRecord(cfg.channels?.modelByChannel);
+  for (const [providerId, channelMap] of Object.entries(modelByChannel ?? {})) {
+    add(providerId);
+    for (const modelRef of Object.values(asObjectRecord(channelMap) ?? {})) {
+      if (typeof modelRef !== "string") {
+        continue;
+      }
+      const slash = modelRef.indexOf("/");
+      if (slash > 0) {
+        add(modelRef.slice(0, slash));
+      }
+    }
+  }
+  for (const { value } of collectConfiguredModelRefs(cfg, {
+    includeChannelModelOverrides: false,
+  })) {
+    const slash = value.indexOf("/");
+    if (slash > 0) {
+      add(value.slice(0, slash));
+    }
+  }
+  return ids;
+}
+
+function collectProviderPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
+  const configuredProviders = collectConfiguredProviderIds(cfg);
+  if (configuredProviders.size === 0) {
+    return [];
+  }
+  const ids = new Set<string>();
+  for (const entry of resolveProviderInstallCatalogEntries({
+    config: cfg,
+    env,
+    includeUntrustedWorkspacePlugins: false,
+  })) {
+    if (
+      [entry.providerId, ...(entry.providerAliases ?? [])].some((providerId) =>
+        configuredProviders.has(providerId.toLowerCase()),
+      )
+    ) {
+      ids.add(entry.pluginId);
+    }
+  }
+  return [...ids].toSorted((left, right) => left.localeCompare(right));
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function collectAgentHarnessRuntimePluginIds(
   cfg: OpenClawConfig,
   _env: NodeJS.ProcessEnv,
@@ -161,9 +235,12 @@ function collectAgentHarnessRuntimePluginIds(
 }
 
 function collectWebSearchPluginIds(cfg: OpenClawConfig): string[] {
+<<<<<<< HEAD
   if (cfg.tools?.web?.search?.enabled === false) {
     return [];
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const providerId = cfg.tools?.web?.search?.provider;
   if (typeof providerId !== "string") {
     return [];
@@ -172,6 +249,7 @@ function collectWebSearchPluginIds(cfg: OpenClawConfig): string[] {
   return entry?.pluginId ? [entry.pluginId] : [];
 }
 
+<<<<<<< HEAD
 function collectEnvWebSearchPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
   if (cfg.tools?.web?.search?.enabled === false) {
     return [];
@@ -211,6 +289,8 @@ function collectSpeechPluginIds(cfg: OpenClawConfig): string[] {
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function collectAcpRuntimePluginIds(cfg: OpenClawConfig): string[] {
   const acp = asObjectRecord(cfg.acp);
   if (!acp) {
@@ -296,7 +376,11 @@ export function collectReleaseConfiguredPluginIds(params: {
   for (const pluginId of collectSlotPluginIds(params.cfg)) {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
+<<<<<<< HEAD
   for (const pluginId of collectConfiguredProviderPluginIds({ cfg: params.cfg, env })) {
+=======
+  for (const pluginId of collectProviderPluginIds(params.cfg, env)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
   for (const pluginId of collectAgentHarnessRuntimePluginIds(params.cfg, env)) {
@@ -305,6 +389,7 @@ export function collectReleaseConfiguredPluginIds(params: {
   for (const pluginId of collectWebSearchPluginIds(params.cfg)) {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
+<<<<<<< HEAD
   for (const pluginId of collectEnvWebSearchPluginIds(params.cfg, env)) {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
@@ -317,6 +402,8 @@ export function collectReleaseConfiguredPluginIds(params: {
   for (const pluginId of collectSpeechPluginIds(params.cfg)) {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   for (const pluginId of collectAcpRuntimePluginIds(params.cfg)) {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
@@ -370,7 +457,10 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
       blockedPluginIds: collectBlockedPluginIds(params.cfg),
       env,
     });
+<<<<<<< HEAD
     const warnings = [...repaired.warnings, ...(repaired.notices ?? [])];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const postInstallDoctorResult = createPostInstallDoctorResultForDeferredRepair({
       updateInProgress,
       details: repaired.deferredRepairDetails ?? [],
@@ -378,7 +468,11 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
     });
     return {
       changes: repaired.changes,
+<<<<<<< HEAD
       warnings,
+=======
+      warnings: repaired.warnings,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       completed: repaired.warnings.length === 0,
       touchedConfig: false,
       ...(postInstallDoctorResult ? { postInstallDoctorResult } : {}),
@@ -395,7 +489,10 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
     env,
   });
   const completed = repaired.warnings.length === 0 && !updateInProgress;
+<<<<<<< HEAD
   const warnings = [...repaired.warnings, ...(repaired.notices ?? [])];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const postInstallDoctorResult = createPostInstallDoctorResultForDeferredRepair({
     updateInProgress,
     details: repaired.deferredRepairDetails ?? [],
@@ -403,7 +500,11 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
   });
   return {
     changes: repaired.changes,
+<<<<<<< HEAD
     warnings,
+=======
+    warnings: repaired.warnings,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     completed,
     touchedConfig: completed,
     ...(postInstallDoctorResult ? { postInstallDoctorResult } : {}),

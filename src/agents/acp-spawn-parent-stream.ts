@@ -431,7 +431,10 @@ export function startAcpSpawnParentStreamRelay(params: {
   let disposed = false;
   let pendingText = "";
   let pendingProgressKind: string | undefined;
+<<<<<<< HEAD
   let replaceableAssistantSnapshot: string | undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const itemProgressTextById = new Map<string, string>();
   let lastProgressAt = Date.now();
   let stallNotified = false;
@@ -512,6 +515,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     scheduleFlush();
   };
 
+<<<<<<< HEAD
   const flushReplaceableAssistantSnapshot = () => {
     const snapshot = replaceableAssistantSnapshot;
     replaceableAssistantSnapshot = undefined;
@@ -521,6 +525,8 @@ export function startAcpSpawnParentStreamRelay(params: {
     appendVisibleProgress(snapshot, "assistant:replaceable");
   };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const appendItemProgressSnapshot = (snapshot: { itemId: string; text: string }) => {
     const previous = itemProgressTextById.get(snapshot.itemId) ?? "";
     if (snapshot.text === previous) {
@@ -615,6 +621,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       const assistantPhase = normalizeAssistantPhase(
         (data as { phase?: unknown } | undefined)?.phase,
       );
+<<<<<<< HEAD
       const textCandidate = (data as { text?: unknown } | undefined)?.text;
       const deltaCandidate = (data as { delta?: unknown } | undefined)?.delta;
       const snapshot =
@@ -636,6 +643,12 @@ export function startAcpSpawnParentStreamRelay(params: {
       }
 
       const delta = typeof deltaCandidate === "string" ? deltaCandidate : snapshot;
+=======
+      const deltaCandidate =
+        (data as { delta?: unknown } | undefined)?.delta ??
+        (data as { text?: unknown } | undefined)?.text;
+      const delta = typeof deltaCandidate === "string" ? deltaCandidate : undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (!delta || !delta.trim()) {
         return;
       }
@@ -649,7 +662,10 @@ export function startAcpSpawnParentStreamRelay(params: {
         return;
       }
 
+<<<<<<< HEAD
       replaceableAssistantSnapshot = undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       appendVisibleProgress(delta, `assistant:${assistantPhase ?? "unknown"}`);
       return;
     }
@@ -725,7 +741,10 @@ export function startAcpSpawnParentStreamRelay(params: {
     const phase = normalizeOptionalString((event.data as { phase?: unknown } | undefined)?.phase);
     logEvent("lifecycle", { phase: phase ?? "unknown", data: event.data });
     if (phase === "end") {
+<<<<<<< HEAD
       flushReplaceableAssistantSnapshot();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       flushPending();
       const startedAt = asFiniteNumber(
         (event.data as { startedAt?: unknown } | undefined)?.startedAt,
@@ -748,7 +767,10 @@ export function startAcpSpawnParentStreamRelay(params: {
     }
 
     if (phase === "error") {
+<<<<<<< HEAD
       flushReplaceableAssistantSnapshot();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       flushPending();
       const errorText = normalizeOptionalString(
         (event.data as { error?: unknown } | undefined)?.error,

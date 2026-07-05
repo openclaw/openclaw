@@ -1,5 +1,9 @@
 // Qa Matrix plugin module implements scenario runtime cli behavior.
+<<<<<<< HEAD
 import { spawn as startOpenClawCliProcess, spawnSync } from "node:child_process";
+=======
+import { spawn as startOpenClawCliProcess } from "node:child_process";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
@@ -8,7 +12,10 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+<<<<<<< HEAD
 import { resolveMatrixQaWindowsSystem32ExePath } from "../../windows-system-tools.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type MatrixQaCliRunResult = {
   args: string[];
@@ -108,6 +115,7 @@ function formatMatrixQaCliTimeoutError(result: MatrixQaCliRunResult, timeoutMs: 
 function killMatrixQaCliChild(
   child: ReturnType<typeof startOpenClawCliProcess>,
   signal: NodeJS.Signals,
+<<<<<<< HEAD
   runTaskkill: typeof spawnSync = spawnSync,
 ): void {
   if (process.platform === "win32") {
@@ -135,6 +143,10 @@ function killMatrixQaCliChild(
     return;
   }
   if (child.pid) {
+=======
+): void {
+  if (process.platform !== "win32" && child.pid) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     try {
       process.kill(-child.pid, signal);
       return;
@@ -145,6 +157,7 @@ function killMatrixQaCliChild(
   child.kill(signal);
 }
 
+<<<<<<< HEAD
 function isMatrixQaCliChildProcessGroupRunning(
   child: ReturnType<typeof startOpenClawCliProcess>,
 ): boolean {
@@ -159,6 +172,8 @@ function isMatrixQaCliChildProcessGroupRunning(
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function startMatrixQaOpenClawCli(params: {
   allowNonZero?: boolean;
   args: string[];
@@ -174,7 +189,10 @@ export function startMatrixQaOpenClawCli(params: {
   let closed = false;
   let closeError: Error | undefined;
   let closeResult: MatrixQaCliRunResult | undefined;
+<<<<<<< HEAD
   let killRequested = false;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let timedOut = false;
   let forceKillTimeout: NodeJS.Timeout | undefined;
   let forceSettleTimeout: NodeJS.Timeout | undefined;
@@ -211,6 +229,7 @@ export function startMatrixQaOpenClawCli(params: {
       settleWait.resolve(result);
     }
   };
+<<<<<<< HEAD
   const finishTimeout = (result: MatrixQaCliRunResult) => {
     finish(result, new Error(formatMatrixQaCliTimeoutError(result, params.timeoutMs)));
   };
@@ -257,11 +276,29 @@ export function startMatrixQaOpenClawCli(params: {
       }, MATRIX_QA_CLI_TIMEOUT_FORCE_SETTLE_MS);
     }, MATRIX_QA_CLI_TIMEOUT_KILL_GRACE_MS);
   };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const timeout = setTimeout(() => {
     timedOut = true;
     killMatrixQaCliChild(child, "SIGTERM");
+<<<<<<< HEAD
     scheduleForcedCleanup();
+=======
+    forceKillTimeout = setTimeout(() => {
+      if (!closed) {
+        killMatrixQaCliChild(child, "SIGKILL");
+        forceSettleTimeout = setTimeout(() => {
+          const result = buildMatrixQaCliResult({
+            args: params.args,
+            exitCode: 1,
+            output: readOutput(),
+          });
+          finish(result, new Error(formatMatrixQaCliTimeoutError(result, params.timeoutMs)));
+        }, MATRIX_QA_CLI_TIMEOUT_FORCE_SETTLE_MS);
+      }
+    }, MATRIX_QA_CLI_TIMEOUT_KILL_GRACE_MS);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }, params.timeoutMs);
 
   child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
@@ -271,7 +308,16 @@ export function startMatrixQaOpenClawCli(params: {
   }
   child.on("error", (error) => {
     clearTimeout(timeout);
+<<<<<<< HEAD
     clearForcedTimeouts();
+=======
+    if (forceKillTimeout) {
+      clearTimeout(forceKillTimeout);
+    }
+    if (forceSettleTimeout) {
+      clearTimeout(forceSettleTimeout);
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     finish(
       buildMatrixQaCliResult({
         args: params.args,
@@ -283,11 +329,21 @@ export function startMatrixQaOpenClawCli(params: {
   });
   child.on("close", (exitCode) => {
     clearTimeout(timeout);
+<<<<<<< HEAD
+=======
+    if (forceKillTimeout) {
+      clearTimeout(forceKillTimeout);
+    }
+    if (forceSettleTimeout) {
+      clearTimeout(forceSettleTimeout);
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const result = buildMatrixQaCliResult({
       args: params.args,
       exitCode: exitCode ?? 1,
       output: readOutput(),
     });
+<<<<<<< HEAD
     if (timedOut || killRequested) {
       // A closed parent is not proof that detached, ignored-stdio descendants are gone.
       if (isMatrixQaCliChildProcessGroupRunning(child)) {
@@ -299,6 +355,17 @@ export function startMatrixQaOpenClawCli(params: {
     }
     clearForcedTimeouts();
     finishResult(result);
+=======
+    if (timedOut) {
+      finish(result, new Error(formatMatrixQaCliTimeoutError(result, params.timeoutMs)));
+      return;
+    }
+    if (result.exitCode !== 0 && params.allowNonZero !== true) {
+      finish(result, new Error(formatMatrixQaCliExitError(result)));
+      return;
+    }
+    finish(result);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   return {
@@ -354,10 +421,14 @@ export function startMatrixQaOpenClawCli(params: {
     },
     kill: () => {
       if (!closed) {
+<<<<<<< HEAD
         clearTimeout(timeout);
         killRequested = true;
         killMatrixQaCliChild(child, "SIGTERM");
         scheduleForcedCleanup();
+=======
+        killMatrixQaCliChild(child, "SIGTERM");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     },
   };
@@ -485,7 +556,10 @@ export async function createMatrixQaOpenClawCliRuntime(params: {
     stateDir,
   };
 }
+<<<<<<< HEAD
 
 export const testing = {
   killMatrixQaCliChild,
 };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

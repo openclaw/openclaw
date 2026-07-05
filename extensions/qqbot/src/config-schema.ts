@@ -54,12 +54,18 @@ const QQBotExecApprovalsSchema = z
 
 const QQBotDmPolicySchema = z.enum(["open", "allowlist", "disabled"]).optional();
 const QQBotGroupPolicySchema = z.enum(["open", "allowlist", "disabled"]).optional();
+<<<<<<< HEAD
 const QQBotGroupCommandLevelSchema = z.enum(["all", "safety", "strict"]).optional();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const QQBotGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
+<<<<<<< HEAD
     commandLevel: QQBotGroupCommandLevelSchema,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ignoreOtherMentions: z.boolean().optional(),
     historyLimit: z.number().optional(),
     name: z.string().optional(),

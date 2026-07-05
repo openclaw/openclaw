@@ -8,11 +8,14 @@ export type ReplyDirectiveParseResult = {
   text: string;
   mediaUrls?: string[];
   mediaUrl?: string;
+<<<<<<< HEAD
   reaction?: {
     emoji: string;
     replyToCurrent?: boolean;
     replyToId?: string;
   };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   replyToId?: string;
   replyToCurrent?: boolean;
   replyToTag: boolean;
@@ -28,6 +31,7 @@ type ReplyDirectiveParseOptions = {
   extractMediaDirectives?: boolean;
 };
 
+<<<<<<< HEAD
 const REACTION_DIRECTIVE_RE = /\[\[\s*(react|react_to_current)\s*:\s*([^\]\n]+?)\s*\]\]/giu;
 
 function parseReactionDirective(text: string, currentMessageId?: string) {
@@ -75,6 +79,8 @@ export function mergeReactionDirectiveChannelData(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Parses media, reply-target, audio, and silent directives from reply text. */
 export function parseReplyDirectives(
   raw: string,
@@ -86,9 +92,12 @@ export function parseReplyDirectives(
   });
   let text = split.text ?? "";
 
+<<<<<<< HEAD
   const reactionParsed = parseReactionDirective(text, options.currentMessageId);
   text = reactionParsed.text;
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const replyParsed = parseInlineDirectives(text, {
     currentMessageId: options.currentMessageId,
     stripAudioTag: false,
@@ -110,10 +119,15 @@ export function parseReplyDirectives(
     text,
     mediaUrls: split.mediaUrls,
     mediaUrl: split.mediaUrl,
+<<<<<<< HEAD
     reaction: reactionParsed.reaction,
     replyToId: replyParsed.replyToId ?? reactionParsed.reaction?.replyToId,
     replyToCurrent:
       replyParsed.replyToCurrent || reactionParsed.reaction?.replyToCurrent || undefined,
+=======
+    replyToId: replyParsed.replyToId,
+    replyToCurrent: replyParsed.replyToCurrent || undefined,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     replyToTag: replyParsed.hasReplyTag,
     audioAsVoice: split.audioAsVoice,
     isSilent,

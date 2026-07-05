@@ -809,6 +809,7 @@ describe("gateway session utils", () => {
     expect(row.displayName).toBe("Alice");
   });
 
+<<<<<<< HEAD
   test("buildGatewaySessionRow projects effectiveResponseUsage from a bare config default", () => {
     const cfg = {
       agents: { list: [{ id: "main", default: true }] },
@@ -889,6 +890,8 @@ describe("gateway session utils", () => {
     expect(row.effectiveResponseUsage).toBe("off");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   test("resolveSessionStoreKey maps main aliases to default agent main", () => {
     const cfg = {
       session: { mainKey: "work" },
@@ -1134,12 +1137,61 @@ describe("gateway session utils", () => {
     expect(target.storePath).toBe(path.resolve(storeTemplate.replace("{agentId}", "ops")));
   });
 
+<<<<<<< HEAD
   test("resolveGatewaySessionStoreTarget resolves a customized main alias to its canonical key", () => {
+=======
+  test("resolveGatewaySessionStoreTarget includes legacy mixed-case store key", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-case-"));
+    const storePath = path.join(dir, "sessions.json");
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({ "agent:ops:MySession": { sessionId: "s1", updatedAt: 1 } }),
+      "utf8",
+    );
+    const cfg = {
+      session: { mainKey: "main", store: storePath },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+    const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:ops:mysession" });
+    expect(target.canonicalKey).toBe("agent:ops:mysession");
+    expect(target.storeKeys).toContain("agent:ops:mysession");
+    expect(target.storeKeys).toContain("agent:ops:MySession");
+    const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
+    const found = target.storeKeys.some((k) => Boolean(store[k]));
+    expect(found).toBe(true);
+  });
+
+  test("resolveGatewaySessionStoreTarget includes all case-variant duplicate keys", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-dupes-"));
+    const storePath = path.join(dir, "sessions.json");
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:ops:mysession": { sessionId: "s-lower", updatedAt: 2 },
+        "agent:ops:MySession": { sessionId: "s-mixed", updatedAt: 1 },
+      }),
+      "utf8",
+    );
+    const cfg = {
+      session: { mainKey: "main", store: storePath },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+    const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:ops:mysession" });
+    expect(target.storeKeys).toContain("agent:ops:mysession");
+    expect(target.storeKeys).toContain("agent:ops:MySession");
+  });
+
+  test("resolveGatewaySessionStoreTarget finds legacy main alias key when mainKey is customized", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-alias-"));
     const storePath = path.join(dir, "sessions.json");
     fs.writeFileSync(
       storePath,
+<<<<<<< HEAD
       JSON.stringify({ "agent:ops:main": { sessionId: "s1", updatedAt: 1 } }),
+=======
+      JSON.stringify({ "agent:ops:MAIN": { sessionId: "s1", updatedAt: 1 } }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "utf8",
     );
     const cfg = {
@@ -1148,7 +1200,11 @@ describe("gateway session utils", () => {
     } as OpenClawConfig;
     const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:ops:main" });
     expect(target.canonicalKey).toBe("agent:ops:work");
+<<<<<<< HEAD
     expect(target.storeKeys).toContain("agent:ops:main");
+=======
+    expect(target.storeKeys).toContain("agent:ops:MAIN");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   test("resolveGatewaySessionStoreTarget preserves discovered store paths for non-round-tripping agent dirs", async () => {
@@ -1372,6 +1428,46 @@ describe("gateway session utils", () => {
     }
   });
 
+<<<<<<< HEAD
+=======
+  test("loadSessionEntry prefers the freshest duplicate row for a logical key", async () => {
+    resetConfigRuntimeState();
+    try {
+      await withStateDirEnv("session-utils-load-entry-freshest-", async ({ stateDir }) => {
+        const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+        fs.mkdirSync(sessionsDir, { recursive: true });
+        const storePath = path.join(sessionsDir, "sessions.json");
+        fs.writeFileSync(
+          storePath,
+          JSON.stringify(
+            {
+              "agent:main:main": { sessionId: "sess-stale", updatedAt: 1 },
+              "agent:main:MAIN": { sessionId: "sess-fresh", updatedAt: 2 },
+            },
+            null,
+            2,
+          ),
+          "utf8",
+        );
+        const cfg = {
+          session: {
+            mainKey: "main",
+            store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+          },
+          agents: { list: [{ id: "main", default: true }] },
+        } as OpenClawConfig;
+        setRuntimeConfigSnapshot(cfg, cfg);
+
+        const loaded = loadSessionEntry("agent:main:main");
+
+        expect(loaded.entry?.sessionId).toBe("sess-fresh");
+      });
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   test("loadSessionEntry prefers the freshest duplicate row across discovered stores", async () => {
     resetConfigRuntimeState();
     try {
@@ -1382,7 +1478,12 @@ describe("gateway session utils", () => {
           path.join(canonicalSessionsDir, "sessions.json"),
           JSON.stringify(
             {
+<<<<<<< HEAD
               "agent:main:main": { sessionId: "sess-canonical-fresh", updatedAt: 1000 },
+=======
+              "agent:main:main": { sessionId: "sess-canonical-stale", updatedAt: 10 },
+              "agent:main:MAIN": { sessionId: "sess-canonical-fresh", updatedAt: 1000 },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             },
             null,
             2,
@@ -1422,10 +1523,19 @@ describe("gateway session utils", () => {
     }
   });
 
+<<<<<<< HEAD
   test("pruneLegacyStoreKeys removes alias ghost keys", () => {
     const store: Record<string, unknown> = {
       "agent:ops:work": { sessionId: "canonical", updatedAt: 3 },
       "agent:ops:main": { sessionId: "legacy-alias", updatedAt: 4 },
+=======
+  test("pruneLegacyStoreKeys removes alias and case-variant ghost keys", () => {
+    const store: Record<string, unknown> = {
+      "agent:ops:work": { sessionId: "canonical", updatedAt: 3 },
+      "agent:ops:MAIN": { sessionId: "legacy-upper", updatedAt: 1 },
+      "agent:ops:Main": { sessionId: "legacy-mixed", updatedAt: 2 },
+      "agent:ops:main": { sessionId: "legacy-lower", updatedAt: 4 },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
     pruneLegacyStoreKeys({
       store,
@@ -1435,6 +1545,7 @@ describe("gateway session utils", () => {
     expect(Object.keys(store).toSorted()).toEqual(["agent:ops:work"]);
   });
 
+<<<<<<< HEAD
   test("migrateAndPruneGatewaySessionStoreKey promotes the freshest alias row to canonical", () => {
     const cfg = {
       session: { mainKey: "work" },
@@ -1446,6 +1557,19 @@ describe("gateway session utils", () => {
         updatedAt: 1,
       } as SessionEntry,
       "agent:ops:main": {
+=======
+  test("migrateAndPruneGatewaySessionStoreKey promotes the freshest duplicate row", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const store: Record<string, SessionEntry> = {
+      "agent:main:Main": {
+        sessionId: "sess-stale",
+        updatedAt: 1,
+      } as SessionEntry,
+      "agent:main:MAIN": {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         sessionId: "sess-fresh",
         updatedAt: 2,
       } as SessionEntry,
@@ -1453,6 +1577,7 @@ describe("gateway session utils", () => {
 
     const result = migrateAndPruneGatewaySessionStoreKey({
       cfg,
+<<<<<<< HEAD
       key: "agent:ops:main",
       store,
     });
@@ -1461,6 +1586,45 @@ describe("gateway session utils", () => {
     expect(result.entry?.sessionId).toBe("sess-fresh");
     expect(store["agent:ops:work"]?.sessionId).toBe("sess-fresh");
     expect(store["agent:ops:main"]).toBeUndefined();
+=======
+      key: "agent:main:main",
+      store,
+    });
+
+    expect(result.primaryKey).toBe("agent:main:main");
+    expect(result.entry?.sessionId).toBe("sess-fresh");
+    expect(store["agent:main:main"]?.sessionId).toBe("sess-fresh");
+    expect(store["agent:main:MAIN"]).toBeUndefined();
+    expect(store["agent:main:Main"]).toBeUndefined();
+  });
+
+  test("migrateAndPruneGatewaySessionStoreKey replaces a stale canonical row with a fresher duplicate", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-stale",
+        updatedAt: 1,
+      } as SessionEntry,
+      "agent:main:MAIN": {
+        sessionId: "sess-fresh",
+        updatedAt: 2,
+      } as SessionEntry,
+    };
+
+    const result = migrateAndPruneGatewaySessionStoreKey({
+      cfg,
+      key: "agent:main:main",
+      store,
+    });
+
+    expect(result.primaryKey).toBe("agent:main:main");
+    expect(result.entry?.sessionId).toBe("sess-fresh");
+    expect(store["agent:main:main"]?.sessionId).toBe("sess-fresh");
+    expect(store["agent:main:MAIN"]).toBeUndefined();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   test("listAgentsForGateway rejects avatar symlink escapes outside workspace", () => {
@@ -1661,6 +1825,7 @@ describe("gateway session utils", () => {
   });
 
   test("listAgentsForGateway reports per-agent thinking defaults from the agent model", () => {
+<<<<<<< HEAD
     const resolveDeepSeekThinkingProfile = vi.fn(() => ({
       levels: [
         { id: "off" as const },
@@ -1700,6 +1865,8 @@ describe("gateway session utils", () => {
     );
     setActivePluginRegistry(registry);
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const cfg = {
       session: { mainKey: "main" },
       agents: {
@@ -1722,12 +1889,15 @@ describe("gateway session utils", () => {
     const agent = result.agents.find((row) => row.id === "investment-master");
 
     expect(agent?.model).toEqual({ primary: "deepseek/deepseek-v4-flash" });
+<<<<<<< HEAD
     expect(resolveDeepSeekThinkingProfile).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "deepseek",
         modelId: "deepseek-v4-flash",
       }),
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(agent?.thinkingDefault).toBe("xhigh");
     expect(agent?.thinkingLevels?.map((level) => level.id)).toEqual(
       expect.arrayContaining(["off", "minimal", "low", "medium", "high", "xhigh"]),

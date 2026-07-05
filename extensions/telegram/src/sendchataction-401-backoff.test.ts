@@ -301,6 +301,7 @@ describe("createTelegramSendChatActionHandler", () => {
     await handler.sendChatAction(444, "typing");
     expect(fn).toHaveBeenCalledTimes(3);
   });
+<<<<<<< HEAD
 
   it("treats a structured 429 with retry_after=401 as transient, not as a 401 suspension", async () => {
     // grammY renders this as: "Call to 'sendChatAction' failed! (429: Too Many Requests: retry after 401)"
@@ -391,4 +392,6 @@ describe("createTelegramSendChatActionHandler", () => {
 
     expect(handler.isSuspended()).toBe(true);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

@@ -108,9 +108,14 @@ async function requestVerification(params: {
   headers: Record<string, string>;
   body: Record<string, unknown>;
 }): Promise<VerificationResult> {
+<<<<<<< HEAD
   let res: Response | undefined;
   try {
     res = await fetchWithTimeout(
+=======
+  try {
+    const res = await fetchWithTimeout(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       params.endpoint,
       {
         method: "POST",
@@ -134,8 +139,11 @@ async function requestVerification(params: {
     return { ok: res.ok, status: res.status };
   } catch (error) {
     return { ok: false, error };
+<<<<<<< HEAD
   } finally {
     await res?.body?.cancel().catch(() => undefined);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 

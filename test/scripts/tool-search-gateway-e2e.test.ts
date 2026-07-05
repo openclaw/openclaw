@@ -160,6 +160,7 @@ describe("tool search gateway e2e lane assertions", () => {
     ).toThrow(`code lane did not bridge-call ${targetTool}`);
   });
 
+<<<<<<< HEAD
   it("rejects code lane proof that also exposes the direct target tool", () => {
     expect(() =>
       assertToolSearchLaneResults({
@@ -179,6 +180,8 @@ describe("tool search gateway e2e lane assertions", () => {
     ).toThrow(`code lane exposed direct provider tool ${targetTool}`);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects normal lane output that only echoes the target tool name", () => {
     expect(() =>
       assertToolSearchLaneResults({
@@ -202,6 +205,7 @@ describe("tool search gateway e2e lane assertions", () => {
       }),
     ).toThrow(`normal lane did not call ${targetTool}`);
   });
+<<<<<<< HEAD
 
   it("rejects normal lane proof that uses the Tool Search bridge", () => {
     expect(() =>
@@ -228,4 +232,6 @@ describe("tool search gateway e2e lane assertions", () => {
       }),
     ).toThrow("normal lane unexpectedly used Tool Search bridge");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

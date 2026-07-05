@@ -115,6 +115,7 @@ describe("scripts/ci-docker-pull-retry.sh", () => {
     );
   });
 
+<<<<<<< HEAD
   it("uses gtimeout when timeout is unavailable", () => {
     const binDir = makeTempBin("openclaw-ci-docker-pull-gtimeout-");
     const timeoutArgsPath = path.join(binDir, "gtimeout-args.txt");
@@ -151,6 +152,9 @@ describe("scripts/ci-docker-pull-retry.sh", () => {
   });
 
   it("fails fast when timeout and gtimeout are unavailable", () => {
+=======
+  it("fails fast when timeout is unavailable", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const binDir = makeTempBin("openclaw-ci-docker-pull-no-timeout-");
     const dockerArgsPath = path.join(binDir, "docker-args.txt");
 
@@ -165,7 +169,11 @@ describe("scripts/ci-docker-pull-retry.sh", () => {
 
     expect(result.status).toBe(127);
     expect(result.stderr).toContain(
+<<<<<<< HEAD
       "timeout or gtimeout command not found; cannot bound Docker pull after 42s",
+=======
+      "timeout command not found; cannot bound Docker pull after 42s",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
     expect(existsSync(dockerArgsPath)).toBe(false);
   });

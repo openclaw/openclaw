@@ -25,7 +25,10 @@ export function createFirecrawlWebFetchProvider(): WebFetchProviderPlugin {
           cfg: config,
           url,
           extractMode,
+<<<<<<< HEAD
           access: "keyless",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           maxChars,
           ...(proxy ? { proxy } : {}),
           ...(storeInCache !== undefined ? { storeInCache } : {}),

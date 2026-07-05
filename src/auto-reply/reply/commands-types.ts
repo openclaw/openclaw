@@ -3,7 +3,10 @@ import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunk
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+<<<<<<< HEAD
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { SkillCommandSpec } from "../../skills/types.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
@@ -58,7 +61,11 @@ export type HandleCommandsParams = {
   opts?: GetReplyOptions;
   defaultGroupActivation: () => "always" | "mention";
   resolvedThinkLevel?: ThinkLevel;
+<<<<<<< HEAD
   resolvedFastMode?: FastMode;
+=======
+  resolvedFastMode?: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolvedVerboseLevel: VerboseLevel;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel?: ElevatedLevel;

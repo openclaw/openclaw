@@ -5,7 +5,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   buildSessionEntry,
+<<<<<<< HEAD
   listSessionTranscriptCorpusEntriesForAgent,
+=======
+  listSessionFilesForAgent,
+  loadSessionTranscriptClassificationForAgent,
+  normalizeSessionTranscriptPathForComparison,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   parseUsageCountedSessionIdFromFileName,
   sessionPathForFile,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
@@ -32,7 +38,10 @@ import {
   DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
   DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
   SESSION_SEEN_HASHES_PER_CHUNK,
+<<<<<<< HEAD
   normalizeMemoryCoreWorkspaceKey,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
@@ -541,6 +550,14 @@ type SessionIngestionCollectionResult = {
   changed: boolean;
 };
 
+<<<<<<< HEAD
+=======
+function normalizeWorkspaceKey(workspaceDir: string): string {
+  const resolved = path.resolve(workspaceDir).replace(/\\/g, "/");
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
   const record = asRecord(raw);
   const filesRaw = asRecord(record?.files);
@@ -743,7 +760,11 @@ function resolveSessionAgentsForWorkspace(params: {
   if (!cfg) {
     return [];
   }
+<<<<<<< HEAD
   const target = normalizeMemoryCoreWorkspaceKey(workspaceDir);
+=======
+  const target = normalizeWorkspaceKey(workspaceDir);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const workspaces = resolveMemoryDreamingWorkspaces(
     cfg as Parameters<typeof resolveMemoryDreamingWorkspaces>[0],
     {
@@ -751,9 +772,13 @@ function resolveSessionAgentsForWorkspace(params: {
       primaryAgentId: "main",
     },
   );
+<<<<<<< HEAD
   const match = workspaces.find(
     (entry) => normalizeMemoryCoreWorkspaceKey(entry.workspaceDir) === target,
   );
+=======
+  const match = workspaces.find((entry) => normalizeWorkspaceKey(entry.workspaceDir) === target);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!match) {
     return [];
   }
@@ -846,6 +871,7 @@ async function collectSessionIngestionBatches(params: {
     sessionPath: string;
   }> = [];
   for (const agentId of agentIds) {
+<<<<<<< HEAD
     for (const entry of await listSessionTranscriptCorpusEntriesForAgent(agentId)) {
       const absolutePath = entry.sessionFile;
       if (
@@ -861,6 +887,27 @@ async function collectSessionIngestionBatches(params: {
         absolutePath,
         generatedByDreamingNarrative: entry.generatedByDreamingNarrative === true,
         generatedByCronRun: entry.generatedByCronRun === true,
+=======
+    const files = await listSessionFilesForAgent(agentId);
+    const transcriptClassification =
+      files.length > 0
+        ? loadSessionTranscriptClassificationForAgent(agentId)
+        : {
+            dreamingNarrativeTranscriptPaths: new Set<string>(),
+            cronRunTranscriptPaths: new Set<string>(),
+          };
+    for (const absolutePath of files) {
+      if (isCheckpointSessionTranscriptPath(absolutePath)) {
+        continue;
+      }
+      const normalizedPath = normalizeSessionTranscriptPathForComparison(absolutePath);
+      sessionFiles.push({
+        agentId,
+        absolutePath,
+        generatedByDreamingNarrative:
+          transcriptClassification.dreamingNarrativeTranscriptPaths.has(normalizedPath),
+        generatedByCronRun: transcriptClassification.cronRunTranscriptPaths.has(normalizedPath),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         sessionPath: sessionPathForFile(absolutePath),
       });
     }

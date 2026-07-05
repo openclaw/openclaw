@@ -6,19 +6,28 @@ import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+<<<<<<< HEAD
 import type { Model } from "openclaw/plugin-sdk/llm";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
+=======
+import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
+import type { SkillSnapshot } from "../../skills/types.js";
+import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 
 export type CompactEmbeddedAgentSessionParams = {
   sessionId: string;
   runId?: string;
   sessionKey?: string;
+<<<<<<< HEAD
   /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */
   sessionTarget?: AgentRunSessionTarget;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /** Caller-resolved owner agent for global session aliases. */
   agentId?: string;
   /** Session key used only for runtime policy/sandbox resolution. Defaults to sessionKey. */
@@ -58,8 +67,11 @@ export type CompactEmbeddedAgentSessionParams = {
   senderIsOwner?: boolean;
   provider?: string;
   model?: string;
+<<<<<<< HEAD
   /** Caller-resolved model/provider shape used by native harness compactors. */
   runtimeModel?: Model;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
   modelFallbacksOverride?: string[];
   /** Optional caller-resolved context engine for harness-owned compaction. */
@@ -112,6 +124,7 @@ export type CompactEmbeddedAgentSessionParams = {
   oneShotCliRun?: boolean;
 };
 
+<<<<<<< HEAD
 export type CompactEmbeddedAgentSessionRuntimeParams = Omit<
   CompactEmbeddedAgentSessionParams,
   "sessionFile"
@@ -120,6 +133,8 @@ export type CompactEmbeddedAgentSessionRuntimeParams = Omit<
   sessionFile?: string;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type CompactionMessageMetrics = {
   messages: number;
   historyTextChars: number;

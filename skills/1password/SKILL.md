@@ -35,6 +35,7 @@ Follow the official CLI get-started steps. Don't guess install commands.
 
 1. Check OS + shell.
 2. Verify CLI present: `op --version`.
+<<<<<<< HEAD
 3. Detect the auth mode the user has set up:
    - **Service account:** `OP_SERVICE_ACCOUNT_TOKEN` is set (typical for headless setups, CI, gateways).
    - **Desktop app integration:** the 1Password desktop app is running with CLI integration enabled (typical on macOS / Windows / Linux desktops).
@@ -71,10 +72,24 @@ If a call returns `1Password CLI couldn't connect to the 1Password desktop app`,
 This is the only mode where tmux helps. `op signin` prints an `eval`-style export setting an `OP_SESSION_*` token for POSIX shells; later commands in the same shell are authenticated by that env var. The gateway's per-command shells lose that state between calls, so a persistent tmux pane keeps the session token alive — but only if the export is actually applied with `eval` in a POSIX shell. Sending `op signin` as a plain command leaves stdout printed to the pane and `op whoami` will fail.
 
 The tmux flow is only actionable on macOS/Linux hosts where the `tmux` skill is available. The example intentionally opens `/bin/sh` so the POSIX `eval "$(op signin ...)"` output is valid even when the user's normal shell is fish. On Windows, prefer desktop app integration or service account auth. If the user only has standalone interactive signin on Windows, stop and ask them to provide a persistent PowerShell session mechanism or switch to desktop integration/service account auth; do not translate the tmux commands directly.
+=======
+3. Confirm desktop app integration is enabled (per get-started) and the app is unlocked.
+4. REQUIRED: create a fresh tmux session for all `op` commands (no direct `op` calls outside tmux).
+5. Sign in / authorize inside tmux: `op signin` (expect app prompt).
+6. Verify access inside tmux: `op whoami` (must succeed before any secret read).
+7. If multiple accounts: use `--account` or `OP_ACCOUNT`.
+
+## REQUIRED tmux session (tmux)
+
+The shell tool uses a fresh TTY per command. To avoid re-prompts and failures, always run `op` inside a dedicated tmux session with a fresh socket/session name.
+
+Example (see `tmux` skill for socket conventions, do not reuse old session names):
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 ```bash
 SOCKET_DIR="${OPENCLAW_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/openclaw-tmux-sockets}"
 mkdir -p "$SOCKET_DIR"
+<<<<<<< HEAD
 chmod 700 "$SOCKET_DIR"
 SOCKET="$SOCKET_DIR/openclaw-op.sock"
 SESSION="op-auth-$(date +%Y%m%d-%H%M%S)"
@@ -103,12 +118,31 @@ Keep the tmux session running so later `op read` / `op run` commands reuse the s
 
 Use the same `SOCKET` and `SESSION` values for every follow-up command in this standalone signin flow. The `-S "$SOCKET"` flag selects the tmux server socket; keep it in a user-owned `0700` directory, do not share it between users, and choose a new session name for each new signin attempt.
 
+=======
+SOCKET="$SOCKET_DIR/openclaw-op.sock"
+SESSION="op-auth-$(date +%Y%m%d-%H%M%S)"
+
+tmux -S "$SOCKET" new -d -s "$SESSION" -n shell
+tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- "op signin --account my.1password.com" Enter
+tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- "op whoami" Enter
+tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- "op vault list" Enter
+tmux -S "$SOCKET" capture-pane -p -J -t "$SESSION":0.0 -S -200
+tmux -S "$SOCKET" kill-session -t "$SESSION"
+```
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ## Guardrails
 
 - Never paste secrets into logs, chat, or code.
 - Prefer `op run` / `op inject` over writing secrets to disk.
+<<<<<<< HEAD
 - If sign-in without app integration is needed, use `op account add` first.
 - If a command returns "account is not signed in":
   - service account: re-export `OP_SERVICE_ACCOUNT_TOKEN`
   - desktop app: confirm the app is running and integration is enabled
   - standalone: re-run `op signin` inside the same tmux session and authorize
+=======
+- If sign-in without app integration is needed, use `op account add`.
+- If a command returns "account is not signed in", re-run `op signin` inside tmux and authorize in the app.
+- Do not run `op` outside tmux; stop and ask if tmux is unavailable.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

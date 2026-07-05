@@ -77,11 +77,14 @@ describe("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs", () => {
 
     expect(malformed.status).not.toBe(0);
     expect(malformed.stderr).toContain("had invalid MemUsage");
+<<<<<<< HEAD
 
     const looseCpu = runAssert(writeStats('{"MemUsage":"128MiB / 2GiB","CPUPerc":"1e3%"}\n'));
 
     expect(looseCpu.status).not.toBe(0);
     expect(looseCpu.stderr).toContain("had invalid CPUPerc");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("reports and enforces parsed Docker resource peaks", () => {

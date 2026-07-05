@@ -26,7 +26,10 @@ import { calculateCost } from "../llm/model-utils.js";
 import { resolveAzureDeploymentNameFromMap } from "../llm/providers/azure-deployment-map.js";
 import { convertMessages } from "../llm/providers/openai-completions.js";
 import { clampOpenAIPromptCacheKey } from "../llm/providers/openai-prompt-cache.js";
+<<<<<<< HEAD
 import { mapOpenAIStopReason } from "../llm/providers/openai-stop-reason.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { Api, Context, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { parseStreamingJson } from "../llm/utils/json-parse.js";
@@ -39,7 +42,10 @@ import { isOpenAICompatibleAzureResponsesBaseUrl } from "../shared/azure-openai-
 import {
   isResponsesTextContentPartType,
   isResponsesTextDeltaEventType,
+<<<<<<< HEAD
   resolveResponsesMessageSnapshotCollapse,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "../shared/openai-responses-stream-compat.js";
 import { createReasoningTagTextPartitioner } from "../shared/text/reasoning-tag-text-partitioner.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
@@ -1476,6 +1482,7 @@ async function processResponsesStream(
 ) {
   let currentItem: Record<string, unknown> | null = null;
   let currentBlock: Record<string, unknown> | null = null;
+<<<<<<< HEAD
   let lastTextBlock: {
     block: Record<string, unknown>;
     index: number;
@@ -1485,11 +1492,14 @@ async function processResponsesStream(
   // its public block is deferred so a collapsed item never leaves an
   // unbalanced text_start behind (#91959). null = no deferral in progress.
   let pendingMessageText: string | null = null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const streamStartedAt = Date.now();
   let eventCount = 0;
   const eventTypes = new Map<string, number>();
   const sseDebugMode = resolveModelSseDebugMode();
   const blockIndex = () => output.content.length - 1;
+<<<<<<< HEAD
   const appendPendingMessageDelta = (delta: string) => {
     pendingMessageText = `${pendingMessageText ?? ""}${delta}`;
     const priorText = stringifyUnknown(lastTextBlock?.block.text);
@@ -1504,11 +1514,14 @@ async function processResponsesStream(
     stream.push({ type: "text_delta", contentIndex: blockIndex(), delta: pendingMessageText });
     pendingMessageText = null;
   };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const appendCompletedResponseTextItem = (item: Record<string, unknown>) => {
     const text = readResponsesOutputMessageText(item);
     if (!text) {
       return;
     }
+<<<<<<< HEAD
     const phase = (item.phase as "commentary" | "final_answer" | undefined) ?? undefined;
     const collapse = resolveResponsesMessageSnapshotCollapse({
       prior: lastTextBlock && {
@@ -1538,6 +1551,17 @@ async function processResponsesStream(
     };
     output.content.push(block);
     lastTextBlock = { block, index: blockIndex(), phase };
+=======
+    const block: Record<string, unknown> = {
+      type: "text",
+      text,
+      textSignature: encodeTextSignatureV1(
+        stringifyUnknown(item.id),
+        (item.phase as "commentary" | "final_answer" | undefined) ?? undefined,
+      ),
+    };
+    output.content.push(block);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
     stream.push({
       type: "text_end",
@@ -1579,12 +1603,16 @@ async function processResponsesStream(
       }
       if (rawItem.type === "message") {
         appendCompletedResponseTextItem(rawItem);
+<<<<<<< HEAD
         continue;
       }
       // Any non-message item (reasoning, tool call) is a real boundary; a later
       // message must not collapse across it, mirroring the streaming path.
       lastTextBlock = null;
       if (rawItem.type === "function_call") {
+=======
+      } else if (rawItem.type === "function_call") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         appendCompletedResponseToolCallItem(rawItem);
       }
     }
@@ -1619,12 +1647,15 @@ async function processResponsesStream(
       output.responseId = stringifyUnknown((event.response as { id?: string } | undefined)?.id);
     } else if (type === "response.output_item.added") {
       const item = event.item as Record<string, unknown>;
+<<<<<<< HEAD
       if (item.type !== "message") {
         // Snapshot collapse only applies to back-to-back message items; any
         // other item is a real boundary (see resolveResponsesMessageSnapshotCollapse).
         lastTextBlock = null;
         pendingMessageText = null;
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (item.type === "reasoning") {
         currentItem = item;
         currentBlock = { type: "thinking", thinking: "" };
@@ -1632,6 +1663,7 @@ async function processResponsesStream(
         stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
       } else if (item.type === "message") {
         currentItem = item;
+<<<<<<< HEAD
         if (lastTextBlock) {
           currentBlock = null;
           pendingMessageText = "";
@@ -1640,6 +1672,11 @@ async function processResponsesStream(
           output.content.push(currentBlock);
           stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
         }
+=======
+        currentBlock = { type: "text", text: "" };
+        output.content.push(currentBlock);
+        stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       } else if (item.type === "function_call") {
         currentItem = item;
         currentBlock = {
@@ -1663,6 +1700,7 @@ async function processResponsesStream(
         });
       }
     } else if (isResponsesTextDeltaEventType(type) || type === "response.refusal.delta") {
+<<<<<<< HEAD
       if (currentItem?.type === "message") {
         if (pendingMessageText !== null) {
           appendPendingMessageDelta(stringifyUnknown(event.delta));
@@ -1674,6 +1712,15 @@ async function processResponsesStream(
             delta: stringifyUnknown(event.delta),
           });
         }
+=======
+      if (currentItem?.type === "message" && currentBlock?.type === "text") {
+        currentBlock.text = `${stringifyUnknown(currentBlock.text)}${stringifyUnknown(event.delta)}`;
+        stream.push({
+          type: "text_delta",
+          contentIndex: blockIndex(),
+          delta: stringifyUnknown(event.delta),
+        });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     } else if (type === "response.function_call_arguments.delta") {
       if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
@@ -1688,10 +1735,13 @@ async function processResponsesStream(
       }
     } else if (type === "response.output_item.done") {
       const item = event.item as Record<string, unknown>;
+<<<<<<< HEAD
       if (item.type !== "message") {
         lastTextBlock = null;
         pendingMessageText = null;
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (item.type === "reasoning" && currentBlock?.type === "thinking") {
         const summary = Array.isArray(item.summary)
           ? item.summary
@@ -1717,12 +1767,18 @@ async function processResponsesStream(
           partial: output,
         });
         currentBlock = null;
+<<<<<<< HEAD
       } else if (
         item.type === "message" &&
         (currentBlock?.type === "text" || pendingMessageText !== null)
       ) {
         const content = Array.isArray(item.content) ? item.content : [];
         const finalText = content
+=======
+      } else if (item.type === "message" && currentBlock?.type === "text") {
+        const content = Array.isArray(item.content) ? item.content : [];
+        currentBlock.text = content
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           .map((part) => {
             const contentPart = part as { type?: string; text?: string; refusal?: string };
             return isResponsesTextContentPartType(contentPart.type)
@@ -1730,6 +1786,7 @@ async function processResponsesStream(
               : (contentPart.refusal ?? "");
           })
           .join("");
+<<<<<<< HEAD
         const phase = (item.phase as "commentary" | "final_answer" | undefined) ?? undefined;
         const collapse =
           pendingMessageText !== null
@@ -1777,6 +1834,18 @@ async function processResponsesStream(
             partial: output,
           });
         }
+=======
+        currentBlock.textSignature = encodeTextSignatureV1(
+          stringifyUnknown(item.id),
+          (item.phase as "commentary" | "final_answer" | undefined) ?? undefined,
+        );
+        stream.push({
+          type: "text_end",
+          contentIndex: blockIndex(),
+          content: stringifyUnknown(currentBlock.text),
+          partial: output,
+        });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         currentBlock = null;
       } else if (item.type === "function_call") {
         const args =
@@ -2854,7 +2923,10 @@ async function processOpenAICompletionsStream(
   const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
   const toolCallBlocksById = new Map<string, ToolCallBlock>();
   const toolCallBlockBytes = new WeakMap<ToolCallBlock, number>();
+<<<<<<< HEAD
   const toolCallBlockIndices = new WeakMap<ToolCallBlock, number>();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let sawStopFinishReason = false;
   const blockIndex = () => output.content.length - 1;
   const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
@@ -2987,15 +3059,25 @@ async function processOpenAICompletionsStream(
     };
     currentBlock = block;
     output.content.push(block);
+<<<<<<< HEAD
     toolCallBlockIndices.set(block, output.content.length - 1);
     pushStreamEvent({
       type: "toolcall_start",
       contentIndex: toolCallBlockIndices.get(block) ?? -1,
+=======
+    pushStreamEvent({
+      type: "toolcall_start",
+      contentIndex: output.content.indexOf(block),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       partial: output,
     });
     pushStreamEvent({
       type: "toolcall_delta",
+<<<<<<< HEAD
       contentIndex: toolCallBlockIndices.get(block) ?? -1,
+=======
+      contentIndex: output.content.indexOf(block),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       delta: toolCall.partialArgs,
       partial: output,
     });
@@ -3104,9 +3186,13 @@ async function processOpenAICompletionsStream(
       hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(choiceUsage);
     }
     if (choice.finish_reason) {
+<<<<<<< HEAD
       const finishReasonResult = mapOpenAIStopReason(choice.finish_reason, {
         allowSingularToolCall: true,
       });
+=======
+      const finishReasonResult = mapStopReason(choice.finish_reason);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       output.stopReason = finishReasonResult.stopReason;
       if (finishReasonResult.stopReason === "stop") {
         sawStopFinishReason = true;
@@ -3188,10 +3274,16 @@ async function processOpenAICompletionsStream(
             ...(initialSig ? { thoughtSignature: initialSig } : {}),
           };
           output.content.push(block);
+<<<<<<< HEAD
           toolCallBlockIndices.set(block, output.content.length - 1);
           pushStreamEvent({
             type: "toolcall_start",
             contentIndex: toolCallBlockIndices.get(block) ?? -1,
+=======
+          pushStreamEvent({
+            type: "toolcall_start",
+            contentIndex: output.content.indexOf(block),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             partial: output,
           });
         }
@@ -3221,7 +3313,11 @@ async function processOpenAICompletionsStream(
           block.arguments = parseStreamingJson(block.partialArgs);
           pushStreamEvent({
             type: "toolcall_delta",
+<<<<<<< HEAD
             contentIndex: toolCallBlockIndices.get(block) ?? -1,
+=======
+            contentIndex: output.content.indexOf(block),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             delta: toolCall.function.arguments,
             partial: output,
           });
@@ -4484,6 +4580,35 @@ function hasOpenAICompletionsReasoningUsageActivity(
   );
 }
 
+<<<<<<< HEAD
+=======
+function mapStopReason(reason: string | null) {
+  if (reason === null) {
+    return { stopReason: "stop" };
+  }
+  switch (reason) {
+    case "stop":
+    case "end":
+      return { stopReason: "stop" };
+    case "length":
+      return { stopReason: "length" };
+    case "function_call":
+    case "tool_call":
+    case "tool_calls":
+      return { stopReason: "toolUse" };
+    case "content_filter":
+      return { stopReason: "error", errorMessage: "Provider finish_reason: content_filter" };
+    case "network_error":
+      return { stopReason: "error", errorMessage: "Provider finish_reason: network_error" };
+    default:
+      return {
+        stopReason: "error",
+        errorMessage: `Provider finish_reason: ${reason}`,
+      };
+  }
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export const testing = {
   getCompat,
   assertCodeModeResponsesToolSurface,

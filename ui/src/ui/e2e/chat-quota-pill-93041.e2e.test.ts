@@ -1,7 +1,11 @@
 // Real-browser proof + regression for #93041: the desktop chat composer renders the provider
 // usage pill from models.authStatus. Screenshots go to the ignored .artifacts/ tree.
 import path from "node:path";
+<<<<<<< HEAD
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+=======
+import { chromium, type Browser, type Page } from "playwright";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -36,6 +40,7 @@ const authStatusWithUsage = {
   ],
 };
 
+<<<<<<< HEAD
 let server: ControlUiE2eServer;
 
 async function openChat(authStatus: unknown): Promise<{
@@ -73,18 +78,43 @@ async function closeChat(fixture: {
   await fixture.page.close().catch(() => {});
   await fixture.context.close().catch(() => {});
   await fixture.browser.close().catch(() => {});
+=======
+let browser: Browser;
+let server: ControlUiE2eServer;
+
+async function openChat(authStatus: unknown): Promise<{ page: Page; close: () => Promise<void> }> {
+  const context = await browser.newContext({
+    locale: "en-US",
+    serviceWorkers: "block",
+    viewport: { height: 900, width: 1280 },
+  });
+  const page = await context.newPage();
+  page.setDefaultTimeout(15_000);
+  await installMockGateway(page, { methodResponses: { "models.authStatus": authStatus } });
+  await page.goto(`${server.baseUrl}chat`);
+  return { page, close: () => context.close() };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 describeE2e("Control UI #93041 desktop chat quota pill (mocked Gateway E2E)", () => {
   beforeAll(async () => {
     server = await startControlUiE2eServer();
+<<<<<<< HEAD
   });
 
   afterAll(async () => {
+=======
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+  });
+
+  afterAll(async () => {
+    await browser?.close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await server?.close();
   });
 
   it("renders the provider usage pill in the desktop chat composer", async () => {
+<<<<<<< HEAD
     const fixture = await openChat(authStatusWithUsage);
     const { page } = fixture;
     try {
@@ -95,25 +125,48 @@ describeE2e("Control UI #93041 desktop chat quota pill (mocked Gateway E2E)", ()
       await composerControls.screenshot({
         path: path.join(artifactDir, "02-composer-controls.png"),
       });
+=======
+    const { page, close } = await openChat(authStatusWithUsage);
+    try {
+      const pill = page.locator('[data-chat-provider-usage="true"]');
+      await pill.waitFor({ state: "visible" });
+      await page.screenshot({ path: path.join(artifactDir, "01-chat-with-pill.png") });
+      await page
+        .locator(".agent-chat__composer-controls")
+        .first()
+        .screenshot({ path: path.join(artifactDir, "02-composer-controls.png") });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       const text = (await pill.textContent())?.replace(/\s+/g, " ").trim();
       expect(text).toContain("Usage");
       expect(await pill.getAttribute("href")).toBe("/usage");
       expect(await pill.getAttribute("title")).toContain("Codex");
     } finally {
+<<<<<<< HEAD
       await closeChat(fixture);
+=======
+      await close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
   it("shows no pill when no provider usage windows are present", async () => {
+<<<<<<< HEAD
     const fixture = await openChat({ ts: baseTime, providers: [] });
     const { page } = fixture;
+=======
+    const { page, close } = await openChat({ ts: baseTime, providers: [] });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     try {
       await page.locator(".agent-chat__composer-controls").first().waitFor({ state: "visible" });
       await page.waitForTimeout(500);
       expect(await page.locator('[data-chat-provider-usage="true"]').count()).toBe(0);
     } finally {
+<<<<<<< HEAD
       await closeChat(fixture);
+=======
+      await close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 });

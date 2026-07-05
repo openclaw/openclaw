@@ -7,14 +7,22 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import { clearMemoryEmbeddingProviders } from "./memory-embedding-providers.js";
 import {
+<<<<<<< HEAD
   clearMemoryPluginState,
+=======
+  resetMemoryPluginState,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   getMemoryCapabilityRegistration,
   getMemoryRuntime,
 } from "./memory-state.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
 afterEach(() => {
+<<<<<<< HEAD
   clearMemoryPluginState();
+=======
+  resetMemoryPluginState();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   clearMemoryEmbeddingProviders();
 });
 

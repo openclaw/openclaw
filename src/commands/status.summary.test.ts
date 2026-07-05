@@ -510,6 +510,7 @@ describe("getStatusSummary", () => {
     expect(hydratedKeys).not.toContain("agent:main:session-2");
   });
 
+<<<<<<< HEAD
   it("preserves store order for tied recent session timestamps", async () => {
     const store = Object.fromEntries(
       Array.from({ length: 11 }, (_, index) => {
@@ -544,6 +545,8 @@ describe("getStatusSummary", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("passes agent scope when listing configured agent session stores", async () => {
     vi.mocked(listGatewayAgentsBasic).mockReturnValue({
       defaultId: "main",

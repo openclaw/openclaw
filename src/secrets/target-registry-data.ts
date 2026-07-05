@@ -1,6 +1,9 @@
 /** Builds the static and plugin-derived registry of secret migration targets. */
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+<<<<<<< HEAD
 import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { loadChannelSecretContractApiForRecord } from "./channel-contract-api.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
@@ -67,7 +70,11 @@ function listBundledWebProviderSecretTargetRegistryEntries(
 }
 
 function listBundledPluginConfigSecretTargetRegistryEntries(
+<<<<<<< HEAD
   bundledPlugins: readonly Pick<PluginManifestRecord, "id" | "configContracts">[],
+=======
+  bundledPlugins: readonly PluginManifestRecord[],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
   const seen = new Set<string>();
@@ -86,6 +93,7 @@ function listBundledPluginConfigSecretTargetRegistryEntries(
   return entries.toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
+<<<<<<< HEAD
 function listSourceBundledPluginConfigContractRecords(): Array<
   Pick<PluginManifestRecord, "id" | "configContracts">
 > {
@@ -104,6 +112,8 @@ function listSourceBundledPluginConfigContractRecords(): Array<
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function listChannelSecretTargetRegistryEntries(
   channelPlugins: readonly PluginManifestRecord[],
 ): SecretTargetRegistryEntry[] {
@@ -510,10 +520,14 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
   return [
     ...CORE_SECRET_TARGET_REGISTRY,
     ...listBundledWebProviderSecretTargetRegistryEntries(bundledPlugins),
+<<<<<<< HEAD
     ...listBundledPluginConfigSecretTargetRegistryEntries([
       ...bundledPlugins,
       ...listSourceBundledPluginConfigContractRecords(),
     ]),
+=======
+    ...listBundledPluginConfigSecretTargetRegistryEntries(bundledPlugins),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ...listChannelSecretTargetRegistryEntries(channelPlugins),
   ];
 }

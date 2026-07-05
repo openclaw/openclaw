@@ -198,6 +198,11 @@ export function renderSystemNodeWarning(
   const selectedLabel = selectedNodePath ? ` Using ${selectedNodePath} for the daemon.` : "";
   return `System Node ${versionLabel} at ${systemNode.path} is below the required Node 22.19+.${selectedLabel} Install Node 24 (recommended) or Node 22 LTS from nodejs.org or Homebrew.`;
 }
+<<<<<<< HEAD
+=======
+export { resolveStableNodePath };
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Resolves the Node binary the daemon should use for a node runtime. */
 export async function resolvePreferredNodePath(params: {
   env?: Record<string, string | undefined>;

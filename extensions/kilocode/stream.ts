@@ -1,7 +1,10 @@
 // Kilocode plugin module implements stream behavior.
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
+<<<<<<< HEAD
 import { normalizeOpenAICompatibleReasoningPayload } from "openclaw/plugin-sdk/provider-stream-shared";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
@@ -10,12 +13,58 @@ const KILOCODE_FEATURE_ENV_VAR = "KILOCODE_FEATURE";
 
 type ThinkLevel = NonNullable<ProviderWrapStreamFnContext["thinkingLevel"]>;
 type ProviderStreamFn = NonNullable<ProviderWrapStreamFnContext["streamFn"]>;
+<<<<<<< HEAD
+=======
+type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function resolveKilocodeAppHeaders(): Record<string, string> {
   const feature = process.env[KILOCODE_FEATURE_ENV_VAR]?.trim() || KILOCODE_FEATURE_DEFAULT;
   return { [KILOCODE_FEATURE_HEADER]: feature };
 }
 
+<<<<<<< HEAD
+=======
+function mapThinkingLevelToReasoningEffort(thinkingLevel: ThinkLevel): ReasoningEffort {
+  if (thinkingLevel === "off") {
+    return "none";
+  }
+  if (thinkingLevel === "adaptive") {
+    return "medium";
+  }
+  if (thinkingLevel === "max") {
+    return "xhigh";
+  }
+  return thinkingLevel;
+}
+
+function normalizeKilocodeReasoningPayload(
+  payloadObj: Record<string, unknown>,
+  thinkingLevel?: ThinkLevel,
+): void {
+  delete payloadObj.reasoning_effort;
+  if (!thinkingLevel || thinkingLevel === "off") {
+    return;
+  }
+
+  const existingReasoning = payloadObj.reasoning;
+  if (
+    existingReasoning &&
+    typeof existingReasoning === "object" &&
+    !Array.isArray(existingReasoning)
+  ) {
+    const reasoningObj = existingReasoning as Record<string, unknown>;
+    if (!("max_tokens" in reasoningObj) && !("effort" in reasoningObj)) {
+      reasoningObj.effort = mapThinkingLevelToReasoningEffort(thinkingLevel);
+    }
+  } else if (!existingReasoning) {
+    payloadObj.reasoning = {
+      effort: mapThinkingLevelToReasoningEffort(thinkingLevel),
+    };
+  }
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function normalizeKilocodeStopPayload(payloadObj: Record<string, unknown>): void {
   if (typeof payloadObj.stop === "string") {
     payloadObj.stop = [payloadObj.stop];
@@ -83,7 +132,11 @@ export function createKilocodeStreamWrapper(
         const payloadObj = asRecord(payload);
         if (payloadObj) {
           // Keep Kilo thinking defaults overrideable by later caller/config payload hooks.
+<<<<<<< HEAD
           normalizeOpenAICompatibleReasoningPayload(payloadObj, thinkingLevel);
+=======
+          normalizeKilocodeReasoningPayload(payloadObj, thinkingLevel);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }
 
         const result = originalOnPayload?.(payload, payloadModel);

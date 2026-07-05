@@ -171,7 +171,11 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
 
   constructor(private readonly storageRootDir: string) {
     super();
+<<<<<<< HEAD
     this.stateKey = SYNC_CACHE_STATE_KEY;
+=======
+    this.stateKey = resolveSyncCacheStateKey(storageRootDir);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     let restoredSavedSync: ISyncData | null = null;
     let restoredClientOptions: IStoredClientOpts | undefined;
@@ -426,6 +430,13 @@ function openMatrixSyncCacheStore(
   );
 }
 
+<<<<<<< HEAD
+=======
+function resolveSyncCacheStateKey(_storageRootDir: string): string {
+  return SYNC_CACHE_STATE_KEY;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function metaKey(stateKey: string): string {
   return `${stateKey}:meta`;
 }
@@ -553,7 +564,11 @@ export async function hasMatrixSyncCacheStateInStore(params: {
   storageRootDir: string;
   store: Pick<PluginStateKeyedStore<MatrixSyncCacheRecord>, "lookup">;
 }): Promise<boolean> {
+<<<<<<< HEAD
   const stateKey = SYNC_CACHE_STATE_KEY;
+=======
+  const stateKey = resolveSyncCacheStateKey(params.storageRootDir);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const meta = await params.store.lookup(metaKey(stateKey));
   if (!isSyncCacheMeta(meta) || meta.chunkCount <= 0) {
     return false;
@@ -582,7 +597,11 @@ export async function writeMatrixSyncCacheStateToStore(params: {
   payload: PersistedMatrixSyncStore;
   store: MatrixSyncCacheAsyncStore;
 }): Promise<void> {
+<<<<<<< HEAD
   const stateKey = SYNC_CACHE_STATE_KEY;
+=======
+  const stateKey = resolveSyncCacheStateKey(params.storageRootDir);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const rows = buildSyncCacheRows(stateKey, params.payload);
   for (const row of rows.chunks) {
     await params.store.register(row.key, row.value);

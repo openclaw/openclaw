@@ -1,7 +1,12 @@
+<<<<<<< HEAD
 import { spawnSync } from "node:child_process";
 // Qa Lab plugin module implements web runtime behavior.
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+=======
+// Qa Lab plugin module implements web runtime behavior.
+import { randomUUID } from "node:crypto";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 
@@ -21,7 +26,10 @@ type QaWebOpenPageParams = {
   url: string;
   headless?: boolean;
   channel?: "chrome";
+<<<<<<< HEAD
   repoRoot?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   timeoutMs?: number;
   viewport?: { width: number; height: number };
 };
@@ -57,6 +65,7 @@ const sessions = new Map<string, QaWebSession>();
 const DEFAULT_WEB_TIMEOUT_MS = 20_000;
 const MAX_DIAGNOSTIC_ENTRIES = 50;
 const MAX_DIAGNOSTIC_TEXT_CHARS = 2_000;
+<<<<<<< HEAD
 const PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH_ENV = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
 const SYSTEM_CHROMIUM_EXECUTABLE_CANDIDATES = [
   "/snap/bin/chromium",
@@ -65,6 +74,8 @@ const SYSTEM_CHROMIUM_EXECUTABLE_CANDIDATES = [
   "/usr/bin/google-chrome",
   "/usr/bin/google-chrome-stable",
 ] as const;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function appendDiagnostic(diagnostics: QaWebDiagnosticEntry[], entry: QaWebDiagnosticEntry): void {
   diagnostics.push({
@@ -88,6 +99,7 @@ function resolveSession(pageId: string): QaWebSession {
   return session;
 }
 
+<<<<<<< HEAD
 function canRunChromiumExecutable(executablePath: string): boolean {
   const result = spawnSync(executablePath, ["--version"], { stdio: "ignore" });
   return result.status === 0;
@@ -145,6 +157,14 @@ export async function qaWebOpenPage(params: QaWebOpenPageParams) {
     ensureChromiumAvailable(params.repoRoot ?? process.cwd());
   }
   const browser = await chromium.launch(buildChromiumLaunchOptions(params));
+=======
+export async function qaWebOpenPage(params: QaWebOpenPageParams) {
+  const timeoutMs = resolveTimeoutMs(params.timeoutMs);
+  const browser = await chromium.launch({
+    channel: params.channel ?? "chrome",
+    headless: params.headless ?? true,
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const context = await browser.newContext({
     ignoreHTTPSErrors: true,
     viewport: params.viewport ?? { width: 1440, height: 1080 },
@@ -269,3 +289,10 @@ export async function closeQaWebSessions(pageIds?: Iterable<string>): Promise<vo
     await session.browser.close().catch(() => {});
   }
 }
+<<<<<<< HEAD
+=======
+
+export async function closeAllQaWebSessions(): Promise<void> {
+  await closeQaWebSessions();
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

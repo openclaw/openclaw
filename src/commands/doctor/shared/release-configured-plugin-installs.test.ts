@@ -257,6 +257,7 @@ describe("configured plugin install release step", () => {
     expect(result.channelIds).toStrictEqual([]);
   });
 
+<<<<<<< HEAD
   it("collects external speech and web-fetch plugins selected by config", async () => {
     const { collectReleaseConfiguredPluginIds } =
       await import("./release-configured-plugin-installs.js");
@@ -406,6 +407,8 @@ describe("configured plugin install release step", () => {
     expect(result.channelIds).toStrictEqual([]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("collects provider plugins from documented external provider aliases", async () => {
     mocks.resolveProviderInstallCatalogEntries.mockReturnValue([
       {
@@ -577,6 +580,7 @@ describe("configured plugin install release step", () => {
     expect(result.completed).toBe(true);
   });
 
+<<<<<<< HEAD
   it("surfaces non-fatal repair notices without blocking release repair completion", async () => {
     const reviewNotice = "REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check";
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
@@ -609,6 +613,8 @@ describe("configured plugin install release step", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not stamp config during update-time deferred install repair", async () => {
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
       changes: [

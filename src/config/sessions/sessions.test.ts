@@ -10,7 +10,10 @@ import type { OpenClawConfig } from "../config.js";
 import type { SessionConfig } from "../types.base.js";
 import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
 import {
+<<<<<<< HEAD
   resolveExplicitSessionFilePath,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPathInDir,
@@ -73,6 +76,7 @@ describe("session path safety", () => {
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1.jsonl"));
   });
 
+<<<<<<< HEAD
   it("rejects explicit sessionFile paths without derived fallback", () => {
     const sessionsDir = "/tmp/openclaw/agents/main/sessions";
 
@@ -83,6 +87,8 @@ describe("session path safety", () => {
     ).toThrow(/within sessions directory/);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("ignores multi-store sentinel paths when deriving session file options", () => {
     expect(resolveSessionFilePathOptions({ agentId: "worker", storePath: "(multiple)" })).toEqual({
       agentId: "worker",

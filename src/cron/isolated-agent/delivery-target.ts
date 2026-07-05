@@ -11,7 +11,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { stripTargetProviderPrefix } from "../../infra/outbound/channel-target-prefix.js";
 import type { OutboundSessionRoute } from "../../infra/outbound/outbound-session.js";
+<<<<<<< HEAD
 import { isReservedTargetLiteralError } from "../../infra/outbound/target-errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ResolvedMessagingTarget } from "../../infra/outbound/target-resolver.js";
 import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loaded.js";
 import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
@@ -144,7 +147,11 @@ export async function resolveDeliveryTarget(
     accountId?: string;
     sessionKey?: string;
   },
+<<<<<<< HEAD
   options?: { dryRun?: boolean; inheritSessionThread?: boolean },
+=======
+  options?: { dryRun?: boolean },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ): Promise<DeliveryTargetResolution> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
@@ -182,10 +189,13 @@ export async function resolveDeliveryTarget(
     : undefined;
   const mainEntry = loadSessionEntry({ agentId, sessionKey: mainSessionKey, storePath });
   const main = storedDeliveryEntry ?? threadEntry ?? mainEntry;
+<<<<<<< HEAD
   // True when the cron has no delivery identity of its own (no per-job target, no own
   // sessionKey, no stored/creation delivery context) and therefore fell back to the SHARED
   // agent-main session bucket. See the #91613 refusal below.
   const usedSharedMainFallback = mainEntry !== undefined && main === mainEntry;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const preliminary = resolveSessionDeliveryTarget({
     entry: main,
@@ -301,6 +311,7 @@ export async function resolveDeliveryTarget(
     }
   }
 
+<<<<<<< HEAD
   // Issue #91613: refuse a KEYLESS implicit isolated cron whose delivery target was only inherited
   // from the SHARED agent-main session bucket's last recipient. That bucket is last-writer-wins
   // across every conversation the agent handles, so the inherited `lastTo` can be a different
@@ -340,6 +351,8 @@ export async function resolveDeliveryTarget(
     };
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const preResolvedRouteTargetCandidate = toCandidate;
   const docked = await resolveOutboundTargetWithRuntime({
     channel,
@@ -350,6 +363,7 @@ export async function resolveDeliveryTarget(
     allowFrom: effectiveAllowFrom,
   });
   if (!docked.ok) {
+<<<<<<< HEAD
     if (!toCandidate || !isReservedTargetLiteralError(docked.error)) {
       return {
         ok: false,
@@ -364,6 +378,19 @@ export async function resolveDeliveryTarget(
   } else {
     toCandidate = docked.to;
   }
+=======
+    return {
+      ok: false,
+      channel,
+      to: undefined,
+      accountId,
+      threadId: explicitThreadId,
+      mode,
+      error: docked.error,
+    };
+  }
+  toCandidate = docked.to;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const targetResolution = await deliveryTargetRuntime.resolveChannelTargetForDelivery({
     cfg,
     channel,
@@ -478,6 +505,7 @@ export async function resolveDeliveryTarget(
       : undefined;
   // Thread precedence is explicit config, route canonicalization, parser-derived
   // explicit target, then same-peer session history.
+<<<<<<< HEAD
   const canUseSessionThread =
     options?.inheritSessionThread !== false &&
     shouldCarrySessionThread({
@@ -486,11 +514,24 @@ export async function resolveDeliveryTarget(
       route,
       lastRoute,
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const threadId =
     explicitThreadId ??
     route?.threadId ??
     parserExplicitThreadId ??
+<<<<<<< HEAD
     (canUseSessionThread ? resolved.threadId : undefined);
+=======
+    (shouldCarrySessionThread({
+      resolved,
+      explicitTo,
+      route,
+      lastRoute,
+    })
+      ? resolved.threadId
+      : undefined);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (options?.dryRun) {
     return {
       ok: true,

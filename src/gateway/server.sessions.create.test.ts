@@ -103,7 +103,10 @@ test("sessions.create inherits parent runtime model selection when model is omit
         model: "gpt-5.5",
         contextTokens: 272000,
         thinkingLevel: "off",
+<<<<<<< HEAD
         fastMode: "auto",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         traceLevel: "debug",
         authProfileOverride: "codex-oauth",
         authProfileOverrideSource: "user",
@@ -122,7 +125,10 @@ test("sessions.create inherits parent runtime model selection when model is omit
       model?: string;
       contextTokens?: number;
       thinkingLevel?: string;
+<<<<<<< HEAD
       fastMode?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       traceLevel?: string;
       authProfileOverride?: string;
       authProfileOverrideSource?: string;
@@ -144,7 +150,10 @@ test("sessions.create inherits parent runtime model selection when model is omit
   expect(created.payload?.entry?.model).toBe("gpt-5.5");
   expect(created.payload?.entry?.contextTokens).toBe(272000);
   expect(created.payload?.entry?.thinkingLevel).toBe("off");
+<<<<<<< HEAD
   expect(created.payload?.entry?.fastMode).toBe("auto");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   expect(created.payload?.entry?.traceLevel).toBe("debug");
   expect(created.payload?.entry?.authProfileOverride).toBe("codex-oauth");
   expect(created.payload?.entry?.authProfileOverrideSource).toBe("user");

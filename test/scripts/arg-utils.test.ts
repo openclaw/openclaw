@@ -1,7 +1,10 @@
 // Arg Utils tests cover arg utils script behavior.
 import { describe, expect, it } from "vitest";
 import {
+<<<<<<< HEAD
   booleanFlag,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   floatFlag,
   intFlag,
   parseFlagArgs,
@@ -44,6 +47,7 @@ describe("scripts/lib/arg-utils parseFlagArgs", () => {
     expect(parsed.match).toEqual(["alpha", "beta"]);
   });
 
+<<<<<<< HEAD
   it("rejects duplicate single-value flags", () => {
     expect(() =>
       parseFlagArgs(["--label", "first", "--label=second"], { label: "" }, [
@@ -82,6 +86,8 @@ describe("scripts/lib/arg-utils parseFlagArgs", () => {
     ).toThrow("parseFlagArgs specs must declare a flag for consumed options");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects missing string flag values before consuming the next option", () => {
     expect(() =>
       parseFlagArgs(["--base", "--head", "HEAD"], { base: "origin/main", head: "HEAD" }, [

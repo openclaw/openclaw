@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
+<<<<<<< HEAD
 import { resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
@@ -23,11 +24,17 @@ export const QA_MATURITY_SCORE_LABEL_BANDS = [
   [QA_MATURITY_SCORE_LABELS[3], 50, 70],
   [QA_MATURITY_SCORE_LABELS[4], 0, 50],
 ] as const;
+=======
+import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
+
+export const QA_MATURITY_TAXONOMY_PATH = "taxonomy.yaml";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const qaScorecardIdSchema = z
   .string()
   .trim()
   .regex(/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/, {
+<<<<<<< HEAD
     message: "scorecard ids must use lowercase dotted or dashed tokens",
   });
 
@@ -36,6 +43,9 @@ const qaCoverageIdSchema = z
   .trim()
   .regex(/^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+$/, {
     message: "coverage ids must use lowercase dotted tokens",
+=======
+    message: "scorecard and coverage ids must use lowercase dotted or dashed tokens",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
 function isRepoRootRelativeRef(value: string) {
@@ -44,13 +54,17 @@ function isRepoRootRelativeRef(value: string) {
 
 const qaCoverageEvidenceRoleSchema = z.enum(["primary", "secondary"]);
 export const qaScorecardEvidenceModeSchema = z.enum(["full", "slim"]);
+<<<<<<< HEAD
 export const qaScorecardChannelDriverSchema = z.enum(["qa-channel", "crabline", "live"]);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const qaScorecardProfileSchema = z.object({
   id: qaScorecardIdSchema,
   description: z.string().trim().min(1),
   evidenceMode: qaScorecardEvidenceModeSchema.optional(),
   includeAllCategories: z.boolean().default(false),
+<<<<<<< HEAD
   channelDriver: qaScorecardChannelDriverSchema.default("qa-channel"),
   categoryIds: z.array(qaScorecardIdSchema).default([]),
 });
@@ -184,22 +198,35 @@ export const qaMaturityScoresSchema = z
 const qaMaturityFeatureSchema = z.object({
   name: z.string().trim().min(1),
   coverageIds: z.array(qaCoverageIdSchema).default([]),
+=======
+  categoryIds: z.array(qaScorecardIdSchema).default([]),
+});
+
+const qaMaturityFeatureSchema = z.object({
+  name: z.string().trim().min(1),
+  coverageIds: z.array(qaScorecardIdSchema).default([]),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   description: z.string().trim().min(1).optional(),
 });
 
 const qaMaturityCategorySchema = z.object({
   id: qaScorecardIdSchema,
   name: z.string().trim().min(1),
+<<<<<<< HEAD
   category_note: z.string().trim().min(1),
   features: z.array(qaMaturityFeatureSchema).default([]),
   docs: z.array(z.string().trim().min(1)).default([]),
   search_anchors: z.array(z.string().trim().min(1)).default([]),
   human_lts_override: z.boolean().optional(),
+=======
+  features: z.array(qaMaturityFeatureSchema).default([]),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 const qaMaturitySurfaceSchema = z.object({
   id: qaScorecardIdSchema,
   name: z.string().trim().min(1),
+<<<<<<< HEAD
   family: z.string().trim().min(1),
   level: z.string().trim().min(1),
   level_code: z.string().trim().min(1).optional(),
@@ -233,6 +260,18 @@ export const qaMaturityTaxonomySchema = z
       .optional(),
     profiles: z.array(qaScorecardProfileSchema).default([]),
     levels: z.array(qaMaturityLevelSchema).default([]),
+=======
+  level: z.string().trim().min(1).optional(),
+  level_code: z.string().trim().min(1).optional(),
+  categories: z.array(qaMaturityCategorySchema).default([]),
+});
+
+const qaMaturityTaxonomySchema = z
+  .object({
+    version: z.number(),
+    title: z.string().trim().min(1),
+    profiles: z.array(qaScorecardProfileSchema).default([]),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     surfaces: z.array(qaMaturitySurfaceSchema).default([]),
   })
   .superRefine((taxonomy, ctx) => {
@@ -254,6 +293,7 @@ export const qaMaturityTaxonomySchema = z
           message: `profile ${profile.id} cannot set categoryIds when includeAllCategories is true`,
         });
       }
+<<<<<<< HEAD
       if (profile.channelDriver === "crabline" && profile.includeAllCategories) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -268,6 +308,8 @@ export const qaMaturityTaxonomySchema = z
           message: `profile ${profile.id} requires categoryIds when channelDriver is crabline`,
         });
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       const seenProfileCategoryIds = new Set<string>();
       for (const [categoryIndex, categoryId] of profile.categoryIds.entries()) {
@@ -281,6 +323,7 @@ export const qaMaturityTaxonomySchema = z
         seenProfileCategoryIds.add(categoryId);
       }
     }
+<<<<<<< HEAD
 
     const categoryIds = new Set<string>();
     const surfaceIds = new Set<string>();
@@ -319,11 +362,14 @@ export const qaMaturityTaxonomySchema = z
         }
       }
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
 export type QaNativeCoverageEvidenceKind = "script" | "vitest" | "playwright";
 export type QaScorecardEvidenceKind = QaNativeCoverageEvidenceKind | "qa-scenario";
 export type QaScorecardEvidenceMode = z.infer<typeof qaScorecardEvidenceModeSchema>;
+<<<<<<< HEAD
 export type QaScorecardChannelDriver = z.infer<typeof qaScorecardChannelDriverSchema>;
 export type QaMaturityScoreKey = (typeof QA_MATURITY_SCORE_KEYS)[number];
 export type QaMaturityScoreObject = z.infer<typeof qaMaturityScoreObjectSchema>;
@@ -344,6 +390,10 @@ type QaCoverageEvidenceRole = z.infer<typeof qaCoverageEvidenceRoleSchema>;
 export type QaMaturityCoverageScores = {
   categories: Map<string, QaMaturityScoreObject>;
 };
+=======
+type QaCoverageEvidenceRole = z.infer<typeof qaCoverageEvidenceRoleSchema>;
+type QaMaturityTaxonomy = z.infer<typeof qaMaturityTaxonomySchema>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type QaScorecardValidationIssueCode =
   | "coverage-id-missing-primary-evidence"
@@ -376,7 +426,10 @@ export type QaScorecardCategoryCoverageReport = {
   taxonomyCategoryName: string;
   coverageStatus: "covered" | "partial" | "missing";
   profiles: string[];
+<<<<<<< HEAD
   features: QaScorecardCategoryFeatureCoverageReport[];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   coverageIds: string[];
   fulfilledCoverageIds: string[];
   evidence: QaScorecardEvidenceReport[];
@@ -385,6 +438,7 @@ export type QaScorecardCategoryCoverageReport = {
   missingEvidenceRefs: string[];
 };
 
+<<<<<<< HEAD
 export type QaScorecardCategoryFeatureCoverageReport = {
   name: string;
   coverageIds: string[];
@@ -394,6 +448,11 @@ export type QaScorecardProfileReport = {
   id: string;
   evidenceMode: QaScorecardEvidenceMode;
   channelDriver: QaScorecardChannelDriver;
+=======
+export type QaScorecardProfileReport = {
+  id: string;
+  evidenceMode: QaScorecardEvidenceMode;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   categoryIds: string[];
 };
 
@@ -409,9 +468,15 @@ export type QaScorecardTaxonomyReport = {
   requiredCategoryCount: number;
   fulfilledCategoryCount: number;
   categoryFulfillmentPercent: number;
+<<<<<<< HEAD
   requiredCoverageIdCount: number;
   fulfilledCoverageIdCount: number;
   coverageIdFulfillmentPercent: number;
+=======
+  requiredFeatureCount: number;
+  fulfilledFeatureCount: number;
+  taxonomyFulfillmentPercent: number;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   evidenceRefCount: number;
   scenarioCoverageIdCount: number;
   unknownCoverageIdCount: number;
@@ -421,6 +486,7 @@ export type QaScorecardTaxonomyReport = {
   categories: QaScorecardCategoryCoverageReport[];
 };
 
+<<<<<<< HEAD
 export type QaMaturityTaxonomyCategoryIndex = {
   active: QaMaturityTaxonomySurface[];
   surfaces: Map<
@@ -429,6 +495,8 @@ export type QaMaturityTaxonomyCategoryIndex = {
   >;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type MaturityCategoryRef = {
   id: string;
   surfaceId: string;
@@ -448,8 +516,36 @@ type MaturityCoverageRef = {
   surfaceId: string;
 };
 
+<<<<<<< HEAD
 function resolveRepoPath(relativePath: string, kind: QaRepoPathKind = "file") {
   return resolveQaRepoPath(import.meta.dirname, relativePath, kind);
+=======
+function walkUpDirectories(start: string): string[] {
+  const roots: string[] = [];
+  let current = path.resolve(start);
+  while (true) {
+    roots.push(current);
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return roots;
+    }
+    current = parent;
+  }
+}
+
+function resolveRepoPath(relativePath: string, kind: "file" | "directory" = "file") {
+  for (const dir of walkUpDirectories(import.meta.dirname)) {
+    const candidate = path.join(dir, relativePath);
+    if (!fs.existsSync(candidate)) {
+      continue;
+    }
+    const stat = fs.statSync(candidate);
+    if ((kind === "file" && stat.isFile()) || (kind === "directory" && stat.isDirectory())) {
+      return candidate;
+    }
+  }
+  return null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function repoRootFromPath(filePath: string) {
@@ -460,7 +556,11 @@ function formatZodIssuePath(pathLocal: PropertyKey[]) {
   return pathLocal.length ? pathLocal.map(String).join(".") : "<root>";
 }
 
+<<<<<<< HEAD
 export function parseQaMaturityTaxonomy(value: unknown, label = QA_MATURITY_TAXONOMY_PATH) {
+=======
+function parseQaMaturityTaxonomy(value: unknown, label = QA_MATURITY_TAXONOMY_PATH) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const parsed = qaMaturityTaxonomySchema.safeParse(value);
   if (parsed.success) {
     return parsed.data;
@@ -471,6 +571,7 @@ export function parseQaMaturityTaxonomy(value: unknown, label = QA_MATURITY_TAXO
   throw new Error(`${label}: ${issues}`);
 }
 
+<<<<<<< HEAD
 export function parseQaMaturityScores(value: unknown, label = QA_MATURITY_SCORES_PATH) {
   const parsed = qaMaturityScoresSchema.safeParse(value);
   if (parsed.success) {
@@ -505,6 +606,8 @@ export function readValidatedQaMaturityScoreSources(params?: {
   return { scores, taxonomy, warnings };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function readQaMaturityTaxonomy(repoRoot: string | undefined) {
   const taxonomyPath = repoRoot
     ? path.join(repoRoot, QA_MATURITY_TAXONOMY_PATH)
@@ -574,6 +677,7 @@ function percent(part: number, total: number) {
   return total === 0 ? 0 : Number(((part / total) * 100).toFixed(1));
 }
 
+<<<<<<< HEAD
 export function activeQaMaturityTaxonomySurfaces(taxonomy: QaMaturityTaxonomy) {
   return taxonomy.surfaces.filter((surface) => !surface.archived);
 }
@@ -801,6 +905,8 @@ export function validateQaMaturityScoresAgainstTaxonomy(params: {
   return warnings;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function buildMaturityRefs(taxonomy: QaMaturityTaxonomy | null) {
   const categories = new Map<string, MaturityCategoryRef>();
   const coverageIds = new Map<string, MaturityCoverageRef[]>();
@@ -808,7 +914,11 @@ function buildMaturityRefs(taxonomy: QaMaturityTaxonomy | null) {
     return { categories, coverageIds };
   }
 
+<<<<<<< HEAD
   for (const surface of activeQaMaturityTaxonomySurfaces(taxonomy)) {
+=======
+  for (const surface of taxonomy.surfaces) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     for (const category of surface.categories) {
       const categoryId = `${surface.id}.${category.id}`;
       const features = category.features.map((feature) => ({
@@ -837,6 +947,7 @@ function buildMaturityRefs(taxonomy: QaMaturityTaxonomy | null) {
   return { categories, coverageIds };
 }
 
+<<<<<<< HEAD
 export function readQaScorecardProfileOptions(profileId: string | undefined, repoRoot?: string) {
   const profile = profileId?.trim();
   if (!profile) {
@@ -848,6 +959,27 @@ export function readQaScorecardProfileOptions(profileId: string | undefined, rep
   return {
     evidenceMode: profileOptions?.evidenceMode ?? "full",
     channelDriver: profileOptions?.channelDriver ?? "qa-channel",
+=======
+export function readQaScorecardFeatureCoverageByCategory(repoRoot?: string) {
+  const maturityRefs = buildMaturityRefs(readQaMaturityTaxonomy(repoRoot));
+  return new Map(
+    [...maturityRefs.categories.entries()].map(([categoryId, category]) => [
+      categoryId,
+      category.features.map((feature) => feature.coverageIds),
+    ]),
+  );
+}
+
+export function readQaScorecardProfileOptions(profileId: string | undefined, repoRoot?: string) {
+  const profile = profileId?.trim();
+  if (!profile) {
+    return { evidenceMode: "full" as const };
+  }
+  return {
+    evidenceMode:
+      readQaMaturityTaxonomy(repoRoot)?.profiles.find((entry) => entry.id === profile)
+        ?.evidenceMode ?? "full",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }
 
@@ -987,7 +1119,10 @@ export function buildQaScorecardTaxonomyReport(params: {
       return {
         id: profile.id,
         evidenceMode: profile.evidenceMode ?? "full",
+<<<<<<< HEAD
         channelDriver: profile.channelDriver,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         categoryIds: validCategoryIds,
       };
     }) ?? [];
@@ -1007,8 +1142,13 @@ export function buildQaScorecardTaxonomyReport(params: {
     ...categoryIdsWithEvidence,
   ]);
 
+<<<<<<< HEAD
   const requiredCoverageIds = new Set<string>();
   const fulfilledRequiredCoverageIds = new Set<string>();
+=======
+  let requiredFeatureCount = 0;
+  let fulfilledFeatureCount = 0;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   for (const categoryId of relevantCategoryIds) {
     const category = maturityRefs.categories.get(categoryId);
     if (!category) {
@@ -1074,6 +1214,7 @@ export function buildQaScorecardTaxonomyReport(params: {
       }
     }
 
+<<<<<<< HEAD
     const fulfilledCoverageIdCountForCategory = category.coverageIds.filter((coverageId) =>
       fulfilledCoverageIds.has(coverageId),
     ).length;
@@ -1084,13 +1225,27 @@ export function buildQaScorecardTaxonomyReport(params: {
           fulfilledRequiredCoverageIds.add(coverageId);
         }
       }
+=======
+    const fulfilledFeatureCountForCategory = category.features.filter(
+      (feature) =>
+        feature.coverageIds.length > 0 &&
+        feature.coverageIds.every((coverageId) => fulfilledCoverageIds.has(coverageId)),
+    ).length;
+    if (required) {
+      requiredFeatureCount += category.features.length;
+      fulfilledFeatureCount += fulfilledFeatureCountForCategory;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       pushMissingPrimaryIssues({
         issues,
         category,
         coverageIdsWithPrimaryEvidence: fulfilledCoverageIds,
         coverageIdsWithSecondaryEvidence: secondaryOnlyCoverageIds,
       });
+<<<<<<< HEAD
       if (fulfilledCoverageIdCountForCategory === 0) {
+=======
+      if (fulfilledFeatureCountForCategory === 0) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         issues.push({
           code: "profile-category-missing-evidence",
           severity: "warning",
@@ -1105,8 +1260,13 @@ export function buildQaScorecardTaxonomyReport(params: {
       : [];
     const coverageStatus =
       required &&
+<<<<<<< HEAD
       category.coverageIds.length > 0 &&
       fulfilledCoverageIdCountForCategory === category.coverageIds.length
+=======
+      category.features.length > 0 &&
+      fulfilledFeatureCountForCategory === category.features.length
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         ? "covered"
         : evidenceReports.length > 0
           ? "partial"
@@ -1118,7 +1278,10 @@ export function buildQaScorecardTaxonomyReport(params: {
       taxonomyCategoryName: category.categoryName,
       coverageStatus,
       profiles: profileIds,
+<<<<<<< HEAD
       features: category.features,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       coverageIds: category.coverageIds,
       fulfilledCoverageIds: uniqueSorted(fulfilledCoverageIds),
       evidence: evidenceReports.toSorted((left, right) =>
@@ -1155,12 +1318,18 @@ export function buildQaScorecardTaxonomyReport(params: {
     requiredCategoryCount: requiredCategories.length,
     fulfilledCategoryCount,
     categoryFulfillmentPercent: percent(fulfilledCategoryCount, requiredCategories.length),
+<<<<<<< HEAD
     requiredCoverageIdCount: requiredCoverageIds.size,
     fulfilledCoverageIdCount: fulfilledRequiredCoverageIds.size,
     coverageIdFulfillmentPercent: percent(
       fulfilledRequiredCoverageIds.size,
       requiredCoverageIds.size,
     ),
+=======
+    requiredFeatureCount,
+    fulfilledFeatureCount,
+    taxonomyFulfillmentPercent: percent(fulfilledFeatureCount, requiredFeatureCount),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     evidenceRefCount: categories.reduce((count, category) => count + category.evidence.length, 0),
     scenarioCoverageIdCount: allScenarioCoverageIds.length,
     unknownCoverageIdCount: unknownCoverageIds.length,

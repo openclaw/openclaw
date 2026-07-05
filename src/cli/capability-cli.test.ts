@@ -5,7 +5,11 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
+<<<<<<< HEAD
 import { CAPABILITY_METADATA, registerCapabilityCli } from "./capability-cli.js";
+=======
+import { registerCapabilityCli } from "./capability-cli.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const PNG_1X1_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
@@ -133,10 +137,18 @@ const mocks = vi.hoisted(() => ({
       embedBatch: async (texts: string[]) => texts.map(() => [0.1, 0.2]),
     },
   })),
+<<<<<<< HEAD
+=======
+  registerMemoryEmbeddingProvider: vi.fn(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   listMemoryEmbeddingProviders: vi.fn(() => [
     { id: "openai", defaultModel: "text-embedding-3-small", transport: "remote" },
   ]),
   listEmbeddingProviders: vi.fn(() => []),
+<<<<<<< HEAD
+=======
+  registerBuiltInMemoryEmbeddingProviders: vi.fn(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
   convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
   isWebSearchProviderConfigured: vi.fn(() => false),
@@ -313,6 +325,11 @@ vi.mock("../media/media-services.js", async (importOriginal) => {
 vi.mock("../plugins/memory-embedding-providers.js", () => ({
   listMemoryEmbeddingProviders:
     mocks.listMemoryEmbeddingProviders as unknown as typeof import("../plugins/memory-embedding-providers.js").listMemoryEmbeddingProviders,
+<<<<<<< HEAD
+=======
+  registerMemoryEmbeddingProvider:
+    mocks.registerMemoryEmbeddingProvider as unknown as typeof import("../plugins/memory-embedding-providers.js").registerMemoryEmbeddingProvider,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("../plugins/embedding-provider-runtime.js", () => ({
@@ -323,6 +340,11 @@ vi.mock("../plugins/embedding-provider-runtime.js", () => ({
 vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
   createEmbeddingProvider:
     mocks.createEmbeddingProvider as unknown as typeof import("../plugin-sdk/memory-core-bundled-runtime.js").createEmbeddingProvider,
+<<<<<<< HEAD
+=======
+  registerBuiltInMemoryEmbeddingProviders:
+    mocks.registerBuiltInMemoryEmbeddingProviders as typeof import("../plugin-sdk/memory-core-bundled-runtime.js").registerBuiltInMemoryEmbeddingProviders,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("../image-generation/runtime.js", () => ({
@@ -509,12 +531,20 @@ describe("capability cli", () => {
     mocks.buildMediaUnderstandingRegistry.mockReset().mockReturnValue(new Map());
     mocks.convertHeicToJpeg.mockClear();
     mocks.createEmbeddingProvider.mockClear();
+<<<<<<< HEAD
+=======
+    mocks.registerMemoryEmbeddingProvider.mockClear();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mocks.listMemoryEmbeddingProviders
       .mockReset()
       .mockReturnValue([
         { id: "openai", defaultModel: "text-embedding-3-small", transport: "remote" },
       ]);
     mocks.listEmbeddingProviders.mockReset().mockReturnValue([]);
+<<<<<<< HEAD
+=======
+    mocks.registerBuiltInMemoryEmbeddingProviders.mockClear();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mocks.isWebSearchProviderConfigured.mockReset().mockReturnValue(false);
     mocks.isWebFetchProviderConfigured.mockReset().mockReturnValue(false);
     mocks.getModelsCommandSecretTargetIds.mockClear();
@@ -625,6 +655,16 @@ describe("capability cli", () => {
     return calls[0]?.[0];
   }
 
+<<<<<<< HEAD
+=======
+  function firstRegisteredEmbeddingBootstrapArg() {
+    const calls = mocks.registerBuiltInMemoryEmbeddingProviders.mock.calls as unknown as Array<
+      [{ registerMemoryEmbeddingProvider?: unknown }]
+    >;
+    return calls[0]?.[0];
+  }
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   function imageDescribeCall(index = 0) {
     const calls = mocks.describeImageFile.mock.calls as unknown as Array<[ImageDescribeParams]>;
     return calls[index]?.[0];
@@ -1685,6 +1725,7 @@ describe("capability cli", () => {
     expect(inputImages[0]?.fileName).toBe(path.basename(inputPath));
   });
 
+<<<<<<< HEAD
   it("forwards --count through to the image edit runtime", async () => {
     mocks.generateImage.mockResolvedValue({
       provider: "openai",
@@ -1714,6 +1755,8 @@ describe("capability cli", () => {
     expect(firstImageGenerationCall()?.count).toBe(3);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects unsupported image output format and background hints", async () => {
     await expect(
       runRegisteredCli({
@@ -1883,7 +1926,10 @@ describe("capability cli", () => {
       "--file",
       "--prompt",
       "--model",
+<<<<<<< HEAD
       "--count",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "--size",
       "--aspect-ratio",
       "--resolution",
@@ -1923,6 +1969,7 @@ describe("capability cli", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("keeps capability inspect metadata flags in sync with each command's registered options", () => {
     const program = new Command();
     registerCapabilityCli(program);
@@ -1954,6 +2001,8 @@ describe("capability cli", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("streams url-only generated videos to --output paths", async () => {
     mocks.generateVideo.mockResolvedValue({
       provider: "vydra",
@@ -2857,20 +2906,30 @@ describe("capability cli", () => {
     expect(vi.mocked(mediaRuntime.describeVideoFile)).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("lists generic embedding providers when the memory registry is empty", async () => {
     mocks.listMemoryEmbeddingProviders.mockReturnValueOnce([]);
     mocks.listEmbeddingProviders.mockReturnValueOnce([
       { id: "generic", defaultModel: "generic-embed", transport: "remote" },
     ] as never);
+=======
+  it("bootstraps built-in embedding providers when the registry is empty", async () => {
+    mocks.listMemoryEmbeddingProviders.mockReturnValueOnce([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
       argv: ["capability", "embedding", "providers", "--json"],
     });
 
+<<<<<<< HEAD
     expect(firstJsonOutput()).toMatchObject([
       { id: "generic", defaultModel: "generic-embed", transport: "remote" },
     ]);
+=======
+    const bootstrapArg = firstRegisteredEmbeddingBootstrapArg();
+    expect(typeof bootstrapArg?.registerMemoryEmbeddingProvider).toBe("function");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("marks env-backed audio providers as configured", async () => {

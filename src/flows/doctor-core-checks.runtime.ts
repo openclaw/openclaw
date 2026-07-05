@@ -591,6 +591,7 @@ function collectToolSchemaFindings(params: {
   );
 }
 
+<<<<<<< HEAD
 function collectNormalizedToolSchemaFindings(params: {
   agentId: string;
   tools: AnyAgentTool[];
@@ -600,12 +601,35 @@ function collectNormalizedToolSchemaFindings(params: {
   model: ProviderRuntimeModel;
   normalizationFailureFinding: (error: unknown) => HealthFinding;
 }): readonly HealthFinding[] {
+=======
+function collectBundleMcpRuntimeToolSchemaFindings(params: {
+  bundleRuntime: BundleMcpToolRuntime;
+  cfg: OpenClawConfig;
+  agentId: string;
+  workspaceDir: string;
+  modelRef: { provider: string; model: string };
+  model: ProviderRuntimeModel;
+}): readonly HealthFinding[] {
+  const activeBundleTools = applyFinalEffectiveToolPolicy({
+    bundledTools: params.bundleRuntime.tools,
+    config: params.cfg,
+    agentId: params.agentId,
+    modelProvider: params.modelRef.provider,
+    modelId: params.modelRef.model,
+    warn: () => {},
+    toolPolicyAuditLogLevel: "debug",
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const preNormalizationFindings: HealthFinding[] = [];
 
   let normalizedTools: AnyAgentTool[];
   try {
     normalizedTools = normalizeAgentRuntimeTools({
+<<<<<<< HEAD
       tools: params.tools,
+=======
+      tools: activeBundleTools,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       provider: params.modelRef.provider,
       config: params.cfg,
       workspaceDir: params.workspaceDir,
@@ -626,7 +650,11 @@ function collectNormalizedToolSchemaFindings(params: {
       },
     });
   } catch (error) {
+<<<<<<< HEAD
     return [...preNormalizationFindings, params.normalizationFailureFinding(error)];
+=======
+    return [...preNormalizationFindings, bundleMcpRuntimeNormalizationFailureFinding(error)];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   return [
@@ -638,6 +666,7 @@ function collectNormalizedToolSchemaFindings(params: {
   ];
 }
 
+<<<<<<< HEAD
 function collectBundleMcpRuntimeToolSchemaFindings(params: {
   bundleRuntime: BundleMcpToolRuntime;
   cfg: OpenClawConfig;
@@ -666,6 +695,8 @@ function collectBundleMcpRuntimeToolSchemaFindings(params: {
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function agentRuntimeToolLoadFailureFinding(params: {
   agentId: string;
   error: unknown;
@@ -722,6 +753,7 @@ function collectAgentRuntimeToolSchemaFindings(params: {
     return [agentRuntimeToolLoadFailureFinding({ agentId: params.agentId, error })];
   }
 
+<<<<<<< HEAD
   return collectNormalizedToolSchemaFindings({
     agentId: params.agentId,
     tools,
@@ -735,6 +767,47 @@ function collectAgentRuntimeToolSchemaFindings(params: {
         error,
       }),
   });
+=======
+  const preNormalizationFindings: HealthFinding[] = [];
+
+  let normalizedTools: AnyAgentTool[];
+  try {
+    normalizedTools = normalizeAgentRuntimeTools({
+      tools,
+      provider: params.modelRef.provider,
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      env: process.env,
+      modelId: params.modelRef.model,
+      modelApi: params.model.api,
+      model: params.model,
+      onPreNormalizationSchemaDiagnostics: (diagnostics, sourceTools) => {
+        preNormalizationFindings.push(
+          ...diagnostics.map((diagnostic) =>
+            toolSchemaDiagnosticToFinding({
+              agentId: params.agentId,
+              tools: sourceTools,
+              diagnostic,
+            }),
+          ),
+        );
+      },
+    });
+  } catch (error) {
+    return [
+      ...preNormalizationFindings,
+      agentRuntimeToolNormalizationFailureFinding({ agentId: params.agentId, error }),
+    ];
+  }
+
+  return [
+    ...preNormalizationFindings,
+    ...collectToolSchemaFindings({
+      agentId: params.agentId,
+      tools: normalizedTools,
+    }),
+  ];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function bundleMcpRuntimeNormalizationFailureFinding(error: unknown): HealthFinding {

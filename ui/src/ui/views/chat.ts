@@ -33,13 +33,20 @@ import { CHAT_HISTORY_RENDER_LIMIT } from "../chat/history-limits.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../chat/input-history.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
+<<<<<<< HEAD
+=======
+import type { RealtimeTalkConversationEntry } from "../chat/realtime-talk-conversation.ts";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   REALTIME_TALK_FALLBACK_PROVIDERS,
   listSelectableRealtimeTalkProviders,
   resolveControlUiRealtimeTalkProviderTransports,
   type RealtimeTalkCatalogProvider,
 } from "../chat/realtime-talk-catalog.ts";
+<<<<<<< HEAD
 import type { RealtimeTalkConversationEntry } from "../chat/realtime-talk-conversation.ts";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
 import { renderChatRunControls } from "../chat/run-controls.ts";
 import type { ChatRunUiStatus } from "../chat/run-lifecycle.ts";
@@ -506,11 +513,14 @@ function renderRealtimeTalkConversation(props: ChatProps) {
   `;
 }
 
+<<<<<<< HEAD
 type PendingClearedSubmittedDraft = {
   key: string;
   value: string;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 interface ChatEphemeralState {
   slashMenuOpen: boolean;
   slashMenuItems: SlashCommandDef[];
@@ -524,8 +534,11 @@ interface ChatEphemeralState {
   searchQuery: string;
   pinnedExpanded: boolean;
   composerComposing: boolean;
+<<<<<<< HEAD
   composerInputIntentKey: string | null;
   pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   historyRenderSessionKey: string | null;
   historyRenderMessagesRef: unknown[] | null;
   historyRenderMessageCount: number;
@@ -553,8 +566,11 @@ function createChatEphemeralState(): ChatEphemeralState {
     searchQuery: "",
     pinnedExpanded: false,
     composerComposing: false,
+<<<<<<< HEAD
     composerInputIntentKey: null,
     pendingClearedSubmittedDraft: null,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     historyRenderSessionKey: null,
     historyRenderMessagesRef: null,
     historyRenderMessageCount: 0,
@@ -611,6 +627,7 @@ function commitComposerDraft(props: ChatProps, value: string): void {
   props.onDraftChange(value);
 }
 
+<<<<<<< HEAD
 function markComposerInputIntent(key: string): void {
   vs.composerInputIntentKey = key;
 }
@@ -652,6 +669,8 @@ function suppressStaleSubmittedDraftReplay(
   return true;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsProps): boolean {
   return (
     previous.sessionKey === next.sessionKey &&
@@ -2313,14 +2332,18 @@ export function renderChat(props: ChatProps) {
     if (typeof hostDraft !== "string") {
       return;
     }
+<<<<<<< HEAD
     const mirrorKey = composerDraftMirrorKey(props);
     const submittedDraft = draftMirror.value;
     const clearedSubmittedDraft =
       hostDraft === "" && submittedDraft !== "" && target?.value === submittedDraft;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     // Sends can clear the host draft synchronously before Lit rerenders; keep
     // the local mirror aligned so the submitted text does not stay editable.
     draftMirror.hostDraft = hostDraft;
     draftMirror.value = hostDraft;
+<<<<<<< HEAD
     if (clearedSubmittedDraft) {
       vs.pendingClearedSubmittedDraft = {
         key: mirrorKey,
@@ -2329,6 +2352,8 @@ export function renderChat(props: ChatProps) {
     } else {
       clearPendingClearedSubmittedDraft(mirrorKey);
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (target && target.value !== hostDraft) {
       target.value = hostDraft;
       adjustTextareaHeight(target);
@@ -2479,6 +2504,7 @@ export function renderChat(props: ChatProps) {
     }
     updateSlashMenu(target.value, requestUpdate, props, {}, () => target.value);
   };
+<<<<<<< HEAD
   const handleBeforeInput = (e: InputEvent) => {
     if (!vs.composerComposing && !e.isComposing) {
       markComposerInputIntent(composerDraftMirrorKey(props));
@@ -2488,6 +2514,10 @@ export function renderChat(props: ChatProps) {
     const target = e.target as HTMLTextAreaElement;
     const mirrorKey = composerDraftMirrorKey(props);
     const hasInputIntent = consumeComposerInputIntent(mirrorKey);
+=======
+  const handleInput = (e: InputEvent) => {
+    const target = e.target as HTMLTextAreaElement;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (vs.composerComposing || e.isComposing) {
       // Skip adjustTextareaHeight during IME composition — each pinyin
       // keystroke fires `input` and the height read/write forces a
@@ -2496,9 +2526,12 @@ export function renderChat(props: ChatProps) {
       draftMirror.value = target.value;
       return;
     }
+<<<<<<< HEAD
     if (suppressStaleSubmittedDraftReplay(target, e, draftMirror, hasInputIntent)) {
       return;
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     syncComposerValue(target);
   };
   const handleCompositionEnd = (e: CompositionEvent) => {
@@ -2610,7 +2643,10 @@ export function renderChat(props: ChatProps) {
           aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
           aria-describedby=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
           @keydown=${handleKeyDown}
+<<<<<<< HEAD
           @beforeinput=${handleBeforeInput}
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           @input=${handleInput}
           @compositionstart=${() => {
             vs.composerComposing = true;

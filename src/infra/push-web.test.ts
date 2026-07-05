@@ -6,12 +6,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import webPush from "web-push";
 import {
   broadcastWebPush,
+<<<<<<< HEAD
   clearWebPushSubscriptionByEndpoint,
   listWebPushSubscriptions,
   registerWebPushSubscription,
   resolveVapidKeys,
 } from "./push-web.js";
 
+=======
+  clearWebPushSubscription,
+  clearWebPushSubscriptionByEndpoint,
+  listWebPushSubscriptions,
+  loadWebPushSubscription,
+  registerWebPushSubscription,
+  resolveVapidKeys,
+  sendWebPushNotification,
+} from "./push-web.js";
+
+type WebPushSubscription = NonNullable<Awaited<ReturnType<typeof loadWebPushSubscription>>>;
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // Stub resolveStateDir so tests use a temp directory.
 let tmpDir: string;
 vi.mock("../config/paths.js", () => ({
@@ -30,6 +44,19 @@ vi.mock("web-push", () => ({
   },
 }));
 
+<<<<<<< HEAD
+=======
+function expectLoadedSubscription(
+  loaded: Awaited<ReturnType<typeof loadWebPushSubscription>>,
+): WebPushSubscription {
+  if (loaded === null) {
+    throw new Error("Expected loaded web push subscription");
+  }
+  expect(loaded.endpoint).not.toBe("");
+  return loaded;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "push-web-test-"));
   vi.clearAllMocks();
@@ -113,6 +140,24 @@ describe("subscription CRUD", () => {
     expect(sub2.keys.p256dh).toBe("new-p256dh");
   });
 
+<<<<<<< HEAD
+=======
+  it("loads a subscription by ID", async () => {
+    const sub = await registerWebPushSubscription({
+      endpoint,
+      keys,
+      baseDir: tmpDir,
+    });
+    const loaded = await loadWebPushSubscription(sub.subscriptionId, tmpDir);
+    expect(expectLoadedSubscription(loaded).endpoint).toBe(endpoint);
+  });
+
+  it("returns null for unknown subscription ID", async () => {
+    const loaded = await loadWebPushSubscription("nonexistent", tmpDir);
+    expect(loaded).toBeNull();
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("lists all subscriptions", async () => {
     await registerWebPushSubscription({
       endpoint: "https://push.example.com/a",
@@ -128,6 +173,22 @@ describe("subscription CRUD", () => {
     expect(list).toHaveLength(2);
   });
 
+<<<<<<< HEAD
+=======
+  it("clears a subscription by ID", async () => {
+    const sub = await registerWebPushSubscription({
+      endpoint,
+      keys,
+      baseDir: tmpDir,
+    });
+    const removed = await clearWebPushSubscription(sub.subscriptionId, tmpDir);
+    expect(removed).toBe(true);
+
+    const list = await listWebPushSubscriptions(tmpDir);
+    expect(list).toHaveLength(0);
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("clears a subscription by endpoint", async () => {
     await registerWebPushSubscription({ endpoint, keys, baseDir: tmpDir });
     const removed = await clearWebPushSubscriptionByEndpoint(endpoint, tmpDir);
@@ -161,6 +222,28 @@ describe("subscription CRUD", () => {
 describe("sending", () => {
   const keys = { p256dh: "p256dh-key", auth: "auth-key" };
 
+<<<<<<< HEAD
+=======
+  it("configures VAPID details for direct sends", async () => {
+    const sub = await registerWebPushSubscription({
+      endpoint: "https://push.example.com/direct",
+      keys,
+      baseDir: tmpDir,
+    });
+
+    const result = await sendWebPushNotification(sub, { title: "Direct" });
+
+    expect(result.ok).toBe(true);
+    expect(vi.mocked(webPush.setVapidDetails)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(webPush.setVapidDetails)).toHaveBeenCalledWith(
+      "https://openclaw.ai",
+      "test-public-key-base64url",
+      "test-private-key-base64url",
+    );
+    expect(vi.mocked(webPush.sendNotification)).toHaveBeenCalledTimes(1);
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("configures VAPID details once before broadcasting to subscribers", async () => {
     await registerWebPushSubscription({
       endpoint: "https://push.example.com/a",

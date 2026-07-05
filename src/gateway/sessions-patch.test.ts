@@ -238,6 +238,7 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBeUndefined();
   });
 
+<<<<<<< HEAD
   test("persists responseUsage=off (does not clear)", async () => {
     const entry = expectPatchOk(
       await runPatch({
@@ -262,6 +263,8 @@ describe("gateway sessions patch", () => {
     expect(entry.responseUsage).toBeUndefined();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   test("persists reasoningLevel=off (does not clear)", async () => {
     const entry = expectPatchOk(
       await runPatch({
@@ -344,6 +347,7 @@ describe("gateway sessions patch", () => {
     expect(entry.fastMode).toBeUndefined();
   });
 
+<<<<<<< HEAD
   test("sets fastMode to auto", async () => {
     const store: Record<string, SessionEntry> = {
       [MAIN_SESSION_KEY]: {} as SessionEntry,
@@ -358,6 +362,8 @@ describe("gateway sessions patch", () => {
     expect(entry.fastMode).toBe("auto");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   test("persists verboseLevel=full", async () => {
     const entry = expectPatchOk(
       await runPatch({

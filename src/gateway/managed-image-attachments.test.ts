@@ -292,12 +292,17 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(readSessionMessagesMock).toHaveBeenCalledWith(
       {
         agentId: undefined,
+<<<<<<< HEAD
         sessionEntry: {
           sessionFile: "session.jsonl",
           sessionId: "sess-1",
         },
         sessionId: "sess-1",
         sessionKey: "agent:main:main",
+=======
+        sessionFile: "session.jsonl",
+        sessionId: "sess-1",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         storePath: path.join(stateDir, "gateway-sessions.json"),
       },
       expect.objectContaining({ allowResetArchiveFallback: true }),
@@ -859,6 +864,7 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(requireBlock(blocks).type).toBe("image");
   });
 
+<<<<<<< HEAD
   it("allows managed inbound image paths before validating explicit roots", async () => {
     const inboundPath = path.join(stateDir, "media", "inbound", "inbound.png");
     await fs.mkdir(path.dirname(inboundPath), { recursive: true });
@@ -877,6 +883,8 @@ describe("createManagedOutgoingImageBlocks", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects relative local image paths that resolve outside allowed roots", async () => {
     const allowedWorkspaceDir = path.join(stateDir, "workspace");
     const outsidePath = path.join(stateDir, "outside.png");
@@ -1086,12 +1094,17 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(readSessionMessagesMock).toHaveBeenCalledWith(
       {
         agentId: undefined,
+<<<<<<< HEAD
         sessionEntry: {
           sessionFile: "/tmp/sess-main.jsonl",
           sessionId: "sess-main",
         },
         sessionId: "sess-main",
         sessionKey: "agent:main:main",
+=======
+        sessionFile: "/tmp/sess-main.jsonl",
+        sessionId: "sess-main",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         storePath: path.join(stateDir, "gateway-sessions.json"),
       },
       expect.objectContaining({ allowResetArchiveFallback: true }),

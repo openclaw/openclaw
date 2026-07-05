@@ -604,7 +604,11 @@ describe("openclaw state database", () => {
       | { journal_mode?: string }
       | undefined;
     expect(journalMode?.journal_mode?.toLowerCase()).toBe("delete");
+<<<<<<< HEAD
     expect(statfs).toHaveBeenCalledWith(fs.realpathSync(path.join(stateDir, "state")));
+=======
+    expect(statfs).toHaveBeenCalledWith(path.join(stateDir, "state"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("records durable schema metadata", () => {

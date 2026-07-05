@@ -62,13 +62,17 @@ export type ApplyPatchSummary = {
 type ApplyPatchResult = {
   summary: ApplyPatchSummary;
   text: string;
+<<<<<<< HEAD
   noOp?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 type ApplyPatchToolDetails = {
   summary: ApplyPatchSummary;
 };
 
+<<<<<<< HEAD
 function normalizeUpdateComparison(content: string): string {
   const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   if (normalized.length === 0 || normalized.endsWith("\n")) {
@@ -77,6 +81,8 @@ function normalizeUpdateComparison(content: string): string {
   return `${normalized}\n`;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type SandboxApplyPatchConfig = {
   root: string;
   bridge: SandboxFsBridge;
@@ -132,7 +138,10 @@ export function createApplyPatchTool(
       return {
         content: [{ type: "text", text: result.text }],
         details: { summary: result.summary },
+<<<<<<< HEAD
         ...(result.noOp ? { terminate: true } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       };
     },
   };
@@ -158,7 +167,10 @@ export async function applyPatch(
     modified: new Set<string>(),
     deleted: new Set<string>(),
   };
+<<<<<<< HEAD
   const noOpPaths = new Set<string>();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const fileOps = resolvePatchFileOps(options);
 
   for (const hunk of parsed.hunks) {
@@ -195,6 +207,7 @@ export async function applyPatch(
       await ensureDir(moveTarget.resolved, fileOps);
       const moveResolvesToSource =
         path.resolve(moveTarget.resolved) === path.resolve(target.resolved);
+<<<<<<< HEAD
       const destination = moveResolvesToSource ? target.resolved : moveTarget.resolved;
       if (moveResolvesToSource) {
         const existing = await fileOps.readFile(target.resolved);
@@ -236,6 +249,30 @@ export async function applyPatch(
     summary,
     text: noOp ? `No changes made to ${Array.from(noOpPaths).join(", ")}.` : formatSummary(summary),
     ...(noOp ? { noOp: true } : {}),
+=======
+      await fileOps.writeFile(
+        moveResolvesToSource ? target.resolved : moveTarget.resolved,
+        applied,
+      );
+      if (!moveResolvesToSource) {
+        await fileOps.remove(target.resolved);
+      }
+      recordSummary(
+        summary,
+        seen,
+        "modified",
+        moveResolvesToSource ? target.display : moveTarget.display,
+      );
+    } else {
+      await fileOps.writeFile(target.resolved, applied);
+      recordSummary(summary, seen, "modified", target.display);
+    }
+  }
+
+  return {
+    summary,
+    text: formatSummary(summary),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }
 

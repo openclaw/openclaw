@@ -141,12 +141,19 @@ function normalizeMediaEntryForTranscript(media: PersistedUserTurnMediaInput):
 
 function normalizeOptionalTextArray(
   values: readonly (string | null | undefined)[] | null | undefined,
+<<<<<<< HEAD
 ): (string | undefined)[] {
   // Map each entry to a normalized string or undefined — do NOT compact with
   // .filter(Boolean). The writer pads holes with "" to keep parallel Media*
   // arrays (MediaPaths / MediaUrls / MediaTypes) index-aligned, so compaction
   // here would shift later entries onto the wrong attachment.
   return values?.map(normalizeOptionalText) ?? [];
+=======
+): string[] {
+  return (
+    values?.map(normalizeOptionalText).filter((value): value is string => Boolean(value)) ?? []
+  );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 const URL_LIKE_MEDIA_PATH_PATTERN = /^[a-z][a-z0-9+.-]*:/i;

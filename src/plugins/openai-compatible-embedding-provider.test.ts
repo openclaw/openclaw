@@ -1,6 +1,10 @@
 // Covers OpenAI-compatible embedding provider plugin behavior.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+<<<<<<< HEAD
 import type { AddressInfo, Socket } from "node:net";
+=======
+import type { AddressInfo } from "node:net";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-providers.js";
@@ -116,6 +120,7 @@ async function startEmbeddingServer(params?: {
   };
 }
 
+<<<<<<< HEAD
 async function startHangingErrorEmbeddingServer(): Promise<{
   baseUrl: string;
   closed: Promise<void>;
@@ -163,6 +168,8 @@ async function startHangingErrorEmbeddingServer(): Promise<{
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 afterEach(async () => {
   const pending = servers.splice(0);
   await Promise.all(pending.map((server) => server.close()));
@@ -297,6 +304,7 @@ describe("openai-compatible generic embedding provider", () => {
     });
   });
 
+<<<<<<< HEAD
   it("bounds and cancels non-ok embedding error bodies", async () => {
     const server = await startHangingErrorEmbeddingServer();
     const { provider } = await createOpenAICompatibleEmbeddingProvider(
@@ -333,6 +341,8 @@ describe("openai-compatible generic embedding provider", () => {
     ).resolves.toBe("closed");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("resolves env SecretRef API keys on the memory search secret surface", async () => {
     const token = "env-secret-token";
     const envVar = "OPENCLAW_TEST_OPENAI_COMPATIBLE_EMBEDDING_API_KEY";

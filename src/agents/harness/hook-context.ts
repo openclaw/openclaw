@@ -3,10 +3,15 @@
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+<<<<<<< HEAD
 import { buildAgentHookContextIdentityFields } from "../../plugins/hook-agent-context.js";
 import type {
   PluginHookAgentContext,
   PluginHookChannelContext,
+=======
+import type {
+  PluginHookAgentContext,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   PluginHookContextWindowSource,
 } from "../../plugins/hook-types.js";
 
@@ -17,7 +22,11 @@ import type {
  * construction input so hooks do not accidentally depend on mutable raw configuration.
  */
 export type AgentHarnessHookContext = {
+<<<<<<< HEAD
   runId?: string;
+=======
+  runId: string;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   trace?: DiagnosticTraceContext;
   jobId?: string;
   agentId?: string;
@@ -27,22 +36,35 @@ export type AgentHarnessHookContext = {
   modelProviderId?: string;
   modelId?: string;
   messageProvider?: string;
+<<<<<<< HEAD
+=======
+  channel?: string;
+  chatId?: string;
+  senderId?: string;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   trigger?: string;
   channelId?: string;
   contextTokenBudget?: number;
   contextWindowSource?: PluginHookContextWindowSource;
   contextWindowReferenceTokens?: number;
   config?: OpenClawConfig;
+<<<<<<< HEAD
   senderId?: string;
   chatId?: string;
   channel?: string;
   channelContext?: PluginHookChannelContext;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 /** Builds the sparse hook context object passed to agent harness plugin hooks. */
 export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHookAgentContext {
   return {
+<<<<<<< HEAD
     ...(params.runId ? { runId: params.runId } : {}),
+=======
+    runId: params.runId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ...(params.trace ? { trace: params.trace } : {}),
     ...(params.jobId ? { jobId: params.jobId } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -53,6 +75,11 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.modelId ? { modelId: params.modelId } : {}),
     ...(params.messageProvider ? { messageProvider: params.messageProvider } : {}),
     ...(params.channel ? { channel: params.channel } : {}),
+<<<<<<< HEAD
+=======
+    ...(params.chatId ? { chatId: params.chatId } : {}),
+    ...(params.senderId ? { senderId: params.senderId } : {}),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ...(params.trigger ? { trigger: params.trigger } : {}),
     ...(params.channelId ? { channelId: params.channelId } : {}),
     ...(params.contextTokenBudget ? { contextTokenBudget: params.contextTokenBudget } : {}),
@@ -60,11 +87,14 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.contextWindowReferenceTokens
       ? { contextWindowReferenceTokens: params.contextWindowReferenceTokens }
       : {}),
+<<<<<<< HEAD
     ...buildAgentHookContextIdentityFields({
       trigger: params.trigger,
       senderId: params.senderId,
       chatId: params.chatId,
       channelContext: params.channelContext,
     }),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }

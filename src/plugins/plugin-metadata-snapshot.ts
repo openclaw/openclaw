@@ -36,7 +36,10 @@ import {
   type PluginRegistrySnapshotSource,
 } from "./plugin-registry.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
+<<<<<<< HEAD
 import { fileFingerprint } from "./plugin-snapshot-fingerprint.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type PluginMetadataSnapshotMemo = {
   key: string;
@@ -87,6 +90,19 @@ export type {
   ResolvePluginMetadataSnapshotParams,
 } from "./plugin-metadata-snapshot.types.js";
 
+<<<<<<< HEAD
+=======
+function fileFingerprint(filePath: string): unknown {
+  try {
+    const stat = fs.statSync(filePath, { bigint: true });
+    const kind = stat.isFile() ? "file" : stat.isDirectory() ? "dir" : "other";
+    return [filePath, kind, stat.size.toString(), stat.mtimeNs.toString(), stat.ctimeNs.toString()];
+  } catch {
+    return [filePath, "missing"];
+  }
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function directoryChildPackageJsonFingerprint(directoryPath: string): unknown {
   let entries: fs.Dirent[];
   try {
@@ -578,7 +594,20 @@ export function loadPluginMetadataSnapshot(
   const memoKey = computePluginMetadataSnapshotMemoKey({ params, registryState });
   const memo = findPluginMetadataSnapshotMemo(memoKey);
   if (memo?.key === memoKey) {
+<<<<<<< HEAD
     return memo.snapshot;
+=======
+    return measureDiagnosticsTimelineSpanSync("plugins.metadata.scan", () => memo.snapshot, {
+      phase: activeTimelineSpan?.phase ?? "startup",
+      config: params.config,
+      env: params.env,
+      attributes: {
+        cacheHit: true,
+        hasWorkspaceDir: params.workspaceDir !== undefined,
+        hasInstalledIndex: params.index !== undefined,
+      },
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   const result = measureDiagnosticsTimelineSpanSync(

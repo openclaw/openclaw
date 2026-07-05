@@ -536,6 +536,7 @@ export async function dispatchGatewayMethodInProcess<T>(
   return await dispatchGatewayMethod<T>(method, params, options);
 }
 
+<<<<<<< HEAD
 const PLUGIN_SUBAGENT_SESSION_MESSAGES_MAX_LIMIT = 1_000;
 
 export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
@@ -550,6 +551,13 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
     const payload = await dispatchGatewayMethod<{ messages?: unknown[] }>("sessions.get", {
       key: params.sessionKey,
       ...(limit != null && { limit }),
+=======
+export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
+  const getSessionMessages: PluginRuntime["subagent"]["getSessionMessages"] = async (params) => {
+    const payload = await dispatchGatewayMethod<{ messages?: unknown[] }>("sessions.get", {
+      key: params.sessionKey,
+      ...(params.limit != null && { limit: params.limit }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     return { messages: Array.isArray(payload?.messages) ? payload.messages : [] };
   };
@@ -617,6 +625,7 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
           ...(params.timeoutMs != null && { timeoutMs: params.timeoutMs }),
         },
       );
+<<<<<<< HEAD
       let status = payload?.status;
       if (status === "completed" || status === "succeeded") {
         status = "ok";
@@ -631,6 +640,15 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         ...(status !== "ok" &&
           typeof payload?.error === "string" &&
           payload.error && { error: payload.error }),
+=======
+      const status = payload?.status;
+      if (status !== "ok" && status !== "error" && status !== "timeout") {
+        throw new Error(`Gateway agent.wait returned unexpected status: ${status}`);
+      }
+      return {
+        status,
+        ...(typeof payload?.error === "string" && payload.error && { error: payload.error }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       };
     },
     getSessionMessages,

@@ -184,7 +184,11 @@ export function resolveLastToRaw(params: {
 export function maybeRetireLegacyMainDeliveryRoute(params: {
   sessionCfg: { dmScope?: string } | undefined;
   sessionKey: string;
+<<<<<<< HEAD
   legacyMain?: SessionEntry;
+=======
+  sessionStore: Record<string, SessionEntry>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   agentId: string;
   mainKey: string;
   isGroup: boolean;
@@ -201,7 +205,11 @@ export function maybeRetireLegacyMainDeliveryRoute(params: {
   if (params.sessionKey === canonicalMainSessionKey) {
     return undefined;
   }
+<<<<<<< HEAD
   const legacyMain = params.legacyMain;
+=======
+  const legacyMain = params.sessionStore[canonicalMainSessionKey];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!legacyMain) {
     return undefined;
   }

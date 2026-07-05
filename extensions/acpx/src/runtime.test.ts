@@ -2,7 +2,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+<<<<<<< HEAD
 import { RequestedModelUnsupportedError } from "acpx/runtime";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AcpRuntimeError,
@@ -709,6 +712,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
   });
 
+<<<<<<< HEAD
   it("retries without a model when ACPX reports missing model capability", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
@@ -803,6 +807,8 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(ensure).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("injects Codex ACP startup config into the scoped registry", () => {
     expect(testing.isCodexAcpCommand(CODEX_ACP_COMMAND)).toBe(true);
     expect(testing.isCodexAcpCommand(CODEX_ACP_WRAPPER_COMMAND)).toBe(true);

@@ -69,6 +69,18 @@ export async function ensureChannelSetupPluginInstalled(params: {
   };
 }
 
+<<<<<<< HEAD
+=======
+/** Reload configured channel setup plugins after config or install-record changes. */
+export function reloadChannelSetupPluginRegistry(params: {
+  cfg: OpenClawConfig;
+  runtime: RuntimeEnv;
+  workspaceDir?: string;
+}): void {
+  loadChannelSetupPluginRegistry(params);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function loadChannelSetupPluginRegistry(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -137,6 +149,29 @@ function resolveUniqueManifestScopedChannelPluginId(params: {
   return matches.length === 1 ? matches[0] : undefined;
 }
 
+<<<<<<< HEAD
+=======
+/** Reload only the plugin that can contribute setup support for one channel id. */
+export function reloadChannelSetupPluginRegistryForChannel(params: {
+  cfg: OpenClawConfig;
+  runtime: RuntimeEnv;
+  channel: string;
+  pluginId?: string;
+  workspaceDir?: string;
+}): void {
+  const scopedPluginId = resolveScopedChannelPluginId({
+    cfg: params.cfg,
+    channel: params.channel,
+    pluginId: params.pluginId,
+    workspaceDir: params.workspaceDir,
+  });
+  loadChannelSetupPluginRegistry({
+    ...params,
+    ...(scopedPluginId ? { onlyPluginIds: [scopedPluginId] } : {}),
+  });
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Load an inactive setup-plugin registry snapshot for resolving a channel without side effects. */
 export function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
   cfg: OpenClawConfig;

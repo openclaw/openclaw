@@ -1225,6 +1225,7 @@ describe("loadSessions", () => {
 });
 
 describe("applySessionsChangedEvent", () => {
+<<<<<<< HEAD
   it("replaces stale effective fast metadata from session change events", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {
@@ -1264,6 +1265,8 @@ describe("applySessionsChangedEvent", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("removes deleted sessions instead of keeping archived rows visible", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {

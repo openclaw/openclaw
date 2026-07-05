@@ -1,14 +1,20 @@
 /**
  * Public option and metadata types for agent command execution.
  */
+<<<<<<< HEAD
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { PromptMode } from "../../agents/system-prompt.types.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+<<<<<<< HEAD
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
@@ -41,10 +47,13 @@ export type AgentRunContext = {
   groupChannel?: string | null;
   groupSpace?: string | null;
   currentChannelId?: string;
+<<<<<<< HEAD
   /** Transport-native chat/conversation ID for plugin hook identity context. */
   chatId?: string;
   /** Channel-specific sender/chat metadata for plugin hook identity context. */
   channelContext?: PluginHookChannelContext;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   currentThreadTs?: string;
   currentInboundAudio?: boolean;
   senderId?: string | null;
@@ -96,8 +105,11 @@ export type AgentCommandOpts = {
   accountId?: string;
   /** Context for embedded run routing (channel/account/thread). */
   runContext?: AgentRunContext;
+<<<<<<< HEAD
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /** Internal trusted exec approval follow-up elevated defaults. */
   bashElevated?: ExecElevatedDefaults;
   /** Trusted sender identity bit for command/channel-action auth; defaults true for local CLI calls. */
@@ -137,10 +149,13 @@ export type AgentCommandOpts = {
   skipInitialSessionTouch?: boolean;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
+<<<<<<< HEAD
   /** Resolved per-run fast mode from channel/directive handling. */
   fastMode?: FastMode;
   /** Resolved per-run auto cutoff seconds for fast mode. */
   fastModeAutoOnSeconds?: number;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /** Explicit workspace directory override (for subagents to inherit parent workspace). */
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
   /** Explicit task working directory for this run. Bootstrap still uses workspaceDir. */

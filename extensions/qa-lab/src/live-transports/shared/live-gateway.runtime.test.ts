@@ -193,6 +193,7 @@ describe("startQaLiveLaneGateway", () => {
     expect(gatewayStop).toHaveBeenCalledTimes(1);
   });
 
+<<<<<<< HEAD
   it("stops the mock server when gateway startup fails", async () => {
     startQaGatewayChild.mockRejectedValueOnce(new Error("gateway failed"));
 
@@ -232,6 +233,8 @@ describe("startQaLiveLaneGateway", () => {
     expect(mockStop).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("still stops the mock server when gateway shutdown fails", async () => {
     gatewayStop.mockRejectedValueOnce(new Error("gateway down"));
     const harness = await startQaLiveLaneGateway({

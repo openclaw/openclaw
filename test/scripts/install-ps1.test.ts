@@ -96,7 +96,11 @@ describe("install.ps1 failure handling", () => {
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_UPDATE_NOTIFIER = "false"');
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_FUND = "false"');
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_AUDIT = "false"');
+<<<<<<< HEAD
     expect(npmInstallBody).not.toContain("NPM_CONFIG_SCRIPT_SHELL");
+=======
+    expect(npmInstallBody).toContain('$env:NPM_CONFIG_SCRIPT_SHELL = "cmd.exe"');
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(npmInstallBody).toContain('$freshnessArgs = @("--min-release-age=0")');
     expect(npmInstallBody).toContain("Remove-Item Env:NPM_CONFIG_BEFORE");
     expect(npmInstallBody).toContain("Remove-Item Env:NPM_CONFIG_MIN_RELEASE_AGE");
@@ -117,6 +121,7 @@ describe("install.ps1 failure handling", () => {
     expect(source).toContain("Get-Content -LiteralPath $latestLog -Tail 120");
   });
 
+<<<<<<< HEAD
   it("does not force npm or pnpm lifecycle scripts through cmd.exe", () => {
     const ensurePnpmBody = extractFunctionBody(source, "Ensure-Pnpm");
     const npmInstallBody = extractFunctionBody(source, "Install-OpenClaw");
@@ -127,6 +132,8 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody).not.toContain("NPM_CONFIG_SCRIPT_SHELL");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("runs Windows command shims from a Windows-local cwd", () => {
     const commandSafeBody = extractFunctionBody(source, "Invoke-CommandFromWindowsSafeDirectory");
     const npmCommandBody = extractFunctionBody(source, "Invoke-NpmCommand");
@@ -246,8 +253,11 @@ describe("install.ps1 failure handling", () => {
   it("persists user-local portable Git for future git-backed updates", () => {
     const portableGitRootBody = extractFunctionBody(source, "Get-PortableGitRoot");
     const portableGitBody = extractFunctionBody(source, "Install-PortableGit");
+<<<<<<< HEAD
     const portableArchitectureBody = extractFunctionBody(source, "Get-WindowsPortableArchitecture");
     const portableGitDownloadBody = extractFunctionBody(source, "Resolve-PortableGitDownload");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const portableGitPathEntriesBody = extractFunctionBody(source, "Get-PortableGitPathEntries");
     const portableGitPathBody = extractFunctionBody(source, "Ensure-PortableGitOnUserPath");
     const usePortableGitBody = extractFunctionBody(source, "Use-PortableGitIfPresent");
@@ -262,6 +272,7 @@ describe("install.ps1 failure handling", () => {
     expect(ensureGitBody).toContain("Ensure-PortableGitOnUserPath");
     expect(portableGitPathBody).toContain("Add-ToUserPath $pathEntry");
     expect(portableGitPathBody).toContain("git-backed updates");
+<<<<<<< HEAD
     expect(portableArchitectureBody).toContain("Win32_Processor");
     expect(portableArchitectureBody).toContain("Architecture -eq 12");
     expect(portableArchitectureBody).toContain("Win32_ComputerSystem");
@@ -367,6 +378,8 @@ describe("install.ps1 failure handling", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("activates the repo-pinned pnpm version for git installs", () => {
@@ -431,7 +444,10 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody).toContain('$env:PNPM_CONFIG_WORKSPACE_CONCURRENCY = "1"');
     expect(gitInstallBody).toContain('$env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = "false"');
     expect(gitInstallBody).toContain('$env:PNPM_CONFIG_SIDE_EFFECTS_CACHE = "false"');
+<<<<<<< HEAD
     expect(gitInstallBody).toContain('$env:NODE_LLAMA_CPP_POSTINSTALL = "skip"');
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(gitInstallBody).toContain("$installSucceeded = ($LASTEXITCODE -eq 0)");
     expect(gitInstallBody).toContain("clearing node_modules and retrying once");
     expect(gitInstallBody).toContain("Remove-Item -Recurse -Force node_modules");
@@ -451,7 +467,10 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody).toContain(
       "$env:PNPM_CONFIG_WORKSPACE_CONCURRENCY = $prevPnpmWorkspaceConcurrency",
     );
+<<<<<<< HEAD
     expect(gitInstallBody).toContain("$env:NODE_LLAMA_CPP_POSTINSTALL = $prevNodeLlamaPostinstall");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(gitInstallBody).toContain("Add-ToUserPath $binDir");
     expect(gitInstallBody).toContain('Write-Host "[!] pnpm build failed for the Git checkout"');
     expect(gitInstallBody).toContain('$entryPath = Join-Path $RepoDir "dist\\\\entry.js"');

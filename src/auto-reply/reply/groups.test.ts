@@ -34,7 +34,11 @@ describe("group runtime loading", () => {
       "Your text replies are automatically sent to this group chat.",
     );
     expect(groupChatContext).toContain(
+<<<<<<< HEAD
       "For ordinary text, do not use the message tool to send to this same destination; just reply normally.",
+=======
+      "For ordinary text, do not use the message tool to send to this same group; just reply normally.",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
     expect(groupChatContext).toContain(
       "Use message(action=send) only when you need to send files, images, or other attachments to this same group/topic.",
@@ -62,6 +66,7 @@ describe("group runtime loading", () => {
     expect(toolOnlyContext).toContain("<https://example.com>");
     expect(toolOnlyContext).toContain("do not call message(action=send)");
     expect(toolOnlyContext).not.toContain('reply with exactly "NO_REPLY"');
+<<<<<<< HEAD
     const channelToolOnlyContext = isolatedGroups.buildGroupChatContext({
       sessionCtx: { ChatType: "channel", Provider: "mattermost" },
       sourceReplyDeliveryMode: "message_tool_only",
@@ -72,6 +77,8 @@ describe("group runtime loading", () => {
     expect(channelToolOnlyContext).toContain("posted to this channel");
     expect(channelToolOnlyContext).not.toContain("visible group response");
     expect(channelToolOnlyContext).not.toContain("posted to the group");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const telegramContext = isolatedGroups.buildGroupChatContext({
       sessionCtx: { ChatType: "group", Provider: "telegram" },
       silentReplyPolicy: "allow",
@@ -166,6 +173,7 @@ describe("group runtime loading", () => {
     expect(notExplicit).not.toContain("channel identity @kesslerAIBot");
   });
 
+<<<<<<< HEAD
   it("uses channel wording when the authoritative chat type is channel", () => {
     const context = groups.buildGroupChatContext({
       sessionCtx: { ChatType: "channel", Provider: "mattermost" },
@@ -180,6 +188,8 @@ describe("group runtime loading", () => {
     expect(context).not.toContain("group chat");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("marks non-visible assistant replies silent for groups with silence allowed", () => {
     expect(
       groups.resolveGroupSilentReplyBehavior({

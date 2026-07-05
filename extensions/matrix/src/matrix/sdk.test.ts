@@ -1645,6 +1645,7 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(bootstrapSpy).toHaveBeenCalledTimes(2);
   });
 
+<<<<<<< HEAD
   it("rejects recovery keys when secret-storage metadata cannot authenticate them", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-test-"));
     const recoveryKeyPath = path.join(tmpDir, "recovery-key.json");
@@ -1693,6 +1694,8 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(checkKey).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("provides secret storage callbacks and resolves stored recovery key", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-test-"));
     const recoveryKeyPath = path.join(tmpDir, "recovery-key.json");

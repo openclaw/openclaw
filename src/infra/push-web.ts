@@ -191,11 +191,47 @@ export async function registerWebPushSubscription(
   });
 }
 
+<<<<<<< HEAD
+=======
+export async function loadWebPushSubscription(
+  subscriptionId: string,
+  baseDir?: string,
+): Promise<WebPushSubscription | null> {
+  const state = await loadState(baseDir);
+  for (const sub of Object.values(state.subscriptionsByEndpointHash)) {
+    if (sub.subscriptionId === subscriptionId) {
+      return sub;
+    }
+  }
+  return null;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function listWebPushSubscriptions(baseDir?: string): Promise<WebPushSubscription[]> {
   const state = await loadState(baseDir);
   return Object.values(state.subscriptionsByEndpointHash);
 }
 
+<<<<<<< HEAD
+=======
+export async function clearWebPushSubscription(
+  subscriptionId: string,
+  baseDir?: string,
+): Promise<boolean> {
+  return await withLock(async () => {
+    const state = await loadState(baseDir);
+    for (const [hash, sub] of Object.entries(state.subscriptionsByEndpointHash)) {
+      if (sub.subscriptionId === subscriptionId) {
+        delete state.subscriptionsByEndpointHash[hash];
+        await persistState(state, baseDir);
+        return true;
+      }
+    }
+    return false;
+  });
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function clearWebPushSubscriptionByEndpoint(
   endpoint: string,
   baseDir?: string,
@@ -225,6 +261,21 @@ function applyVapidDetails(webPush: WebPushRuntime, keys: VapidKeyPair): void {
   webPush.setVapidDetails(keys.subject, keys.publicKey, keys.privateKey);
 }
 
+<<<<<<< HEAD
+=======
+export async function sendWebPushNotification(
+  subscription: WebPushSubscription,
+  payload: WebPushPayload,
+  vapidKeys?: VapidKeyPair,
+): Promise<WebPushSendResult> {
+  const keys = vapidKeys ?? (await resolveVapidKeys());
+  const webPush = await loadWebPushRuntime();
+  applyVapidDetails(webPush, keys);
+
+  return sendPreparedWebPushNotification(webPush, subscription, payload);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function sendPreparedWebPushNotification(
   webPush: WebPushRuntime,
   subscription: WebPushSubscription,

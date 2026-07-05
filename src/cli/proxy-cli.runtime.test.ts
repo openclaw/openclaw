@@ -39,7 +39,12 @@ vi.mock("../infra/net/proxy/proxy-validation.js", () => ({
 
 describe("proxy cli runtime", () => {
   const envKeys = [
+<<<<<<< HEAD
     "OPENCLAW_STATE_DIR",
+=======
+    "OPENCLAW_DEBUG_PROXY_DB_PATH",
+    "OPENCLAW_DEBUG_PROXY_BLOB_DIR",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     "OPENCLAW_DEBUG_PROXY_CERT_DIR",
     "OPENCLAW_DEBUG_PROXY_SESSION_ID",
     "OPENCLAW_DEBUG_PROXY_ENABLED",
@@ -51,7 +56,12 @@ describe("proxy cli runtime", () => {
 
   beforeEach(() => {
     tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-cli-runtime-"));
+<<<<<<< HEAD
     process.env.OPENCLAW_STATE_DIR = tempDir;
+=======
+    process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
+    process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     process.env.OPENCLAW_DEBUG_PROXY_CERT_DIR = path.join(tempDir, "certs");
     delete process.env.OPENCLAW_DEBUG_PROXY_ENABLED;
     delete process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID;
@@ -90,9 +100,13 @@ describe("proxy cli runtime", () => {
 
   afterEach(async () => {
     const { closeDebugProxyCaptureStore } = await import("../proxy-capture/store.sqlite.js");
+<<<<<<< HEAD
     const { closeOpenClawStateDatabaseForTest } = await import("../state/openclaw-state-db.js");
     closeDebugProxyCaptureStore();
     closeOpenClawStateDatabaseForTest();
+=======
+    closeDebugProxyCaptureStore();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     vi.restoreAllMocks();
     vi.resetModules();
     process.exitCode = undefined;
@@ -503,7 +517,14 @@ describe("proxy cli runtime", () => {
 
     expect(serverStopSpy).toHaveBeenCalledTimes(1);
 
+<<<<<<< HEAD
     const store = getDebugProxyCaptureStore();
+=======
+    const store = getDebugProxyCaptureStore(
+      process.env.OPENCLAW_DEBUG_PROXY_DB_PATH!,
+      process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR!,
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const [session] = store.listSessions(5);
     expect(session?.mode).toBe("proxy-run");
     expect(session?.endedAt).toBeGreaterThanOrEqual(beforeRun);

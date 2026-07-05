@@ -88,7 +88,11 @@ async function withTaskCommandStateDir(
   await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-tasks-command-" },
     async (state) => {
+<<<<<<< HEAD
       taskRegistryMaintenance.stopTaskRegistryMaintenance();
+=======
+      taskRegistryMaintenance.stopTaskRegistryMaintenanceForTests();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
       resetConfigRuntimeState();
       resetDetachedTaskLifecycleRuntimeForTests();
@@ -99,7 +103,11 @@ async function withTaskCommandStateDir(
       try {
         await run(state);
       } finally {
+<<<<<<< HEAD
         taskRegistryMaintenance.stopTaskRegistryMaintenance();
+=======
+        taskRegistryMaintenance.stopTaskRegistryMaintenanceForTests();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
         resetConfigRuntimeState();
         resetDetachedTaskLifecycleRuntimeForTests();
@@ -119,7 +127,11 @@ describe("tasks commands", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+<<<<<<< HEAD
     taskRegistryMaintenance.stopTaskRegistryMaintenance();
+=======
+    taskRegistryMaintenance.stopTaskRegistryMaintenanceForTests();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
     resetConfigRuntimeState();
     resetDetachedTaskLifecycleRuntimeForTests();
@@ -370,6 +382,7 @@ describe("tasks commands", () => {
     });
   });
 
+<<<<<<< HEAD
   it("preserves both cron-run session key shapes for a running non-slug job id", async () => {
     await withTaskCommandStateDir(async (state) => {
       const now = Date.now();
@@ -489,6 +502,8 @@ describe("tasks commands", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not build JSON-only diagnostics for text maintenance output", async () => {
     await withTaskCommandStateDir(async () => {
       const diagnosticsSpy = vi.spyOn(

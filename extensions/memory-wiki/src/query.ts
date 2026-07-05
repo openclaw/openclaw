@@ -245,17 +245,25 @@ async function listWikiMarkdownFiles(rootDir: string): Promise<string[]> {
     await Promise.all(
       QUERY_DIRS.map(async (relativeDir) => {
         const dirPath = path.join(rootDir, relativeDir);
+<<<<<<< HEAD
         const entries = await fs
           .readdir(dirPath, { withFileTypes: true, recursive: true })
           .catch(() => []);
+=======
+        const entries = await fs.readdir(dirPath, { withFileTypes: true }).catch(() => []);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         return entries
           .filter(
             (entry) => entry.isFile() && entry.name.endsWith(".md") && entry.name !== "index.md",
           )
+<<<<<<< HEAD
           .map((entry) => {
             const absPath = path.join(entry.parentPath ?? dirPath, entry.name);
             return path.relative(rootDir, absPath).split(path.sep).join("/");
           });
+=======
+          .map((entry) => path.join(relativeDir, entry.name));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }),
     )
   ).flat();

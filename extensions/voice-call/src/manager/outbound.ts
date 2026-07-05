@@ -3,7 +3,10 @@ import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   resolveVoiceCallEffectiveConfig,
+<<<<<<< HEAD
   resolveVoiceCallNumberRouteKeyForCall,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveVoiceCallSessionKey,
   type CallMode,
 } from "../config.js";
@@ -35,7 +38,10 @@ type InitiateContext = Pick<
   | "providerCallIdMap"
   | "provider"
   | "config"
+<<<<<<< HEAD
   | "coreSession"
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   | "storePath"
   | "webhookUrl"
   | "streamSessionIssuer"
@@ -192,7 +198,10 @@ export async function initiateCall(
       callId,
       phone: to,
       explicitSessionKey: sessionKey,
+<<<<<<< HEAD
       coreSession: ctx.coreSession,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }),
     startedAt: Date.now(),
     transcript: [],
@@ -291,7 +300,12 @@ export async function speak(
     transitionState(call, "speaking");
     persistCallRecord(ctx.storePath, call);
 
+<<<<<<< HEAD
     const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
+=======
+    const numberRouteKey =
+      typeof call.metadata?.numberRouteKey === "string" ? call.metadata.numberRouteKey : call.to;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const voice = resolvePreferredTtsVoice(
       resolveVoiceCallEffectiveConfig(ctx.config, numberRouteKey).config,
     );

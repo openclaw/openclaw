@@ -633,7 +633,11 @@ describe("processEvent (functional)", () => {
     processEvent(ctx, event);
 
     const call = requireFirstActiveCall(ctx);
+<<<<<<< HEAD
     expect(call.sessionKey).toBe(`agent:main:voice:call:${call.callId}`);
+=======
+    expect(call.sessionKey).toBe(`voice:call:${call.callId}`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("applies per-number inbound greeting and stores the matched route key", () => {

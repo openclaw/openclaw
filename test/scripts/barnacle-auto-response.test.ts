@@ -1,5 +1,8 @@
 // Barnacle Auto Response tests cover barnacle auto response script behavior.
+<<<<<<< HEAD
 import { readFileSync } from "node:fs";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { describe, expect, it } from "vitest";
 import {
   candidateLabels,
@@ -10,6 +13,7 @@ import {
 import {
   PROOF_OVERRIDE_LABEL,
   PROOF_SUFFICIENT_LABEL,
+<<<<<<< HEAD
 } from "../../scripts/github/real-behavior-proof-policy.mjs";
 
 const clawSweeperProofSuppliedLabel = "proof: supplied";
@@ -17,6 +21,34 @@ const blankTemplateBody = readFileSync(
   new URL("../../.github/pull_request_template.md", import.meta.url),
   "utf8",
 );
+=======
+  PROOF_SUPPLIED_LABEL,
+} from "../../scripts/github/real-behavior-proof-policy.mjs";
+
+const blankTemplateBody = [
+  "## Summary",
+  "",
+  "Describe the problem and fix in 2–5 bullets:",
+  "",
+  "- Problem:",
+  "- Why it matters:",
+  "- What changed:",
+  "- What did NOT change (scope boundary):",
+  "",
+  "## Linked Issue/PR",
+  "",
+  "- Closes #",
+  "- Related #",
+  "",
+  "## Root Cause (if applicable)",
+  "",
+  "- Root cause:",
+  "",
+  "## Regression Test Plan (if applicable)",
+  "",
+  "- Target test or file:",
+].join("\n");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function pr(title: string, body = blankTemplateBody) {
   return {
@@ -25,6 +57,7 @@ function pr(title: string, body = blankTemplateBody) {
   };
 }
 
+<<<<<<< HEAD
 function prContextBody(evidence: string, overrides: Record<string, string> = {}) {
   const fields = {
     problem: "Gateway status did not report the Discord channel as ready.",
@@ -39,6 +72,27 @@ function prContextBody(evidence: string, overrides: Record<string, string> = {})
     "## Evidence",
     "",
     fields.evidence,
+=======
+function realBehaviorProofBody(evidence: string, overrides: Record<string, string> = {}) {
+  const fields = {
+    behavior: "Gateway status now reports the Discord channel as ready.",
+    environment: "macOS 15.4, Node 24, local OpenClaw gateway, redacted Discord token.",
+    steps: "pnpm openclaw gateway restart and pnpm openclaw gateway status",
+    evidence,
+    observedResult: "The gateway stayed connected and Discord reported ready.",
+    notTested: "No known gaps.",
+    ...overrides,
+  };
+  return [
+    "## Real behavior proof",
+    "",
+    `- Behavior or issue addressed: ${fields.behavior}`,
+    `- Real environment tested: ${fields.environment}`,
+    `- Exact steps or command run after this patch: ${fields.steps}`,
+    `- Evidence after fix: ${fields.evidence}`,
+    `- Observed result after fix: ${fields.observedResult}`,
+    `- What was not tested: ${fields.notTested}`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ].join("\n");
 }
 
@@ -246,6 +300,12 @@ describe("barnacle-auto-response", () => {
     expect(managedLabelSpecs["r: third-party-extension"].description).toContain("ClawHub");
     expect(managedLabelSpecs["r: bluebubbles"].description).toContain("deprecated");
     expect(managedLabelSpecs["r: too-many-prs"].description).toContain("twenty active PRs");
+<<<<<<< HEAD
+=======
+    expect(managedLabelSpecs[PROOF_SUPPLIED_LABEL].color).toBe("C2E0C6");
+    expect(managedLabelSpecs[PROOF_SUFFICIENT_LABEL].color).toBe("0E8A16");
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     for (const label of Object.values(candidateLabels)) {
       expect(managedLabelSpecs).toHaveProperty(label);
       expect(managedLabelSpecs[label].description).toMatch(/^Candidate:/);
@@ -259,7 +319,11 @@ describe("barnacle-auto-response", () => {
 
     expect(labels).toEqual([
       candidateLabels.blankTemplate,
+<<<<<<< HEAD
       candidateLabels.needsPrContext,
+=======
+      candidateLabels.needsRealBehaviorProof,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       candidateLabels.lowSignalDocs,
       candidateLabels.docsDiscoverability,
     ]);
@@ -272,11 +336,16 @@ describe("barnacle-auto-response", () => {
 
     expect(labels).toEqual([
       candidateLabels.blankTemplate,
+<<<<<<< HEAD
       candidateLabels.needsPrContext,
+=======
+      candidateLabels.needsRealBehaviorProof,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       candidateLabels.testOnlyNoBug,
     ]);
   });
 
+<<<<<<< HEAD
   it("uses the latest case-insensitive context sections after template boilerplate", () => {
     const body = [
       blankTemplateBody,
@@ -298,10 +367,14 @@ describe("barnacle-auto-response", () => {
   });
 
   it("labels external PRs that are missing context or evidence", () => {
+=======
+  it("labels external PRs that are missing real behavior proof", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const labels = classifyPullRequestCandidateLabels(pr("Fix gateway startup"), [
       file("src/gateway/server.ts"),
     ]);
 
+<<<<<<< HEAD
     expect(labels).toContain(candidateLabels.needsPrContext);
   });
 
@@ -320,10 +393,25 @@ describe("barnacle-auto-response", () => {
       pr(
         "Fix gateway startup",
         prContextBody("![after](https://github.com/user-attachments/assets/gateway-ready)"),
+=======
+    expect(labels).toContain(candidateLabels.needsRealBehaviorProof);
+    expect(labels).not.toContain(candidateLabels.mockOnlyProof);
+  });
+
+  it("labels external PRs whose proof is only tests or mocks", () => {
+    const labels = classifyPullRequestCandidateLabels(
+      pr(
+        "Fix gateway startup",
+        realBehaviorProofBody("pnpm test passed with Vitest mocks.", {
+          steps: "pnpm test",
+          observedResult: "CI passes.",
+        }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ),
       [file("src/gateway/server.ts")],
     );
 
+<<<<<<< HEAD
     expect(labels).not.toContain(clawSweeperProofSuppliedLabel);
     expect(labels).not.toContain(candidateLabels.needsPrContext);
   });
@@ -336,12 +424,45 @@ describe("barnacle-auto-response", () => {
           /\n/g,
           "\r\n",
         ),
+=======
+    expect(labels).toContain(candidateLabels.mockOnlyProof);
+    expect(labels).not.toContain(candidateLabels.needsRealBehaviorProof);
+  });
+
+  it("labels external PRs that include real behavior proof as supplied", () => {
+    const labels = classifyPullRequestCandidateLabels(
+      pr(
+        "Fix gateway startup",
+        realBehaviorProofBody("![after](https://github.com/user-attachments/assets/gateway-ready)"),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ),
       [file("src/gateway/server.ts")],
     );
 
+<<<<<<< HEAD
     expect(labels).not.toContain(clawSweeperProofSuppliedLabel);
     expect(labels).not.toContain(candidateLabels.needsPrContext);
+=======
+    expect(labels).toContain(PROOF_SUPPLIED_LABEL);
+    expect(labels).not.toContain(candidateLabels.needsRealBehaviorProof);
+    expect(labels).not.toContain(candidateLabels.mockOnlyProof);
+  });
+
+  it("labels CRLF-formatted external PRs with screenshot proof as supplied", () => {
+    const labels = classifyPullRequestCandidateLabels(
+      pr(
+        "Fix gateway startup",
+        realBehaviorProofBody(
+          "![after](https://github.com/user-attachments/assets/gateway-ready)",
+        ).replace(/\n/g, "\r\n"),
+      ),
+      [file("src/gateway/server.ts")],
+    );
+
+    expect(labels).toContain(PROOF_SUPPLIED_LABEL);
+    expect(labels).not.toContain(candidateLabels.needsRealBehaviorProof);
+    expect(labels).not.toContain(candidateLabels.mockOnlyProof);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("uses linked issues as context and suppresses low-signal docs labels", () => {
@@ -673,7 +794,11 @@ describe("barnacle-auto-response", () => {
     expect(calls.addLabels).toStrictEqual([
       expectedAddLabels(123, [
         candidateLabels.blankTemplate,
+<<<<<<< HEAD
         candidateLabels.needsPrContext,
+=======
+        candidateLabels.needsRealBehaviorProof,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         candidateLabels.refactorOnly,
         candidateLabels.dirtyCandidate,
       ]),
@@ -696,7 +821,11 @@ describe("barnacle-auto-response", () => {
     expect(calls.addLabels).toStrictEqual([
       expectedAddLabels(123, [
         candidateLabels.blankTemplate,
+<<<<<<< HEAD
         candidateLabels.needsPrContext,
+=======
+        candidateLabels.needsRealBehaviorProof,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         candidateLabels.refactorOnly,
       ]),
     ]);
@@ -704,11 +833,16 @@ describe("barnacle-auto-response", () => {
     expect(calls.update).toStrictEqual([]);
   });
 
+<<<<<<< HEAD
   it("removes stale context labels without changing ClawSweeper proof labels", async () => {
+=======
+  it("removes stale structural proof labels but preserves sufficient proof when override is present", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
 
     await runBarnacleAutoResponse({
       github,
+<<<<<<< HEAD
       context: barnacleContext(
         {
           body: prContextBody("pnpm test passed."),
@@ -721,13 +855,28 @@ describe("barnacle-auto-response", () => {
           PROOF_OVERRIDE_LABEL,
         ],
       ),
+=======
+      context: barnacleContext({}, [
+        candidateLabels.needsRealBehaviorProof,
+        candidateLabels.mockOnlyProof,
+        PROOF_SUPPLIED_LABEL,
+        PROOF_SUFFICIENT_LABEL,
+        PROOF_OVERRIDE_LABEL,
+      ]),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       core: {
         info: () => undefined,
       },
     });
 
     expect(calls.removeLabel).toStrictEqual([
+<<<<<<< HEAD
       expectedRemoveLabel(123, candidateLabels.needsPrContext),
+=======
+      expectedRemoveLabel(123, candidateLabels.needsRealBehaviorProof),
+      expectedRemoveLabel(123, candidateLabels.mockOnlyProof),
+      expectedRemoveLabel(123, PROOF_SUPPLIED_LABEL),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ]);
     expect(calls.update).toStrictEqual([]);
   });
@@ -739,7 +888,13 @@ describe("barnacle-auto-response", () => {
       github,
       context: barnacleContext(
         {
+<<<<<<< HEAD
           body: prContextBody("![after](https://github.com/user-attachments/assets/gateway-ready)"),
+=======
+          body: realBehaviorProofBody(
+            "![after](https://github.com/user-attachments/assets/gateway-ready)",
+          ),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
         [PROOF_OVERRIDE_LABEL, PROOF_SUFFICIENT_LABEL],
         {
@@ -758,16 +913,28 @@ describe("barnacle-auto-response", () => {
     expect(calls.update).toEqual([]);
   });
 
+<<<<<<< HEAD
   it("removes stale context labels without adding proof labels", async () => {
+=======
+  it("removes stale negative proof labels and adds supplied when proof is present", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
 
     await runBarnacleAutoResponse({
       github,
       context: barnacleContext(
         {
+<<<<<<< HEAD
           body: prContextBody("![after](https://github.com/user-attachments/assets/gateway-ready)"),
         },
         [candidateLabels.needsPrContext, "triage: mock-only-proof"],
+=======
+          body: realBehaviorProofBody(
+            "![after](https://github.com/user-attachments/assets/gateway-ready)",
+          ),
+        },
+        [candidateLabels.needsRealBehaviorProof, candidateLabels.mockOnlyProof],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ),
       core: {
         info: () => undefined,
@@ -775,6 +942,7 @@ describe("barnacle-auto-response", () => {
     });
 
     expect(calls.removeLabel).toStrictEqual([
+<<<<<<< HEAD
       expectedRemoveLabel(123, candidateLabels.needsPrContext),
     ]);
     expect(calls.addLabels).toStrictEqual([]);
@@ -782,6 +950,16 @@ describe("barnacle-auto-response", () => {
 
   it.each(["edited", "synchronize"])(
     "preserves ClawSweeper sufficient proof labels after PR %s events",
+=======
+      expectedRemoveLabel(123, candidateLabels.needsRealBehaviorProof),
+      expectedRemoveLabel(123, candidateLabels.mockOnlyProof),
+    ]);
+    expect(calls.addLabels).toStrictEqual([expectedAddLabels(123, [PROOF_SUPPLIED_LABEL])]);
+  });
+
+  it.each(["edited", "synchronize"])(
+    "removes stale sufficient proof label after PR %s events",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     async (action) => {
       const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
 
@@ -789,11 +967,19 @@ describe("barnacle-auto-response", () => {
         github,
         context: barnacleContext(
           {
+<<<<<<< HEAD
             body: prContextBody(
               "![after](https://github.com/user-attachments/assets/gateway-ready)",
             ),
           },
           [clawSweeperProofSuppliedLabel, PROOF_SUFFICIENT_LABEL],
+=======
+            body: realBehaviorProofBody(
+              "![after](https://github.com/user-attachments/assets/gateway-ready)",
+            ),
+          },
+          [PROOF_SUPPLIED_LABEL, PROOF_SUFFICIENT_LABEL],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           { action },
         ),
         core: {
@@ -801,7 +987,11 @@ describe("barnacle-auto-response", () => {
         },
       });
 
+<<<<<<< HEAD
       expect(calls.removeLabel).toEqual([]);
+=======
+      expect(calls.removeLabel).toEqual([expectedRemoveLabel(123, PROOF_SUFFICIENT_LABEL)]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
   );
 
@@ -842,7 +1032,11 @@ describe("barnacle-auto-response", () => {
     );
   });
 
+<<<<<<< HEAD
   it("preserves sufficient proof on synchronize when the matching marker is forged", async () => {
+=======
+  it("removes sufficient proof on synchronize when the matching marker is forged", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const headSha = "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f";
     const { calls, github } = barnacleGithub([file("src/gateway/server.ts")], {
       comments: [
@@ -871,7 +1065,11 @@ describe("barnacle-auto-response", () => {
       },
     });
 
+<<<<<<< HEAD
     expect(calls.removeLabel).toEqual([]);
+=======
+    expect(calls.removeLabel).toEqual([expectedRemoveLabel(123, PROOF_SUFFICIENT_LABEL)]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("preserves stale sufficient proof while ClawSweeper automerge owns the PR", async () => {
@@ -885,9 +1083,17 @@ describe("barnacle-auto-response", () => {
             ref: "fix/memory-search-event-loop-yield-81172",
             sha: "0ede3d716805e7d2ced8df37c6666af510dc9e19",
           },
+<<<<<<< HEAD
           body: prContextBody("![after](https://github.com/user-attachments/assets/gateway-ready)"),
         },
         [clawSweeperProofSuppliedLabel, PROOF_SUFFICIENT_LABEL, "clawsweeper:automerge"],
+=======
+          body: realBehaviorProofBody(
+            "![after](https://github.com/user-attachments/assets/gateway-ready)",
+          ),
+        },
+        [PROOF_SUPPLIED_LABEL, PROOF_SUFFICIENT_LABEL, "clawsweeper:automerge"],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         { action: "synchronize" },
       ),
       core: {
@@ -909,9 +1115,17 @@ describe("barnacle-auto-response", () => {
             ref: "clawsweeper/repair-pr-83758",
             sha: "0ede3d716805e7d2ced8df37c6666af510dc9e19",
           },
+<<<<<<< HEAD
           body: prContextBody("![after](https://github.com/user-attachments/assets/gateway-ready)"),
         },
         [clawSweeperProofSuppliedLabel, PROOF_SUFFICIENT_LABEL],
+=======
+          body: realBehaviorProofBody(
+            "![after](https://github.com/user-attachments/assets/gateway-ready)",
+          ),
+        },
+        [PROOF_SUPPLIED_LABEL, PROOF_SUFFICIENT_LABEL],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         { action: "synchronize" },
       ),
       core: {
@@ -929,13 +1143,23 @@ describe("barnacle-auto-response", () => {
       github,
       context: barnacleContext(
         {
+<<<<<<< HEAD
           body: prContextBody("![after](https://github.com/user-attachments/assets/gateway-ready)"),
+=======
+          body: realBehaviorProofBody(
+            "![after](https://github.com/user-attachments/assets/gateway-ready)",
+          ),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           user: {
             login: "clawsweeper[bot]",
             type: "Bot",
           },
         },
+<<<<<<< HEAD
         [clawSweeperProofSuppliedLabel, PROOF_SUFFICIENT_LABEL],
+=======
+        [PROOF_SUPPLIED_LABEL, PROOF_SUFFICIENT_LABEL],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         { action: "synchronize" },
       ),
       core: {
@@ -955,9 +1179,17 @@ describe("barnacle-auto-response", () => {
       github,
       context: barnacleContext(
         {
+<<<<<<< HEAD
           body: prContextBody("![after](https://github.com/user-attachments/assets/gateway-ready)"),
         },
         [clawSweeperProofSuppliedLabel, PROOF_SUFFICIENT_LABEL],
+=======
+          body: realBehaviorProofBody(
+            "![after](https://github.com/user-attachments/assets/gateway-ready)",
+          ),
+        },
+        [PROOF_SUPPLIED_LABEL, PROOF_SUFFICIENT_LABEL],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         {
           action: "labeled",
           label: { name: PROOF_SUFFICIENT_LABEL },
@@ -972,7 +1204,11 @@ describe("barnacle-auto-response", () => {
     expect(calls.removeLabel).toEqual([]);
   });
 
+<<<<<<< HEAD
   it("adds missing context labels even when proof is sufficient", async () => {
+=======
+  it("preserves sufficient proof on unrelated label events even without body proof", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
 
     await runBarnacleAutoResponse({
@@ -988,6 +1224,7 @@ describe("barnacle-auto-response", () => {
     });
 
     expect(calls.removeLabel).toEqual([]);
+<<<<<<< HEAD
     expect(calls.addLabels.flatMap((call) => call.labels)).toContain(
       candidateLabels.needsPrContext,
     );
@@ -1032,6 +1269,58 @@ describe("barnacle-auto-response", () => {
     expect(calls.removeLabel).toEqual([]);
     expect(calls.addLabels.flatMap((call) => call.labels)).not.toContain(
       candidateLabels.needsPrContext,
+=======
+    expect(calls.addLabels.flatMap((call) => call.labels)).not.toContain(
+      candidateLabels.needsRealBehaviorProof,
+    );
+  });
+
+  it("does not re-add negative proof labels while sufficient proof is present", async () => {
+    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext({}, [PROOF_SUFFICIENT_LABEL], {
+        action: "unlabeled",
+        label: { name: candidateLabels.needsRealBehaviorProof },
+        sender: { login: "maintainer", type: "User" },
+      }),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toEqual([]);
+    expect(calls.addLabels.flatMap((call) => call.labels)).not.toContain(
+      candidateLabels.needsRealBehaviorProof,
+    );
+  });
+
+  it("removes negative proof labels when sufficient proof is already present", async () => {
+    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext(
+        {},
+        [PROOF_SUFFICIENT_LABEL, candidateLabels.needsRealBehaviorProof],
+        {
+          action: "labeled",
+          label: { name: "status: ready for maintainer look" },
+          sender: { login: "openclaw-clawsweeper[bot]", type: "Bot" },
+        },
+      ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toEqual([
+      expectedRemoveLabel(123, candidateLabels.needsRealBehaviorProof),
+    ]);
+    expect(calls.addLabels.flatMap((call) => call.labels)).not.toContain(
+      candidateLabels.needsRealBehaviorProof,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
   });
 
@@ -1134,7 +1423,11 @@ describe("barnacle-auto-response", () => {
     expect(calls.removeLabel).toStrictEqual([expectedRemoveLabel(123, "trigger-response")]);
     expect(calls.createComment).toHaveLength(1);
     expect(calls.createComment[0]?.issue_number).toBe(123);
+<<<<<<< HEAD
     expect(calls.createComment[0]?.body).toContain("lacks a clear problem statement or evidence");
+=======
+    expect(calls.createComment[0]?.body).toContain("does not include real behavior proof");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(calls.update).toStrictEqual([expectedIssueUpdate(123, "closed")]);
   });
 });

@@ -56,6 +56,17 @@ export function parseMinHostVersionRequirement(
   };
 }
 
+<<<<<<< HEAD
+=======
+/** Validates a plugin minHostVersion manifest field for schema/reporting callers. */
+export function validateMinHostVersion(raw: unknown): string | null {
+  if (raw === undefined) {
+    return null;
+  }
+  return parseMinHostVersionRequirement(raw) ? null : MIN_HOST_VERSION_FORMAT;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Checks whether the current host satisfies a plugin minHostVersion requirement. */
 export function checkMinHostVersion(params: {
   currentVersion: string | undefined;

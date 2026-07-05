@@ -3,7 +3,22 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
+<<<<<<< HEAD
 import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-types";
+=======
+import type {
+  ModelCatalog,
+  ModelCatalogAlias,
+  ModelCatalogCost,
+  ModelCatalogDiscovery,
+  ModelCatalogInput,
+  ModelCatalogModel,
+  ModelCatalogProvider,
+  ModelCatalogStatus,
+  ModelCatalogSuppression,
+  ModelCatalogTieredCost,
+} from "@openclaw/model-catalog-core/model-catalog-types";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
@@ -78,6 +93,18 @@ export type PluginManifestModelSupport = {
   modelPatterns?: string[];
 };
 
+<<<<<<< HEAD
+=======
+export type PluginManifestModelCatalogInput = ModelCatalogInput;
+export type PluginManifestModelCatalogDiscovery = ModelCatalogDiscovery;
+export type PluginManifestModelCatalogStatus = ModelCatalogStatus;
+export type PluginManifestModelCatalogTieredCost = ModelCatalogTieredCost;
+export type PluginManifestModelCatalogCost = ModelCatalogCost;
+export type PluginManifestModelCatalogModel = ModelCatalogModel;
+export type PluginManifestModelCatalogProvider = ModelCatalogProvider;
+export type PluginManifestModelCatalogAlias = ModelCatalogAlias;
+export type PluginManifestModelCatalogSuppression = ModelCatalogSuppression;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type PluginManifestModelCatalog = ModelCatalog;
 
 export type PluginManifestModelPricingModelIdTransform = "version-dots";
@@ -376,8 +403,11 @@ export type PluginManifest = {
   skills?: string[];
   name?: string;
   description?: string;
+<<<<<<< HEAD
   /** Optional HTTPS URL for marketplace/catalog card artwork. */
   icon?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   version?: string;
   uiHints?: Record<string, PluginConfigUiHint>;
   /**
@@ -1597,7 +1627,11 @@ function normalizeChannelConfigs(
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+<<<<<<< HEAD
 export function normalizeManifestChannelCommandDefaults(
+=======
+function normalizeManifestChannelCommandDefaults(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   value: unknown,
 ): PluginManifestChannelCommandDefaults | undefined {
   if (!isRecord(value)) {
@@ -1766,7 +1800,10 @@ export function loadPluginManifest(
   );
   const name = normalizeOptionalString(raw.name);
   const description = normalizeOptionalString(raw.description);
+<<<<<<< HEAD
   const icon = normalizeOptionalString(raw.icon);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const version = normalizeOptionalString(raw.version);
   const channels = normalizeTrimmedStringList(raw.channels);
   const providers = normalizeTrimmedStringList(raw.providers);
@@ -1859,7 +1896,10 @@ export function loadPluginManifest(
       skills,
       name,
       description,
+<<<<<<< HEAD
       icon,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       version,
       uiHints,
       contracts,

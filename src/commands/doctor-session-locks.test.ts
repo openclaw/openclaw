@@ -13,12 +13,16 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 
+<<<<<<< HEAD
 import {
   detectStaleSessionLocks,
   noteSessionLockHealth,
   sessionLockToHealthFinding,
   sessionLockToRepairEffect,
 } from "./doctor-session-locks.js";
+=======
+import { noteSessionLockHealth } from "./doctor-session-locks.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   try {
@@ -110,6 +114,7 @@ describe("noteSessionLockHealth", () => {
     await expect(fs.access(freshLock)).resolves.toBeUndefined();
   });
 
+<<<<<<< HEAD
   it("detects stale locks without removing them for structured lint", async () => {
     const sessionsDir = state.sessionsDir();
     await fs.mkdir(sessionsDir, { recursive: true });
@@ -258,6 +263,8 @@ describe("noteSessionLockHealth", () => {
     await expect(fs.access(reportOnlyLock)).resolves.toBeUndefined();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses configured stale threshold without removing live OpenClaw lock files", async () => {
     const sessionsDir = state.sessionsDir();
     await fs.mkdir(sessionsDir, { recursive: true });

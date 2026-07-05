@@ -446,6 +446,7 @@ function hasHumanNotesBlock(markdown: string): boolean {
   return markdown.includes(HUMAN_START_MARKER) && markdown.includes(HUMAN_END_MARKER);
 }
 
+<<<<<<< HEAD
 const SOURCE_CONTENT_HEADING = /(?:^|\r?\n)## Content\r?\n/u;
 
 function afterSourceContentFence(page: string): number {
@@ -492,6 +493,8 @@ export function preserveHumanNotesBlock(rendered: string, existing: string): str
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function detectGeneratedSourceBody(markdown: string): GeneratedSourceBody | undefined {
   const lines = normalizeMarkdownLines(markdown);
   const normalized = lines.join("\n");

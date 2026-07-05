@@ -360,6 +360,13 @@ export function createProcessSupervisor(): ProcessSupervisor {
     spawn,
     cancel,
     cancelScope,
+<<<<<<< HEAD
+=======
+    reconcileOrphans: async () => {
+      // Deliberate no-op: this supervisor uses in-memory ownership only.
+      // Active runs are not recovered after process restart in the current model.
+    },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     getRecord: (runId: string) => registry.get(runId),
   };
 }

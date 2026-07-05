@@ -47,20 +47,29 @@ function extractMessageSenderLabel(entry: Record<string, unknown>): string | nul
 // inbound envelopes while assistant/tool content may carry internal metadata.
 function stripEnvelopeFromContentWithRole(
   content: unknown[],
+<<<<<<< HEAD
   role: string,
 ): { content: unknown[]; changed: boolean } {
   const stripUserEnvelope = role === "user";
+=======
+  stripUserEnvelope: boolean,
+): { content: unknown[]; changed: boolean } {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let changed = false;
   const next = content.map((item) => {
     if (!item || typeof item !== "object") {
       return item;
     }
     const entry = item as Record<string, unknown>;
+<<<<<<< HEAD
     const isRoleTextBlock =
       entry.type === "text" ||
       (role === "user" && entry.type === "input_text") ||
       (role === "assistant" && (entry.type === "input_text" || entry.type === "output_text"));
     if (!isRoleTextBlock || typeof entry.text !== "string") {
+=======
+    if (entry.type !== "text" || typeof entry.text !== "string") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return item;
     }
     const stripped = stripUserEnvelope
@@ -104,7 +113,11 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
       changed = true;
     }
   } else if (Array.isArray(entry.content)) {
+<<<<<<< HEAD
     const updated = stripEnvelopeFromContentWithRole(entry.content, role);
+=======
+    const updated = stripEnvelopeFromContentWithRole(entry.content, stripUserEnvelope);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (updated.changed) {
       next.content = updated.content;
       changed = true;

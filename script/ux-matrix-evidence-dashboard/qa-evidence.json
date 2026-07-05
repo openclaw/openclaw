@@ -1,0 +1,221 @@
+{
+  "kind": "openclaw.qa.evidence-summary",
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-03T13:13:20.465Z",
+  "evidenceMode": "full",
+  "entries": [
+    {
+      "test": {
+        "kind": "ux-matrix-cell",
+        "id": "ux-matrix.qa-lab.producer-artifact-fixture",
+        "title": "UX Matrix: producer artifact fixture",
+        "source": {
+          "path": "scripts/qa/ux-matrix-evidence-producer.ts"
+        }
+      },
+      "coverage": [
+        {
+          "id": "qa.artifact-safety",
+          "role": "primary"
+        },
+        {
+          "id": "tools.evidence",
+          "role": "secondary"
+        },
+        {
+          "id": "workspace.artifacts",
+          "role": "secondary"
+        }
+      ],
+      "refs": [
+        {
+          "kind": "code",
+          "path": "scripts/qa/ux-matrix-evidence-producer.ts"
+        },
+        {
+          "kind": "docs",
+          "path": "docs/concepts/qa-e2e-automation.md"
+        }
+      ],
+      "execution": {
+        "runner": "ux-matrix-script-producer",
+        "environment": {
+          "ref": "e954c3f48ed04b887fe455952d06c566f0404891",
+          "os": "linux",
+          "nodeVersion": "v24.13.0"
+        },
+        "provider": {
+          "id": "ux-matrix",
+          "live": false,
+          "model": {
+            "name": null,
+            "ref": null
+          },
+          "fixture": "local-qa-lab-script-producer"
+        },
+        "packageSource": {
+          "kind": "source-checkout"
+        },
+        "artifacts": [
+          {
+            "kind": "html",
+            "path": "surfaces/qa-lab/stages/producer-artifact-fixture/producer-artifact-fixture.html",
+            "source": "ux-matrix:qa-lab:producer-artifact-fixture"
+          },
+          {
+            "kind": "log",
+            "path": "surfaces/qa-lab/stages/producer-artifact-fixture/logs.txt",
+            "source": "ux-matrix:qa-lab:producer-artifact-fixture"
+          },
+          {
+            "kind": "screenshot",
+            "path": "surfaces/qa-lab/stages/producer-artifact-fixture/producer-artifact-fixture.png",
+            "source": "ux-matrix:qa-lab:producer-artifact-fixture"
+          },
+          {
+            "kind": "video",
+            "path": "surfaces/qa-lab/stages/producer-artifact-fixture/producer-artifact-fixture.webm",
+            "source": "ux-matrix:qa-lab:producer-artifact-fixture"
+          }
+        ]
+      },
+      "result": {
+        "status": "pass",
+        "timing": {
+          "wallMs": 3669
+        }
+      }
+    },
+    {
+      "test": {
+        "kind": "ux-matrix-cell",
+        "id": "ux-matrix.control-ui.screenshot-artifact",
+        "title": "UX Matrix: screenshot artifact",
+        "source": {
+          "path": "scripts/qa/ux-matrix-evidence-producer.ts"
+        }
+      },
+      "coverage": [
+        {
+          "id": "ui.control",
+          "role": "primary"
+        },
+        {
+          "id": "gateway.control-ui-hosting",
+          "role": "secondary"
+        }
+      ],
+      "refs": [
+        {
+          "kind": "code",
+          "path": "scripts/qa/ux-matrix-evidence-producer.ts"
+        },
+        {
+          "kind": "docs",
+          "path": "docs/concepts/qa-e2e-automation.md"
+        }
+      ],
+      "execution": {
+        "runner": "ux-matrix-script-producer",
+        "environment": {
+          "ref": "e954c3f48ed04b887fe455952d06c566f0404891",
+          "os": "linux",
+          "nodeVersion": "v24.13.0"
+        },
+        "provider": {
+          "id": "ux-matrix",
+          "live": false,
+          "model": {
+            "name": null,
+            "ref": null
+          },
+          "fixture": "local-qa-lab-script-producer"
+        },
+        "packageSource": {
+          "kind": "source-checkout"
+        },
+        "artifacts": [
+          {
+            "kind": "log",
+            "path": "surfaces/control-ui/stages/screenshot-artifact/logs.txt",
+            "source": "ux-matrix:control-ui:screenshot-artifact"
+          },
+          {
+            "kind": "screenshot",
+            "path": "surfaces/control-ui/stages/screenshot-artifact/screenshot.png",
+            "source": "ux-matrix:control-ui:screenshot-artifact"
+          }
+        ]
+      },
+      "result": {
+        "status": "pass",
+        "timing": {
+          "wallMs": 1334
+        }
+      }
+    },
+    {
+      "test": {
+        "kind": "ux-matrix-cell",
+        "id": "ux-matrix.cli.entrypoint-help",
+        "title": "UX Matrix: CLI entrypoint help",
+        "source": {
+          "path": "scripts/qa/ux-matrix-evidence-producer.ts"
+        }
+      },
+      "coverage": [
+        {
+          "id": "cli.entrypoint",
+          "role": "primary"
+        },
+        {
+          "id": "cli.status-snapshots",
+          "role": "secondary"
+        }
+      ],
+      "refs": [
+        {
+          "kind": "code",
+          "path": "scripts/qa/ux-matrix-evidence-producer.ts"
+        },
+        {
+          "kind": "docs",
+          "path": "docs/concepts/qa-e2e-automation.md"
+        }
+      ],
+      "execution": {
+        "runner": "ux-matrix-script-producer",
+        "environment": {
+          "ref": "e954c3f48ed04b887fe455952d06c566f0404891",
+          "os": "linux",
+          "nodeVersion": "v24.13.0"
+        },
+        "provider": {
+          "id": "ux-matrix",
+          "live": false,
+          "model": {
+            "name": null,
+            "ref": null
+          },
+          "fixture": "local-qa-lab-script-producer"
+        },
+        "packageSource": {
+          "kind": "source-checkout"
+        },
+        "artifacts": [
+          {
+            "kind": "log",
+            "path": "surfaces/cli/stages/entrypoint-help/logs.txt",
+            "source": "ux-matrix:cli:entrypoint-help"
+          }
+        ]
+      },
+      "result": {
+        "status": "pass",
+        "timing": {
+          "wallMs": 1278
+        }
+      }
+    }
+  ]
+}

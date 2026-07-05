@@ -18,7 +18,10 @@ function makeGroupInfo(partial: Partial<InboundGroupInfo["display"]> = {}): Inbo
   return {
     gate: makeGate(),
     activation: "mention",
+<<<<<<< HEAD
     commandLevel: "safety",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     historyLimit: 50,
     isMerged: false,
     display: {

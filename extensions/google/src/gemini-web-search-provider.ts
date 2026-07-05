@@ -40,8 +40,12 @@ const GEMINI_TOOL_PARAMETERS = {
     language: { type: "string", description: "Not supported by Gemini." },
     freshness: {
       type: "string",
+<<<<<<< HEAD
       description:
         "Filter Gemini search freshness: week, month, and year use hard Google Search time ranges; day prioritizes the last 24 hours as a recency hint.",
+=======
+      description: "Limit Google Search grounding to recent results: day, week, month, or year.",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
     date_after: {
       type: "string",

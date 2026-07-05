@@ -2,7 +2,13 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createIosNodeListResponse } from "./program.nodes-test-helpers.js";
+<<<<<<< HEAD
 import { callGateway, runtime } from "./program.test-mocks.js";
+=======
+import { callGateway, installBaseProgramMocks, runtime } from "./program.test-mocks.js";
+
+installBaseProgramMocks();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 let registerNodesCli: typeof import("./nodes-cli.js").registerNodesCli;
 
@@ -562,7 +568,11 @@ describe("cli program (nodes basics)", () => {
 
     const output = getRuntimeOutput();
     expect(output).toContain("openclaw nodes approve request-reapproval --timeout 3000");
+<<<<<<< HEAD
     expect(output).toContain("Reuse the same connection options when rerunning: --url, --token.");
+=======
+    expect(output).toContain("Reuse the same --url/--token options when rerunning.");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(output).not.toContain("gateway-user");
     expect(output).not.toContain("url-secret");
     expect(output).not.toContain("gateway.example");

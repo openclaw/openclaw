@@ -1,10 +1,16 @@
 // Doctor state migration tests cover legacy state moves, archive markers, and repair behavior.
+<<<<<<< HEAD
 import { createHash } from "node:crypto";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+<<<<<<< HEAD
 import { gunzipSync, gzipSync } from "node:zlib";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -20,10 +26,14 @@ import {
   writePersistedInstalledPluginIndex,
 } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginInstallRecordInfo } from "../plugins/installed-plugin-index.js";
+<<<<<<< HEAD
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+=======
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { loadTaskFlowRegistryStateFromSqlite } from "../tasks/task-flow-registry.store.sqlite.js";
 import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import {
@@ -136,6 +146,49 @@ vi.mock("../channels/plugins/bundled.js", async () => {
         detectTelegramAllowFromMigration({ cfg, env }),
       () => mockedChannelMigrationPlans.plans,
     ]),
+<<<<<<< HEAD
+=======
+    listBundledChannelSetupPluginsByFeature: vi.fn((feature: string) => {
+      if (feature === "legacySessionSurfaces") {
+        return [
+          {
+            id: "whatsapp",
+            messaging: {
+              isLegacyGroupSessionKey: (key: string) => /^group:.+@g\.us$/i.test(key.trim()),
+              canonicalizeLegacySessionKey: ({ key, agentId }: { key: string; agentId: string }) =>
+                /^group:.+@g\.us$/i.test(key.trim())
+                  ? `agent:${agentId}:whatsapp:${key.trim().toLowerCase()}`
+                  : null,
+            },
+          },
+        ];
+      }
+      if (feature === "legacyStateMigrations") {
+        return [
+          {
+            id: "whatsapp",
+            lifecycle: {
+              detectLegacyStateMigrations: ({ oauthDir }: { oauthDir: string }) =>
+                detectWhatsAppLegacyStateMigrations({ oauthDir }),
+            },
+          },
+          {
+            id: "telegram",
+            lifecycle: {
+              detectLegacyStateMigrations: ({
+                cfg,
+                env,
+              }: {
+                cfg: OpenClawConfig;
+                env: NodeJS.ProcessEnv;
+              }) => detectTelegramAllowFromMigration({ cfg, env }),
+            },
+          },
+        ];
+      }
+      return [];
+    }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 });
 
@@ -314,6 +367,7 @@ function writeLegacyPluginStateSidecar(root: string): string {
   return sourcePath;
 }
 
+<<<<<<< HEAD
 function writeLegacyDebugProxyCaptureSidecar(
   root: string,
   overrides: { sourcePath?: string; blobDir?: string } = {},
@@ -418,6 +472,8 @@ function writeLegacyDebugProxyCaptureSidecar(
   return { sourcePath, blobDir, blobId };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function writeExistingPluginInstallIndex(
   root: string,
   installRecords: Record<string, InstalledPluginInstallRecordInfo>,
@@ -1645,6 +1701,7 @@ describe("doctor legacy state migrations", () => {
     });
   });
 
+<<<<<<< HEAD
   it("imports the shipped debug proxy capture sidecar into shared state", async () => {
     const root = await makeTempRoot();
     const { sourcePath, blobDir, blobId } = writeLegacyDebugProxyCaptureSidecar(root);
@@ -1895,6 +1952,8 @@ describe("doctor legacy state migrations", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("archives the plugin-state rollback journal with the legacy database", async () => {
     const root = await makeTempRoot();
     const sourcePath = writeLegacyPluginStateSidecar(root);

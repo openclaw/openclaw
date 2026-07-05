@@ -38,7 +38,10 @@ import type {
   TuiModelChoice,
   TuiSessionList,
   TuiSessionMutationResult,
+<<<<<<< HEAD
   TuiChatSendResult,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./tui-backend.js";
 
 export type GatewayConnectionOptions = {
@@ -101,10 +104,13 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+<<<<<<< HEAD
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type GatewaySessionList = TuiSessionList;
 export type GatewayAgentsList = TuiAgentsList;
 export type GatewayModelChoice = TuiModelChoice;
@@ -199,9 +205,15 @@ export class GatewayChatClient implements TuiBackend {
     await this.readyPromise;
   }
 
+<<<<<<< HEAD
   async sendChat(opts: ChatSendOptions): Promise<TuiChatSendResult> {
     const runId = opts.runId ?? randomUUID();
     const response = await this.client.request<{ runId?: unknown; status?: unknown }>("chat.send", {
+=======
+  async sendChat(opts: ChatSendOptions): Promise<{ runId: string }> {
+    const runId = opts.runId ?? randomUUID();
+    await this.client.request("chat.send", {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: opts.sessionKey,
       ...(opts.agentId ? { agentId: opts.agentId } : {}),
       ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
@@ -211,9 +223,13 @@ export class GatewayChatClient implements TuiBackend {
       timeoutMs: opts.timeoutMs,
       idempotencyKey: runId,
     });
+<<<<<<< HEAD
     const acceptedRunId = nonEmptyString(response?.runId) ?? runId;
     const status = nonEmptyString(response?.status);
     return status ? { runId: acceptedRunId, status } : { runId: acceptedRunId };
+=======
+    return { runId };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   async abortChat(opts: { sessionKey: string; agentId?: string; runId: string }) {

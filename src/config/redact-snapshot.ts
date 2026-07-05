@@ -442,7 +442,11 @@ export function redactConfigSnapshot(
     redactedRaw &&
     shouldFallbackToStructuredRawRedaction({
       redactedRaw,
+<<<<<<< HEAD
       originalConfig: snapshot.parsed ?? snapshot.config,
+=======
+      originalConfig: snapshot.config,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       restoreParsed: (parsed) =>
         withRestoreWarningsSuppressed(() =>
           restoreRedactedValues(parsed, snapshot.config, uiHints),

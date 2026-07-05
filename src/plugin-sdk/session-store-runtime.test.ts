@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -340,5 +341,24 @@ describe("session-store-runtime compatibility surface", () => {
     expect(
       fs.readdirSync(tempDir).filter((file) => file.startsWith("lifecycle-owned-old.jsonl.deleted.")),
     ).toHaveLength(1);
+=======
+import { describe, expect, it } from "vitest";
+import {
+  listSessionEntries as listAccessorSessionEntries,
+  loadSessionEntry,
+  readSessionUpdatedAt as readAccessorSessionUpdatedAt,
+} from "../config/sessions/session-accessor.js";
+import {
+  getSessionEntry,
+  listSessionEntries,
+  readSessionUpdatedAt,
+} from "./session-store-runtime.js";
+
+describe("session-store-runtime", () => {
+  it("routes read helpers through the session accessor seam", () => {
+    expect(getSessionEntry).toBe(loadSessionEntry);
+    expect(listSessionEntries).toBe(listAccessorSessionEntries);
+    expect(readSessionUpdatedAt).toBe(readAccessorSessionUpdatedAt);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

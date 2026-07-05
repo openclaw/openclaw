@@ -1,13 +1,27 @@
 // Loads dotenv files while blocking unsafe workspace env keys.
+<<<<<<< HEAD
 import path from "node:path";
 import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
 import { loadGlobalRuntimeDotEnvFiles, readDotEnvFile } from "./dotenv-global.js";
+=======
+import fs from "node:fs";
+import path from "node:path";
+import dotenv from "dotenv";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
+import { loadGlobalRuntimeDotEnvFiles } from "./dotenv-global.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "./host-env-security.js";
 
+<<<<<<< HEAD
+=======
+const logger = createSubsystemLogger("infra:dotenv");
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const BLOCKED_PROVIDER_AUTH_WORKSPACE_DOTENV_KEYS = [
   "AI_GATEWAY_API_KEY",
   "ANTHROPIC_API_KEY",
@@ -217,6 +231,58 @@ function shouldBlockWorkspaceDotEnvKey(
   );
 }
 
+<<<<<<< HEAD
+=======
+type DotEnvEntry = {
+  key: string;
+  value: string;
+};
+
+type LoadedDotEnvFile = {
+  filePath: string;
+  entries: DotEnvEntry[];
+};
+
+function readDotEnvFile(params: {
+  filePath: string;
+  shouldBlockKey: (key: string) => boolean;
+  quiet?: boolean;
+}): LoadedDotEnvFile | null {
+  let content: string;
+  try {
+    content = fs.readFileSync(params.filePath, "utf8");
+  } catch (error) {
+    if (!params.quiet) {
+      const code =
+        error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
+      if (code !== "ENOENT") {
+        logger.warn(`Failed to read ${params.filePath}: ${String(error)}`, { error });
+      }
+    }
+    return null;
+  }
+
+  let parsed: Record<string, string>;
+  try {
+    parsed = dotenv.parse(content);
+  } catch (error) {
+    if (!params.quiet) {
+      logger.warn(`Failed to parse ${params.filePath}: ${String(error)}`, { error });
+    }
+    return null;
+  }
+  const entries: DotEnvEntry[] = [];
+  for (const [rawKey, value] of Object.entries(parsed)) {
+    const key = normalizeEnvVarKey(rawKey, { portable: true });
+    if (!key || params.shouldBlockKey(key)) {
+      continue;
+    }
+    entries.push({ key, value });
+  }
+  return { filePath: params.filePath, entries };
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function loadWorkspaceDotEnvFile(filePath: string, opts?: { quiet?: boolean }) {
   let providerAuthBlockedKeys: ReadonlySet<string> | undefined;
   const getProviderAuthBlockedKeys = () => {
@@ -225,7 +291,11 @@ export function loadWorkspaceDotEnvFile(filePath: string, opts?: { quiet?: boole
   };
   const parsed = readDotEnvFile({
     filePath,
+<<<<<<< HEAD
     entryFilter: (key) => !shouldBlockWorkspaceDotEnvKey(key, getProviderAuthBlockedKeys),
+=======
+    shouldBlockKey: (key) => shouldBlockWorkspaceDotEnvKey(key, getProviderAuthBlockedKeys),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     quiet: opts?.quiet ?? true,
   });
   if (!parsed) {

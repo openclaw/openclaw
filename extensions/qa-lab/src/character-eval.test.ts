@@ -255,6 +255,7 @@ describe("runQaCharacterEval", () => {
     expect(report).not.toContain("Judge Raw Reply");
   });
 
+<<<<<<< HEAD
   it("creates a unique default output directory under repo artifacts", async () => {
     const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
       makeSuiteResult({
@@ -288,6 +289,8 @@ describe("runQaCharacterEval", () => {
     await expect(fs.stat(result.reportPath).then((stats) => stats.isFile())).resolves.toBe(true);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("can hide candidate model refs from judge prompts and map rankings back", async () => {
     const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
       makeSuiteResult({

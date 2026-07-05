@@ -141,6 +141,7 @@ describe("deliverDiscordReply", () => {
     expect(sendOptions.rest).toBe(rest);
   });
 
+<<<<<<< HEAD
   it("formats reasoning replies as visible Discord payloads before shared outbound", async () => {
     await deliverDiscordReply({
       replies: [{ text: "Because it helps", isReasoning: true }],
@@ -156,6 +157,8 @@ describe("deliverDiscordReply", () => {
     expect(firstDeliverParams().payloads).toEqual([{ text: "Thinking\n\n_Because it helps_" }]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("fails when shared outbound accepts a final reply but delivers no Discord message", async () => {
     sendDurableMessageBatchMock.mockResolvedValueOnce({ status: "sent", results: [] });
 

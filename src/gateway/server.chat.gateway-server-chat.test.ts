@@ -7,7 +7,10 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
+<<<<<<< HEAD
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   connectOk,
@@ -693,6 +696,7 @@ describe("gateway server chat", () => {
     });
   });
 
+<<<<<<< HEAD
   test("marks a running webchat session failed when dispatch rejects before a reply", async () => {
     await withMainSessionStore(async (dir) => {
       await writeSessionStore({
@@ -760,6 +764,8 @@ describe("gateway server chat", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   test("chat.history hides assistant NO_REPLY-only entries", async () => {
     const historyMessages = await loadChatHistoryWithMessages(buildNoReplyHistoryFixture());
     const textValues = collectHistoryTextValues(historyMessages);
@@ -770,6 +776,7 @@ describe("gateway server chat", () => {
     expect(textValues).toEqual(["hello", "real reply", "real text field reply", "NO_REPLY"]);
   });
 
+<<<<<<< HEAD
   test("chat.history hides assistant control replies in Responses output blocks", async () => {
     const historyMessages = await loadChatHistoryWithMessages([
       {
@@ -800,6 +807,8 @@ describe("gateway server chat", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   test("chat.history mirrors current-session message tool sends before NO_REPLY", async () => {
     const replyText = "Here, love. Eva, not Evo.";
     const historyMessages = await loadChatHistoryWithMessages([
@@ -1534,8 +1543,13 @@ describe("gateway server chat", () => {
   test("chat.history persists assistant image data URLs as managed image blocks", async () => {
     await withMainSessionStore(
       async (dir) => {
+<<<<<<< HEAD
         const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
         setTestEnvValue("OPENCLAW_STATE_DIR", dir);
+=======
+        const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+        process.env.OPENCLAW_STATE_DIR = dir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const pngB64 =
           "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
         dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
@@ -1617,7 +1631,15 @@ describe("gateway server chat", () => {
           expect(serializedAssistant).not.toContain("data:image/png;base64");
           expect(serializedAssistant).not.toContain(pngB64);
         } finally {
+<<<<<<< HEAD
           envSnapshot.restore();
+=======
+          if (previousStateDir == null) {
+            delete process.env.OPENCLAW_STATE_DIR;
+          } else {
+            process.env.OPENCLAW_STATE_DIR = previousStateDir;
+          }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }
       },
       { sessionId: "sess-managed-image-history" },

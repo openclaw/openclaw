@@ -16,7 +16,10 @@ import type { BundledChannelConfigCollector } from "./manifest-registry.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
+<<<<<<< HEAD
   normalizeManifestChannelCommandDefaults,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type OpenClawPackageManifest,
   type PackageManifest,
   type PluginPackageChannel,
@@ -32,12 +35,17 @@ import {
 const installedManifestRegistryIndexFingerprintCache = new WeakMap<InstalledPluginIndex, string>();
 const installedPackageJsonPathCache = new Map<string, string | null>();
 const installedPackageMetadataCache = new Map<string, InstalledPackageMetadata>();
+<<<<<<< HEAD
 // Installed plugin metadata is process-stable between explicit lifecycle clears.
 // Share realpaths across fingerprint builds to avoid repeated package boundary IO.
 const installedManifestRegistryRealpathCache = new Map<string, string>();
 const MAX_INSTALLED_PACKAGE_JSON_PATH_CACHE_ENTRIES = 256;
 const MAX_INSTALLED_PACKAGE_METADATA_CACHE_ENTRIES = 256;
 const MAX_INSTALLED_MANIFEST_REGISTRY_REALPATH_CACHE_ENTRIES = 512;
+=======
+const MAX_INSTALLED_PACKAGE_JSON_PATH_CACHE_ENTRIES = 256;
+const MAX_INSTALLED_PACKAGE_METADATA_CACHE_ENTRIES = 256;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type InstalledPackageMetadata = {
   packageManifest?: OpenClawPackageManifest;
@@ -48,7 +56,10 @@ type InstalledPackageMetadata = {
 export function clearInstalledManifestRegistryProcessCaches(): void {
   installedPackageJsonPathCache.clear();
   installedPackageMetadataCache.clear();
+<<<<<<< HEAD
   installedManifestRegistryRealpathCache.clear();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 registerPluginMetadataProcessMemoLifecycleClear(clearInstalledManifestRegistryProcessCaches);
@@ -174,6 +185,7 @@ function rememberInstalledPackageJsonPath(
   return packageJsonPath;
 }
 
+<<<<<<< HEAD
 function trimInstalledManifestRegistryRealpathCache(): void {
   while (
     installedManifestRegistryRealpathCache.size >
@@ -187,6 +199,8 @@ function trimInstalledManifestRegistryRealpathCache(): void {
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function buildInstalledPackageJsonPathCacheKey(
   record: InstalledPluginIndexRecord,
 ): string | undefined {
@@ -214,6 +228,10 @@ function buildInstalledPackageMetadataCacheKey(params: {
 }
 
 function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
+<<<<<<< HEAD
+=======
+  const realpathCache = new Map<string, string>();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return {
     version: index.version,
     hostContractVersion: index.hostContractVersion,
@@ -223,11 +241,15 @@ function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
     installRecords: index.installRecords,
     diagnostics: index.diagnostics,
     plugins: index.plugins.map((record) => {
+<<<<<<< HEAD
       const packageJsonPath = resolvePackageJsonPath(
         record,
         installedManifestRegistryRealpathCache,
       );
       trimInstalledManifestRegistryRealpathCache();
+=======
+      const packageJsonPath = resolvePackageJsonPath(record, realpathCache);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const packageJsonFile = record.packageJson?.fileSignature
         ? packageJsonPath
           ? formatFileSignature(packageJsonPath, record.packageJson.fileSignature)
@@ -296,6 +318,31 @@ function resolveFallbackPluginSource(record: InstalledPluginIndexRecord): string
   return path.join(rootDir, DEFAULT_PLUGIN_ENTRY_CANDIDATES[0]);
 }
 
+<<<<<<< HEAD
+=======
+function normalizePackageChannelCommands(
+  commands: unknown,
+): PluginPackageChannel["commands"] | undefined {
+  if (!isRecord(commands)) {
+    return undefined;
+  }
+  const nativeCommandsAutoEnabled =
+    typeof commands.nativeCommandsAutoEnabled === "boolean"
+      ? commands.nativeCommandsAutoEnabled
+      : undefined;
+  const nativeSkillsAutoEnabled =
+    typeof commands.nativeSkillsAutoEnabled === "boolean"
+      ? commands.nativeSkillsAutoEnabled
+      : undefined;
+  return nativeCommandsAutoEnabled !== undefined || nativeSkillsAutoEnabled !== undefined
+    ? {
+        ...(nativeCommandsAutoEnabled !== undefined ? { nativeCommandsAutoEnabled } : {}),
+        ...(nativeSkillsAutoEnabled !== undefined ? { nativeSkillsAutoEnabled } : {}),
+      }
+    : undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function normalizePackageChannelExposure(
   exposure: unknown,
 ): PluginPackageChannel["exposure"] | undefined {
@@ -480,7 +527,11 @@ function normalizePersistedPackageChannel(value: unknown): PluginPackageChannel 
   if (exposure) {
     channel.exposure = exposure;
   }
+<<<<<<< HEAD
   const commands = normalizeManifestChannelCommandDefaults(value.commands);
+=======
+  const commands = normalizePackageChannelCommands(value.commands);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (commands) {
     channel.commands = commands;
   }

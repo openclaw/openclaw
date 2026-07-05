@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+<<<<<<< HEAD
+=======
+  COPILOT_SDK_FALLBACK_DIR,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   COPILOT_SDK_SPEC,
   resetCopilotSdkCacheForTests,
   loadCopilotSdk,
@@ -200,6 +204,13 @@ describe("sdk-loader", () => {
     expect(primaryImport).toHaveBeenCalledTimes(2);
   });
 
+<<<<<<< HEAD
+=======
+  it("default fallback dir points at ~/.openclaw/npm-runtime/copilot", () => {
+    expect(COPILOT_SDK_FALLBACK_DIR).toMatch(/\.openclaw[\\/]+npm-runtime[\\/]+copilot$/);
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("resolves the fallback dir from OPENCLAW_STATE_DIR for relocated profiles", () => {
     expect(
       resolveCopilotSdkFallbackDir({
@@ -215,6 +226,12 @@ describe("sdk-loader", () => {
 });
 
 describe("sdk dependency constants", () => {
+<<<<<<< HEAD
+=======
+  it("COPILOT_SDK_FALLBACK_DIR keeps the legacy fallback path stable", () => {
+    expect(COPILOT_SDK_FALLBACK_DIR).toMatch(/\.openclaw[\\/]+npm-runtime[\\/]+copilot$/);
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("COPILOT_SDK_SPEC pins the canonical SDK spec", () => {
     expect(COPILOT_SDK_SPEC).toBe("@github/copilot-sdk@1.0.0-beta.9");
   });

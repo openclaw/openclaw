@@ -746,6 +746,7 @@ describe("memory cli", () => {
     });
   });
 
+<<<<<<< HEAD
   it("reports light-only dreaming as active during status", async () => {
     getRuntimeConfig.mockReturnValue({
       plugins: {
@@ -946,6 +947,8 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("repairs invalid recall metadata and stale locks with status --fix", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await shortTermTesting.writeRawRecallStore(workspaceDir, {
@@ -2342,7 +2345,11 @@ describe("memory cli", () => {
         lastRecalledAt: "<now>",
         queryHashes: ["<hash>"],
         recallDays: ["<today>"],
+<<<<<<< HEAD
         conceptTags: ["backup", "backups", "glacier", "s3"],
+=======
+        conceptTags: ["backup", "backups", "glacier"],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
       expect(close).toHaveBeenCalled();
     });

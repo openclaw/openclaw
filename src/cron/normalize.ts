@@ -210,7 +210,11 @@ function coercePayload(payload: UnknownRecord) {
     }
   }
   if ("fallbacks" in next) {
+<<<<<<< HEAD
     const fallbacks = normalizeTrimmedStringArray(next.fallbacks, { allowNull: true });
+=======
+    const fallbacks = normalizeTrimmedStringArray(next.fallbacks);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (fallbacks !== undefined) {
       next.fallbacks = fallbacks;
     } else {

@@ -14,7 +14,10 @@ import {
   findDuplicateGuardMusicGenerationTaskForSession,
 } from "../music-generation-task-status.js";
 import {
+<<<<<<< HEAD
   createMediaGenerateDuplicateGuardResult,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   createMediaGenerateProviderListActionResult,
   createMediaGenerateTaskStatusActions,
   type MediaGenerateActionResult,
@@ -101,6 +104,7 @@ export function createMusicGenerateDuplicateGuardResult(
   sessionKey?: string,
   params?: { prompt?: string; requestKey?: string },
 ): MusicGenerateActionResult | undefined {
+<<<<<<< HEAD
   return createMediaGenerateDuplicateGuardResult({
     sessionKey,
     prompt: params?.prompt,
@@ -109,4 +113,26 @@ export function createMusicGenerateDuplicateGuardResult(
     buildStatusText: buildMusicGenerationTaskStatusText,
     buildStatusDetails: buildMusicGenerationTaskStatusDetails,
   });
+=======
+  const blockingTask = findDuplicateGuardMusicGenerationTaskForSession(sessionKey, {
+    prompt: params?.prompt,
+    requestKey: params?.requestKey,
+  });
+  if (!blockingTask) {
+    return undefined;
+  }
+  return {
+    content: [
+      {
+        type: "text",
+        text: buildMusicGenerationTaskStatusText(blockingTask, { duplicateGuard: true }),
+      },
+    ],
+    details: {
+      action: "status",
+      duplicateGuard: true,
+      ...buildMusicGenerationTaskStatusDetails(blockingTask),
+    },
+  };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }

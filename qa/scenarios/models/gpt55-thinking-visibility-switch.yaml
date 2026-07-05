@@ -208,7 +208,11 @@ flow:
                   message:
                     expr: "`expected medium OpenAI reasoning payload, got ${JSON.stringify(maxRequest?.body?.reasoning ?? null)}`"
         - if:
+<<<<<<< HEAD
             expr: "env.transport.id !== 'qa-channel' && env.transport.id !== 'crabline'"
+=======
+            expr: "env.transport.id !== 'qa-channel'"
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             then:
               - call: waitForCondition
                 saveAs: maxReasoning
@@ -220,4 +224,8 @@ flow:
                   expr: "maxReasoning.text.trimStart().startsWith('Reasoning:')"
                   message:
                     expr: "`missing max reasoning message near answer: ${recentOutboundSummary(state, 6)}`"
+<<<<<<< HEAD
       detailsExpr: "env.transport.id === 'qa-channel' || env.transport.id === 'crabline' ? `answer=${maxAnswer.text}; medium reasoning=${env.mock ? String(maxRequest?.body?.reasoning?.effort ?? '') : 'live'}; ${env.transport.id} suppresses reasoning delivery` : `answer=${maxAnswer.text}; reasoning=${maxReasoning.text}`"
+=======
+      detailsExpr: "env.transport.id === 'qa-channel' ? `answer=${maxAnswer.text}; medium reasoning=${env.mock ? String(maxRequest?.body?.reasoning?.effort ?? '') : 'live'}; qa-channel suppresses reasoning delivery` : `answer=${maxAnswer.text}; reasoning=${maxReasoning.text}`"
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

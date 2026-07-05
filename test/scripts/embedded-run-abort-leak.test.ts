@@ -52,6 +52,7 @@ describe("scripts/embedded-run-abort-leak", () => {
     );
     expect(readdirSync(looseThresholdProbe.snapDir)).toEqual([]);
   });
+<<<<<<< HEAD
 
   it("rejects duplicate thresholds before writing heap snapshots", () => {
     const snapDir = makeTempRoot();
@@ -94,4 +95,6 @@ describe("scripts/embedded-run-abort-leak", () => {
     expect(modeResult.stdout).toBe("");
     expect(modeResult.stderr).toContain("error: --mode requires a value");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

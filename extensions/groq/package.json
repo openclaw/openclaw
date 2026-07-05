@@ -1,11 +1,17 @@
 {
   "name": "@openclaw/groq-provider",
+<<<<<<< HEAD
   "version": "2026.6.10",
   "description": "OpenClaw Groq media-understanding provider.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
   },
+=======
+  "version": "2026.6.8",
+  "private": true,
+  "description": "OpenClaw Groq media-understanding provider",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "type": "module",
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -13,6 +19,7 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
+<<<<<<< HEAD
     ],
     "install": {
       "clawhubSpec": "clawhub:@openclaw/groq-provider",
@@ -31,5 +38,8 @@
       "publishToClawHub": true,
       "publishToNpm": true
     }
+=======
+    ]
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }

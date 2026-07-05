@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
+<<<<<<< HEAD
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   loadGatewayConfig,
   openAuthenticatedGatewayWs,
@@ -340,7 +343,11 @@ describe("gateway shared auth rotation with unchanged SecretRefs", () => {
     }
     secretRefPort = await getFreePort();
     testState.gatewayAuth = undefined;
+<<<<<<< HEAD
     setTestEnvValue(SECRET_REF_TOKEN_ID, OLD_TOKEN);
+=======
+    process.env[SECRET_REF_TOKEN_ID] = OLD_TOKEN;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(
       configPath,
@@ -363,11 +370,19 @@ describe("gateway shared auth rotation with unchanged SecretRefs", () => {
 
   beforeEach(() => {
     testState.gatewayAuth = undefined;
+<<<<<<< HEAD
     setTestEnvValue(SECRET_REF_TOKEN_ID, OLD_TOKEN);
   });
 
   afterAll(async () => {
     deleteTestEnvValue(SECRET_REF_TOKEN_ID);
+=======
+    process.env[SECRET_REF_TOKEN_ID] = OLD_TOKEN;
+  });
+
+  afterAll(async () => {
+    delete process.env[SECRET_REF_TOKEN_ID];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     testState.gatewayAuth = ORIGINAL_GATEWAY_AUTH;
     await secretRefServer.close();
   });
@@ -380,7 +395,11 @@ describe("gateway shared auth rotation with unchanged SecretRefs", () => {
     const ws = await openSecretRefAuthenticatedWs();
     try {
       const closed = waitForGatewayWsClose(ws, 30_000);
+<<<<<<< HEAD
       setTestEnvValue(SECRET_REF_TOKEN_ID, NEW_TOKEN);
+=======
+      process.env[SECRET_REF_TOKEN_ID] = NEW_TOKEN;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const res = await applyCurrentConfig(ws);
       expect(res.ok).toBe(true);
       await expectGatewayAuthChangedClose(closed);

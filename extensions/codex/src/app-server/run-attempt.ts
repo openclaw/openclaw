@@ -12,8 +12,11 @@ import {
   embeddedAgentLog,
   emitAgentEvent as emitGlobalAgentEvent,
   finalizeHarnessContextEngineTurn,
+<<<<<<< HEAD
   FAST_MODE_AUTO_PROGRESS_KIND,
   formatFastModeAutoProgressText,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   formatErrorMessage,
   getAgentHarnessHookRunner,
   getBeforeToolCallPolicyDiagnosticState,
@@ -24,6 +27,7 @@ import {
   resolveSandboxContext,
   resolveSessionAgentIds,
   resolveUserPath,
+<<<<<<< HEAD
   awaitAgentEndSideEffects,
   runAgentEndSideEffects,
   runAgentHarnessLlmInputHook,
@@ -34,6 +38,16 @@ import {
   supportsModelTools,
   runAgentCleanupStep,
   type FastModeAutoProgressState,
+=======
+  awaitAgentHarnessAgentEndHook,
+  runAgentHarnessAgentEndHook,
+  runAgentHarnessLlmInputHook,
+  runAgentHarnessLlmOutputHook,
+  runHarnessContextEngineMaintenance,
+  setActiveEmbeddedRun,
+  supportsModelTools,
+  runAgentCleanupStep,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
   type NativeHookRelayEvent,
@@ -70,7 +84,10 @@ import {
   readContextEngineThreadBootstrapProjection,
   readMirroredSessionHistoryMessages,
   renderCodexSkillsCollaborationInstructions,
+<<<<<<< HEAD
   resolveCodexDeliveryHintPreservedInputRange,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveContextEngineBootstrapProjectionDecision,
 } from "./attempt-context.js";
 import {
@@ -89,7 +106,10 @@ import {
   isCurrentThreadOptionalTurnRequestParams,
   isCurrentThreadTurnRequestParams,
   isNativeResponseStreamDeltaNotification,
+<<<<<<< HEAD
   isRawFunctionToolOutputCompletionNotification,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   isTerminalTurnStatus,
   readCodexNotificationItem,
   readRawResponseToolCallId,
@@ -145,8 +165,11 @@ import {
   type OpenClawExecPolicyForCodexAppServer,
 } from "./config.js";
 import {
+<<<<<<< HEAD
   type CodexProjectedContextRange,
   fitCodexProjectedContextForTurnStart,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   projectContextEngineAssemblyForCodex,
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
@@ -279,6 +302,7 @@ const CODEX_APP_SERVER_PROJECTED_CHARS_PER_TOKEN = 4;
 const CODEX_APP_SERVER_ACTIVE_NATIVE_TURN_WAIT_TIMEOUT_MS = 30_000;
 const ensuredCodexWorkspaceDirs = new Set<string>();
 
+<<<<<<< HEAD
 function withCodexAppServerFastModeServiceTier(
   appServer: CodexAppServerRuntimeOptions,
   params: EmbeddedRunAttemptParams,
@@ -295,6 +319,8 @@ function withCodexAppServerFastModeServiceTier(
   return { ...appServer, serviceTier: null };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function estimateCodexAppServerProjectedTurnTokens(params: {
   prompt: string;
   developerInstructions?: string;
@@ -327,10 +353,17 @@ async function ensureCodexWorkspaceDirOnce(workspaceDir: string): Promise<void> 
   ensuredCodexWorkspaceDirs.add(normalized);
 }
 
+<<<<<<< HEAD
 async function emitCodexAppServerEvent(
   params: EmbeddedRunAttemptParams,
   event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
 ): Promise<void> {
+=======
+function emitCodexAppServerEvent(
+  params: EmbeddedRunAttemptParams,
+  event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
+): void {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   try {
     emitGlobalAgentEvent({
       runId: params.runId,
@@ -342,7 +375,14 @@ async function emitCodexAppServerEvent(
     embeddedAgentLog.debug("codex app-server global agent event emit failed", { error });
   }
   try {
+<<<<<<< HEAD
     await params.onAgentEvent?.(event);
+=======
+    const maybePromise = params.onAgentEvent?.(event);
+    void Promise.resolve(maybePromise).catch((error: unknown) => {
+      embeddedAgentLog.debug("codex app-server agent event handler rejected", { error });
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } catch (error) {
     // Event consumers are observational; they must not abort or strand the
     // canonical app-server turn lifecycle.
@@ -387,7 +427,11 @@ function formatUnsupportedCodexDynamicToolOutput(type: unknown): string {
   return `[Unsupported Codex dynamic tool output: ${label}${suffix}]`;
 }
 
+<<<<<<< HEAD
 type CodexAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
+=======
+type CodexAgentEndHookParams = Parameters<typeof runAgentHarnessAgentEndHook>[0];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function shouldAwaitCodexAgentEndHook(params: EmbeddedRunAttemptParams): boolean {
   return !params.messageChannel && !params.messageProvider;
@@ -397,6 +441,7 @@ async function runCodexAgentEndHook(
   params: EmbeddedRunAttemptParams,
   hookParams: CodexAgentEndHookParams,
 ): Promise<void> {
+<<<<<<< HEAD
   const sideEffectParams = {
     ...hookParams,
     ctx: { ...hookParams.ctx, config: params.config },
@@ -406,6 +451,13 @@ async function runCodexAgentEndHook(
     return;
   }
   runAgentEndSideEffects(sideEffectParams);
+=======
+  if (shouldAwaitCodexAgentEndHook(params)) {
+    await awaitAgentHarnessAgentEndHook(hookParams);
+    return;
+  }
+  runAgentHarnessAgentEndHook(hookParams);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export async function runCodexAppServerAttempt(
@@ -434,6 +486,7 @@ export async function runCodexAppServerAttempt(
   );
   const codexModelContentCapture = resolveDiagnosticModelContentCapturePolicy(params.config);
   const codexModelCallId = `${params.runId}:codex-model:1`;
+<<<<<<< HEAD
   const fastModeAutoStartedAtMs =
     typeof params.fastModeStartedAtMs === "number" && Number.isFinite(params.fastModeStartedAtMs)
       ? params.fastModeStartedAtMs
@@ -442,6 +495,8 @@ export async function runCodexAppServerAttempt(
     offAnnounced: false,
     resetAnnounced: false,
   };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   // Startup phase timings are profiler-gated because this function runs before
   // every Codex turn; normal production should not do timing bookkeeping here.
   const preDynamicStartupStages = createCodexDynamicToolBuildStageTracker({
@@ -790,9 +845,13 @@ export async function runCodexAppServerAttempt(
     onYieldDetected: () => {
       yieldDetected = true;
     },
+<<<<<<< HEAD
     onCodexAppServerEvent: (event) => {
       void emitCodexAppServerEvent(params, event);
     },
+=======
+    onCodexAppServerEvent: (event) => emitCodexAppServerEvent(params, event),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     onPersistentWebSearchPolicyResolved: (allowed) => {
       persistentWebSearchAllowed = allowed;
     },
@@ -819,9 +878,13 @@ export async function runCodexAppServerAttempt(
     onYieldDetected: () => {
       yieldDetected = true;
     },
+<<<<<<< HEAD
     onCodexAppServerEvent: (event) => {
       void emitCodexAppServerEvent(params, event);
     },
+=======
+    onCodexAppServerEvent: (event) => emitCodexAppServerEvent(params, event),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   const toolBridge = createCodexDynamicToolBridge({
     tools,
@@ -849,6 +912,7 @@ export async function runCodexAppServerAttempt(
     },
   });
   const hadSessionFile = await pathExists(activeSessionFile);
+<<<<<<< HEAD
   const activeTranscriptTarget = {
     agentId: sessionAgentId,
     sessionFile: activeSessionFile,
@@ -859,6 +923,9 @@ export async function runCodexAppServerAttempt(
     !activeContextEngine && initialStartupBindingHadInactiveThreadBootstrap
       ? []
       : ((await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ?? []);
+=======
+  let historyMessages = (await readMirroredSessionHistoryMessages(activeSessionFile)) ?? [];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const hookContextWindowFields = {
     ...(params.contextWindowInfo?.tokens
       ? { contextTokenBudget: params.contextWindowInfo.tokens }
@@ -916,7 +983,11 @@ export async function runCodexAppServerAttempt(
       warn: (message) => embeddedAgentLog.warn(message),
     });
     historyMessages =
+<<<<<<< HEAD
       (await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ?? historyMessages;
+=======
+      (await readMirroredSessionHistoryMessages(activeSessionFile)) ?? historyMessages;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   const memoryToolNames = getCodexWorkspaceMemoryToolNames(toolBridge.availableSpecs);
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
@@ -942,6 +1013,7 @@ export async function runCodexAppServerAttempt(
     skillsPrompt: params.skillsSnapshot?.prompt,
   });
   let promptText = params.prompt;
+<<<<<<< HEAD
   let promptContextRange: CodexProjectedContextRange | undefined;
   let developerInstructions = baseDeveloperInstructions;
   let prePromptMessageCount = historyMessages.length;
@@ -951,6 +1023,10 @@ export async function runCodexAppServerAttempt(
       config: params.config,
     }),
   });
+=======
+  let developerInstructions = baseDeveloperInstructions;
+  let prePromptMessageCount = historyMessages.length;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
   let precomputedStaleBindingContinuityProjectionApplied = false;
   let staleBindingContinuityForcedFreshStart = false;
@@ -961,10 +1037,15 @@ export async function runCodexAppServerAttempt(
       assembledMessages: historyMessages,
       originalHistoryMessages: historyMessages,
       prompt: params.prompt,
+<<<<<<< HEAD
       maxRenderedContextChars: codexContextProjectionMaxChars,
     });
     promptText = projection.promptText;
     promptContextRange = projection.promptContextRange;
+=======
+    });
+    promptText = projection.promptText;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     prePromptMessageCount = projection.prePromptMessageCount;
   };
   const applyActiveContextEngineProjection = async (
@@ -1004,7 +1085,16 @@ export async function runCodexAppServerAttempt(
       originalHistoryMessages: historyMessages,
       prompt: params.prompt,
       systemPromptAddition: assembled.systemPromptAddition,
+<<<<<<< HEAD
       maxRenderedContextChars: codexContextProjectionMaxChars,
+=======
+      maxRenderedContextChars: resolveCodexContextEngineProjectionMaxChars({
+        contextTokenBudget: params.contextTokenBudget,
+        reserveTokens: resolveCodexContextEngineProjectionReserveTokens({
+          config: params.config,
+        }),
+      }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       toolPayloadMode: contextEngineProjection ? "preserve" : "elide",
     });
     const projectionDecision = contextEngineProjection
@@ -1036,7 +1126,10 @@ export async function runCodexAppServerAttempt(
       developerInstructionAdditionChars: projection.developerInstructionAddition?.length ?? 0,
     });
     promptText = projectionDecision.project ? projection.promptText : params.prompt;
+<<<<<<< HEAD
     promptContextRange = projectionDecision.project ? projection.promptContextRange : undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     developerInstructions = joinPresentSections(
       baseDeveloperInstructions,
       projection.developerInstructionAddition,
@@ -1064,6 +1157,7 @@ export async function runCodexAppServerAttempt(
       developerInstructions,
       messages: codexModelInputHistoryMessages,
       ctx: hookContext,
+<<<<<<< HEAD
       ...("beforeAgentStartResult" in params
         ? { beforeAgentStartResult: params.beforeAgentStartResult }
         : {}),
@@ -1177,6 +1271,16 @@ export async function runCodexAppServerAttempt(
     });
   };
   let codexTurnPromptText = decorateCodexTurnPromptText(promptBuild);
+=======
+    });
+  let promptBuild = await buildPromptFromCurrentInputs();
+  const decorateCodexTurnPromptText = (prompt: string) =>
+    prependCodexOpenClawPromptContext(prompt, openClawPromptContext, {
+      preservePromptWithoutContext:
+        params.bootstrapContextMode === "lightweight" && params.bootstrapContextRunKind === "cron",
+    });
+  let codexTurnPromptText = decorateCodexTurnPromptText(promptBuild.prompt);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const buildCodexTurnCollaborationDeveloperInstructions = () =>
     buildTurnCollaborationMode(params, {
       turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
@@ -1192,7 +1296,11 @@ export async function runCodexAppServerAttempt(
     );
   const rebuildCodexPromptBuildFromCurrentProjection = async () => {
     promptBuild = await buildPromptFromCurrentInputs();
+<<<<<<< HEAD
     codexTurnPromptText = decorateCodexTurnPromptText(promptBuild);
+=======
+    codexTurnPromptText = decorateCodexTurnPromptText(promptBuild.prompt);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
   const rebuildCodexTurnPromptTextFromCurrentProjection = async () => {
     const nextPromptBuild = await buildPromptFromCurrentInputs();
@@ -1201,9 +1309,14 @@ export async function runCodexAppServerAttempt(
     promptBuild = {
       ...promptBuild,
       prompt: nextPromptBuild.prompt,
+<<<<<<< HEAD
       promptInputRange: nextPromptBuild.promptInputRange,
     };
     codexTurnPromptText = decorateCodexTurnPromptText(nextPromptBuild);
+=======
+    };
+    codexTurnPromptText = decorateCodexTurnPromptText(nextPromptBuild.prompt);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
   const selectNewerVisibleHistoryAfterBinding = (binding: CodexAppServerThreadBinding) => {
     const bindingUpdatedAt = Date.parse(binding.updatedAt);
@@ -1245,10 +1358,15 @@ export async function runCodexAppServerAttempt(
       assembledMessages: newerVisibleMessages,
       originalHistoryMessages: historyMessages,
       prompt: params.prompt,
+<<<<<<< HEAD
       maxRenderedContextChars: codexContextProjectionMaxChars,
     });
     promptText = projection.promptText;
     promptContextRange = projection.promptContextRange;
+=======
+    });
+    promptText = projection.promptText;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     prePromptMessageCount = projection.prePromptMessageCount;
     return true;
   };
@@ -1325,11 +1443,14 @@ export async function runCodexAppServerAttempt(
     staleBindingContinuityForcedFreshStart =
       precomputedStaleBindingContinuityProjectionApplied &&
       !inactiveThreadBootstrapBindingForcedFreshStart;
+<<<<<<< HEAD
     if (staleBindingContinuityForcedFreshStart) {
       // Once the native thread id is discarded, Codex no longer owns the
       // pre-binding history; rebuild from the mirrored transcript.
       applyFreshThreadContinuityProjection();
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (activeContextEngine) {
       contextEngineProjection = undefined;
       try {
@@ -1463,6 +1584,7 @@ export async function runCodexAppServerAttempt(
     };
   };
   try {
+<<<<<<< HEAD
     void emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
       data: { phase: "startup" },
@@ -1472,6 +1594,15 @@ export async function runCodexAppServerAttempt(
     const startupResult = await startCodexAttemptThread({
       attemptClientFactory,
       appServer: attemptAppServer,
+=======
+    emitCodexAppServerEvent(params, {
+      stream: "codex_app_server.lifecycle",
+      data: { phase: "startup" },
+    });
+    const startupResult = await startCodexAttemptThread({
+      attemptClientFactory,
+      appServer,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       pluginConfig,
       computerUseConfig,
       startupAuthProfileId,
@@ -1510,7 +1641,11 @@ export async function runCodexAppServerAttempt(
     codexSandboxPolicy = startupResult.sandboxPolicy;
     releaseSharedClientLease = startupResult.releaseSharedClientLease;
     restartContextEngineCodexThread = startupResult.restartContextEngineCodexThread;
+<<<<<<< HEAD
     void emitCodexAppServerEvent(params, {
+=======
+    emitCodexAppServerEvent(params, {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       stream: "codex_app_server.lifecycle",
       data: { phase: "thread_ready", threadId: thread.threadId },
     });
@@ -1578,7 +1713,10 @@ export async function runCodexAppServerAttempt(
   let activeAppServerTurnRequests = 0;
   const pendingOpenClawDynamicToolCompletionIds = new Set<string>();
   const activeTurnItemIds = new Set<string>();
+<<<<<<< HEAD
   const activeCompletionBlockerItemIds = new Set<string>();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let turnCrossedToolHandoff = false;
   let pendingTerminalDynamicToolRelease:
     | {
@@ -1628,7 +1766,10 @@ export async function runCodexAppServerAttempt(
     isTerminalTurnNotificationQueued: () => terminalTurnNotificationQueued,
     getActiveAppServerTurnRequests: () => activeAppServerTurnRequests,
     getActiveTurnItemCount: () => activeTurnItemIds.size,
+<<<<<<< HEAD
     getActiveCompletionBlockerItemCount: () => activeCompletionBlockerItemIds.size,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     turnCompletionIdleTimeoutMs,
     turnAssistantCompletionIdleTimeoutMs,
     turnAttemptIdleTimeoutMs,
@@ -1756,7 +1897,11 @@ export async function runCodexAppServerAttempt(
   };
 
   const emitLifecycleStart = () => {
+<<<<<<< HEAD
     void emitCodexAppServerEvent(params, {
+=======
+    emitCodexAppServerEvent(params, {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       stream: "lifecycle",
       data: { phase: "start", startedAt: attemptStartedAt },
     });
@@ -1767,7 +1912,11 @@ export async function runCodexAppServerAttempt(
     if (!lifecycleStarted || lifecycleTerminalEmitted) {
       return;
     }
+<<<<<<< HEAD
     void emitCodexAppServerEvent(params, {
+=======
+    emitCodexAppServerEvent(params, {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       stream: "lifecycle",
       data: {
         startedAt: attemptStartedAt,
@@ -1803,6 +1952,7 @@ export async function runCodexAppServerAttempt(
       emitExecutionPhaseOnce,
     });
   };
+<<<<<<< HEAD
   const emitFastModeAutoProgress = async (payload: {
     enabled: boolean;
     elapsedSeconds: number;
@@ -1872,6 +2022,8 @@ export async function runCodexAppServerAttempt(
       );
     }
   };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const isTerminalTurnNotificationForTurn = (
     notification: CodexServerNotification,
@@ -1901,7 +2053,10 @@ export async function runCodexAppServerAttempt(
       currentPromptTexts: [codexTurnPromptText],
       turnWatches,
       activeTurnItemIds,
+<<<<<<< HEAD
       activeCompletionBlockerItemIds,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       activeAppServerTurnRequests,
       pendingOpenClawDynamicToolCompletionIds,
       turnCrossedToolHandoff,
@@ -1919,6 +2074,7 @@ export async function runCodexAppServerAttempt(
     try {
       await waitForCodexNotificationDispatchTurn();
       await projector.handleNotification(notification);
+<<<<<<< HEAD
       if (
         notificationState.isCurrentTurnNotification &&
         activeTurnItemIds.size === 0 &&
@@ -1926,6 +2082,8 @@ export async function runCodexAppServerAttempt(
       ) {
         await maybeAnnounceFastModeAutoOff();
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } catch (error) {
       embeddedAgentLog.debug("codex app-server projector notification threw", {
         method: notification.method,
@@ -2202,7 +2360,11 @@ export async function runCodexAppServerAttempt(
       const toolArgs = sanitizeCodexToolArguments(call.arguments);
       const shouldEmitDynamicToolProgress = shouldEmitTranscriptToolProgress(call.tool, toolArgs);
       if (shouldEmitDynamicToolProgress) {
+<<<<<<< HEAD
         void emitCodexAppServerEvent(params, {
+=======
+        emitCodexAppServerEvent(params, {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           stream: "tool",
           data: {
             phase: "start",
@@ -2292,7 +2454,11 @@ export async function runCodexAppServerAttempt(
         });
         if (shouldEmitDynamicToolProgress) {
           const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);
+<<<<<<< HEAD
           void emitCodexAppServerEvent(params, {
+=======
+          emitCodexAppServerEvent(params, {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             stream: "tool",
             data: {
               phase: "result",
@@ -2442,12 +2608,19 @@ export async function runCodexAppServerAttempt(
     throw error;
   };
   const startCodexTurn = async (): Promise<CodexTurnStartResponse> => {
+<<<<<<< HEAD
     const turnAppServer = withCodexAppServerFastModeServiceTier(pluginAppServer, params);
     pluginAppServer = turnAppServer;
     const turnStartParams = buildTurnStartParams(params, {
       threadId: thread.threadId,
       cwd: codexExecutionCwd,
       appServer: turnAppServer,
+=======
+    const turnStartParams = buildTurnStartParams(params, {
+      threadId: thread.threadId,
+      cwd: codexExecutionCwd,
+      appServer: pluginAppServer,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       promptText: codexTurnPromptText,
       sandboxPolicy: codexSandboxPolicy,
       environmentSelection: codexEnvironmentSelection,
@@ -2479,7 +2652,11 @@ export async function runCodexAppServerAttempt(
       "codex app-server resumed thread has active native turn; waiting before turn/start",
       { threadId: thread.threadId, activeTurnIds: activeNativeTurnIds },
     );
+<<<<<<< HEAD
     void emitCodexAppServerEvent(params, {
+=======
+    emitCodexAppServerEvent(params, {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       stream: "codex_app_server.lifecycle",
       data: {
         phase: "turn_start_waiting_for_native_turn",
@@ -2502,7 +2679,11 @@ export async function runCodexAppServerAttempt(
       ctx: hookContext,
       hookRunner,
     });
+<<<<<<< HEAD
     void emitCodexAppServerEvent(params, {
+=======
+    emitCodexAppServerEvent(params, {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       stream: "codex_app_server.lifecycle",
       data: { phase: "turn_starting", threadId: thread.threadId },
     });
@@ -2519,7 +2700,11 @@ export async function runCodexAppServerAttempt(
       );
       const compactTurnCompleted = await waitForActiveNativeTurnCompletion();
       if (compactTurnCompleted && !runAbortController.signal.aborted) {
+<<<<<<< HEAD
         void emitCodexAppServerEvent(params, {
+=======
+        emitCodexAppServerEvent(params, {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           stream: "codex_app_server.lifecycle",
           data: { phase: "turn_start_retry_after_compact", threadId: thread.threadId },
         });
@@ -2601,7 +2786,11 @@ export async function runCodexAppServerAttempt(
               );
             }
           }
+<<<<<<< HEAD
           void emitCodexAppServerEvent(params, {
+=======
+          emitCodexAppServerEvent(params, {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             stream: "codex_app_server.lifecycle",
             data: { phase: "thread_ready_retry", threadId: thread.threadId },
           });
@@ -2631,7 +2820,11 @@ export async function runCodexAppServerAttempt(
           error: turnStartErrorMessage,
         });
       }
+<<<<<<< HEAD
       void emitCodexAppServerEvent(params, {
+=======
+      emitCodexAppServerEvent(params, {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         stream: "codex_app_server.lifecycle",
         data: { phase: "turn_start_failed", error: turnStartErrorMessage },
       });
@@ -2732,8 +2925,11 @@ export async function runCodexAppServerAttempt(
   }
   turnIdRef.current = turn.turn.id;
   const activeTurnId = turn.turn.id;
+<<<<<<< HEAD
   let assistantStreamEventEmitted = false;
   let assistantStreamNeedsTerminalSnapshot = false;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
   userInputBridgeRef.current = createCodexUserInputBridge({
     paramsForRun: params,
@@ -2748,6 +2944,7 @@ export async function runCodexAppServerAttempt(
     imagesCount: params.images?.length ?? 0,
   });
   projectorRef.current = new CodexAppServerEventProjector(
+<<<<<<< HEAD
     {
       ...dynamicToolParams,
       onAgentEvent: (event) => {
@@ -2758,6 +2955,9 @@ export async function runCodexAppServerAttempt(
         return dynamicToolParams.onAgentEvent?.(event);
       },
     },
+=======
+    dynamicToolParams,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     thread.threadId,
     activeTurnId,
     {
@@ -2765,7 +2965,10 @@ export async function runCodexAppServerAttempt(
         nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
         nativeHookRelay.shouldRelayEvent("post_tool_use"),
       trajectoryRecorder,
+<<<<<<< HEAD
       onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
   );
   if (
@@ -3025,6 +3228,7 @@ export async function runCodexAppServerAttempt(
       turnId: activeTurnId,
     });
     const terminalAssistantText = collectTerminalAssistantText(result);
+<<<<<<< HEAD
     if (
       terminalAssistantText &&
       (!assistantStreamEventEmitted || assistantStreamNeedsTerminalSnapshot) &&
@@ -3032,6 +3236,10 @@ export async function runCodexAppServerAttempt(
       !finalPromptError
     ) {
       void emitCodexAppServerEvent(params, {
+=======
+    if (terminalAssistantText && !finalAborted && !finalPromptError) {
+      emitCodexAppServerEvent(params, {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         stream: "assistant",
         data: { text: terminalAssistantText },
       });
@@ -3051,7 +3259,11 @@ export async function runCodexAppServerAttempt(
       const activeContextEnginePluginIdLocal =
         resolveContextEngineOwnerPluginId(activeContextEngine);
       const finalMessages =
+<<<<<<< HEAD
         (await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ??
+=======
+        (await readMirroredSessionHistoryMessages(activeSessionFile)) ??
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         historyMessages.concat(result.messagesSnapshot);
       await finalizeHarnessContextEngineTurn({
         contextEngine: activeContextEngine,
@@ -3163,9 +3375,12 @@ export async function runCodexAppServerAttempt(
       systemPromptReport,
     };
   } finally {
+<<<<<<< HEAD
     if (params.isFinalFallbackAttempt !== false) {
       await maybeEmitFastModeAutoResetBestEffort();
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     codexModelCallDiagnostics.emitError(
       "codex app-server run completed without model-call terminal event",
     );

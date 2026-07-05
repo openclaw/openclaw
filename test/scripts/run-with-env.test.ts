@@ -3,13 +3,18 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+<<<<<<< HEAD
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+=======
+import { describe, expect, it } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   isRunWithEnvHelpRequest,
   parseRunWithEnvArgs,
   resolveForceKillDelayMs,
   resolveSpawnCommand,
+<<<<<<< HEAD
   signalRunWithEnvChild,
 } from "../../scripts/run-with-env.mjs";
 
@@ -36,6 +41,10 @@ function withDefaultWindowsSystemRoot(run: () => void): void {
   }
 }
 
+=======
+} from "../../scripts/run-with-env.mjs";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function waitFor(predicate: () => boolean, label: string, timeoutMs = 3_000): Promise<void> {
   const startedAt = Date.now();
   while (!predicate()) {
@@ -153,11 +162,14 @@ describe("run-with-env", () => {
   it("rejects malformed force-kill grace configuration before spawning", () => {
     expect(resolveForceKillDelayMs({})).toBe(5_000);
     expect(resolveForceKillDelayMs({ OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: "250" })).toBe(250);
+<<<<<<< HEAD
     expect(
       resolveForceKillDelayMs({
         OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: String(MAX_TIMER_TIMEOUT_MS + 1),
       }),
     ).toBe(MAX_TIMER_TIMEOUT_MS);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     for (const value of ["0", "-1", "1e3", "100ms"]) {
       expect(() => resolveForceKillDelayMs({ OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: value })).toThrow(
         "OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS must be a positive integer",
@@ -188,6 +200,7 @@ describe("run-with-env", () => {
     );
   });
 
+<<<<<<< HEAD
   it("signals Windows wrapped command trees with taskkill", () => {
     withDefaultWindowsSystemRoot(() => {
       const child = {
@@ -241,6 +254,8 @@ describe("run-with-env", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.runIf(process.platform !== "win32").each(["SIGTERM", "SIGHUP", "SIGINT"] as const)(
     "forwards parent %s to the wrapped command",
     async (signal) => {
@@ -399,10 +414,14 @@ describe("run-with-env", () => {
         ],
         {
           cwd: process.cwd(),
+<<<<<<< HEAD
           env: {
             ...process.env,
             OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: String(MAX_TIMER_TIMEOUT_MS + 1),
           },
+=======
+          env: { ...process.env, OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: "1000" },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           stdio: "ignore",
         },
       );

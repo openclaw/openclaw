@@ -1,0 +1,73 @@
+{
+  "scenarios": [
+    {
+      "name": "Memory failure fallback",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "falls back cleanly when group:memory tools are denied",
+          "status": "pass",
+          "details": "Protocol note: I checked the available runtime context but could not confirm the hidden memory-only fact, so I will not guess."
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 56486,
+    "gatewayProcessCpuMs": 7000,
+    "gatewayCpuCoreRatio": 0.124,
+    "gatewayProcessRssStartBytes": 808288256,
+    "gatewayProcessRssEndBytes": 635592704,
+    "gatewayProcessRssDeltaBytes": -172695552,
+    "gatewayProcessRssPeakBytes": 808288256,
+    "gatewayProcessRssPeakDeltaBytes": 0,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:14:02.944Z",
+        "gatewayProcessRssBytes": 808288256
+      },
+      {
+        "label": "scenario:memory-failure-fallback:start",
+        "at": "2026-07-03T13:14:02.958Z",
+        "gatewayProcessRssBytes": 808288256
+      },
+      {
+        "label": "scenario:memory-failure-fallback:finish",
+        "at": "2026-07-03T13:14:46.830Z",
+        "gatewayProcessRssBytes": 635592704
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:14:46.848Z",
+        "gatewayProcessRssBytes": 635592704
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:13:50.344Z",
+    "finishedAt": "2026-07-03T13:14:46.830Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "memory-failure-fallback"
+    ],
+    "runtimePair": null
+  }
+}

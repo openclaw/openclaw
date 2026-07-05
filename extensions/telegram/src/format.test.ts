@@ -4,7 +4,10 @@ import {
   markdownToTelegramChunks,
   markdownToTelegramHtml,
   markdownToTelegramRichHtml,
+<<<<<<< HEAD
   materializeTelegramRichHtmlLineBreaks,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   renderTelegramHtmlText,
   sanitizeTelegramRichHtml,
   splitTelegramHtmlChunks,
@@ -89,6 +92,7 @@ describe("markdownToTelegramHtml", () => {
     expect(markdownToTelegramRichHtml("<sup>1</sup>")).toBe("<sup>1</sup>");
   });
 
+<<<<<<< HEAD
   it("materializes inline and paragraph newlines as <br> for rich messages", () => {
     // The exact reported symptom: literal "• " bullets (not Markdown list markers)
     // joined by soft breaks, which Bot API 10.1 rich messages collapse without <br>.
@@ -155,6 +159,8 @@ describe("markdownToTelegramHtml", () => {
     expect(materializeTelegramRichHtmlLineBreaks("line1<br>\nline2")).toBe("line1<br>\nline2");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves rich table, details, quote, checklist, anchor, and math HTML", () => {
     const input = [
       '<a name="top"></a>',
@@ -170,6 +176,7 @@ describe("markdownToTelegramHtml", () => {
     expect(markdownToTelegramRichHtml(input)).toBe(input);
   });
 
+<<<<<<< HEAD
   it("converts raw HTML tables to code fallbacks in legacy HTML mode", () => {
     const input = [
       "<table>",
@@ -201,6 +208,8 @@ describe("markdownToTelegramHtml", () => {
     expect(sanitizeTelegramRichHtml(input)).toBe(input);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("isolates rich media tags as blocks", () => {
     const html = markdownToTelegramRichHtml(
       'One <img src="https://example.com/a.jpg" alt="A"> two https://example.com/page',
@@ -254,7 +263,11 @@ describe("markdownToTelegramHtml", () => {
         `| ${Array.from({ length: columns }, (_, index) => String(index + 1)).join(" | ")} |`,
       ].join("\n");
 
+<<<<<<< HEAD
     expect(markdownToTelegramRichHtml(table(20))).toContain("<table bordered striped>");
+=======
+    expect(markdownToTelegramRichHtml(table(20))).toContain("<table>");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(markdownToTelegramRichHtml(table(21))).toContain("<pre><code>");
     expect(markdownToTelegramRichHtml(table(2), { tableMode: "code" })).toContain("<pre><code>");
     expect(markdownToTelegramRichHtml(table(2), { tableMode: "code" })).not.toContain("<table>");
@@ -295,6 +308,7 @@ describe("markdownToTelegramHtml", () => {
     expect(html).toContain('<td><a href="https://example.com">docs</a></td>');
   });
 
+<<<<<<< HEAD
   it("preserves markdown table column alignment in rich tables", () => {
     const html = markdownToTelegramRichHtml(
       "| Feature | Status | Count |\n| :--- | :---: | ---: |\n| Rich tables | Fixed | 2 |",
@@ -308,6 +322,8 @@ describe("markdownToTelegramHtml", () => {
     expect(html).toContain('<td align="right">2</td>');
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not auto-linkify bare URLs when entity detection is skipped", () => {
     expect(markdownToTelegramRichHtml("https://example.com", { skipEntityDetection: true })).toBe(
       "https://example.com",
@@ -317,6 +333,7 @@ describe("markdownToTelegramHtml", () => {
     ).toBe('<a href="https://example.com">docs</a>');
   });
 
+<<<<<<< HEAD
   it("keeps unsupported markdown link hrefs as visible text in rich HTML", () => {
     expect(
       markdownToTelegramRichHtml(
@@ -339,6 +356,8 @@ describe("markdownToTelegramHtml", () => {
     expect(markdownToTelegramRichHtml("[back](#top)")).toBe('<a href="#top">back</a>');
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves Markdown heading levels in rich HTML", () => {
     expect(markdownToTelegramRichHtml("# Title\n\n### Detail")).toBe(
       "<h1>Title</h1>\n\n<h3>Detail</h3>",

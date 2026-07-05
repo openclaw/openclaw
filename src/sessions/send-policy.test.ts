@@ -88,6 +88,7 @@ describe("resolveSendPolicy", () => {
       expected: "deny",
     },
     {
+<<<<<<< HEAD
       name: "chat-type deny fires for a per-peer DM key without session metadata",
       cfg: cfgWithRules([{ action: "deny", match: { chatType: "direct" } }]),
       sessionKey: buildAgentPeerSessionKey({
@@ -142,6 +143,8 @@ describe("resolveSendPolicy", () => {
       expected: "deny",
     },
     {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       name: "channel-scoped deny ignores later peer-kind-looking tokens in non-channel keys",
       cfg: cfgWithRules([{ action: "deny", match: { channel: "demo-channel" } }]),
       sessionKey: "demo-channel:not-a-peer-kind:user-1:direct",
@@ -156,6 +159,7 @@ describe("resolveSendPolicy", () => {
   ])("$name", ({ cfg, entry, sessionKey, expected }) => {
     expect(resolveSendPolicy({ cfg, entry, sessionKey })).toBe(expected);
   });
+<<<<<<< HEAD
 
   it("does not apply channel allow rules to nested opaque identities", () => {
     const cfg = {
@@ -205,4 +209,6 @@ describe("resolveSendPolicy", () => {
 
     expect(resolveSendPolicy({ cfg, sessionKey })).toBe("deny");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

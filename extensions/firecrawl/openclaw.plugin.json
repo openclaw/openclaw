@@ -24,7 +24,11 @@
     },
     "webFetch.apiKey": {
       "label": "Firecrawl Fetch API Key",
+<<<<<<< HEAD
       "help": "Optional for hosted keyless scraping; add a key for higher limits (fallback: FIRECRAWL_API_KEY env var).",
+=======
+      "help": "Firecrawl API key for web fetch fallback (fallback: FIRECRAWL_API_KEY env var).",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "sensitive": true,
       "placeholder": "fc-..."
     },

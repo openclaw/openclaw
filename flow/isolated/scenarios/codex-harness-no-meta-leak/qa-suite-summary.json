@@ -1,0 +1,78 @@
+{
+  "scenarios": [
+    {
+      "name": "Codex harness no meta leak",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "confirms GPT-5.5 Codex harness target",
+          "status": "pass",
+          "details": "mock mode: parsed codex-harness-no-meta-leak"
+        },
+        {
+          "name": "keeps codex coordination chatter out of the visible reply",
+          "status": "pass",
+          "details": "mock mode: skipped live codex leak check"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 44886,
+    "gatewayProcessCpuMs": 0,
+    "gatewayCpuCoreRatio": 0,
+    "gatewayProcessRssStartBytes": 798760960,
+    "gatewayProcessRssEndBytes": 798781440,
+    "gatewayProcessRssDeltaBytes": 20480,
+    "gatewayProcessRssPeakBytes": 798781440,
+    "gatewayProcessRssPeakDeltaBytes": 20480,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:16:46.682Z",
+        "gatewayProcessRssBytes": 798760960
+      },
+      {
+        "label": "scenario:codex-harness-no-meta-leak:start",
+        "at": "2026-07-03T13:16:46.706Z",
+        "gatewayProcessRssBytes": 798781440
+      },
+      {
+        "label": "scenario:codex-harness-no-meta-leak:finish",
+        "at": "2026-07-03T13:16:46.743Z",
+        "gatewayProcessRssBytes": 798781440
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:16:46.795Z",
+        "gatewayProcessRssBytes": 798781440
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:16:01.857Z",
+    "finishedAt": "2026-07-03T13:16:46.743Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "codex-harness-no-meta-leak"
+    ],
+    "runtimePair": null
+  }
+}

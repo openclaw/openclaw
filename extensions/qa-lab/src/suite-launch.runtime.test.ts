@@ -28,6 +28,7 @@ async function makeTempRepo(prefix: string) {
   return repoRoot;
 }
 
+<<<<<<< HEAD
 async function writeEvidence(pathLocal: string, writeFile = true) {
   const evidence = {
     kind: "openclaw.qa.evidence-summary",
@@ -41,12 +42,32 @@ async function writeEvidence(pathLocal: string, writeFile = true) {
     await fs.writeFile(pathLocal, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
   }
   return evidence;
+=======
+async function writeEvidence(pathLocal: string) {
+  await fs.mkdir(path.dirname(pathLocal), { recursive: true });
+  await fs.writeFile(
+    pathLocal,
+    `${JSON.stringify(
+      {
+        kind: "openclaw.qa.evidence-summary",
+        schemaVersion: 2,
+        generatedAt: "2026-06-14T00:00:00.000Z",
+        evidenceMode: "full",
+        entries: [],
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 describe("qa suite runtime launcher", () => {
   beforeEach(() => {
     runQaFlowSuite.mockReset();
     runQaTestFileScenarios.mockReset();
+<<<<<<< HEAD
     runQaFlowSuite.mockImplementation(
       async (
         params:
@@ -73,20 +94,50 @@ describe("qa suite runtime launcher", () => {
         };
       },
     );
+=======
+    runQaFlowSuite.mockImplementation(async (params: { outputDir?: string } | undefined) => {
+      const outputDir = params?.outputDir ?? "/tmp/qa-flow";
+      const evidencePath = path.join(outputDir, "qa-evidence.json");
+      await writeEvidence(evidencePath);
+      return {
+        outputDir,
+        evidencePath,
+        reportPath: path.join(outputDir, "qa-suite-report.md"),
+        summaryPath: path.join(outputDir, "qa-suite-summary.json"),
+        report: "# QA Suite Report\n",
+        scenarios: [
+          {
+            name: "channel-chat-baseline",
+            status: "pass",
+            steps: [],
+          },
+        ],
+        watchUrl: "http://127.0.0.1:43124",
+      };
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     runQaTestFileScenarios.mockImplementation(
       async (params: {
         outputDir: string;
         scenarios: Array<{ id: string; execution: { kind: "script" | "vitest" | "playwright" } }>;
+<<<<<<< HEAD
         writeEvidenceFile?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }) => {
         const [scenario] = params.scenarios;
         if (!scenario) {
           throw new Error("expected scenario");
         }
         const evidencePath = path.join(params.outputDir, "qa-evidence.json");
+<<<<<<< HEAD
         const evidence = await writeEvidence(evidencePath, params.writeEvidenceFile);
         return {
           evidence,
+=======
+        await writeEvidence(evidencePath);
+        return {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           outputDir: params.outputDir,
           executionKind: scenario.execution.kind,
           evidencePath,
@@ -102,7 +153,10 @@ describe("qa suite runtime launcher", () => {
   });
 
   afterEach(async () => {
+<<<<<<< HEAD
     vi.unstubAllEnvs();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await Promise.all(
       tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
     );
@@ -176,6 +230,7 @@ describe("qa suite runtime launcher", () => {
     ).toEqual([{ id: "control-ui-chat-flow-playwright", kind: "playwright" }]);
   });
 
+<<<<<<< HEAD
   it("serializes test-file runner partitions in one checkout", async () => {
     const repoRoot = await makeTempRepo("qa-suite-test-file-serial-");
     let releaseVitest!: () => void;
@@ -230,6 +285,8 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).toHaveBeenCalledTimes(2);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("runs mixed flow and Vitest/Playwright scenarios as one suite", async () => {
     const repoRoot = await makeTempRepo("qa-suite-mixed-");
     const result = await runQaSuite({
@@ -250,17 +307,24 @@ describe("qa suite runtime launcher", () => {
       expect.objectContaining({
         outputDir: path.join(outputDir, "flow"),
         scenarioIds: ["channel-chat-baseline"],
+<<<<<<< HEAD
         writeEvidenceFile: false,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }),
     );
     expect(runQaTestFileScenarios).toHaveBeenCalledWith(
       expect.objectContaining({
         outputDir: path.join(outputDir, "playwright"),
+<<<<<<< HEAD
         writeEvidenceFile: false,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }),
     );
     await expect(fs.access(path.join(outputDir, "qa-suite-summary.json"))).resolves.toBeUndefined();
     await expect(fs.access(path.join(outputDir, "qa-evidence.json"))).resolves.toBeUndefined();
+<<<<<<< HEAD
     await expect(fs.access(path.join(outputDir, "flow", "qa-evidence.json"))).rejects.toMatchObject(
       {
         code: "ENOENT",
@@ -271,6 +335,8 @@ describe("qa suite runtime launcher", () => {
     ).rejects.toMatchObject({
       code: "ENOENT",
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const summary = JSON.parse(
       await fs.readFile(path.join(outputDir, "qa-suite-summary.json"), "utf8"),
     ) as {
@@ -291,6 +357,7 @@ describe("qa suite runtime launcher", () => {
     );
   });
 
+<<<<<<< HEAD
   it("keeps channel-driver unified flow partitions serial by default", async () => {
     const repoRoot = await makeTempRepo("qa-suite-crabline-serial-");
     await runQaSuite({
@@ -799,6 +866,8 @@ describe("qa suite runtime launcher", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects runtime-pair requests for Vitest/Playwright scenarios", async () => {
     await expect(
       runQaSuite({

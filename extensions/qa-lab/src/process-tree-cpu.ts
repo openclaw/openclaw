@@ -1,7 +1,10 @@
 // Qa Lab plugin module implements process tree cpu behavior.
 import { spawnSync } from "node:child_process";
 import { parseStrictFiniteNumber, parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
+<<<<<<< HEAD
 import { resolveQaWindowsPowerShellExePath } from "./windows-system-tools.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type ProcessTreeSnapshot = {
   childrenByParent: Map<number, number[]>;
@@ -176,7 +179,11 @@ function collectProcessTreeMetric(
 
 function readWindowsProcessTreeSnapshot(): ProcessTreeSnapshot | null {
   const result = spawnSync(
+<<<<<<< HEAD
     resolveQaWindowsPowerShellExePath(),
+=======
+    "powershell.exe",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     [
       "-NoProfile",
       "-ExecutionPolicy",

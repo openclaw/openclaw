@@ -1,10 +1,20 @@
 // Runtime web-channel plugin helpers expose web-channel tools through activated plugin runtimes.
+<<<<<<< HEAD
+=======
+import type { AgentToolResult } from "../../agents/runtime/index.js";
+import type { ChannelAgentTool } from "../../channels/plugins/types.core.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   getDefaultLocalRoots as getDefaultLocalRootsImpl,
   loadWebMedia as loadWebMediaImpl,
   loadWebMediaRaw as loadWebMediaRawImpl,
   optimizeImageToJpeg as optimizeImageToJpegImpl,
 } from "../../media/web-media.js";
+<<<<<<< HEAD
+=======
+import type { PollInput } from "../../polls.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   createPluginModuleLoaderCache,
   type PluginModuleLoaderCache,
@@ -45,6 +55,10 @@ type WebChannelLightRuntimeModule = {
     lid: string | null;
   };
   webAuthExists: (authDir?: string) => Promise<boolean>;
+<<<<<<< HEAD
+=======
+  createWhatsAppLoginTool: () => ChannelAgentTool;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   formatError: (error: unknown) => string;
   getStatusCode: (error: unknown) => number | undefined;
   pickWebChannel: (pref: string, authDir?: string) => Promise<string>;
@@ -59,6 +73,51 @@ type WebChannelHeavyRuntimeModule = {
     runtime?: unknown,
     accountId?: string,
   ) => Promise<void>;
+<<<<<<< HEAD
+=======
+  sendMessageWhatsApp: (
+    to: string,
+    body: string,
+    options: {
+      verbose: boolean;
+      cfg?: OpenClawConfig;
+      mediaUrl?: string;
+      mediaAccess?: {
+        localRoots?: readonly string[];
+        readFile?: (filePath: string) => Promise<Buffer>;
+      };
+      mediaLocalRoots?: readonly string[];
+      mediaReadFile?: (filePath: string) => Promise<Buffer>;
+      gifPlayback?: boolean;
+      accountId?: string;
+    },
+  ) => Promise<{ messageId: string; toJid: string }>;
+  sendPollWhatsApp: (
+    to: string,
+    poll: PollInput,
+    options: { verbose: boolean; accountId?: string; cfg?: OpenClawConfig },
+  ) => Promise<{ messageId: string; toJid: string }>;
+  sendReactionWhatsApp: (
+    chatJid: string,
+    messageId: string,
+    emoji: string,
+    options: {
+      verbose: boolean;
+      fromMe?: boolean;
+      participant?: string;
+      accountId?: string;
+    },
+  ) => Promise<void>;
+  createWaSocket: (
+    printQr: boolean,
+    verbose: boolean,
+    opts?: { authDir?: string; onQr?: (qr: string) => void },
+  ) => Promise<unknown>;
+  handleWhatsAppAction: (
+    params: Record<string, unknown>,
+    cfg: OpenClawConfig,
+  ) => Promise<AgentToolResult<unknown>>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   monitorWebChannel: (...args: unknown[]) => Promise<unknown>;
   monitorWebInbox: (...args: unknown[]) => Promise<unknown>;
   startWebLoginWithQr: (...args: unknown[]) => Promise<unknown>;
@@ -216,6 +275,44 @@ export function webAuthExists(
   return getLightExport("webAuthExists")(...args);
 }
 
+<<<<<<< HEAD
+=======
+/** Sends a web-channel message through the heavy runtime API. */
+export function sendWebChannelMessage(
+  ...args: Parameters<WebChannelHeavyRuntimeModule["sendMessageWhatsApp"]>
+): ReturnType<WebChannelHeavyRuntimeModule["sendMessageWhatsApp"]> {
+  return loadWebChannelHeavyModule().then((loaded) => loaded.sendMessageWhatsApp(...args));
+}
+
+/** Sends a web-channel poll through the heavy runtime API. */
+export function sendWebChannelPoll(
+  ...args: Parameters<WebChannelHeavyRuntimeModule["sendPollWhatsApp"]>
+): ReturnType<WebChannelHeavyRuntimeModule["sendPollWhatsApp"]> {
+  return loadWebChannelHeavyModule().then((loaded) => loaded.sendPollWhatsApp(...args));
+}
+
+/** Sends a web-channel reaction through the heavy runtime API. */
+export function sendWebChannelReaction(
+  ...args: Parameters<WebChannelHeavyRuntimeModule["sendReactionWhatsApp"]>
+): ReturnType<WebChannelHeavyRuntimeModule["sendReactionWhatsApp"]> {
+  return loadWebChannelHeavyModule().then((loaded) => loaded.sendReactionWhatsApp(...args));
+}
+
+/** Creates the web-channel login tool from the light runtime API. */
+export function createRuntimeWebChannelLoginTool(
+  ...args: Parameters<WebChannelLightRuntimeModule["createWhatsAppLoginTool"]>
+): ReturnType<WebChannelLightRuntimeModule["createWhatsAppLoginTool"]> {
+  return getLightExport("createWhatsAppLoginTool")(...args);
+}
+
+/** Creates a web-channel socket through the heavy runtime API. */
+export function createWebChannelSocket(
+  ...args: Parameters<WebChannelHeavyRuntimeModule["createWaSocket"]>
+): ReturnType<WebChannelHeavyRuntimeModule["createWaSocket"]> {
+  return loadWebChannelHeavyModule().then((loaded) => loaded.createWaSocket(...args));
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Formats a web-channel runtime error through the light runtime API. */
 export function formatError(
   ...args: Parameters<WebChannelLightRuntimeModule["formatError"]>
@@ -254,6 +351,16 @@ export function resolveWebChannelAuthDir(): ReturnType<
   throw new Error("web channel plugin runtime is missing export 'resolveDefaultWebAuthDir'");
 }
 
+<<<<<<< HEAD
+=======
+/** Handles a web-channel action through the heavy runtime API. */
+export async function handleWebChannelAction(
+  ...args: Parameters<WebChannelHeavyRuntimeModule["handleWhatsAppAction"]>
+): ReturnType<WebChannelHeavyRuntimeModule["handleWhatsAppAction"]> {
+  return (await getHeavyExport("handleWhatsAppAction"))(...args);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Loads web media through the core media helper. */
 export async function loadWebMedia(
   ...args: Parameters<typeof loadWebMediaImpl>

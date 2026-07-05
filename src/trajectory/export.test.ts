@@ -1467,6 +1467,7 @@ describe("exportTrajectoryBundle", () => {
     expect(tools).toContain("$WORKSPACE_DIR/docs");
     expect(`${prompts}\n${artifacts}\n${systemPrompt}\n${tools}`).not.toContain(tmpDir);
   });
+<<<<<<< HEAD
 
   it("exports the transcript for a legacy v1 session without entry timestamps", async () => {
     const tmpDir = makeTempDir();
@@ -1502,4 +1503,6 @@ describe("exportTrajectoryBundle", () => {
     expect(bundle.manifest.transcriptEventCount).toBe(2);
     expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

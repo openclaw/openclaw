@@ -4,6 +4,7 @@ import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listActiveChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
 import type {
+<<<<<<< HEAD
   ChannelOnboardingPostWriteHook,
   ChannelSetupConfiguredResult,
   ChannelSetupPlugin,
@@ -11,6 +12,10 @@ import type {
   ChannelSetupStatus,
   ChannelSetupWizardAdapter,
   SetupChannelsOptions,
+=======
+  ChannelSetupPlugin,
+  ChannelSetupWizardAdapter,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "../channels/plugins/setup-wizard-types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -26,6 +31,16 @@ import {
   getTrustedChannelPluginCatalogEntry,
   listTrustedChannelPluginCatalogEntries,
 } from "../commands/channel-setup/trusted-catalog.js";
+<<<<<<< HEAD
+=======
+import type {
+  ChannelSetupConfiguredResult,
+  ChannelSetupResult,
+  ChannelSetupStatus,
+  ChannelOnboardingPostWriteHook,
+  SetupChannelsOptions,
+} from "../commands/channel-setup/types.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -51,6 +66,10 @@ import {
   resolveChannelSetupSelectionContributions,
   resolveQuickstartDefault,
 } from "./channel-setup.status.js";
+<<<<<<< HEAD
+=======
+export { noteChannelStatus } from "./channel-setup.status.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export function createChannelOnboardingPostWriteHookCollector() {
   const hooks = new Map<string, ChannelOnboardingPostWriteHook>();

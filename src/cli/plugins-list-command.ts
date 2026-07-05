@@ -1,7 +1,12 @@
 // `openclaw plugins list`: builds registry reports and defers terminal-only formatting modules.
 import { getRuntimeConfig } from "../config/config.js";
+<<<<<<< HEAD
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { quietPluginJsonLogger } from "./plugins-json-logger.js";
+=======
+import type { PluginLogger } from "../plugins/types.js";
+import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Options accepted by the plugin list command. */
 export type PluginsListOptions = {
@@ -10,6 +15,16 @@ export type PluginsListOptions = {
   verbose?: boolean;
 };
 
+<<<<<<< HEAD
+=======
+const quietPluginJsonLogger: PluginLogger = {
+  debug: () => undefined,
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function loadHumanListModules() {
   const [sourceDisplay, table, themeModule, commandFormat, listFormat] = await Promise.all([
     import("../plugins/source-display.js"),

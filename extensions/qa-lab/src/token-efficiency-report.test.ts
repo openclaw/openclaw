@@ -134,6 +134,7 @@ describe("token efficiency report", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("fails live reports with non-integer token usage evidence", () => {
     const report = buildTokenEfficiencyReport({
       summary: makeLiveSummary([
@@ -152,6 +153,8 @@ describe("token efficiency report", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("fails empty live runtime summaries instead of treating them as skipped proof", () => {
     const report = buildTokenEfficiencyReport({
       generatedAt: "2026-05-10T00:00:00.000Z",

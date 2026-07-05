@@ -1,4 +1,5 @@
 // Copilot tests cover harness plugin behavior.
+<<<<<<< HEAD
 import { attachModelProviderRequestTransport } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   initializeGlobalHookRunner,
@@ -9,11 +10,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CopilotClientPool } from "./harness.js";
 import { createCopilotAgentHarness, type CopilotSessionBinding } from "./harness.js";
 import { COPILOT_BYOK_PROVIDER_ERROR } from "./src/provider-bridge.js";
+=======
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { CopilotClientPool } from "./harness.js";
+import { createCopilotAgentHarness, type CopilotSessionBinding } from "./harness.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const mocks = vi.hoisted(() => ({
   runCopilotAttempt: vi.fn(),
   resolvePoolAcquire: vi.fn(
+<<<<<<< HEAD
     (_params: any) =>
+=======
+    () =>
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ({
         auth: {
           agentId: "test",
@@ -24,7 +34,10 @@ const mocks = vi.hoisted(() => ({
         options: { copilotHome: "/tmp/copilot", useLoggedInUser: true },
       }) as any,
   ),
+<<<<<<< HEAD
   createCopilotByokProxy: vi.fn(),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   createCopilotClientPool: vi.fn(),
 }));
 
@@ -33,10 +46,13 @@ vi.mock("./src/attempt.js", () => ({
   runCopilotAttempt: mocks.runCopilotAttempt,
 }));
 
+<<<<<<< HEAD
 vi.mock("./src/byok-proxy.js", () => ({
   createCopilotByokProxy: mocks.createCopilotByokProxy,
 }));
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.mock("./src/runtime.js", () => ({
   createCopilotClientPool: mocks.createCopilotClientPool,
 }));
@@ -50,13 +66,21 @@ const TEST_SESSION_CONFIG = {
   workingDirectory: "/workspace",
 };
 
+<<<<<<< HEAD
 function makePoolMock() {
+=======
+function makePoolMock(): CopilotClientPool {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return {
     acquire: vi.fn(),
     release: vi.fn(),
     dispose: vi.fn().mockResolvedValue([]),
     size: vi.fn().mockReturnValue(0),
+<<<<<<< HEAD
   } satisfies CopilotClientPool;
+=======
+  };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function makeSessionStoreMock() {
@@ -93,7 +117,10 @@ describe("createCopilotAgentHarness", () => {
   beforeEach(() => {
     mocks.runCopilotAttempt.mockReset();
     mocks.resolvePoolAcquire.mockClear();
+<<<<<<< HEAD
     mocks.createCopilotByokProxy.mockReset();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mocks.createCopilotClientPool.mockReset();
     mocks.runCopilotAttempt.mockResolvedValue(ATTEMPT_RESULT);
     mocks.resolvePoolAcquire.mockReturnValue({
@@ -106,11 +133,14 @@ describe("createCopilotAgentHarness", () => {
       options: { copilotHome: "/tmp/copilot", useLoggedInUser: true },
     });
     mocks.createCopilotClientPool.mockImplementation(() => makePoolMock());
+<<<<<<< HEAD
     mocks.createCopilotByokProxy.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
     resetGlobalHookRunner();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("returns the copilot id and default label", () => {
@@ -189,11 +219,16 @@ describe("createCopilotAgentHarness", () => {
     ).toEqual({ supported: true, priority: 100 });
   });
 
+<<<<<<< HEAD
   it("supports custom provider ids for BYOK model entries", () => {
+=======
+  it("supports rejects providers outside the whitelist", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const harness = createCopilotAgentHarness();
 
     expect(
       harness.supports({
+<<<<<<< HEAD
         provider: "custom-proxy",
         modelId: "llama-3.1-8b",
         modelProvider: {
@@ -216,10 +251,15 @@ describe("createCopilotAgentHarness", () => {
         modelId: "llama-3.1-8b",
         providerOwnerStatus: "unowned",
         providerOwnerPluginIds: [],
+=======
+        provider: "anthropic",
+        modelId: "claude-sonnet-4.5",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         requestedRuntime: "copilot",
       }),
     ).toEqual({
       supported: false,
+<<<<<<< HEAD
       reason:
         "provider is not a supported Copilot BYOK model (requires supported api, baseUrl, and no request transport policy overrides)",
     });
@@ -264,6 +304,17 @@ describe("createCopilotAgentHarness", () => {
           requestedRuntime: "copilot",
           providerOwnerStatus: "owned",
           providerOwnerPluginIds: ownerPluginIds,
+=======
+      reason: "provider is not one of: github-copilot",
+    });
+    // Legacy aspirational ids should not be claimed by the harness.
+    for (const legacyId of ["github", "openclaw", "copilot"]) {
+      expect(
+        harness.supports({
+          provider: legacyId,
+          modelId: "gpt-4.1",
+          requestedRuntime: "copilot",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }),
       ).toEqual({
         supported: false,
@@ -272,6 +323,7 @@ describe("createCopilotAgentHarness", () => {
     }
   });
 
+<<<<<<< HEAD
   it("supports rejects ambiguous custom provider ownership", () => {
     const harness = createCopilotAgentHarness();
 
@@ -293,6 +345,8 @@ describe("createCopilotAgentHarness", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("runAttempt lazy-imports attempt by waiting until invocation to create a pool", async () => {
     const pool = makePoolMock();
     mocks.createCopilotClientPool.mockReturnValue(pool);
@@ -307,6 +361,7 @@ describe("createCopilotAgentHarness", () => {
     expect(mocks.runCopilotAttempt).toHaveBeenCalledTimes(1);
   });
 
+<<<<<<< HEAD
   it("keeps invalid BYOK provider configuration on the structured attempt path", async () => {
     const pool = makePoolMock();
     mocks.createCopilotClientPool.mockReturnValue(pool);
@@ -319,6 +374,8 @@ describe("createCopilotAgentHarness", () => {
     expect(mocks.runCopilotAttempt).toHaveBeenCalledWith(ATTEMPT_PARAMS, { pool });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("runAttempt creates one pool lazily and reuses it across two attempts on the same harness", async () => {
     const pool = makePoolMock();
     const firstResult = { attempt: 1 } as any;
@@ -625,6 +682,7 @@ describe("createCopilotAgentHarness", () => {
     expect(deleteSession).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("aborts deferred compaction cleanup before disposal", async () => {
     const cleanup = createDeferred<"aborted" | "completed" | "deadline">();
     const abort = vi.fn(() => cleanup.resolve("aborted"));
@@ -785,6 +843,8 @@ describe("createCopilotAgentHarness", () => {
     expect(sessionStore.entries.get("oc-reset-reuse")?.sdkSessionId).toBe("sdk-sess-during-reset");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   describe("session reuse across turns (dogfood finding #4)", () => {
     // These tests pin the harness's session-reuse contract: subsequent
     // `runAttempt` calls within the same OpenClaw session should pass
@@ -832,6 +892,7 @@ describe("createCopilotAgentHarness", () => {
       expect(secondCallParams.initialReplayState?.replayInvalid).toBeUndefined();
     });
 
+<<<<<<< HEAD
     it("blocks reuse while timed-out compaction is pending, then resumes after completion", async () => {
       const pool = makePoolMock();
       const sessionStore = makeSessionStoreMock();
@@ -1003,6 +1064,8 @@ describe("createCopilotAgentHarness", () => {
       await flushAsyncWork();
     });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     it("does not seed sdkSessionId on the first turn (nothing tracked yet)", async () => {
       const pool = makePoolMock();
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
@@ -1283,6 +1346,7 @@ describe("createCopilotAgentHarness", () => {
       expect(secondCallParams.initialReplayState?.sdkSessionId).toBe("sdk-sess-sqlite");
     });
 
+<<<<<<< HEAD
     it("persists BYOK session compatibility with endpoint fingerprints instead of raw URLs", async () => {
       const sessionStore = makeSessionStoreMock();
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
@@ -1365,6 +1429,8 @@ describe("createCopilotAgentHarness", () => {
       expect(secondCallParams.initialReplayState?.sdkSessionId).toBeUndefined();
     });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     it("resumes shipped schema v1 plugin-state bindings for attempts", async () => {
       const sessionStore = makeSessionStoreMock();
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
@@ -1667,7 +1733,10 @@ describe("createCopilotAgentHarness", () => {
         copilotHome: "/copilot-home",
         auth: { useLoggedInUser: true },
         sessionId: "oc-sess-compact",
+<<<<<<< HEAD
         sessionFile: "/session.json",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         ...overrides,
       };
     }
@@ -1698,6 +1767,7 @@ describe("createCopilotAgentHarness", () => {
       });
     });
 
+<<<<<<< HEAD
     it("does not resume a session while deferred background compaction is pending", async () => {
       const cleanup = createDeferred<"aborted" | "completed" | "deadline">();
       const pool = makePoolMock();
@@ -1784,16 +1854,22 @@ describe("createCopilotAgentHarness", () => {
           { hookName: "after_compaction", handler: afterCompaction },
         ]),
       );
+=======
+    it("calls the SDK history compaction RPC without requiring a workspace sidecar", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const compact = vi.fn(async () => ({
         success: true,
         tokensRemoved: 123,
         messagesRemoved: 4,
+<<<<<<< HEAD
         summaryContent: "compacted summary",
         contextWindow: {
           tokenLimit: 1000,
           currentTokens: 777,
           messagesLength: 12,
         },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }));
       const disconnect = vi.fn(async () => {
         throw new Error("disconnect failed");
@@ -1834,7 +1910,10 @@ describe("createCopilotAgentHarness", () => {
         model: "gpt-4.1",
         sessionKey: "agent:main:main",
         sessionId: "oc-sess-compact-1",
+<<<<<<< HEAD
         currentTokenCount: 900,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         workspaceDir: "/this\u0000is/illegal",
         customInstructions: "Keep decisions.",
       });
@@ -1853,6 +1932,7 @@ describe("createCopilotAgentHarness", () => {
       expect(compact).toHaveBeenCalledWith({ customInstructions: "Keep decisions." });
       expect(disconnect).toHaveBeenCalledTimes(1);
       expect(release).toHaveBeenCalledTimes(1);
+<<<<<<< HEAD
       expect(beforeCompaction).toHaveBeenCalledWith(
         { messageCount: -1, sessionFile: "/session.json" },
         expect.objectContaining({
@@ -1866,10 +1946,13 @@ describe("createCopilotAgentHarness", () => {
         { compactedCount: 4, messageCount: -1, sessionFile: "/session.json" },
         expect.objectContaining({ sessionId: "oc-sess-compact-1" }),
       );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(result).toEqual({
         ok: true,
         compacted: true,
         reason: "copilot-sdk-history-compacted",
+<<<<<<< HEAD
         result: {
           summary: "compacted summary",
           firstKeptEntryId: "",
@@ -1889,6 +1972,8 @@ describe("createCopilotAgentHarness", () => {
           sessionId: "oc-sess-compact-1",
           sessionFile: "/session.json",
         },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
     });
 
@@ -2065,6 +2150,7 @@ describe("createCopilotAgentHarness", () => {
       expect(matchingResult?.compacted).toBe(true);
     });
 
+<<<<<<< HEAD
     it("compacts tracked BYOK sessions from production compact params with a fresh proxy", async () => {
       const compact = vi.fn(async () => ({
         success: true,
@@ -2207,6 +2293,8 @@ describe("createCopilotAgentHarness", () => {
       expect(result?.compacted).toBe(true);
     });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     it("does not compact a tracked SDK session after model changes", async () => {
       const resumeSession = vi.fn();
       const pool = makePoolMock();

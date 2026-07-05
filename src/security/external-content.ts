@@ -295,7 +295,11 @@ function replaceMarkers(content: string): string {
   return output;
 }
 
+<<<<<<< HEAD
 export function sanitizeModelSpecialTokens(content: string): string {
+=======
+function replaceLlmSpecialTokenLiterals(content: string): string {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let output = content;
   for (const literal of LLM_SPECIAL_TOKEN_LITERALS) {
     output = output.split(literal).join(SPECIAL_TOKEN_REPLACEMENT);
@@ -307,7 +311,11 @@ export function sanitizeModelSpecialTokens(content: string): string {
 }
 
 function sanitizeExternalContentText(content: string): string {
+<<<<<<< HEAD
   return sanitizeModelSpecialTokens(replaceMarkers(content));
+=======
+  return replaceLlmSpecialTokenLiterals(replaceMarkers(content));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export type WrapExternalContentOptions = {

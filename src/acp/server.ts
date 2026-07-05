@@ -8,7 +8,10 @@ import {
   PROTOCOL_VERSION,
   ndJsonStream,
 } from "@agentclientprotocol/sdk";
+<<<<<<< HEAD
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -28,7 +31,11 @@ import {
 } from "./event-ledger.js";
 import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
+<<<<<<< HEAD
 import { normalizeAcpProvenanceMode } from "./types.js";
+=======
+import { normalizeAcpProvenanceMode, type AcpServerOptions } from "./types.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type AcpStreamMessage =
   ReturnType<typeof ndJsonStream> extends {

@@ -80,8 +80,14 @@ type StopSlackStreamParams = {
 };
 
 /**
+<<<<<<< HEAD
  * Thrown when Slack definitively rejects a stream flush/finalize while text
  * remains buffered locally by the Slack SDK. Carries the pending text so the
+=======
+ * Thrown when Slack rejects a stream flush/finalize with a recipient-resolution
+ * error (see {@link BENIGN_SLACK_FINALIZE_ERROR_CODES}) while text is still
+ * only buffered locally by the Slack SDK. Carries the pending text so the
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
  * caller can deliver it via the normal Slack reply path.
  */
 export class SlackStreamNotDeliveredError extends Error {
@@ -89,7 +95,11 @@ export class SlackStreamNotDeliveredError extends Error {
   readonly slackCode: string;
   constructor(pendingText: string, slackCode: string) {
     super(
+<<<<<<< HEAD
       `slack-stream: finalize failed with ${slackCode} before buffered text reached Slack ` +
+=======
+      `slack-stream: finalize failed with ${slackCode} before any text reached Slack ` +
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         `(${pendingText.length} chars pending)`,
     );
     this.name = "SlackStreamNotDeliveredError";
@@ -234,6 +244,7 @@ export type StopSlackStreamResult = {
  * After calling this the stream message becomes a normal Slack message.
  * Optionally include final text to append before stopping.
  *
+<<<<<<< HEAD
  * If Slack's `chat.stopStream` responds with a definitive recipient/channel
  * rejection while text is still buffered locally, this function throws a
  * {@link SlackStreamNotDeliveredError} carrying that pending text so the caller
@@ -246,6 +257,19 @@ export type StopSlackStreamResult = {
  * already-delivered text stays visible.
  *
  * Errors without buffered text propagate unchanged.
+=======
+ * If Slack's `chat.stopStream` responds with a known benign finalize error
+ * (see {@link BENIGN_SLACK_FINALIZE_ERROR_CODES}) AND any prior `append`
+ * has already landed on Slack, the error is swallowed and the session is
+ * marked stopped - the already-delivered text stays visible.
+ *
+ * If the same benign error fires while text is still only buffered locally
+ * (e.g. short replies that never exceeded the SDK's buffer_size), this
+ * function throws a {@link SlackStreamNotDeliveredError} carrying that pending
+ * text so the caller can deliver it through the normal Slack reply path.
+ *
+ * All other errors propagate unchanged.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
  *
  * On success, returns the finalized message's Slack `ts` (when reported) so the
  * caller can emit the `message_sent` hook with a populated `messageId`.
@@ -293,8 +317,12 @@ export async function stopSlackStream(
       const code = extractSlackErrorCode(err) ?? "unknown";
       if (session.pendingText) {
         // stop() can be the first network call for short replies. If Slack
+<<<<<<< HEAD
         // definitively rejects that finalize, the user has not seen the
         // SDK-buffered text. Let the caller fall back to chat.postMessage.
+=======
+        // Connect rejects it, the user has not seen the SDK-buffered text yet.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         throw new SlackStreamNotDeliveredError(session.pendingText, code);
       }
       if (session.delivered) {
@@ -328,8 +356,11 @@ const BENIGN_SLACK_FINALIZE_ERROR_CODES = new Set<string>([
   "team_not_found",
   // DMs that closed between stream start and stop.
   "missing_recipient_user_id",
+<<<<<<< HEAD
   // Channels where Slack accepts ordinary messages but not native streaming.
   "method_not_supported_for_channel_type",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ]);
 
 export function isBenignSlackFinalizeError(err: unknown): boolean {

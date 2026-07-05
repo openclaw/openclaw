@@ -4,17 +4,25 @@ import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+<<<<<<< HEAD
 import { describe, expect, it, vi } from "vitest";
+=======
+import { describe, expect, it } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   createManagedCommandSpawnSpec,
   runManagedCommand,
   signalExitCode,
+<<<<<<< HEAD
   terminateManagedChild,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "../../scripts/lib/managed-child-process.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 const posixIt = process.platform === "win32" ? it.skip : it;
+<<<<<<< HEAD
 const taskkillPath = path.win32.join("C:\\Windows", "System32", "taskkill.exe");
 
 function restoreEnvValue(key: string, value: string | undefined): void {
@@ -37,6 +45,8 @@ function withDefaultWindowsSystemRoot(run: () => void): void {
     restoreEnvValue("WINDIR", originalWindir);
   }
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function expectProcessPid(pid: number | undefined): number {
   if (pid == null) {
@@ -77,6 +87,7 @@ describe("managed-child-process", () => {
     });
   });
 
+<<<<<<< HEAD
   it("uses Windows shell normalization when the platform override is win32", () => {
     expect(
       createManagedCommandSpawnSpec({
@@ -100,6 +111,8 @@ describe("managed-child-process", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves explicit non-shell Windows subprocesses", () => {
     expect(
       createManagedCommandSpawnSpec({
@@ -133,6 +146,7 @@ describe("managed-child-process", () => {
     ).toThrow("unsafe Windows cmd.exe argument detected");
   });
 
+<<<<<<< HEAD
   it("signals Windows managed process trees with taskkill", () => {
     withDefaultWindowsSystemRoot(() => {
       const child = {
@@ -186,6 +200,8 @@ describe("managed-child-process", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("shares process signal listeners across parallel managed commands", async () => {
     const signals = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
     const baseline = new Map(signals.map((signal) => [signal, process.listenerCount(signal)]));
@@ -216,6 +232,7 @@ describe("managed-child-process", () => {
     }
   });
 
+<<<<<<< HEAD
   posixIt(
     "kills managed child process group descendants when the runner is terminated",
     async () => {
@@ -299,6 +316,72 @@ import { runManagedCommand } from ${JSON.stringify(helperUrl)};
       }
     },
   );
+=======
+  posixIt("kills the managed child process group when the runner is terminated", async () => {
+    const dir = createTempDir("openclaw-managed-child-");
+    const childPath = path.join(dir, "child.mjs");
+    const runnerPath = path.join(dir, "runner.mjs");
+    const childPidPath = path.join(dir, "child.pid");
+    const runnerReadyPath = path.join(dir, "runner.ready");
+    const helperUrl = pathToFileURL(path.resolve("scripts/lib/managed-child-process.mjs")).href;
+
+    fs.writeFileSync(
+      childPath,
+      `
+import fs from "node:fs";
+
+fs.writeFileSync(process.argv[2], String(process.pid));
+for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
+  process.on(signal, () => process.exit(0));
+}
+setInterval(() => {}, 1_000);
+`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      runnerPath,
+      `
+import fs from "node:fs";
+import { runManagedCommand } from ${JSON.stringify(helperUrl)};
+
+process.exitCode = await runManagedCommand({
+  bin: process.execPath,
+  args: [${JSON.stringify(childPath)}, ${JSON.stringify(childPidPath)}],
+  stdio: "ignore",
+  onReady: () => fs.writeFileSync(${JSON.stringify(runnerReadyPath)}, "1"),
+});
+`,
+      "utf8",
+    );
+
+    const runner = spawn(process.execPath, [runnerPath], {
+      stdio: "ignore",
+    });
+    const runnerPid = expectProcessPid(runner.pid);
+    let childPid = 0;
+
+    try {
+      await waitFor(() => fs.existsSync(runnerReadyPath));
+      await waitFor(() => fs.existsSync(childPidPath));
+      childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+      expect(Number.isInteger(childPid)).toBe(true);
+      expect(isProcessAlive(childPid)).toBe(true);
+
+      process.kill(runnerPid, "SIGTERM");
+      const result = await waitForClose(runner);
+
+      expect(result).toEqual({ code: 143, signal: null });
+      await waitFor(() => !isProcessAlive(childPid), 1_500);
+    } finally {
+      if (isProcessAlive(runnerPid)) {
+        process.kill(runnerPid, "SIGKILL");
+      }
+      if (childPid && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
+    }
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 async function waitFor(condition: () => boolean, timeoutMs = 3_000) {

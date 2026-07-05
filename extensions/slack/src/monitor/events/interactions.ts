@@ -6,7 +6,10 @@ import {
   registerModalLifecycleHandler,
   type RegisterSlackModalHandler,
 } from "./interactions.modal.js";
+<<<<<<< HEAD
 import { registerSlackShortcutHandler } from "./interactions.shortcuts.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ModalInputSummary } from "./modal-input-summary.js";
 
 const SLACK_INTERACTION_EVENT_PREFIX = "Slack interaction: ";
@@ -100,14 +103,20 @@ function buildCompactSlackInteractionPayload(
     actionId: payload.actionId,
     callbackId: payload.callbackId,
     actionType: payload.actionType,
+<<<<<<< HEAD
     actionTs: payload.actionTs,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     userId: payload.userId,
     teamId: payload.teamId,
     channelId: payload.channelId ?? payload.routedChannelId,
     messageTs: payload.messageTs,
     threadTs: payload.threadTs,
+<<<<<<< HEAD
     messageUserId: payload.messageUserId,
     messageText: payload.messageText,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     viewId: payload.viewId,
     isCleared: payload.isCleared,
     selectedValues: payload.selectedValues,
@@ -192,11 +201,14 @@ export function registerSlackInteractionEvents(params: {
     trackEvent,
     formatSystemEvent: formatSlackInteractionSystemEvent,
   });
+<<<<<<< HEAD
   registerSlackShortcutHandler({
     ctx,
     trackEvent,
     formatSystemEvent: formatSlackInteractionSystemEvent,
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   if (typeof ctx.app.view !== "function") {
     return;

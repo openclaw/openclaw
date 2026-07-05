@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+<<<<<<< HEAD
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -12,6 +13,9 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
+=======
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   testing,
   bindGenericCurrentConversation,
@@ -23,11 +27,14 @@ import {
 } from "./current-conversation-bindings.js";
 import type { SessionBindingRecord } from "./session-binding.types.js";
 
+<<<<<<< HEAD
 type CurrentConversationBindingDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "current_conversation_bindings"
 >;
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function expectSessionBinding(bound: SessionBindingRecord | null): SessionBindingRecord {
   if (bound === null) {
     throw new Error("Expected current-conversation binding");
@@ -56,6 +63,7 @@ function expectBindingMetadata(
   }
 }
 
+<<<<<<< HEAD
 function buildConversationKey(ref: SessionBindingRecord["conversation"]): string {
   return [ref.channel, ref.accountId, ref.parentConversationId ?? "", ref.conversationId].join(
     "\u241f",
@@ -90,6 +98,8 @@ function seedPersistedBinding(record: SessionBindingRecord): void {
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function setMinimalCurrentConversationRegistry(): void {
   setActivePluginRegistry(
     createTestRegistry([
@@ -127,7 +137,10 @@ describe("generic current-conversation bindings", () => {
     testing.resetCurrentConversationBindingsForTests({
       deletePersistedFile: true,
     });
+<<<<<<< HEAD
     closeOpenClawStateDatabaseForTest();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (previousStateDir == null) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -201,6 +214,7 @@ describe("generic current-conversation bindings", () => {
   });
 
   it("normalizes persisted target session keys on reload", async () => {
+<<<<<<< HEAD
     seedPersistedBinding({
       bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
       targetSessionKey: " agent:codex:acp:workspace-dm ",
@@ -216,6 +230,33 @@ describe("generic current-conversation bindings", () => {
         label: "workspace-dm",
       },
     });
+=======
+    const filePath = testing.resolveBindingsFilePath();
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        version: 1,
+        bindings: [
+          {
+            bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
+            targetSessionKey: " agent:codex:acp:workspace-dm ",
+            targetKind: "session",
+            conversation: {
+              channel: "workspace",
+              accountId: "default",
+              conversationId: "user:U123",
+            },
+            status: "active",
+            boundAt: 1234,
+            metadata: {
+              label: "workspace-dm",
+            },
+          },
+        ],
+      }),
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const resolved = resolveGenericCurrentConversationBinding({
       channel: "workspace",
@@ -273,6 +314,7 @@ describe("generic current-conversation bindings", () => {
   });
 
   it("migrates persisted legacy self-parent binding ids on load", async () => {
+<<<<<<< HEAD
     seedPersistedBinding({
       bindingId: "generic:forum\u241fdefault\u241f6098642967\u241f6098642967",
       targetSessionKey: "agent:codex:acp:forum-dm",
@@ -289,6 +331,34 @@ describe("generic current-conversation bindings", () => {
         label: "forum-dm",
       },
     });
+=======
+    const filePath = testing.resolveBindingsFilePath();
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        version: 1,
+        bindings: [
+          {
+            bindingId: "generic:forum\u241fdefault\u241f6098642967\u241f6098642967",
+            targetSessionKey: "agent:codex:acp:forum-dm",
+            targetKind: "session",
+            conversation: {
+              channel: "forum",
+              accountId: "default",
+              conversationId: "6098642967",
+              parentConversationId: "6098642967",
+            },
+            status: "active",
+            boundAt: 1234,
+            metadata: {
+              label: "forum-dm",
+            },
+          },
+        ],
+      }),
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const resolved = resolveGenericCurrentConversationBinding({
       channel: "forum",
@@ -354,6 +424,7 @@ describe("generic current-conversation bindings", () => {
   });
 
   it("drops persisted bindings with invalid expiration timestamps", async () => {
+<<<<<<< HEAD
     seedPersistedBinding({
       bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
       targetSessionKey: "agent:codex:acp:workspace-dm",
@@ -367,6 +438,31 @@ describe("generic current-conversation bindings", () => {
       boundAt: 1234,
       expiresAt: 8_640_000_000_000_001,
     });
+=======
+    const filePath = testing.resolveBindingsFilePath();
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        version: 1,
+        bindings: [
+          {
+            bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
+            targetSessionKey: "agent:codex:acp:workspace-dm",
+            targetKind: "session",
+            conversation: {
+              channel: "workspace",
+              accountId: "default",
+              conversationId: "user:U123",
+            },
+            status: "active",
+            boundAt: 1234,
+            expiresAt: 8_640_000_000_000_001,
+          },
+        ],
+      }),
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(
       resolveGenericCurrentConversationBinding({

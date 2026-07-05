@@ -20,6 +20,10 @@ const mocks = vi.hoisted(() => ({
   }),
   resolveBrowserControlAuth: vi.fn(() => ({})),
   shouldAutoGenerateBrowserAuth: vi.fn(() => true),
+<<<<<<< HEAD
+=======
+  ensureExtensionRelayForProfiles: vi.fn(async () => {}),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("../config/config.js", async () => {
@@ -68,6 +72,10 @@ vi.mock("./server-context.js", () => ({
 }));
 
 vi.mock("./server-lifecycle.js", () => ({
+<<<<<<< HEAD
+=======
+  ensureExtensionRelayForProfiles: mocks.ensureExtensionRelayForProfiles,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   stopKnownBrowserProfiles: vi.fn(async () => {}),
 }));
 
@@ -83,6 +91,10 @@ describe("browser control auth bootstrap failures", () => {
     mocks.ensureBrowserControlAuth.mockClear();
     mocks.resolveBrowserControlAuth.mockClear();
     mocks.shouldAutoGenerateBrowserAuth.mockClear();
+<<<<<<< HEAD
+=======
+    mocks.ensureExtensionRelayForProfiles.mockClear();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   afterEach(async () => {
@@ -95,6 +107,10 @@ describe("browser control auth bootstrap failures", () => {
     expect(started).toBeNull();
     expect(mocks.ensureBrowserControlAuth).toHaveBeenCalledTimes(1);
     expect(mocks.resolveBrowserControlAuth).toHaveBeenCalledTimes(1);
+<<<<<<< HEAD
+=======
+    expect(mocks.ensureExtensionRelayForProfiles).not.toHaveBeenCalled();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("fails closed when auth bootstrap resolves empty auth in production-like mode", async () => {
@@ -107,6 +123,10 @@ describe("browser control auth bootstrap failures", () => {
     expect(started).toBeNull();
     expect(mocks.ensureBrowserControlAuth).toHaveBeenCalledTimes(1);
     expect(mocks.resolveBrowserControlAuth).toHaveBeenCalledTimes(1);
+<<<<<<< HEAD
+=======
+    expect(mocks.ensureExtensionRelayForProfiles).not.toHaveBeenCalled();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("fails closed when password mode has no resolved password", async () => {
@@ -118,6 +138,10 @@ describe("browser control auth bootstrap failures", () => {
     const started = await startBrowserControlServerFromConfig();
 
     expect(started).toBeNull();
+<<<<<<< HEAD
+=======
+    expect(mocks.ensureExtensionRelayForProfiles).not.toHaveBeenCalled();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("fails closed when password mode drops an inactive token but has no password", async () => {
@@ -130,5 +154,9 @@ describe("browser control auth bootstrap failures", () => {
     const started = await startBrowserControlServerFromConfig();
 
     expect(started).toBeNull();
+<<<<<<< HEAD
+=======
+    expect(mocks.ensureExtensionRelayForProfiles).not.toHaveBeenCalled();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

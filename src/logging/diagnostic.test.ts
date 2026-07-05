@@ -648,6 +648,7 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+<<<<<<< HEAD
   it("aborts stale embedded runs when queued work refreshes session activity", () => {
     const recoverStuckSession = vi.fn();
     const stuckSessionWarnMs = 120_000;
@@ -718,6 +719,8 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("recovers stale native tool calls through the active-run abort path", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
@@ -1889,14 +1892,23 @@ describe("stuck session diagnostics threshold", () => {
       logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
       logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
       markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+<<<<<<< HEAD
+=======
+
+      vi.advanceTimersByTime(stuckSessionAbortMs - 1);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       markDiagnosticRunProgressForTest({
         sessionId: "s1",
         sessionKey: "main",
         reason: terminalReason,
       });
+<<<<<<< HEAD
       vi.advanceTimersByTime(stuckSessionAbortMs - stuckSessionWarnMs - 1);
       logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
       vi.advanceTimersByTime(stuckSessionWarnMs + 1);
+=======
+      vi.advanceTimersByTime(1);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } finally {
       unsubscribe();
     }
@@ -1912,13 +1924,21 @@ describe("stuck session diagnostics threshold", () => {
       classification: "stalled_agent_run",
       reason: "queued_behind_terminal_active_work",
       activeWorkKind: "embedded_run",
+<<<<<<< HEAD
       queueDepth: 2,
+=======
+      queueDepth: 1,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       terminalProgressStale: true,
       lastProgressReason: terminalReason,
     });
     expectRecoveryCall(
       recoverStuckSession,
+<<<<<<< HEAD
       { sessionId: "s1", sessionKey: "main", queueDepth: 2, allowActiveAbort: true },
+=======
+      { sessionId: "s1", sessionKey: "main", queueDepth: 1, allowActiveAbort: true },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ["ageMs", "stateGeneration"],
     );
   });

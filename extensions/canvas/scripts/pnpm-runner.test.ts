@@ -17,7 +17,10 @@ describe("canvas pnpm runner", () => {
     try {
       expect(
         resolvePnpmRunner({
+<<<<<<< HEAD
           env: { PATH: "" },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           npmExecPath,
           platform: "darwin",
           pnpmArgs: ["exec", "rolldown", "-c"],
@@ -41,7 +44,10 @@ describe("canvas pnpm runner", () => {
     try {
       expect(
         resolvePnpmRunner({
+<<<<<<< HEAD
           env: { PATH: "" },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           npmExecPath,
           platform: "darwin",
           pnpmArgs: ["exec", "rolldown", "-c"],
@@ -55,6 +61,7 @@ describe("canvas pnpm runner", () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+<<<<<<< HEAD
 
   posixIt("uses Corepack when pnpm is not directly available on PATH", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "canvas-pnpm-runner-corepack-"));
@@ -130,4 +137,6 @@ describe("canvas pnpm runner", () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

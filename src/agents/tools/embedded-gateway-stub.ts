@@ -15,10 +15,13 @@ import type {
 } from "../../gateway/session-transcript-readers.js";
 import type { SessionsListResult } from "../../gateway/session-utils.types.js";
 import type { SessionsResolveResult } from "../../gateway/sessions-resolve.js";
+<<<<<<< HEAD
 import {
   normalizeFastMode,
   type FastMode,
 } from "@openclaw/normalization-core/string-coerce";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { readPositiveIntegerParam } from "./common.js";
 
@@ -134,7 +137,11 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   sessionId: string | undefined;
   messages: unknown[];
   thinkingLevel?: string;
+<<<<<<< HEAD
   fastMode?: FastMode;
+=======
+  fastMode?: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   verboseLevel?: string;
 }> {
   const rt = await getRuntime();
@@ -159,6 +166,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const requested = typeof limit === "number" ? limit : defaultLimit;
   const max = Math.min(hardMax, requested);
   const maxHistoryBytes = rt.getMaxChatHistoryMessagesBytes();
+<<<<<<< HEAD
   const sessionEntry =
     typeof entry?.sessionId === "string"
       ? {
@@ -166,15 +174,22 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
           ...(typeof entry.sessionFile === "string" ? { sessionFile: entry.sessionFile } : {}),
         }
       : undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const localMessages =
     sessionId && storePath
       ? await rt.readSessionMessagesAsync(
           {
             agentId: sessionAgentId,
+<<<<<<< HEAD
             sessionEntry,
             sessionId,
             sessionKey,
+=======
+            sessionFile: entry?.sessionFile as string | undefined,
+            sessionId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             storePath,
           },
           {
@@ -215,7 +230,11 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
     sessionId,
     messages: bounded.messages,
     thinkingLevel: entry?.thinkingLevel as string | undefined,
+<<<<<<< HEAD
     fastMode: normalizeFastMode(entry?.fastMode),
+=======
+    fastMode: entry?.fastMode as boolean | undefined,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     verboseLevel: entry?.verboseLevel as string | undefined,
   };
 }

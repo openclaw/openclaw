@@ -23,6 +23,11 @@ vi.mock("./model-auth-env-vars.js", () => {
   } as const;
   return {
     listKnownProviderEnvApiKeyNames: () => [...new Set(Object.values(candidates).flat())],
+<<<<<<< HEAD
+=======
+    resolveProviderEnvApiKeyCandidates: () => candidates,
+    resolveProviderEnvAuthEvidence: () => ({}),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resolveProviderEnvAuthLookupMaps: () => ({
       aliasMap: {},
       envCandidateMap: candidates,

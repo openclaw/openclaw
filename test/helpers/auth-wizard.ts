@@ -6,10 +6,19 @@ import type { RuntimeEnv } from "../../src/runtime.js";
 import { makeTempWorkspace } from "../../src/test-helpers/workspace.js";
 import { captureEnv } from "../../src/test-utils/env.js";
 import type { WizardPrompter } from "../../src/wizard/prompts.js";
+<<<<<<< HEAD
 import { createWizardPrompter as createBaseWizardPrompter } from "./wizard-prompter.js";
 
 // Shared auth wizard test helpers for runtime/env setup.
 
+=======
+
+// Shared auth wizard test helpers for runtime/env setup.
+
+const noopAsync = async () => {};
+const noop = () => {};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Create a RuntimeEnv whose exit method throws for assertions. */
 export function createExitThrowingRuntime(): RuntimeEnv {
   return {
@@ -26,7 +35,21 @@ export function createWizardPrompter(
   overrides: Partial<WizardPrompter>,
   options?: { defaultSelect?: string },
 ): WizardPrompter {
+<<<<<<< HEAD
   return createBaseWizardPrompter(overrides, { defaultSelect: options?.defaultSelect ?? "" });
+=======
+  return {
+    intro: vi.fn(noopAsync),
+    outro: vi.fn(noopAsync),
+    note: vi.fn(noopAsync),
+    select: vi.fn(async () => (options?.defaultSelect ?? "") as never),
+    multiselect: vi.fn(async () => []),
+    text: vi.fn(async () => "") as unknown as WizardPrompter["text"],
+    confirm: vi.fn(async () => false),
+    progress: vi.fn(() => ({ update: noop, stop: noop })),
+    ...overrides,
+  };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /** Create isolated auth state and agent directories for auth tests. */

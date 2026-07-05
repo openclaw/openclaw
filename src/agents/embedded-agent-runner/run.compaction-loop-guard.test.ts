@@ -187,6 +187,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     expect(attemptSignalReason).toBeInstanceOf(PostCompactionLoopPersistedError);
   });
 
+<<<<<<< HEAD
   it("releases the lane after a post-compaction abort when the backend ignores cancellation", async () => {
     vi.useFakeTimers();
     let settleIgnoredAttempt: ((value: ReturnType<typeof makeAttemptResult>) => void) | undefined;
@@ -387,6 +388,8 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not abort when the result hash changes across post-compaction attempts (progress was made)", async () => {
     const overflowError = makeOverflowError();
     // Attempt 1: overflow → triggers compaction.

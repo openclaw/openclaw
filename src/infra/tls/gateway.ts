@@ -80,6 +80,7 @@ export async function loadGatewayTlsRuntime(
 
   const autoGenerate = cfg.autoGenerate !== false;
   const baseDir = path.join(CONFIG_DIR, "gateway", "tls");
+<<<<<<< HEAD
   // Only blank/whitespace values fall back to the default. Any non-empty path is
   // passed through verbatim so resolveUserPath owns all normalization (it trims
   // and expands ~); trimming here would duplicate it and silently rewrite paths
@@ -94,6 +95,10 @@ export async function loadGatewayTlsRuntime(
       ? cfg.keyPath
       : path.join(baseDir, "gateway-key.pem"),
   );
+=======
+  const certPath = resolveUserPath(cfg.certPath ?? path.join(baseDir, "gateway-cert.pem"));
+  const keyPath = resolveUserPath(cfg.keyPath ?? path.join(baseDir, "gateway-key.pem"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const caPath = cfg.caPath ? resolveUserPath(cfg.caPath) : undefined;
 
   const hasCert = await pathExists(certPath);

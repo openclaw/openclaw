@@ -1,5 +1,8 @@
 // Imessage plugin module implements echo cache behavior.
+<<<<<<< HEAD
 import { stripLeadingEchoTextCorruptionMarkers } from "./echo-text-corruption.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { hasPersistedIMessageEcho } from "./persisted-echo-cache.js";
 
 type SentMessageLookup = {
@@ -36,6 +39,23 @@ export type SentMessageCache = {
 const SENT_MESSAGE_TEXT_TTL_MS = 4_000;
 const SENT_MESSAGE_ID_TTL_MS = 60_000;
 
+<<<<<<< HEAD
+=======
+function isLeadingEchoTextCorruptionMarker(code: number): boolean {
+  return (
+    code === 0x0000 || code === 0xfeff || code === 0xfffd || code === 0xfffe || code === 0xffff
+  );
+}
+
+function stripLeadingEchoTextCorruptionMarkers(text: string): string {
+  let offset = 0;
+  while (offset < text.length && isLeadingEchoTextCorruptionMarker(text.charCodeAt(offset))) {
+    offset += 1;
+  }
+  return offset === 0 ? text : text.slice(offset);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function normalizeEchoTextKey(text: string | undefined): string | null {
   if (!text) {
     return null;

@@ -548,6 +548,7 @@ describe("handleSlackMessageAction", () => {
       }),
     ).rejects.toThrow(/fileId/i);
   });
+<<<<<<< HEAD
 
   it("defaults member-info userId to the inbound sender when omitted", async () => {
     const invoke = createInvokeSpy();
@@ -650,6 +651,8 @@ describe("handleSlackMessageAction", () => {
       expect.any(Object),
     );
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("extractSlackToolSend", () => {

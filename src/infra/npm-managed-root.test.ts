@@ -15,7 +15,10 @@ import {
   readManagedNpmRootInstalledDependency,
   readOpenClawManagedNpmRootOverrides,
   resolveManagedNpmRootDependencySpec,
+<<<<<<< HEAD
   restoreManagedNpmRootPeerDependencySnapshot,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   syncManagedNpmRootPeerDependencies,
   upsertManagedNpmRootDependency,
 } from "./npm-managed-root.js";
@@ -295,6 +298,7 @@ describe("managed npm root", () => {
     });
   });
 
+<<<<<<< HEAD
   it("aligns stale managed peer pins with managed overrides when adding a plugin", async () => {
     const npmRoot = await makeTempRoot();
     await fs.writeFile(
@@ -530,6 +534,8 @@ describe("managed npm root", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("reads workspace pnpm overrides for managed plugin installs", async () => {
     const workspace = YAML.parse(
       await fs.readFile(path.resolve(process.cwd(), "pnpm-workspace.yaml"), "utf8"),
@@ -832,6 +838,7 @@ describe("managed npm root", () => {
     });
   });
 
+<<<<<<< HEAD
   it("advances stale managed peer pins to the override-aware npm plan", async () => {
     const npmRoot = await makeTempRoot();
     await fs.writeFile(
@@ -984,6 +991,8 @@ describe("managed npm root", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves existing managed peer dependencies when npm cannot plan third-party peers", async () => {
     const npmRoot = await makeTempRoot();
     await fs.writeFile(

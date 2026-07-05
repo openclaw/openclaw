@@ -3,7 +3,10 @@ import path from "node:path";
 import { resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import type { QaProviderMode } from "../run-config.js";
 import { normalizeQaProviderMode } from "../run-config.js";
+<<<<<<< HEAD
 import { createLiveTransportQaRunId } from "./live-transport-artifacts.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { LiveTransportQaCommandOptions } from "./live-transport-cli.js";
 
 export function resolveLiveTransportQaRunOptions(
@@ -16,7 +19,11 @@ export function resolveLiveTransportQaRunOptions(
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const outputDir =
     resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
+<<<<<<< HEAD
     path.join(repoRoot, ".artifacts", "qa-e2e", `matrix-${createLiveTransportQaRunId()}`);
+=======
+    path.join(repoRoot, ".artifacts", "qa-e2e", `matrix-${Date.now().toString(36)}`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return {
     repoRoot,
     outputDir,

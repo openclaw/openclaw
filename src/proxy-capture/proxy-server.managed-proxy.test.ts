@@ -5,6 +5,7 @@ import { Socket, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { DebugProxySettings } from "./env.js";
 import { assertDebugProxyDirectUpstreamAllowed, startDebugProxyServer } from "./proxy-server.js";
@@ -21,6 +22,13 @@ async function cleanupTestDirs(): Promise<void> {
   } else {
     process.env.OPENCLAW_STATE_DIR = originalStateDir;
   }
+=======
+import { assertDebugProxyDirectUpstreamAllowed, startDebugProxyServer } from "./proxy-server.js";
+
+let testRoot: string | undefined;
+
+async function cleanupTestDirs(): Promise<void> {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!testRoot) {
     return;
   }
@@ -29,17 +37,28 @@ async function cleanupTestDirs(): Promise<void> {
   await rm(root, { recursive: true, force: true });
 }
 
+<<<<<<< HEAD
 async function makeSettings(): Promise<DebugProxySettings> {
+=======
+async function makeSettings() {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   testRoot = await mkdtemp(join(tmpdir(), "openclaw-debug-proxy-managed-proxy-"));
   const certDir = join(testRoot, "certs");
   await mkdir(certDir, { recursive: true });
   await writeFile(join(certDir, "root-ca.pem"), "test root cert\n", "utf8");
   await writeFile(join(certDir, "root-ca-key.pem"), "test root key\n", "utf8");
+<<<<<<< HEAD
   process.env.OPENCLAW_STATE_DIR = testRoot;
   return {
     enabled: true,
     required: false,
     dbPath: join(testRoot, "capture.sqlite"),
+=======
+  return {
+    enabled: true,
+    required: false,
+    dbPath: ":memory:",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     blobDir: join(testRoot, "blobs"),
     certDir,
     sessionId: "debug-proxy-managed-proxy-test",

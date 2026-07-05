@@ -3813,6 +3813,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     persistSpy.mockRestore();
   });
 
+<<<<<<< HEAD
   it("appends configured responseUsage footers during followup delivery", async () => {
     const sessionKey = "main";
     const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
@@ -3944,6 +3945,8 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(payload.text).toBe("hello world!");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses providerUsed for snapshot freshness when agent metadata overrides the run provider", async () => {
     const storePath = "/tmp/openclaw-followup-usage-provider.json";
     const sessionKey = "main";

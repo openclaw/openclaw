@@ -349,6 +349,7 @@ describe("resolveNpmCommandInvocation", () => {
     });
   });
 
+<<<<<<< HEAD
   it("wraps bare Windows npm_execpath through npm.cmd", () => {
     expect(
       resolveNpmCommandInvocation({
@@ -364,6 +365,8 @@ describe("resolveNpmCommandInvocation", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("wraps Windows npm_execpath command shims", () => {
     expect(
       resolveNpmCommandInvocation({

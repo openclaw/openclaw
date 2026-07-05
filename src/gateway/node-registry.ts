@@ -361,6 +361,14 @@ export class NodeRegistry {
     });
   }
 
+<<<<<<< HEAD
+=======
+  /** Update command list while keeping it within the node's declared command surface. */
+  updateCommands(nodeId: string, commands: readonly string[]): NodeSession | null {
+    return this.updateSurface(nodeId, { commands });
+  }
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   updateSurface(
     nodeId: string,
     surface: {

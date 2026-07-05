@@ -39,11 +39,15 @@ import {
 } from "../session-transcript-repair.js";
 import type { SessionManager } from "../sessions/index.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../stream-message-shared.js";
+<<<<<<< HEAD
 import {
   extractToolCallsFromAssistant,
   extractToolResultId,
   sanitizeToolCallIdsForCloudCodeAssist,
 } from "../tool-call-id.js";
+=======
+import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import {
   providerRequiresSignedThinking,
@@ -592,6 +596,7 @@ function isSameModelSnapshot(a: ModelSnapshotEntry, b: ModelSnapshotEntry): bool
   );
 }
 
+<<<<<<< HEAD
 function formatOpenAIResponsesReplayInvariantError(params: {
   reason: "dangling_tool_call" | "orphan_tool_result";
   toolCallId?: string;
@@ -664,6 +669,8 @@ function assertOpenAIResponsesToolUseResultInvariant(messages: AgentMessage[]): 
   return messages;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Applies the generic replay-history cleanup pipeline before provider-owned
  * replay hooks run.
@@ -825,6 +832,7 @@ export async function sanitizeSessionHistory(params: {
     providerSanitized = providerResult ?? undefined;
   }
   const sanitizedWithProvider = providerSanitized ?? sanitizedCompactionUsage;
+<<<<<<< HEAD
   const responsesProviderRepaired =
     isOpenAIResponsesApi && policy.repairToolUseResultPairing
       ? sanitizeToolUseResultPairing(sanitizedWithProvider, {
@@ -838,6 +846,8 @@ export async function sanitizeSessionHistory(params: {
   const responsesInvariantChecked = isOpenAIResponsesApi
     ? assertOpenAIResponsesToolUseResultInvariant(responsesProviderRepaired)
     : responsesProviderRepaired;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {
@@ -849,7 +859,11 @@ export async function sanitizeSessionHistory(params: {
   }
 
   if (!policy.applyGoogleTurnOrdering) {
+<<<<<<< HEAD
     return responsesInvariantChecked;
+=======
+    return sanitizedWithProvider;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   // Strict OpenAI-compatible providers (vLLM, Gemma, etc.) also reject
@@ -858,10 +872,14 @@ export async function sanitizeSessionHistory(params: {
   // provider-owned ordering rewrite above; keep this generic fallback for the
   // strict OpenAI-compatible path and for any provider that leaves assistant-
   // first repair to core. See #38962.
+<<<<<<< HEAD
   const googleOrdered = sanitizeGoogleTurnOrdering(responsesInvariantChecked);
   return isOpenAIResponsesApi
     ? assertOpenAIResponsesToolUseResultInvariant(googleOrdered)
     : googleOrdered;
+=======
+  return sanitizeGoogleTurnOrdering(sanitizedWithProvider);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /**

@@ -13,8 +13,11 @@ import {
   createPlainTextToolCallCompatWrapper,
   defaultToolStreamExtraParams,
   isOpenAICompatibleThinkingEnabled,
+<<<<<<< HEAD
   normalizeOpenAICompatibleReasoningPayload,
   setQwenChatTemplateThinking,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   stripTrailingAnthropicAssistantPrefillWhenThinking,
 } from "./provider-stream-shared.js";
 
@@ -162,6 +165,7 @@ describe("isOpenAICompatibleThinkingEnabled", () => {
   });
 });
 
+<<<<<<< HEAD
 describe("setQwenChatTemplateThinking", () => {
   it("preserves existing chat-template kwargs and enables thinking", () => {
     const payload = {
@@ -233,6 +237,8 @@ describe("normalizeOpenAICompatibleReasoningPayload", () => {
   });
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("createDeepSeekV4OpenAICompatibleThinkingWrapper", () => {
   it("backfills reasoning_content on every replayed assistant message when thinking is enabled", () => {
     const payload = {

@@ -165,6 +165,18 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "test", "vitest", "discord-api-types-v10-runtime.ts"),
       },
       {
+<<<<<<< HEAD
+=======
+        find: "discord-api-types/gateway/v10",
+        replacement: path.join(
+          repoRoot,
+          "test",
+          "vitest",
+          "discord-api-types-gateway-v10-runtime.ts",
+        ),
+      },
+      {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         find: "discord-api-types/payloads/v10",
         replacement: path.join(
           repoRoot,
@@ -618,6 +630,7 @@ export const sharedVitestConfig = {
         "src/agents/embedded-agent-runner.ts",
         "src/agents/sandbox-paths.ts",
         "src/agents/sandbox.ts",
+<<<<<<< HEAD
         "src/agents/agent-tool-definition-adapter.ts",
         "src/agents/tools/discord-actions*.ts",
         "src/infra/state-migrations.ts",
@@ -625,6 +638,20 @@ export const sharedVitestConfig = {
         "src/infra/ports-inspect.ts",
         "src/infra/outbound/outbound-session.ts",
         "src/gateway/control-ui.ts",
+=======
+        "src/agents/skills-install.ts",
+        "src/agents/agent-tool-definition-adapter.ts",
+        "src/agents/tools/discord-actions*.ts",
+        "src/agents/tools/slack-actions.ts",
+        "src/infra/state-migrations.ts",
+        "src/infra/skills-remote.ts",
+        "src/infra/update-check.ts",
+        "src/infra/ports-inspect.ts",
+        "src/infra/outbound/outbound-session.ts",
+        "src/memory/batch-gemini.ts",
+        "src/gateway/control-ui.ts",
+        "src/gateway/server-bridge.ts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         "src/gateway/server-channels.ts",
         "src/gateway/server-methods/config.ts",
         "src/gateway/server-methods/send.ts",
@@ -633,6 +660,10 @@ export const sharedVitestConfig = {
         "src/gateway/server-methods/web.ts",
         "src/gateway/server-methods/wizard.ts",
         "src/gateway/call.ts",
+<<<<<<< HEAD
+=======
+        "src/process/tau-rpc.ts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         "src/process/exec.ts",
         "src/tui/**",
         "src/wizard/**",

@@ -10,7 +10,10 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "./runtime/index.js";
+<<<<<<< HEAD
 import { isThinkingLikeBlock } from "./thinking-block.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   extractToolCallsFromAssistant,
   extractToolResultId,
@@ -41,6 +44,17 @@ const RAW_TOOL_CALL_BLOCK_TYPES = new Set([
   "function_call",
 ]);
 
+<<<<<<< HEAD
+=======
+function isThinkingLikeBlock(block: unknown): boolean {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const type = (block as { type?: unknown }).type;
+  return type === "thinking" || type === "redacted_thinking";
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isRawToolCallBlock(block: unknown): block is RawToolCallBlock {
   if (!block || typeof block !== "object") {
     return false;
@@ -554,6 +568,7 @@ function assistantHasToolCalls(message: AgentMessage): boolean {
   return extractToolCallsFromAssistant(message).length > 0;
 }
 
+<<<<<<< HEAD
 function collectLaterMatchingToolResults(params: {
   messages: AgentMessage[];
   startIndex: number;
@@ -563,6 +578,16 @@ function collectLaterMatchingToolResults(params: {
 }): Map<string, Extract<AgentMessage, { role: "toolResult" }>> {
   const resultsById = new Map<string, Extract<AgentMessage, { role: "toolResult" }>>();
   const toolCallIds = new Set(params.toolCalls.map((toolCall) => toolCall.id));
+=======
+function findLaterMatchingToolResult(params: {
+  messages: AgentMessage[];
+  startIndex: number;
+  toolCallId: string;
+  toolName?: string;
+  toolCalls: Array<{ id: string; name?: string }>;
+  seenToolResultIds: Set<string>;
+}): Extract<AgentMessage, { role: "toolResult" }> | undefined {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   for (let index = params.startIndex; index < params.messages.length; index += 1) {
     const candidate = params.messages[index];
     if (!candidate || typeof candidate !== "object" || candidate.role !== "toolResult") {
@@ -570,6 +595,7 @@ function collectLaterMatchingToolResults(params: {
     }
     const normalizedLegacyResult = normalizeLegacyToolResultId(candidate, params.toolCalls);
     const id = extractToolResultId(normalizedLegacyResult);
+<<<<<<< HEAD
     if (!id || !toolCallIds.has(id) || params.seenToolResultIds.has(id) || resultsById.has(id)) {
       continue;
     }
@@ -579,6 +605,14 @@ function collectLaterMatchingToolResults(params: {
     );
   }
   return resultsById;
+=======
+    if (!id || id !== params.toolCallId || params.seenToolResultIds.has(id)) {
+      continue;
+    }
+    return normalizeToolResultName(normalizedLegacyResult, params.toolName);
+  }
+  return undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function repairToolUseResultPairing(
@@ -773,6 +807,7 @@ export function repairToolUseResultPairing(
       changed = true;
     }
 
+<<<<<<< HEAD
     const laterResultsById = collectLaterMatchingToolResults({
       messages,
       startIndex: j,
@@ -780,14 +815,28 @@ export function repairToolUseResultPairing(
       toolNamesById: toolCallNamesById,
       seenToolResultIds,
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     for (const call of toolCalls) {
       const existing = spanResultsById.get(call.id);
       if (existing) {
         pushToolResult(existing);
       } else {
+<<<<<<< HEAD
         const laterResult = laterResultsById.get(call.id);
         if (laterResult) {
           laterResultsById.delete(call.id);
+=======
+        const laterResult = findLaterMatchingToolResult({
+          messages,
+          startIndex: j,
+          toolCallId: call.id,
+          toolName: call.name,
+          toolCalls,
+          seenToolResultIds,
+        });
+        if (laterResult) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           moved = true;
           changed = true;
           pushToolResult(laterResult);

@@ -18,7 +18,11 @@ import {
   resetTaskRegistryMaintenanceRuntimeForTests,
   runTaskRegistryMaintenance,
   setTaskRegistryMaintenanceRuntimeForTests,
+<<<<<<< HEAD
   stopTaskRegistryMaintenance,
+=======
+  stopTaskRegistryMaintenanceForTests,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./task-registry.maintenance.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
@@ -48,7 +52,11 @@ type TaskRegistryMaintenanceRuntime = Parameters<
 >[0];
 
 afterEach(() => {
+<<<<<<< HEAD
   stopTaskRegistryMaintenance();
+=======
+  stopTaskRegistryMaintenanceForTests();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resetTaskRegistryMaintenanceRuntimeForTests();
   resetDetachedTaskLifecycleRuntimeForTests();
 });

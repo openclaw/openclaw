@@ -2129,6 +2129,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
   });
 
+<<<<<<< HEAD
   it("reports confirmed sends as successful when result middleware fails", async () => {
     const registry = createEmptyPluginRegistry();
     const handler = vi.fn((event: { result: AgentToolResult<unknown> }) => {
@@ -2211,6 +2212,8 @@ describe("createCodexDynamicToolBridge", () => {
     expect(result.sideEffectEvidence).toBe(true);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("builds terminal presentation from the post-middleware result", async () => {
     const registry = createEmptyPluginRegistry();
     const handler = vi.fn(async () => ({

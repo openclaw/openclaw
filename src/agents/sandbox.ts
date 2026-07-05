@@ -43,7 +43,10 @@ export { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-
 export type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./sandbox/fs-bridge.js";
 export {
   buildExecRemoteCommand,
+<<<<<<< HEAD
   buildRemoteWorkdirValidationCommand,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   buildRemoteCommand,
   buildSshSandboxArgv,
   buildValidatedExecRemoteCommand,
@@ -69,12 +72,18 @@ export type {
   SandboxBackendHandle,
   SandboxBackendId,
   SandboxBackendManager,
+<<<<<<< HEAD
   SandboxBackendPreparedWorkdirDiscarder,
   SandboxBackendRegistration,
   SandboxBackendRuntimeInfo,
   SandboxBackendWorkdirValidation,
   SandboxBackendWorkdirResolver,
   SandboxBackendWorkdirValidator,
+=======
+  SandboxBackendRegistration,
+  SandboxBackendRuntimeInfo,
+  SandboxBackendWorkdirResolver,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./sandbox/backend.js";
 export type { RemoteShellSandboxHandle } from "./sandbox/remote-fs-bridge.js";
 export type {

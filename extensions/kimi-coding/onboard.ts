@@ -34,6 +34,13 @@ const kimiCodingPresetAppliers = createDefaultModelPresetAppliers({
   },
 });
 
+<<<<<<< HEAD
+=======
+export function applyKimiCodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return kimiCodingPresetAppliers.applyProviderConfig(cfg);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function applyKimiCodeConfig(cfg: OpenClawConfig): OpenClawConfig {
   return kimiCodingPresetAppliers.applyConfig(cfg);
 }

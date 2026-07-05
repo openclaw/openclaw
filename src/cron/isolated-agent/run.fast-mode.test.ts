@@ -1,5 +1,6 @@
 // Fast mode tests cover isolated cron run behavior in fast execution mode.
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
@@ -9,6 +10,17 @@ import {
   dispatchCronDeliveryMock,
   retireSessionMcpRuntimeMock,
   resolveCronDeliveryPlanMock,
+=======
+import {
+  makeIsolatedAgentTurnJob,
+  makeIsolatedAgentTurnParams,
+  setupRunCronIsolatedAgentTurnSuite,
+} from "./run.suite-helpers.js";
+import {
+  loadRunCronIsolatedAgentTurn,
+  makeCronSession,
+  retireSessionMcpRuntimeMock,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveFastModeStateMock,
   resolveCronSessionMock,
   runEmbeddedAgentMock,
@@ -44,16 +56,25 @@ function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string
 }
 
 async function runFastModeCase(params: {
+<<<<<<< HEAD
   configFastMode: boolean | "auto";
   configFastAutoOnSeconds?: number;
   expectedFastMode: boolean | "auto";
   expectedFastModeAutoOnSeconds?: number;
+=======
+  configFastMode: boolean;
+  expectedFastMode: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   expectedCleanupBundleMcpOnRunEnd?: boolean;
   expectedRetiredSessionId?: string;
   message: string;
   previousSessionId?: string;
   sessionId?: string;
+<<<<<<< HEAD
   sessionFastMode?: boolean | "auto";
+=======
+  sessionFastMode?: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sessionTarget?: string;
 }) {
   const baseSession = makeCronSession();
@@ -71,6 +92,7 @@ async function runFastModeCase(params: {
   mockSuccessfulModelFallback();
   resolveFastModeStateMock.mockImplementation(({ cfg, sessionEntry }) => {
     const sessionFastMode = sessionEntry?.fastMode;
+<<<<<<< HEAD
     if (typeof sessionFastMode === "boolean" || sessionFastMode === "auto") {
       return {
         mode: sessionFastMode,
@@ -85,11 +107,22 @@ async function runFastModeCase(params: {
       enabled: mode === "auto" ? true : Boolean(mode),
       source: "config",
       fastAutoOnSeconds: params.configFastAutoOnSeconds ?? 60,
+=======
+    if (typeof sessionFastMode === "boolean") {
+      return { enabled: sessionFastMode };
+    }
+    return {
+      enabled: Boolean(cfg.agents?.defaults?.models?.[OPENAI_GPT4_MODEL]?.params?.fastMode),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
   });
 
   const result = await runCronIsolatedAgentTurn(
+<<<<<<< HEAD
     makeIsolatedAgentParamsFixture({
+=======
+    makeIsolatedAgentTurnParams({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       cfg: {
         agents: {
           defaults: {
@@ -97,16 +130,23 @@ async function runFastModeCase(params: {
               [OPENAI_GPT4_MODEL]: {
                 params: {
                   fastMode: params.configFastMode,
+<<<<<<< HEAD
                   ...(params.configFastAutoOnSeconds === undefined
                     ? {}
                     : { fastAutoOnSeconds: params.configFastAutoOnSeconds }),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 },
               },
             },
           },
         },
       },
+<<<<<<< HEAD
       job: makeIsolatedAgentJobFixture({
+=======
+      job: makeIsolatedAgentTurnJob({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         sessionTarget: params.sessionTarget ?? "isolated",
         payload: {
           kind: "agentTurn",
@@ -123,7 +163,10 @@ async function runFastModeCase(params: {
   expect(embeddedRunParams.provider).toBe("openai");
   expect(embeddedRunParams.model).toBe(EXPECTED_OPENAI_MODEL);
   expect(embeddedRunParams.fastMode).toBe(params.expectedFastMode);
+<<<<<<< HEAD
   expect(embeddedRunParams.fastModeAutoOnSeconds).toBe(params.expectedFastModeAutoOnSeconds ?? 60);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   expect(embeddedRunParams.cleanupBundleMcpOnRunEnd).toBe(
     params.expectedCleanupBundleMcpOnRunEnd ?? true,
   );
@@ -155,6 +198,7 @@ async function runFastModeCase(params: {
 describe("runCronIsolatedAgentTurn — fast mode", () => {
   setupRunCronIsolatedAgentTurnSuite({ fast: true });
 
+<<<<<<< HEAD
   it("deletes the run-scoped cron session after delivery-none deleteAfterRun jobs", async () => {
     const result = await runCronIsolatedAgentTurn(
       makeIsolatedAgentParamsFixture({
@@ -212,6 +256,8 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("passes config-driven fast mode into embedded cron runs", async () => {
     await runFastModeCase({
       configFastMode: true,
@@ -220,6 +266,7 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
     });
   });
 
+<<<<<<< HEAD
   it("passes config-driven fast auto cutoff into embedded cron runs", async () => {
     await runFastModeCase({
       configFastMode: "auto",
@@ -230,6 +277,8 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("honors session fastMode=false over config fastMode=true", async () => {
     await runFastModeCase({
       configFastMode: true,

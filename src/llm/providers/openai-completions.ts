@@ -33,6 +33,10 @@ import type {
   Model,
   OpenAICompletionsCompat,
   SimpleStreamOptions,
+<<<<<<< HEAD
+=======
+  StopReason,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   StreamFunction,
   StreamOptions,
   TextContent,
@@ -45,11 +49,17 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+<<<<<<< HEAD
 import { resolveCacheRetention } from "./cache-retention.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
+=======
+import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
+import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
+import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { buildBaseOptions } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -119,6 +129,19 @@ type ChatCompletionToolWithCacheControl = OpenAI.Chat.Completions.ChatCompletion
   cache_control?: OpenAICompatCacheControl;
 };
 
+<<<<<<< HEAD
+=======
+function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention {
+  if (cacheRetention) {
+    return cacheRetention;
+  }
+  if (typeof process !== "undefined" && process.env.OPENCLAW_CACHE_RETENTION === "long") {
+    return "long";
+  }
+  return "short";
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export const streamOpenAICompletions: StreamFunction<
   "openai-completions",
   OpenAICompletionsOptions
@@ -186,6 +209,7 @@ export const streamOpenAICompletions: StreamFunction<
       let hasFinishReason = false;
       const toolCallBlocksByIndex = new Map<number, StreamingToolCallBlock>();
       const toolCallBlocksById = new Map<string, StreamingToolCallBlock>();
+<<<<<<< HEAD
       const toolCallBlocksByFirstId = new Map<string, StreamingToolCallBlock>();
       const blocks = output.content as StreamingBlock[];
       // A block can be finished mid-stream (native reasoning sealed at the
@@ -209,6 +233,15 @@ export const streamOpenAICompletions: StreamFunction<
           return;
         }
         finishedBlocks.add(block);
+=======
+      const blocks = output.content as StreamingBlock[];
+      const getContentIndex = (block: StreamingBlock) => blocks.indexOf(block);
+      const finishBlock = (block: StreamingBlock) => {
+        const contentIndex = getContentIndex(block);
+        if (contentIndex === -1) {
+          return;
+        }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         if (block.type === "text") {
           stream.push({
             type: "text_end",
@@ -240,7 +273,11 @@ export const streamOpenAICompletions: StreamFunction<
       const ensureTextBlock = () => {
         if (!textBlock) {
           textBlock = { type: "text", text: "" };
+<<<<<<< HEAD
           appendBlock(textBlock);
+=======
+          blocks.push(textBlock);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           stream.push({
             type: "text_start",
             contentIndex: getContentIndex(textBlock),
@@ -256,7 +293,11 @@ export const streamOpenAICompletions: StreamFunction<
             thinking: "",
             thinkingSignature,
           };
+<<<<<<< HEAD
           appendBlock(thinkingBlock);
+=======
+          blocks.push(thinkingBlock);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           stream.push({
             type: "thinking_start",
             contentIndex: getContentIndex(thinkingBlock),
@@ -265,6 +306,7 @@ export const streamOpenAICompletions: StreamFunction<
         }
         return thinkingBlock;
       };
+<<<<<<< HEAD
       // Native-thinking providers (e.g. deepseek `reasoning_content`) stream the
       // reasoning lane, then switch to the answer via `content` with no boundary
       // event. Seal the open thought when visible text begins so `thinking_end`
@@ -278,6 +320,9 @@ export const streamOpenAICompletions: StreamFunction<
       };
       const appendTextDelta = (delta: string) => {
         sealNativeReasoningBeforeText();
+=======
+      const appendTextDelta = (delta: string) => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const block = ensureTextBlock();
         block.text += delta;
         stream.push({
@@ -317,9 +362,14 @@ export const streamOpenAICompletions: StreamFunction<
           }
           if (toolCall.id) {
             toolCallBlocksById.set(toolCall.id, block);
+<<<<<<< HEAD
             rememberFirstToolCallById(toolCall.id, block);
           }
           appendBlock(block);
+=======
+          }
+          blocks.push(block);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           stream.push({
             type: "toolcall_start",
             contentIndex: getContentIndex(block),
@@ -384,7 +434,11 @@ export const streamOpenAICompletions: StreamFunction<
         }
 
         if (choice.finish_reason) {
+<<<<<<< HEAD
           const finishReasonResult = mapOpenAIStopReason(choice.finish_reason);
+=======
+          const finishReasonResult = mapStopReason(choice.finish_reason);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           output.stopReason = finishReasonResult.stopReason;
           if (finishReasonResult.errorMessage) {
             output.errorMessage = finishReasonResult.errorMessage;
@@ -411,6 +465,17 @@ export const streamOpenAICompletions: StreamFunction<
           if (foundReasoningField) {
             reasoningTagTextPartitioner.markStrict();
           }
+<<<<<<< HEAD
+=======
+          if (
+            choice.delta.content !== null &&
+            choice.delta.content !== undefined &&
+            choice.delta.content.length > 0
+          ) {
+            appendPartitionedContent(choice.delta.content, Boolean(foundReasoningField));
+          }
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           if (shouldEmitReasoning && foundReasoningField) {
             const delta = deltaFields[foundReasoningField];
             if (typeof delta === "string" && delta.length > 0) {
@@ -421,6 +486,7 @@ export const streamOpenAICompletions: StreamFunction<
               appendThinkingDelta(thinkingSignature, delta);
             }
           }
+<<<<<<< HEAD
           if (
             choice.delta.content !== null &&
             choice.delta.content !== undefined &&
@@ -434,12 +500,20 @@ export const streamOpenAICompletions: StreamFunction<
             // The tool-call lane is also a reasoning boundary; seal the thought
             // before toolcall_start so thinking_end never trails the action.
             sealNativeReasoningBeforeText();
+=======
+
+          if (choice?.delta?.tool_calls) {
+            flushPartitionedContent();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             for (const toolCall of choice.delta.tool_calls) {
               const block = ensureToolCallBlock(toolCall);
               if (!block.id && toolCall.id) {
                 block.id = toolCall.id;
                 toolCallBlocksById.set(toolCall.id, block);
+<<<<<<< HEAD
                 rememberFirstToolCallById(toolCall.id, block);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               }
               if (!block.name && toolCall.function?.name) {
                 block.name = toolCall.function.name;
@@ -465,7 +539,13 @@ export const streamOpenAICompletions: StreamFunction<
           if (reasoningDetails && Array.isArray(reasoningDetails)) {
             for (const detail of reasoningDetails) {
               if (detail.type === "reasoning.encrypted" && detail.id && detail.data) {
+<<<<<<< HEAD
                 const matchingToolCall = toolCallBlocksByFirstId.get(detail.id);
+=======
+                const matchingToolCall = output.content.find(
+                  (b) => b.type === "toolCall" && b.id === detail.id,
+                ) as ToolCall | undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 if (matchingToolCall) {
                   matchingToolCall.thoughtSignature = JSON.stringify(detail);
                 }
@@ -1254,6 +1334,37 @@ function parseChunkUsage(
   return usage;
 }
 
+<<<<<<< HEAD
+=======
+function mapStopReason(reason: string): {
+  stopReason: StopReason;
+  errorMessage?: string;
+} {
+  if (reason === null) {
+    return { stopReason: "stop" };
+  }
+  switch (reason) {
+    case "stop":
+    case "end":
+      return { stopReason: "stop" };
+    case "length":
+      return { stopReason: "length" };
+    case "function_call":
+    case "tool_calls":
+      return { stopReason: "toolUse" };
+    case "content_filter":
+      return { stopReason: "error", errorMessage: "Provider finish_reason: content_filter" };
+    case "network_error":
+      return { stopReason: "error", errorMessage: "Provider finish_reason: network_error" };
+    default:
+      return {
+        stopReason: "error",
+        errorMessage: `Provider finish_reason: ${reason}`,
+      };
+  }
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Detect compatibility settings from provider and baseUrl for known providers.
  * Provider takes precedence over URL-based detection since it's explicitly configured.

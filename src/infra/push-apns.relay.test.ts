@@ -9,7 +9,10 @@ import {
 } from "./device-identity.js";
 import {
   DEFAULT_APNS_RELAY_BASE_URL,
+<<<<<<< HEAD
   DEFAULT_APNS_SANDBOX_RELAY_BASE_URL,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveApnsRelayConfigFromEnv,
   sendApnsRelayPush,
 } from "./push-apns.relay.js";
@@ -79,6 +82,7 @@ describe("push-apns.relay", () => {
       );
     });
 
+<<<<<<< HEAD
     it("defaults to the sandbox hosted relay when the registration was minted there", () => {
       expectRelayConfig(
         resolveApnsRelayConfigFromEnv({} as NodeJS.ProcessEnv, undefined, {
@@ -91,6 +95,8 @@ describe("push-apns.relay", () => {
       );
     });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     it("fails closed when relay registration origin is unknown and no relay URL is configured", () => {
       const resolved = resolveApnsRelayConfigFromEnv({} as NodeJS.ProcessEnv);
 
@@ -287,7 +293,11 @@ describe("push-apns.relay", () => {
       expect(result.ok).toBe(false);
       expect(result.status).toBe(302);
       expect(result.reason).toBe("RelayRedirectNotAllowed");
+<<<<<<< HEAD
       expect(result.environment).toBeUndefined();
+=======
+      expect(result.environment).toBe("production");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     it("falls back to fetch status when the relay body is not JSON", async () => {
@@ -303,6 +313,10 @@ describe("push-apns.relay", () => {
         status: 202,
         apnsId: undefined,
         reason: undefined,
+<<<<<<< HEAD
+=======
+        environment: "production",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         tokenSuffix: undefined,
       });
     });
@@ -326,6 +340,7 @@ describe("push-apns.relay", () => {
         status: 410,
         apnsId: "relay-apns-id",
         reason: "Unregistered",
+<<<<<<< HEAD
         tokenSuffix: "abcd1234",
       });
     });
@@ -349,6 +364,9 @@ describe("push-apns.relay", () => {
         apnsId: undefined,
         reason: undefined,
         environment: "sandbox",
+=======
+        environment: "production",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         tokenSuffix: "abcd1234",
       });
     });

@@ -2,17 +2,24 @@
 import crypto from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
+<<<<<<< HEAD
 import { applyFileBackedSessionStoreMaintenance } from "./store-maintenance-operations.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   collectSessionMaintenancePreserveKeys,
   registerSessionMaintenancePreserveKeysProvider,
 } from "./store-maintenance-preserve.js";
 import {
+<<<<<<< HEAD
   isGatewayModelRunSessionKey,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   isProtectedSessionMaintenanceEntry,
   resolveMaintenanceConfigFromInput,
   resolveQuotaSuspensionEntryMaintenance,
   resolveSessionEntryMaintenanceHighWater,
+<<<<<<< HEAD
   shouldRunModelRunPrune,
 } from "./store-maintenance.js";
 import {
@@ -21,6 +28,10 @@ import {
   pruneStaleEntries,
   pruneStaleModelRunEntries,
 } from "./store.js";
+=======
+} from "./store-maintenance.js";
+import { capEntryCount, getActiveSessionMaintenanceWarning, pruneStaleEntries } from "./store.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -152,6 +163,7 @@ describe("resolveQuotaSuspensionEntryMaintenance", () => {
   });
 });
 
+<<<<<<< HEAD
 describe("applyFileBackedSessionStoreMaintenance", () => {
   it("preserves the active session and cleans artifacts using the final referenced session set", async () => {
     const now = Date.now();
@@ -382,6 +394,8 @@ describe("pruneStaleModelRunEntries", () => {
   });
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("capEntryCount", () => {
   it("over limit: keeps N most recent by updatedAt, deletes rest", () => {
     const now = Date.now();
@@ -569,6 +583,7 @@ describe("resolveMaintenanceConfigFromInput", () => {
     expect(maintenance.mode).toBe("enforce");
   });
 
+<<<<<<< HEAD
   it("defaults gateway model-run probes to fixed 24h retention", () => {
     expect(resolveMaintenanceConfigFromInput().modelRunPruneAfterMs).toBe(DAY_MS);
   });
@@ -585,6 +600,8 @@ describe("resolveMaintenanceConfigFromInput", () => {
     ).toBe(false);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("batches normal entry-count maintenance for production-sized caps", () => {
     expect(resolveSessionEntryMaintenanceHighWater(2)).toBe(3);
     expect(resolveSessionEntryMaintenanceHighWater(50)).toBe(75);

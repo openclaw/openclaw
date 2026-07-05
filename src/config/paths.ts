@@ -42,6 +42,13 @@ function newStateDir(homedir: () => string = resolveDefaultHomeDir): string {
   return path.join(homedir(), NEW_STATE_DIRNAME);
 }
 
+<<<<<<< HEAD
+=======
+export function resolveLegacyStateDir(homedir: () => string = resolveDefaultHomeDir): string {
+  return legacyStateDirs(homedir)[0] ?? newStateDir(homedir);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function resolveLegacyStateDirs(homedir: () => string = resolveDefaultHomeDir): string[] {
   return legacyStateDirs(homedir);
 }

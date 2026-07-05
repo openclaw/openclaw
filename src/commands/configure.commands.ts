@@ -1,5 +1,8 @@
 // Entry points for the full configure wizard and section-limited runs.
+<<<<<<< HEAD
 import process from "node:process";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatCliCommand } from "../cli/command-format.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -7,6 +10,7 @@ import type { WizardSection } from "./configure.shared.js";
 import { CONFIGURE_WIZARD_SECTIONS, parseConfigureWizardSections } from "./configure.shared.js";
 import { runConfigureWizard } from "./configure.wizard.js";
 
+<<<<<<< HEAD
 /**
  * Non-interactive config subcommands surfaced when the wizard cannot run.
  * Mirrors the real `openclaw config <sub>` surface so the message only ever
@@ -46,6 +50,8 @@ function assertInteractiveConfigureTerminal(
   return false;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function configureCommand(runtime: RuntimeEnv = defaultRuntime) {
   await runConfigureWizard({ command: "configure" }, runtime);
 }
@@ -61,6 +67,7 @@ async function configureCommandWithSections(
 export async function configureCommandFromSectionsArg(
   rawSections: unknown,
   runtime: RuntimeEnv = defaultRuntime,
+<<<<<<< HEAD
   options?: { interactive?: boolean },
 ): Promise<void> {
   // Fail closed once at the shared entry: both `openclaw configure` and the
@@ -72,6 +79,9 @@ export async function configureCommandFromSectionsArg(
     return;
   }
 
+=======
+): Promise<void> {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const { sections, invalid } = parseConfigureWizardSections(rawSections);
   if (sections.length === 0) {
     await configureCommand(runtime);

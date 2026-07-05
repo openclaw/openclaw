@@ -34,8 +34,11 @@ type PositionalInterpreterSpec = {
   flag: "<command>" | "<program>";
 };
 
+<<<<<<< HEAD
 const VERSION_SUFFIX_PATTERN = /-?\d+(?:\.\d+)*$/;
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
   { names: ["python", "python2", "python3", "pypy", "pypy3"], exactFlags: new Set(["-c"]) },
   {
@@ -49,6 +52,7 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
   },
   { names: ["ruby"], exactFlags: new Set(["-e"]) },
   { names: ["perl"], exactFlags: new Set(["-e", "-E"]) },
+<<<<<<< HEAD
   {
     names: ["php"],
     exactFlags: new Set(["-r"]),
@@ -59,6 +63,9 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
     ]),
   },
   { names: ["r", "rscript"], exactFlags: new Set(["-e"]) },
+=======
+  { names: ["php"], exactFlags: new Set(["-r"]) },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   { names: ["lua"], exactFlags: new Set(["-e"]) },
   { names: ["osascript"], exactFlags: new Set(["-e"]) },
   {
@@ -165,6 +172,7 @@ const INTERPRETER_ALLOWLIST_NAMES = new Set(
   ),
 );
 
+<<<<<<< HEAD
 function stripInterpreterVersionSuffix(value: string): string {
   const stripped = value.replace(VERSION_SUFFIX_PATTERN, "");
   return stripped.length > 0 ? stripped : value;
@@ -187,6 +195,12 @@ function findInterpreterSpec(executable: string): InterpreterFlagSpec | null {
   const normalized = normalizeExecutableToken(executable);
   for (const spec of FLAG_INTERPRETER_INLINE_EVAL_SPECS) {
     if (specNamesInclude(spec.names, normalized)) {
+=======
+function findInterpreterSpec(executable: string): InterpreterFlagSpec | null {
+  const normalized = normalizeExecutableToken(executable);
+  for (const spec of FLAG_INTERPRETER_INLINE_EVAL_SPECS) {
+    if (spec.names.includes(normalized)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return spec;
     }
   }
@@ -196,7 +210,11 @@ function findInterpreterSpec(executable: string): InterpreterFlagSpec | null {
 function findPositionalInterpreterSpec(executable: string): PositionalInterpreterSpec | null {
   const normalized = normalizeExecutableToken(executable);
   for (const spec of POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS) {
+<<<<<<< HEAD
     if (specNamesInclude(spec.names, normalized)) {
+=======
+    if (spec.names.includes(normalized)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return spec;
     }
   }
@@ -328,17 +346,26 @@ export function isInterpreterLikeAllowlistPattern(pattern: string | undefined | 
     return false;
   }
   const normalized = normalizeExecutableToken(trimmed);
+<<<<<<< HEAD
   if (
     interpreterNameVariants(normalized).some((candidate) =>
       INTERPRETER_ALLOWLIST_NAMES.has(candidate),
     )
   ) {
+=======
+  if (INTERPRETER_ALLOWLIST_NAMES.has(normalized)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return true;
   }
   const basename = trimmed.replace(/\\/g, "/").split("/").pop() ?? trimmed;
   const withoutExe = basename.endsWith(".exe") ? basename.slice(0, -4) : basename;
+<<<<<<< HEAD
   const strippedWildcards = withoutExe.replace(/[*?[\]{}()]/g, "").replace(/[.-]+$/, "");
   return interpreterNameVariants(strippedWildcards).some((candidate) =>
     INTERPRETER_ALLOWLIST_NAMES.has(candidate),
   );
+=======
+  const strippedWildcards = withoutExe.replace(/[*?[\]{}()]/g, "");
+  return INTERPRETER_ALLOWLIST_NAMES.has(strippedWildcards);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }

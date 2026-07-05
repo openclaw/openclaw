@@ -39,10 +39,13 @@ import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 import { isSignalNativeApprovalHandlerConfigured } from "./approval-native.js";
+<<<<<<< HEAD
 import {
   addSignalApprovalReactionHintToStructuredPayload,
   registerSignalApprovalReactionTargetForDeliveredPayload,
 } from "./approval-reactions.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { signalRpcRequest, signalCheck } from "./client-adapter.js";
 import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
 import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
@@ -358,7 +361,11 @@ async function fetchAttachment(params: {
   return { path: saved.path, contentType: saved.contentType };
 }
 
+<<<<<<< HEAD
 export async function deliverReplies(params: {
+=======
+async function deliverReplies(params: {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   cfg: OpenClawConfig;
   replies: ReplyPayload[];
   target: string;
@@ -373,6 +380,7 @@ export async function deliverReplies(params: {
   const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
     params;
   for (const payload of replies) {
+<<<<<<< HEAD
     const deliveryResults: Array<{
       channel: "signal";
       messageId: string;
@@ -446,6 +454,34 @@ export async function deliverReplies(params: {
         results: deliveryResults,
         targetAuthor: account,
       });
+=======
+    const reply = resolveSendableOutboundReplyParts(payload);
+    const delivered = await deliverTextOrMediaReply({
+      payload,
+      text: reply.text,
+      chunkText: (value) => chunkTextWithMode(value, textLimit, chunkMode),
+      sendText: async (chunk) => {
+        await sendMessageSignal(target, chunk, {
+          cfg: params.cfg,
+          baseUrl,
+          account,
+          maxBytes,
+          accountId,
+        });
+      },
+      sendMedia: async ({ mediaUrl, caption }) => {
+        await sendMessageSignal(target, caption ?? "", {
+          cfg: params.cfg,
+          baseUrl,
+          account,
+          mediaUrl,
+          maxBytes,
+          accountId,
+        });
+      },
+    });
+    if (delivered !== "empty") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       runtime.log?.(`delivered reply to ${target}`);
     }
   }

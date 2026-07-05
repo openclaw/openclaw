@@ -143,6 +143,7 @@ describe("runMessageAction send validation", () => {
     expect(JSON.stringify(result.toolResult?.content)).not.toContain("hello from codex");
   });
 
+<<<<<<< HEAD
   it.each(["agent:voice:agent:channel:room", "agent:main:telegram::group:room"])(
     "keeps malformed session route %s on the internal source sink",
     async (sessionKey) => {
@@ -164,6 +165,8 @@ describe("runMessageAction send validation", () => {
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses non-webchat current source context as the message-tool-only send sink", async () => {
     const result = await runMessageAction({
       cfg: emptyConfig,

@@ -1,5 +1,9 @@
 // Whatsapp plugin module implements connection controller behavior.
+<<<<<<< HEAD
 import type { GroupMetadata, WASocket, WAMessageKey, proto } from "baileys";
+=======
+import type { WASocket } from "baileys";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { info } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -404,7 +408,11 @@ export class WhatsAppConnectionController {
     this.heartbeatSeconds = params.heartbeatSeconds;
     this.transportTimeoutMs = params.transportTimeoutMs;
     this.messageTimeoutMs = params.messageTimeoutMs;
+<<<<<<< HEAD
     this.appSilenceTimeoutMs = params.messageTimeoutMs * 4;
+=======
+    this.appSilenceTimeoutMs = Math.max(params.messageTimeoutMs, params.messageTimeoutMs * 4);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     this.watchdogCheckMs = params.watchdogCheckMs;
     this.reconnectPolicy = params.reconnectPolicy;
     this.abortSignal = params.abortSignal;
@@ -528,8 +536,11 @@ export class WhatsAppConnectionController {
     }) => Promise<ManagedWhatsAppListener>;
     onHeartbeat?: (snapshot: WhatsAppConnectionSnapshot) => void;
     onWatchdogTimeout?: (snapshot: WhatsAppConnectionSnapshot) => void;
+<<<<<<< HEAD
     getMessage?: (key: WAMessageKey) => Promise<proto.IMessage | undefined>;
     cachedGroupMetadata?: (jid: string) => Promise<GroupMetadata | undefined>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }): Promise<WhatsAppLiveConnection> {
     if (this.current) {
       await this.closeCurrentConnection();
@@ -541,8 +552,11 @@ export class WhatsAppConnectionController {
       sock = await createWaSocket(false, this.verbose, {
         authDir: this.authDir,
         ...this.socketTiming,
+<<<<<<< HEAD
         ...(params.getMessage ? { getMessage: params.getMessage } : {}),
         ...(params.cachedGroupMetadata ? { cachedGroupMetadata: params.cachedGroupMetadata } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
       await waitForWaConnection(sock, { timeoutMs: this.socketTiming.connectTimeoutMs });
 

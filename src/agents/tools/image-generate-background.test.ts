@@ -19,8 +19,13 @@ vi.mock("../subagent-announce-delivery.js", () => announceDeliveryMocks);
 
 const {
   createImageGenerationTaskRun,
+<<<<<<< HEAD
   imageGenerationTaskLifecycle,
   recordImageGenerationTaskProgress,
+=======
+  recordImageGenerationTaskProgress,
+  wakeImageGenerationTaskCompletion,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } = await import("./image-generate-background.js");
 
 describe("image generate background helpers", () => {
@@ -87,7 +92,11 @@ describe("image generate background helpers", () => {
       path: "direct",
     });
 
+<<<<<<< HEAD
     await imageGenerationTaskLifecycle.wakeTaskCompletion({
+=======
+    await wakeImageGenerationTaskCompletion({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ...createMediaCompletionFixture({
         runId: "tool:image_generate:abc",
         taskLabel: "small watercolor robot",
@@ -122,7 +131,11 @@ describe("image generate background helpers", () => {
       result: "provider failed",
     });
 
+<<<<<<< HEAD
     await imageGenerationTaskLifecycle.wakeTaskCompletion({
+=======
+    await wakeImageGenerationTaskCompletion({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ...completion,
       status: "error",
       statusLabel: "failed",

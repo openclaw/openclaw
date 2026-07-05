@@ -1,10 +1,16 @@
 // Shared session-store helpers for command handlers that mutate sessions.
+<<<<<<< HEAD
 import { resolveSessionStoreEntry, type SessionEntry } from "../../config/sessions.js";
 import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
+=======
+import type { SessionEntry } from "../../config/sessions.js";
+import { updateSessionStore } from "../../config/sessions.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { applyAbortCutoffToSessionEntry, type AbortCutoff } from "./abort-cutoff.js";
 import type { CommandHandler } from "./commands-types.js";
 
 type CommandParams = Parameters<CommandHandler>[0];
+<<<<<<< HEAD
 type PersistSessionEntryParams = Pick<
   CommandParams,
   "sessionEntry" | "sessionStore" | "sessionKey" | "storePath"
@@ -35,16 +41,37 @@ export async function persistSessionEntry(params: PersistSessionEntryParams): Pr
   const sessionEntry = params.sessionEntry;
   sessionEntry.updatedAt = Date.now();
   params.sessionStore[params.sessionKey] = sessionEntry;
+=======
+
+export async function persistSessionEntry(params: CommandParams): Promise<boolean> {
+  if (!params.sessionEntry || !params.sessionStore || !params.sessionKey) {
+    return false;
+  }
+  params.sessionEntry.updatedAt = Date.now();
+  params.sessionStore[params.sessionKey] = params.sessionEntry;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (params.storePath) {
     // Slash commands mutate one known session entry; skipping global session
     // maintenance avoids scanning the whole sessions directory for simple
     // command-only writes.
+<<<<<<< HEAD
     await patchSessionEntry(
       { storePath: params.storePath, sessionKey: params.sessionKey },
       () => sessionEntry,
       {
         fallbackEntry: sessionEntry,
         replaceEntry: true,
+=======
+    await updateSessionStore(
+      params.storePath,
+      (store) => {
+        store[params.sessionKey] = params.sessionEntry as SessionEntry;
+        return params.sessionEntry as SessionEntry;
+      },
+      {
+        resolveSingleEntryPersistence: (entry) =>
+          entry ? { sessionKey: params.sessionKey, entry } : null,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         skipMaintenance: true,
       },
     );
@@ -70,6 +97,7 @@ export async function persistAbortTargetEntry(params: {
   sessionStore[key] = entry;
 
   if (storePath) {
+<<<<<<< HEAD
     await patchSessionEntry(
       { storePath, sessionKey: key },
       (nextEntry) => {
@@ -82,6 +110,24 @@ export async function persistAbortTargetEntry(params: {
         fallbackEntry: entry,
         replaceEntry: true,
         skipMaintenance: true,
+=======
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        const nextEntry = store[key] ?? entry;
+        if (!nextEntry) {
+          return undefined;
+        }
+        nextEntry.abortedLastRun = true;
+        applyAbortCutoffToSessionEntry(nextEntry, abortCutoff);
+        nextEntry.updatedAt = Date.now();
+        store[key] = nextEntry;
+        return nextEntry;
+      },
+      {
+        resolveSingleEntryPersistence: (updated) =>
+          updated ? { sessionKey: key, entry: updated } : null,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     );
   }

@@ -105,9 +105,14 @@ export async function runOpenAIOAuthTlsPreflight(options?: {
 }): Promise<OpenAIOAuthTlsPreflightResult> {
   const timeoutMs = resolveTimerTimeoutMs(options?.timeoutMs, 5000);
   const fetchImpl = options?.fetchImpl ?? fetch;
+<<<<<<< HEAD
   let response: Response | undefined;
   try {
     response = await fetchImpl(OPENAI_AUTH_PROBE_URL, {
+=======
+  try {
+    await fetchImpl(OPENAI_AUTH_PROBE_URL, {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       method: "GET",
       redirect: "manual",
       signal: AbortSignal.timeout(timeoutMs),
@@ -121,10 +126,13 @@ export async function runOpenAIOAuthTlsPreflight(options?: {
       code: failure.code,
       message: failure.message,
     };
+<<<<<<< HEAD
   } finally {
     if (response?.bodyUsed !== true) {
       await response?.body?.cancel().catch(() => undefined);
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 

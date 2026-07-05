@@ -1,6 +1,9 @@
 // Dependency Changes Report tests cover dependency changes report script behavior.
+<<<<<<< HEAD
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { describe, expect, it } from "vitest";
 import {
   createDependencyChangesReport,
@@ -9,6 +12,7 @@ import {
   parseArgs,
 } from "../../scripts/dependency-changes-report.mjs";
 
+<<<<<<< HEAD
 function runCli(...args: string[]) {
   return spawnSync(process.execPath, ["scripts/dependency-changes-report.mjs", ...args], {
     cwd: path.resolve("."),
@@ -21,6 +25,8 @@ function expectNoNodeStack(stderr: string) {
   expect(stderr).not.toContain("\n    at ");
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("dependency-changes-report", () => {
   it("reports added, removed, and changed packages", () => {
     const report = createDependencyChangesReport({
@@ -84,6 +90,7 @@ describe("dependency-changes-report", () => {
       "--markdown",
     ]) {
       expect(() => parseArgs([flag, "--json"])).toThrow(`${flag} requires a value`);
+<<<<<<< HEAD
       expect(() => parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
     }
   });
@@ -121,4 +128,8 @@ describe("dependency-changes-report", () => {
     expect(unknownArg.stderr.trim()).toBe("Unsupported argument: --wat");
     expectNoNodeStack(unknownArg.stderr);
   });
+=======
+    }
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

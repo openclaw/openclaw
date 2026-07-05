@@ -41,7 +41,10 @@ import {
   OLLAMA_CLOUD_DEFAULT_MODELS,
   OLLAMA_CLOUD_PROVIDER_ID,
   OLLAMA_DEFAULT_BASE_URL,
+<<<<<<< HEAD
   OLLAMA_GLM52_CLOUD_MODEL_ID,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./src/defaults.js";
 import {
   OLLAMA_DEFAULT_API_KEY,
@@ -80,6 +83,11 @@ const dynamicModelCache = new Map<string, ProviderRuntimeModel[]>();
 const OLLAMA_CLOUD_DEFAULT_MODEL_REF = `${OLLAMA_CLOUD_PROVIDER_ID}/${OLLAMA_CLOUD_DEFAULT_MODELS[0]}`;
 const OLLAMA_CONFIGURED_SHOW_CONCURRENCY = 4;
 const OLLAMA_CONFIGURED_SHOW_MAX_MODELS = 8;
+<<<<<<< HEAD
+=======
+const OLLAMA_API_KEY_ENV_REF_RE = /^[A-Z_][A-Z0-9_]*$/u;
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function buildDynamicCacheKey(provider: string, baseUrl: string | undefined): string {
   return `${provider}\0${baseUrl ?? ""}`;
 }
@@ -181,7 +189,14 @@ function readEnvBackedOllamaApiKey(value: unknown, env: NodeJS.ProcessEnv): stri
   if (ref?.source === "env") {
     return readConcreteOllamaApiKey(env[ref.id.trim()]);
   }
+<<<<<<< HEAD
   return undefined;
+=======
+  const apiKey = readConfiguredOllamaApiKey(value);
+  return apiKey && OLLAMA_API_KEY_ENV_REF_RE.test(apiKey)
+    ? readConcreteOllamaApiKey(env[apiKey])
+    : undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function isAmbientOllamaApiKeyMarker(value: string | undefined): boolean {
@@ -191,7 +206,11 @@ function isAmbientOllamaApiKeyMarker(value: string | undefined): boolean {
 function readUsableOllamaShowApiKey(params: {
   env: NodeJS.ProcessEnv;
   allowAmbientEnvFallback: boolean;
+<<<<<<< HEAD
   explicitApiKey?: unknown;
+=======
+  explicitApiKey?: string;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolved?: { apiKey?: unknown; discoveryApiKey?: unknown };
 }): string | undefined {
   const explicitEnvApiKey = readEnvBackedOllamaApiKey(params.explicitApiKey, params.env);
@@ -214,7 +233,11 @@ function readUsableOllamaShowApiKey(params: {
     return resolvedEnvApiKey;
   }
   const apiKey = readConcreteOllamaApiKey(params.resolved?.apiKey);
+<<<<<<< HEAD
   if (apiKey) {
+=======
+  if (apiKey && !OLLAMA_API_KEY_ENV_REF_RE.test(apiKey)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return apiKey;
   }
   return params.allowAmbientEnvFallback
@@ -302,6 +325,7 @@ function buildStaticOllamaCloudProvider(): ModelProviderConfig {
   };
 }
 
+<<<<<<< HEAD
 async function buildOllamaCloudProvider(apiKey?: string): Promise<ModelProviderConfig> {
   const discovered = await buildOllamaProvider(OLLAMA_CLOUD_BASE_URL, {
     ...(apiKey ? { apiKey } : {}),
@@ -332,6 +356,11 @@ async function buildOllamaCloudProvider(apiKey?: string): Promise<ModelProviderC
       ),
     ],
   };
+=======
+async function buildOllamaCloudProvider(): Promise<ModelProviderConfig> {
+  const discovered = await buildOllamaProvider(OLLAMA_CLOUD_BASE_URL, { quiet: true });
+  return discovered.models?.length ? discovered : buildStaticOllamaCloudProvider();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function resolveRequestedDynamicOllamaModel(params: {
@@ -383,7 +412,11 @@ async function augmentConfiguredOllamaCatalogModels(params: {
   const showApiKey = readUsableOllamaShowApiKey({
     env: params.env,
     allowAmbientEnvFallback: !isLocalBaseUrl,
+<<<<<<< HEAD
     explicitApiKey: configuredProvider?.apiKey,
+=======
+    explicitApiKey: readConfiguredOllamaApiKey(configuredProvider?.apiKey),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resolved: params.resolveProviderApiKey?.(params.provider),
   });
   if (!isLocalBaseUrl && !showApiKey) {
@@ -480,6 +513,7 @@ export default definePluginEntry({
       catalog: {
         order: "simple",
         run: async (ctx: ProviderCatalogContext) => {
+<<<<<<< HEAD
           const resolvedAuth = ctx.resolveProviderApiKey(OLLAMA_CLOUD_PROVIDER_ID);
           const apiKey = resolvedAuth.apiKey ?? resolvedAuth.discoveryApiKey;
           if (!apiKey) {
@@ -493,6 +527,15 @@ export default definePluginEntry({
           return {
             provider: {
               ...(await buildOllamaCloudProvider(discoveryApiKey)),
+=======
+          const apiKey = ctx.resolveProviderApiKey(OLLAMA_CLOUD_PROVIDER_ID).apiKey;
+          if (!apiKey) {
+            return null;
+          }
+          return {
+            provider: {
+              ...(await buildOllamaCloudProvider()),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               apiKey,
             },
           };
@@ -524,6 +567,7 @@ export default definePluginEntry({
       resolveReasoningOutputMode: () => "native",
       resolveThinkingProfile: resolveOllamaThinkingProfile,
       wrapStreamFn: createConfiguredOllamaCompatStreamWrapper,
+<<<<<<< HEAD
       resolveDynamicModel: ({ provider, modelId }) => {
         const cloudProvider = buildStaticOllamaCloudProvider();
         const model = cloudProvider.models?.find((entry) => entry.id === modelId);
@@ -531,6 +575,8 @@ export default definePluginEntry({
           ? toDynamicOllamaModel({ provider, providerConfig: cloudProvider, model })
           : undefined;
       },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       augmentModelCatalog: async (ctx) =>
         await augmentConfiguredOllamaCatalogModels({
           config: ctx.config,

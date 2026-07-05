@@ -67,10 +67,16 @@ export async function listConfiguredMcpServers(): Promise<ConfigMcpReadResult> {
   };
 }
 
+<<<<<<< HEAD
 async function updateConfiguredMcpServerConfig(params: {
   name: string;
   update: (server: Record<string, unknown>) => Record<string, unknown>;
   errorLabel: string;
+=======
+export async function updateConfiguredMcpServerTools(params: {
+  name: string;
+  tools: McpServerToolSelection | null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }): Promise<ConfigMcpWriteResult> {
   const name = params.name.trim();
   if (!name) {
@@ -93,7 +99,26 @@ async function updateConfiguredMcpServerConfig(params: {
 
   const next = structuredClone(loaded.config);
   const servers = normalizeConfiguredMcpServers(next.mcp?.servers);
+<<<<<<< HEAD
   servers[name] = params.update({ ...servers[name] });
+=======
+  const server = { ...servers[name] };
+  if (params.tools === null) {
+    delete server.toolFilter;
+  } else {
+    const include = normalizeToolSelectionList(params.tools.include);
+    const exclude = normalizeToolSelectionList(params.tools.exclude);
+    if (include || exclude) {
+      server.toolFilter = {
+        ...(include ? { include } : {}),
+        ...(exclude ? { exclude } : {}),
+      };
+    } else {
+      delete server.toolFilter;
+    }
+  }
+  servers[name] = server;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   next.mcp = {
     ...next.mcp,
     servers,
@@ -105,7 +130,11 @@ async function updateConfiguredMcpServerConfig(params: {
     return {
       ok: false,
       path: loaded.path,
+<<<<<<< HEAD
       error: `Config invalid after MCP ${params.errorLabel} (${issue.path}: ${issue.message}).`,
+=======
+      error: `Config invalid after MCP tool selection update (${issue.path}: ${issue.message}).`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
   }
   await replaceConfigFile({
@@ -121,6 +150,7 @@ async function updateConfiguredMcpServerConfig(params: {
   };
 }
 
+<<<<<<< HEAD
 export async function updateConfiguredMcpServerTools(params: {
   name: string;
   tools: McpServerToolSelection | null;
@@ -148,15 +178,67 @@ export async function updateConfiguredMcpServerTools(params: {
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function updateConfiguredMcpServer(params: {
   name: string;
   update: (server: Record<string, unknown>) => Record<string, unknown>;
 }): Promise<ConfigMcpWriteResult> {
+<<<<<<< HEAD
   return updateConfiguredMcpServerConfig({
     name: params.name,
     errorLabel: "configure",
     update: (server) => canonicalizeConfiguredMcpServer(params.update(server)),
   });
+=======
+  const name = params.name.trim();
+  if (!name) {
+    return { ok: false, path: "", error: "MCP server name is required." };
+  }
+
+  const loaded = await listConfiguredMcpServers();
+  if (!loaded.ok) {
+    return loaded;
+  }
+  if (!Object.hasOwn(loaded.mcpServers, name)) {
+    return {
+      ok: true,
+      path: loaded.path,
+      config: loaded.config,
+      mcpServers: loaded.mcpServers,
+      updated: false,
+    };
+  }
+
+  const next = structuredClone(loaded.config);
+  const servers = normalizeConfiguredMcpServers(next.mcp?.servers);
+  servers[name] = canonicalizeConfiguredMcpServer(params.update({ ...servers[name] }));
+  next.mcp = {
+    ...next.mcp,
+    servers,
+  };
+
+  const validated = validateConfigObjectWithPlugins(next);
+  if (!validated.ok) {
+    const issue = validated.issues[0];
+    return {
+      ok: false,
+      path: loaded.path,
+      error: `Config invalid after MCP configure (${issue.path}: ${issue.message}).`,
+    };
+  }
+  await replaceConfigFile({
+    nextConfig: validated.config,
+    baseHash: loaded.baseHash,
+  });
+  return {
+    ok: true,
+    path: loaded.path,
+    config: validated.config,
+    mcpServers: servers,
+    updated: true,
+  };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export async function setConfiguredMcpServer(params: {

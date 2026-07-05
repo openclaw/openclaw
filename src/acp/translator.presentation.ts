@@ -9,10 +9,14 @@ import {
   type AcpSessionLineageMeta,
 } from "@openclaw/acp-core/session-lineage-meta";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+<<<<<<< HEAD
 import {
   normalizeFastMode,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+=======
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import type { GatewaySessionRow } from "../gateway/session-utils.js";
 
@@ -53,7 +57,10 @@ export type GatewaySessionPresentationRow = Pick<
   | "updatedAt"
   | "thinkingLevel"
   | "fastMode"
+<<<<<<< HEAD
   | "effectiveFastMode"
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   | "modelProvider"
   | "model"
   | "thinkingLevels"
@@ -164,7 +171,10 @@ export function buildSessionPresentation(params: {
     ...BASE_THINKING_LEVELS,
   ];
   const currentModeId = normalizeOptionalString(row.thinkingLevel) || "adaptive";
+<<<<<<< HEAD
   const currentFastMode = normalizeFastMode(row.effectiveFastMode ?? row.fastMode) ?? false;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!availableLevelIds.includes(currentModeId)) {
     availableLevelIds.push(currentModeId);
   }
@@ -192,8 +202,13 @@ export function buildSessionPresentation(params: {
       id: ACP_FAST_MODE_CONFIG_ID,
       name: "Fast mode",
       description: "Controls whether OpenAI sessions use the Gateway fast-mode profile.",
+<<<<<<< HEAD
       currentValue: currentFastMode === "auto" ? "auto" : currentFastMode ? "on" : "off",
       values: ["off", "auto", "on"],
+=======
+      currentValue: row.fastMode ? "on" : "off",
+      values: ["off", "on"],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }),
     buildSelectConfigOption({
       id: ACP_VERBOSE_LEVEL_CONFIG_ID,
@@ -221,9 +236,15 @@ export function buildSessionPresentation(params: {
       id: ACP_RESPONSE_USAGE_CONFIG_ID,
       name: "Usage detail",
       description:
+<<<<<<< HEAD
         "Controls how much usage information OpenClaw attaches to responses for the session. 'inherit' follows the configured default; 'off' explicitly disables it for this session.",
       currentValue: normalizeOptionalString(row.responseUsage) || "inherit",
       values: ["inherit", "off", "tokens", "full"],
+=======
+        "Controls how much usage information OpenClaw attaches to responses for the session.",
+      currentValue: normalizeOptionalString(row.responseUsage) || "off",
+      values: ["off", "tokens", "full"],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }),
     buildSelectConfigOption({
       id: ACP_ELEVATED_LEVEL_CONFIG_ID,

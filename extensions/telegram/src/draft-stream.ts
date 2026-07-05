@@ -5,7 +5,10 @@ import {
   takeMessageIdAfterStop,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+<<<<<<< HEAD
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
 import {
@@ -89,16 +92,23 @@ function isTelegramHtmlParseError(err: unknown): boolean {
   return TELEGRAM_PARSE_ERR_RE.test(formatErrorMessage(err));
 }
 
+<<<<<<< HEAD
 function telegramRichHtmlToParseModeHtml(html: string): string {
   return html.replace(/<br\s*\/?>/giu, "\n");
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function normalizeTelegramDraftTransportPreview(
   preview: TelegramDraftPreview,
 ): TelegramDraftTransportPreview {
   if (preview.richMessage?.html) {
     return {
+<<<<<<< HEAD
       text: telegramRichHtmlToParseModeHtml(preview.richMessage.html),
+=======
+      text: preview.richMessage.html,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       parseMode: "HTML",
       plainText: preview.text,
     };
@@ -170,7 +180,11 @@ function findTelegramDraftChunkLength(
       high = mid - 1;
     }
   }
+<<<<<<< HEAD
   return sliceUtf16Safe(text, 0, best).length;
+=======
+  return best;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function createTelegramDraftStream(params: {
@@ -356,7 +370,12 @@ export function createTelegramDraftStream(params: {
     const renderedPayloadLength = richMessages
       ? telegramDraftRichPayloadLength(rendered)
       : renderedText.length;
+<<<<<<< HEAD
     const renderedPreviewKey = telegramDraftPreviewKey({ ...rendered, text: renderedText });
+=======
+    const renderedPreview = { ...rendered, text: renderedText };
+    const renderedPreviewKey = telegramDraftPreviewKey(renderedPreview);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!renderedText) {
       return false;
     }
@@ -417,7 +436,11 @@ export function createTelegramDraftStream(params: {
     lastSentPreviewKey = renderedPreviewKey;
     try {
       const sent = await sendMessageTransportPreview({
+<<<<<<< HEAD
         preview: rendered,
+=======
+        preview: renderedPreview,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         sendGeneration,
       });
       if (sent) {

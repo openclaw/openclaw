@@ -64,8 +64,11 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
   postJsonRequest: postJsonRequestMock,
   postMultipartRequest: postMultipartRequestMock,
+<<<<<<< HEAD
   // Pass-through: bounded-reader enforcement is tested via bounded-reader unit tests.
   readProviderJsonResponse: async (response: { json(): Promise<unknown> }) => response.json(),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
   sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
 }));
@@ -1003,6 +1006,7 @@ describe("openai image generation provider", () => {
     });
   });
 
+<<<<<<< HEAD
   it("cancels oversized Codex OAuth image response streams", async () => {
     mockCodexAuthOnly();
     let canceled = false;
@@ -1039,6 +1043,8 @@ describe("openai image generation provider", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not treat Codex API key profiles as configured Codex OAuth image auth", async () => {
     mockGeneratedPngResponse();
     resolveApiKeyForProviderMock.mockImplementation(async (params?: { provider?: string }) => {

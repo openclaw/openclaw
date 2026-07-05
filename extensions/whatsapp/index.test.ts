@@ -15,7 +15,11 @@ describe("whatsapp bundled entries", () => {
 
   it("declares account config as channel-restart reload metadata", () => {
     expect(whatsappPlugin.reload).toEqual({
+<<<<<<< HEAD
       configPrefixes: ["web", "channels.whatsapp.accounts", "channels.whatsapp.selfChatMode"],
+=======
+      configPrefixes: ["web", "channels.whatsapp.accounts"],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       noopPrefixes: ["channels.whatsapp"],
     });
   });

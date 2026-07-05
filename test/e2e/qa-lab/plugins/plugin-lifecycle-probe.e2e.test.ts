@@ -1,27 +1,40 @@
 // Plugin Lifecycle Probe tests cover QA Lab plugin lifecycle evidence.
+<<<<<<< HEAD
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../../../scripts/lib/windows-taskkill.mjs";
+=======
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   assertInspectLoaded,
   assertUninstalled,
   parseDurationMs,
+<<<<<<< HEAD
   testing as probeTesting,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./plugin-lifecycle-probe-runtime.js";
 
 const tempDirs = createTempDirTracker();
 
+<<<<<<< HEAD
 function expectedTaskkillPath(): string {
   return resolveWindowsTaskkillPath();
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function makeTempDir(): string {
   return tempDirs.make("openclaw-plugin-lifecycle-probe-");
 }
 
+<<<<<<< HEAD
 function isProcessRunning(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -60,6 +73,8 @@ class FakeCommandChild extends EventEmitter {
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 afterEach(tempDirs.cleanup);
 
 describe("plugin lifecycle matrix probe", () => {
@@ -115,6 +130,7 @@ describe("plugin lifecycle matrix probe", () => {
   it("preserves disabled npm install timeout semantics", () => {
     expect(parseDurationMs("0", "600s")).toBeUndefined();
   });
+<<<<<<< HEAD
 
   it("rejects timed commands that exit cleanly during kill grace", async () => {
     vi.useFakeTimers();
@@ -237,4 +253,6 @@ describe("plugin lifecycle matrix probe", () => {
       }
     }
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

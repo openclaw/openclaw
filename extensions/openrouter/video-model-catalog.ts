@@ -7,7 +7,10 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   assertOkOrThrowHttpError,
+<<<<<<< HEAD
   readProviderJsonResponse,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import {
@@ -235,10 +238,14 @@ async function fetchOpenRouterVideoModels(params: {
       });
       try {
         await assertOkOrThrowHttpError(response, "OpenRouter video models request failed");
+<<<<<<< HEAD
         return await readProviderJsonResponse<OpenRouterVideoModelsResponse>(
           response,
           "OpenRouter video models request failed",
         );
+=======
+        return (await response.json()) as OpenRouterVideoModelsResponse;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       } finally {
         await release();
       }

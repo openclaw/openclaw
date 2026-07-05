@@ -1091,6 +1091,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(now + 300_000);
   });
 
+<<<<<<< HEAD
   it("cancels WHAM HTTP error response bodies", async () => {
     const now = 1_700_000_000_000;
     const store = makeStore({});
@@ -1104,6 +1105,8 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(now + 300_000);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves a longer existing cooldown via max semantics", async () => {
     const now = 1_700_000_000_000;
     const existingCooldownUntil = now + 6 * 60 * 60 * 1000;

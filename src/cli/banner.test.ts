@@ -132,6 +132,7 @@ describe("emitCliBanner", () => {
     expect(writeSpy).toHaveBeenCalledWith("\n🦞 OpenClaw 2026.3.7 (abc1234)\n\n");
     expect(hasEmittedCliBanner()).toBe(true);
   });
+<<<<<<< HEAD
 
   it("can reset banner emission state for same-module tests", async () => {
     const { emitCliBanner, hasEmittedCliBanner, testing } = await importFreshBannerModule();
@@ -157,4 +158,6 @@ describe("emitCliBanner", () => {
     emitCliBanner("2026.3.7", options);
     expect(writeSpy).toHaveBeenCalledTimes(2);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

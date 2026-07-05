@@ -80,7 +80,10 @@ import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentEvent } from "./runtime/index.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
+<<<<<<< HEAD
 import { readToolResultDetails } from "./tool-result-error.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
@@ -300,12 +303,17 @@ function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentItemEventD
     ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
     data: itemData,
   });
+<<<<<<< HEAD
   emitAgentEventCallbackBestEffort(ctx, {
+=======
+  void ctx.params.onAgentEvent?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     stream: "item",
     data: itemData,
   });
 }
 
+<<<<<<< HEAD
 function warnBestEffortEventFailure(ctx: ToolHandlerContext, label: string, error: unknown): void {
   ctx.log.warn(`${label} callback failed: ${String(error)}`);
 }
@@ -335,6 +343,10 @@ function emitAgentEventCallbackBestEffort(
   } catch (error) {
     warnBestEffortEventFailure(ctx, "tool agent event", error);
   }
+=======
+function readToolResultDetailsRecord(result: unknown): Record<string, unknown> | undefined {
+  return readRecordField(asOptionalObjectRecord(result)?.details);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function applyCurrentMessageProvider(
@@ -354,21 +366,33 @@ function applyCurrentMessageProvider(
 }
 
 function applyToolSendReceiptForExtraction(result: unknown, receiptResult: unknown): unknown {
+<<<<<<< HEAD
   const toolSend = readToolResultDetails(receiptResult)?.toolSend;
+=======
+  const toolSend = readToolResultDetailsRecord(receiptResult)?.toolSend;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (toolSend === undefined) {
     return result;
   }
   return {
     ...readRecordField(result),
     details: {
+<<<<<<< HEAD
       ...readToolResultDetails(result),
+=======
+      ...readToolResultDetailsRecord(result),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       toolSend,
     },
   };
 }
 
 function isAsyncStartedToolResult(result: unknown): boolean {
+<<<<<<< HEAD
   const details = readToolResultDetails(result);
+=======
+  const details = readToolResultDetailsRecord(result);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return details?.async === true && details.status === "started";
 }
 
@@ -376,7 +400,11 @@ function readAsyncStartedTaskIds(result: unknown): {
   asyncTaskRunId?: string;
   asyncTaskId?: string;
 } {
+<<<<<<< HEAD
   const details = readToolResultDetails(result);
+=======
+  const details = readToolResultDetailsRecord(result);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!details) {
     return {};
   }
@@ -390,7 +418,11 @@ function readAsyncStartedTaskIds(result: unknown): {
 }
 
 function readExecToolDetails(result: unknown): ExecToolDetails | null {
+<<<<<<< HEAD
   const details = readToolResultDetails(result);
+=======
+  const details = readToolResultDetailsRecord(result);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!details || typeof details.status !== "string") {
     return null;
   }
@@ -420,7 +452,11 @@ function capLiveExecResult(result: unknown): unknown {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     return result;
   }
+<<<<<<< HEAD
   const details = readToolResultDetails(result);
+=======
+  const details = readToolResultDetailsRecord(result);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return {
     ...(result as Record<string, unknown>),
     details: {
@@ -471,7 +507,11 @@ function shouldEmitLiveExecUpdate(ctx: ToolHandlerContext, toolCallId: string): 
 }
 
 function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null {
+<<<<<<< HEAD
   const details = readToolResultDetails(result);
+=======
+  const details = readToolResultDetailsRecord(result);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const summary =
     details?.summary && typeof details.summary === "object" && !Array.isArray(details.summary)
       ? (details.summary as Record<string, unknown>)
@@ -808,7 +848,11 @@ export function handleToolExecutionStart(
     const args = evt.args;
     const runId = ctx.params.runId;
     ctx.state.toolExecutionSinceLastBlockReply = true;
+<<<<<<< HEAD
     emitExecutionPhaseBestEffort(ctx, {
+=======
+    ctx.params.onExecutionPhase?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       phase: "tool_execution_started",
       tool: toolName,
       toolCallId,
@@ -926,7 +970,11 @@ export function handleToolExecutionStart(
     };
     emitTrackedItemEvent(ctx, itemData);
     // Best-effort typing signal; do not block tool summaries on slow emitters.
+<<<<<<< HEAD
     emitAgentEventCallbackBestEffort(ctx, {
+=======
+    void ctx.params.onAgentEvent?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       stream: "tool",
       data: {
         phase: "start",
@@ -1065,7 +1113,11 @@ export function handleToolExecutionUpdate(
   };
   emitTrackedItemEvent(ctx, itemData);
   if (!toolProgress) {
+<<<<<<< HEAD
     emitAgentEventCallbackBestEffort(ctx, {
+=======
+    void ctx.params.onAgentEvent?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       stream: "tool",
       data: {
         phase: "update",
@@ -1103,7 +1155,11 @@ export function handleToolExecutionUpdate(
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         data: outputData,
       });
+<<<<<<< HEAD
       emitAgentEventCallbackBestEffort(ctx, {
+=======
+      void ctx.params.onAgentEvent?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         stream: "command_output",
         data: outputData,
       });
@@ -1350,7 +1406,11 @@ export async function handleToolExecutionEnd(
       : {}),
   };
   emitTrackedItemEvent(ctx, itemData);
+<<<<<<< HEAD
   emitAgentEventCallbackBestEffort(ctx, {
+=======
+  void ctx.params.onAgentEvent?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     stream: "tool",
     data: {
       phase: "result",
@@ -1396,7 +1456,11 @@ export async function handleToolExecutionEnd(
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         data: approvalData,
       });
+<<<<<<< HEAD
       emitAgentEventCallbackBestEffort(ctx, {
+=======
+      void ctx.params.onAgentEvent?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         stream: "approval",
         data: approvalData,
       });
@@ -1463,7 +1527,11 @@ export async function handleToolExecutionEnd(
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         data: outputData,
       });
+<<<<<<< HEAD
       emitAgentEventCallbackBestEffort(ctx, {
+=======
+      void ctx.params.onAgentEvent?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         stream: "command_output",
         data: outputData,
       });
@@ -1489,7 +1557,11 @@ export async function handleToolExecutionEnd(
             ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
             data: approvalData,
           });
+<<<<<<< HEAD
           emitAgentEventCallbackBestEffort(ctx, {
+=======
+          void ctx.params.onAgentEvent?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             stream: "approval",
             data: approvalData,
           });
@@ -1535,7 +1607,11 @@ export async function handleToolExecutionEnd(
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         data: patchData,
       });
+<<<<<<< HEAD
       emitAgentEventCallbackBestEffort(ctx, {
+=======
+      void ctx.params.onAgentEvent?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         stream: "patch",
         data: patchData,
       });
@@ -1555,9 +1631,12 @@ export async function handleToolExecutionEnd(
     result,
     sanitizedResult,
   });
+<<<<<<< HEAD
   await Promise.resolve(ctx.params.onToolStreamBoundary?.()).catch((error: unknown) => {
     ctx.log.debug(`embedded run tool stream boundary callback failed: ${String(error)}`);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();

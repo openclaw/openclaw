@@ -4,7 +4,10 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+<<<<<<< HEAD
 import { pathToFileURL } from "node:url";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { afterEach, describe, expect, it } from "vitest";
 import {
   acquireBoundaryCheckLock,
@@ -85,6 +88,7 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
   throw new Error(`process still alive: ${pid}`);
 }
 
+<<<<<<< HEAD
 function waitForChildClose(
   child: ReturnType<typeof spawn>,
   timeoutMs = 5_000,
@@ -100,6 +104,8 @@ function waitForChildClose(
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 afterEach(() => {
   for (const rootDir of tempRoots) {
     fs.rmSync(rootDir, { force: true, recursive: true });
@@ -432,6 +438,7 @@ describe("check-extension-package-tsc-boundary", () => {
     expect(elapsedMs).toBeGreaterThanOrEqual(0);
   }, 30_000);
 
+<<<<<<< HEAD
   it("clamps oversized async node step timers before scheduling", async () => {
     await expect(
       runNodeStepAsync(
@@ -445,6 +452,8 @@ describe("check-extension-package-tsc-boundary", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps async node step failure output bounded", async () => {
     const child = new EventEmitter() as EventEmitter & {
       kill: (signal?: NodeJS.Signals | number) => boolean;
@@ -551,9 +560,16 @@ describe("check-extension-package-tsc-boundary", () => {
       tempRoots.add(root);
       const childPidPath = path.join(root, "child.pid");
       let childPid = 0;
+<<<<<<< HEAD
       const childScript = ["process.on('SIGTERM', () => {});", "setInterval(() => {}, 1000);"].join(
         "",
       );
+=======
+      const childScript = [
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const parentScript = [
         "const { spawn } = require('node:child_process');",
         "const fs = require('node:fs');",
@@ -563,11 +579,24 @@ describe("check-extension-package-tsc-boundary", () => {
       ].join("");
 
       try {
+<<<<<<< HEAD
         const failurePromise = runNodeStepAsync("hung-step-group", ["--eval", parentScript], 100, {
           spawnImpl(command: string, args: string[], options: unknown) {
             return spawn(command, args, options as Parameters<typeof spawn>[2]);
           },
         }).then(
+=======
+        const failurePromise = runNodeStepAsync(
+          "hung-step-group",
+          ["--eval", parentScript],
+          100,
+          {
+            spawnImpl(command: string, args: string[], options: unknown) {
+              return spawn(command, args, options as Parameters<typeof spawn>[2]);
+            },
+          },
+        ).then(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           () => {
             throw new Error("expected hung-step-group to time out");
           },
@@ -615,6 +644,7 @@ describe("check-extension-package-tsc-boundary", () => {
     expect(Date.now() - startedAt).toBeLessThan(abortBudgetMs);
   }, 45_000);
 
+<<<<<<< HEAD
   it.skipIf(process.platform === "win32")(
     "force-kills aborted async node step process groups",
     async () => {
@@ -742,6 +772,8 @@ describe("check-extension-package-tsc-boundary", () => {
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("passes successful step timing metadata to onSuccess handlers", async () => {
     const elapsedTimes: number[] = [];
 

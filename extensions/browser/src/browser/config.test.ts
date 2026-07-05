@@ -11,6 +11,10 @@ import {
   resolveBrowserConfig,
   resolveManagedBrowserHeadlessMode,
   resolveProfile,
+<<<<<<< HEAD
+=======
+  shouldStartLocalBrowserServer,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./config.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 
@@ -46,6 +50,10 @@ describe("browser config", () => {
     expect(resolved.enabled).toBe(true);
     expect(resolved.controlPort).toBe(18791);
     expect(resolved.color).toBe("#FF4500");
+<<<<<<< HEAD
+=======
+    expect(shouldStartLocalBrowserServer(resolved)).toBe(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(resolved.cdpHost).toBe("127.0.0.1");
     expect(resolved.cdpProtocol).toBe("http");
     const profile = resolveProfile(resolved, resolved.defaultProfile);

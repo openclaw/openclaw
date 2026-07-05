@@ -2,6 +2,7 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import process from "node:process";
+<<<<<<< HEAD
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
@@ -10,10 +11,17 @@ import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 const spawnMock = vi.hoisted(() => vi.fn());
 const execFileMock = vi.hoisted(() => vi.fn());
 const execFilePromiseMock = vi.hoisted(() => vi.fn());
+=======
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
+
+const spawnMock = vi.hoisted(() => vi.fn());
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 let attachChildProcessBridge: typeof import("./child-process-bridge.js").attachChildProcessBridge;
 let resolveCommandEnv: typeof import("./exec.js").resolveCommandEnv;
 let resolveProcessExitCode: typeof import("./exec.js").resolveProcessExitCode;
+<<<<<<< HEAD
 let runExec: typeof import("./exec.js").runExec;
 let runCommandWithTimeout: typeof import("./exec.js").runCommandWithTimeout;
 let shouldSpawnWithShell: typeof import("./exec.js").shouldSpawnWithShell;
@@ -21,20 +29,36 @@ let shouldSpawnWithShell: typeof import("./exec.js").shouldSpawnWithShell;
 async function loadExecModules(options?: { mockSpawn?: boolean; mockExecFile?: boolean }) {
   vi.resetModules();
   if (options?.mockSpawn || options?.mockExecFile) {
+=======
+let runCommandWithTimeout: typeof import("./exec.js").runCommandWithTimeout;
+let shouldSpawnWithShell: typeof import("./exec.js").shouldSpawnWithShell;
+
+async function loadExecModules(options?: { mockSpawn?: boolean }) {
+  vi.resetModules();
+  if (options?.mockSpawn) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     vi.doMock("node:child_process", async () => {
       const actual =
         await vi.importActual<typeof import("node:child_process")>("node:child_process");
       return {
         ...actual,
+<<<<<<< HEAD
         spawn: options?.mockSpawn ? spawnMock : actual.spawn,
         execFile: options?.mockExecFile ? execFileMock : actual.execFile,
+=======
+        spawn: spawnMock,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       };
     });
   } else {
     vi.doUnmock("node:child_process");
   }
   ({ attachChildProcessBridge } = await import("./child-process-bridge.js"));
+<<<<<<< HEAD
   ({ resolveCommandEnv, resolveProcessExitCode, runCommandWithTimeout, runExec, shouldSpawnWithShell } =
+=======
+  ({ resolveCommandEnv, resolveProcessExitCode, runCommandWithTimeout, shouldSpawnWithShell } =
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await import("./exec.js"));
 }
 
@@ -90,9 +114,12 @@ describe("runCommandWithTimeout", () => {
   beforeEach(async () => {
     vi.useRealTimers();
     spawnMock.mockReset();
+<<<<<<< HEAD
     execFileMock.mockReset();
     execFilePromiseMock.mockReset();
     delete (execFileMock as { [promisify.custom]?: unknown })[promisify.custom];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await loadExecModules();
   });
 
@@ -174,6 +201,7 @@ describe("runCommandWithTimeout", () => {
     expect(resolved.npm_config_fund).toBe("false");
   });
 
+<<<<<<< HEAD
   it("caps oversized execFile timeouts", async () => {
     execFilePromiseMock.mockResolvedValue({ stdout: Buffer.from("ok"), stderr: Buffer.from("") });
     (execFileMock as { [promisify.custom]?: typeof execFilePromiseMock })[promisify.custom] =
@@ -191,6 +219,8 @@ describe("runCommandWithTimeout", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("infers success for shimmed Windows commands when exit codes are missing", () => {
     expect(
       resolveProcessExitCode({
@@ -286,6 +316,7 @@ describe("runCommandWithTimeout", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+<<<<<<< HEAD
     "caps oversized process timeouts before arming timers",
     async () => {
       vi.useFakeTimers();
@@ -329,6 +360,8 @@ describe("runCommandWithTimeout", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     "swallows stdin EPIPE when child exits before input is consumed (#75438)",
     { timeout: 5_000 },
     async () => {

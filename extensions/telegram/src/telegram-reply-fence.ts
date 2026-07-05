@@ -234,6 +234,13 @@ export function shouldSupersedeTelegramReplyFence(ctxPayload: {
   return true;
 }
 
+<<<<<<< HEAD
+=======
+export function getTelegramReplyFenceSizeForTests(): number {
+  return telegramReplyFenceByKey.size;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function resetTelegramReplyFenceForTests(): void {
   telegramReplyFenceByKey.clear();
   telegramReplyFenceKeysByLane.clear();

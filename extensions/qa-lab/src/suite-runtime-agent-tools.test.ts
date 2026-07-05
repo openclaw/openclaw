@@ -52,7 +52,10 @@ import {
   callPluginToolsMcp,
   findSkill,
   handleQaAction,
+<<<<<<< HEAD
   resolveWorkspaceSkillPath,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   writeWorkspaceSkill,
 } from "./suite-runtime-agent-tools.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
@@ -92,6 +95,7 @@ describe("qa suite runtime agent tools helpers", () => {
     expect(skillPath).toBe(path.join(workspaceDir, "skills", "my-skill", "SKILL.md"));
   });
 
+<<<<<<< HEAD
   it("rejects workspace skill names that escape the skills directory", async () => {
     const workspaceDir = await makeTempDir("qa-workspace-");
 
@@ -111,6 +115,8 @@ describe("qa suite runtime agent tools helpers", () => {
     await expect(fs.readdir(path.join(workspaceDir, "skills"))).rejects.toThrow();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("routes generic transport actions through the payload extractor", async () => {
     const handleAction = vi.fn(async () => ({
       content: [{ type: "text", text: "done" }],

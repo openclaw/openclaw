@@ -108,6 +108,7 @@ describe("slash-commands", () => {
     ).toEqual(["oc_model", "oc_models"]);
   });
 
+<<<<<<< HEAD
   it("registers the queue command mapped to the core /queue directive", () => {
     const queueSpec = DEFAULT_COMMAND_SPECS.find((spec) => spec.trigger === "oc_queue");
     expect(queueSpec?.originalName).toBe("queue");
@@ -117,6 +118,8 @@ describe("slash-commands", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("normalizes callback path in slash config", () => {
     const config = resolveSlashCommandConfig({ callbackPath: "api/channels/mattermost/command" });
     expect(config.callbackPath).toBe("/api/channels/mattermost/command");

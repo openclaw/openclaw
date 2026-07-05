@@ -9,7 +9,11 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
+<<<<<<< HEAD
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+=======
+import { resolveRestartSentinelPath } from "./restart-sentinel.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { SUPERVISOR_HINT_ENV_VARS, type RespawnSupervisor } from "./supervisor-markers.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
@@ -96,6 +100,29 @@ function readJsonFile(filePath) {
   }
 }
 
+<<<<<<< HEAD
+=======
+function writeJsonFile(filePath, value) {
+  const dir = path.dirname(filePath);
+  const tempPath = path.join(
+    dir,
+    "." + path.basename(filePath) + "." + process.pid + "." + Date.now() + ".tmp",
+  );
+  try {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(tempPath, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
+    fs.renameSync(tempPath, filePath);
+  } catch (err) {
+    appendLog("failed to write update sentinel failure: " + (err && err.stack ? err.stack : String(err)));
+    try {
+      fs.rmSync(tempPath, { force: true });
+    } catch {
+      // Best effort only.
+    }
+  }
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isPendingUpdatePayload(payload) {
   const reason = payload && payload.stats && payload.stats.reason;
   return (
@@ -106,6 +133,7 @@ function isPendingUpdatePayload(payload) {
   );
 }
 
+<<<<<<< HEAD
 function openStateDatabase() {
   if (!params.stateDatabasePath || typeof params.stateDatabasePath !== "string") {
     return null;
@@ -270,6 +298,8 @@ function writeRestartSentinelPayload(payload) {
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function buildFallbackFailurePayload(reason) {
   const metaFile = params.metaPath ? readJsonFile(params.metaPath) : null;
   const meta = metaFile && metaFile.version === 1 && metaFile.meta ? metaFile.meta : {};
@@ -301,7 +331,15 @@ function buildFallbackFailurePayload(reason) {
 }
 
 function markUpdateSentinelFailureIfPending(reason) {
+<<<<<<< HEAD
   let payload = readRestartSentinelPayload();
+=======
+  if (!params.sentinelPath) {
+    return;
+  }
+  const current = readJsonFile(params.sentinelPath);
+  let payload = current && current.version === 1 ? current.payload : null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (payload && (payload.kind !== "update" || !isPendingUpdatePayload(payload))) {
     return;
   }
@@ -316,7 +354,11 @@ function markUpdateSentinelFailureIfPending(reason) {
   } else {
     payload = buildFallbackFailurePayload(reason);
   }
+<<<<<<< HEAD
   writeRestartSentinelPayload(payload);
+=======
+  writeJsonFile(params.sentinelPath, { version: 1, payload });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function runServiceCommand(command, args) {
@@ -693,7 +735,11 @@ export async function startManagedServiceUpdateHandoff(params: {
     handoffId: params.handoffId,
     logPath,
     metaPath,
+<<<<<<< HEAD
     stateDatabasePath: resolveOpenClawStateSqlitePath(params.env ?? process.env),
+=======
+    sentinelPath: resolveRestartSentinelPath(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sensitivePaths: [scriptPath, paramsPath, metaPath],
     serviceRecovery: resolveGatewayServiceRecovery(params.supervisor, params.env ?? process.env),
   };

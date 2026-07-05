@@ -31,7 +31,10 @@ scenario:
     summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --cli-auth-mode api-key --model claude-cli/claude-sonnet-4-6 --alt-model claude-cli/claude-sonnet-4-6 --scenario claude-cli-provider-capabilities`.
     config:
       authMode: api-key
+<<<<<<< HEAD
       requiredProviderMode: live-frontier
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       requiredProvider: claude-cli
       chatPrompt: "Claude CLI provider marker check. Reply exactly: CLAUDE-CLI-CHAT-OK"
       chatExpected: CLAUDE-CLI-CHAT-OK
@@ -86,8 +89,12 @@ flow:
         - call: runAgentPrompt
           args:
             - ref: env
+<<<<<<< HEAD
             - sessionKey:
                 expr: "`agent:qa:claude-cli-${config.authMode}-chat`"
+=======
+            - sessionKey: agent:qa:claude-cli-chat
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               message:
                 expr: config.chatPrompt
               provider:
@@ -118,8 +125,12 @@ flow:
         - call: runAgentPrompt
           args:
             - ref: env
+<<<<<<< HEAD
             - sessionKey:
                 expr: "`agent:qa:claude-cli-${config.authMode}-image`"
+=======
+            - sessionKey: agent:qa:claude-cli-image
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               message:
                 expr: config.imagePrompt
               provider:
@@ -169,7 +180,11 @@ flow:
           saveAs: mcpSessionKey
           args:
             - ref: env
+<<<<<<< HEAD
             - expr: "`Claude CLI MCP bridge ${config.authMode}`"
+=======
+            - Claude CLI MCP bridge
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         - call: readEffectiveTools
           saveAs: mcpTools
           args:
@@ -234,8 +249,12 @@ flow:
         - call: runAgentPrompt
           args:
             - ref: env
+<<<<<<< HEAD
             - sessionKey:
                 expr: "`agent:qa:claude-cli-${config.authMode}-skill`"
+=======
+            - sessionKey: agent:qa:claude-cli-skill
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               message:
                 expr: config.skillPrompt
               provider:

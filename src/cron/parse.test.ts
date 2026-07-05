@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { parseAbsoluteTimeMs } from "./parse.js";
 
 describe("parseAbsoluteTimeMs", () => {
+<<<<<<< HEAD
   describe("epoch milliseconds", () => {
     it("parses positive epoch milliseconds", () => {
       expect(parseAbsoluteTimeMs("1700000000000")).toBe(1_700_000_000_000);
@@ -242,6 +243,14 @@ describe("parseAbsoluteTimeMs", () => {
         Date.parse("2024-01-15T10:30:45.999Z"),
       );
     });
+=======
+  it("parses positive epoch milliseconds", () => {
+    expect(parseAbsoluteTimeMs("1700000000000")).toBe(1_700_000_000_000);
+  });
+
+  it("rejects digit-only timestamps outside the Date range", () => {
+    expect(parseAbsoluteTimeMs(String(Number.MAX_SAFE_INTEGER))).toBeNull();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("parses ISO timestamps with UTC defaults and explicit offsets", () => {

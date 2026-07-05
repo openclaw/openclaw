@@ -74,6 +74,7 @@ function buildProviderEntry(params: {
   const providerId = normalizeString(params.provider.id);
   const label = normalizeString(params.provider.label);
   const hint = normalizeString(params.provider.hint);
+<<<<<<< HEAD
   const configuredCredentialPath = normalizeString(params.provider.credentialPath);
   const credentialPath =
     params.provider.credentialPath === ""
@@ -91,6 +92,15 @@ function buildProviderEntry(params: {
     !placeholder ||
     !signupUrl
   ) {
+=======
+  const credentialPath =
+    normalizeString(params.provider.credentialPath) ??
+    `plugins.entries.${params.pluginId}.config.webSearch.apiKey`;
+  const envVars = normalizeTrimmedStringList(params.provider.envVars);
+  const placeholder = normalizeString(params.provider.placeholder);
+  const signupUrl = normalizeString(params.provider.signupUrl);
+  if (!providerId || !label || !hint || envVars.length === 0 || !placeholder || !signupUrl) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return null;
   }
   return {
@@ -161,6 +171,7 @@ export function resolveWebSearchInstallCatalogEntries(): WebSearchInstallCatalog
   );
 }
 
+<<<<<<< HEAD
 /** Lists credential-backed web provider plugins selected by documented environment variables. */
 export function resolveWebSearchInstallCatalogEntriesForEnv(
   env: NodeJS.ProcessEnv,
@@ -172,6 +183,8 @@ export function resolveWebSearchInstallCatalogEntriesForEnv(
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Resolves one web-search install catalog entry by provider id or plugin id. */
 export function resolveWebSearchInstallCatalogEntry(params: {
   providerId?: string;

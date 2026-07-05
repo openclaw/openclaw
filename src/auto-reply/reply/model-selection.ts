@@ -16,7 +16,10 @@ import {
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
+<<<<<<< HEAD
   normalizeStoredOverrideModel,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolvePersistedOverrideModelRef,
   resolveReasoningDefault,
   resolveThinkingDefault,
@@ -54,7 +57,10 @@ type ModelSelectionState = {
   allowedModelCatalog: ModelCatalog;
   resetModelOverride: boolean;
   resetModelOverrideRef?: string;
+<<<<<<< HEAD
   resetModelOverrideReason?: "disallowed" | "stale";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveThinkingCatalog: () => Promise<ModelCatalog | undefined>;
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel>;
   /** Default reasoning level from model capability: "on" if model has reasoning, else "off". */
@@ -77,7 +83,10 @@ export function createFastTestModelSelectionState(params: {
     allowedModelCatalog: [],
     resetModelOverride: false,
     resetModelOverrideRef: undefined,
+<<<<<<< HEAD
     resetModelOverrideReason: undefined,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resolveThinkingCatalog: async () => [],
     resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
     resolveDefaultReasoningLevel: async () => "off",
@@ -136,7 +145,10 @@ export async function createModelSelectionState(params: {
   provider: string;
   model: string;
   hasModelDirective: boolean;
+<<<<<<< HEAD
   hasOneTurnModelOverride?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   skipStoredModelOverride?: boolean;
   /** True when heartbeat.model was explicitly resolved for this run.
    *  In that case, skip session-stored overrides so the heartbeat selection wins. */
@@ -170,7 +182,10 @@ export async function createModelSelectionState(params: {
   let model = params.model;
   const primaryProvider = params.primaryProvider ?? defaultProvider;
   const primaryModel = params.primaryModel ?? defaultModel;
+<<<<<<< HEAD
   const hasOneTurnModelOverride = params.hasOneTurnModelOverride === true;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
   const visibility = parseConfiguredModelVisibilityEntries({ cfg });
@@ -197,6 +212,7 @@ export async function createModelSelectionState(params: {
   let modelCatalog: ModelCatalog | null = null;
   let resetModelOverride = false;
   let resetModelOverrideRef: string | undefined;
+<<<<<<< HEAD
   let resetModelOverrideReason: "disallowed" | "stale" | undefined;
   const agentEntry = params.agentId ? resolveAgentConfig(cfg, params.agentId) : undefined;
   const normalizedDirectStoredOverride = normalizeStoredOverrideModel({
@@ -207,6 +223,13 @@ export async function createModelSelectionState(params: {
     defaultProvider,
     overrideProvider: normalizedDirectStoredOverride.providerOverride,
     overrideModel: normalizedDirectStoredOverride.modelOverride,
+=======
+  const agentEntry = params.agentId ? resolveAgentConfig(cfg, params.agentId) : undefined;
+  const directStoredOverride = resolvePersistedOverrideModelRef({
+    defaultProvider,
+    overrideProvider: sessionEntry?.providerOverride,
+    overrideModel: sessionEntry?.modelOverride,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   const directStoredModelOverride = directStoredOverride
     ? { ...directStoredOverride, source: "session" as const }
@@ -290,6 +313,7 @@ export async function createModelSelectionState(params: {
     logStage("configured-catalog-ready", `entries=${configuredModelCatalog.length}`);
   }
 
+<<<<<<< HEAD
   if (
     sessionEntry &&
     sessionStore &&
@@ -297,6 +321,9 @@ export async function createModelSelectionState(params: {
     directStoredOverride &&
     !hasOneTurnModelOverride
   ) {
+=======
+  if (sessionEntry && sessionStore && sessionKey && directStoredOverride) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const normalizedOverride = normalizeRuntimeModelRef(
       directStoredOverride.provider,
       directStoredOverride.model,
@@ -318,7 +345,10 @@ export async function createModelSelectionState(params: {
       resetModelOverride = updated;
       if (updated) {
         resetModelOverrideRef = key;
+<<<<<<< HEAD
         resetModelOverrideReason = staleDirectStoredOverride ? "stale" : "disallowed";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     }
   }
@@ -349,7 +379,10 @@ export async function createModelSelectionState(params: {
   // configured default.
   const skipStoredOverride =
     params.skipStoredModelOverride === true ||
+<<<<<<< HEAD
     hasOneTurnModelOverride ||
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     params.hasResolvedHeartbeatModelOverride === true ||
     (staleDirectStoredOverride && storedOverride?.source === "session");
 
@@ -365,7 +398,11 @@ export async function createModelSelectionState(params: {
     }
   }
 
+<<<<<<< HEAD
   if (!params.hasModelDirective && !hasOneTurnModelOverride) {
+=======
+  if (!params.hasModelDirective) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const allowedInitialSelection = visibilityPolicy.resolveSelection({
       provider,
       model,
@@ -611,7 +648,10 @@ export async function createModelSelectionState(params: {
     allowedModelCatalog,
     resetModelOverride,
     resetModelOverrideRef,
+<<<<<<< HEAD
     resetModelOverrideReason,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resolveThinkingCatalog,
     resolveDefaultThinkingLevel,
     resolveDefaultReasoningLevel,

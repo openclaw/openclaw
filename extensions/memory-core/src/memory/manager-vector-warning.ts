@@ -22,7 +22,11 @@ export function logMemoryVectorDegradedWrite(params: {
     return params.warningShown;
   }
   params.warn(
+<<<<<<< HEAD
     `memory_index_chunks_vec not updated — ${formatMemoryVectorDegradedWriteReason(params.loadError)}. Vector recall degraded. Further duplicate warnings suppressed.`,
+=======
+    `chunks_vec not updated — ${formatMemoryVectorDegradedWriteReason(params.loadError)}. Vector recall degraded. Further duplicate warnings suppressed.`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
   return true;
 }

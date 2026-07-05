@@ -8,6 +8,7 @@ import type {
   SandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+<<<<<<< HEAD
   buildAgentHookContextChannelFields,
   detectAndLoadAgentHarnessPromptImages,
   getModelProviderRequestTransport,
@@ -30,6 +31,16 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createCopilotByokAuth, resolveCopilotAuth } from "./auth-bridge.js";
 import { createCopilotByokProxy } from "./byok-proxy.js";
+=======
+  detectAndLoadAgentHarnessPromptImages,
+  resolveAttemptFsWorkspaceOnly,
+  resolveAttemptSpawnWorkspaceDir,
+  resolveSandboxContext as defaultResolveSandboxContext,
+  resolveSessionAgentIds,
+  resolveUserPath,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveCopilotAuth } from "./auth-bridge.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   createInfiniteSessionConfig,
   type CopilotInfiniteSessionOptions,
@@ -46,13 +57,19 @@ import {
   type SessionLike,
 } from "./event-bridge.js";
 import { createHooksBridge, type CopilotHooksConfig } from "./hooks-bridge.js";
+<<<<<<< HEAD
 import { createCopilotNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   createPermissionBridge,
   rejectAllPolicy,
   type CopilotPermissionPolicy,
 } from "./permission-bridge.js";
+<<<<<<< HEAD
 import { resolveCopilotProvider, type ResolvedCopilotProvider } from "./provider-bridge.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   classifyResumeFailure,
   computeReplayMetadata,
@@ -61,6 +78,7 @@ import {
 } from "./replay-shim.js";
 import type { ClientCreateOptions, CopilotClientPool, PoolKey, PooledClient } from "./runtime.js";
 import { createCopilotToolBridge } from "./tool-bridge.js";
+<<<<<<< HEAD
 import { createCopilotUserInputBridge } from "./user-input-bridge.js";
 import { resolveCopilotWorkspaceBootstrapContext } from "./workspace-bootstrap.js";
 
@@ -71,6 +89,14 @@ const COPILOT_ASK_USER_AVAILABLE_TOOLS = ["builtin:ask_user"] as const;
 type AttemptResultWithSdkSessionId = AgentHarnessAttemptResult & { sdkSessionId?: string };
 type PromptErrorWithCode = Error & { code?: string; cause?: unknown };
 type CopilotAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
+=======
+import { resolveCopilotWorkspaceBootstrapContext } from "./workspace-bootstrap.js";
+
+const SUPPORTED_PROVIDERS = new Set(["github-copilot"]);
+
+type AttemptResultWithSdkSessionId = AgentHarnessAttemptResult & { sdkSessionId?: string };
+type PromptErrorWithCode = Error & { code?: string; cause?: unknown };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type CopilotSessionConfig = Pick<
   SessionConfig,
   | "availableTools"
@@ -81,8 +107,11 @@ export type CopilotSessionConfig = Pick<
   | "infiniteSessions"
   | "model"
   | "onPermissionRequest"
+<<<<<<< HEAD
   | "onUserInputRequest"
   | "provider"
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   | "reasoningEffort"
   | "systemMessage"
   | "tools"
@@ -119,6 +148,7 @@ type AttemptParamsLike = AgentHarnessAttemptParams & {
   // internal expansion. Symmetric to `EmbeddedRunAttemptParams.transcriptPrompt`.
   transcriptPrompt?: string;
 };
+<<<<<<< HEAD
 type ModelRef = {
   api?: string;
   id: string;
@@ -155,6 +185,9 @@ type ModelRefInputObject = {
   contextWindow?: number;
   maxTokens?: number;
 };
+=======
+type ModelRef = { api?: string; id: string; provider: string };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type { AttemptParamsLike as CopilotPoolAcquireInput, ModelRef };
 export { SUPPORTED_PROVIDERS };
@@ -181,11 +214,15 @@ export interface CopilotAttemptDeps {
    * attempt.
    */
   onSessionEstablished?: (info: {
+<<<<<<< HEAD
     compactionSessionConfig?: CopilotSessionConfig;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sdkSessionId: string;
     pooledClient: PooledClient;
     sessionConfig: CopilotSessionConfig;
   }) => void;
+<<<<<<< HEAD
   /**
    * Called before an attempt retains its live SDK session to observe background
    * compaction. The harness must prevent that session ID from being resumed
@@ -359,6 +396,8 @@ async function awaitDeferredCleanupBeforeDeadline(params: {
       clearTimeout(timeoutId);
     }
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export async function runCopilotAttempt(
@@ -366,6 +405,7 @@ export async function runCopilotAttempt(
   deps: CopilotAttemptDeps,
 ): Promise<AgentHarnessAttemptResult> {
   const now = deps.now ?? Date.now;
+<<<<<<< HEAD
   const attemptStartedAt = now();
   const input = params as AttemptParamsLike;
   const createToolBridge = deps.createToolBridge ?? createCopilotToolBridge;
@@ -442,6 +482,36 @@ export async function runCopilotAttempt(
         sessionIdUsed: input.sessionId,
       }),
     );
+=======
+  const input = params as AttemptParamsLike;
+  const createToolBridge = deps.createToolBridge ?? createCopilotToolBridge;
+  const messages = getMessagesSnapshotInput(input);
+
+  if (params.abortSignal?.aborted) {
+    return createResult(input, {
+      aborted: true,
+      externalAbort: true,
+      messagesSnapshot: messages,
+      now,
+      promptError: undefined,
+      sdkSessionId: undefined,
+      sessionIdUsed: input.sessionId,
+    });
+  }
+
+  const modelRef = resolveModelRef(input);
+  if (!SUPPORTED_PROVIDERS.has(modelRef.provider)) {
+    return createResult(input, {
+      messagesSnapshot: messages,
+      now,
+      promptError: createPromptError(
+        "model_not_supported",
+        `[copilot-attempt] provider ${modelRef.provider} is not supported at MVP (subscription Copilot models only; BYOK arrives via byok-mapping-skeleton)`,
+      ),
+      sdkSessionId: undefined,
+      sessionIdUsed: input.sessionId,
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   let abortRequested = false;
@@ -449,7 +519,10 @@ export async function runCopilotAttempt(
   let externalAbort = false;
   let settled = false;
   let sentTurnStarted = false;
+<<<<<<< HEAD
   let timedOutDuringCompaction = false;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let timedOut = false;
   let promptError: Error | undefined;
   let sdkSessionId: string | undefined;
@@ -458,6 +531,7 @@ export async function runCopilotAttempt(
   let handle: PooledClient | undefined;
   let session: SessionLike | undefined;
   let bridge: ReturnType<typeof attachEventBridge> | undefined;
+<<<<<<< HEAD
   const nativeSubagentTaskMirror = createCopilotNativeSubagentTaskMirror({
     agentId: sessionAgentId,
     now,
@@ -466,6 +540,8 @@ export async function runCopilotAttempt(
   let activeRunHandleRef: Parameters<typeof clearActiveEmbeddedRun>[1] | undefined;
   let userInputBridgeRef: ReturnType<typeof createCopilotUserInputBridge> | undefined;
   let cleanupToolBridge: (() => void) | undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let releaseError: Error | undefined;
   let downgradedFromResume = false;
   let resumeFailureRecovered = false;
@@ -478,6 +554,7 @@ export async function runCopilotAttempt(
   // `src/agents/pi-embedded-runner/run/types.ts:139`.
   let yieldDetected = false;
 
+<<<<<<< HEAD
   const markExternalAbort = () => {
     abortRequested = true;
     externalAbort = true;
@@ -486,16 +563,25 @@ export async function runCopilotAttempt(
 
   const abortActiveSession = () => {
     markExternalAbort();
+=======
+  const onAbort = () => {
+    abortRequested = true;
+    externalAbort = true;
+    aborted = true;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (settled || !sentTurnStarted || !session) {
       return;
     }
     void session.abort().catch(() => undefined);
   };
 
+<<<<<<< HEAD
   const onAbort = () => {
     abortActiveSession();
   };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   params.abortSignal?.addEventListener("abort", onAbort, { once: true });
 
   // Sandbox parity with PI (`src/agents/pi-embedded-runner/run/attempt.ts:1232-1244`):
@@ -504,6 +590,15 @@ export async function runCopilotAttempt(
   // spawned subagents should inherit. When sandbox is disabled (the default),
   // `resolveSandboxContext` returns `null` and behavior is unchanged from the
   // pre-fix path.
+<<<<<<< HEAD
+=======
+  const resolvedWorkspaceForSandbox =
+    readResolvedAttemptPath(input.workspaceDir) ?? readResolvedAttemptPath(input.cwd);
+  const sandboxSessionKey =
+    readString((input as { sandboxSessionKey?: unknown }).sandboxSessionKey) ??
+    readString((input as { sessionKey?: unknown }).sessionKey) ??
+    readString(input.sessionId);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const resolveSandbox = deps.resolveSandboxContextOverride ?? defaultResolveSandboxContext;
   let sandbox: SandboxContext | null = null;
   let effectiveWorkspaceDir = resolvedWorkspaceForSandbox;
@@ -535,6 +630,7 @@ export async function runCopilotAttempt(
       settled = true;
       params.abortSignal?.removeEventListener("abort", onAbort);
       if (abortRequested || params.abortSignal?.aborted) {
+<<<<<<< HEAD
         return finishAttempt(
           createResult(input, {
             aborted: true,
@@ -563,10 +659,36 @@ export async function runCopilotAttempt(
     }
   }
   hookContext.workspaceDir = effectiveWorkspaceDir;
+=======
+        return createResult(input, {
+          aborted: true,
+          externalAbort: true,
+          messagesSnapshot: messages,
+          now,
+          promptError: undefined,
+          sdkSessionId: undefined,
+          sessionIdUsed: input.sessionId,
+        });
+      }
+      return createResult(input, {
+        messagesSnapshot: messages,
+        now,
+        promptError: createPromptError(
+          "sandbox_resolution_failure",
+          `[copilot-attempt] sandbox resolution failed: ${toError(error).message}`,
+          error,
+        ),
+        sdkSessionId: undefined,
+        sessionIdUsed: input.sessionId,
+      });
+    }
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const requestedCwd = readResolvedAttemptPath(input.cwd);
   if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspaceForSandbox) {
     settled = true;
     params.abortSignal?.removeEventListener("abort", onAbort);
+<<<<<<< HEAD
     return finishAttempt(
       createResult(input, {
         messagesSnapshot: messages,
@@ -579,10 +701,30 @@ export async function runCopilotAttempt(
         sessionIdUsed: input.sessionId,
       }),
     );
+=======
+    return createResult(input, {
+      messagesSnapshot: messages,
+      now,
+      promptError: createPromptError(
+        "sandbox_cwd_override_unsupported",
+        "[copilot-attempt] cwd override is not supported for sandboxed Copilot runs; omit cwd or use the agent workspace as cwd",
+      ),
+      sdkSessionId: undefined,
+      sessionIdUsed: input.sessionId,
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   const effectiveCwd = sandbox?.enabled
     ? effectiveWorkspaceDir
     : (requestedCwd ?? effectiveWorkspaceDir);
+<<<<<<< HEAD
+=======
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: readString((input as { sessionKey?: unknown }).sessionKey),
+    config: input.config,
+    agentId: readString(params.agentId),
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const effectiveFsWorkspaceOnly = resolveAttemptFsWorkspaceOnly({
     config: input.config,
     sessionAgentId,
@@ -593,6 +735,7 @@ export async function runCopilotAttempt(
         resolvedWorkspace: resolvedWorkspaceForSandbox,
       })
     : undefined;
+<<<<<<< HEAD
   const poolAcquire = resolvePoolAcquire(input);
   let byokProxy: Awaited<ReturnType<typeof createCopilotByokProxy>>;
   try {
@@ -610,6 +753,10 @@ export async function runCopilotAttempt(
   }
   const cleanupByokProxy = byokProxy?.close;
   const sessionProvider = byokProxy?.provider ?? poolAcquire.provider;
+=======
+
+  const poolAcquire = resolvePoolAcquire(input);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   // Mutable session holder shared with the tool bridge so onYield
   // (raised inside wrapped-tool execution) can route to the live SDK
@@ -623,7 +770,10 @@ export async function runCopilotAttempt(
     let sdkTools: SdkTool[];
     try {
       const toolBridge = await createToolBridge({
+<<<<<<< HEAD
         allowModelTools: poolAcquire.provider.mode === "byok",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         modelProvider: modelRef.provider,
         modelId: modelRef.id,
         agentId: readString(params.agentId) ?? "copilot",
@@ -648,6 +798,7 @@ export async function runCopilotAttempt(
         onYieldDetected: () => {
           yieldDetected = true;
         },
+<<<<<<< HEAD
         onToolCompleted: ({ args, error, result, startedAt, toolCallId, toolName }) =>
           runAgentHarnessAfterToolCallHook({
             toolName,
@@ -667,6 +818,12 @@ export async function runCopilotAttempt(
       sdkTools = toolBridge.sdkTools;
     } catch (error: unknown) {
       const result = createResult(input, {
+=======
+      });
+      sdkTools = toolBridge.sdkTools;
+    } catch (error: unknown) {
+      return createResult(input, {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         messagesSnapshot: messages,
         now,
         promptError: createPromptError(
@@ -677,7 +834,10 @@ export async function runCopilotAttempt(
         sdkSessionId: undefined,
         sessionIdUsed: input.sessionId,
       });
+<<<<<<< HEAD
       return finishAttempt(result);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
 
     handle = await deps.pool.acquire(poolAcquire.key, poolAcquire.options);
@@ -704,6 +864,7 @@ export async function runCopilotAttempt(
       effectiveWorkspaceDir,
       warn: (message) => console.warn(message),
     });
+<<<<<<< HEAD
     const originalDeveloperInstructions =
       createSystemMessageContent(input, workspaceBootstrap.instructions) ?? "";
     const promptBuild = isRawCopilotModelRun(input)
@@ -785,6 +946,17 @@ export async function runCopilotAttempt(
             : undefined,
         )
       : sessionConfig;
+=======
+    const sessionConfig = createSessionConfig(
+      input,
+      modelRef.id,
+      sdkTools,
+      poolAcquire.auth,
+      workspaceBootstrap.instructions,
+      effectiveWorkspaceDir,
+      effectiveCwd,
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const replayDecision = decideReplayAction({
       sdkSessionId: input.initialReplayState?.sdkSessionId,
       replayInvalid: input.initialReplayState?.replayInvalid,
@@ -831,18 +1003,23 @@ export async function runCopilotAttempt(
     sessionIdUsed = sdkSessionId ?? input.sessionId;
     if (sdkSessionId && deps.onSessionEstablished) {
       try {
+<<<<<<< HEAD
         deps.onSessionEstablished({
           compactionSessionConfig,
           sdkSessionId,
           pooledClient: handle,
           sessionConfig,
         });
+=======
+        deps.onSessionEstablished({ sdkSessionId, pooledClient: handle, sessionConfig });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       } catch {
         // never let session-tracking callbacks break attempts
       }
     }
     bridge = attachEventBridge(session, {
       onAssistantDelta: input.onAssistantDelta,
+<<<<<<< HEAD
       onAgentEvent: input.onAgentEvent,
       onNativeSubagentEvent: (event) => nativeSubagentTaskMirror?.handleEvent(event),
       onCompactionStart: async () => {
@@ -866,10 +1043,13 @@ export async function runCopilotAttempt(
           ctx: hookContext,
         });
       },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       getSdkSessionId: () => sdkSessionId,
       isAborted: () => aborted,
     });
 
+<<<<<<< HEAD
     const activeRunHandle = {
       kind: "embedded" as const,
       queueMessage: async (text: string) => {
@@ -901,23 +1081,39 @@ export async function runCopilotAttempt(
       workspaceOnly: effectiveFsWorkspaceOnly,
     });
     promptImagesCount = messageOptions.attachments?.length ?? 0;
+=======
+    const messageOptions = await createMessageOptions(input, {
+      effectiveCwd,
+      effectiveWorkspaceDir,
+      sandbox,
+      workspaceOnly: effectiveFsWorkspaceOnly,
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (abortRequested || params.abortSignal?.aborted) {
       aborted = true;
       externalAbort = true;
     } else {
       sentTurnStarted = true;
+<<<<<<< HEAD
       if (!hasNativePromptHook) {
         emitLlmInput(attemptInput.prompt);
       }
       const result = await session.sendAndWait(messageOptions, input.timeoutMs);
       await bridge.awaitDeltaChain();
       await bridge.awaitAgentEventChain();
+=======
+      const result = await session.sendAndWait(messageOptions, input.timeoutMs);
+      await bridge.awaitDeltaChain();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (!bridge.recordSendResult(result) && !aborted) {
         // SDK sendAndWait returning undefined is treated as a timeout by the
         // capability inventory. Do not call session.abort() here: OpenClaw may
         // resume the in-flight SDK session on the next attempt.
         timedOut = true;
+<<<<<<< HEAD
         timedOutDuringCompaction = bridge.isCompacting();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
       const snap = bridge.snapshot();
       if (!promptError && !timedOut && !aborted && snap.streamError) {
@@ -938,7 +1134,10 @@ export async function runCopilotAttempt(
         // in-flight SDK session on the next attempt (the SDK keeps
         // the server-side session intact across this kind of timeout).
         timedOut = true;
+<<<<<<< HEAD
         timedOutDuringCompaction = bridge?.isCompacting() === true;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         // Flush any in-flight delta promise chain so the snapshot
         // built below in `finally` includes the deltas the SDK already
         // delivered before the timer fired.
@@ -947,13 +1146,17 @@ export async function runCopilotAttempt(
         } catch {
           // delta-flush failure must not mask the timeout state
         }
+<<<<<<< HEAD
         await bridge?.awaitAgentEventChain();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       } else {
         promptError = toError(error);
       }
     }
   } finally {
     settled = true;
+<<<<<<< HEAD
     userInputBridgeRef?.cancelPending();
     if (activeRunHandleRef) {
       clearActiveEmbeddedRun(
@@ -1045,6 +1248,41 @@ export async function runCopilotAttempt(
         }
       }
     }
+=======
+    bridge?.detach();
+    params.abortSignal?.removeEventListener("abort", onAbort);
+
+    if (session) {
+      try {
+        await session.disconnect();
+      } catch (error: unknown) {
+        disconnectError = toError(error);
+        // A timeout is a higher-fidelity signal than a cleanup-time
+        // disconnect failure; don't let a stale disconnect error
+        // mask the timeout classification the replay-shim depends on.
+        if (!promptError && !timedOut) {
+          promptError = disconnectError;
+        }
+      }
+    }
+
+    if (handle) {
+      try {
+        await deps.pool.release(handle);
+      } catch (error: unknown) {
+        const releaseFailure = toError(error);
+        if (promptError) {
+          console.warn("[copilot-attempt] pool.release failed after primary error", releaseFailure);
+        } else {
+          releaseError = releaseFailure;
+        }
+      }
+    }
+  }
+
+  if (releaseError) {
+    throw releaseError;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   const snap = bridge?.snapshot();
@@ -1095,9 +1333,14 @@ export async function runCopilotAttempt(
   // extension. Identity-tagged so re-emits dedupe. Errors are
   // swallowed so a mirror failure cannot break the attempt.
   const sessionFileForMirror = readString(input.sessionFile);
+<<<<<<< HEAD
   const openClawSessionIdForMirror = readString(input.sessionId);
   const mirrorScopeSessionId = sessionIdUsed ?? openClawSessionIdForMirror;
   if (sessionFileForMirror && openClawSessionIdForMirror && messagesSnapshot.length > 0) {
+=======
+  const sessionIdForScope = sessionIdUsed ?? readString(input.sessionId);
+  if (sessionFileForMirror && messagesSnapshot.length > 0) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const taggedMessages = messagesSnapshot.map((message, index) => {
       if (
         message.role !== "user" &&
@@ -1118,16 +1361,27 @@ export async function runCopilotAttempt(
       if (hasMirrorIdentity(message)) {
         return message;
       }
+<<<<<<< HEAD
       const identityScope = sdkSessionId ?? mirrorScopeSessionId ?? "attempt";
+=======
+      const identityScope = sdkSessionId ?? sessionIdForScope ?? "attempt";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return attachCopilotMirrorIdentity(message, `${identityScope}:${message.role}:${index}`);
     });
     await dualWriteCopilotTranscriptBestEffort({
       sessionFile: sessionFileForMirror,
+<<<<<<< HEAD
       sessionId: openClawSessionIdForMirror,
       sessionKey: readString((input as { sessionKey?: unknown }).sessionKey),
       agentId: readString(input.agentId),
       messages: taggedMessages,
       idempotencyScope: mirrorScopeSessionId ? `copilot:${mirrorScopeSessionId}` : undefined,
+=======
+      sessionKey: readString((input as { sessionKey?: unknown }).sessionKey),
+      agentId: readString(input.agentId),
+      messages: taggedMessages,
+      idempotencyScope: sessionIdForScope ? `copilot:${sessionIdForScope}` : undefined,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       config: (input as { config?: unknown }).config as never,
     }).catch((mirrorError: unknown) => {
       // Defense-in-depth: the best-effort wrapper already swallows
@@ -1143,7 +1397,11 @@ export async function runCopilotAttempt(
     });
   }
 
+<<<<<<< HEAD
   const result = createResult(input, {
+=======
+  return createResult(input, {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     aborted,
     assistantTexts,
     currentAttemptAssistant: lastAssistant,
@@ -1162,11 +1420,15 @@ export async function runCopilotAttempt(
     sdkSessionId,
     sessionIdUsed,
     timedOut,
+<<<<<<< HEAD
     timedOutDuringCompaction,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     toolMetas: snap ? [...snap.toolMetas] : [],
     usage: snap?.usage,
     yieldDetected,
   });
+<<<<<<< HEAD
   if (sentTurnStarted) {
     runAgentHarnessLlmOutputHook({
       event: {
@@ -1199,6 +1461,8 @@ export async function runCopilotAttempt(
     throw releaseError;
   }
   return finishAttempt(result);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function createResult(
@@ -1218,7 +1482,10 @@ function createResult(
     sdkSessionId?: string;
     sessionIdUsed?: string;
     timedOut?: boolean;
+<<<<<<< HEAD
     timedOutDuringCompaction?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     toolMetas?: Array<{ meta?: string; toolName: string }>;
     usage?: AssistantUsageSnapshot;
     yieldDetected?: boolean;
@@ -1261,7 +1528,11 @@ function createResult(
     sessionFileUsed: readString(params.sessionFile),
     sessionIdUsed: state.sessionIdUsed ?? readString(params.sessionId) ?? "copilot-session",
     timedOut,
+<<<<<<< HEAD
     timedOutDuringCompaction: state.timedOutDuringCompaction === true,
+=======
+    timedOutDuringCompaction: false,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     toolMetas,
     yieldDetected: state.yieldDetected === true,
   };
@@ -1281,6 +1552,7 @@ function createSessionConfig(
   sdkModelId: string,
   sdkTools: SdkTool[],
   resolvedAuth: ReturnType<typeof resolveCopilotAuth>,
+<<<<<<< HEAD
   resolvedProvider: ResolvedCopilotProvider,
   systemMessageContent: string | undefined,
   effectiveWorkspaceDir: string | undefined,
@@ -1291,6 +1563,16 @@ function createSessionConfig(
   const permissionPolicy = params.permissionPolicy ?? rejectAllPolicy;
   const hooks = createHooksBridge(params.hooksConfig, hooksBridgeOptions);
   const infiniteSessions = createInfiniteSessionConfig(params.infiniteSessionConfig);
+=======
+  workspaceBootstrapInstructions: string | undefined,
+  effectiveWorkspaceDir: string | undefined,
+  effectiveCwd: string | undefined,
+): CopilotSessionConfig {
+  const permissionPolicy = params.permissionPolicy ?? rejectAllPolicy;
+  const hooks = createHooksBridge(params.hooksConfig);
+  const infiniteSessions = createInfiniteSessionConfig(params.infiniteSessionConfig);
+  const systemMessageContent = createSystemMessageContent(params, workspaceBootstrapInstructions);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return {
     model: sdkModelId,
     // Permission decisions for SDK built-in tool kinds (shell, write,
@@ -1313,6 +1595,7 @@ function createSessionConfig(
     // tool wrapper, and the SDK gate is a safety net for kinds we
     // don't surface. See permission-bridge.ts and docs/plugins/copilot.md.
     onPermissionRequest: createPermissionBridge(permissionPolicy),
+<<<<<<< HEAD
     // Registers the SDK ask_user bridge. The bridge itself owns pending
     // reply routing so generic mid-run steering still fails closed.
     onUserInputRequest,
@@ -1323,6 +1606,16 @@ function createSessionConfig(
     // Preserve the shipped native SDK hook contract. These callbacks expose
     // Copilot-specific events and decisions that generic lifecycle hooks do
     // not model.
+=======
+    // `onUserInputRequest` is intentionally NOT registered: per the SDK
+    // contract, omitting the handler hides the `ask_user` tool from the
+    // model entirely. Interactive ask_user will need a real channel/TUI
+    // prompt bridge before this runtime can expose the handler.
+    // SessionHooks: only set when the host actually supplied handlers.
+    // createHooksBridge returns undefined for an empty config so we
+    // never install an empty hooks subsystem. See hooks-bridge.ts for
+    // the back-pointer to src/agents/harness/lifecycle-hook-helpers.ts.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ...(hooks ? { hooks } : {}),
     // Session-level telemetry opt-out: only propagate when the host
     // explicitly set a boolean. undefined means "use SDK default"
@@ -1337,9 +1630,14 @@ function createSessionConfig(
     ...(infiniteSessions ? { infiniteSessions } : {}),
     reasoningEffort: params.reasoningEffort,
     tools: sdkTools,
+<<<<<<< HEAD
     // Restrict the SDK's tool catalog to the bridged tool names returned
     // by `createCopilotToolBridge` plus the built-in `ask_user` tool owned
     // by `onUserInputRequest`. Without this, the SDK
+=======
+    // Restrict the SDK's tool catalog to exactly the bridged tool names
+    // returned by `createCopilotToolBridge`. Without this, the SDK
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     // would still expose its native read/write/shell/url/mcp/memory/
     // hook tools to the model alongside our overrides, which would
     // bypass OpenClaw's wrapped-tool enforcement under any permissive
@@ -1354,7 +1652,11 @@ function createSessionConfig(
     // `@github/copilot-sdk/dist/types.d.ts:1198` (it picks
     // `availableTools`, so the spread into `resumeSession` covers
     // the resume path too).
+<<<<<<< HEAD
     availableTools: buildCopilotAvailableTools(sdkTools),
+=======
+    availableTools: sdkTools.map((tool) => tool.name),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     workingDirectory:
       effectiveCwd ?? effectiveWorkspaceDir ?? readResolvedAttemptPath(params.workspaceDir),
     // When a task runs from a sub-cwd, keep SDK-native project docs
@@ -1400,21 +1702,28 @@ function createSessionConfig(
   };
 }
 
+<<<<<<< HEAD
 function buildCopilotAvailableTools(sdkTools: SdkTool[]): string[] {
   return [...new Set([...sdkTools.map((tool) => tool.name), ...COPILOT_ASK_USER_AVAILABLE_TOOLS])];
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function createMessageOptions(
   params: AttemptParamsLike,
   context: {
     effectiveCwd: string | undefined;
     effectiveWorkspaceDir: string | undefined;
+<<<<<<< HEAD
     provider: ResolvedCopilotProvider;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sandbox: SandboxContext | null;
     workspaceOnly: boolean;
   },
 ): Promise<MessageOptions> {
   const attachments = createPromptImageAttachments(await resolvePromptImages(params, context));
+<<<<<<< HEAD
   const requestHeaders = resolveProviderRequestHeaders(context.provider);
   return {
     prompt: params.prompt,
@@ -1431,6 +1740,11 @@ function resolveProviderRequestHeaders(
 ): Record<string, string> | undefined {
   const headers = provider.provider?.headers;
   return headers && Object.keys(headers).length > 0 ? { ...headers } : undefined;
+=======
+  return attachments.length > 0
+    ? { prompt: params.prompt, attachments }
+    : { prompt: params.prompt };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function createPromptImageAttachments(
@@ -1597,6 +1911,7 @@ function readResolvedAttemptPath(value: unknown): string | undefined {
 }
 
 export function resolveModelRef(params: AttemptParamsLike): ModelRef {
+<<<<<<< HEAD
   const rawModel = (params as { runtimeModel?: unknown }).runtimeModel ?? params.model;
   if (rawModel && typeof rawModel === "object") {
     const model = rawModel as ModelRefInputObject;
@@ -1626,6 +1941,20 @@ export function resolveModelRef(params: AttemptParamsLike): ModelRef {
       contextTokens: model.contextTokens,
       contextWindow: model.contextWindow,
       maxTokens: model.maxTokens,
+=======
+  const rawModel = params.model;
+  if (rawModel && typeof rawModel === "object") {
+    return {
+      api: readString(rawModel.api),
+      id:
+        readString(rawModel.id) ??
+        readString((params as { modelId?: unknown }).modelId) ??
+        "unknown-model",
+      provider:
+        readString(rawModel.provider) ??
+        readString((params as { provider?: unknown }).provider) ??
+        "unknown-provider",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
   }
   return {
@@ -1655,6 +1984,7 @@ export function resolvePoolAcquire(params: AttemptParamsLike): {
    * setting both.
    */
   auth: ReturnType<typeof resolveCopilotAuth>;
+<<<<<<< HEAD
   provider: ResolvedCopilotProvider;
 } {
   const model = resolveModelRef(params);
@@ -1708,6 +2038,42 @@ export function resolvePoolAcquire(params: AttemptParamsLike): {
     },
     auth,
     provider,
+=======
+} {
+  const resolved = resolveCopilotAuth({
+    agentId: readString(params.agentId),
+    agentDir: readString(params.agentDir),
+    workspaceDir: readString(params.workspaceDir),
+    copilotHome: readString(params.copilotHome),
+    auth: params.auth,
+    // Contract-resolved auth (EmbeddedRunAttemptParams): the production
+    // main path for agents with a configured `github-copilot` auth
+    // profile. Falling through to env / useLoggedInUser when absent
+    // keeps the direct-CLI / dogfood paths working unchanged.
+    resolvedApiKey: readString(params.resolvedApiKey),
+    authProfileId: readString(params.authProfileId),
+    profileVersion: readString(params.profileVersion),
+  });
+
+  return {
+    key: {
+      agentId: resolved.agentId,
+      authMode: resolved.authMode,
+      ...(resolved.authMode === "gitHubToken"
+        ? {
+            authProfileId: resolved.authProfileId,
+            authProfileVersion: resolved.authProfileVersion,
+          }
+        : {}),
+      copilotHome: resolved.copilotHome,
+    },
+    options: {
+      copilotHome: resolved.copilotHome,
+      gitHubToken: resolved.authMode === "gitHubToken" ? resolved.gitHubToken : undefined,
+      useLoggedInUser: resolved.authMode === "useLoggedInUser",
+    },
+    auth: resolved,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }
 

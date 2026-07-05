@@ -134,6 +134,7 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     ).toBe("claude-cli");
   });
 
+<<<<<<< HEAD
   it("matches provider runtime policy from a provider-qualified model when the caller provider is empty", () => {
     expect(
       resolveCliRuntimeExecutionProvider({
@@ -154,6 +155,8 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     ).toBe("claude-cli");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not return a CLI runtime when the matched entry's provider is incompatible with the runtime alias", () => {
     expect(
       resolveCliRuntimeExecutionProvider({

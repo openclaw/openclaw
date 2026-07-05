@@ -5,7 +5,10 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
+<<<<<<< HEAD
 import { deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type RestoreEntry = { key: string; value: string | undefined };
 
@@ -45,9 +48,15 @@ function isTruthyEnvValue(value: string | undefined): boolean {
 function restoreEnv(entries: RestoreEntry[]): void {
   for (const { key, value } of entries) {
     if (value === undefined) {
+<<<<<<< HEAD
       deleteTestEnvValue(key);
     } else {
       setTestEnvValue(key, value);
+=======
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   }
 }
@@ -91,7 +100,11 @@ function loadProfileEnv(homeDir = os.homedir()): void {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key) || (process.env[key] ?? "") !== "") {
       return false;
     }
+<<<<<<< HEAD
     setTestEnvValue(key, entry.slice(idx + 1));
+=======
+    process.env[key] = entry.slice(idx + 1);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return true;
   };
   const countAppliedEntries = (entries: Iterable<string>) => {
@@ -194,6 +207,7 @@ function createIsolatedTestHome(restore: RestoreEntry[]): {
 } {
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-home-"));
 
+<<<<<<< HEAD
   setTestEnvValue("HOME", tempHome);
   setTestEnvValue("USERPROFILE", tempHome);
   setTestEnvValue("OPENCLAW_TEST_HOME", tempHome);
@@ -233,6 +247,47 @@ function createIsolatedTestHome(restore: RestoreEntry[]): {
   setTestEnvValue("XDG_DATA_HOME", path.join(tempHome, ".local", "share"));
   setTestEnvValue("XDG_STATE_HOME", path.join(tempHome, ".local", "state"));
   setTestEnvValue("XDG_CACHE_HOME", path.join(tempHome, ".cache"));
+=======
+  process.env.HOME = tempHome;
+  process.env.USERPROFILE = tempHome;
+  process.env.OPENCLAW_TEST_HOME = tempHome;
+  process.env.OPENCLAW_TEST_FAST = "1";
+  process.env.OPENCLAW_STRICT_FAST_REPLY_CONFIG = "1";
+  delete process.env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS;
+
+  // Ensure test runs never touch the developer's real config/state, even if they have overrides set.
+  delete process.env.OPENCLAW_CONFIG_PATH;
+  // Prefer deriving state dir from HOME so nested tests that change HOME also isolate correctly.
+  delete process.env.OPENCLAW_STATE_DIR;
+  delete process.env.OPENCLAW_AGENT_DIR;
+  // Prefer test-controlled ports over developer overrides (avoid port collisions across tests/workers).
+  delete process.env.OPENCLAW_GATEWAY_PORT;
+  delete process.env.OPENCLAW_BRIDGE_ENABLED;
+  delete process.env.OPENCLAW_BRIDGE_HOST;
+  delete process.env.OPENCLAW_BRIDGE_PORT;
+  delete process.env.OPENCLAW_CANVAS_HOST_PORT;
+  // Avoid leaking real GitHub/Copilot tokens into non-live test runs.
+  delete process.env.TELEGRAM_BOT_TOKEN;
+  delete process.env.DISCORD_BOT_TOKEN;
+  delete process.env.SLACK_BOT_TOKEN;
+  delete process.env.SLACK_APP_TOKEN;
+  delete process.env.SLACK_USER_TOKEN;
+  delete process.env.COPILOT_GITHUB_TOKEN;
+  delete process.env.GH_TOKEN;
+  delete process.env.GITHUB_TOKEN;
+  // Avoid leaking local dev tooling flags into tests (e.g. --inspect).
+  delete process.env.NODE_OPTIONS;
+
+  // Windows: prefer the default state dir so auth/profile tests match real paths.
+  if (process.platform === "win32") {
+    process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
+  }
+
+  process.env.XDG_CONFIG_HOME = path.join(tempHome, ".config");
+  process.env.XDG_DATA_HOME = path.join(tempHome, ".local", "share");
+  process.env.XDG_STATE_HOME = path.join(tempHome, ".local", "state");
+  process.env.XDG_CACHE_HOME = path.join(tempHome, ".cache");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const cleanup = () => {
     restoreEnv(restore);

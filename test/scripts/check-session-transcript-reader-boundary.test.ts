@@ -128,6 +128,7 @@ describe("session transcript reader boundary guard", () => {
       `),
     ).toEqual([]);
   });
+<<<<<<< HEAD
 
   it("flags storage-specific reader aliases in migrated files", () => {
     expect(
@@ -146,4 +147,6 @@ describe("session transcript reader boundary guard", () => {
       },
     ]);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

@@ -788,6 +788,7 @@ describe("executeSlashCommand directives", () => {
       "",
     );
 
+<<<<<<< HEAD
     expect(result.content).toBe(
       "Current fast mode: on.\nOptions: on, off, auto (60 sec), default, status.",
     );
@@ -844,6 +845,12 @@ describe("executeSlashCommand directives", () => {
     );
   });
 
+=======
+    expect(result.content).toBe("Current fast mode: on.\nOptions: status, on, off, default.");
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("patches fast mode for /fast on", async () => {
     const request = vi.fn().mockResolvedValue({ ok: true });
 
@@ -861,6 +868,7 @@ describe("executeSlashCommand directives", () => {
     });
   });
 
+<<<<<<< HEAD
   it("patches fast mode for /fast auto", async () => {
     const request = vi.fn().mockResolvedValue({ ok: true });
 
@@ -878,6 +886,8 @@ describe("executeSlashCommand directives", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("clears fast mode override for /fast default", async () => {
     const request = vi.fn(async (method: string, payload?: unknown) => {
       if (method === "sessions.patch") {
@@ -922,13 +932,17 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     );
 
     expect(result.content).toBe("Steered.");
+<<<<<<< HEAD
     expect(result.pendingCurrentRun).toBe(true);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const chatSend = requireRequestCall(request, "chat.send");
     expect(chatSend.payload.sessionKey).toBe("agent:main:main");
     expect(chatSend.payload.message).toBe("try a different approach");
     expect(chatSend.payload.deliver).toBe(false);
   });
 
+<<<<<<< HEAD
   it("does not mark the current run pending when chat.send returns terminal ok", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
@@ -984,6 +998,8 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("passes selected-agent scope when steering the selected global session", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
@@ -1245,6 +1261,7 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
     });
   });
 
+<<<<<<< HEAD
   it("does not track a pending run when sessions.steer returns terminal ok", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.steer") {
@@ -1286,6 +1303,8 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
     expect(result.trackRunId).toBeUndefined();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("passes selected-agent scope when redirecting the selected global session", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.steer") {

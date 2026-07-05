@@ -51,11 +51,14 @@ type ArtifactCollectionOptions = {
   downloadArtifactId?: string;
 };
 
+<<<<<<< HEAD
 type ArtifactBase64Payload = {
   data?: string;
   sizeBytes: number;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type ResolvedArtifactSession = {
   sessionKey: string;
   agentId?: string;
@@ -160,13 +163,18 @@ function base64FromDataUrl(value: string): string | undefined {
   if (!metadata.includes(";base64")) {
     return undefined;
   }
+<<<<<<< HEAD
   return trimmed.slice(commaIndex + 1);
+=======
+  return trimmed.slice(commaIndex + 1).replace(/\s+/g, "");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function isBase64Whitespace(value: string): boolean {
   return value === " " || value === "\n" || value === "\r" || value === "\t";
 }
 
+<<<<<<< HEAD
 function isArtifactBase64DataChar(value: string): boolean {
   const code = value.charCodeAt(0);
   return (
@@ -194,19 +202,35 @@ function readArtifactBase64Payload(
   value: string | undefined,
   opts: { includeData: boolean },
 ): ArtifactBase64Payload | undefined {
+=======
+function estimateBase64Size(value: string | undefined): number | undefined {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!value) {
     return undefined;
   }
   let encodedLength = 0;
   let padding = 0;
+<<<<<<< HEAD
   let sawPadding = false;
   let data = opts.includeData ? "" : undefined;
   for (const char of value) {
     if (isBase64Whitespace(char)) {
+=======
+  for (const char of value) {
+    if (!char || isBase64Whitespace(char)) {
+      continue;
+    }
+    encodedLength += 1;
+  }
+  for (let index = value.length - 1; index >= 0 && padding < 2; index -= 1) {
+    const char = value[index];
+    if (!char || isBase64Whitespace(char)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       continue;
     }
     if (char === "=") {
       padding += 1;
+<<<<<<< HEAD
       if (padding > 2) {
         return undefined;
       }
@@ -224,10 +248,16 @@ function readArtifactBase64Payload(
     if (data !== undefined) {
       data += normalizeArtifactBase64Char(char);
     }
+=======
+      continue;
+    }
+    break;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   if (encodedLength === 0) {
     return undefined;
   }
+<<<<<<< HEAD
   const remainder = encodedLength % 4;
   if ((padding > 0 && remainder !== 0) || remainder === 1) {
     return undefined;
@@ -239,6 +269,9 @@ function readArtifactBase64Payload(
     ...(data !== undefined ? { data } : {}),
     sizeBytes: Math.max(0, Math.floor((encodedLength * 3) / 4) - padding),
   };
+=======
+  return Math.max(0, Math.floor((encodedLength * 3) / 4) - padding);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function mediaUrlValue(value: unknown): string | undefined {
@@ -324,6 +357,7 @@ function resolveBlockDownload(
   const dataUrl = [url, sourceUrl, imageUrl, audioUrl, data, content, sourceData].find(
     (value) => typeof value === "string" && /^data:/i.test(value),
   );
+<<<<<<< HEAD
   const base64FromDetectedDataUrl = readArtifactBase64Payload(
     dataUrl ? base64FromDataUrl(dataUrl) : undefined,
     opts,
@@ -332,6 +366,12 @@ function resolveBlockDownload(
     .filter((value): value is string => typeof value === "string" && !/^data:/i.test(value))
     .map((value) => readArtifactBase64Payload(value, opts))
     .find((value): value is ArtifactBase64Payload => value !== undefined);
+=======
+  const base64FromDetectedDataUrl = dataUrl ? base64FromDataUrl(dataUrl) : undefined;
+  const directBase64 = [data, sourceData, content].find(
+    (value) => typeof value === "string" && !/^data:/i.test(value),
+  );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const base64 = base64FromDetectedDataUrl ?? directBase64;
   const remoteUrl = [url, sourceUrl, imageUrl, audioUrl].find(
     (value) => typeof value === "string" && isSafeDownloadUrl(value),
@@ -346,6 +386,7 @@ function resolveBlockDownload(
   const sizeBytes =
     typeof explicitSize === "number" && Number.isFinite(explicitSize) && explicitSize >= 0
       ? Math.floor(explicitSize)
+<<<<<<< HEAD
       : base64?.sizeBytes;
   if (base64) {
     return {
@@ -354,6 +395,11 @@ function resolveBlockDownload(
       mimeType,
       sizeBytes,
     };
+=======
+      : estimateBase64Size(base64);
+  if (base64) {
+    return { mode: "bytes", ...(opts.includeData ? { data: base64 } : {}), mimeType, sizeBytes };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   if (remoteUrl) {
     return { mode: "url", url: remoteUrl, mimeType, sizeBytes };
@@ -379,6 +425,26 @@ function isArtifactBlock(block: Record<string, unknown>): boolean {
   );
 }
 
+<<<<<<< HEAD
+=======
+export function collectArtifactsFromMessages(params: {
+  messages: unknown[];
+  sessionKey: string;
+  runId?: string;
+  taskId?: string;
+  includeDownloadData?: boolean;
+  downloadArtifactId?: string;
+}): ArtifactRecord[] {
+  const artifacts: ArtifactRecord[] = [];
+  let messageFallbackSeq = 0;
+  for (const message of params.messages) {
+    messageFallbackSeq += 1;
+    collectArtifactsFromMessage({ ...params, message, messageFallbackSeq, artifacts });
+  }
+  return artifacts;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function collectArtifactsFromMessage(params: {
   message: unknown;
   messageFallbackSeq: number;
@@ -526,9 +592,14 @@ async function loadArtifacts(
   await visitSessionMessagesAsync(
     {
       agentId: resolved.agentId ?? resolveAgentIdFromSessionKey(sessionKey),
+<<<<<<< HEAD
       sessionEntry: entry,
       sessionId,
       sessionKey,
+=======
+      sessionFile: entry?.sessionFile,
+      sessionId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       storePath,
     },
     (message, seq) => {

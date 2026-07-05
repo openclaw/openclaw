@@ -20,11 +20,14 @@ export type PluginAutoEnableCandidate =
     }
   | {
       pluginId: string;
+<<<<<<< HEAD
       kind: "speech-provider-selected";
       providerId: string;
     }
   | {
       pluginId: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       kind: "agent-harness-runtime-configured";
       runtime: string;
     }
@@ -52,10 +55,13 @@ export type PluginAutoEnableCandidate =
     }
   | {
       pluginId: string;
+<<<<<<< HEAD
       kind: "configured-plugin-repaired";
     }
   | {
       pluginId: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       kind: "setup-auto-enable";
       reason: string;
     };

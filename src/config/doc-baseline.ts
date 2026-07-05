@@ -519,6 +519,15 @@ function splitConfigDocBaselineEntries(entries: ConfigDocBaselineEntry[]): {
   return { coreEntries, channelEntries, pluginEntries };
 }
 
+<<<<<<< HEAD
+=======
+export function flattenConfigDocBaselineEntries(
+  baseline: ConfigDocBaseline,
+): ConfigDocBaselineEntry[] {
+  return [...baseline.coreEntries, ...baseline.channelEntries, ...baseline.pluginEntries];
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
   if (cachedConfigDocBaselinePromise) {
     return await cachedConfigDocBaselinePromise;
@@ -688,3 +697,10 @@ export async function writeConfigDocBaselineArtifacts(params?: {
     hashPath,
   };
 }
+<<<<<<< HEAD
+=======
+
+export function normalizeConfigDocBaselineHelpPath(pathValue: string): string {
+  return normalizeBaselinePath(pathValue);
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

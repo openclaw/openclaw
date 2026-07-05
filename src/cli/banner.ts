@@ -117,6 +117,7 @@ export function emitCliBanner(version: string, options: BannerOptions = {}) {
 export function hasEmittedCliBanner(): boolean {
   return bannerEmitted;
 }
+<<<<<<< HEAD
 
 export const testing = {
   resetBannerEmittedForTests(): void {
@@ -124,3 +125,5 @@ export const testing = {
   },
 };
 export { testing as __testing };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

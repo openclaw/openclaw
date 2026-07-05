@@ -2,7 +2,10 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { GatewayService } from "../../daemon/service.js";
+<<<<<<< HEAD
 import type { GatewayServiceControlArgs } from "../../daemon/service-types.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   defaultRuntime,
   resetLifecycleRuntimeLogs,
@@ -446,6 +449,7 @@ describe("runServiceRestart token drift", () => {
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
 
+<<<<<<< HEAD
   it("captures service restart warnings in json restart output", async () => {
     service.restart.mockImplementationOnce(async (args?: GatewayServiceControlArgs) => {
       args?.warn?.(
@@ -465,6 +469,8 @@ describe("runServiceRestart token drift", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("writes restart force and wait options into the service-manager intent", async () => {
     service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });
 
@@ -517,6 +523,7 @@ describe("runServiceRestart token drift", () => {
     expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
   });
 
+<<<<<<< HEAD
   it("captures service start warnings in json start output", async () => {
     service.restart.mockImplementationOnce(async (args?: GatewayServiceControlArgs) => {
       args?.warn?.(
@@ -541,11 +548,14 @@ describe("runServiceRestart token drift", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("repairs stale loaded services during start before reporting success", async () => {
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway"],
       environment: { OPENCLAW_SERVICE_VERSION: "2026.4.24" },
     });
+<<<<<<< HEAD
     type RepairLoadedService = NonNullable<
       Parameters<typeof runServiceStart>[0]["repairLoadedService"]
     >;
@@ -560,6 +570,14 @@ describe("runServiceRestart token drift", () => {
         loaded: true,
       };
     });
+=======
+    const repairLoadedService = vi.fn(async () => ({
+      result: "started" as const,
+      message: "Gateway service definition repaired and started.",
+      warnings: ["service was installed by OpenClaw 2026.4.24, current CLI is 2026.5.2"],
+      loaded: true,
+    }));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await runServiceStart({
       serviceNoun: "Gateway",
@@ -579,12 +597,16 @@ describe("runServiceRestart token drift", () => {
     }>();
     expect(payload.result).toBe("started");
     expect(payload.message).toBe("Gateway service definition repaired and started.");
+<<<<<<< HEAD
     expect(payload.warnings).toEqual(
       expect.arrayContaining([
         expect.stringContaining("service was installed by OpenClaw"),
         expect.stringContaining("custom behavior and will be overwritten"),
       ]),
     );
+=======
+    expect(payload.warnings?.[0]).toContain("service was installed by OpenClaw");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(payload.service?.loaded).toBe(true);
   });
 

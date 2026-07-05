@@ -152,10 +152,17 @@
             ]
           },
           "url": { "type": "string" },
+<<<<<<< HEAD
           "authToken": { "type": ["string", "object"] },
           "headers": {
             "type": "object",
             "additionalProperties": { "type": ["string", "object"] }
+=======
+          "authToken": { "type": "string" },
+          "headers": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           },
           "clearEnv": {
             "type": "array",
@@ -254,6 +261,7 @@
       }
     }
   },
+<<<<<<< HEAD
   "configContracts": {
     "secretInputs": {
       "paths": [
@@ -262,6 +270,8 @@
       ]
     }
   },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "uiHints": {
     "codexDynamicToolsLoading": {
       "label": "Dynamic Tools Loading",
@@ -390,7 +400,10 @@
     "appServer.headers": {
       "label": "Headers",
       "help": "Additional headers sent to the WebSocket app-server.",
+<<<<<<< HEAD
       "sensitive": true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "advanced": true
     },
     "appServer.clearEnv": {

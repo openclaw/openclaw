@@ -13,7 +13,10 @@ import {
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
+<<<<<<< HEAD
   readProviderJsonResponse,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { QWEN_STANDARD_GLOBAL_BASE_URL } from "./models.js";
@@ -61,6 +64,7 @@ export async function describeQwenVideo(
 
   try {
     await assertOkOrThrowHttpError(res, "Qwen video description failed");
+<<<<<<< HEAD
     // Read the success body through the shared byte-bounded JSON reader (16 MiB cap +
     // stream cancel on overflow) so a hostile or buggy endpoint cannot force the runtime
     // to buffer an unbounded body. Malformed JSON keeps the
@@ -69,6 +73,9 @@ export async function describeQwenVideo(
       res,
       "Qwen video description failed",
     );
+=======
+    const payload = (await res.json()) as OpenAiCompatibleVideoPayload;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const text = coerceOpenAiCompatibleVideoText(payload);
     if (!text) {
       throw new Error("Qwen video description response missing content");

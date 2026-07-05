@@ -18,6 +18,7 @@ function createJsonResponse(body: unknown, init?: { status?: number }) {
   });
 }
 
+<<<<<<< HEAD
 function cancelTrackedResponse(
   text: string,
   init: ResponseInit,
@@ -40,6 +41,8 @@ function cancelTrackedResponse(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function fetchCall(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>, index: number) {
   const call = fetchMock.mock.calls[index];
   if (!call) {
@@ -194,6 +197,7 @@ describe("loginOpenAICodexDeviceCode", () => {
     expect(credentials.expires).toBe(expectedExpiry);
   });
 
+<<<<<<< HEAD
   it("accepts token exchange JSON above the diagnostic preview limit", async () => {
     const accessToken = createJwt({
       exp: Math.floor(Date.now() / 1000) + 600,
@@ -232,6 +236,8 @@ describe("loginOpenAICodexDeviceCode", () => {
     expect(credentials.refresh).toBe("refresh-token-123");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("falls back when device-code intervals and token lifetimes overflow safe milliseconds", async () => {
     vi.useFakeTimers();
     try {
@@ -301,6 +307,7 @@ describe("loginOpenAICodexDeviceCode", () => {
     ).rejects.toThrow("OpenAI device code request failed: HTTP 503 down now");
   });
 
+<<<<<<< HEAD
   it("bounds user-code error bodies without using response.text()", async () => {
     const tracked = cancelTrackedResponse(`${"device code unavailable ".repeat(1024)}tail`, {
       status: 503,
@@ -323,6 +330,8 @@ describe("loginOpenAICodexDeviceCode", () => {
     expect(textSpy).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("surfaces device authorization failures with sanitized payload details", async () => {
     const fetchMock = vi
       .fn()

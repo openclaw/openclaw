@@ -3,8 +3,11 @@ import { existsSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+<<<<<<< HEAD
 import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../../../packages/terminal-core/src/safe-text.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
@@ -25,6 +28,7 @@ import {
 } from "../../../infra/update-channels.js";
 import { resolveConfiguredChannelPresencePolicy } from "../../../plugins/channel-plugin-ids.js";
 import { buildClawHubPluginInstallRecordFields } from "../../../plugins/clawhub-install-records.js";
+<<<<<<< HEAD
 import {
   CLAWHUB_INSTALL_ERROR_CODE,
   installPluginFromClawHub,
@@ -32,6 +36,10 @@ import {
 } from "../../../plugins/clawhub.js";
 import { collectConfiguredMemoryEmbeddingProviderIds } from "../../../plugins/gateway-startup-plugin-ids.js";
 import { collectConfiguredSpeechProviderIds } from "../../../plugins/gateway-startup-speech-providers.js";
+=======
+import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../../../plugins/clawhub.js";
+import { collectConfiguredMemoryEmbeddingProviderIds } from "../../../plugins/gateway-startup-plugin-ids.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
@@ -55,14 +63,19 @@ import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract
 import type { PluginPackageInstall } from "../../../plugins/manifest.js";
 import {
   listOfficialExternalPluginCatalogEntries,
+<<<<<<< HEAD
   resolveOfficialExternalProviderContractPluginIds,
   resolveOfficialExternalWebProviderContractPluginIdsForEnv,
+=======
+  getOfficialExternalPluginCatalogManifest,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
   resolveOfficialExternalPluginLabel,
 } from "../../../plugins/official-external-plugin-catalog.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
+<<<<<<< HEAD
 import {
   isClawHubTrustSkippedOutcome,
   updateNpmInstalledPlugins,
@@ -74,6 +87,12 @@ import {
 import { resolveUserPath } from "../../../utils.js";
 import { VERSION } from "../../../version.js";
 import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
+=======
+import { updateNpmInstalledPlugins } from "../../../plugins/update.js";
+import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search-install-catalog.js";
+import { resolveUserPath } from "../../../utils.js";
+import { VERSION } from "../../../version.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   collectConfiguredRuntimePluginIds,
   CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES,
@@ -126,6 +145,7 @@ function shouldFallbackClawHubToNpm(params: {
   );
 }
 
+<<<<<<< HEAD
 function appendClawHubRiskAcknowledgementGuidance(params: {
   message: string;
   spec: string | undefined;
@@ -170,6 +190,8 @@ function recordClawHubInstallSpec(record: PluginInstallRecord | undefined): stri
   return undefined;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveCandidateClawHubSpec(install: PluginPackageInstall): string | undefined {
   const explicit = install.clawhubSpec?.trim();
   if (explicit) {
@@ -202,16 +224,36 @@ function addConfiguredMemoryEmbeddingProviderPluginIds(
   if (configuredProviderIds.size === 0) {
     return;
   }
+<<<<<<< HEAD
   for (const contract of ["embeddingProviders", "memoryEmbeddingProviders"] as const) {
     for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
       contract,
       providerIds: configuredProviderIds,
     })) {
+=======
+  for (const entry of listOfficialExternalPluginCatalogEntries()) {
+    const manifest = getOfficialExternalPluginCatalogManifest(entry);
+    const pluginId = resolveOfficialExternalPluginId(entry);
+    if (!pluginId) {
+      continue;
+    }
+    const ownedProviderIds = [
+      ...(manifest?.contracts?.embeddingProviders ?? []),
+      ...(manifest?.contracts?.memoryEmbeddingProviders ?? []),
+    ];
+    if (
+      ownedProviderIds.some((providerId) => {
+        const normalized = normalizeOptionalLowercaseString(providerId);
+        return normalized ? configuredProviderIds.has(normalized) : false;
+      })
+    ) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ids.add(pluginId);
     }
   }
 }
 
+<<<<<<< HEAD
 function addConfiguredSpeechProviderPluginIds(ids: Set<string>, cfg: OpenClawConfig): void {
   for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
     contract: "speechProviders",
@@ -255,6 +297,9 @@ function addEnvWebFetchProviderPluginIds(
 }
 
 function collectConfiguredPluginIds(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): Set<string> {
+=======
+function collectConfiguredPluginIds(cfg: OpenClawConfig): Set<string> {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const ids = new Set<string>();
   const plugins = asObjectRecord(cfg.plugins);
   if (plugins?.enabled === false) {
@@ -274,6 +319,7 @@ function collectConfiguredPluginIds(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv
       ids.add(installEntry.pluginId);
     }
   }
+<<<<<<< HEAD
   if (cfg.tools?.web?.search?.enabled !== false) {
     // Env-only web providers are valid auto-detect inputs and need their manifest installed first.
     for (const entry of resolveWebSearchInstallCatalogEntriesForEnv(env ?? process.env)) {
@@ -288,6 +334,10 @@ function collectConfiguredPluginIds(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv
   addConfiguredSpeechProviderPluginIds(ids, cfg);
   addConfiguredWebFetchProviderPluginIds(ids, cfg);
   addEnvWebFetchProviderPluginIds(ids, cfg, env);
+=======
+  addConfiguredAgentRuntimePluginIds(ids, cfg);
+  addConfiguredMemoryEmbeddingProviderPluginIds(ids, cfg);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return ids;
 }
 
@@ -1011,19 +1061,28 @@ async function installCandidate(params: {
   mode?: "install" | "update";
   preferNpm?: boolean;
   repairReason?: InstallCandidateRepairReason;
+<<<<<<< HEAD
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
 }): Promise<{
   records: Record<string, PluginInstallRecord>;
   changes: string[];
   notices: string[];
+=======
+}): Promise<{
+  records: Record<string, PluginInstallRecord>;
+  changes: string[];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   warnings: string[];
   failedPluginId?: string;
 }> {
   const { candidate } = params;
   const extensionsDir = resolveDefaultPluginExtensionsDir(params.env);
   const changes: string[] = [];
+<<<<<<< HEAD
   const warnings: string[] = [];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const clawhubSpecs = candidate.clawhubSpec
     ? resolveClawHubInstallSpecsForUpdateChannel({
         spec: candidate.clawhubSpec,
@@ -1073,19 +1132,25 @@ async function installCandidate(params: {
     !(params.preferNpm && npmInstallSpec) &&
     candidate.defaultChoice !== "npm";
   if (shouldTryClawHub) {
+<<<<<<< HEAD
     const clawhubInstallSpecLabel = sanitizeTerminalText(clawhubInstallSpec);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const clawhubResult = await installPluginFromClawHub({
       spec: clawhubInstallSpec,
       extensionsDir,
       env: params.env,
       expectedPluginId: candidate.pluginId,
       mode: params.mode === "update" || existingClawHubPackagePath ? "update" : "install",
+<<<<<<< HEAD
       logger: {
         terminalLinks: false,
         warn: (message) => warnings.push(stripAnsi(message)),
       },
       ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
       ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     if (clawhubResult.ok) {
       const pluginId = clawhubResult.pluginId;
@@ -1102,11 +1167,18 @@ async function installCandidate(params: {
         changes: [
           formatInstalledConfiguredPluginChange({
             pluginId,
+<<<<<<< HEAD
             installSpec: clawhubInstallSpecLabel,
             repairReason: params.repairReason,
           }),
         ],
         notices: warnings,
+=======
+            installSpec: clawhubInstallSpec,
+            repairReason: params.repairReason,
+          }),
+        ],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         warnings: [],
       };
     }
@@ -1114,6 +1186,7 @@ async function installCandidate(params: {
       !npmInstallSpec ||
       !shouldFallbackClawHubToNpm({ result: clawhubResult, npmSpec: npmInstallSpec })
     ) {
+<<<<<<< HEAD
       const failure = `Failed to install missing configured plugin "${candidate.pluginId}" from ${clawhubInstallSpecLabel}: ${clawhubResult.error}`;
       return {
         records: params.records,
@@ -1125,22 +1198,38 @@ async function installCandidate(params: {
             message: failure,
             spec: clawhubInstallSpec,
           }),
+=======
+      return {
+        records: params.records,
+        changes: [],
+        warnings: [
+          `Failed to install missing configured plugin "${candidate.pluginId}" from ${clawhubInstallSpec}: ${clawhubResult.error}`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         ],
         failedPluginId: candidate.pluginId,
       };
     }
+<<<<<<< HEAD
     const npmInstallSpecLabel = sanitizeTerminalText(npmInstallSpec);
     changes.push(
       `ClawHub ${clawhubInstallSpecLabel} unavailable for "${candidate.pluginId}"; falling back to npm ${npmInstallSpecLabel}.`,
+=======
+    changes.push(
+      `ClawHub ${clawhubInstallSpec} unavailable for "${candidate.pluginId}"; falling back to npm ${npmInstallSpec}.`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
   }
   if (!npmInstallSpec) {
     return {
       records: params.records,
       changes: [],
+<<<<<<< HEAD
       notices: [],
       warnings: [
         ...warnings,
+=======
+      warnings: [
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         `Failed to install missing configured plugin "${candidate.pluginId}": missing npm spec.`,
       ],
       failedPluginId: candidate.pluginId,
@@ -1175,9 +1264,13 @@ async function installCandidate(params: {
     return {
       records: params.records,
       changes: [],
+<<<<<<< HEAD
       notices: [],
       warnings: [
         ...warnings,
+=======
+      warnings: [
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         `Failed to install missing configured plugin "${candidate.pluginId}" from ${npmInstallSpec}: ${result.error}`,
       ],
       failedPluginId: candidate.pluginId,
@@ -1208,7 +1301,10 @@ async function installCandidate(params: {
         repairReason: params.repairReason,
       }),
     ],
+<<<<<<< HEAD
     notices: [],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     warnings: [],
   };
 }
@@ -1276,7 +1372,10 @@ async function adoptExistingNpmPackage(params: {
 }): Promise<{
   records: Record<string, PluginInstallRecord>;
   changes: string[];
+<<<<<<< HEAD
   notices: string[];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   warnings: string[];
 }> {
   const npmName = parseRegistryNpmSpec(params.npmInstallSpec)?.name;
@@ -1308,7 +1407,10 @@ async function adoptExistingNpmPackage(params: {
     changes: [
       `Repaired missing configured plugin "${params.candidate.pluginId}" from existing npm payload ${params.npmInstallSpec}.`,
     ],
+<<<<<<< HEAD
     notices: [],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     warnings: [],
   };
 }
@@ -1317,11 +1419,15 @@ export type RepairMissingPluginInstallsResult = {
   /** User-facing repair notes for installed or recovered plugin records. */
   changes: string[];
   /** User-facing warnings for failed or skipped plugin install repairs. */
+<<<<<<< HEAD
   /** User-facing notices from successful repairs that still need operator review. */
   notices?: string[];
   warnings: string[];
   /** Plugin ids successfully repaired from current configuration. */
   repairedPluginIds?: string[];
+=======
+  warnings: string[];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /** User-facing details for repairs explicitly deferred until post-core convergence. */
   deferredRepairDetails?: string[];
   /** Plugin ids whose install repair failed and should be preserved from cleanup passes. */
@@ -1342,8 +1448,11 @@ export type RepairMissingPluginInstallsResult = {
 export async function repairMissingConfiguredPluginInstalls(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+<<<<<<< HEAD
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /**
    * Optional pre-seeded records. When provided, this map is used instead of
    * the disk-loaded install-record snapshot. Pass the in-memory records
@@ -1356,11 +1465,17 @@ export async function repairMissingConfiguredPluginInstalls(params: {
   return repairMissingPluginInstalls({
     cfg: params.cfg,
     env: params.env,
+<<<<<<< HEAD
     pluginIds: collectConfiguredPluginIds(params.cfg, params.env),
     channelIds: collectConfiguredChannelIds(params.cfg, params.env),
     blockedPluginIds: collectBlockedPluginIds(params.cfg),
     ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
     ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
+=======
+    pluginIds: collectConfiguredPluginIds(params.cfg),
+    channelIds: collectConfiguredChannelIds(params.cfg, params.env),
+    blockedPluginIds: collectBlockedPluginIds(params.cfg),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
   });
 }
@@ -1373,8 +1488,11 @@ export async function repairMissingPluginInstallsForIds(params: {
   blockedPluginIds?: Iterable<string>;
   env?: NodeJS.ProcessEnv;
   baselineRecords?: Record<string, PluginInstallRecord>;
+<<<<<<< HEAD
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }): Promise<RepairMissingPluginInstallsResult> {
   return repairMissingPluginInstalls({
     cfg: params.cfg,
@@ -1392,8 +1510,11 @@ export async function repairMissingPluginInstallsForIds(params: {
         .map((pluginId) => pluginId.trim())
         .filter((pluginId) => pluginId),
     ),
+<<<<<<< HEAD
     ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
     ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
   });
 }
@@ -1405,8 +1526,11 @@ async function repairMissingPluginInstalls(params: {
   blockedPluginIds?: ReadonlySet<string>;
   env?: NodeJS.ProcessEnv;
   baselineRecords?: Record<string, PluginInstallRecord>;
+<<<<<<< HEAD
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }): Promise<RepairMissingPluginInstallsResult> {
   const env = params.env ?? process.env;
   const snapshot = loadManifestMetadataSnapshot({
@@ -1480,11 +1604,17 @@ async function repairMissingPluginInstalls(params: {
   });
   const officialReplacementPluginIds = new Set(officialReplacementInstallCandidates.keys());
   const changes: string[] = [];
+<<<<<<< HEAD
   const notices: string[] = [];
   const warnings: string[] = [];
   const deferredRepairDetails: string[] = [];
   const failedPluginIds = new Set<string>();
   const repairedPluginIds = new Set<string>();
+=======
+  const warnings: string[] = [];
+  const deferredRepairDetails: string[] = [];
+  const failedPluginIds = new Set<string>();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const deferredPluginIds = new Set<string>();
   const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env);
   let nextRecords = records;
@@ -1559,6 +1689,7 @@ async function repairMissingPluginInstalls(params: {
       pluginIds: missingRecordedPluginIds,
       updateChannel,
       logger: {
+<<<<<<< HEAD
         terminalLinks: false,
         warn: (message) => {
           if (isClawHubReviewNotice(message)) {
@@ -1575,6 +1706,14 @@ async function repairMissingPluginInstalls(params: {
     for (const outcome of updateResult.outcomes) {
       if (outcome.status === "updated" || outcome.status === "unchanged") {
         repairedPluginIds.add(outcome.pluginId);
+=======
+        warn: (message) => warnings.push(message),
+        error: (message) => warnings.push(message),
+      },
+    });
+    for (const outcome of updateResult.outcomes) {
+      if (outcome.status === "updated" || outcome.status === "unchanged") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         changes.push(
           installedPluginIdsWithStaleVersionBoundRuntimePackages.has(outcome.pluginId)
             ? `Refreshed stale configured plugin "${outcome.pluginId}".`
@@ -1585,6 +1724,7 @@ async function repairMissingPluginInstalls(params: {
       } else if (outcome.status === "error") {
         warnings.push(outcome.message);
         failedPluginIds.add(outcome.pluginId);
+<<<<<<< HEAD
       } else if (isActionableClawHubSkippedOutcome(outcome)) {
         warnings.push(
           appendClawHubRiskAcknowledgementGuidance({
@@ -1593,6 +1733,8 @@ async function repairMissingPluginInstalls(params: {
           }),
         );
         failedPluginIds.add(outcome.pluginId);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     }
     nextRecords = updateResult.config.plugins?.installs ?? nextRecords;
@@ -1671,8 +1813,11 @@ async function repairMissingPluginInstalls(params: {
       ...(installedPluginIdsWithStaleVersionBoundRuntimePackages.has(candidate.pluginId)
         ? { repairReason: "stale-version-bound-runtime" as const }
         : {}),
+<<<<<<< HEAD
       ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
       ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     if (shouldReplaceBrokenOfficialInstall) {
       const installedRecord = installed.records[candidate.pluginId];
@@ -1694,11 +1839,15 @@ async function repairMissingPluginInstalls(params: {
     }
     nextRecords = installed.records;
     changes.push(...installed.changes);
+<<<<<<< HEAD
     notices.push(...installed.notices);
     warnings.push(...installed.warnings);
     if (!installed.failedPluginId && installed.records[candidate.pluginId]) {
       repairedPluginIds.add(candidate.pluginId);
     }
+=======
+    warnings.push(...installed.warnings);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (installed.failedPluginId) {
       failedPluginIds.add(installed.failedPluginId);
     }
@@ -1717,6 +1866,7 @@ async function repairMissingPluginInstalls(params: {
   return {
     changes,
     warnings,
+<<<<<<< HEAD
     ...(notices.length > 0 ? { notices } : {}),
     ...(deferredRepairDetails.length > 0 ? { deferredRepairDetails } : {}),
     ...(repairedPluginIds.size > 0
@@ -1726,6 +1876,9 @@ async function repairMissingPluginInstalls(params: {
           ),
         }
       : {}),
+=======
+    ...(deferredRepairDetails.length > 0 ? { deferredRepairDetails } : {}),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ...(failedPluginIds.size > 0
       ? {
           failedPluginIds: [...failedPluginIds].toSorted((left, right) =>

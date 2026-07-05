@@ -15,6 +15,7 @@ function jsonlBytes(value: string): number {
   return jsonlEncoder.encode(value).byteLength;
 }
 
+<<<<<<< HEAD
 function cancelTrackedResponse(
   text: string,
   init: ResponseInit,
@@ -37,6 +38,8 @@ function cancelTrackedResponse(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function fetchInputUrl(input: RequestInfo | URL): string {
   if (typeof input === "string") {
     return input;
@@ -265,6 +268,7 @@ describe("OpenAI embedding batch output", () => {
       ["3", [4]],
     ]);
   });
+<<<<<<< HEAD
 
   it("bounds batch resource error bodies without using response.text()", async () => {
     const tracked = cancelTrackedResponse(`${"batch status unavailable ".repeat(1024)}tail`, {
@@ -317,4 +321,6 @@ describe("OpenAI embedding batch output", () => {
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

@@ -454,7 +454,10 @@ describe("sessions view", () => {
 
     const keyCell = container.querySelector(".session-key-cell");
     expect(keyCell?.textContent?.trim()).toBe("📊 Data Expert (dingtalk)");
+<<<<<<< HEAD
     // Identity rows keep hover = visible label (friendlyKeyLabel), fallback rows show raw key
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(keyCell?.getAttribute("title")).toBe("📊 Data Expert (dingtalk)");
   });
 
@@ -829,7 +832,11 @@ describe("sessions view", () => {
       "Session details",
     );
     expect(details?.querySelector(".session-details-panel__title")?.textContent?.trim()).toBe(
+<<<<<<< HEAD
       "Main Session",
+=======
+      "agent:main:main",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
     expect(
       Array.from(details?.querySelectorAll(".session-details-panel__badges > *") ?? []).map(

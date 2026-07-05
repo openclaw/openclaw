@@ -49,6 +49,7 @@ export function isAzureResponsesTextDeltaEvent(event: {
 }): event is AzureResponsesTextDeltaEvent {
   return isAzureResponsesTextDeltaEventType(event.type) && typeof event.delta === "string";
 }
+<<<<<<< HEAD
 
 export type ResponsesMessageSnapshotCollapse = { kind: "extend"; text: string } | { kind: "keep" };
 
@@ -76,3 +77,5 @@ export function resolveResponsesMessageSnapshotCollapse(params: {
   }
   return { kind: "keep" };
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

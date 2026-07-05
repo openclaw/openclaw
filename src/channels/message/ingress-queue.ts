@@ -142,10 +142,13 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
     id: string,
     options?: { ownerId?: string },
   ): Promise<ChannelIngressQueueClaim<TPayload, TMetadata> | null>;
+<<<<<<< HEAD
   refreshClaim?(
     claim: ChannelIngressQueueClaimRef,
     options?: { refreshedAt?: number },
   ): Promise<boolean>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   complete(
     idOrClaim: string | ChannelIngressQueueClaimRef,
     options?: { metadata?: TCompletedMetadata; completedAt?: number },
@@ -190,6 +193,7 @@ function normalizePart(value: string | undefined, fallback: string): string {
   return normalized ? normalized : fallback;
 }
 
+<<<<<<< HEAD
 // Keep inherited lookups for HOME/etc. without enumerating large Kubernetes service envs.
 export function createStateDirEnv(
   stateDir: string,
@@ -203,6 +207,11 @@ export function createStateDirEnv(
 function openStateDatabase(stateDir?: string) {
   return openOpenClawStateDatabase({
     env: stateDir ? createStateDirEnv(stateDir) : process.env,
+=======
+function openStateDatabase(stateDir?: string) {
+  return openOpenClawStateDatabase({
+    env: stateDir ? { ...process.env, OPENCLAW_STATE_DIR: stateDir } : process.env,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 }
 
@@ -444,6 +453,29 @@ export function createChannelIngressQueue<
     return rows.map((row) => claimedRecord<TPayload, TMetadata>(row));
   };
 
+<<<<<<< HEAD
+=======
+  const recoverStaleClaims: ChannelIngressQueue<
+    TPayload,
+    TMetadata,
+    TCompletedMetadata
+  >["recoverStaleClaims"] = async (recoverOptions) => {
+    const staleMs = Math.max(0, Math.floor(recoverOptions?.staleMs ?? 0));
+    const cutoff = (recoverOptions?.now ?? now()) - staleMs;
+    const claims = (await listClaims()).filter((claim) => claim.claim.claimedAt <= cutoff);
+    let recovered = 0;
+    for (const claim of claims) {
+      if (recoverOptions?.shouldRecover && !(await recoverOptions.shouldRecover(claim))) {
+        continue;
+      }
+      if (await release(claim, { releasedAt: recoverOptions?.now ?? now() })) {
+        recovered += 1;
+      }
+    }
+    return recovered;
+  };
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const claimNext: ChannelIngressQueue<
     TPayload,
     TMetadata,
@@ -545,6 +577,7 @@ export function createChannelIngressQueue<
     );
   };
 
+<<<<<<< HEAD
   const refreshClaim: NonNullable<
     ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>["refreshClaim"]
   > = async (claimRef, refreshOptions) => {
@@ -628,6 +661,8 @@ export function createChannelIngressQueue<
     return recovered;
   };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const complete: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>["complete"] = async (
     idOrClaim,
     completeOptions,
@@ -912,7 +947,10 @@ export function createChannelIngressQueue<
     listClaims,
     claimNext,
     claim,
+<<<<<<< HEAD
     refreshClaim,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     complete,
     release,
     fail,

@@ -14,7 +14,10 @@ export {
   runAgentPrompt,
   runQaCli,
   startAgentRun,
+<<<<<<< HEAD
   waitForAgentHistoryReply,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   waitForAgentRun,
 } from "./suite-runtime-agent-process.js";
 export {

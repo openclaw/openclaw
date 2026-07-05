@@ -12,7 +12,11 @@ const {
   formatDoctorNonInteractiveHintMock,
   isRestartEnabledMock,
   callGatewayToolMock,
+<<<<<<< HEAD
   clearRestartSentinelMock,
+=======
+  removeRestartSentinelFileMock,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   scheduleGatewaySigusr1RestartMock,
   writeRestartSentinelMock,
 } = vi.hoisted(() => ({
@@ -30,8 +34,13 @@ const {
     () =>
       "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
   ),
+<<<<<<< HEAD
   writeRestartSentinelMock: vi.fn(async (_payload: RestartSentinelPayload) => undefined),
   clearRestartSentinelMock: vi.fn(async () => undefined),
+=======
+  writeRestartSentinelMock: vi.fn(async (_payload: RestartSentinelPayload) => "/tmp/restart"),
+  removeRestartSentinelFileMock: vi.fn(async (_path: string | null | undefined) => undefined),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   scheduleGatewaySigusr1RestartMock: vi.fn((_opts?: ScheduleGatewayRestartArgs) => ({
     ok: true,
     pid: 123,
@@ -59,7 +68,11 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
   return {
     ...actual,
     formatDoctorNonInteractiveHint: formatDoctorNonInteractiveHintMock,
+<<<<<<< HEAD
     clearRestartSentinel: clearRestartSentinelMock,
+=======
+    removeRestartSentinelFile: removeRestartSentinelFileMock,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     writeRestartSentinel: writeRestartSentinelMock,
   };
 });
@@ -115,8 +128,13 @@ describe("gateway tool restart continuation", () => {
       "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
     );
     writeRestartSentinelMock.mockReset();
+<<<<<<< HEAD
     writeRestartSentinelMock.mockResolvedValue(undefined);
     clearRestartSentinelMock.mockClear();
+=======
+    writeRestartSentinelMock.mockResolvedValue("/tmp/restart");
+    removeRestartSentinelFileMock.mockClear();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     scheduleGatewaySigusr1RestartMock.mockReset();
     scheduleGatewaySigusr1RestartMock.mockReturnValue({
       ok: true,
@@ -354,7 +372,11 @@ describe("gateway tool restart continuation", () => {
     await scheduledArgs.emitHooks?.beforeEmit?.();
     await scheduledArgs.emitHooks?.afterEmitRejected?.();
 
+<<<<<<< HEAD
     expect(clearRestartSentinelMock).toHaveBeenCalledOnce();
+=======
+    expect(removeRestartSentinelFileMock).toHaveBeenCalledWith("/tmp/restart");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("uses the runtime session for update.run continuation routing (#86742)", async () => {

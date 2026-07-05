@@ -60,6 +60,20 @@ export function isLoopbackAddress(ip: string | undefined): boolean {
   return isLoopbackIpAddress(ip);
 }
 
+<<<<<<< HEAD
+=======
+export function isLocalInterfaceAddress(
+  ip: string | undefined,
+  snapshot?: NetworkInterfacesSnapshot,
+): boolean {
+  return (
+    (arguments.length >= 2
+      ? resolveLocalInterfaceAddressMatch(ip, snapshot)
+      : resolveLocalInterfaceAddressMatch(ip)) === true
+  );
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function resolveLocalInterfaceAddressMatch(
   ip: string | undefined,
   snapshot?: NetworkInterfacesSnapshot,

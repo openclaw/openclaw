@@ -6,14 +6,20 @@
  */
 
 import { html, nothing, type TemplateResult } from "lit";
+<<<<<<< HEAD
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
 import type { BorderRadiusStop, TextScaleStop } from "../storage.ts";
 import { normalizeOptionalString } from "../string-coerce.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
+<<<<<<< HEAD
 import type { FastMode } from "../types.ts";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   normalizeLocalUserIdentity,
   resolveLocalUserAvatarText,
@@ -58,10 +64,17 @@ export type QuickSettingsProps = {
   // Model & Thinking
   currentModel: string;
   thinkingLevel: string;
+<<<<<<< HEAD
   fastMode: FastMode | undefined;
   onModelChange?: () => void;
   onThinkingChange?: (level: string) => void;
   onFastModeChange?: (mode: FastMode) => void;
+=======
+  fastMode: boolean;
+  onModelChange?: () => void;
+  onThinkingChange?: (level: string) => void;
+  onFastModeToggle?: () => void;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   // Channels
   channels: QuickSettingsChannel[];
@@ -408,12 +421,16 @@ function renderCardHeader(icon: TemplateResult, title: string, action?: Template
   `;
 }
 
+<<<<<<< HEAD
 function fastModeOptionValue(value: "auto" | "on" | "off"): FastMode {
   return value === "auto" ? "auto" : value === "on";
 }
 
 function renderModelCard(props: QuickSettingsProps) {
   const fastMode = formatFastModeValue(props.fastMode);
+=======
+function renderModelCard(props: QuickSettingsProps) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return html`
     <div class="qs-card qs-card--model">
       ${renderCardHeader(icons.brain, "Model & Thinking")}
@@ -444,6 +461,7 @@ function renderModelCard(props: QuickSettingsProps) {
         </div>
         <div class="qs-row">
           <span class="qs-row__label">Fast mode</span>
+<<<<<<< HEAD
           <div class="qs-segmented">
             ${(
               [
@@ -465,6 +483,15 @@ function renderModelCard(props: QuickSettingsProps) {
               `,
             )}
           </div>
+=======
+          <label class="qs-toggle">
+            <input type="checkbox" .checked=${props.fastMode} @change=${props.onFastModeToggle} />
+            <span class="qs-toggle__track"></span>
+            <span class="qs-toggle__hint muted"
+              >${props.fastMode ? "On — cheaper, less capable" : "Off"}</span
+            >
+          </label>
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         </div>
       </div>
     </div>

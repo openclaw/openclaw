@@ -507,9 +507,13 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("If a skill's <version> differs from a previous turn");
     expect(prompt).toContain("If several apply, choose the most specific.");
     expect(prompt).toContain("Docs: /tmp/openclaw/docs");
+<<<<<<< HEAD
     expect(prompt).toContain(
       "Docs are authoritative for OpenClaw self-knowledge: before understanding how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use `Read` or search local docs first; treat AGENTS.md/project context, workspace/profile/memory notes, and `memory_search` as instruction context or user memory, not OpenClaw design/implementation knowledge.",
     );
+=======
+    expect(prompt).toContain("OpenClaw behavior/config/architecture: read local docs first.");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("includes docs guidance when docsPath is provided", () => {
@@ -522,6 +526,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## Documentation");
     expect(prompt).toContain("Docs: /tmp/openclaw/docs");
     expect(prompt).toContain("Source: /tmp/openclaw");
+<<<<<<< HEAD
     expect(prompt).toContain(
       "Docs are authoritative for OpenClaw self-knowledge: before understanding how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use `read` or search local docs first; treat AGENTS.md/project context, workspace/profile/memory notes, and `memory_search` as instruction context or user memory, not OpenClaw design/implementation knowledge.",
     );
@@ -546,6 +551,10 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Self-knowledge rule: for questions about");
     expect(prompt).not.toContain("Treat questions about daily notes");
     expect(prompt).not.toContain("never answer from AGENTS.md/project context");
+=======
+    expect(prompt).toContain("OpenClaw behavior/config/architecture: read local docs first.");
+    expect(prompt).toContain("If docs are stale/incomplete, inspect local source.");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("falls back to public docs and GitHub source guidance when local docs are unavailable", () => {
@@ -555,10 +564,14 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("Docs: https://docs.openclaw.ai");
     expect(prompt).toContain("Source: https://github.com/openclaw/openclaw");
+<<<<<<< HEAD
     expect(prompt).toContain(
       "Docs are authoritative for OpenClaw self-knowledge: before understanding how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use the docs mirror first when web tooling is available; treat AGENTS.md/project context, workspace/profile/memory notes, and `memory_search` as instruction context or user memory, not OpenClaw design/implementation knowledge.",
     );
     expect(prompt).toContain("If docs are silent/stale, say so and inspect GitHub source.");
+=======
+    expect(prompt).toContain("If docs are stale/incomplete, inspect GitHub source.");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("includes workspace notes when provided", () => {

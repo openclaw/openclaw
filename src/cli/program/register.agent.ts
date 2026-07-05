@@ -5,6 +5,10 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { hasExplicitOptions } from "../command-options.js";
 import { formatHelpExamples } from "../help-format.js";
 import { collectOption } from "./helpers.js";
+<<<<<<< HEAD
+=======
+import { registerAgentTurnCommand } from "./register.agent-turn.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type AgentsAddModule = typeof import("../../commands/agents.commands.add.js");
 type AgentsBindModule = typeof import("../../commands/agents.commands.bind.js");
@@ -70,6 +74,18 @@ async function runAgentsCommandAction(
   });
 }
 
+<<<<<<< HEAD
+=======
+/** Register single-turn `agent` plus multi-agent management commands. */
+export function registerAgentCommands(
+  program: Command,
+  args: { agentChannelOptions: string },
+): void {
+  registerAgentTurnCommand(program, args);
+  registerAgentsCommands(program);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Register `agents` management subcommands for config, bindings, identity, and deletion. */
 export function registerAgentsCommands(program: Command): void {
   const agents = program

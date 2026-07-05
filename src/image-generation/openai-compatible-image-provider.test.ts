@@ -51,6 +51,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
 }));
 
+<<<<<<< HEAD
 vi.mock("openclaw/plugin-sdk/provider-http", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-http")>(
     "openclaw/plugin-sdk/provider-http",
@@ -73,6 +74,17 @@ function jsonResponse(payload: unknown): Response {
     headers: { "Content-Type": "application/json" },
   });
 }
+=======
+vi.mock("openclaw/plugin-sdk/provider-http", () => ({
+  assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+  createProviderOperationDeadline: createProviderOperationDeadlineMock,
+  postJsonRequest: postJsonRequestMock,
+  postMultipartRequest: postMultipartRequestMock,
+  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+  resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
+  sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
+}));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function requireFirstRequestHeaders(mock: ReturnType<typeof vi.fn>): Headers {
   const [call] = mock.mock.calls;
@@ -151,8 +163,13 @@ function mockGeneratedResponse() {
       },
     ],
   };
+<<<<<<< HEAD
   postJsonRequestMock.mockResolvedValue({ response: jsonResponse(payload), release });
   postMultipartRequestMock.mockResolvedValue({ response: jsonResponse(payload), release });
+=======
+  postJsonRequestMock.mockResolvedValue({ response: { json: async () => payload }, release });
+  postMultipartRequestMock.mockResolvedValue({ response: { json: async () => payload }, release });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return release;
 }
 
@@ -239,6 +256,7 @@ describe("OpenAI-compatible image provider helper", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+<<<<<<< HEAD
   it("accepts valid multi-image JSON above the generic provider JSON cap", async () => {
     const imageBytes = Buffer.alloc(6 * 1024 * 1024, 1);
     postJsonRequestMock.mockResolvedValue({
@@ -307,6 +325,8 @@ describe("OpenAI-compatible image provider helper", () => {
     ).rejects.toThrow("sample.image-generation: JSON response exceeds");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("posts multipart edit requests without forwarding a content-type header", async () => {
     mockGeneratedResponse();
     const provider = createProvider();
@@ -331,7 +351,11 @@ describe("OpenAI-compatible image provider helper", () => {
 
   it("honors default operation timeouts and empty-response errors", async () => {
     postJsonRequestMock.mockResolvedValue({
+<<<<<<< HEAD
       response: jsonResponse({ data: [] }),
+=======
+      response: { json: async () => ({ data: [] }) },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       release: vi.fn(async () => {}),
     });
     const provider = createProvider({
@@ -363,7 +387,11 @@ describe("OpenAI-compatible image provider helper", () => {
 
   it("wraps malformed successful image responses with provider-owned errors", async () => {
     postJsonRequestMock.mockResolvedValue({
+<<<<<<< HEAD
       response: jsonResponse({ data: { b64_json: "not-an-array" } }),
+=======
+      response: { json: async () => ({ data: { b64_json: "not-an-array" } }) },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       release: vi.fn(async () => {}),
     });
     const provider = createProvider();

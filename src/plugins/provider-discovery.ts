@@ -104,6 +104,7 @@ export function groupPluginDiscoveryProvidersByOrder(
   return grouped;
 }
 
+<<<<<<< HEAD
 /** Matches a normalized provider filter against all provider-owned identifiers. */
 export function providerMatchesFilter(params: {
   provider: Pick<ProviderPlugin, "id" | "aliases" | "hookAliases">;
@@ -116,6 +117,8 @@ export function providerMatchesFilter(params: {
   ].some((providerId) => normalizeProviderId(providerId) === params.providerFilter);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Normalizes a plugin discovery response into safe provider-config keys. */
 export function normalizePluginDiscoveryResult(params: {
   provider: ProviderPlugin;

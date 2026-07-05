@@ -13,6 +13,10 @@ export const BASE_DIFF_VIEWER_LANGUAGE_HINTS = [
   "text",
   "ansi",
 ] as const satisfies readonly SupportedLanguages[];
+<<<<<<< HEAD
+=======
+export type DiffViewerBaseLanguage = (typeof BASE_DIFF_VIEWER_LANGUAGE_HINTS)[number];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const BASE_LANGUAGE_HINTS = new Set<SupportedLanguages>(BASE_DIFF_VIEWER_LANGUAGE_HINTS);
 const BASE_LANGUAGE_ALIASES = new Map<string, SupportedLanguages>(
@@ -56,6 +60,16 @@ export async function normalizeSupportedLanguageHint(
   }
 }
 
+<<<<<<< HEAD
+=======
+export async function filterSupportedLanguageHints(
+  values: Iterable<string>,
+  options: { languagePackAvailable?: boolean } = {},
+): Promise<SupportedLanguages[]> {
+  return normalizeSupportedLanguageHints(values, { fallbackToText: true, ...options });
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function normalizeSupportedLanguageHints(
   values: Iterable<string>,
   options: { fallbackToText: boolean; languagePackAvailable?: boolean },

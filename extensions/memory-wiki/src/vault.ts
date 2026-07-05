@@ -20,6 +20,10 @@ export const WIKI_VAULT_DIRECTORIES = [
   "_attachments",
   "_views",
   ".openclaw-wiki",
+<<<<<<< HEAD
+=======
+  ".openclaw-wiki/locks",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ".openclaw-wiki/cache",
 ] as const;
 
@@ -124,6 +128,25 @@ export async function initializeMemoryWikiVault(
     withTrailingNewline("# Inbox\n\nDrop raw ideas, questions, and source links here.\n"),
     createdFiles,
   );
+<<<<<<< HEAD
+=======
+  await writeFileIfMissing(
+    rootDir,
+    ".openclaw-wiki/state.json",
+    withTrailingNewline(
+      JSON.stringify(
+        {
+          version: 1,
+          createdAt: resolveMemoryWikiTimestamp(options?.nowMs),
+          renderMode: config.vault.renderMode,
+        },
+        null,
+        2,
+      ),
+    ),
+    createdFiles,
+  );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   await writeFileIfMissing(rootDir, ".openclaw-wiki/log.jsonl", "", createdFiles);
 
   if (createdDirectories.length > 0 || createdFiles.length > 0) {

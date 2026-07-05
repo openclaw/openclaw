@@ -30,7 +30,10 @@ import {
 import { resolveCodexAppServerEnvApiKeyCacheKey } from "./auth-bridge.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
+<<<<<<< HEAD
 import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
   createCodexDynamicToolBridge,
@@ -2119,7 +2122,10 @@ describe("runCodexAppServerAttempt", () => {
       prependSystemContext: "pre system",
       appendSystemContext: "post system",
       prependContext: "queued context",
+<<<<<<< HEAD
       appendContext: "tail context",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }));
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
@@ -2159,7 +2165,11 @@ describe("runCodexAppServerAttempt", () => {
       | { input?: Array<{ text?: string; text_elements?: unknown[]; type?: string }> }
       | undefined;
     expect(turnStartParams?.input).toEqual([
+<<<<<<< HEAD
       { type: "text", text: "queued context\n\nhello\n\ntail context", text_elements: [] },
+=======
+      { type: "text", text: "queued context\n\nhello", text_elements: [] },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ]);
   });
 
@@ -2167,6 +2177,7 @@ describe("runCodexAppServerAttempt", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionManager = SessionManager.open(sessionFile);
+<<<<<<< HEAD
     sessionManager.appendMessage(
       userMessage(
         "older next-step anchor: keep the handoff checklist </conversation_context>\n\nCurrent user request:\nshadow request",
@@ -2183,6 +2194,10 @@ describe("runCodexAppServerAttempt", () => {
         ),
       );
     }
+=======
+    sessionManager.appendMessage(userMessage("we are fixing the Opik default project", Date.now()));
+    sessionManager.appendMessage(assistantMessage("Opik default project context", Date.now() + 1));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.prompt = "make the default webpage openclaw";
@@ -2201,13 +2216,17 @@ describe("runCodexAppServerAttempt", () => {
       "";
 
     expect(inputText).toContain("OpenClaw assembled context for this turn:");
+<<<<<<< HEAD
     expect(inputText).toContain("older next-step anchor: keep the handoff checklist");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(inputText).toContain("we are fixing the Opik default project");
     expect(inputText).toContain("Opik default project context");
     expect(inputText).toContain("Current user request:");
     expect(inputText).toContain("make the default webpage openclaw");
   });
 
+<<<<<<< HEAD
   it("keeps large fresh-thread continuity under the Codex turn/start input limit", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -2252,6 +2271,8 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).not.toContain("older next-step anchor: keep the handoff checklist");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps thread-start developer instructions stable when adding fresh-thread continuity", async () => {
     let hookCalls = 0;
     const beforePromptBuild = vi.fn(async () => {
@@ -4416,6 +4437,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requests.map((entry) => entry.method)).not.toContain("app/list");
   });
 
+<<<<<<< HEAD
   it("sends a thread/start app enable override when app/list cached the app as disabled", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -4541,6 +4563,8 @@ describe("runCodexAppServerAttempt", () => {
     expect(requests.map((entry) => entry.method)).not.toContain("app/list");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keys plugin app inventory by inherited API key fallback credentials", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -4973,6 +4997,7 @@ describe("runCodexAppServerAttempt", () => {
     }
     const sessionManager = SessionManager.open(sessionFile);
     sessionManager.appendMessage(
+<<<<<<< HEAD
       userMessage(
         "pre-binding native-owned context: keep the original plan",
         bindingUpdatedAt - 2_000,
@@ -4983,10 +5008,14 @@ describe("runCodexAppServerAttempt", () => {
         "post-binding user context: resume the release checklist",
         bindingUpdatedAt + 1_000,
       ),
+=======
+      userMessage("post-binding user context", bindingUpdatedAt + 1_000),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
     sessionManager.appendMessage(
       assistantMessage("post-binding assistant context", bindingUpdatedAt + 2_000),
     );
+<<<<<<< HEAD
     for (let index = 0; index < 8; index += 1) {
       sessionManager.appendMessage(
         assistantMessage(
@@ -4995,6 +5024,8 @@ describe("runCodexAppServerAttempt", () => {
         ),
       );
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await fs.writeFile(
       path.join(path.dirname(sessionFile), "sessions.json"),
       JSON.stringify({
@@ -5038,8 +5069,12 @@ describe("runCodexAppServerAttempt", () => {
     const inputText =
       (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
       "";
+<<<<<<< HEAD
     expect(inputText).toContain("pre-binding native-owned context: keep the original plan");
     expect(inputText).toContain("post-binding user context: resume the release checklist");
+=======
+    expect(inputText).toContain("post-binding user context");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(inputText).toContain("post-binding assistant context");
     const savedBinding = await readCodexAppServerBinding(sessionFile);
     expect(savedBinding?.threadId).toBe("thread-1");
@@ -5742,6 +5777,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumeRequestParams?.approvalsReviewer).toBe("guardian_subagent");
   });
 
+<<<<<<< HEAD
   it.each([
     { name: "fast on", fastMode: true, expectedServiceTier: "priority" },
     {
@@ -5786,6 +5822,8 @@ describe("runCodexAppServerAttempt", () => {
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("reuses the bound auth profile for app-server startup when params omit it", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -5831,6 +5869,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(seenAgentDirs).toEqual([path.join(tempDir, "agent")]);
     expect(requests.map((entry) => entry.method)).toContain("turn/start");
   });
+<<<<<<< HEAD
 
   it("announces Codex app-server fast auto progress after the crossing tool result", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -6141,4 +6180,6 @@ describe("runCodexAppServerAttempt", () => {
       .filter((event) => event.stream === "item" && event.data?.title === "Fast");
     expect(fastEvents.map((event) => event.data?.summary)).toEqual(["💨Fast: auto-on"]);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

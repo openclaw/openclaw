@@ -17,7 +17,11 @@ import {
   setMemorySearchImpl,
   setMemoryWorkspaceDir,
   type MemoryReadParams,
+<<<<<<< HEAD
 } from "./memory-tool-manager.test-mocks.js";
+=======
+} from "./memory-tool-manager-mock.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { testing as shortTermPromotionTesting } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 import { testing as memoryToolsTesting } from "./tools.js";

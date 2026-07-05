@@ -525,7 +525,11 @@ export class GatewayBrowserClient {
       this.pendingDeviceTokenRetry = false;
       this.pendingStartupReconnectDelayMs = null;
       this.flushPending(new Error(error.message));
+<<<<<<< HEAD
       this.notifyClose({
+=======
+      this.opts.onClose?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         code: BROWSER_WEBSOCKET_CLOSE_CODE,
         reason:
           error.code === BROWSER_WEBSOCKET_SECURITY_ERROR_CODE
@@ -562,7 +566,11 @@ export class GatewayBrowserClient {
         return;
       }
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
+<<<<<<< HEAD
       this.notifyClose({ code: ev.code, reason, error: connectError });
+=======
+      this.opts.onClose?.({ code: ev.code, reason, error: connectError });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const connectErrorCode = resolveGatewayErrorDetailCode(connectError);
       if (connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH) {
         if (this.pendingDeviceTokenRetry) {
@@ -799,7 +807,11 @@ export class GatewayBrowserClient {
     }
     this.backoffMs = 800;
     this.emitConnectTiming(generation, "hello", this.connectPlanTimingPayload(plan));
+<<<<<<< HEAD
     this.notifyHello(hello);
+=======
+    this.opts.onHello?.(hello);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   private handleConnectFailure(err: unknown, plan: ConnectPlan, ws: WebSocket, generation: number) {
@@ -920,6 +932,7 @@ export class GatewayBrowserClient {
       const seq = typeof evt.seq === "number" ? evt.seq : null;
       if (seq !== null) {
         if (this.lastSeq !== null && seq > this.lastSeq + 1) {
+<<<<<<< HEAD
           this.notifyGap({ expected: this.lastSeq + 1, received: seq });
         }
         this.lastSeq = seq;
@@ -931,6 +944,19 @@ export class GatewayBrowserClient {
         } catch (err) {
           console.error("[gateway] event listener error:", err);
         }
+=======
+          this.opts.onGap?.({ expected: this.lastSeq + 1, received: seq });
+        }
+        this.lastSeq = seq;
+      }
+      try {
+        this.opts.onEvent?.(evt);
+        for (const listener of this.eventListeners) {
+          listener(evt);
+        }
+      } catch (err) {
+        console.error("[gateway] event handler error:", err);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
       return;
     }
@@ -960,6 +986,7 @@ export class GatewayBrowserClient {
     }
   }
 
+<<<<<<< HEAD
   private notifyHello(hello: GatewayHelloOk): void {
     try {
       this.opts.onHello?.(hello);
@@ -992,6 +1019,8 @@ export class GatewayBrowserClient {
     }
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   private selectConnectAuth(params: { role: string; deviceId: string }): SelectedConnectAuth {
     const explicitGatewayToken = this.opts.token?.trim() || undefined;
     const authPassword = this.opts.password?.trim() || undefined;

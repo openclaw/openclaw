@@ -49,8 +49,11 @@ scenario:
         - "confirmed: the hidden fact is present"
         - hidden fact is present
         - hidden fact exists
+<<<<<<< HEAD
         - hidden fact is available
         - available in memory files
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 flow:
   steps:

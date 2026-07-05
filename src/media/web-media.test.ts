@@ -573,6 +573,7 @@ describe("loadWebMedia", () => {
     expect(result.fileName).toBe("fake.png");
   });
 
+<<<<<<< HEAD
   it("strips internal media-store UUID suffix from outbound fileName", async () => {
     const stagedName = "report---a1b2c3d4-5678-90ab-cdef-1234567890ab.png";
     const mediaDir = path.join(stateDir, "media", "outbound");
@@ -598,6 +599,8 @@ describe("loadWebMedia", () => {
     expect(result.fileName).toBe(fileName);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses only the leaf filename from Windows-style sandbox-validated media paths", async () => {
     const result = await loadWebMedia(String.raw`C:\workspace\captures\tiny.png`, {
       maxBytes: 1024 * 1024,

@@ -546,7 +546,11 @@ export interface PathSegmentLayout {
 
 export function getPathLayout(path: OcPath): PathSegmentLayout {
   // Quote-aware split — `.split('.')` would shred a quoted segment
+<<<<<<< HEAD
   // containing a literal `.` (e.g. `"a.b"`).
+=======
+  // containing a literal `.` (e.g. `"a.b"`) and break repackPath.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const sectionSubs = path.section === undefined ? [] : splitRespectingBrackets(path.section, ".");
   const itemSubs = path.item === undefined ? [] : splitRespectingBrackets(path.item, ".");
   const fieldSubs = path.field === undefined ? [] : splitRespectingBrackets(path.field, ".");
@@ -558,6 +562,34 @@ export function getPathLayout(path: OcPath): PathSegmentLayout {
   };
 }
 
+<<<<<<< HEAD
+=======
+/**
+ * Re-pack a concrete sub-segment list into an `OcPath` preserving the
+ * pattern's slot boundaries. Throws on length mismatch.
+ */
+export function repackPath(pattern: OcPath, subs: readonly string[]): OcPath {
+  const layout = getPathLayout(pattern);
+  if (subs.length !== layout.subs.length) {
+    fail(
+      `repack length mismatch: pattern has ${layout.subs.length} sub-segments, got ${subs.length}`,
+      formatOcPath(pattern),
+      "OC_PATH_REPACK_LENGTH",
+    );
+  }
+  const sectionSubs = subs.slice(0, layout.sectionLen);
+  const itemSubs = subs.slice(layout.sectionLen, layout.sectionLen + layout.itemLen);
+  const fieldSubs = subs.slice(layout.sectionLen + layout.itemLen);
+  return {
+    file: pattern.file,
+    ...(sectionSubs.length > 0 ? { section: sectionSubs.join(".") } : {}),
+    ...(itemSubs.length > 0 ? { item: itemSubs.join(".") } : {}),
+    ...(fieldSubs.length > 0 ? { field: fieldSubs.join(".") } : {}),
+    ...(pattern.session !== undefined ? { session: pattern.session } : {}),
+  };
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function extractSession(queryPart: string, input: string): string | undefined {
   if (queryPart.length === 0) {
     return undefined;

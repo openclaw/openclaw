@@ -20,10 +20,13 @@ function setRawArgs(command: Command, rawArgs: string[]): void {
   (command as Command & { rawArgs: string[] }).rawArgs = rawArgs;
 }
 
+<<<<<<< HEAD
 function deleteRawArgs(command: Command): void {
   delete (command as Command & { rawArgs?: string[] }).rawArgs;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("reparseProgramFromActionArgs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -108,12 +111,17 @@ describe("reparseProgramFromActionArgs", () => {
     expect(buildParseArgvMock).toHaveBeenCalledWith({
       programName: "openclaw",
       rawArgs: ["node", "openclaw", "workspaces", "audit", "export", "--since", "1"],
+<<<<<<< HEAD
       fallbackArgv: ["workspaces", "audit", "export", "--since", "1"],
+=======
+      fallbackArgv: ["export", "--since", "1"],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "status"]);
     expect(auditParseAsync).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("reconstructs the full nested command path when Commander rawArgs is missing", async () => {
     // #83893: nested lazy commands still need their ancestor path if
     // Commander stops exposing root rawArgs at runtime.
@@ -135,6 +143,8 @@ describe("reparseProgramFromActionArgs", () => {
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "status"]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses program root when action command is missing", async () => {
     const program = new Command().name("openclaw");
     const parseAsync = vi.spyOn(program, "parseAsync").mockResolvedValue(program);
@@ -149,6 +159,7 @@ describe("reparseProgramFromActionArgs", () => {
     });
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "status"]);
   });
+<<<<<<< HEAD
 
   it("falls back to fallbackArgv when Commander rawArgs is missing from the root command", async () => {
     // #83893: rawArgs is a Commander runtime field, so the root command must
@@ -168,4 +179,6 @@ describe("reparseProgramFromActionArgs", () => {
     });
     expect(parseAsync).toHaveBeenCalled();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

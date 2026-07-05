@@ -799,6 +799,7 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(result.content.some((block) => block.type === "thinking")).toBe(false);
   });
 
+<<<<<<< HEAD
   it("seals the native reasoning block before the answer text begins", async () => {
     // deepseek streams reasoning_content, then switches to content with no
     // boundary event; thinking_end must precede the answer so channels do not
@@ -967,6 +968,8 @@ describe("openai-completions stop-reason tool-call guard", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("promotes silent tool_calls with finish_reason stop to toolUse", async () => {
     mockChunksRef.chunks = [
       makeToolCallChunk("call_1", "bash", '{"cmd":"ls"}'),

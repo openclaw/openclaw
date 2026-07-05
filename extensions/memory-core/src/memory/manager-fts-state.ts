@@ -9,7 +9,11 @@ export function deleteMemoryFtsRows(params: {
   source: MemorySource;
   currentModel?: string;
 }): void {
+<<<<<<< HEAD
   const tableName = params.tableName ?? "memory_index_chunks_fts";
+=======
+  const tableName = params.tableName ?? "chunks_fts";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   // Lexical search is model-agnostic, so refreshed/deleted files must not
   // leave old-model FTS rows behind for the same path/source.
   params.db

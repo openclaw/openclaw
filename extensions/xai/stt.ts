@@ -8,9 +8,14 @@ import {
   assertOkOrThrowHttpError,
   buildAudioTranscriptionFormData,
   postTranscriptionRequest,
+<<<<<<< HEAD
   readProviderJsonResponse,
   requireTranscriptionText,
   resolveProviderHttpRequestConfig,
+=======
+  resolveProviderHttpRequestConfig,
+  requireTranscriptionText,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XAI_BASE_URL } from "./model-definitions.js";
@@ -69,7 +74,11 @@ export async function transcribeXaiAudio(
 
   try {
     await assertOkOrThrowHttpError(response, "xAI audio transcription failed");
+<<<<<<< HEAD
     const payload = await readProviderJsonResponse<XaiSttResponse>(response, "xai.stt");
+=======
+    const payload = (await response.json()) as XaiSttResponse;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return {
       text: requireTranscriptionText(payload.text, "xAI transcription response missing text"),
       ...(model ? { model } : {}),

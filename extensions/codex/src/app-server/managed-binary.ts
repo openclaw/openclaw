@@ -12,7 +12,10 @@ import { MANAGED_CODEX_APP_SERVER_PACKAGE } from "./version.js";
 
 const CODEX_APP_SERVER_MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CODEX_PLUGIN_ROOT = resolveDefaultCodexPluginRoot(CODEX_APP_SERVER_MODULE_DIR);
+<<<<<<< HEAD
 const MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND = "/Applications/Codex.app/Contents/Resources/codex";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type ManagedCodexAppServerPaths = {
   commandPath: string;
@@ -40,19 +43,29 @@ export async function resolveManagedCodexAppServerStartOptions(
     pluginRoot: options.pluginRoot,
   });
   const pathExists = options.pathExists ?? commandPathExists;
+<<<<<<< HEAD
   const commandPaths = await findManagedCodexAppServerCommandPaths({
+=======
+  const commandPath = await findManagedCodexAppServerCommandPath({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     candidateCommandPaths: paths.candidateCommandPaths,
     pathExists,
     platform,
   });
+<<<<<<< HEAD
   const commandPath = commandPaths[0];
   const managedFallbackCommandPaths = commandPaths.slice(1);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   return {
     ...startOptions,
     command: commandPath,
     commandSource: "resolved-managed",
+<<<<<<< HEAD
     ...(managedFallbackCommandPaths.length > 0 ? { managedFallbackCommandPaths } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }
 
@@ -81,17 +94,23 @@ function resolveManagedCodexAppServerCommandCandidates(
   const roots = resolveManagedCodexAppServerCandidateRoots(pluginRoot, platform);
   return [
     ...new Set([
+<<<<<<< HEAD
       ...resolveDesktopCodexAppServerCommandCandidates(platform),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ...roots.map((root) => pathApi.join(root, "node_modules", ".bin", commandName)),
       ...resolveManagedCodexPackageBinCandidates(roots, platform),
     ]),
   ];
 }
 
+<<<<<<< HEAD
 function resolveDesktopCodexAppServerCommandCandidates(platform: NodeJS.Platform): string[] {
   return platform === "darwin" ? [MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND] : [];
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveDefaultCodexPluginRoot(moduleDir: string): string {
   const moduleBaseName = path.basename(moduleDir);
   if (moduleBaseName === "dist" || moduleBaseName === "dist-runtime") {
@@ -204,6 +223,7 @@ function pathForPlatform(platform: NodeJS.Platform): typeof path {
   return platform === "win32" ? path.win32 : path.posix;
 }
 
+<<<<<<< HEAD
 async function findManagedCodexAppServerCommandPaths(params: {
   candidateCommandPaths: readonly string[];
   pathExists: (filePath: string, platform: NodeJS.Platform) => Promise<boolean>;
@@ -218,6 +238,18 @@ async function findManagedCodexAppServerCommandPaths(params: {
   if (commandPaths.length > 0) {
     return commandPaths;
   }
+=======
+async function findManagedCodexAppServerCommandPath(params: {
+  candidateCommandPaths: readonly string[];
+  pathExists: (filePath: string, platform: NodeJS.Platform) => Promise<boolean>;
+  platform: NodeJS.Platform;
+}): Promise<string> {
+  for (const commandPath of params.candidateCommandPaths) {
+    if (await params.pathExists(commandPath, params.platform)) {
+      return commandPath;
+    }
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   throw new Error(
     [

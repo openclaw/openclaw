@@ -116,11 +116,18 @@ export type IMessageAccountConfig = {
   /**
    * Merge consecutive same-sender DM rows from `chat.db` into a single agent
    * turn, so Apple's split-send (`<command> <URL>` arriving as two separate
+<<<<<<< HEAD
    * rows several seconds apart) lands as one merged message. DM-only — group chats
    * keep instant per-message dispatch. Widens the default inbound debounce
    * window to 7000 ms when enabled without an explicit
    * `messages.inbound.byChannel.imessage` or global
    * `messages.inbound.debounceMs`. Default: `false`.
+=======
+   * rows ~0.8-2.0 s apart) lands as one merged message. DM-only — group chats
+   * keep instant per-message dispatch. Widens the default inbound debounce
+   * window to 2500 ms when enabled without an explicit
+   * `messages.inbound.byChannel.imessage`. Default: `false`.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
    */
   coalesceSameSenderDms?: boolean;
   groups?: Record<

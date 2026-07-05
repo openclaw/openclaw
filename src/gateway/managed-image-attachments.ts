@@ -4,19 +4,32 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+<<<<<<< HEAD
+=======
+import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { tryReadJson, writeJson } from "../infra/json-files.js";
+<<<<<<< HEAD
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
+=======
+import { safeFileURLToPath } from "../infra/local-file-access.js";
+import { assertLocalMediaAllowed } from "../media/local-media-access.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   createImageProcessor,
   getImageMetadata,
   readImageProbeFromHeader,
 } from "../media/media-services.js";
 import { MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
+<<<<<<< HEAD
+=======
+import { resolveUserPath } from "../utils.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, sendMethodNotAllowed, sendMissingScopeForbidden } from "./http-common.js";
@@ -33,6 +46,11 @@ const OUTGOING_IMAGE_ROUTE_PREFIX = "/api/chat/media/outgoing";
 const DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS = 15 * 60 * 1000;
 const MANAGED_OUTGOING_ATTACHMENT_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+<<<<<<< HEAD
+=======
+const DATA_URL_RE = /^data:/i;
+const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export const DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS = {
   maxBytes: 12 * 1024 * 1024,
@@ -270,6 +288,30 @@ function deriveAltText(source: string, index: number) {
   return localName || fallback;
 }
 
+<<<<<<< HEAD
+=======
+function resolveLocalMediaPath(source: string): string | undefined {
+  const trimmed = source.trim();
+  if (!trimmed || isPassThroughRemoteMediaSource(trimmed) || DATA_URL_RE.test(trimmed)) {
+    return undefined;
+  }
+  if (trimmed.startsWith("file://")) {
+    try {
+      return safeFileURLToPath(trimmed);
+    } catch {
+      return undefined;
+    }
+  }
+  if (trimmed.startsWith("~")) {
+    return resolveUserPath(trimmed);
+  }
+  if (path.isAbsolute(trimmed) || WINDOWS_DRIVE_RE.test(trimmed)) {
+    return path.resolve(trimmed);
+  }
+  return undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function parseImageDataUrl(
   source: string,
   alt: string,
@@ -299,6 +341,7 @@ function parseImageDataUrl(
   };
 }
 
+<<<<<<< HEAD
 async function getVariantStats(params: { filePath: string; buffer?: Buffer; sizeBytes?: number }) {
   const loaded = params.buffer
     ? { buffer: params.buffer, sizeBytes: params.sizeBytes ?? params.buffer.byteLength }
@@ -307,6 +350,10 @@ async function getVariantStats(params: { filePath: string; buffer?: Buffer; size
         return { buffer, sizeBytes: stat.size };
       })();
   const metadataBuffer = loaded.buffer;
+=======
+async function getVariantStats(filePath: string) {
+  const { buffer: metadataBuffer, stat } = await readLocalFileSafely({ filePath });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const metadata = (await getImageMetadata(metadataBuffer).catch(() => null)) ?? {
     width: null,
     height: null,
@@ -314,7 +361,11 @@ async function getVariantStats(params: { filePath: string; buffer?: Buffer; size
   return {
     width: metadata.width ?? null,
     height: metadata.height ?? null,
+<<<<<<< HEAD
     sizeBytes: Number.isFinite(loaded.sizeBytes) ? loaded.sizeBytes : null,
+=======
+    sizeBytes: Number.isFinite(stat.size) ? stat.size : null,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }
 
@@ -712,9 +763,14 @@ async function getSessionManagedOutgoingAttachmentIndex(
   const readResult = await readSessionMessagesWithSourceAsync(
     {
       agentId,
+<<<<<<< HEAD
       sessionEntry: entry,
       sessionId,
       sessionKey,
+=======
+      sessionFile: entry.sessionFile,
+      sessionId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       storePath,
     },
     {
@@ -843,7 +899,10 @@ export async function createManagedOutgoingImageBlocks(params: {
   const stateDir = params.stateDir ?? resolveStateDir();
   const limits = resolveManagedImageAttachmentLimits(params.limits);
   const blocks: ManagedImageBlock[] = [];
+<<<<<<< HEAD
   let resolvedLocalRoots: readonly string[] | undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   for (const [index, mediaUrl] of mediaUrls.entries()) {
     const fallbackAlt = `Generated image ${index + 1}`;
     const parsedDataUrl = parseImageDataUrl(mediaUrl, fallbackAlt, limits);
@@ -871,6 +930,7 @@ export async function createManagedOutgoingImageBlocks(params: {
           : await (async () => {
               const localMediaPath = resolveLocalMediaPath(mediaUrl);
               if (localMediaPath) {
+<<<<<<< HEAD
                 const localRoots = params.localRoots;
                 const localMediaOptions =
                   localRoots === "any"
@@ -882,6 +942,9 @@ export async function createManagedOutgoingImageBlocks(params: {
                         },
                       };
                 await assertLocalMediaAllowed(localMediaPath, localRoots, localMediaOptions);
+=======
+                await assertLocalMediaAllowed(localMediaPath, params.localRoots);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               }
               return await saveMediaSource(
                 mediaUrl,
@@ -909,11 +972,15 @@ export async function createManagedOutgoingImageBlocks(params: {
           : (await readLocalFileSafely({ filePath: savedOriginal.path })).buffer;
       validateManagedImageBuffer(originalBuffer, alt, limits);
 
+<<<<<<< HEAD
       let originalStats = await getVariantStats({
         filePath: savedOriginal.path,
         buffer: originalBuffer,
         sizeBytes: savedOriginal.size,
       });
+=======
+      let originalStats = await getVariantStats(savedOriginal.path);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (originalStats.sizeBytes != null && originalStats.sizeBytes > limits.maxBytes) {
         throw createManagedImageAttachmentError(
           `Managed image attachment ${JSON.stringify(alt)} exceeds the ${formatLimitMiB(limits.maxBytes)} byte limit`,
@@ -951,11 +1018,15 @@ export async function createManagedOutgoingImageBlocks(params: {
         savedOriginalContentType = replacement.contentType ?? resized.contentType;
         savedOriginalPath = savedOriginal.path;
         originalBuffer = resized.buffer;
+<<<<<<< HEAD
         originalStats = await getVariantStats({
           filePath: savedOriginal.path,
           buffer: originalBuffer,
           sizeBytes: savedOriginal.size,
         });
+=======
+        originalStats = await getVariantStats(savedOriginal.path);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         effectiveMetadata = orientManagedImageMetadata(
           originalBuffer,
           originalStats.width != null && originalStats.height != null

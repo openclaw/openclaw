@@ -434,6 +434,7 @@ function normalizeNotificationSubscription(
     throw new Error("notification subscription needs cardId, sessionKey, runId, or target.");
   }
   const eventKinds = normalizeNotificationKinds(input.eventKinds);
+<<<<<<< HEAD
   const preservedFields: Partial<WorkboardNotificationSubscription> = {};
   if (fallback) {
     if (fallback.lastEventAt) {
@@ -449,6 +450,8 @@ function normalizeNotificationSubscription(
       preservedFields.deliveredEventIds = fallback.deliveredEventIds;
     }
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return {
     id: fallback?.id ?? randomUUID(),
     boardId,
@@ -457,7 +460,16 @@ function normalizeNotificationSubscription(
     ...(runId ? { runId } : {}),
     ...(target ? { target } : {}),
     ...(eventKinds ? { eventKinds } : {}),
+<<<<<<< HEAD
     ...preservedFields,
+=======
+    ...(fallback?.lastEventAt ? { lastEventAt: fallback.lastEventAt } : {}),
+    ...(fallback?.lastEventId ? { lastEventId: fallback.lastEventId } : {}),
+    ...(fallback?.lastEventSequence ? { lastEventSequence: fallback.lastEventSequence } : {}),
+    ...(fallback?.deliveredEventIds?.length
+      ? { deliveredEventIds: fallback.deliveredEventIds }
+      : {}),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     createdAt: fallback?.createdAt ?? now,
     updatedAt: now,
   };
@@ -2980,6 +2992,20 @@ export class WorkboardStore {
     return await this.promoteDependencyReady(nextChild.id);
   }
 
+<<<<<<< HEAD
+=======
+  async linkParents(childId: string, parentIds: readonly string[]): Promise<WorkboardCard> {
+    let child = await this.get(childId);
+    if (!child) {
+      throw new Error(`card not found: ${childId}`);
+    }
+    for (const parentId of parentIds) {
+      child = await this.linkCards(parentId, child.id);
+    }
+    return child;
+  }
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   private async dependencyTargetStatus(card: WorkboardCard, now: number): Promise<WorkboardStatus> {
     const scheduledAt = card.metadata?.automation?.scheduledAt;
     const parents = cardParentIds(card);

@@ -190,8 +190,11 @@ describe("normalizeStoredCronJobs", () => {
 
     expect(result.issues.legacyAgentTurnCommandPayload).toBeUndefined();
     expect(result.issues.unresolvedAgentTurnShellToolPrompt).toBe(1);
+<<<<<<< HEAD
     expect(result.unresolvedAgentTurnCommandPromptJobs).toEqual(["Legacy job"]);
     expect(result.unresolvedAgentTurnShellToolPromptJobs).toEqual([]);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const payload = job.payload as Record<string, unknown>;
     expect(payload.kind).toBe("agentTurn");
     expect(payload.message).toContain(command);

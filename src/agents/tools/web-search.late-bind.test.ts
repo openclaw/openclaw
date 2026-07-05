@@ -35,10 +35,26 @@ type RunWebSearchParams = {
   };
 };
 
+<<<<<<< HEAD
+=======
+type ProviderResolutionParams = {
+  value?: string;
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function firstRunWebSearchParams(): RunWebSearchParams | undefined {
   return mocks.runWebSearch.mock.calls[0]?.[0] as RunWebSearchParams | undefined;
 }
 
+<<<<<<< HEAD
+=======
+function firstProviderResolutionParams(): ProviderResolutionParams | undefined {
+  return mocks.resolveManifestContractOwnerPluginId.mock.calls[0]?.[0] as
+    | ProviderResolutionParams
+    | undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("web_search late-bound runtime fallback", () => {
   beforeEach(() => {
     mocks.runWebSearch.mockReset();
@@ -96,7 +112,11 @@ describe("web_search late-bound runtime fallback", () => {
 
     await tool?.execute("call-search", { query: "openclaw" }, undefined);
 
+<<<<<<< HEAD
     expect(mocks.resolveManifestContractOwnerPluginId).not.toHaveBeenCalled();
+=======
+    expect(firstProviderResolutionParams()?.value).toBe("brave");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(firstRunWebSearchParams()?.preferRuntimeProviders).toBe(true);
   });
 
@@ -112,7 +132,11 @@ describe("web_search late-bound runtime fallback", () => {
     expect(firstRunWebSearchParams()?.preferRuntimeProviders).toBe(true);
   });
 
+<<<<<<< HEAD
   it("keeps runtime provider discovery enabled when configured search provider has a manifest owner", async () => {
+=======
+  it("does not prefer runtime providers when the configured provider is a bundled manifest owner", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mocks.resolveManifestContractOwnerPluginId.mockReturnValue("openclaw-bundled-brave");
     const config = {
       tools: { web: { search: { provider: "brave" } } },
@@ -124,8 +148,12 @@ describe("web_search late-bound runtime fallback", () => {
 
     await tool?.execute("call-search", { query: "openclaw" }, undefined);
 
+<<<<<<< HEAD
     expect(mocks.resolveManifestContractOwnerPluginId).not.toHaveBeenCalled();
     expect(firstRunWebSearchParams()?.preferRuntimeProviders).toBe(true);
+=======
+    expect(firstRunWebSearchParams()?.preferRuntimeProviders).toBe(false);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("prefers active runtime metadata over options.runtimeWebSearch when present", async () => {

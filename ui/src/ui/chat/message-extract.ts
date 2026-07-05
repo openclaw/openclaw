@@ -9,6 +9,7 @@ import { stripThinkingTags } from "../strip-thinking-tags.ts";
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
+<<<<<<< HEAD
 function isTextContentBlockType(value: unknown, role: string): boolean {
   return (
     value === "text" ||
@@ -17,6 +18,8 @@ function isTextContentBlockType(value: unknown, role: string): boolean {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function processMessageText(text: string, role: string): string {
   const shouldStripInboundMetadata = normalizeLowercaseStringOrEmpty(role) === "user";
   const withoutInternalContext = stripInternalRuntimeContext(text);
@@ -98,7 +101,10 @@ export function extractThinkingCached(message: unknown): string | null {
 
 export function extractRawText(message: unknown): string | null {
   const m = message as Record<string, unknown>;
+<<<<<<< HEAD
   const role = normalizeLowercaseStringOrEmpty(m.role);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const content = m.content;
   if (typeof content === "string") {
     return content;
@@ -107,7 +113,11 @@ export function extractRawText(message: unknown): string | null {
     const parts = content
       .map((p) => {
         const item = p as Record<string, unknown>;
+<<<<<<< HEAD
         if (isTextContentBlockType(item.type, role) && typeof item.text === "string") {
+=======
+        if (item.type === "text" && typeof item.text === "string") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           return item.text;
         }
         return null;

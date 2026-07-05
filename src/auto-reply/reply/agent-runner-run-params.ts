@@ -4,7 +4,11 @@ import type { resolveProviderScopedAuthProfile } from "./agent-runner-auth-profi
 import type { FollowupRun } from "./queue.js";
 
 /** Callback used to detect providers that require final-answer tags. */
+<<<<<<< HEAD
 type ReasoningTagProviderResolver = (
+=======
+export type ReasoningTagProviderResolver = (
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   provider: string,
   options: {
     config: FollowupRun["run"]["config"];
@@ -13,6 +17,25 @@ type ReasoningTagProviderResolver = (
   },
 ) => boolean;
 
+<<<<<<< HEAD
+=======
+/** Resolves whether a provider/model run should enforce final-answer tags. */
+export const resolveEnforceFinalTagWithResolver = (
+  run: FollowupRun["run"],
+  provider: string,
+  model = run.model,
+  isReasoningTagProvider?: ReasoningTagProviderResolver,
+) =>
+  (run.skipProviderRuntimeHints ? false : undefined) ??
+  (run.enforceFinalTag ||
+    isReasoningTagProvider?.(provider, {
+      config: run.config,
+      workspaceDir: run.workspaceDir,
+      modelId: model,
+    }) ||
+    false);
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Builds model fallback options for an embedded follow-up run. */
 export function resolveModelFallbackOptions(
   run: FollowupRun["run"],
@@ -38,6 +61,7 @@ export function resolveModelFallbackOptions(
   };
 }
 
+<<<<<<< HEAD
 /** Resolves whether final-answer tags should be enforced for an embedded follow-up run. */
 export function resolveEnforceFinalTagWithResolver(
   run: FollowupRun["run"],
@@ -57,6 +81,8 @@ export function resolveEnforceFinalTagWithResolver(
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Builds the shared embedded-agent run params from a queued follow-up run. */
 export function buildEmbeddedRunBaseParams(params: {
   run: FollowupRun["run"];
@@ -77,12 +103,15 @@ export function buildEmbeddedRunBaseParams(params: {
     modelOverrideSource: params.run.modelOverrideSource,
     hasAutoFallbackProvenance: params.run.hasAutoFallbackProvenance === true,
   });
+<<<<<<< HEAD
   const enforceFinalTag = resolveEnforceFinalTagWithResolver(
     params.run,
     params.provider,
     params.model,
     params.isReasoningTagProvider,
   );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   // Runtime policy keys may differ from session keys for direct-message scoped policy.
   return {
     sessionFile: params.run.sessionFile,
@@ -94,9 +123,18 @@ export function buildEmbeddedRunBaseParams(params: {
     ownerNumbers: params.run.ownerNumbers,
     inputProvenance: params.run.inputProvenance,
     senderIsOwner: params.run.senderIsOwner,
+<<<<<<< HEAD
     channelContext: params.run.channelContext,
     approvalReviewerDeviceId: params.run.approvalReviewerDeviceId,
     enforceFinalTag,
+=======
+    enforceFinalTag: resolveEnforceFinalTagWithResolver(
+      params.run,
+      params.provider,
+      params.model,
+      params.isReasoningTagProvider,
+    ),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     silentExpected: params.run.silentExpected,
     allowEmptyAssistantReplyAsSilent: params.run.allowEmptyAssistantReplyAsSilent,
     silentReplyPromptMode: params.run.silentReplyPromptMode,
@@ -106,8 +144,11 @@ export function buildEmbeddedRunBaseParams(params: {
     modelFallbacksOverride,
     ...params.authProfile,
     thinkLevel: params.run.thinkLevel,
+<<<<<<< HEAD
     fastMode: params.run.fastMode,
     fastModeAutoOnSeconds: params.run.fastModeAutoOnSeconds,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     verboseLevel: params.run.verboseLevel,
     reasoningLevel: params.run.reasoningLevel,
     execOverrides: params.run.execOverrides,

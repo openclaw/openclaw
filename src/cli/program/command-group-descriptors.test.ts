@@ -3,6 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildCommandGroupEntries,
   defineImportedCommandGroupSpec,
+<<<<<<< HEAD
+=======
+  defineImportedCommandGroupSpecs,
+  defineImportedProgramCommandGroupSpec,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   defineImportedProgramCommandGroupSpecs,
   resolveCommandGroupEntries,
 } from "./command-group-descriptors.js";
@@ -64,6 +69,53 @@ describe("command-group-descriptors", () => {
     expect(module.register).toHaveBeenCalledWith("ok");
   });
 
+<<<<<<< HEAD
+=======
+  it("builds imported specs from definition arrays", async () => {
+    const alpha = { registerAlpha: vi.fn() };
+    const beta = { registerBeta: vi.fn() };
+    const specs = defineImportedCommandGroupSpecs<string, typeof alpha | typeof beta>([
+      {
+        commandNames: ["alpha"],
+        loadModule: async () => alpha,
+        register: (loaded, value) => {
+          if ("registerAlpha" in loaded) {
+            loaded.registerAlpha(value);
+          }
+        },
+      },
+      {
+        commandNames: ["beta"],
+        loadModule: async () => beta,
+        register: (loaded, value) => {
+          if ("registerBeta" in loaded) {
+            loaded.registerBeta(value);
+          }
+        },
+      },
+    ]);
+
+    await specs[0].register("one");
+    await specs[1].register("two");
+
+    expect(alpha.registerAlpha).toHaveBeenCalledWith("one");
+    expect(beta.registerBeta).toHaveBeenCalledWith("two");
+  });
+
+  it("builds program-only imported specs from exported registrar names", async () => {
+    const module = { registerAlpha: vi.fn() };
+    const spec = defineImportedProgramCommandGroupSpec({
+      commandNames: ["alpha"],
+      loadModule: async () => module,
+      exportName: "registerAlpha",
+    });
+
+    await spec.register("program" as never);
+
+    expect(module.registerAlpha).toHaveBeenCalledWith("program");
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("builds multiple program-only imported specs from definition arrays", async () => {
     const alpha = { registerAlpha: vi.fn() };
     const beta = { registerBeta: vi.fn() };

@@ -149,6 +149,7 @@ describe("loadGatewayTlsRuntime", () => {
     expect(result.keyPath).toBe(keyPath);
     expect(result.error).toContain("gateway tls: failed to load cert");
   });
+<<<<<<< HEAD
 
   it("falls back to default paths when certPath and keyPath are empty strings", async () => {
     const result = await loadGatewayTlsRuntime({
@@ -192,4 +193,6 @@ describe("loadGatewayTlsRuntime", () => {
     expect(result.certPath).not.toContain("gateway-cert.pem");
     expect(result.keyPath).not.toContain("gateway-key.pem");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

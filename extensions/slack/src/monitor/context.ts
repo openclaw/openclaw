@@ -308,6 +308,7 @@ export function createSlackMonitorContext(params: {
     threadTs?: string | null;
   }) => {
     const channelId = normalizeOptionalString(p.channelId) ?? "";
+<<<<<<< HEAD
     const senderId = normalizeOptionalString(p.senderId) ?? "";
     const channelType = normalizeSlackChannelType(p.channelType, channelId);
     const isDirectMessage = channelType === "im";
@@ -317,10 +318,25 @@ export function createSlackMonitorContext(params: {
     const isGroup = channelType === "mpim";
     const from = isDirectMessage
       ? `slack:${channelId || senderId}`
+=======
+    if (!channelId) {
+      return params.mainKey;
+    }
+    const channelType = normalizeSlackChannelType(p.channelType, channelId);
+    const isDirectMessage = channelType === "im";
+    const isGroup = channelType === "mpim";
+    const from = isDirectMessage
+      ? `slack:${channelId}`
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       : isGroup
         ? `slack:group:${channelId}`
         : `slack:channel:${channelId}`;
     const chatType = isDirectMessage ? "direct" : isGroup ? "group" : "channel";
+<<<<<<< HEAD
+=======
+    const senderId = normalizeOptionalString(p.senderId) ?? "";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     // Resolve through shared channel/account bindings so system events route to
     // the same agent session as regular inbound messages.
     try {

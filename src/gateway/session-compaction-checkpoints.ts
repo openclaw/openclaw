@@ -8,18 +8,28 @@ import {
   SessionManager,
   type FileEntry as SessionFileEntry,
 } from "../agents/sessions/session-manager.js";
+<<<<<<< HEAD
+=======
+import { updateSessionStore } from "../config/sessions.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type {
   SessionCompactionCheckpoint,
   SessionCompactionCheckpointReason,
   SessionEntry,
 } from "../config/sessions.js";
 import { isCompactionCheckpointTranscriptFileName } from "../config/sessions/artifacts.js";
+<<<<<<< HEAD
 import { readFileRangeAsync } from "../config/sessions/file-range.js";
 import {
   branchSessionFromCompactionCheckpoint,
   restoreSessionFromCompactionCheckpoint,
   type SessionCompactionCheckpointMutationResult,
   updateSessionEntry,
+=======
+import {
+  resolveSessionTranscriptRuntimeReadTarget,
+  type SessionTranscriptRuntimeScope,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "../config/sessions/session-accessor.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
@@ -62,6 +72,7 @@ type ForkedCompactionCheckpointTranscript = {
   sessionFile: string;
 };
 
+<<<<<<< HEAD
 export type CompactionCheckpointForkedTranscript = ForkedCompactionCheckpointTranscript & {
   totalTokens?: number;
 };
@@ -133,6 +144,8 @@ export type CompactionCheckpointStore = {
   ) => Promise<CompactionCheckpointSessionMutationResult>;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function checkpointSnapshotPath(checkpoint: SessionCompactionCheckpoint): string | undefined {
   return checkpoint.preCompaction.sessionFile?.trim() || undefined;
 }
@@ -235,10 +248,36 @@ export function resolveSessionCompactionCheckpointReason(params: {
 const SESSION_HEADER_READ_MAX_BYTES = 64 * 1024;
 const SESSION_TAIL_READ_INITIAL_BYTES = 64 * 1024;
 
+<<<<<<< HEAD
 async function readSessionHeaderFromTranscriptAsync(
   sessionFile: string,
 ): Promise<{ id: string; cwd?: string } | null> {
   let fileHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
+=======
+type AsyncTranscriptFileHandle = Awaited<ReturnType<typeof fs.open>>;
+
+async function readFileRangeAsync(
+  fileHandle: AsyncTranscriptFileHandle,
+  position: number,
+  length: number,
+): Promise<Buffer> {
+  const buffer = Buffer.alloc(length);
+  let offset = 0;
+  while (offset < length) {
+    const { bytesRead } = await fileHandle.read(buffer, offset, length - offset, position + offset);
+    if (bytesRead <= 0) {
+      break;
+    }
+    offset += bytesRead;
+  }
+  return offset === length ? buffer : buffer.subarray(0, offset);
+}
+
+async function readSessionHeaderFromTranscriptAsync(
+  sessionFile: string,
+): Promise<{ id: string; cwd?: string } | null> {
+  let fileHandle: AsyncTranscriptFileHandle | undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   try {
     fileHandle = await fs.open(sessionFile, "r");
     const buffer = await readFileRangeAsync(fileHandle, 0, SESSION_HEADER_READ_MAX_BYTES);
@@ -347,7 +386,11 @@ export async function readSessionLeafStateFromTranscriptAsync(
   sessionFile: string,
   maxBytes = MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES,
 ): Promise<{ entryId: string; leafId: string | null } | null> {
+<<<<<<< HEAD
   let fileHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
+=======
+  let fileHandle: AsyncTranscriptFileHandle | undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   try {
     fileHandle = await fs.open(sessionFile, "r");
     const stat = await fileHandle.stat();
@@ -415,6 +458,27 @@ export async function readSessionLeafStateFromTranscriptAsync(
   return null;
 }
 
+<<<<<<< HEAD
+=======
+export async function readSessionLeafIdFromTranscriptAsync(
+  sessionFile: string,
+  maxBytes = MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES,
+): Promise<string | null> {
+  return (await readSessionLeafStateFromTranscriptAsync(sessionFile, maxBytes))?.leafId ?? null;
+}
+
+/**
+ * Reads the latest leaf id for a runtime transcript scope.
+ */
+export async function readRuntimeSessionLeafIdFromTranscriptAsync(
+  scope: SessionTranscriptRuntimeScope,
+  maxBytes = MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES,
+): Promise<string | null> {
+  const target = await resolveSessionTranscriptRuntimeReadTarget(scope);
+  return await readSessionLeafIdFromTranscriptAsync(target.sessionFile, maxBytes);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function forkCompactionCheckpointTranscriptAsync(params: {
   sourceFile: string;
   sourceLeafId?: string;
@@ -477,6 +541,7 @@ export async function forkCompactionCheckpointTranscriptAsync(params: {
   }
 }
 
+<<<<<<< HEAD
 function resolveCheckpointTranscriptForkSource(
   checkpoint: SessionCompactionCheckpoint,
 ): { sourceFile: string; sourceLeafId?: string; totalTokens?: number } | null {
@@ -640,6 +705,8 @@ export function createFileBackedCompactionCheckpointStore(): CompactionCheckpoin
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Capture the stable pre-compaction identity without duplicating the transcript.
  * Branch/restore uses the compacted successor transcript, while legacy
@@ -680,6 +747,25 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
   };
 }
 
+<<<<<<< HEAD
+=======
+/**
+ * Captures checkpoint metadata for a runtime transcript scope.
+ */
+export async function captureRuntimeCompactionCheckpointSnapshotAsync(params: {
+  sessionManager?: Pick<SessionManager, "getLeafId">;
+  scope: SessionTranscriptRuntimeScope;
+  maxBytes?: number;
+}): Promise<CapturedCompactionCheckpointSnapshot | null> {
+  const target = await resolveSessionTranscriptRuntimeReadTarget(params.scope);
+  return await captureCompactionCheckpointSnapshotAsync({
+    sessionManager: params.sessionManager,
+    sessionFile: target.sessionFile,
+    maxBytes: params.maxBytes,
+  });
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function cleanupCompactionCheckpointSnapshot(
   snapshot: CapturedCompactionCheckpointSnapshot | null | undefined,
 ): Promise<void> {
@@ -727,9 +813,27 @@ async function cleanupTrimmedCompactionCheckpointFiles(params: {
   }
 }
 
+<<<<<<< HEAD
 export async function persistSessionCompactionCheckpoint(
   params: PersistSessionCompactionCheckpointParams,
 ): Promise<SessionCompactionCheckpoint | null> {
+=======
+export async function persistSessionCompactionCheckpoint(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  sessionId: string;
+  reason: SessionCompactionCheckpointReason;
+  snapshot: CapturedCompactionCheckpointSnapshot;
+  summary?: string;
+  firstKeptEntryId?: string;
+  tokensBefore?: number;
+  tokensAfter?: number;
+  postSessionFile?: string;
+  postLeafId?: string;
+  postEntryId?: string;
+  createdAt?: number;
+}): Promise<SessionCompactionCheckpoint | null> {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const snapshotSessionFile = params.snapshot.sessionFile?.trim();
   const postSessionFile = params.postSessionFile?.trim();
   const postSourceLeafId = params.postEntryId?.trim() || params.postLeafId?.trim();
@@ -773,12 +877,17 @@ export async function persistSessionCompactionCheckpoint(
     },
   };
 
+<<<<<<< HEAD
+=======
+  let stored = false;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let trimmedCheckpoints:
     | {
         kept: SessionCompactionCheckpoint[] | undefined;
         removed: SessionCompactionCheckpoint[];
       }
     | undefined;
+<<<<<<< HEAD
   let stored = false;
   const updatedEntry = await updateSessionEntry(
     {
@@ -802,6 +911,26 @@ export async function persistSessionCompactionCheckpoint(
   );
 
   if (!updatedEntry || !stored) {
+=======
+  await updateSessionStore(target.storePath, async (store) => {
+    const existing = store[target.canonicalKey];
+    if (!existing?.sessionId) {
+      return;
+    }
+    const checkpoints = sessionStoreCheckpoints(existing);
+    checkpoints.push(checkpoint);
+    const snapshotBytesByPath = await statCheckpointSnapshotBytes(checkpoints);
+    trimmedCheckpoints = trimSessionCheckpoints(checkpoints, snapshotBytesByPath);
+    store[target.canonicalKey] = {
+      ...existing,
+      updatedAt: Math.max(existing.updatedAt ?? 0, createdAt),
+      compactionCheckpoints: trimmedCheckpoints.kept,
+    };
+    stored = true;
+  });
+
+  if (!stored) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     log.warn("skipping compaction checkpoint persist: session not found", {
       sessionKey: params.sessionKey,
     });

@@ -36,7 +36,10 @@
 
 import * as crypto from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
+<<<<<<< HEAD
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { MediaSource, OpenedLocalFile } from "../messaging/media-source.js";
 import { openLocalFile } from "../messaging/media-source.js";
@@ -140,7 +143,10 @@ const MAX_PART_FINISH_RETRY_TIMEOUT_MS = 10 * 60 * 1000;
 
 /** Per-part PUT timeout (5 minutes). Matches the low-bandwidth tolerance. */
 const PART_UPLOAD_TIMEOUT_MS = 300_000;
+<<<<<<< HEAD
 const PART_UPLOAD_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /**
  * Boundary used by `md5_10m` — first 10,002,432 bytes.
@@ -413,6 +419,22 @@ export class ChunkedMediaApi {
   }
 }
 
+<<<<<<< HEAD
+=======
+// ============ Legacy functional facade ============
+
+/**
+ * @deprecated The chunked uploader is always implemented.
+ *
+ * Legacy feature flag. The chunked uploader is fully implemented, so this
+ * returns `true`. Retained so that older call sites can be converted
+ * progressively.
+ */
+export function isChunkedUploadImplemented(): boolean {
+  return true;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // ============ Source resolution ============
 
 /**
@@ -571,10 +593,14 @@ async function putToPresignedUrl(
         const etag = response.headers.get("ETag") ?? "-";
 
         if (!response.ok) {
+<<<<<<< HEAD
           const body = await readResponseTextLimited(
             response,
             PART_UPLOAD_ERROR_BODY_LIMIT_BYTES,
           ).catch(() => "");
+=======
+          const body = await response.text().catch(() => "");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           logger?.error?.(
             `${prefix} PUT part ${partIndex}/${totalParts}: HTTP ${response.status} ${response.statusText} (${elapsed}ms, requestId=${requestId}) body=${body.slice(0, 160)}`,
           );

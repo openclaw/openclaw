@@ -4,7 +4,11 @@ import type {
   DocumentExtractorPlugin,
   PluginDocumentExtractorEntry,
 } from "./document-extractor-types.js";
+<<<<<<< HEAD
 import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
+=======
+import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const DOCUMENT_EXTRACTOR_ARTIFACT_CANDIDATES = [
   "document-extractor.js",
@@ -23,6 +27,31 @@ function isDocumentExtractorPlugin(value: unknown): value is DocumentExtractorPl
   );
 }
 
+<<<<<<< HEAD
+=======
+function tryLoadBundledPublicArtifactModule(params: {
+  dirName: string;
+}): Record<string, unknown> | null {
+  for (const artifactBasename of DOCUMENT_EXTRACTOR_ARTIFACT_CANDIDATES) {
+    try {
+      return loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
+        dirName: params.dirName,
+        artifactBasename,
+      });
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.startsWith("Unable to resolve bundled plugin public surface ")
+      ) {
+        continue;
+      }
+      throw error;
+    }
+  }
+  return null;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function collectExtractorFactories(mod: Record<string, unknown>): {
   extractors: DocumentExtractorPlugin[];
   errors: unknown[];
@@ -59,10 +88,14 @@ export function loadBundledDocumentExtractorEntriesFromDir(params: {
   dirName: string;
   pluginId: string;
 }): PluginDocumentExtractorEntry[] | null {
+<<<<<<< HEAD
   const mod = loadBundledPluginPublicArtifactModuleFromCandidatesSync<Record<string, unknown>>({
     dirName: params.dirName,
     artifactCandidates: DOCUMENT_EXTRACTOR_ARTIFACT_CANDIDATES,
   });
+=======
+  const mod = tryLoadBundledPublicArtifactModule({ dirName: params.dirName });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!mod) {
     return null;
   }

@@ -58,6 +58,10 @@ vi.mock("../daemon/launchd.js", async () => {
     await vi.importActual<typeof import("../daemon/launchd.js")>("../daemon/launchd.js");
   return {
     ...actual,
+<<<<<<< HEAD
+=======
+    isLaunchAgentListed: vi.fn(async () => false),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     isLaunchAgentLoaded: vi.fn(async () => false),
     launchAgentPlistExists: vi.fn(async () => false),
     repairLaunchAgentBootstrap: vi.fn(async () => ({ ok: true, status: "repaired" })),
@@ -138,7 +142,10 @@ vi.mock("./gateway-install-token.js", () => ({
 }));
 
 vi.mock("./health-format.js", () => ({
+<<<<<<< HEAD
   formatGatewayClosedDiagnostic: vi.fn(() => undefined),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   formatHealthCheckFailure: vi.fn(() => "health failed"),
 }));
 
@@ -245,16 +252,26 @@ describe("maybeRepairGatewayDaemon", () => {
     });
   }
 
+<<<<<<< HEAD
   async function runAutoRepair(options: { repair?: boolean; yes?: boolean } = { repair: true }) {
+=======
+  async function runAutoRepair() {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     await maybeRepairGatewayDaemon({
       cfg: { gateway: {} },
       runtime,
       prompter: createDoctorPrompter({
         runtime,
+<<<<<<< HEAD
         options,
       }),
       options: { deep: false, ...options },
+=======
+        options: { repair: true },
+      }),
+      options: { deep: false, repair: true },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       gatewayDetailsMessage: "details",
       healthOk: false,
     });
@@ -542,6 +559,7 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.restart).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("skips running service restart during non-interactive repairs", async () => {
     setPlatform("linux");
 
@@ -575,6 +593,8 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("skips gateway service install when service repair policy is external", async () => {
     setPlatform("linux");
     service.isLoaded.mockResolvedValue(false);

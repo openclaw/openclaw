@@ -276,6 +276,7 @@ describe("runPostCorePluginConvergence", () => {
     expect(result.installRecords).toEqual({ brave: baseline.brave });
   });
 
+<<<<<<< HEAD
   it("forwards ClawHub risk acknowledgement options to repair", async () => {
     const cfg = {
       plugins: { entries: { matrix: { enabled: true } } },
@@ -299,6 +300,8 @@ describe("runPostCorePluginConvergence", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps repair warnings nonblocking with actionable guidance", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: [],
@@ -387,6 +390,7 @@ describe("runPostCorePluginConvergence", () => {
     });
   });
 
+<<<<<<< HEAD
   it("surfaces repair notices without marking convergence errored", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: ['Installed missing configured plugin "discord".'],
@@ -420,6 +424,8 @@ describe("runPostCorePluginConvergence", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("flags errored=true when smoke check finds a missing main entry", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: [],

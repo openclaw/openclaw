@@ -2,12 +2,18 @@
  * Tests agent-specific exec defaults in assembled coding tools.
  * Verifies per-agent exec host policy affects lazy exec/process behavior.
  */
+<<<<<<< HEAD
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+=======
+import { beforeEach, describe, expect, it } from "vitest";
+import "./test-helpers/fast-coding-tools.js";
+import "./test-helpers/fast-openclaw-tools.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
@@ -49,6 +55,7 @@ function requireExecTool(tools: ReturnType<typeof createOpenClawCodingTools>) {
   return execTool;
 }
 
+<<<<<<< HEAD
 const tempDirs = createTempDirTracker();
 
 function createTempAgentDirs(prefix: string) {
@@ -60,15 +67,20 @@ function createTempAgentDirs(prefix: string) {
   return { workspaceDir, agentDir };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("Agent-specific exec tool defaults", () => {
   beforeEach(() => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
   });
 
+<<<<<<< HEAD
   afterEach(() => {
     tempDirs.cleanup();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("should run exec synchronously when process is denied", async () => {
     const cfg: OpenClawConfig = {
       tools: {
@@ -84,7 +96,12 @@ describe("Agent-specific exec tool defaults", () => {
     const tools = createOpenClawCodingTools({
       config: cfg,
       sessionKey: "agent:main:main",
+<<<<<<< HEAD
       ...createTempAgentDirs("test-main"),
+=======
+      workspaceDir: "/tmp/test-main",
+      agentDir: "/tmp/agent-main",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     const execTool = requireExecTool(tools);
 
@@ -108,7 +125,12 @@ describe("Agent-specific exec tool defaults", () => {
         },
       },
       sessionKey: "agent:main:main",
+<<<<<<< HEAD
       ...createTempAgentDirs("test-main-implicit-gateway"),
+=======
+      workspaceDir: "/tmp/test-main-implicit-gateway",
+      agentDir: "/tmp/agent-main-implicit-gateway",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     const execTool = requireExecTool(tools);
 
@@ -129,7 +151,12 @@ describe("Agent-specific exec tool defaults", () => {
         },
       },
       sessionKey: "agent:main:main",
+<<<<<<< HEAD
       ...createTempAgentDirs("test-main-mode-deny"),
+=======
+      workspaceDir: "/tmp/test-main-mode-deny",
+      agentDir: "/tmp/agent-main-mode-deny",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     const execTool = requireExecTool(tools);
 
@@ -150,7 +177,12 @@ describe("Agent-specific exec tool defaults", () => {
         },
       },
       sessionKey: "agent:main:main",
+<<<<<<< HEAD
       ...createTempAgentDirs("test-main-mode-call-security"),
+=======
+      workspaceDir: "/tmp/test-main-mode-call-security",
+      agentDir: "/tmp/agent-main-mode-call-security",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     const execTool = requireExecTool(tools);
 
@@ -185,7 +217,12 @@ describe("Agent-specific exec tool defaults", () => {
         },
       },
       sessionKey: "agent:main:main",
+<<<<<<< HEAD
       ...createTempAgentDirs("test-main-mode-partial-agent"),
+=======
+      workspaceDir: "/tmp/test-main-mode-partial-agent",
+      agentDir: "/tmp/agent-main-mode-partial-agent",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     const execTool = requireExecTool(tools);
 
@@ -210,7 +247,12 @@ describe("Agent-specific exec tool defaults", () => {
         security: "deny",
       },
       sessionKey: "agent:main:main",
+<<<<<<< HEAD
       ...createTempAgentDirs("test-main-session-legacy-override"),
+=======
+      workspaceDir: "/tmp/test-main-session-legacy-override",
+      agentDir: "/tmp/agent-main-session-legacy-override",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     const execTool = requireExecTool(tools);
 
@@ -225,7 +267,12 @@ describe("Agent-specific exec tool defaults", () => {
     const tools = createOpenClawCodingTools({
       config: {},
       sessionKey: "agent:main:main",
+<<<<<<< HEAD
       ...createTempAgentDirs("test-main-fail-closed"),
+=======
+      workspaceDir: "/tmp/test-main-fail-closed",
+      agentDir: "/tmp/agent-main-fail-closed",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     const execTool = requireExecTool(tools);
     await expect(
@@ -245,7 +292,12 @@ describe("Agent-specific exec tool defaults", () => {
     const mainTools = createOpenClawCodingTools({
       config: cfg,
       sessionKey: "agent:main:main",
+<<<<<<< HEAD
       ...createTempAgentDirs("test-main-exec-defaults"),
+=======
+      workspaceDir: "/tmp/test-main-exec-defaults",
+      agentDir: "/tmp/agent-main-exec-defaults",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     const mainExecTool = requireExecTool(mainTools);
     const mainResult = await mainExecTool.execute("call-main-default", {
@@ -264,7 +316,12 @@ describe("Agent-specific exec tool defaults", () => {
     const helperTools = createOpenClawCodingTools({
       config: cfg,
       sessionKey: "agent:helper:main",
+<<<<<<< HEAD
       ...createTempAgentDirs("test-helper-exec-defaults"),
+=======
+      workspaceDir: "/tmp/test-helper-exec-defaults",
+      agentDir: "/tmp/agent-helper-exec-defaults",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     const helperExecTool = requireExecTool(helperTools);
     const helperResult = await helperExecTool.execute("call-helper-default", {
@@ -289,7 +346,12 @@ describe("Agent-specific exec tool defaults", () => {
       config: cfg,
       agentId: "main",
       sessionKey: "run-opaque-123",
+<<<<<<< HEAD
       ...createTempAgentDirs("test-main-opaque-session"),
+=======
+      workspaceDir: "/tmp/test-main-opaque-session",
+      agentDir: "/tmp/agent-main-opaque-session",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     const execTool = requireExecTool(tools);
     const result = await execTool.execute("call-main-opaque-session", {

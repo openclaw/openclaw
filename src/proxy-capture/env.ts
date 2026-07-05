@@ -13,9 +13,13 @@ import {
 // processes and provider transports so capture sessions share one store/proxy.
 export const OPENCLAW_DEBUG_PROXY_ENABLED = "OPENCLAW_DEBUG_PROXY_ENABLED";
 export const OPENCLAW_DEBUG_PROXY_URL = "OPENCLAW_DEBUG_PROXY_URL";
+<<<<<<< HEAD
 /** @deprecated Capture storage now lives in the shared state database. */
 export const OPENCLAW_DEBUG_PROXY_DB_PATH = "OPENCLAW_DEBUG_PROXY_DB_PATH";
 /** @deprecated Capture payloads now live in the shared state database. */
+=======
+export const OPENCLAW_DEBUG_PROXY_DB_PATH = "OPENCLAW_DEBUG_PROXY_DB_PATH";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export const OPENCLAW_DEBUG_PROXY_BLOB_DIR = "OPENCLAW_DEBUG_PROXY_BLOB_DIR";
 export const OPENCLAW_DEBUG_PROXY_CERT_DIR = "OPENCLAW_DEBUG_PROXY_CERT_DIR";
 export const OPENCLAW_DEBUG_PROXY_SESSION_ID = "OPENCLAW_DEBUG_PROXY_SESSION_ID";
@@ -25,9 +29,13 @@ export type DebugProxySettings = {
   enabled: boolean;
   required: boolean;
   proxyUrl?: string;
+<<<<<<< HEAD
   /** @deprecated Capture storage now lives in the shared state database. */
   dbPath: string;
   /** @deprecated Capture payloads now live in the shared state database. */
+=======
+  dbPath: string;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   blobDir: string;
   certDir: string;
   sessionId: string;
@@ -65,11 +73,17 @@ export function applyDebugProxyEnv(
   params: {
     proxyUrl: string;
     sessionId: string;
+<<<<<<< HEAD
+=======
+    dbPath?: string;
+    blobDir?: string;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     certDir?: string;
   },
 ): NodeJS.ProcessEnv {
   // Child process env forces proxy capture and standard proxy variables while
   // preserving unrelated environment values.
+<<<<<<< HEAD
   const baseEnv = { ...env };
   delete baseEnv.OPENCLAW_DEBUG_PROXY_DB_PATH;
   delete baseEnv.OPENCLAW_DEBUG_PROXY_BLOB_DIR;
@@ -78,6 +92,15 @@ export function applyDebugProxyEnv(
     [OPENCLAW_DEBUG_PROXY_ENABLED]: "1",
     [OPENCLAW_DEBUG_PROXY_REQUIRE]: "1",
     [OPENCLAW_DEBUG_PROXY_URL]: params.proxyUrl,
+=======
+  return {
+    ...env,
+    [OPENCLAW_DEBUG_PROXY_ENABLED]: "1",
+    [OPENCLAW_DEBUG_PROXY_REQUIRE]: "1",
+    [OPENCLAW_DEBUG_PROXY_URL]: params.proxyUrl,
+    [OPENCLAW_DEBUG_PROXY_DB_PATH]: params.dbPath ?? resolveDebugProxyDbPath(env),
+    [OPENCLAW_DEBUG_PROXY_BLOB_DIR]: params.blobDir ?? resolveDebugProxyBlobDir(env),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     [OPENCLAW_DEBUG_PROXY_CERT_DIR]: params.certDir ?? resolveDebugProxyCertDir(env),
     [OPENCLAW_DEBUG_PROXY_SESSION_ID]: params.sessionId,
     HTTP_PROXY: params.proxyUrl,

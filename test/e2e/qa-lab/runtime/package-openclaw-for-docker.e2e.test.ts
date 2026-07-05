@@ -4,7 +4,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+<<<<<<< HEAD
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { describe, expect, it, vi } from "vitest";
 import {
   buildPackageArtifacts,
@@ -99,6 +102,7 @@ describe("package-openclaw-for-docker", () => {
     for (const flag of ["--output-dir", "--output-name", "--source-dir"]) {
       expect(() => parseArgs([flag])).toThrow(`${flag} requires a value`);
       expect(() => parseArgs([flag, "--skip-build"])).toThrow(`${flag} requires a value`);
+<<<<<<< HEAD
       expect(() => parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
       expect(() => parseArgs([`${flag}=`])).toThrow(`${flag} requires a value`);
       expect(() => parseArgs([`${flag}=-h`])).toThrow(`${flag} requires a value`);
@@ -115,6 +119,9 @@ describe("package-openclaw-for-docker", () => {
 
     for (const [flag, args] of duplicateCases) {
       expect(() => parseArgs(args), flag).toThrow(`${flag} was provided more than once`);
+=======
+      expect(() => parseArgs([`${flag}=`])).toThrow(`${flag} requires a value`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
@@ -269,14 +276,22 @@ describe("package-openclaw-for-docker", () => {
         }),
       ).rejects.toThrow("missing packed OpenClaw tarball");
 
+<<<<<<< HEAD
+=======
+      fs.writeFileSync(path.join(outputDir, "openclaw-2026.6.17.tgz"), "");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       await expect(
         packOpenClawPackageForDocker("/repo", outputDir, {
           prepareChangelog: async () => {},
           restoreChangelog: async () => {},
+<<<<<<< HEAD
           runCaptureImpl: async () => {
             fs.writeFileSync(path.join(outputDir, "openclaw-2026.6.17.tgz"), "");
             return "npm notice\n";
           },
+=======
+          runCaptureImpl: async () => "npm notice\n",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }),
       ).resolves.toBe(path.join(outputDir, "openclaw-2026.6.17.tgz"));
     } finally {
@@ -284,6 +299,7 @@ describe("package-openclaw-for-docker", () => {
     }
   });
 
+<<<<<<< HEAD
   it("ignores stale package tarballs before fallback scanning npm output", async () => {
     const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docker-pack-stale-"));
     try {
@@ -309,6 +325,8 @@ describe("package-openclaw-for-docker", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("restores the changelog when ignore-scripts packaging fails", async () => {
     const calls: string[] = [];
 
@@ -330,6 +348,7 @@ describe("package-openclaw-for-docker", () => {
     expect(calls).toEqual(["prepare:/repo", "pack", "restore:/repo"]);
   });
 
+<<<<<<< HEAD
   it("clamps oversized command timers before scheduling", async () => {
     await expect(
       runCommandForTest(
@@ -344,6 +363,8 @@ describe("package-openclaw-for-docker", () => {
     ).resolves.toBe("");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("kills timed-out child process groups", async () => {
     if (process.platform === "win32") {
       return;
@@ -382,6 +403,7 @@ describe("package-openclaw-for-docker", () => {
     }
   });
 
+<<<<<<< HEAD
   it("clamps oversized kill grace before scheduling", async () => {
     if (process.platform === "win32") {
       return;
@@ -417,6 +439,8 @@ describe("package-openclaw-for-docker", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps fallback SIGKILL armed for descendants after the direct child exits", async () => {
     if (process.platform === "win32") {
       return;

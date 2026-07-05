@@ -3,8 +3,14 @@ import { afterEach, vi } from "vitest";
 
 const DEBUG_PROXY_ENV_KEYS = [
   "OPENCLAW_DEBUG_PROXY_ENABLED",
+<<<<<<< HEAD
   "OPENCLAW_DEBUG_PROXY_SESSION_ID",
   "OPENCLAW_STATE_DIR",
+=======
+  "OPENCLAW_DEBUG_PROXY_DB_PATH",
+  "OPENCLAW_DEBUG_PROXY_BLOB_DIR",
+  "OPENCLAW_DEBUG_PROXY_SESSION_ID",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ] as const;
 
 type DebugProxyEnvKey = (typeof DEBUG_PROXY_ENV_KEYS)[number];
@@ -29,6 +35,7 @@ function restoreDebugProxyEnv(snapshot: DebugProxyEnvSnapshot): void {
 
 export function installDebugProxyTestResetHooks() {
   const originalFetch = globalThis.fetch;
+<<<<<<< HEAD
   const originalProxyEnv = snapshotDebugProxyEnv();
   let priorProxyEnv = originalProxyEnv;
 
@@ -42,6 +49,15 @@ export function installDebugProxyTestResetHooks() {
     vi.restoreAllMocks();
     restoreDebugProxyEnv(priorProxyEnv);
     priorProxyEnv = originalProxyEnv;
+=======
+  let priorProxyEnv: DebugProxyEnvSnapshot = {};
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+    restoreDebugProxyEnv(priorProxyEnv);
+    priorProxyEnv = {};
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   return {

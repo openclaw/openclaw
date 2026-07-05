@@ -1,22 +1,34 @@
 /**
  * Resolves and persists live-session model switch requests.
  */
+<<<<<<< HEAD
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionEntry, patchSessionEntry } from "../config/sessions/session-accessor.js";
+=======
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
+import type { EmbeddedRunModelSwitchRequest } from "./embedded-agent-runner/runs.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
 } from "./model-selection.js";
 export { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
+<<<<<<< HEAD
 export type LiveSessionModelSelection = {
   provider: string;
   model: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
 };
+=======
+export type LiveSessionModelSelection = EmbeddedRunModelSwitchRequest;
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_PROVIDER_ID = "openai";
@@ -43,12 +55,19 @@ export function resolveLiveSessionModelSelection(params: {
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId,
   });
+<<<<<<< HEAD
   const entry = loadSessionEntry({
     storePath,
     sessionKey,
     hydrateSkillPromptRefs: false,
     readConsistency: "latest",
   });
+=======
+  const entry = loadSessionStore(storePath, {
+    hydrateSkillPromptRefs: false,
+    skipCache: true,
+  })[sessionKey];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const normalizedSelection = normalizeStoredOverrideModel({
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
@@ -128,8 +147,13 @@ export function hasDifferentLiveSessionModelSelection(
  * set so the switch fires on the next clean retry opportunity — even if that
  * falls into a subsequent user turn.
  *
+<<<<<<< HEAD
  * This replaces the previous approach that used an in-memory run-state map,
  * which could not distinguish between
+=======
+ * This replaces the previous approach that used an in-memory map
+ * (`consumeEmbeddedRunModelSwitch`) which could not distinguish between
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
  * user-initiated `/model` switches and system-initiated fallback rotations.
  */
 export function shouldSwitchToLiveModel(params: {
@@ -151,6 +175,7 @@ export function shouldSwitchToLiveModel(params: {
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: params.agentId?.trim(),
   });
+<<<<<<< HEAD
   const entry = loadSessionEntry({
     storePath,
     sessionKey,
@@ -158,6 +183,13 @@ export function shouldSwitchToLiveModel(params: {
     clone: false,
     readConsistency: "latest",
   });
+=======
+  const entry = loadSessionStore(storePath, {
+    hydrateSkillPromptRefs: false,
+    skipCache: true,
+    clone: false,
+  })[sessionKey];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!entry?.liveModelSwitchPending) {
     return undefined;
   }
@@ -214,6 +246,7 @@ export async function clearLiveModelSwitchPending(params: {
   if (!storePath) {
     return;
   }
+<<<<<<< HEAD
   await patchSessionEntry(
     { storePath, sessionKey },
     (entry) => {
@@ -223,4 +256,12 @@ export async function clearLiveModelSwitchPending(params: {
     },
     { replaceEntry: true },
   );
+=======
+  await updateSessionStore(storePath, (store) => {
+    const entry = store[sessionKey];
+    if (entry) {
+      delete entry.liveModelSwitchPending;
+    }
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }

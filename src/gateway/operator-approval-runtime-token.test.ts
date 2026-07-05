@@ -2,17 +2,30 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 
 const envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME"]);
+=======
+
+const originalEnv = {
+  HOME: process.env.HOME,
+  OPENCLAW_HOME: process.env.OPENCLAW_HOME,
+};
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const tempHomes: string[] = [];
 
 function useTempHome(): string {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-runtime-"));
   tempHomes.push(home);
+<<<<<<< HEAD
   setTestEnvValue("HOME", home);
   setTestEnvValue("OPENCLAW_HOME", home);
+=======
+  process.env.HOME = home;
+  process.env.OPENCLAW_HOME = home;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return home;
 }
 
@@ -48,7 +61,20 @@ async function importRuntimeTokenModule(): Promise<
 
 afterEach(() => {
   vi.resetModules();
+<<<<<<< HEAD
   envSnapshot.restore();
+=======
+  if (originalEnv.HOME === undefined) {
+    delete process.env.HOME;
+  } else {
+    process.env.HOME = originalEnv.HOME;
+  }
+  if (originalEnv.OPENCLAW_HOME === undefined) {
+    delete process.env.OPENCLAW_HOME;
+  } else {
+    process.env.OPENCLAW_HOME = originalEnv.OPENCLAW_HOME;
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   for (const home of tempHomes.splice(0)) {
     fs.rmSync(home, { recursive: true, force: true });
   }

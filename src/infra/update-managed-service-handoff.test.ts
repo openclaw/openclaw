@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -16,6 +17,8 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "./update-control-plane-sentinel.js";
 import {
@@ -39,10 +42,15 @@ vi.mock("node:child_process", async () => {
 });
 
 const tempDirs = new Set<string>();
+<<<<<<< HEAD
 type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
 
 afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
+=======
+
+afterEach(async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   spawnMock.mockClear();
   await Promise.all([...tempDirs].map((dir) => fs.rm(dir, { recursive: true, force: true })));
   tempDirs.clear();
@@ -57,6 +65,7 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
+<<<<<<< HEAD
 function writeRestartSentinelRow(env: NodeJS.ProcessEnv, sentinel: unknown): void {
   const { db } = openOpenClawStateDatabase({ env });
   const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
@@ -125,6 +134,12 @@ async function runHelperWithExistingSentinel(params: {
   metaHandoffId?: string;
   prepareStateDatabase?: (env: NodeJS.ProcessEnv) => Promise<void> | void;
   sentinel?: unknown;
+=======
+async function runHelperWithExistingSentinel(params: {
+  handoffId?: string;
+  metaHandoffId?: string;
+  sentinel: unknown;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }) {
   const { execFile } =
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -159,11 +174,16 @@ async function runHelperWithExistingSentinel(params: {
     string,
     unknown
   >;
+<<<<<<< HEAD
   const env = { OPENCLAW_STATE_DIR: tmpDir } as NodeJS.ProcessEnv;
   await params.prepareStateDatabase?.(env);
   if (params.sentinel !== undefined) {
     writeRestartSentinelRow(env, params.sentinel);
   }
+=======
+  const sentinelPath = path.join(tmpDir, "restart-sentinel.json");
+  await fs.writeFile(sentinelPath, `${JSON.stringify(params.sentinel, null, 2)}\n`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const helperParamsPath = path.join(tmpDir, "helper-params.json");
   await fs.writeFile(
     helperParamsPath,
@@ -172,7 +192,11 @@ async function runHelperWithExistingSentinel(params: {
         ...helperParams,
         parentPid: process.pid,
         parentExitTimeoutMs: 1,
+<<<<<<< HEAD
         stateDatabasePath: resolveOpenClawStateSqlitePath(env),
+=======
+        sentinelPath,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         logPath: path.join(tmpDir, "handoff.log"),
         sensitivePaths: [],
       },
@@ -193,6 +217,7 @@ async function runHelperWithExistingSentinel(params: {
     },
   );
 
+<<<<<<< HEAD
   return { result, env };
 }
 
@@ -218,6 +243,9 @@ async function createLegacyRestartSentinelTable(env: NodeJS.ProcessEnv): Promise
   } finally {
     db.close();
   }
+=======
+  return { result, sentinelPath };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function spawnExitedPid(): Promise<number> {
@@ -270,7 +298,11 @@ async function runHelperWithCommand(params: {
         parentExitTimeoutMs: 5000,
         cwd: tmpDir,
         commandArgv: params.commandArgv,
+<<<<<<< HEAD
         stateDatabasePath: resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: tmpDir }),
+=======
+        sentinelPath: path.join(tmpDir, "restart-sentinel.json"),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         logPath: path.join(tmpDir, "handoff.log"),
         sensitivePaths: [],
         ...(params.serviceRecovery ? { serviceRecovery: params.serviceRecovery } : {}),
@@ -388,10 +420,17 @@ describe("managed service update handoff", () => {
     const helperParams = JSON.parse(await fs.readFile(args[1] ?? "", "utf-8")) as {
       cwd?: string;
       metaPath?: string;
+<<<<<<< HEAD
       stateDatabasePath?: string;
     };
     expect(helperParams.metaPath).toMatch(/sentinel-meta\.json$/u);
     expect(helperParams.stateDatabasePath).toMatch(/openclaw\.sqlite$/u);
+=======
+      sentinelPath?: string;
+    };
+    expect(helperParams.metaPath).toMatch(/sentinel-meta\.json$/u);
+    expect(helperParams.sentinelPath).toMatch(/restart-sentinel\.json$/u);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(options.cwd).toBe(os.homedir());
     expect(helperParams.cwd).toBe(os.homedir());
     expect(options.detached).toBe(true);
@@ -581,6 +620,7 @@ describe("managed service update handoff", () => {
     }
   });
 
+<<<<<<< HEAD
   it("writes a fallback update failure when no restart sentinel row exists", async () => {
     const { result, env } = await runHelperWithExistingSentinel({
       handoffId: "handoff-123",
@@ -626,6 +666,8 @@ describe("managed service update handoff", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not overwrite a restart sentinel owned by another startup task", async () => {
     const unrelatedSentinel = {
       version: 1,
@@ -636,12 +678,22 @@ describe("managed service update handoff", () => {
         stats: { reason: "config-restart-pending" },
       },
     };
+<<<<<<< HEAD
     const { result, env } = await runHelperWithExistingSentinel({
+=======
+    const { result, sentinelPath } = await runHelperWithExistingSentinel({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sentinel: unrelatedSentinel,
     });
 
     expect(result).toEqual({ code: 1, signal: null });
+<<<<<<< HEAD
     expect(readRestartSentinelPayload(env)).toEqual(unrelatedSentinel);
+=======
+    await expect(fs.readFile(sentinelPath, "utf-8").then(JSON.parse)).resolves.toEqual(
+      unrelatedSentinel,
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("does not overwrite a newer pending update handoff sentinel", async () => {
@@ -660,14 +712,24 @@ describe("managed service update handoff", () => {
         },
       },
     };
+<<<<<<< HEAD
     const { result, env } = await runHelperWithExistingSentinel({
+=======
+    const { result, sentinelPath } = await runHelperWithExistingSentinel({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       handoffId: "old-handoff",
       metaHandoffId: "old-handoff",
       sentinel: newerSentinel,
     });
 
     expect(result).toEqual({ code: 1, signal: null });
+<<<<<<< HEAD
     expect(readRestartSentinelPayload(env)).toEqual(newerSentinel);
+=======
+    await expect(fs.readFile(sentinelPath, "utf-8").then(JSON.parse)).resolves.toEqual(
+      newerSentinel,
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("sweeps stale handoff temp directories while keeping fresh handoff logs", async () => {

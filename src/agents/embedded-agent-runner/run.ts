@@ -5,7 +5,11 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+<<<<<<< HEAD
 import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+=======
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
@@ -22,7 +26,10 @@ import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
   claimAgentRunContext,
+<<<<<<< HEAD
   emitAgentItemEvent,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
   registerAgentRunContext,
@@ -30,7 +37,11 @@ import {
 } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+<<<<<<< HEAD
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+=======
+import { formatErrorMessage } from "../../infra/errors.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
@@ -90,12 +101,15 @@ import {
   FailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
+<<<<<<< HEAD
 import {
   DEFAULT_FAST_MODE_AUTO_ON_SECONDS,
   type FastModeAutoProgressState,
   formatFastModeAutoProgressText,
   resolveFastModeForElapsed,
 } from "../fast-mode.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { selectAgentHarness } from "../harness/selection.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
@@ -125,10 +139,13 @@ import {
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { hasOnlyAssistantReasoningContent } from "../replay-turn-classification.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
+<<<<<<< HEAD
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
@@ -231,7 +248,10 @@ import {
   resolveHookModelSelection,
 } from "./run/setup.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
+<<<<<<< HEAD
 import type { EmbeddedRunFastModeParam } from "./run/types.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   resolveLiveToolResultMaxChars,
   sessionLikelyHasOversizedToolResults,
@@ -249,7 +269,10 @@ type ApiKeyInfo = ResolvedProviderAuth;
 
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
 const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
+<<<<<<< HEAD
 const EMBEDDED_RUN_LANE_HEARTBEAT_MS = EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS / 2;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
@@ -259,7 +282,10 @@ const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
 const MAX_BEFORE_AGENT_FINALIZE_REVISIONS = 3;
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+<<<<<<< HEAD
 type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentParams & { sessionFile: string };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function isNoRealConversationCompactionNoop(params: {
   ok?: boolean;
@@ -622,12 +648,18 @@ export function runEmbeddedAgent(
 async function runEmbeddedAgentInternal(
   paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
+<<<<<<< HEAD
   const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
   let lifecycleGeneration = paramsBase.lifecycleGeneration!;
+=======
+  let params = paramsInput;
+  let lifecycleGeneration = params.lifecycleGeneration!;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const queuedLifecycleGeneration = getAgentEventLifecycleGeneration();
   // Resolve sessionKey early so all downstream consumers (hooks, LCM, compaction)
   // receive a non-null key even when callers omit it. See #60552.
   const effectiveSessionKey = backfillSessionKey({
+<<<<<<< HEAD
     config: paramsBase.config,
     sessionId: paramsBase.sessionId,
     sessionKey: paramsBase.sessionKey,
@@ -644,6 +676,16 @@ async function runEmbeddedAgentInternal(
     sessionKey: normalizeOptionalString(effectiveSessionKey ?? runSessionTarget.sessionKey),
     sessionFile: runSessionTarget.sessionFile,
   };
+=======
+    config: params.config,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
+  if (effectiveSessionKey !== params.sessionKey) {
+    params = { ...params, sessionKey: effectiveSessionKey };
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   // Outer fallback attempts defer session suspension only while another
@@ -659,8 +701,11 @@ async function runEmbeddedAgentInternal(
   };
   const sessionQueuePriority = resolveEmbeddedRunSessionQueuePriority(params.trigger);
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(params.timeoutMs);
+<<<<<<< HEAD
   const laneTaskAbortController = new AbortController();
   const laneTaskReleaseController = new AbortController();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let laneTaskProgressAtMs = Date.now();
   const noteLaneTaskProgress = () => {
     laneTaskProgressAtMs = Date.now();
@@ -685,9 +730,12 @@ async function runEmbeddedAgentInternal(
       {
         ...opts,
         taskTimeoutProgressAtMs: () => laneTaskProgressAtMs,
+<<<<<<< HEAD
         taskTimeoutAbortSignal: laneTaskAbortController.signal,
         taskTimeoutAbortGraceMs: EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
         taskTimeoutReleaseSignal: laneTaskReleaseController.signal,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
       laneTaskTimeoutMs,
     );
@@ -793,6 +841,7 @@ async function runEmbeddedAgentInternal(
     return enqueueGlobal(async () => {
       throwIfAborted();
       const started = Date.now();
+<<<<<<< HEAD
       const fastModeStarted = params.fastModeStartedAtMs ?? started;
       const fastModeAutoOnSeconds =
         params.fastModeAutoOnSeconds ?? DEFAULT_FAST_MODE_AUTO_ON_SECONDS;
@@ -801,6 +850,8 @@ async function runEmbeddedAgentInternal(
           offAnnounced: false,
           resetAnnounced: false,
         };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const startupStages = createEmbeddedRunStageTracker();
       let startupStagesEmitted = false;
       const notifyExecutionPhase = (
@@ -819,6 +870,7 @@ async function runEmbeddedAgentInternal(
         noteLaneTaskProgress();
         params.onRunProgress?.(info);
       };
+<<<<<<< HEAD
       const emitFastModeAutoProgress = async (payload: {
         enabled: boolean;
         elapsedSeconds: number;
@@ -927,6 +979,8 @@ async function runEmbeddedAgentInternal(
           );
         }
       };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const emitStartupStageSummary = (phase: string) => {
         const summary = startupStages.snapshot();
         const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary);
@@ -1623,7 +1677,10 @@ async function runEmbeddedAgentInternal(
         const verdict = postCompactionGuard.observe(observation);
         if (verdict.shouldAbort) {
           postCompactionAbortError ??= PostCompactionLoopPersistedError.fromVerdict(verdict);
+<<<<<<< HEAD
           laneTaskAbortController.abort(postCompactionAbortError);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           postCompactionAbortController?.abort(postCompactionAbortError);
         }
       };
@@ -1946,7 +2003,10 @@ async function runEmbeddedAgentInternal(
             apiKeyInfo,
             runtimeAuthState,
           });
+<<<<<<< HEAD
           const attemptFastMode = resolveAttemptFastModeParam();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           if (!startupStagesEmitted) {
             startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt);
           }
@@ -1976,7 +2036,11 @@ async function runEmbeddedAgentInternal(
             thinkingLevel: thinkLevel,
             extraParamsOverride: {
               ...params.streamParams,
+<<<<<<< HEAD
               fastMode: attemptFastMode,
+=======
+              fastMode: params.fastMode,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             },
           });
           if (!startupStagesEmitted) {
@@ -1991,7 +2055,10 @@ async function runEmbeddedAgentInternal(
           postCompactionAbortController = attemptAbortController;
           const parentAbortSignal = params.abortSignal;
           const relayParentAbort = (): void => {
+<<<<<<< HEAD
             laneTaskAbortController.abort(parentAbortSignal?.reason);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             attemptAbortController.abort(parentAbortSignal?.reason);
           };
           if (parentAbortSignal?.aborted) {
@@ -1999,6 +2066,7 @@ async function runEmbeddedAgentInternal(
           } else {
             parentAbortSignal?.addEventListener("abort", relayParentAbort, { once: true });
           }
+<<<<<<< HEAD
           // Native attempts start the heartbeat only after their own timeout
           // watchdog is armed, keeping preflight inside the requested deadline.
           let progressInterval: ReturnType<typeof setInterval> | undefined;
@@ -2041,6 +2109,8 @@ async function runEmbeddedAgentInternal(
             );
             timeoutReleaseTimer.unref?.();
           };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
@@ -2064,10 +2134,14 @@ async function runEmbeddedAgentInternal(
             senderName: params.senderName,
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
+<<<<<<< HEAD
             approvalReviewerDeviceId: params.approvalReviewerDeviceId,
             currentChannelId: params.currentChannelId,
             chatId: params.chatId,
             channelContext: params.channelContext,
+=======
+            currentChannelId: params.currentChannelId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             currentMessagingTarget: params.currentMessagingTarget,
             currentThreadTs: params.currentThreadTs,
             currentMessageId: params.currentMessageId,
@@ -2134,6 +2208,7 @@ async function runEmbeddedAgentInternal(
             thinkLevel,
             onToolOutcome: observeToolOutcome,
             allocateToolOutcomeOrdinal,
+<<<<<<< HEAD
             onToolStreamBoundary: maybeAnnounceFastModeAutoOff,
             onRunProgress: notifyRunProgress,
             fastMode: attemptFastMode,
@@ -2145,6 +2220,10 @@ async function runEmbeddedAgentInternal(
                   fastModeAutoProgressState,
                 }
               : {}),
+=======
+            onRunProgress: notifyRunProgress,
+            fastMode: params.fastMode,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
@@ -2156,6 +2235,7 @@ async function runEmbeddedAgentInternal(
             runId: params.runId,
             lifecycleGeneration,
             abortSignal: attemptAbortController.signal,
+<<<<<<< HEAD
             onAttemptTimeoutArmed: pluginHarnessOwnsTransport
               ? undefined
               : startLaneProgressHeartbeat,
@@ -2166,6 +2246,8 @@ async function runEmbeddedAgentInternal(
                   stopLaneProgressHeartbeat();
                   laneTaskAbortController.abort();
                 },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             replyOperation: params.replyOperation,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
@@ -2177,9 +2259,15 @@ async function runEmbeddedAgentInternal(
             blockReplyChunking: params.blockReplyChunking,
             onReasoningStream: params.onReasoningStream,
             onReasoningEnd: params.onReasoningEnd,
+<<<<<<< HEAD
             onToolResult: notifyToolResult,
             onAgentToolResult: params.onAgentToolResult,
             onAgentEvent: notifyAgentEvent,
+=======
+            onToolResult: params.onToolResult,
+            onAgentToolResult: params.onAgentToolResult,
+            onAgentEvent: params.onAgentEvent,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             deferTerminalLifecycle:
               params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
             deferTerminalLifecycleEnd:
@@ -2194,7 +2282,10 @@ async function runEmbeddedAgentInternal(
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
             silentExpected: params.silentExpected,
+<<<<<<< HEAD
             suppressLiveStreamOutput: params.suppressLiveStreamOutput,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             bootstrapContextMode: params.bootstrapContextMode,
             bootstrapContextRunKind: params.bootstrapContextRunKind,
             jobId: params.jobId,
@@ -2222,8 +2313,11 @@ async function runEmbeddedAgentInternal(
               throw postCompactionAbortError ?? err;
             })
             .finally(() => {
+<<<<<<< HEAD
               clearAttemptTimeoutRelease();
               stopLaneProgressHeartbeat();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               parentAbortSignal?.removeEventListener?.("abort", relayParentAbort);
               if (postCompactionAbortController === attemptAbortController) {
                 postCompactionAbortController = undefined;
@@ -2981,7 +3075,11 @@ async function runEmbeddedAgentInternal(
               !hasRecoverableCodexAppServerTimeoutOutcome &&
               !shouldSurfaceCodexCompletionTimeout
             ) {
+<<<<<<< HEAD
               throw toErrorObject(promptError, "Prompt failed");
+=======
+              throw toLintErrorObject(promptError, "Prompt failed");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             }
           }
 
@@ -3116,12 +3214,15 @@ async function runEmbeddedAgentInternal(
             );
             const promptFailoverFailure =
               promptFailoverReason !== null || isFailoverErrorMessage(errorText, { provider });
+<<<<<<< HEAD
             const promptTimeoutFallbackSafe =
               promptErrorSource === "prompt" &&
               promptFailoverReason === "timeout" &&
               !attempt.codexAppServerFailure &&
               attempt.promptTimeoutOutcome?.replayInvalid !== true &&
               attempt.replayMetadata.replaySafe;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
             const failedPromptProfileId = lastProfileId;
             const logPromptFailoverDecision = createFailoverDecisionLogger({
@@ -3153,7 +3254,10 @@ async function runEmbeddedAgentInternal(
               failoverFailure: promptFailoverFailure,
               failoverReason: promptFailoverReason,
               harnessOwnsTransport: pluginHarnessOwnsTransport,
+<<<<<<< HEAD
               promptTimeoutFallbackSafe,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               profileRotated: false,
             });
             if (
@@ -3193,7 +3297,10 @@ async function runEmbeddedAgentInternal(
                 failoverFailure: promptFailoverFailure,
                 failoverReason: promptFailoverReason,
                 harnessOwnsTransport: pluginHarnessOwnsTransport,
+<<<<<<< HEAD
                 promptTimeoutFallbackSafe,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 profileRotated: true,
               });
             }
@@ -3259,7 +3366,11 @@ async function runEmbeddedAgentInternal(
               });
               logPromptFailoverDecision("surface_error");
             }
+<<<<<<< HEAD
             throw toErrorObject(promptError, "Prompt failed");
+=======
+            throw toLintErrorObject(promptError, "Prompt failed");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           }
 
           const assistantForFailover = currentAttemptAssistant ?? sessionAssistantForCandidate;
@@ -4152,9 +4263,12 @@ async function runEmbeddedAgentInternal(
           };
         }
       } finally {
+<<<<<<< HEAD
         if (params.isFinalFallbackAttempt !== false) {
           await maybeEmitFastModeAutoResetBestEffort();
         }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         forgetPromptBuildDrainCacheForRun(params.runId);
         stopRuntimeAuthRefreshTimer();
         await runAgentCleanupStep({
@@ -4210,3 +4324,20 @@ function resolveAuthProfileStateProvider(
   const idProvider = profileId.split(":", 1)[0]?.trim();
   return idProvider || fallbackProvider;
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

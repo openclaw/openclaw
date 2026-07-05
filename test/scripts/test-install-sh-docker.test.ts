@@ -1,4 +1,5 @@
 // Test Install Sh Docker tests cover test install sh docker script behavior.
+<<<<<<< HEAD
 import { spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -26,17 +27,32 @@ const PODMAN_RUN_PATH = "scripts/run-openclaw-podman.sh";
 const SMOKE_DOCKERFILE_PATH = "scripts/docker/install-sh-smoke/Dockerfile";
 const SMOKE_RUNNER_PATH = "scripts/docker/install-sh-smoke/run.sh";
 const NONROOT_DOCKERFILE_PATH = "scripts/docker/install-sh-nonroot/Dockerfile";
+=======
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
+import { describe, expect, it } from "vitest";
+
+const SCRIPT_PATH = "scripts/test-install-sh-docker.sh";
+const DOCKER_SETUP_PATH = "scripts/docker/setup.sh";
+const PODMAN_SETUP_PATH = "scripts/podman/setup.sh";
+const PODMAN_RUN_PATH = "scripts/run-openclaw-podman.sh";
+const SMOKE_RUNNER_PATH = "scripts/docker/install-sh-smoke/run.sh";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const NONROOT_RUNNER_PATH = "scripts/docker/install-sh-nonroot/run.sh";
 const BUN_GLOBAL_SMOKE_PATH = "scripts/e2e/bun-global-install-smoke.sh";
 const BUN_GLOBAL_ASSERTIONS_PATH = "scripts/e2e/lib/bun-global-install/assertions.mjs";
 const INSTALL_SMOKE_WORKFLOW_PATH = ".github/workflows/install-smoke.yml";
 const RELEASE_CHECKS_WORKFLOW_PATH = ".github/workflows/openclaw-release-checks.yml";
 const LIVE_E2E_WORKFLOW_PATH = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
+<<<<<<< HEAD
 const tempDirs = createTempDirTracker();
 
 afterEach(() => {
   tempDirs.cleanup();
 });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 class ScriptExit extends Error {
   constructor(readonly status: number) {
@@ -115,6 +131,7 @@ function runDefaultSmokePlatform(env: Record<string, string>, hostArch: string):
   return result.stdout;
 }
 
+<<<<<<< HEAD
 function extractInstallE2eAgentJsonParser(): string {
   const script = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
   const match = script.match(
@@ -190,6 +207,8 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function extractReadPackTarballFilename(): string {
   const script = readFileSync(SCRIPT_PATH, "utf8");
   const match = script.match(/(read_pack_tarball_filename\(\) \{[\s\S]*?\n\})\n\nSMOKE_IMAGE/u);
@@ -300,6 +319,7 @@ describe("test-install-sh-docker", () => {
     );
   });
 
+<<<<<<< HEAD
   it("keeps install-sh Dockerfiles wired to their runner contracts", () => {
     const e2eDockerfile = expectInstallDockerfileContract(
       INSTALL_E2E_DOCKERFILE_PATH,
@@ -385,6 +405,8 @@ describe("test-install-sh-docker", () => {
     expect(result.stdout).toContain("==> Sanity: CLI runs");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("can reuse dist from the already-built root Docker smoke image", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
     const dockerfile = readFileSync("Dockerfile", "utf8");
@@ -472,6 +494,7 @@ describe("test-install-sh-docker", () => {
 
   it("bounds Docker setup image pulls", () => {
     const script = readFileSync(DOCKER_SETUP_PATH, "utf8");
+<<<<<<< HEAD
     const timeoutHelper = readFileSync(HOST_TIMEOUT_PATH, "utf8");
 
     expect(script).toContain('source "$ROOT_DIR/scripts/lib/host-timeout.sh"');
@@ -482,6 +505,16 @@ describe("test-install-sh-docker", () => {
     );
     expect(timeoutHelper).toContain("elif command -v gtimeout >/dev/null 2>&1; then");
     expect(timeoutHelper).toContain('"$timeout_bin" --kill-after=30s "$timeout_value" "$@"');
+=======
+
+    expect(script).toContain('DOCKER_PULL_TIMEOUT="${OPENCLAW_DOCKER_SETUP_PULL_TIMEOUT:-600s}"');
+    expect(script).toContain("run_docker_pull()");
+    expect(script).toContain("timeout --kill-after=1s 1s true");
+    expect(script).toContain(
+      'timeout --kill-after=30s "$DOCKER_PULL_TIMEOUT" docker pull "$image"',
+    );
+    expect(script).toContain('timeout "$DOCKER_PULL_TIMEOUT" docker pull "$image"');
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(script).toContain('run_docker_pull "$IMAGE_NAME"');
     expect(script).not.toContain('docker pull "$IMAGE_NAME"');
   });
@@ -489,12 +522,22 @@ describe("test-install-sh-docker", () => {
   it("bounds Podman setup image pulls", () => {
     const script = readFileSync(PODMAN_SETUP_PATH, "utf8");
 
+<<<<<<< HEAD
     expect(script).toContain('source "$REPO_PATH/scripts/lib/host-timeout.sh"');
     expect(script).toContain('PODMAN_PULL_TIMEOUT="${OPENCLAW_PODMAN_SETUP_PULL_TIMEOUT:-600s}"');
     expect(script).toContain("run_podman_pull()");
     expect(script).toContain(
       'openclaw_host_timeout_cmd "$PODMAN_PULL_TIMEOUT" podman pull "$image"',
     );
+=======
+    expect(script).toContain('PODMAN_PULL_TIMEOUT="${OPENCLAW_PODMAN_SETUP_PULL_TIMEOUT:-600s}"');
+    expect(script).toContain("run_podman_pull()");
+    expect(script).toContain("timeout --kill-after=1s 1s true");
+    expect(script).toContain(
+      'timeout --kill-after=30s "$PODMAN_PULL_TIMEOUT" podman pull "$image"',
+    );
+    expect(script).toContain('timeout "$PODMAN_PULL_TIMEOUT" podman pull "$image"');
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(script).toContain('run_podman_pull "$OPENCLAW_IMAGE"');
     expect(script).not.toContain('podman pull "$OPENCLAW_IMAGE"');
   });
@@ -506,7 +549,13 @@ describe("test-install-sh-docker", () => {
       'PODMAN_BUILD_TIMEOUT="${OPENCLAW_PODMAN_SETUP_BUILD_TIMEOUT:-1800s}"',
     );
     expect(script).toContain("run_podman_build()");
+<<<<<<< HEAD
     expect(script).toContain('openclaw_host_timeout_cmd "$PODMAN_BUILD_TIMEOUT" podman build "$@"');
+=======
+    expect(script).toContain("timeout --kill-after=1s 1s true");
+    expect(script).toContain('timeout --kill-after=30s "$PODMAN_BUILD_TIMEOUT" podman build "$@"');
+    expect(script).toContain('timeout "$PODMAN_BUILD_TIMEOUT" podman build "$@"');
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(script).toContain('run_podman_build -t "$OPENCLAW_IMAGE"');
     expect(script).not.toContain('podman build -t "$OPENCLAW_IMAGE"');
   });
@@ -516,9 +565,16 @@ describe("test-install-sh-docker", () => {
 
     expect(script).toContain('PODMAN_RUN_TIMEOUT="${OPENCLAW_PODMAN_RUN_TIMEOUT:-600s}"');
     expect(script).toContain("OPENCLAW_PODMAN_RUN_TIMEOUT|OPENCLAW_PODMAN_GATEWAY_HOST_PORT");
+<<<<<<< HEAD
     expect(script).toContain('source "$SCRIPT_DIR/lib/host-timeout.sh"');
     expect(script).toContain("run_podman_detached()");
     expect(script).toContain('openclaw_host_timeout_cmd "$PODMAN_RUN_TIMEOUT" podman run "$@"');
+=======
+    expect(script).toContain("run_podman_detached()");
+    expect(script).toContain("timeout --kill-after=1s 1s true");
+    expect(script).toContain('timeout --kill-after=30s "$PODMAN_RUN_TIMEOUT" podman run "$@"');
+    expect(script).toContain('timeout "$PODMAN_RUN_TIMEOUT" podman run "$@"');
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(script).toContain('podman run --pull="$PODMAN_PULL" --rm -it \\');
     expect(script).toContain('run_podman_detached --pull="$PODMAN_PULL" -d --replace \\');
     expect(script).not.toContain('podman run --pull="$PODMAN_PULL" -d --replace \\');
@@ -548,6 +604,7 @@ describe("test-install-sh-docker", () => {
     expect(podmanSetup).not.toContain("OPENCLAW_DOCKER_PIP_PACKAGES");
   });
 
+<<<<<<< HEAD
   it("keeps the Podman Quadlet template aligned with setup substitutions", () => {
     const setupScript = readFileSync(PODMAN_SETUP_PATH, "utf8");
     const template = readFileSync(PODMAN_QUADLET_TEMPLATE_PATH, "utf8");
@@ -577,6 +634,8 @@ describe("test-install-sh-docker", () => {
     expect(template).not.toContain("/home/admin");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("allows repository branch history and release tags for secret-backed Docker release checks", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW_PATH, "utf8");
 
@@ -677,6 +736,7 @@ describe("test-install-sh-docker", () => {
   });
 });
 
+<<<<<<< HEAD
 describe("install-sh E2E runner", () => {
   it("normalizes Docker wrapper timing and toggle knobs before forwarding", () => {
     const wrapper = readFileSync(INSTALL_E2E_DOCKER_PATH, "utf8");
@@ -802,17 +862,27 @@ describe("install-sh E2E runner", () => {
   });
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("install-sh smoke runner", () => {
   it("wraps long npm/update operations with heartbeat and install-size audits", () => {
     const script = readFileSync(SMOKE_RUNNER_PATH, "utf8");
 
     expect(script).toContain(
+<<<<<<< HEAD
       'HEARTBEAT_INTERVAL="$(read_nonnegative_int_env OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL 60)"',
     );
     expect(script).toContain(
       'INSTALL_COMMAND_TIMEOUT="$(read_positive_int_env OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT 900)"',
     );
     expect(script).toContain('if [[ "$interval" == "0" ]]; then');
+=======
+      'HEARTBEAT_INTERVAL="${OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL:-60}"',
+    );
+    expect(script).toContain(
+      'INSTALL_COMMAND_TIMEOUT="${OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT:-900}"',
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(script).toContain("run_with_heartbeat");
     expect(script).toContain("npm_install_global");
     expect(script).toContain('timeout --kill-after=30s "${INSTALL_COMMAND_TIMEOUT}s"');
@@ -826,6 +896,7 @@ describe("install-sh smoke runner", () => {
     expect(script).toContain("unterminated update JSON object");
   });
 
+<<<<<<< HEAD
   it.each([
     ["command timeout", "OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT", "900s"],
     ["heartbeat interval", "OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL", "60s"],
@@ -843,6 +914,8 @@ describe("install-sh smoke runner", () => {
     expect(result.stderr).not.toContain("unsupported OPENCLAW_INSTALL_SMOKE_MODE");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("covers plain npm global installs and npm-driven updates", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
     const runner = readFileSync(SMOKE_RUNNER_PATH, "utf8");
@@ -908,9 +981,12 @@ describe("bun global install smoke", () => {
     expect(script).toContain("OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE");
     expect(script).toContain('source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"');
     expect(script).toContain(
+<<<<<<< HEAD
       'COMMAND_TIMEOUT_MS="$(read_positive_int_env OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS 180000)"',
     );
     expect(script).toContain(
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       'DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_BUN_GLOBAL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"',
     );
     expect(script).toContain('container_id="$(docker_e2e_docker_cmd create "$image")"');
@@ -931,6 +1007,7 @@ describe("bun global install smoke", () => {
     expect(script).not.toContain('\n  rm -rf "$ROOT_DIR/dist"\n');
   });
 
+<<<<<<< HEAD
   it("rejects invalid Bun global install command timeouts before Bun setup", () => {
     const result = spawnSync("bash", [BUN_GLOBAL_SMOKE_PATH], {
       encoding: "utf8",
@@ -945,6 +1022,8 @@ describe("bun global install smoke", () => {
     expect(result.stderr).not.toContain("Bun is required");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps npm pack tarball paths inside the Bun smoke pack directory", () => {
     const script = readFileSync(BUN_GLOBAL_SMOKE_PATH, "utf8");
 
@@ -980,6 +1059,7 @@ describe("bun global install smoke", () => {
     }
   });
 
+<<<<<<< HEAD
   it.runIf(process.platform !== "win32" && existsSync("/usr/bin/time"))(
     "preserves Bun global timeout kill grace after the leader exits",
     () => {
@@ -1100,6 +1180,8 @@ describe("bun global install smoke", () => {
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("gates workflow Bun install smoke to scheduled and release-check runs", () => {
     const workflow = readFileSync(INSTALL_SMOKE_WORKFLOW_PATH, "utf8");
     const releaseChecks = readFileSync(RELEASE_CHECKS_WORKFLOW_PATH, "utf8");

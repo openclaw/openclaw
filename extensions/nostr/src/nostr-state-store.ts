@@ -1,6 +1,9 @@
 // Nostr plugin module implements nostr state store behavior.
 import { getNostrRuntime } from "./runtime.js";
+<<<<<<< HEAD
 import { normalizeNostrStateAccountId } from "./state-account-id.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const STORE_VERSION = 2;
 const PROFILE_STATE_VERSION = 1;
@@ -26,6 +29,17 @@ type NostrProfileState = {
   lastPublishResults: Record<string, "ok" | "failed" | "timeout"> | null;
 };
 
+<<<<<<< HEAD
+=======
+function normalizeAccountId(accountId?: string): string {
+  const trimmed = accountId?.trim();
+  if (!trimmed) {
+    return "default";
+  }
+  return trimmed.replace(/[^a-z0-9._-]+/gi, "_");
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function openNostrBusStateStore(env?: NodeJS.ProcessEnv) {
   return getNostrRuntime().state.openKeyedStore<NostrBusState>({
     namespace: "bus-state",
@@ -47,9 +61,13 @@ export async function readNostrBusState(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<NostrBusState | null> {
   return (
+<<<<<<< HEAD
     (await openNostrBusStateStore(params.env).lookup(
       normalizeNostrStateAccountId(params.accountId),
     )) ?? null
+=======
+    (await openNostrBusStateStore(params.env).lookup(normalizeAccountId(params.accountId))) ?? null
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
 }
 
@@ -66,10 +84,14 @@ export async function writeNostrBusState(params: {
     gatewayStartedAt: params.gatewayStartedAt,
     recentEventIds: (params.recentEventIds ?? []).filter((x): x is string => typeof x === "string"),
   };
+<<<<<<< HEAD
   await openNostrBusStateStore(params.env).register(
     normalizeNostrStateAccountId(params.accountId),
     payload,
   );
+=======
+  await openNostrBusStateStore(params.env).register(normalizeAccountId(params.accountId), payload);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /**
@@ -105,9 +127,14 @@ export async function readNostrProfileState(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<NostrProfileState | null> {
   return (
+<<<<<<< HEAD
     (await openNostrProfileStateStore(params.env).lookup(
       normalizeNostrStateAccountId(params.accountId),
     )) ?? null
+=======
+    (await openNostrProfileStateStore(params.env).lookup(normalizeAccountId(params.accountId))) ??
+    null
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
 }
 
@@ -125,7 +152,11 @@ export async function writeNostrProfileState(params: {
     lastPublishResults: params.lastPublishResults,
   };
   await openNostrProfileStateStore(params.env).register(
+<<<<<<< HEAD
     normalizeNostrStateAccountId(params.accountId),
+=======
+    normalizeAccountId(params.accountId),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     payload,
   );
 }

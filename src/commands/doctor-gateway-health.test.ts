@@ -8,7 +8,10 @@ import {
 
 const callGateway = vi.hoisted(() => vi.fn());
 const isGatewayCredentialsRequiredError = vi.hoisted(() => vi.fn(() => false));
+<<<<<<< HEAD
 const isGatewayTransportError = vi.hoisted(() => vi.fn((_value: unknown) => false));
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const isGatewaySecretRefUnavailableError = vi.hoisted(() => vi.fn(() => false));
 const probeGatewayStatus = vi.hoisted(() => vi.fn());
 const note = vi.hoisted(() => vi.fn());
@@ -28,7 +31,10 @@ vi.mock("../gateway/call.js", () => ({
   })),
   callGateway,
   isGatewayCredentialsRequiredError,
+<<<<<<< HEAD
   isGatewayTransportError,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("../gateway/credentials.js", () => ({
@@ -56,8 +62,11 @@ describe("checkGatewayHealth", () => {
     callGateway.mockReset();
     isGatewayCredentialsRequiredError.mockReset();
     isGatewayCredentialsRequiredError.mockReturnValue(false);
+<<<<<<< HEAD
     isGatewayTransportError.mockReset();
     isGatewayTransportError.mockReturnValue(false);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     isGatewaySecretRefUnavailableError.mockReset();
     isGatewaySecretRefUnavailableError.mockReturnValue(false);
     probeGatewayStatus.mockReset();
@@ -125,6 +134,7 @@ describe("checkGatewayHealth", () => {
     );
   });
 
+<<<<<<< HEAD
   it("reports the typed close reason instead of claiming the gateway is not running", async () => {
     const error = Object.assign(
       new Error("gateway closed (1008): \u001B]52;c;YXR0YWNr\u0007protocol version mismatch"),
@@ -145,6 +155,8 @@ describe("checkGatewayHealth", () => {
     expect(note).not.toHaveBeenCalledWith("Gateway not running.", "Gateway");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("reports credentials-required when status RPC auth blocks a reachable gateway", async () => {
     callGateway.mockRejectedValueOnce(new Error());
     isGatewayCredentialsRequiredError.mockReturnValueOnce(true);

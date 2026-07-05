@@ -373,7 +373,10 @@ export function createMcpLoopbackServerConfig(port: number) {
       openclaw: {
         type: "http",
         url: `http://127.0.0.1:${port}/mcp`,
+<<<<<<< HEAD
         alwaysLoad: true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         headers: {
           Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
           "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",

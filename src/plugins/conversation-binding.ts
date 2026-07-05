@@ -1,5 +1,10 @@
 // Binds plugin conversations to stable channel and agent identifiers.
 import crypto from "node:crypto";
+<<<<<<< HEAD
+=======
+import fs from "node:fs";
+import path from "node:path";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -12,6 +17,7 @@ import {
 } from "../bindings/records.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
+<<<<<<< HEAD
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -21,6 +27,13 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+=======
+import { expandHomePrefix } from "../infra/home-dir.js";
+import { writeJson } from "../infra/json-files.js";
+import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type {
   PluginConversationBinding,
   PluginConversationBindingResolvedEvent,
@@ -32,6 +45,10 @@ import { getActivePluginRegistry } from "./runtime.js";
 
 const log = createSubsystemLogger("plugins/binding");
 
+<<<<<<< HEAD
+=======
+const APPROVALS_PATH = "~/.openclaw/plugin-binding-approvals.json";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const PLUGIN_BINDING_CUSTOM_ID_PREFIX = "pluginbind";
 const PLUGIN_BINDING_OWNER = "plugin";
 const PLUGIN_BINDING_SESSION_PREFIX = "plugin-binding";
@@ -53,8 +70,15 @@ type PluginBindingApprovalEntry = {
   approvedAt: number;
 };
 
+<<<<<<< HEAD
 type PluginBindingApprovalsState = { approvals: PluginBindingApprovalEntry[] };
 type PluginBindingApprovalsDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_binding_approvals">;
+=======
+type PluginBindingApprovalsFile = {
+  version: 1;
+  approvals: PluginBindingApprovalEntry[];
+};
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type PluginBindingConversation = {
   channel: string;
@@ -121,7 +145,11 @@ const pendingRequests = resolveGlobalMap<string, PendingPluginBindingRequest>(
 
 type PluginBindingGlobalState = {
   fallbackNoticeBindingIds: Set<string>;
+<<<<<<< HEAD
   approvalsCache: PluginBindingApprovalsState | null;
+=======
+  approvalsCache: PluginBindingApprovalsFile | null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   approvalsLoaded: boolean;
   approvalsSaveChain: Promise<void>;
 };
@@ -157,6 +185,13 @@ function getPluginBindingGlobalState(): PluginBindingGlobalState {
   return pluginBindingGlobalState;
 }
 
+<<<<<<< HEAD
+=======
+function resolveApprovalsPath(): string {
+  return expandHomePrefix(APPROVALS_PATH);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function normalizeChannel(value: string): string {
   return normalizeOptionalLowercaseString(value) ?? "";
 }
@@ -334,6 +369,7 @@ function createApprovalRequestId(): string {
   return crypto.randomBytes(9).toString("base64url");
 }
 
+<<<<<<< HEAD
 function openApprovalsDatabase() {
   return openOpenClawStateDatabase();
 }
@@ -395,16 +431,74 @@ async function persistApprovalEntry(entry: PluginBindingApprovalEntry): Promise<
               }),
             ),
         );
+=======
+function loadApprovalsFromDisk(): PluginBindingApprovalsFile {
+  const filePath = resolveApprovalsPath();
+  try {
+    if (!fs.existsSync(filePath)) {
+      return { version: 1, approvals: [] };
+    }
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(raw) as Partial<PluginBindingApprovalsFile>;
+    if (!Array.isArray(parsed.approvals)) {
+      return { version: 1, approvals: [] };
+    }
+    return {
+      version: 1,
+      approvals: parsed.approvals
+        .filter(
+          (entry): entry is PluginBindingApprovalEntry =>
+            entry !== null && typeof entry === "object",
+        )
+        .map((entry) => ({
+          pluginRoot: typeof entry.pluginRoot === "string" ? entry.pluginRoot : "",
+          pluginId: typeof entry.pluginId === "string" ? entry.pluginId : "",
+          pluginName: typeof entry.pluginName === "string" ? entry.pluginName : undefined,
+          channel: typeof entry.channel === "string" ? normalizeChannel(entry.channel) : "",
+          accountId: normalizeOptionalString(entry.accountId) ?? "default",
+          approvedAt:
+            typeof entry.approvedAt === "number" && Number.isFinite(entry.approvedAt)
+              ? Math.floor(entry.approvedAt)
+              : Date.now(),
+        }))
+        .filter((entry) => entry.pluginRoot && entry.pluginId && entry.channel),
+    };
+  } catch (error) {
+    log.warn(`plugin binding approvals load failed: ${String(error)}`);
+    return { version: 1, approvals: [] };
+  }
+}
+
+async function saveApprovals(file: PluginBindingApprovalsFile): Promise<void> {
+  const filePath = resolveApprovalsPath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const state = getPluginBindingGlobalState();
+  state.approvalsCache = file;
+  state.approvalsLoaded = true;
+  const writeApprovals = state.approvalsSaveChain
+    .catch(() => undefined)
+    .then(async () => {
+      await writeJson(filePath, file, {
+        mode: 0o600,
+        trailingNewline: true,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
     });
   state.approvalsSaveChain = writeApprovals.catch(() => undefined);
   await writeApprovals;
 }
 
+<<<<<<< HEAD
 function getApprovals(): PluginBindingApprovalsState {
   const state = getPluginBindingGlobalState();
   if (!state.approvalsLoaded || !state.approvalsCache) {
     state.approvalsCache = loadApprovalsFromDatabase();
+=======
+function getApprovals(): PluginBindingApprovalsFile {
+  const state = getPluginBindingGlobalState();
+  if (!state.approvalsLoaded || !state.approvalsCache) {
+    state.approvalsCache = loadApprovalsFromDisk();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     state.approvalsLoaded = true;
   }
   return state.approvalsCache;
@@ -438,10 +532,17 @@ async function addPersistentApproval(entry: PluginBindingApprovalEntry): Promise
       }) !== key,
   );
   approvals.push(entry);
+<<<<<<< HEAD
   const state = getPluginBindingGlobalState();
   state.approvalsCache = { approvals };
   state.approvalsLoaded = true;
   await persistApprovalEntry(entry);
+=======
+  await saveApprovals({
+    version: 1,
+    approvals,
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function buildBindingMetadata(params: {

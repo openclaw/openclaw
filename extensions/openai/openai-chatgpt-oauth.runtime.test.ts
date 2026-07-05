@@ -22,6 +22,7 @@ describe("OpenAI Codex OAuth runtime", () => {
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
+<<<<<<< HEAD
 
   it("cancels reachable TLS preflight response bodies", async () => {
     const response = new Response("reachable", { status: 302 });
@@ -37,4 +38,6 @@ describe("OpenAI Codex OAuth runtime", () => {
 
     expect(cancel).toHaveBeenCalledOnce();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

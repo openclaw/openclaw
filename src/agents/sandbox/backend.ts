@@ -20,7 +20,10 @@ export type {
   SandboxBackendManager,
   SandboxBackendRegistration,
   SandboxBackendRuntimeInfo,
+<<<<<<< HEAD
   SandboxBackendWorkdirValidation,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   SandboxBackendWorkdirResolver,
 } from "./backend.types.js";
 export type {
@@ -28,8 +31,11 @@ export type {
   SandboxBackendCommandResult,
   SandboxBackendExecSpec,
   SandboxBackendHandle,
+<<<<<<< HEAD
   SandboxBackendPreparedWorkdirDiscarder,
   SandboxBackendWorkdirValidator,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./backend-handle.types.js";
 
 const SANDBOX_BACKEND_FACTORIES_STATE_KEY = Symbol.for("openclaw.sandboxBackendFactories");

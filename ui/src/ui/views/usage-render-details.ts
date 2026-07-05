@@ -396,15 +396,25 @@ function renderTimeSeriesCompact(
   if (startDate || endDate || (selectedDays && selectedDays.length > 0)) {
     const startTs = startDate ? new Date(startDate + "T00:00:00").getTime() : 0;
     const endTs = endDate ? new Date(endDate + "T23:59:59").getTime() : Infinity;
+<<<<<<< HEAD
     const selectedDaySet = selectedDays?.length ? new Set(selectedDays) : undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     points = timeSeries.points.filter((p) => {
       if (p.timestamp < startTs || p.timestamp > endTs) {
         return false;
       }
+<<<<<<< HEAD
       if (selectedDaySet) {
         const d = new Date(p.timestamp);
         const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
         return selectedDaySet.has(dateStr);
+=======
+      if (selectedDays && selectedDays.length > 0) {
+        const d = new Date(p.timestamp);
+        const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        return selectedDays.includes(dateStr);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
       return true;
     });

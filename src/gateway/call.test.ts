@@ -9,7 +9,11 @@ import type { DeviceIdentity } from "../infra/device-identity.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
+<<<<<<< HEAD
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+=======
+import { captureEnv } from "../test-utils/env.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   loadConfigMock as getRuntimeConfig,
@@ -208,6 +212,10 @@ const {
   buildGatewayProbeConnectionDetails,
   callGateway,
   callGatewayCli,
+<<<<<<< HEAD
+=======
+  callGatewayScoped,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   formatGatewayClientRequestErrorJson,
   formatGatewayTransportErrorJson,
   isGatewayTransportError,
@@ -331,12 +339,21 @@ describe("callGateway url resolution", () => {
 
   beforeEach(() => {
     envSnapshot.restore();
+<<<<<<< HEAD
     deleteTestEnvValue("OPENCLAW_ALLOW_INSECURE_PRIVATE_WS");
     deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
     deleteTestEnvValue("OPENCLAW_GATEWAY_PORT");
     deleteTestEnvValue("OPENCLAW_GATEWAY_URL");
     deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
     deleteTestEnvValue("OPENCLAW_STATE_DIR");
+=======
+    delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
+    delete process.env.OPENCLAW_CONFIG_PATH;
+    delete process.env.OPENCLAW_GATEWAY_PORT;
+    delete process.env.OPENCLAW_GATEWAY_URL;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_STATE_DIR;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resetGatewayCallMocks();
   });
 
@@ -626,6 +643,7 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.password).toBeUndefined();
   });
 
+<<<<<<< HEAD
   it("lets an explicit local port override bypass gateway env URL and port", async () => {
     getRuntimeConfig.mockReturnValue({
       gateway: { mode: "local", bind: "loopback" },
@@ -649,6 +667,8 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.token).toBe("explicit-token");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses env URL override credentials without resolving local password SecretRefs", async () => {
     getRuntimeConfig.mockReturnValue({
       gateway: {
@@ -779,10 +799,17 @@ describe("callGateway url resolution", () => {
   it("passes explicit scopes through, including empty arrays", async () => {
     setLocalLoopbackGatewayConfig();
 
+<<<<<<< HEAD
     await callGateway({ method: "health", scopes: ["operator.read"] });
     expect(lastClientOptions?.scopes).toEqual(["operator.read"]);
 
     await callGateway({ method: "health", scopes: [] });
+=======
+    await callGatewayScoped({ method: "health", scopes: ["operator.read"] });
+    expect(lastClientOptions?.scopes).toEqual(["operator.read"]);
+
+    await callGatewayScoped({ method: "health", scopes: [] });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(lastClientOptions?.scopes).toStrictEqual([]);
   });
 
@@ -1143,6 +1170,7 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.preauthHandshakeTimeoutMs).toBe(4321);
   });
 
+<<<<<<< HEAD
   it("lets probe details local port override bypass gateway env URL and port", async () => {
     const config = {
       gateway: {
@@ -1186,6 +1214,8 @@ describe("buildGatewayConnectionDetails", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("redacts credential-bearing target URLs from connection messages", () => {
     setLocalLoopbackGatewayConfig(18800);
 
@@ -1284,6 +1314,7 @@ describe("buildGatewayConnectionDetails", () => {
     }
   });
 
+<<<<<<< HEAD
   it("lets a local port override bypass gateway env URL and port in connection details", () => {
     getRuntimeConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
     resolveGatewayPort.mockImplementation((_config?: unknown, env?: unknown) => {
@@ -1320,6 +1351,12 @@ describe("buildGatewayConnectionDetails", () => {
     const tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-call-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
     setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(tempStateDir, "missing-config.json"));
+=======
+  it("falls back to the default config loader when test deps drift", () => {
+    const tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-call-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    process.env.OPENCLAW_CONFIG_PATH = path.join(tempStateDir, "missing-config.json");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     try {
       getRuntimeConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
       resolveGatewayPort.mockReturnValue(18800);
@@ -2650,7 +2687,11 @@ describe("callGateway password resolution", () => {
   });
 
   it.each(explicitAuthCases)("uses explicit $label when url override is set", async (testCase) => {
+<<<<<<< HEAD
     setTestEnvValue(testCase.envKey, testCase.envValue);
+=======
+    process.env[testCase.envKey] = testCase.envValue;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const auth = { [testCase.authKey]: testCase.configValue } as {
       password?: string;
       token?: string;

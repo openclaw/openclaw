@@ -19,7 +19,10 @@ import {
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
+<<<<<<< HEAD
   filterLiveShortTermRecallEntries,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   isShortTermMemoryPath,
   loadShortTermPromotionDreamingStats,
   recordGroundedShortTermCandidates,
@@ -172,6 +175,7 @@ describe("short-term promotion", () => {
     });
   });
 
+<<<<<<< HEAD
   it("deduplicates source-file checks within a recall batch", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const notePath = await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
@@ -208,6 +212,8 @@ describe("short-term promotion", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("falls back when the injected recall timestamp is outside Date range", async () => {
     vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 4, 30, 12, 0, 0));
     await withTempWorkspace(async (workspaceDir) => {
@@ -3189,9 +3195,13 @@ describe("short-term promotion", () => {
         path: "memory/2026-04-03.md",
         snippet: "Move backups to S3 Glacier and sync QMD router notes.",
       }),
+<<<<<<< HEAD
       // "s3" is a protected-glossary term; it now surfaces as a standalone token past the
       // per-script min-length gate (the longer terms still match as substrings).
     ).toStrictEqual(["backup", "backups", "glacier", "qmd", "router", "s3", "sync"]);
+=======
+    ).toStrictEqual(["backup", "backups", "glacier", "qmd", "router", "sync"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("extracts multilingual concept tags across latin and cjk snippets", () => {

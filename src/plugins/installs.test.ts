@@ -146,6 +146,7 @@ describe("recordPluginInstall", () => {
 
     expectRecordedInstall("demo", next);
   });
+<<<<<<< HEAD
 
   it("clears stale ClawHub trust metadata when a later install omits it", () => {
     const existing = recordPluginInstall(
@@ -192,4 +193,6 @@ describe("recordPluginInstall", () => {
       installedAt: "2026-05-15T00:00:03.000Z",
     });
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

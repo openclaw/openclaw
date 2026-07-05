@@ -8,7 +8,11 @@ import {
   isLikelyToolNonceRefusal,
   shouldRetryExecReadProbe,
   shouldRetryToolReadProbe,
+<<<<<<< HEAD
 } from "./live-tool-probe.test-helpers.js";
+=======
+} from "./live-tool-probe-utils.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("live tool probe utils", () => {
   describe("nonce matching", () => {

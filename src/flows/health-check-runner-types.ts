@@ -25,6 +25,7 @@ export interface HealthCheckRunResult extends Omit<HealthRepairResult, "changes"
   readonly effects?: readonly HealthRepairEffect[];
 }
 
+<<<<<<< HEAD
 /** Internal runner selection metadata. This is intentionally not part of the public SDK type. */
 export interface HealthCheckSelectionOptions {
   readonly defaultEnabled?: boolean;
@@ -42,6 +43,20 @@ export type HealthCheckInput = SplitHealthCheckInput | RunnableHealthCheck;
 
 /** Normalized check contract consumed by lint and repair runners. */
 export interface RegisteredHealthCheck extends HealthCheck, HealthCheckSelectionOptions {
+=======
+/** Health-check implementation that owns its own detect/repair orchestration. */
+export interface RunnableHealthCheck extends Pick<
+  HealthCheck,
+  "id" | "kind" | "description" | "source"
+> {
+  run(ctx: HealthCheckRunContext, scope?: HealthCheckScope): Promise<HealthCheckRunResult>;
+}
+
+export type HealthCheckInput = HealthCheck | RunnableHealthCheck;
+
+/** Normalized check contract consumed by lint and repair runners. */
+export interface RegisteredHealthCheck extends HealthCheck {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   readonly sourceContract: "split" | "run";
   run(ctx: HealthCheckRunContext, scope?: HealthCheckScope): Promise<HealthCheckRunResult>;
 }

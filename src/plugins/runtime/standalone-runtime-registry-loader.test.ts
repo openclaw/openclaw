@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearPluginLoaderCache, testing } from "../loader.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import type { PluginRegistry } from "../registry-types.js";
+<<<<<<< HEAD
 import {
   getActivePluginChannelRegistry,
   getActivePluginRegistry,
@@ -10,6 +11,9 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../runtime.js";
+=======
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../runtime.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const loaderMocks = vi.hoisted(() => ({
   loadOpenClawPlugins: vi.fn<typeof import("../loader.js").loadOpenClawPlugins>(),
@@ -121,6 +125,7 @@ describe("ensureStandaloneRuntimePluginRegistryLoaded", () => {
     expect(loaderMocks.loadOpenClawPlugins).toHaveBeenCalledOnce();
   });
 });
+<<<<<<< HEAD
 
 describe("ensureStandaloneRuntimePluginRegistryLoaded tool-discovery installs", () => {
   it("does not replace active or pinned channel registries during tool discovery", () => {
@@ -211,3 +216,5 @@ describe("ensureStandaloneRuntimePluginRegistryLoaded tool-discovery installs", 
     expect(getActivePluginRegistry()).toBeNull();
   });
 });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

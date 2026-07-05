@@ -1,9 +1,30 @@
+<<<<<<< HEAD
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // @vitest-environment node
 import { createDeferred } from "../../../src/test-utils/deferred.js";
 
 type CronRunsLoadStatus = "ok" | "error" | "skipped";
 
+=======
+// @vitest-environment node
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+type CronRunsLoadStatus = "ok" | "error" | "skipped";
+
+function createDeferred<T = void>() {
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred resolver to be initialized");
+  }
+  return { promise, resolve, reject };
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function raceWithNextMacrotask(promise: Promise<unknown>): Promise<"resolved" | "pending"> {
   return await Promise.race([
     promise.then(() => "resolved" as const),

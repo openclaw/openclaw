@@ -316,6 +316,7 @@ export function parseBindingSpecs(params: {
     if (!trimmed) {
       continue;
     }
+<<<<<<< HEAD
     // Bind specs are exactly <channel> or <channel>:<account>; extra colon
     // segments would silently change the requested account if truncated.
     const [channelRaw, accountRaw, ...extraSegments] = trimmed.split(":");
@@ -325,6 +326,9 @@ export function parseBindingSpecs(params: {
       );
       continue;
     }
+=======
+    const [channelRaw, accountRaw] = trimmed.split(":", 2);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const channel = normalizeBindingChannelId(channelRaw, params.config);
     if (!channel) {
       errors.push(formatUnknownChannelMessage({ channel: channelRaw }));

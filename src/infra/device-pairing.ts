@@ -909,6 +909,7 @@ export async function removePairedDevice(
   });
 }
 
+<<<<<<< HEAD
 /** Remove one approved paired-device role while preserving unrelated role tokens. */
 export async function removePairedDeviceRole(params: {
   deviceId: string;
@@ -987,6 +988,8 @@ export async function removePairedDeviceRole(params: {
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Update non-auth metadata for a paired device presence/status refresh. */
 export async function updatePairedDeviceMetadata(
   deviceId: string,
@@ -1307,3 +1310,20 @@ export async function revokeDeviceToken(params: {
     return { ok: true, entry };
   });
 }
+<<<<<<< HEAD
+=======
+
+/** Delete a paired device record without touching unrelated pending requests. */
+export async function clearDevicePairing(deviceId: string, baseDir?: string): Promise<boolean> {
+  return await withLock(async () => {
+    const state = await loadState(baseDir);
+    const normalizedId = normalizeDeviceId(deviceId);
+    if (!state.pairedByDeviceId[normalizedId]) {
+      return false;
+    }
+    delete state.pairedByDeviceId[normalizedId];
+    await persistState(state, baseDir, "paired");
+    return true;
+  });
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

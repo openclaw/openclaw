@@ -15,6 +15,7 @@ function restoreEnvVar(name: string, value: string | undefined): void {
   }
 }
 
+<<<<<<< HEAD
 function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(payload), {
     status: 200,
@@ -23,6 +24,8 @@ function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function withLiveChutesDiscovery<T>(
   fetchMock: ReturnType<typeof vi.fn>,
   run: () => Promise<T>,
@@ -53,11 +56,20 @@ async function withLiveChutesDiscovery<T>(
 function createAuthEchoFetchMock() {
   return vi.fn().mockImplementation((_url, init?: { headers?: HeadersInit }) => {
     const auth = readAuthorizationHeader(init);
+<<<<<<< HEAD
     return Promise.resolve(
       jsonResponse({
         data: [{ id: auth ? `${auth}-model` : "public-model" }],
       }),
     );
+=======
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({
+        data: [{ id: auth ? `${auth}-model` : "public-model" }],
+      }),
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 }
 
@@ -131,8 +143,14 @@ describe("chutes-models", () => {
   });
 
   it("discoverChutesModels correctly maps API response when not in test env", async () => {
+<<<<<<< HEAD
     const mockFetch = vi.fn().mockResolvedValue(
       jsonResponse({
+=======
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         data: [
           { id: "zai-org/GLM-4.7-TEE" },
           {
@@ -146,7 +164,11 @@ describe("chutes-models", () => {
           { id: "new-provider/simple-model" },
         ],
       }),
+<<<<<<< HEAD
     );
+=======
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await withLiveChutesDiscovery(mockFetch, async () => {
       const models = await discoverChutesModels("test-token-real-fetch");
       expect(models.length).toBeGreaterThan(0);
@@ -164,8 +186,14 @@ describe("chutes-models", () => {
   });
 
   it("falls back from malformed live token metadata", async () => {
+<<<<<<< HEAD
     const mockFetch = vi.fn().mockResolvedValue(
       jsonResponse({
+=======
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         data: [
           {
             id: "provider/bad-window",
@@ -179,7 +207,11 @@ describe("chutes-models", () => {
           },
         ],
       }),
+<<<<<<< HEAD
     );
+=======
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await withLiveChutesDiscovery(mockFetch, async () => {
       const models = await discoverChutesModels("malformed-token-metadata");
@@ -200,10 +232,21 @@ describe("chutes-models", () => {
   it("discoverChutesModels retries without auth on 401", async () => {
     const mockFetch = vi.fn().mockImplementation((_url, init?: { headers?: HeadersInit }) => {
       if (readAuthorizationHeader(init) === "Bearer test-token-error") {
+<<<<<<< HEAD
         return Promise.resolve(new Response("", { status: 401 }));
       }
       return Promise.resolve(
         jsonResponse({
+=======
+        return Promise.resolve({
+          ok: false,
+          status: 401,
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           data: [
             {
               id: "Qwen/Qwen3-32B",
@@ -233,7 +276,11 @@ describe("chutes-models", () => {
             },
           ],
         }),
+<<<<<<< HEAD
       );
+=======
+      });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     await withLiveChutesDiscovery(mockFetch, async () => {
       const models = await discoverChutesModels("test-token-error");
@@ -243,7 +290,14 @@ describe("chutes-models", () => {
   });
 
   it("does not cache fallback static catalog for non-OK responses", async () => {
+<<<<<<< HEAD
     const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 503 }));
+=======
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await withLiveChutesDiscovery(mockFetch, async () => {
       const first = await discoverChutesModels("chutes-fallback-token");
@@ -258,6 +312,7 @@ describe("chutes-models", () => {
     const mockFetch = vi.fn().mockImplementation((_url, init?: { headers?: HeadersInit }) => {
       const auth = readAuthorizationHeader(init);
       if (auth === "Bearer chutes-token-a") {
+<<<<<<< HEAD
         return Promise.resolve(
           jsonResponse({
             data: [{ id: "private/model-a" }],
@@ -276,6 +331,29 @@ describe("chutes-models", () => {
           data: [{ id: "public/model" }],
         }),
       );
+=======
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            data: [{ id: "private/model-a" }],
+          }),
+        });
+      }
+      if (auth === "Bearer chutes-token-b") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            data: [{ id: "private/model-b" }],
+          }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          data: [{ id: "public/model" }],
+        }),
+      });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     await withLiveChutesDiscovery(mockFetch, async () => {
       const modelsA = await discoverChutesModels("chutes-token-a");
@@ -320,6 +398,7 @@ describe("chutes-models", () => {
   it("does not cache 401 fallback under the failed token key", async () => {
     const mockFetch = vi.fn().mockImplementation((_url, init?: { headers?: HeadersInit }) => {
       if (readAuthorizationHeader(init) === "Bearer failed-token") {
+<<<<<<< HEAD
         return Promise.resolve(new Response("", { status: 401 }));
       }
       return Promise.resolve(
@@ -327,6 +406,19 @@ describe("chutes-models", () => {
           data: [{ id: "public/model" }],
         }),
       );
+=======
+        return Promise.resolve({
+          ok: false,
+          status: 401,
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          data: [{ id: "public/model" }],
+        }),
+      });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     await withLiveChutesDiscovery(mockFetch, async () => {
       await discoverChutesModels("failed-token");

@@ -38,6 +38,7 @@ describe("scripts/kova-ci-summary", () => {
     expect(result.stdout).toContain("usage: node scripts/kova-ci-summary.mjs --report");
   });
 
+<<<<<<< HEAD
   it.each([
     ["flag-shaped value", ["--report", "-h"]],
     ["option separator before help", ["--report", "--", "--help"]],
@@ -52,6 +53,8 @@ describe("scripts/kova-ci-summary", () => {
     expect(result.stderr).toContain("error: --report requires a value");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects empty Kova reports instead of rendering unknown summaries", () => {
     const empty = runSummary({});
     expect(empty.result.status).toBe(1);
@@ -197,6 +200,7 @@ describe("scripts/kova-ci-summary", () => {
       "invalid Kova report: missing sampled CPU metric in performance groups",
     );
   });
+<<<<<<< HEAD
 
   it("rejects malformed resource metric counts instead of treating them as sampled", () => {
     const { result } = runSummary({
@@ -283,4 +287,6 @@ describe("scripts/kova-ci-summary", () => {
     expect(output).toContain("| gateway | clean | Gateway RSS | 256 MB | 256 MB | 256 MB |");
     expect(output).toContain("| gateway | clean | CPU max | 12 % | 12 % | 12 % |");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

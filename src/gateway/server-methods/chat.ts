@@ -7,7 +7,10 @@ import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+<<<<<<< HEAD
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   buildTtsSupplementMediaPayload,
@@ -151,10 +154,16 @@ import {
   createManagedOutgoingImageBlocks,
 } from "../managed-image-attachments.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
+<<<<<<< HEAD
 import { chatAbortMarkerTimestampMs, type ChatRunTiming } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes, MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import { resolveSessionHistoryTailReadOptions } from "../session-history-state.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
+=======
+import type { ChatRunTiming } from "../server-chat-state.js";
+import { getMaxChatHistoryMessagesBytes, MAX_PAYLOAD_BYTES } from "../server-constants.js";
+import { resolveSessionHistoryTailReadOptions } from "../session-history-state.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import {
   capArrayByJsonBytes,
@@ -284,6 +293,7 @@ function shouldIncludeChatSendAckServerTiming(client?: {
   return isOperatorUiClient(client);
 }
 
+<<<<<<< HEAD
 const CONTROL_UI_RECONNECT_RESUME_PARAM = "__controlUiReconnectResume";
 
 function resolveControlUiReconnectResumeParams(
@@ -304,6 +314,8 @@ function resolveControlUiReconnectResumeParams(
   return { params: validatedParams, resumeRequested: true };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function emitOperatorChatSendServerTiming(params: {
   context: Pick<GatewayRequestContext, "broadcastToConnIds">;
   client?: GatewayClient | null;
@@ -559,6 +571,7 @@ export { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
+<<<<<<< HEAD
 const CHAT_HISTORY_UNAVAILABLE_SENTINEL =
   "[chat.history unavailable: transcript too large to display; the full history is preserved on disk]";
 
@@ -578,6 +591,11 @@ function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
 const CHAT_STARTUP_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS = 25;
 const MANAGED_OUTGOING_IMAGE_PATH_PREFIX = "/api/chat/media/outgoing/";
 let chatHistoryOmittedEmitCount = 0;
+=======
+const CHAT_STARTUP_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS = 25;
+const MANAGED_OUTGOING_IMAGE_PATH_PREFIX = "/api/chat/media/outgoing/";
+let chatHistoryPlaceholderEmitCount = 0;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const chatHistoryManagedImageCleanupState = new Map<string, Promise<void>>();
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
   "main",
@@ -1672,6 +1690,7 @@ export function replaceOversizedChatHistoryMessages(params: {
   return { messages: replacedCount > 0 ? next : messages, replacedCount };
 }
 
+<<<<<<< HEAD
 // Enforces the final byte budget for chat.history. Returns only the surviving
 // messages; how many original messages were omitted is measured end-to-end by
 // reportOmittedChatHistory, which alone sees the full replace/cap/final pipeline
@@ -1739,6 +1758,28 @@ export function reportOmittedChatHistory(params: {
     `chat.history omitted oversized payloads count=${omittedCount} total=${chatHistoryOmittedEmitCount}`,
   );
   return omittedCount;
+=======
+export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; maxBytes: number }): {
+  messages: unknown[];
+  placeholderCount: number;
+} {
+  const { messages, maxBytes } = params;
+  if (messages.length === 0) {
+    return { messages, placeholderCount: 0 };
+  }
+  if (jsonUtf8Bytes(messages) <= maxBytes) {
+    return { messages, placeholderCount: 0 };
+  }
+  const last = messages.at(-1);
+  if (last && jsonUtf8Bytes([last]) <= maxBytes) {
+    return { messages: [last], placeholderCount: 0 };
+  }
+  const placeholder = buildOversizedHistoryPlaceholder(last);
+  if (jsonUtf8Bytes([placeholder]) <= maxBytes) {
+    return { messages: [placeholder], placeholderCount: 1 };
+  }
+  return { messages: [], placeholderCount: 0 };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function resolveTranscriptPath(params: {
@@ -2616,8 +2657,12 @@ function readChatHistoryMessageId(message: unknown): string | undefined {
 async function isChatMessageIdVisibleAfterHistoryFilters(params: {
   sessionId: string;
   storePath: string | undefined;
+<<<<<<< HEAD
   sessionEntry?: { sessionFile?: string; sessionId?: string };
   sessionKey: string;
+=======
+  sessionFile: string | undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   agentId?: string;
   messageId: string;
   sessionStartedAt?: number;
@@ -2629,9 +2674,14 @@ async function isChatMessageIdVisibleAfterHistoryFilters(params: {
   const messages = await readSessionMessagesAsync(
     {
       agentId: params.agentId,
+<<<<<<< HEAD
       sessionEntry: params.sessionEntry,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+=======
+      sessionFile: params.sessionFile,
+      sessionId: params.sessionId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       storePath: params.storePath,
     },
     {
@@ -2750,9 +2800,14 @@ async function handleChatHistoryRequest({
       ? await readRecentSessionMessagesAsync(
           {
             agentId: sessionAgentId,
+<<<<<<< HEAD
             sessionEntry: entry,
             sessionId,
             sessionKey: canonicalKey,
+=======
+            sessionFile: entry?.sessionFile,
+            sessionId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             storePath,
           },
           {
@@ -2803,6 +2858,7 @@ async function handleChatHistoryRequest({
   });
   const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
   const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
+<<<<<<< HEAD
   reportOmittedChatHistory({
     originalMessages: normalized,
     finalMessages: bounded.messages,
@@ -2810,6 +2866,23 @@ async function handleChatHistoryRequest({
     maxHistoryBytes,
     logDebug: (message) => context.logGateway.debug(message),
   });
+=======
+  const placeholderCount = replaced.replacedCount + bounded.placeholderCount;
+  if (placeholderCount > 0) {
+    chatHistoryPlaceholderEmitCount += placeholderCount;
+    logLargePayload({
+      surface: "gateway.chat.history",
+      action: "truncated",
+      bytes: jsonUtf8Bytes(normalized),
+      limitBytes: maxHistoryBytes,
+      count: placeholderCount,
+      reason: "chat_history_budget",
+    });
+    context.logGateway.debug(
+      `chat.history omitted oversized payloads placeholders=${placeholderCount} total=${chatHistoryPlaceholderEmitCount}`,
+    );
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const modelCatalog = await modelCatalogPromise;
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const startupMetadata = includeMetadata
@@ -2936,9 +3009,14 @@ export const chatHandlers: GatewayRequestHandlers = {
     const resolved = await readSessionMessageByIdAsync(
       {
         agentId: sessionAgentId,
+<<<<<<< HEAD
         sessionEntry: entry,
         sessionId,
         sessionKey,
+=======
+        sessionFile: entry?.sessionFile,
+        sessionId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         storePath,
       },
       messageId,
@@ -2951,8 +3029,12 @@ export const chatHandlers: GatewayRequestHandlers = {
     const visible = await isChatMessageIdVisibleAfterHistoryFilters({
       sessionId,
       storePath,
+<<<<<<< HEAD
       sessionEntry: entry,
       sessionKey,
+=======
+      sessionFile: entry?.sessionFile,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       agentId: sessionAgentId,
       messageId,
       sessionStartedAt:
@@ -3166,9 +3248,13 @@ export const chatHandlers: GatewayRequestHandlers = {
   },
   "chat.send": async ({ params, respond, context, client }) => {
     const chatSendReceivedAtMs = performance.now();
+<<<<<<< HEAD
     const clientInfo = client?.connect?.client;
     const controlUiReconnectResume = resolveControlUiReconnectResumeParams(params, clientInfo);
     if (!validateChatSendParams(controlUiReconnectResume.params)) {
+=======
+    if (!validateChatSendParams(params)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       respond(
         false,
         undefined,
@@ -3179,14 +3265,22 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+<<<<<<< HEAD
     const p = controlUiReconnectResume.params as {
+=======
+    const p = params as {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: string;
       agentId?: string;
       sessionId?: string;
       message: string;
       thinking?: string;
+<<<<<<< HEAD
       fastMode?: FastMode;
       fastAutoOnSeconds?: number;
+=======
+      fastMode?: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       deliver?: boolean;
       originatingChannel?: string;
       originatingTo?: string;
@@ -3391,9 +3485,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
+<<<<<<< HEAD
     const abortMarker = context.chatAbortedRuns.get(clientRunId);
     if (abortMarker !== undefined) {
       const abortedAt = chatAbortMarkerTimestampMs(abortMarker);
+=======
+    const abortedAt = context.chatAbortedRuns.get(clientRunId);
+    if (abortedAt !== undefined) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const payload = buildAbortedChatSendPayload({
         runId: clientRunId,
         endedAt: abortedAt,
@@ -3422,6 +3521,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
       return;
     }
+<<<<<<< HEAD
+=======
+    const clientInfo = client?.connect?.client;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const chatSendTraceAttributes = {
       runId: clientRunId,
       sessionKey,
@@ -3740,7 +3843,10 @@ export const chatHandlers: GatewayRequestHandlers = {
               body: commandBody,
             },
         MessageSid: clientRunId,
+<<<<<<< HEAD
         ApprovalReviewerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         ...(!isOperatorUiClient(clientInfo)
           ? {
               SenderId: clientInfo?.id,
@@ -3782,6 +3888,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
       let appendedWebchatAgentMedia = false;
       let agentRunStarted = false;
+<<<<<<< HEAD
       let pendingDispatchLifecycleError:
         | {
             endedAt: number;
@@ -3790,6 +3897,8 @@ export const chatHandlers: GatewayRequestHandlers = {
             startedAt: number;
           }
         | undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const userTurnRecorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
         input: baseUserTurnInput,
         resolveInput: () => userTurnInputPromise,
@@ -4022,15 +4131,21 @@ export const chatHandlers: GatewayRequestHandlers = {
                     }),
                   }
                 : {}),
+<<<<<<< HEAD
               requestedSessionId,
               resumeRequestedSession: controlUiReconnectResume.resumeRequested,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               abortSignal: activeRunAbort.controller.signal,
               images: replyOptionImages,
               imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
               thinkingLevelOverride: p.thinking,
               fastModeOverride: p.fastMode,
               userTurnTranscriptRecorder: userTurnRecorder,
+<<<<<<< HEAD
               fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               onAgentRunStart: (runId) => {
                 agentRunStarted = true;
                 emitServerTiming(
@@ -5001,7 +5116,10 @@ export const chatHandlers: GatewayRequestHandlers = {
           );
         })
         .catch(async (err: unknown) => {
+<<<<<<< HEAD
           const errorMessage = String(err);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           const emitAfterError =
             userTurnRecorder.hasPersisted() || userTurnRecorder.isBlocked()
               ? Promise.resolve()
@@ -5011,6 +5129,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
             );
           });
+<<<<<<< HEAD
           if (
             !agentRunStarted &&
             !activeRunAbort.controller.signal.aborted &&
@@ -5024,6 +5143,9 @@ export const chatHandlers: GatewayRequestHandlers = {
             };
           }
           const error = errorShape(ErrorCodes.UNAVAILABLE, errorMessage);
+=======
+          const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
             key: `chat:${clientRunId}`,
@@ -5033,7 +5155,11 @@ export const chatHandlers: GatewayRequestHandlers = {
               payload: {
                 runId: clientRunId,
                 status: "error" as const,
+<<<<<<< HEAD
                 summary: errorMessage,
+=======
+                summary: String(err),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               },
               error,
             },
@@ -5043,7 +5169,11 @@ export const chatHandlers: GatewayRequestHandlers = {
             runId: clientRunId,
             sessionKey,
             agentId,
+<<<<<<< HEAD
             errorMessage,
+=======
+            errorMessage: String(err),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           });
         })
         .finally(() => {
@@ -5051,6 +5181,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           clearAgentRunContext(clientRunId, lifecycleGeneration);
           clearActiveChatSendDedupeRun(context.dedupe, activeChatSendDedupeKey, clientRunId);
           context.removeChatRun(clientRunId, clientRunId, sessionKey);
+<<<<<<< HEAD
           if (!pendingDispatchLifecycleError) {
             return;
           }
@@ -5098,6 +5229,8 @@ export const chatHandlers: GatewayRequestHandlers = {
             }
           };
           void persistDispatchLifecycleError();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         });
     } catch (err) {
       activeRunAbort.cleanup({ force: true });

@@ -15,6 +15,7 @@ import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 const pluginDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rootDir = path.resolve(pluginDir, "../..");
 const require = createRequire(import.meta.url);
+<<<<<<< HEAD
 const hashFile =
   process.env.OPENCLAW_A2UI_BUNDLE_HASH_FILE ??
   path.join(pluginDir, "src", "host", "a2ui", ".bundle.hash");
@@ -23,6 +24,14 @@ const outputFile =
   path.join(pluginDir, "src", "host", "a2ui", "a2ui.bundle.js");
 const a2uiAppDir = path.join(pluginDir, "src", "host", "a2ui-app");
 const repoInputPaths = getBundleHashRepoInputPaths(rootDir);
+=======
+const hashFile = path.join(pluginDir, "src", "host", "a2ui", ".bundle.hash");
+const outputFile = path.join(pluginDir, "src", "host", "a2ui", "a2ui.bundle.js");
+const a2uiAppDir = path.join(pluginDir, "src", "host", "a2ui-app");
+const rootPackageFile = path.join(rootDir, "package.json");
+const lockFile = path.join(rootDir, "pnpm-lock.yaml");
+const repoInputPaths = [rootPackageFile, lockFile, a2uiAppDir];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const relativeRepoInputPaths = repoInputPaths.map((inputPath) =>
   normalizePath(path.relative(rootDir, inputPath)),
 );
@@ -79,6 +88,14 @@ export function getBundleHashRepoInputPaths(repoRoot = rootDir) {
   ];
 }
 
+<<<<<<< HEAD
+=======
+/** Returns A2UI bundle hash input paths. */
+export function getBundleHashInputPaths(repoRoot = rootDir) {
+  return getBundleHashRepoInputPaths(repoRoot);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Compares paths after normalizing separators to POSIX slashes. */
 export function compareNormalizedPaths(left, right) {
   const normalizedLeft = normalizePath(left);

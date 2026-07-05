@@ -64,7 +64,10 @@ vi.mock("./official-external-plugin-catalog.js", async () => {
 });
 
 import {
+<<<<<<< HEAD
   resolveDeprecatedProviderInstallCatalogEntry,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveProviderInstallCatalogEntries,
   resolveProviderInstallCatalogEntry,
 } from "./provider-install-catalog.js";
@@ -658,6 +661,7 @@ describe("provider install catalog", () => {
     });
   });
 
+<<<<<<< HEAD
   it("resolves deprecated official external auth choices before their plugin is installed", () => {
     listOfficialExternalProviderCatalogEntries.mockReturnValue([
       {
@@ -694,6 +698,8 @@ describe("provider install catalog", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("surfaces provider-index ClawHub install metadata as the preferred source", () => {
     loadOpenClawProviderIndex.mockReturnValue({
       version: 1,

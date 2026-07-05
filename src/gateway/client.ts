@@ -82,8 +82,11 @@ export type GatewayReconnectPausedInfo = {
 
 export type GatewayClientCloseInfo = {
   phase: "pre-hello" | "post-hello";
+<<<<<<< HEAD
   socketOpened: boolean;
   transportValidated: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   transientPreHelloCleanClose: boolean;
 };
 

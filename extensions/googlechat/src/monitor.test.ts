@@ -30,6 +30,7 @@ beforeEach(() => {
   accessMocks.applyGoogleChatInboundAccessPolicy.mockReset();
 });
 
+<<<<<<< HEAD
 function createInboundClassificationHarness() {
   const resolveAgentRoute = vi.fn(() => ({
     agentId: "agent-1",
@@ -58,6 +59,8 @@ function createInboundClassificationHarness() {
   return { buildContext, core, resolveAgentRoute, runTurn };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("googlechat monitor bot loop protection", () => {
   it("maps accepted bot-authored messages to shared channel-turn facts", () => {
     expect(
@@ -187,6 +190,7 @@ describe("googlechat monitor bot loop protection", () => {
   });
 });
 
+<<<<<<< HEAD
 describe("googlechat monitor inbound space classification", () => {
   const cases = [
     { name: "legacy DM", space: { type: "DM" }, peerKind: "direct" },
@@ -255,6 +259,8 @@ describe("googlechat monitor inbound space classification", () => {
   });
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("googlechat monitor direct messages", () => {
   it("creates typing messages by default", async () => {
     const runTurn = vi.fn();

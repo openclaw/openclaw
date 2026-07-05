@@ -1,7 +1,10 @@
 // Qqbot plugin module implements inbound context behavior.
 import type { ChannelIngressDecision } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { EngineAdapters } from "../adapter/index.js";
+<<<<<<< HEAD
 import type { QQBotGroupCommandLevel } from "../config/group.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { GroupActivationMode, SessionStoreReader } from "../group/activation.js";
 import type { HistoryEntry } from "../group/history.js";
 import type { GroupMessageGateResult } from "../group/message-gating.js";
@@ -19,7 +22,10 @@ export interface ReplyToInfo {
 export interface InboundGroupInfo {
   gate: GroupMessageGateResult;
   activation: GroupActivationMode;
+<<<<<<< HEAD
   commandLevel: QQBotGroupCommandLevel;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   historyLimit: number;
   isMerged: boolean;
   mergedMessages?: readonly QueuedMessage[];
@@ -58,11 +64,15 @@ export interface InboundContext {
   blockReasonCode?: string;
   accessDecision?: ChannelIngressDecision["decision"];
   skipped: boolean;
+<<<<<<< HEAD
   skipReason?:
     | "drop_other_mention"
     | "block_unauthorized_command"
     | "skip_no_mention"
     | "private_command_only";
+=======
+  skipReason?: "drop_other_mention" | "block_unauthorized_command" | "skip_no_mention";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   typing: { keepAlive: TypingKeepAlive | null };
   inputNotifyRefIdx?: string;
 }

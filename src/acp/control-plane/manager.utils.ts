@@ -7,7 +7,10 @@ import {
 } from "../../config/sessions/main-session.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+<<<<<<< HEAD
 import { toErrorObject } from "../../infra/errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   normalizeAgentId,
   normalizeMainKey,
@@ -50,7 +53,11 @@ export function requireReadySessionMeta(resolution: AcpSessionResolution): Sessi
   if (resolution.kind === "ready") {
     return resolution.meta;
   }
+<<<<<<< HEAD
   throw toErrorObject(resolveAcpSessionResolutionError(resolution), "Non-Error thrown");
+=======
+  throw toLintErrorObject(resolveAcpSessionResolutionError(resolution), "Non-Error thrown");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function normalizeSessionKey(sessionKey: string): string {
@@ -130,3 +137,20 @@ export function hasLegacyAcpIdentityProjection(meta: SessionAcpMeta): boolean {
     Object.hasOwn(raw, "sessionIdsProvisional")
   );
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

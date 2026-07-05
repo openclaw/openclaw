@@ -1,11 +1,19 @@
 // Slack tests cover send.blocks plugin behavior.
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
+=======
+import { createSlackSendTestClient, installSlackBlockTestMocks } from "./blocks.test-helpers.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   clearSlackThreadParticipationCache,
   hasSlackThreadParticipation,
 } from "./sent-thread-cache.js";
 
+<<<<<<< HEAD
+=======
+installSlackBlockTestMocks();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const { sendMessageSlack } = await import("./send.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 const SLACK_TEXT_LIMIT = 8000;
@@ -100,13 +108,18 @@ describe("sendMessageSlack thread participation", () => {
     clearSlackThreadParticipationCache();
     const client = createSlackSendTestClient();
 
+<<<<<<< HEAD
     const result = await sendMessageSlack("channel:C123", "hello thread", {
+=======
+    await sendMessageSlack("channel:C123", "hello thread", {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       token: "xoxb-test",
       cfg: SLACK_TEST_CFG,
       client,
       threadTs: "1712345678.123456",
     });
 
+<<<<<<< HEAD
     expect(result.threadTs).toBe("1712345678.123456");
     expect(result.receipt.threadId).toBe("1712345678.123456");
     expect(hasSlackThreadParticipation("default", "C123", "1712345678.123456")).toBe(true);
@@ -138,6 +151,11 @@ describe("sendMessageSlack thread participation", () => {
     expect(hasSlackThreadParticipation("default", "C123", "1781932168.648159")).toBe(false);
   });
 
+=======
+    expect(hasSlackThreadParticipation("default", "C123", "1712345678.123456")).toBe(true);
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not record participation for unthreaded sends", async () => {
     clearSlackThreadParticipationCache();
     const client = createSlackSendTestClient();
@@ -202,6 +220,7 @@ describe("sendMessageSlack chunking", () => {
     ).toStrictEqual([]);
     expect(postedTexts.join("")).toBe(message);
   });
+<<<<<<< HEAD
 
   it("preserves the first canonical response thread across chunked sends", async () => {
     clearSlackThreadParticipationCache();
@@ -236,6 +255,8 @@ describe("sendMessageSlack chunking", () => {
     expect(hasSlackThreadParticipation("default", "C123", "1781803536.235489")).toBe(true);
     expect(hasSlackThreadParticipation("default", "C123", "1781932168.648159")).toBe(false);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("sendMessageSlack blocks", () => {
@@ -264,6 +285,7 @@ describe("sendMessageSlack blocks", () => {
     expect((receiptPart?.raw as Record<string, unknown> | undefined)?.channelId).toBe("C123");
   });
 
+<<<<<<< HEAD
   it("uses canonical Slack response thread for block receipts and participation", async () => {
     clearSlackThreadParticipationCache();
     const client = createSlackSendTestClient();
@@ -292,6 +314,8 @@ describe("sendMessageSlack blocks", () => {
     expect(hasSlackThreadParticipation("default", "C123", "1781932168.648159")).toBe(false);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("posts user-target block messages directly without conversations.open", async () => {
     const client = createSlackSendTestClient();
     client.conversations.open.mockRejectedValueOnce(new Error("missing_scope"));

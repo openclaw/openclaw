@@ -20,6 +20,7 @@ function formatTokens(n: number): string {
     return `${(n / 1_000_000).toFixed(1)}M`;
   }
   if (n >= 1_000) {
+<<<<<<< HEAD
     // Values from 999,950-999,999 round to "1000.0" at one-decimal
     // thousands precision, which would display the nonsensical "1000.0K"
     // instead of rolling over to the M branch above. Re-check the
@@ -30,6 +31,9 @@ function formatTokens(n: number): string {
       return `${(n / 1_000_000).toFixed(1)}M`;
     }
     return `${thousands}K`;
+=======
+    return `${(n / 1_000).toFixed(1)}K`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   return String(n);
 }

@@ -27,7 +27,11 @@ function resolveRuntimeSubagentMode(
   return "default";
 }
 
+<<<<<<< HEAD
 function installStandaloneRuntimePluginRegistry(
+=======
+function installStandaloneRegistry(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   registry: PluginRegistry,
   params: {
     loadOptions: PluginLoadOptions;
@@ -93,6 +97,7 @@ export function ensureStandaloneRuntimePluginRegistryLoaded(params: {
     return registry;
   }
 
+<<<<<<< HEAD
   // Tool discovery returns a request-local snapshot. Installing it would replace live provider,
   // channel, or HTTP-route registries with a registry that intentionally omits those surfaces.
   if (params.loadOptions.toolDiscovery === true) {
@@ -100,6 +105,9 @@ export function ensureStandaloneRuntimePluginRegistryLoaded(params: {
   }
 
   installStandaloneRuntimePluginRegistry(registry, {
+=======
+  installStandaloneRegistry(registry, {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     loadOptions: params.loadOptions,
     surface,
   });

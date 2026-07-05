@@ -7,7 +7,15 @@ import {
   normalizeQueueMode,
 } from "./normalize.js";
 import { DEFAULT_QUEUE_CAP, DEFAULT_QUEUE_DEBOUNCE_MS, DEFAULT_QUEUE_DROP } from "./state.js";
+<<<<<<< HEAD
 import type { QueueSettings, ResolveQueueSettingsParams } from "./types.js";
+=======
+import type { QueueMode, QueueSettings, ResolveQueueSettingsParams } from "./types.js";
+
+function defaultQueueModeForChannel(_channel?: string): QueueMode {
+  return "steer";
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Resolve per-channel debounce override from debounceMsByChannel map. */
 function resolveChannelDebounce(
@@ -33,7 +41,11 @@ export function resolveQueueSettings(params: ResolveQueueSettingsParams): QueueS
     normalizePersistedQueueMode(params.sessionEntry?.queueMode) ??
     normalizeQueueMode(providerModeRaw) ??
     normalizeQueueMode(queueCfg?.mode) ??
+<<<<<<< HEAD
     "steer";
+=======
+    defaultQueueModeForChannel(channelKey);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const debounceRaw =
     params.inlineOptions?.debounceMs ??
     params.sessionEntry?.queueDebounceMs ??

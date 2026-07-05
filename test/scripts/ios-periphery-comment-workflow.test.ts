@@ -2,7 +2,10 @@ import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { compileFunction } from "node:vm";
+<<<<<<< HEAD
 import { deflateRawSync } from "node:zlib";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
@@ -12,6 +15,7 @@ const PRODUCER_WORKFLOW_PATH = ".github/workflows/ios-periphery.yml";
 const ARTIFACT_NAME = "ios-periphery-dead-code-12345-2";
 
 type WorkflowStep = {
+<<<<<<< HEAD
   if?: string;
   id?: string;
   name?: string;
@@ -20,6 +24,12 @@ type WorkflowStep = {
     "if-no-files-found"?: string;
     name?: string;
     path?: string;
+=======
+  id?: string;
+  name?: string;
+  with?: {
+    name?: string;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     script?: string;
   };
 };
@@ -321,6 +331,7 @@ function u32(value: number): Buffer {
   return buffer;
 }
 
+<<<<<<< HEAD
 function makeZip(
   files: Record<string, string>,
   options: { compressionMethod?: 0 | 8 } = {},
@@ -329,39 +340,68 @@ function makeZip(
   const centralParts: Buffer[] = [];
   let offset = 0;
   const compressionMethod = options.compressionMethod ?? 0;
+=======
+function makeZip(files: Record<string, string>): Buffer {
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let offset = 0;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   for (const [name, contents] of Object.entries(files)) {
     const nameBuffer = Buffer.from(name, "utf8");
     const contentsBuffer = Buffer.from(contents, "utf8");
+<<<<<<< HEAD
     const compressedBuffer =
       compressionMethod === 8 ? deflateRawSync(contentsBuffer) : contentsBuffer;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const checksum = crc32(contentsBuffer);
     const localHeader = Buffer.concat([
       u32(0x04034b50),
       u16(20),
       u16(0),
+<<<<<<< HEAD
       u16(compressionMethod),
       u16(0),
       u16(0),
       u32(checksum),
       u32(compressedBuffer.length),
+=======
+      u16(0),
+      u16(0),
+      u16(0),
+      u32(checksum),
+      u32(contentsBuffer.length),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       u32(contentsBuffer.length),
       u16(nameBuffer.length),
       u16(0),
       nameBuffer,
     ]);
+<<<<<<< HEAD
     localParts.push(localHeader, compressedBuffer);
+=======
+    localParts.push(localHeader, contentsBuffer);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     centralParts.push(
       Buffer.concat([
         u32(0x02014b50),
         u16(20),
         u16(20),
         u16(0),
+<<<<<<< HEAD
         u16(compressionMethod),
         u16(0),
         u16(0),
         u32(checksum),
         u32(compressedBuffer.length),
+=======
+        u16(0),
+        u16(0),
+        u16(0),
+        u32(checksum),
+        u32(contentsBuffer.length),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         u32(contentsBuffer.length),
         u16(nameBuffer.length),
         u16(0),
@@ -373,7 +413,11 @@ function makeZip(
         nameBuffer,
       ]),
     );
+<<<<<<< HEAD
     offset += localHeader.length + compressedBuffer.length;
+=======
+    offset += localHeader.length + contentsBuffer.length;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   const localData = Buffer.concat(localParts);
@@ -402,6 +446,7 @@ function markFirstCentralDirectoryEntryEncrypted(archive: Buffer): Buffer {
   return result;
 }
 
+<<<<<<< HEAD
 function setFirstEntryUncompressedSize(archive: Buffer, size: number): Buffer {
   const result = Buffer.from(archive);
   if (result.readUInt32LE(0) !== 0x04034b50) {
@@ -423,6 +468,13 @@ describe("iOS Periphery comment workflow", () => {
     expect(script).not.toContain("execFileSync");
     expect(() =>
       compileFunction(`return (async () => {\n${script}\n})();`, [
+=======
+describe("iOS Periphery comment workflow", () => {
+  it("parses the workflow YAML and embedded github-script JavaScript", () => {
+    expect(() => commenterScript()).not.toThrow();
+    expect(() =>
+      compileFunction(`return (async () => {\n${commenterScript()}\n})();`, [
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         "require",
         "context",
         "core",
@@ -440,9 +492,12 @@ describe("iOS Periphery comment workflow", () => {
     expect(upload?.with?.name).toBe(
       "ios-periphery-dead-code-${{ github.run_id }}-${{ github.run_attempt }}",
     );
+<<<<<<< HEAD
     expect(upload?.if).toBe("always()");
     expect(upload?.with?.path).toBe("${{ runner.temp }}/ios-periphery");
     expect(upload?.with?.["if-no-files-found"]).toBe("error");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("runs scope detection for PR transitions that can clear stale findings", () => {
@@ -518,6 +573,7 @@ describe("iOS Periphery comment workflow", () => {
     expect(result.core.warnings).toEqual([]);
   });
 
+<<<<<<< HEAD
   it("accepts deflated Periphery artifacts", async () => {
     const archive = makeZip(
       {
@@ -567,6 +623,8 @@ describe("iOS Periphery comment workflow", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects oversized artifact metadata before download", async () => {
     const result = await runCommenter(
       {

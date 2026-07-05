@@ -1,6 +1,7 @@
 // Cached startup metadata readers for precomputed root and subcommand help text.
 import { readCliStartupMetadata } from "./startup-metadata.js";
 
+<<<<<<< HEAD
 export type PrecomputedSubcommandHelpName =
   | "doctor"
   | "gateway"
@@ -8,6 +9,9 @@ export type PrecomputedSubcommandHelpName =
   | "plugins"
   | "sessions"
   | "tasks";
+=======
+export type PrecomputedSubcommandHelpName = "doctor" | "gateway" | "models" | "plugins";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 let precomputedRootHelpText: string | null | undefined;
 let precomputedBrowserHelpText: string | null | undefined;
@@ -48,7 +52,35 @@ function loadPrecomputedHelpText(
   return null;
 }
 
+<<<<<<< HEAD
 function loadPrecomputedSubcommandHelpText(commandName: string): string | null {
+=======
+export function loadPrecomputedRootHelpText(): string | null {
+  return loadPrecomputedHelpText("rootHelpText", precomputedRootHelpText, (value) => {
+    precomputedRootHelpText = value;
+  });
+}
+
+export function loadPrecomputedBrowserHelpText(): string | null {
+  return loadPrecomputedHelpText("browserHelpText", precomputedBrowserHelpText, (value) => {
+    precomputedBrowserHelpText = value;
+  });
+}
+
+export function loadPrecomputedSecretsHelpText(): string | null {
+  return loadPrecomputedHelpText("secretsHelpText", precomputedSecretsHelpText, (value) => {
+    precomputedSecretsHelpText = value;
+  });
+}
+
+export function loadPrecomputedNodesHelpText(): string | null {
+  return loadPrecomputedHelpText("nodesHelpText", precomputedNodesHelpText, (value) => {
+    precomputedNodesHelpText = value;
+  });
+}
+
+export function loadPrecomputedSubcommandHelpText(commandName: string): string | null {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!isPrecomputedSubcommandHelpName(commandName)) {
     return null;
   }
@@ -74,9 +106,13 @@ function loadPrecomputedSubcommandHelpText(commandName: string): string | null {
 }
 
 export function outputPrecomputedRootHelpText(): boolean {
+<<<<<<< HEAD
   const rootHelpText = loadPrecomputedHelpText("rootHelpText", precomputedRootHelpText, (value) => {
     precomputedRootHelpText = value;
   });
+=======
+  const rootHelpText = loadPrecomputedRootHelpText();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!rootHelpText) {
     return false;
   }
@@ -85,6 +121,7 @@ export function outputPrecomputedRootHelpText(): boolean {
 }
 
 export function outputPrecomputedBrowserHelpText(): boolean {
+<<<<<<< HEAD
   const browserHelpText = loadPrecomputedHelpText(
     "browserHelpText",
     precomputedBrowserHelpText,
@@ -92,6 +129,9 @@ export function outputPrecomputedBrowserHelpText(): boolean {
       precomputedBrowserHelpText = value;
     },
   );
+=======
+  const browserHelpText = loadPrecomputedBrowserHelpText();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!browserHelpText) {
     return false;
   }
@@ -100,6 +140,7 @@ export function outputPrecomputedBrowserHelpText(): boolean {
 }
 
 export function outputPrecomputedSecretsHelpText(): boolean {
+<<<<<<< HEAD
   const secretsHelpText = loadPrecomputedHelpText(
     "secretsHelpText",
     precomputedSecretsHelpText,
@@ -107,6 +148,9 @@ export function outputPrecomputedSecretsHelpText(): boolean {
       precomputedSecretsHelpText = value;
     },
   );
+=======
+  const secretsHelpText = loadPrecomputedSecretsHelpText();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!secretsHelpText) {
     return false;
   }
@@ -115,6 +159,7 @@ export function outputPrecomputedSecretsHelpText(): boolean {
 }
 
 export function outputPrecomputedNodesHelpText(): boolean {
+<<<<<<< HEAD
   const nodesHelpText = loadPrecomputedHelpText(
     "nodesHelpText",
     precomputedNodesHelpText,
@@ -122,6 +167,9 @@ export function outputPrecomputedNodesHelpText(): boolean {
       precomputedNodesHelpText = value;
     },
   );
+=======
+  const nodesHelpText = loadPrecomputedNodesHelpText();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!nodesHelpText) {
     return false;
   }
@@ -145,9 +193,13 @@ function isPrecomputedSubcommandHelpName(
     commandName === "doctor" ||
     commandName === "gateway" ||
     commandName === "models" ||
+<<<<<<< HEAD
     commandName === "plugins" ||
     commandName === "sessions" ||
     commandName === "tasks"
+=======
+    commandName === "plugins"
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
 }
 
@@ -166,3 +218,17 @@ function setPrecomputedSubcommandHelpText(
     [commandName]: value,
   };
 }
+<<<<<<< HEAD
+=======
+
+export const testing = {
+  resetPrecomputedRootHelpTextForTests(): void {
+    precomputedRootHelpText = undefined;
+    precomputedBrowserHelpText = undefined;
+    precomputedSecretsHelpText = undefined;
+    precomputedNodesHelpText = undefined;
+    precomputedSubcommandHelpText = undefined;
+  },
+};
+export { testing as __testing };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

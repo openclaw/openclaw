@@ -37,6 +37,10 @@ export type {
 export { PluginStateStoreError } from "./plugin-state-store.types.js";
 export {
   closePluginStateDatabase,
+<<<<<<< HEAD
+=======
+  closePluginStateSqliteStore,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   countPluginStateLiveEntries,
   isPluginStateDatabaseOpen,
   MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
@@ -464,6 +468,16 @@ export function createPluginStateSyncKeyedStore<T>(
   return createSyncKeyedStoreForPluginId<T>(pluginId, options);
 }
 
+<<<<<<< HEAD
+=======
+/** Opens an async plugin-state namespace for a trusted core owner id. */
+export function createCorePluginStateKeyedStore<T>(
+  options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
+): PluginStateKeyedStore<T> {
+  return createKeyedStoreForPluginId<T>(options.ownerId, options);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Opens a sync plugin-state namespace for a trusted core owner id. */
 export function createCorePluginStateSyncKeyedStore<T>(
   options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },

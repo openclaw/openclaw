@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Selects and invokes native agent harnesses for embedded run attempts.
  */
@@ -12,7 +15,10 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+<<<<<<< HEAD
 import { resolveProviderRefOwnership } from "../../plugins/providers.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
   resolveEffectiveToolPolicy,
@@ -45,7 +51,11 @@ import {
   type AgentHarnessPolicy,
 } from "./policy.js";
 import { getRegisteredAgentHarness, listRegisteredAgentHarnesses } from "./registry.js";
+<<<<<<< HEAD
 import type { AgentHarness, AgentHarnessSupport, AgentHarnessSupportContext } from "./types.js";
+=======
+import type { AgentHarness, AgentHarnessSupport } from "./types.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const log = createSubsystemLogger("agents/harness");
 export { resolveAgentHarnessPolicy } from "./policy.js";
@@ -155,6 +165,7 @@ function compareHarnessSupport(
   return left.harness.id.localeCompare(right.harness.id);
 }
 
+<<<<<<< HEAD
 function buildAgentHarnessSupportContext(params: {
   provider: string;
   modelId?: string;
@@ -205,6 +216,8 @@ function readStringParam(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function selectAgentHarness(params: {
   provider: string;
   modelId?: string;
@@ -252,6 +265,7 @@ function selectAgentHarnessDecision(params: {
   if (runtime !== "auto") {
     const forced = pluginHarnesses.find((entry) => entry.id === runtime);
     if (forced) {
+<<<<<<< HEAD
       const supportContext = buildAgentHarnessSupportContext({
         provider: params.provider,
         modelId: params.modelId,
@@ -259,6 +273,13 @@ function selectAgentHarnessDecision(params: {
         config: params.config,
       });
       const support = forced.supports(supportContext);
+=======
+      const support = forced.supports({
+        provider: params.provider,
+        modelId: params.modelId,
+        requestedRuntime: runtime,
+      });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (support.supported) {
         return buildSelectionDecision({
           harness: forced,
@@ -315,6 +336,7 @@ function selectAgentHarnessDecision(params: {
     throw new MissingAgentHarnessError(runtime);
   }
 
+<<<<<<< HEAD
   const candidates =
     pluginHarnesses.length > 0
       ? (() => {
@@ -330,6 +352,16 @@ function selectAgentHarnessDecision(params: {
           }));
         })()
       : [];
+=======
+  const candidates = pluginHarnesses.map((harness) => ({
+    harness,
+    support: harness.supports({
+      provider: params.provider,
+      modelId: params.modelId,
+      requestedRuntime: runtime,
+    }),
+  }));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const supported = candidates
     .filter(
       (

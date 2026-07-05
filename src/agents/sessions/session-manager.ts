@@ -50,9 +50,12 @@ import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 
 export { CURRENT_SESSION_VERSION };
 
+<<<<<<< HEAD
 const SESSION_HEADER_READ_CHUNK_BYTES = 4096;
 const MAX_SESSION_HEADER_BYTES = 64 * 1024;
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export interface SessionHeader {
   type: "session";
   version?: number; // v1 sessions don't have this
@@ -1144,6 +1147,7 @@ function recoverCorruptSessionEntries(filePath: string, cwd: string): FileEntry[
   return [header, ...recoveredEntries];
 }
 
+<<<<<<< HEAD
 function readFirstSessionFileLine(filePath: string): string | undefined {
   const fd = openSync(filePath, "r");
   try {
@@ -1174,6 +1178,15 @@ function readFirstSessionFileLine(filePath: string): string | undefined {
 function isValidSessionFile(filePath: string): boolean {
   try {
     const firstLine = readFirstSessionFileLine(filePath);
+=======
+function isValidSessionFile(filePath: string): boolean {
+  try {
+    const fd = openSync(filePath, "r");
+    const buffer = Buffer.alloc(512);
+    const bytesRead = readSync(fd, buffer, 0, 512, 0);
+    closeSync(fd);
+    const firstLine = buffer.toString("utf8", 0, bytesRead).split("\n")[0];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!firstLine) {
       return false;
     }

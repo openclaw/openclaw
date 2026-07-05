@@ -91,7 +91,10 @@ describe("sessionsCleanupCommand", () => {
     mocks.resolveMaintenanceConfig.mockReturnValue({
       mode: "warn",
       pruneAfterMs: 7 * 24 * 60 * 60 * 1000,
+<<<<<<< HEAD
       modelRunPruneAfterMs: 24 * 60 * 60 * 1000,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       maxEntries: 500,
       resetArchiveRetentionMs: 7 * 24 * 60 * 60 * 1000,
       maxDiskBytes: null,
@@ -127,7 +130,10 @@ describe("sessionsCleanupCommand", () => {
         cappedKeys: Set<string>;
         budgetEvictedKeys: Set<string>;
         dmScopeRetiredKeys: Set<string>;
+<<<<<<< HEAD
         modelRunPrunedKeys?: Set<string>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }) => {
         if (params.dmScopeRetiredKeys.has(params.key)) {
           return "retire-dm-scope";
@@ -194,7 +200,10 @@ describe("sessionsCleanupCommand", () => {
           afterCount: 1,
           missing: 0,
           dmScopeRetired: 0,
+<<<<<<< HEAD
           modelRunPruned: 0,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           pruned: 0,
           capped: 2,
           diskBudget: {
@@ -234,7 +243,10 @@ describe("sessionsCleanupCommand", () => {
       afterCount: 1,
       missing: 0,
       dmScopeRetired: 0,
+<<<<<<< HEAD
       modelRunPruned: 0,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       pruned: 0,
       capped: 2,
       diskBudget: {
@@ -271,7 +283,10 @@ describe("sessionsCleanupCommand", () => {
       afterCount: 1,
       missing: 0,
       dmScopeRetired: 0,
+<<<<<<< HEAD
       modelRunPruned: 0,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       pruned: 2,
       capped: 0,
       diskBudget: null,
@@ -305,7 +320,10 @@ describe("sessionsCleanupCommand", () => {
       afterCount: 1,
       missing: 0,
       dmScopeRetired: 0,
+<<<<<<< HEAD
       modelRunPruned: 0,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       pruned: 2,
       capped: 0,
       diskBudget: null,
@@ -329,7 +347,10 @@ describe("sessionsCleanupCommand", () => {
             afterCount: 1,
             missing: 0,
             dmScopeRetired: 0,
+<<<<<<< HEAD
             modelRunPruned: 0,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             pruned: 1,
             capped: 0,
             diskBudget: {
@@ -350,7 +371,10 @@ describe("sessionsCleanupCommand", () => {
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
+<<<<<<< HEAD
           modelRunPrunedKeys: new Set<string>(),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
       ],
       appliedSummaries: [],
@@ -375,7 +399,10 @@ describe("sessionsCleanupCommand", () => {
       afterCount: 1,
       missing: 0,
       dmScopeRetired: 0,
+<<<<<<< HEAD
       modelRunPruned: 0,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       pruned: 1,
       capped: 0,
       diskBudget: {
@@ -409,7 +436,10 @@ describe("sessionsCleanupCommand", () => {
             afterCount: 0,
             missing: 1,
             dmScopeRetired: 0,
+<<<<<<< HEAD
             modelRunPruned: 0,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             pruned: 0,
             capped: 0,
             diskBudget: null,
@@ -421,7 +451,10 @@ describe("sessionsCleanupCommand", () => {
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
+<<<<<<< HEAD
           modelRunPrunedKeys: new Set<string>(),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
       ],
       appliedSummaries: [],
@@ -447,7 +480,10 @@ describe("sessionsCleanupCommand", () => {
       afterCount: 0,
       missing: 1,
       dmScopeRetired: 0,
+<<<<<<< HEAD
       modelRunPruned: 0,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       pruned: 0,
       capped: 0,
       diskBudget: null,
@@ -470,7 +506,10 @@ describe("sessionsCleanupCommand", () => {
             afterCount: 1,
             missing: 0,
             dmScopeRetired: 0,
+<<<<<<< HEAD
             modelRunPruned: 0,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             pruned: 1,
             capped: 0,
             unreferencedArtifacts: {
@@ -491,7 +530,10 @@ describe("sessionsCleanupCommand", () => {
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
+<<<<<<< HEAD
           modelRunPrunedKeys: new Set<string>(),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
       ],
       appliedSummaries: [],
@@ -634,7 +676,10 @@ describe("sessionsCleanupCommand", () => {
             afterCount: 0,
             missing: 0,
             dmScopeRetired: 0,
+<<<<<<< HEAD
             modelRunPruned: 0,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             pruned: 1,
             capped: 0,
             diskBudget: null,
@@ -646,7 +691,10 @@ describe("sessionsCleanupCommand", () => {
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
+<<<<<<< HEAD
           modelRunPrunedKeys: new Set<string>(),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
         {
           summary: {
@@ -658,7 +706,10 @@ describe("sessionsCleanupCommand", () => {
             afterCount: 0,
             missing: 0,
             dmScopeRetired: 0,
+<<<<<<< HEAD
             modelRunPruned: 0,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             pruned: 1,
             capped: 0,
             diskBudget: null,
@@ -670,7 +721,10 @@ describe("sessionsCleanupCommand", () => {
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
+<<<<<<< HEAD
           modelRunPrunedKeys: new Set<string>(),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
       ],
       appliedSummaries: [],
@@ -701,7 +755,10 @@ describe("sessionsCleanupCommand", () => {
           afterCount: 0,
           missing: 0,
           dmScopeRetired: 0,
+<<<<<<< HEAD
           modelRunPruned: 0,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           pruned: 1,
           capped: 0,
           diskBudget: null,
@@ -716,7 +773,10 @@ describe("sessionsCleanupCommand", () => {
           afterCount: 0,
           missing: 0,
           dmScopeRetired: 0,
+<<<<<<< HEAD
           modelRunPruned: 0,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           pruned: 1,
           capped: 0,
           diskBudget: null,

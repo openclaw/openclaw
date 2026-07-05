@@ -248,8 +248,11 @@ type CronAgentTurnPayloadFields = {
   lightContext?: boolean;
   /** Optional tool allow-list; when set, only these tools are sent to the model. */
   toolsAllow?: string[];
+<<<<<<< HEAD
   /** Server-managed marker for auto-stamped defaults; explicit restrictions omit it. */
   toolsAllowIsDefault?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 type CronAgentTurnPayload = {
@@ -258,9 +261,14 @@ type CronAgentTurnPayload = {
 
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
+<<<<<<< HEAD
 } & Partial<Omit<CronAgentTurnPayloadFields, "model" | "fallbacks" | "toolsAllow">> & {
     model?: string | null;
     fallbacks?: string[] | null;
+=======
+} & Partial<Omit<CronAgentTurnPayloadFields, "model" | "toolsAllow">> & {
+    model?: string | null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     toolsAllow?: string[] | null;
   };
 

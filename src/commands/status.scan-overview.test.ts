@@ -3,7 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
 
 const mocks = vi.hoisted(() => ({
+<<<<<<< HEAD
   hasConfiguredChannelsForReadOnlyScope: vi.fn(),
+=======
+  hasPotentialConfiguredChannels: vi.fn(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveCommandConfigWithSecrets: vi.fn(),
   getStatusCommandSecretTargetIds: vi.fn(),
   readBestEffortConfigSnapshot: vi.fn(),
@@ -15,7 +19,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
+<<<<<<< HEAD
   hasConfiguredChannelsForReadOnlyScope: mocks.hasConfiguredChannelsForReadOnlyScope,
+=======
+  hasConfiguredChannelsForReadOnlyScope: mocks.hasPotentialConfiguredChannels,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("../cli/command-config-resolution.js", () => ({
@@ -78,7 +86,11 @@ describe("collectStatusScanOverview", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
+<<<<<<< HEAD
     mocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
+=======
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mocks.getStatusCommandSecretTargetIds.mockReturnValue([]);
     mocks.readBestEffortConfigSnapshot.mockResolvedValue({
       config: { session: {} },

@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+<<<<<<< HEAD
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
@@ -147,15 +150,28 @@ async function runEnvProviderCase(params: {
   expectedApiKeyRef: string;
 }) {
   // Mutate one env var at a time so auth-gated provider generation stays isolated.
+<<<<<<< HEAD
   const envSnapshot = captureEnv([params.envVar]);
   setTestEnvValue(params.envVar, params.envValue);
+=======
+  const previousValue = process.env[params.envVar];
+  process.env[params.envVar] = params.envValue;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   try {
     await ensureOpenClawModelsJson({});
 
     const provider = (await readGeneratedProviders(resolveDefaultAgentDir({})))[params.providerKey];
     expect(provider?.apiKey).toBe(params.expectedApiKeyRef);
   } finally {
+<<<<<<< HEAD
     envSnapshot.restore();
+=======
+    if (previousValue === undefined) {
+      delete process.env[params.envVar];
+    } else {
+      process.env[params.envVar] = previousValue;
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 
@@ -189,7 +205,11 @@ describe("models-config", () => {
 
         const agentDir = path.join(home, "agent-empty");
         // ensureAuthProfileStore merges the main auth store into non-main dirs; point main at our temp dir.
+<<<<<<< HEAD
         setTestEnvValue("OPENCLAW_AGENT_DIR", agentDir);
+=======
+        process.env.OPENCLAW_AGENT_DIR = agentDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
         const result = await ensureOpenClawModelsJson(
           {

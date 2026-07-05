@@ -1,6 +1,10 @@
 // Control UI tests cover sidebar session picker layering and interaction.
 import { chromium, type Browser, type Page } from "playwright";
+<<<<<<< HEAD
 import { describe, expect, it } from "vitest";
+=======
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import {
   canRunPlaywrightChromium,
@@ -12,7 +16,11 @@ const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
   ? describe
   : describe.skip;
 
+<<<<<<< HEAD
 const pageBrowsers = new WeakMap<Page, Browser>();
+=======
+let browser: Browser;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function readUiCss(): string {
   const files = [
@@ -251,6 +259,7 @@ async function openSidebarSessionPickerFixture(
   height: number,
   opts: { sidebarOpen?: boolean; workspaceRail?: boolean } = {},
 ): Promise<Page> {
+<<<<<<< HEAD
   const page = await openBrowserPage(width, height);
   try {
     await page.setContent(
@@ -282,6 +291,13 @@ async function closeBrowserPage(page: Page): Promise<void> {
   pageBrowsers.delete(page);
   await page.close().catch(() => {});
   await browser?.close().catch(() => {});
+=======
+  const page = await browser.newPage({ viewport: { width, height } });
+  await page.setContent(
+    `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${sidebarSessionPickerHtml(opts)}</body></html>`,
+  );
+  return page;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function expectNoHorizontalOverflow(page: Page) {
@@ -294,6 +310,17 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(metrics.body).toBeLessThanOrEqual(metrics.viewport + 1);
 }
 
+<<<<<<< HEAD
+=======
+beforeAll(async () => {
+  browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+});
+
+afterAll(async () => {
+  await browser.close();
+});
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describeBrowserLayout("sidebar session picker browser layout", () => {
   it("keeps the collapsed sidebar session picker interactive above the desktop workbench when the workspace rail is visible", async () => {
     const page = await openSidebarSessionPickerFixture(1366, 900, { workspaceRail: true });
@@ -347,7 +374,11 @@ describeBrowserLayout("sidebar session picker browser layout", () => {
         .poll(() => page.evaluate(() => document.body.dataset.clickedSession ?? ""))
         .toBe("dashboard-session-12");
     } finally {
+<<<<<<< HEAD
       await closeBrowserPage(page);
+=======
+      await page.close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
@@ -386,7 +417,11 @@ describeBrowserLayout("sidebar session picker browser layout", () => {
       expect(boxes.sidebar.left).toBeGreaterThanOrEqual(boxes.main.left - 1);
       expect(boxes.sidebar.width).toBeGreaterThanOrEqual(300);
     } finally {
+<<<<<<< HEAD
       await closeBrowserPage(page);
+=======
+      await page.close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 });

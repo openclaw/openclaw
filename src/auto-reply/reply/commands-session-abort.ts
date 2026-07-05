@@ -12,14 +12,22 @@ import {
   abortSessionRunTarget,
   formatAbortReplyText,
   isAbortTrigger,
+<<<<<<< HEAD
+=======
+  resolveSessionEntryForKey,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   setAbortMemory,
   stopSubagentsForRequester,
 } from "./abort.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
+<<<<<<< HEAD
 import {
   persistAbortTargetEntry,
   resolveCommandSessionEntryForKey,
 } from "./commands-session-store.js";
+=======
+import { persistAbortTargetEntry } from "./commands-session-store.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { CommandHandler } from "./commands-types.js";
 import { clearSessionQueues } from "./queue.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
@@ -38,7 +46,11 @@ function resolveAbortTarget(params: {
 }): AbortTarget {
   const targetSessionKey =
     normalizeOptionalString(params.ctx.CommandTargetSessionKey) || params.sessionKey;
+<<<<<<< HEAD
   const { entry, key } = resolveCommandSessionEntryForKey(params.sessionStore, targetSessionKey);
+=======
+  const { entry, key } = resolveSessionEntryForKey(params.sessionStore, targetSessionKey);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (entry && key) {
     return {
       entry,

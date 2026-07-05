@@ -4,8 +4,13 @@ import type { ChatAbortOptions, ChatSendOptions } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";
+<<<<<<< HEAD
 import type { RealtimeTalkCatalogProvider } from "./chat/realtime-talk-catalog.ts";
 import type { RealtimeTalkConversationEntry } from "./chat/realtime-talk-conversation.ts";
+=======
+import type { RealtimeTalkConversationEntry } from "./chat/realtime-talk-conversation.ts";
+import type { RealtimeTalkCatalogProvider } from "./chat/realtime-talk-catalog.ts";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { RealtimeTalkStatus } from "./chat/realtime-talk.ts";
 import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
 import type { ChatMessageCache } from "./chat/session-message-cache.ts";
@@ -427,6 +432,7 @@ export type AppViewState = {
     clawhubDetailLoading: boolean;
     clawhubDetailError: string | null;
     clawhubInstallSlug: string | null;
+<<<<<<< HEAD
     clawhubInstallMessage: {
       kind: "success" | "error";
       text: string;
@@ -434,6 +440,9 @@ export type AppViewState = {
       acknowledgeVersion?: string;
       acknowledgeLabel?: string;
     } | null;
+=======
+    clawhubInstallMessage: { kind: "success" | "error"; text: string } | null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     clawhubVerdicts: Record<string, ClawHubSkillSecurityVerdict>;
     clawhubVerdictsLoading: boolean;
     clawhubVerdictsError: string | null;

@@ -94,6 +94,7 @@ function fetchInputUrl(fetchMock: ReturnType<typeof vi.fn>, index: number): stri
   return input.url;
 }
 
+<<<<<<< HEAD
 function oversizedJsonResponse(params: { chunkCount: number; chunkSize: number }): {
   response: Response;
   getReadCount: () => number;
@@ -127,6 +128,8 @@ function oversizedJsonResponse(params: { chunkCount: number; chunkSize: number }
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 let ssrfMock: { mockRestore: () => void } | undefined;
 
 describe("google video generation provider", () => {
@@ -519,6 +522,7 @@ describe("google video generation provider", () => {
     expect(result.videos[0]?.buffer).toEqual(Buffer.from("rest-video"));
   });
 
+<<<<<<< HEAD
   it("bounds successful Google REST operation JSON bodies instead of buffering the whole response", async () => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "google-key",
@@ -546,6 +550,8 @@ describe("google video generation provider", () => {
     expect(streamed.wasCanceled()).toBe(true);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("retries transient Google REST poll failures with empty bodies", async () => {
     vi.useFakeTimers();
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({

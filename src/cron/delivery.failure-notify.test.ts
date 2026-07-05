@@ -95,6 +95,7 @@ describe("sendFailureNotificationAnnounce", () => {
       "Cron failed",
     );
 
+<<<<<<< HEAD
     expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
       cfg,
       "main",
@@ -105,6 +106,13 @@ describe("sendFailureNotificationAnnounce", () => {
       },
       undefined,
     );
+=======
+    expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(cfg, "main", {
+      channel: "telegram",
+      to: "123",
+      accountId: "bot-a",
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(mocks.buildOutboundSessionContext).toHaveBeenCalledWith({
       cfg,
       agentId: "main",
@@ -138,6 +146,7 @@ describe("sendFailureNotificationAnnounce", () => {
       "Cron failed",
     );
 
+<<<<<<< HEAD
     expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
       {} as never,
       "main",
@@ -149,6 +158,14 @@ describe("sendFailureNotificationAnnounce", () => {
       },
       undefined,
     );
+=======
+    expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith({} as never, "main", {
+      channel: "telegram",
+      to: undefined,
+      accountId: undefined,
+      sessionKey: "agent:main:telegram:direct:123:thread:99",
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(mocks.buildOutboundSessionContext).toHaveBeenCalledWith({
       cfg: {},
       agentId: "main",
@@ -156,6 +173,7 @@ describe("sendFailureNotificationAnnounce", () => {
     });
   });
 
+<<<<<<< HEAD
   it("can suppress session-thread inheritance for explicit failure destinations", async () => {
     await sendFailureNotificationAnnounce(
       {} as never,
@@ -184,6 +202,8 @@ describe("sendFailureNotificationAnnounce", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not send when target resolution fails", async () => {
     mocks.resolveDeliveryTarget.mockResolvedValue({
       ok: false,

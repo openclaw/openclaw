@@ -105,7 +105,13 @@ const findLegacyGatewayServices = vi.fn().mockResolvedValue([]) as unknown as Mo
 const uninstallLegacyGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
 const findExtraGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
 const findSystemGatewayServices = vi.fn().mockResolvedValue([]) as unknown as MockFn;
+<<<<<<< HEAD
 const renderGatewayServiceCleanupHints = vi.fn().mockReturnValue(["cleanup"]) as unknown as MockFn;
+=======
+const renderGatewayServiceCleanupHints = vi
+  .fn()
+  .mockReturnValue(["cleanup"]) as unknown as MockFn;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const auditGatewayServiceConfig = vi
   .fn()
   .mockResolvedValue({ ok: true, issues: [] }) as unknown as MockFn;
@@ -144,12 +150,15 @@ const autoMigrateLegacyState = vi.fn().mockResolvedValue({
   changes: [],
   warnings: [],
 }) as unknown as MockFn;
+<<<<<<< HEAD
 const autoMigrateLegacyPluginDoctorState = vi.fn().mockResolvedValue({
   migrated: false,
   skipped: false,
   changes: [],
   warnings: [],
 }) as unknown as MockFn;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const autoMigrateLegacyTaskStateSidecars = vi.fn().mockResolvedValue({
   migrated: false,
   skipped: false,
@@ -215,6 +224,7 @@ function createLegacyStateMigrationDetectionResult(params?: {
       targetStorePath: "/tmp/state/agents/main/sessions/sessions.json",
       hasLegacy: params?.hasLegacySessions ?? false,
       legacyKeys: [],
+<<<<<<< HEAD
       preserveAmbiguousKeys: false,
       preserveForeignMainAliases: false,
       targetStoreAliases: {
@@ -222,6 +232,8 @@ function createLegacyStateMigrationDetectionResult(params?: {
         hasFinalSymlink: false,
         hasUnresolvedIdentity: false,
       },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
     agentDir: {
       legacyDir: "/tmp/state/agent",
@@ -236,11 +248,14 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/plugins/installs.json",
       hasLegacy: false,
     },
+<<<<<<< HEAD
     debugProxyCaptureSidecar: {
       sourcePath: "/tmp/state/debug-proxy/capture.sqlite",
       blobDir: "/tmp/state/debug-proxy/blobs",
       hasLegacy: false,
     },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     stateSchema: {
       hasLegacy: false,
       preview: [],
@@ -255,6 +270,7 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sessionPath: "/tmp/state/session-delivery-queue",
       hasLegacy: false,
     },
+<<<<<<< HEAD
     voiceWake: {
       triggersPath: "/tmp/state/settings/voicewake.json",
       routingPath: "/tmp/state/settings/voicewake-routing.json",
@@ -276,6 +292,8 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/bindings/current-conversations.json",
       hasLegacy: false,
     },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     execApprovals: {
       sourcePath: "/tmp/state/exec-approvals.legacy.json",
       targetPath: "/tmp/state/exec-approvals.json",
@@ -285,7 +303,10 @@ function createLegacyStateMigrationDetectionResult(params?: {
       hasLegacy: false,
       plans: [],
     },
+<<<<<<< HEAD
     warnings: [],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     preview: params?.preview ?? [],
   };
 }
@@ -528,7 +549,10 @@ vi.mock("./onboard-helpers.js", () => ({
 }));
 
 vi.mock("./doctor-state-migrations.js", () => ({
+<<<<<<< HEAD
   autoMigrateLegacyPluginDoctorState,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   autoMigrateLegacyState,
   autoMigrateLegacyStateDir,
   autoMigrateLegacyTaskStateSidecars,

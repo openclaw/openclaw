@@ -669,6 +669,7 @@ describe("WhatsAppConnectionController", () => {
       vi.useRealTimers();
     }
   });
+<<<<<<< HEAD
 
   it("uses messageTimeoutMs * 4 as the app-silence window for fresh connections with no inbound", async () => {
     // Verifies the watchdog respects appSilenceTimeoutMs = messageTimeoutMs * 4 on first open.
@@ -717,4 +718,6 @@ describe("WhatsAppConnectionController", () => {
       vi.useRealTimers();
     }
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

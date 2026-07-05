@@ -619,6 +619,7 @@ describe("createWebhookHandler", () => {
     expectBotReplySentTo("123");
   });
 
+<<<<<<< HEAD
   it("awaits deliver directly with no local hardcoded timeout wrapper", async () => {
     // Previously this webhook handler wrapped deliver with a hardcoded 120s
     // Promise.race that overrode the configurable agents.defaults.timeoutSeconds
@@ -650,6 +651,8 @@ describe("createWebhookHandler", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("sanitizes input before delivery", async () => {
     const deliver = vi.fn().mockResolvedValue(null);
     const handler = createWebhookHandler({

@@ -1,12 +1,20 @@
 {
   "name": "openclaw",
+<<<<<<< HEAD
   "version": "2026.6.10",
+=======
+  "version": "2026.6.8",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "openclaw",
+<<<<<<< HEAD
       "version": "2026.6.10",
+=======
+      "version": "2026.6.8",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "hasInstallScript": true,
       "license": "MIT",
       "dependencies": {
@@ -58,7 +66,11 @@
         "tslog": "4.10.2",
         "typebox": "1.1.39",
         "typescript": "6.0.3",
+<<<<<<< HEAD
         "undici": "8.5.0",
+=======
+        "undici": "8.3.0",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         "web-push": "3.6.7",
         "web-tree-sitter": "0.26.9",
         "ws": "8.21.0",
@@ -3338,9 +3350,15 @@
       }
     },
     "node_modules/undici": {
+<<<<<<< HEAD
       "version": "8.5.0",
       "resolved": "https://registry.npmjs.org/undici/-/undici-8.5.0.tgz",
       "integrity": "sha512-xamtWoB1EshgjpmlXd7GGm2VfdDtw1+rD8uhry8pSNW3If6S8E0m2T2+orSKeZXEn/aPJMviCpDBA65WJt8zhg==",
+=======
+      "version": "8.3.0",
+      "resolved": "https://registry.npmjs.org/undici/-/undici-8.3.0.tgz",
+      "integrity": "sha512-TkUDgb6tl7KOGZ+7e8E3d2FYgUQgF6z5YypqjWmixVQSQERFcVrVg0ySADm2LVLRh5ljAaHTCR5Fmz3Q34rB7Q==",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "license": "MIT",
       "engines": {
         "node": ">=22.19.0"

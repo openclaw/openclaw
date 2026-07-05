@@ -7,18 +7,26 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+<<<<<<< HEAD
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
+=======
+import { afterEach, describe, expect, it } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   createPrefixedOutputWriter,
   isArtifactSetFresh,
   parseMode,
+<<<<<<< HEAD
   resolveBoundaryEntryShimRequiredOutputs,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveBoundaryRootShimsTimeoutMs,
   runNodeStep,
   runNodeSteps,
   runNodeStepsInParallel,
+<<<<<<< HEAD
   signalNodeStep,
 } from "../../scripts/prepare-extension-package-boundary-artifacts.mjs";
 import { makeTempDir } from "../helpers/temp-dir.js";
@@ -29,6 +37,12 @@ function expectedTaskkillPath(): string {
   return resolveWindowsTaskkillPath();
 }
 
+=======
+} from "../../scripts/prepare-extension-package-boundary-artifacts.mjs";
+
+const tempRoots = new Set<string>();
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function createMockPipe() {
   const pipe = new EventEmitter() as EventEmitter & {
     setEncoding: (encoding: string) => void;
@@ -130,6 +144,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     expect(Date.now() - startedAt).toBeLessThan(abortBudgetMs);
   }, 45_000);
 
+<<<<<<< HEAD
   it("signals Windows node step process trees with taskkill", () => {
     const child = {
       kill: vi.fn(),
@@ -199,6 +214,8 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     expect(child.kill).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.runIf(process.platform !== "win32")(
     "force-kills aborted sibling step process groups",
     async () => {
@@ -248,6 +265,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     },
   );
 
+<<<<<<< HEAD
   it.runIf(process.platform !== "win32")(
     "lets aborted sibling descendants drain during kill grace",
     async () => {
@@ -291,6 +309,8 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("hard-kills timed out prep steps", async () => {
     const signals: Array<NodeJS.Signals | number | undefined> = [];
     const child = new EventEmitter() as EventEmitter & {
@@ -318,6 +338,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     expect(signals).toEqual(["SIGKILL"]);
   });
 
+<<<<<<< HEAD
   it("clamps oversized prep step timers before scheduling", async () => {
     await expect(
       runNodeStep(
@@ -328,6 +349,8 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     ).resolves.toBeUndefined();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.runIf(process.platform !== "win32")("kills timed-out prep step process groups", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-timeout-group-"));
     tempRoots.add(rootDir);
@@ -491,6 +514,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     ).toBe(false);
   });
 
+<<<<<<< HEAD
   it("requires generated entry-shim outputs in addition to the freshness stamp", () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-entry-shims-"));
     tempRoots.add(rootDir);
@@ -552,6 +576,8 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("parses prep mode and rejects unknown values", () => {
     expect(parseMode([])).toBe("all");
     expect(parseMode(["--mode=package-boundary"])).toBe("package-boundary");

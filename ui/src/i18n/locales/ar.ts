@@ -63,6 +63,10 @@ export const ar: TranslationMap = {
     docs: "المستندات",
     theme: "السمة",
     colorMode: "وضع اللون",
+<<<<<<< HEAD
+=======
+    colorModeOption: "وضع اللون: {mode}",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resources: "الموارد",
     search: "بحث",
     save: "حفظ",
@@ -199,7 +203,10 @@ export const ar: TranslationMap = {
     inherit: "وراثة",
     defaultOption: "الافتراضي ({value})",
     offExplicit: "إيقاف (صريح)",
+<<<<<<< HEAD
     auto: "auto",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     on: "تشغيل",
     off: "متوقف",
     full: "كامل",
@@ -1424,7 +1431,10 @@ export const ar: TranslationMap = {
     jaJP: "日本語 (اليابانية)",
     ko: "한국어 (الكورية)",
     fr: "Français (الفرنسية)",
+<<<<<<< HEAD
     hi: "الهندية (Hindi)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ar: "العربية",
     it: "Italiano (الإيطالية)",
     tr: "Türkçe (التركية)",
@@ -1435,7 +1445,10 @@ export const ar: TranslationMap = {
     vi: "Tiếng Việt (الفيتنامية)",
     nl: "Nederlands (الهولندية)",
     fa: "فارسی (الفارسية)",
+<<<<<<< HEAD
     ru: "الروسية (Russian)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   cron: {
     quickCreate: {
@@ -1603,7 +1616,10 @@ export const ar: TranslationMap = {
       nextHeartbeat: "النبضة التالية",
       wakeModeHelp: "الآن يشغّل فورًا. النبضة التالية تنتظر الدورة التالية.",
       payloadKind: "ما الذي يجب تشغيله؟",
+<<<<<<< HEAD
       command: "Command",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       systemEvent: "نشر رسالة إلى المخطط الزمني الرئيسي",
       agentTurn: "تشغيل مهمة المساعد (معزولة)",
       systemEventHelp: "يرسل نصك إلى المخطط الزمني الرئيسي لـ Gateway (مفيد للتذكيرات/المشغلات).",

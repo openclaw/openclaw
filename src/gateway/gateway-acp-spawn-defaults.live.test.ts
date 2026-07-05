@@ -23,7 +23,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { clearPluginLoaderCache } from "../plugins/loader.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
+<<<<<<< HEAD
 import { setTestEnvValue } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { sleep } from "../utils.js";
 import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
 import { startGatewayServer } from "./server.js";
@@ -283,8 +286,13 @@ describeLive("gateway live (ACP spawn defaults)", () => {
       const sessionKeys: string[] = [];
       let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
 
+<<<<<<< HEAD
       setTestEnvValue("OPENCLAW_CONFIG_PATH", tempConfigPath);
       setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+=======
+      process.env.OPENCLAW_CONFIG_PATH = tempConfigPath;
+      process.env.OPENCLAW_STATE_DIR = tempStateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       process.env.OPENCLAW_SKIP_CHANNELS = "1";
       process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
       process.env.OPENCLAW_SKIP_CRON = "1";

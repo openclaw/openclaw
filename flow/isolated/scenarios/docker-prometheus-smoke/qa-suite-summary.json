@@ -1,0 +1,72 @@
+{
+  "scenarios": [
+    {
+      "name": "Docker Prometheus smoke",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "emits protected low-cardinality prometheus metrics",
+          "status": "pass"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 35183,
+    "gatewayProcessCpuMs": 2000,
+    "gatewayCpuCoreRatio": 0.057,
+    "gatewayProcessRssStartBytes": 816250880,
+    "gatewayProcessRssEndBytes": 1101467648,
+    "gatewayProcessRssDeltaBytes": 285216768,
+    "gatewayProcessRssPeakBytes": 1101467648,
+    "gatewayProcessRssPeakDeltaBytes": 285216768,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:17:10.664Z",
+        "gatewayProcessRssBytes": 816250880
+      },
+      {
+        "label": "scenario:docker-prometheus-smoke:start",
+        "at": "2026-07-03T13:17:10.679Z",
+        "gatewayProcessRssBytes": 816250880
+      },
+      {
+        "label": "scenario:docker-prometheus-smoke:finish",
+        "at": "2026-07-03T13:17:15.407Z",
+        "gatewayProcessRssBytes": 1101467648
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:17:15.428Z",
+        "gatewayProcessRssBytes": 1101467648
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:16:40.224Z",
+    "finishedAt": "2026-07-03T13:17:15.407Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "docker-prometheus-smoke"
+    ],
+    "runtimePair": null
+  }
+}

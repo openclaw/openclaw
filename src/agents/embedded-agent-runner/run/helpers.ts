@@ -65,13 +65,25 @@ export function resolveRateLimitProfileRotationLimit(cfg?: OpenClawConfig): numb
  * retries already happened. Linear and deterministic (no jitter) so RPM
  * windows clear predictably and tests can assert exact values.
  */
+<<<<<<< HEAD
+=======
+export function resolveSameModelRateLimitBackoffMs(retriesSoFar: number): number {
+  const delay = SAME_MODEL_RATE_LIMIT_BACKOFF_STEP_MS * (Math.max(0, retriesSoFar) + 1);
+  return Math.min(SAME_MODEL_RATE_LIMIT_MAX_BACKOFF_MS, delay);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function resolveSameModelRateLimitRetryDelayMs(params: {
   retriesSoFar: number;
   retryAfterSeconds?: number;
 }): number {
+<<<<<<< HEAD
   const backoffDelayMs =
     SAME_MODEL_RATE_LIMIT_BACKOFF_STEP_MS * (Math.max(0, params.retriesSoFar) + 1);
   const backoffMs = Math.min(SAME_MODEL_RATE_LIMIT_MAX_BACKOFF_MS, backoffDelayMs);
+=======
+  const backoffMs = resolveSameModelRateLimitBackoffMs(params.retriesSoFar);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const retryAfterMs = Number.isFinite(params.retryAfterSeconds)
     ? Math.ceil(Math.max(0, params.retryAfterSeconds ?? 0) * 1000)
     : 0;

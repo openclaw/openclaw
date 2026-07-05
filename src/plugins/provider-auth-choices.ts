@@ -5,10 +5,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+<<<<<<< HEAD
 import {
   getOfficialExternalPluginCatalogManifest,
   listOfficialExternalProviderCatalogEntries,
 } from "./official-external-plugin-catalog.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 export type ProviderAuthChoiceMetadata = {
@@ -367,6 +370,7 @@ export function resolveManifestProviderOnboardAuthFlags(
   }
   return flags;
 }
+<<<<<<< HEAD
 
 function resolveOfficialExternalProviderOnboardAuthFlags(): ProviderOnboardAuthFlag[] {
   const flags: ProviderOnboardAuthFlag[] = [];
@@ -410,3 +414,5 @@ export function resolveProviderOnboardAuthFlags(
   }
   return flags;
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

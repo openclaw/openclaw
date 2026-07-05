@@ -396,6 +396,7 @@ describe("runSearchSetupFlow", () => {
     expect(xaiConfig?.xSearch?.model).toBe("grok-4-1-fast");
   });
 
+<<<<<<< HEAD
   it("allows an explicit setup flow to reenable credential-ready web_search", async () => {
     const select = vi.fn().mockResolvedValueOnce("grok").mockResolvedValueOnce("no");
     const prompter = createWizardPrompter({
@@ -436,6 +437,8 @@ describe("runSearchSetupFlow", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("installs an external catalog search provider before enabling it", async () => {
     const select = vi.fn().mockResolvedValueOnce("brave");
     const text = vi.fn().mockResolvedValue("brave-test-key");

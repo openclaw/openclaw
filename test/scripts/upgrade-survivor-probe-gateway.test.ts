@@ -192,6 +192,7 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
     }
   });
 
+<<<<<<< HEAD
   it("keeps failed probe retries inside the total timeout", async () => {
     const server = createHttpServer((_request, response) => {
       response.writeHead(503, { "content-type": "application/json" });
@@ -225,6 +226,8 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("allows degraded ready responses only when degraded readiness is explicit", async () => {
     const server = createHttpServer((_request, response) => {
       response.writeHead(503, { "content-type": "application/json" });
@@ -292,6 +295,7 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
     }
   });
 
+<<<<<<< HEAD
   it("rejects declared oversized probe bodies before waiting on the stream", async () => {
     const server = createHttpServer((_request, response) => {
       response.writeHead(200, {
@@ -331,6 +335,8 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("bounds probes when a server accepts the connection but never responds", async () => {
     const sockets = new Set<Socket>();
     const server = createTcpServer((socket) => {
@@ -371,6 +377,7 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
     }
   });
 
+<<<<<<< HEAD
   it("keeps the attempt timeout active while reading probe bodies", async () => {
     const sockets = new Set<Socket>();
     const server = createHttpServer((_request, response) => {
@@ -414,6 +421,8 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("caps response bodies before parsing probe JSON", async () => {
     const server = createHttpServer((_request, response) => {
       response.writeHead(200, { "content-type": "application/json" });

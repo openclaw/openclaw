@@ -69,6 +69,7 @@ vi.mock("../../channels/plugins/session-conversation.js", () => ({
       threadId: match.groups.threadId,
     };
   },
+<<<<<<< HEAD
   resolveSessionThreadInfo: (sessionKey: string | undefined | null) => {
     const trimmed = sessionKey?.trim();
     const topicMarker = ":topic:";
@@ -81,4 +82,6 @@ vi.mock("../../channels/plugins/session-conversation.js", () => ({
       threadId: trimmed.slice(topicIndex + topicMarker.length) || undefined,
     };
   },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));

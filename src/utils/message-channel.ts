@@ -23,10 +23,13 @@ export {
 export {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalNonDeliveryChannel,
+<<<<<<< HEAD
   NATIVE_APPROVAL_CHANNELS,
   isNativeApprovalChannel,
   type InternalMessageChannel,
   type NativeApprovalChannel,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./message-channel-constants.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "./message-channel-constants.js";
 import { normalizeMessageChannel } from "./message-channel-normalize.js";

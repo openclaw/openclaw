@@ -1,22 +1,38 @@
 {
   "name": "@openclaw/discord",
+<<<<<<< HEAD
   "version": "2026.6.10",
+=======
+  "version": "2026.6.8",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/discord",
+<<<<<<< HEAD
       "version": "2026.6.10",
+=======
+      "version": "2026.6.8",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "dependencies": {
         "@discordjs/voice": "0.19.2",
         "discord-api-types": "0.38.48",
         "libopus-wasm": "0.2.0",
         "typebox": "1.1.39",
+<<<<<<< HEAD
         "undici": "8.5.0",
         "ws": "8.21.0"
       },
       "peerDependencies": {
         "openclaw": ">=2026.6.10"
+=======
+        "undici": "8.3.0",
+        "ws": "8.21.0"
+      },
+      "peerDependencies": {
+        "openclaw": ">=2026.6.8"
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
       "peerDependenciesMeta": {
         "openclaw": {
@@ -399,9 +415,15 @@
       "license": "MIT"
     },
     "node_modules/undici": {
+<<<<<<< HEAD
       "version": "8.5.0",
       "resolved": "https://registry.npmjs.org/undici/-/undici-8.5.0.tgz",
       "integrity": "sha512-xamtWoB1EshgjpmlXd7GGm2VfdDtw1+rD8uhry8pSNW3If6S8E0m2T2+orSKeZXEn/aPJMviCpDBA65WJt8zhg==",
+=======
+      "version": "8.3.0",
+      "resolved": "https://registry.npmjs.org/undici/-/undici-8.3.0.tgz",
+      "integrity": "sha512-TkUDgb6tl7KOGZ+7e8E3d2FYgUQgF6z5YypqjWmixVQSQERFcVrVg0ySADm2LVLRh5ljAaHTCR5Fmz3Q34rB7Q==",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "license": "MIT",
       "engines": {
         "node": ">=22.19.0"

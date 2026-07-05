@@ -14,7 +14,10 @@ import {
 type ReadonlyRecoveryHarness = MemoryReadonlyRecoveryState & {
   syncing: Promise<void> | null;
   queuedSessionFiles: Set<string>;
+<<<<<<< HEAD
   queuedSessions: Map<string, unknown>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   queuedSessionSync: Promise<void> | null;
   vectorDegradedWriteWarningShown: boolean;
   ensureProviderInitialized: ReturnType<typeof vi.fn>;
@@ -33,12 +36,18 @@ describe("memory manager readonly recovery", () => {
 
   function createQueuedSyncHarness(syncing: Promise<void>) {
     const queuedSessionFiles = new Set<string>();
+<<<<<<< HEAD
     const queuedSessions = new Map<string, never>();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     let queuedSessionSync: Promise<void> | null = null;
     const sync = vi.fn(async () => {});
     return {
       queuedSessionFiles,
+<<<<<<< HEAD
       queuedSessions,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       get queuedSessionSync() {
         return queuedSessionSync;
       },
@@ -47,7 +56,10 @@ describe("memory manager readonly recovery", () => {
         isClosed: () => false,
         getSyncing: () => syncing,
         getQueuedSessionFiles: () => queuedSessionFiles,
+<<<<<<< HEAD
         getQueuedSessions: () => queuedSessions,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         getQueuedSessionSync: () => queuedSessionSync,
         setQueuedSessionSync: (value: Promise<void> | null) => {
           queuedSessionSync = value;
@@ -65,7 +77,10 @@ describe("memory manager readonly recovery", () => {
       closed: false,
       syncing: null,
       queuedSessionFiles: new Set<string>(),
+<<<<<<< HEAD
       queuedSessions: new Map<string, never>(),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       queuedSessionSync: null,
       db: initialDb,
       vector: {
@@ -229,9 +244,17 @@ describe("memory manager readonly recovery", () => {
     });
     const harness = createQueuedSyncHarness(pendingSync);
 
+<<<<<<< HEAD
     const queued = enqueueMemoryTargetedSessionSync(harness.state, {
       sessionFiles: ["  /tmp/first.jsonl ", "", "/tmp/second.jsonl"],
     });
+=======
+    const queued = enqueueMemoryTargetedSessionSync(harness.state, [
+      "  /tmp/first.jsonl ",
+      "",
+      "/tmp/second.jsonl",
+    ]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(harness.sync).not.toHaveBeenCalled();
 
@@ -240,8 +263,12 @@ describe("memory manager readonly recovery", () => {
 
     expect(harness.sync).toHaveBeenCalledTimes(1);
     expect(harness.sync).toHaveBeenCalledWith({
+<<<<<<< HEAD
       reason: "queued-sessions",
       sessions: [],
+=======
+      reason: "queued-session-files",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionFiles: ["/tmp/first.jsonl", "/tmp/second.jsonl"],
     });
     expect(harness.queuedSessionSync).toBeNull();
@@ -254,12 +281,23 @@ describe("memory manager readonly recovery", () => {
     });
     const harness = createQueuedSyncHarness(pendingSync);
 
+<<<<<<< HEAD
     const first = enqueueMemoryTargetedSessionSync(harness.state, {
       sessionFiles: ["/tmp/first.jsonl", "/tmp/second.jsonl"],
     });
     const second = enqueueMemoryTargetedSessionSync(harness.state, {
       sessionFiles: ["/tmp/second.jsonl", "/tmp/third.jsonl"],
     });
+=======
+    const first = enqueueMemoryTargetedSessionSync(harness.state, [
+      "/tmp/first.jsonl",
+      "/tmp/second.jsonl",
+    ]);
+    const second = enqueueMemoryTargetedSessionSync(harness.state, [
+      "/tmp/second.jsonl",
+      "/tmp/third.jsonl",
+    ]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(first).toBe(second);
 
@@ -268,8 +306,12 @@ describe("memory manager readonly recovery", () => {
 
     expect(harness.sync).toHaveBeenCalledTimes(1);
     expect(harness.sync).toHaveBeenCalledWith({
+<<<<<<< HEAD
       reason: "queued-sessions",
       sessions: [],
+=======
+      reason: "queued-session-files",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionFiles: ["/tmp/first.jsonl", "/tmp/second.jsonl", "/tmp/third.jsonl"],
     });
   });
@@ -281,9 +323,13 @@ describe("memory manager readonly recovery", () => {
     });
     const harness = createQueuedSyncHarness(pendingSync);
 
+<<<<<<< HEAD
     const queued = enqueueMemoryTargetedSessionSync(harness.state, {
       sessionFiles: ["", "   "],
     });
+=======
+    const queued = enqueueMemoryTargetedSessionSync(harness.state, ["", "   "]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(queued).toBe(pendingSync);
     releaseSync();

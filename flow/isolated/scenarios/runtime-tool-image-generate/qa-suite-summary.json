@@ -1,0 +1,73 @@
+{
+  "scenarios": [
+    {
+      "name": "Runtime tool fixture — image_generate",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises image_generate happy and failure paths",
+          "status": "pass",
+          "details": "image_generate mock provider report-only: direct tool output is not required by this fixture\nimage_generate mock provider happy planned args (diagnostic only): {\"prompt\":\"QA lighthouse runtime parity fixture\",\"filename\":\"runtime-tool-fixture\"}\nimage_generate mock provider failure planned args (diagnostic only): {\"__qaFailureMode\":\"denied-input\"}"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 96958,
+    "gatewayProcessCpuMs": 14000,
+    "gatewayCpuCoreRatio": 0.144,
+    "gatewayProcessRssStartBytes": 796827648,
+    "gatewayProcessRssEndBytes": 1110859776,
+    "gatewayProcessRssDeltaBytes": 314032128,
+    "gatewayProcessRssPeakBytes": 1110859776,
+    "gatewayProcessRssPeakDeltaBytes": 314032128,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:15:48.060Z",
+        "gatewayProcessRssBytes": 796827648
+      },
+      {
+        "label": "scenario:runtime-tool-image-generate:start",
+        "at": "2026-07-03T13:15:48.064Z",
+        "gatewayProcessRssBytes": 796827648
+      },
+      {
+        "label": "scenario:runtime-tool-image-generate:finish",
+        "at": "2026-07-03T13:16:38.204Z",
+        "gatewayProcessRssBytes": 1110859776
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:16:38.264Z",
+        "gatewayProcessRssBytes": 1110859776
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:15:01.246Z",
+    "finishedAt": "2026-07-03T13:16:38.204Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "runtime-tool-image-generate"
+    ],
+    "runtimePair": null
+  }
+}

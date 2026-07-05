@@ -113,6 +113,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
             ...context.messages,
           ];
         }
+<<<<<<< HEAD
         if (provider === "replay-poison") {
           return context.messages.filter(
             (message) =>
@@ -123,6 +124,8 @@ vi.mock("../plugins/provider-runtime.js", async () => {
               ),
           );
         }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         return context.messages;
       },
     ),
@@ -751,6 +754,7 @@ describe("sanitizeSessionHistory", () => {
     expect(JSON.stringify(result)).not.toContain("missing tool result");
   });
 
+<<<<<<< HEAD
   it("keeps OpenAI Responses real tool results paired when strict id sanitization rewrites aliases", async () => {
     const messages = castAgentMessages([
       makeUserMessage("generate"),
@@ -959,6 +963,9 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("synthesizes Codex-style aborted tool results for openai-codex-responses", async () => {
+=======
+  it("synthesizes Codex-style aborted tool results for openai-chatgpt-responses", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const messages: AgentMessage[] = [
       makeAssistantMessage(
         [

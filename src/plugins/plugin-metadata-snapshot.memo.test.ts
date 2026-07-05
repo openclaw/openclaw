@@ -274,6 +274,7 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(second.byPluginId.get("demo")).toBe(second.plugins[0]);
   });
 
+<<<<<<< HEAD
   it("does not emit metadata scan spans for hot memo hits", () => {
     const stateDir = tempStateDir();
     const timelinePath = path.join(stateDir, "timeline", "metadata.jsonl");
@@ -304,6 +305,8 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("skips persisted registry filesystem fingerprints after a process memo hit", () => {
     const stateDir = tempStateDir();
     touchPersistedIndex(stateDir);

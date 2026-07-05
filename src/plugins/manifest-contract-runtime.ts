@@ -13,6 +13,13 @@ export type ManifestContractRuntimePluginResolution = {
   bundledCompatPluginIds: string[];
 };
 
+<<<<<<< HEAD
+=======
+const DEMAND_ONLY_CONTRACT_LOOKUP_OPTIONS = {
+  preferPersisted: false,
+} as const;
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function resolveManifestContractRuntimePluginResolution(params: {
   cfg?: OpenClawConfig;
   contract: PluginManifestContractListKey;
@@ -21,6 +28,10 @@ export function resolveManifestContractRuntimePluginResolution(params: {
   const snapshot = loadPluginMetadataSnapshot({
     config: params.cfg ?? {},
     env: process.env,
+<<<<<<< HEAD
+=======
+    ...DEMAND_ONLY_CONTRACT_LOOKUP_OPTIONS,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   const allContractPlugins = snapshot.plugins.filter((plugin) =>
     hasManifestContractValue({

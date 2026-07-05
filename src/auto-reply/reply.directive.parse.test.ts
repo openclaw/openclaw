@@ -70,12 +70,15 @@ describe("directive parsing", () => {
     expect(res.fastMode).toBe(true);
   });
 
+<<<<<<< HEAD
   it("matches auto fast directive", () => {
     const res = extractFastDirective("/fast auto please");
     expect(res.hasDirective).toBe(true);
     expect(res.fastMode).toBe("auto");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("parses default thinking and fast directives as override clears", () => {
     const think = parseInlineDirectives("/think default");
     expect(think.hasThinkDirective).toBe(true);
@@ -219,6 +222,7 @@ describe("directive parsing", () => {
     expect(think.thinkLevel).toBe("high");
   });
 
+<<<<<<< HEAD
   it("keeps --persist as ordinary text for inline directives", () => {
     const model = parseInlineDirectives("please sync /model openai/gpt-4.1-mini --persist now");
     expect(model.cleaned).toBe("please sync --persist now");
@@ -237,6 +241,8 @@ describe("directive parsing", () => {
     expect(parsed.cleaned).toBe("please keep --persist in this text");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves spacing when stripping think directives before paths", () => {
     const res = extractThinkDirective("thats not /think high/tmp/hello");
     expect(res.hasDirective).toBe(true);

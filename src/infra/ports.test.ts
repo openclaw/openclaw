@@ -3,11 +3,14 @@ import net from "node:net";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+<<<<<<< HEAD
 import {
   getWindowsPowerShellExePath,
   getWindowsSystem32ExePath,
   getWindowsWmicExePath,
 } from "./windows-install-roots.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 
@@ -427,7 +430,11 @@ describe("inspectPortUsage on Windows", () => {
     setPlatform("win32");
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const [command] = argv;
+<<<<<<< HEAD
       if (command === getWindowsSystem32ExePath("netstat.exe")) {
+=======
+      if (command === "netstat") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         return {
           stdout:
             "  TCP    127.0.0.1:50123    127.0.0.1:18789    ESTABLISHED    4242\r\n" +
@@ -436,10 +443,17 @@ describe("inspectPortUsage on Windows", () => {
           code: 0,
         };
       }
+<<<<<<< HEAD
       if (command === getWindowsSystem32ExePath("tasklist.exe")) {
         return { stdout: "Image Name: node.exe\r\n", stderr: "", code: 0 };
       }
       if (command === getWindowsPowerShellExePath()) {
+=======
+      if (command === "tasklist") {
+        return { stdout: "Image Name: node.exe\r\n", stderr: "", code: 0 };
+      }
+      if (command === "powershell") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         return {
           stdout:
             '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js logs --follow\r\n',
@@ -465,17 +479,28 @@ describe("inspectPortUsage on Windows", () => {
     setPlatform("win32");
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const [command] = argv;
+<<<<<<< HEAD
       if (command === getWindowsSystem32ExePath("netstat.exe")) {
+=======
+      if (command === "netstat") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         return {
           stdout: "  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n",
           stderr: "",
           code: 0,
         };
       }
+<<<<<<< HEAD
       if (command === getWindowsSystem32ExePath("tasklist.exe")) {
         return { stdout: "Image Name: node.exe\r\n", stderr: "", code: 0 };
       }
       if (command === getWindowsPowerShellExePath()) {
+=======
+      if (command === "tasklist") {
+        return { stdout: "Image Name: node.exe\r\n", stderr: "", code: 0 };
+      }
+      if (command === "powershell") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         return {
           stdout:
             '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js gateway run\r\n',
@@ -501,7 +526,11 @@ describe("inspectPortUsage on Windows", () => {
     setPlatform("win32");
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const [command] = argv;
+<<<<<<< HEAD
       if (command === getWindowsSystem32ExePath("netstat.exe")) {
+=======
+      if (command === "netstat") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         return {
           stdout:
             "  TCP    127.0.0.1:187890    0.0.0.0:0    LISTENING    9000\r\n" +
@@ -522,13 +551,18 @@ describe("inspectPortUsage on Windows", () => {
     setPlatform("win32");
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const [command] = argv;
+<<<<<<< HEAD
       if (command === getWindowsSystem32ExePath("netstat.exe")) {
+=======
+      if (command === "netstat") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         return {
           stdout: "  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n",
           stderr: "",
           code: 0,
         };
       }
+<<<<<<< HEAD
       if (command === getWindowsSystem32ExePath("tasklist.exe")) {
         return { stdout: "Image Name: node.exe\r\n", stderr: "", code: 0 };
       }
@@ -536,6 +570,15 @@ describe("inspectPortUsage on Windows", () => {
         return { stdout: "", stderr: "access denied", code: 1 };
       }
       if (command === getWindowsWmicExePath()) {
+=======
+      if (command === "tasklist") {
+        return { stdout: "Image Name: node.exe\r\n", stderr: "", code: 0 };
+      }
+      if (command === "powershell") {
+        return { stdout: "", stderr: "access denied", code: 1 };
+      }
+      if (command === "wmic") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         return {
           stdout: "CommandLine=node.exe C:\\openclaw\\dist\\index.js gateway run\r\n",
           stderr: "",
@@ -549,6 +592,10 @@ describe("inspectPortUsage on Windows", () => {
 
     expect(result.listeners[0]?.commandLine).toContain("openclaw");
     const commandNames = runCommandWithTimeoutMock.mock.calls.map(([argv]) => argv[0]);
+<<<<<<< HEAD
     expect(commandNames).toContain(getWindowsWmicExePath());
+=======
+    expect(commandNames).toContain("wmic");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

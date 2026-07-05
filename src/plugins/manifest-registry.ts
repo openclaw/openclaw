@@ -53,7 +53,10 @@ import {
   type PluginManifestToolMetadata,
   type PluginPackageChannel,
   type PluginPackageInstall,
+<<<<<<< HEAD
   normalizeManifestChannelCommandDefaults,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
 import {
@@ -201,7 +204,10 @@ export type PluginManifestRecord = {
   id: string;
   name?: string;
   description?: string;
+<<<<<<< HEAD
   icon?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   version?: string;
   packageName?: string;
   packageVersion?: string;
@@ -297,6 +303,32 @@ function normalizePreferredPluginIds(raw: unknown): string[] | undefined {
   return normalizeOptionalTrimmedStringList(raw);
 }
 
+<<<<<<< HEAD
+=======
+function normalizePackageChannelCommands(
+  commands: unknown,
+): PluginManifestChannelCommandDefaults | undefined {
+  if (!commands || typeof commands !== "object" || Array.isArray(commands)) {
+    return undefined;
+  }
+  const record = commands as Record<string, unknown>;
+  const nativeCommandsAutoEnabled =
+    typeof record.nativeCommandsAutoEnabled === "boolean"
+      ? record.nativeCommandsAutoEnabled
+      : undefined;
+  const nativeSkillsAutoEnabled =
+    typeof record.nativeSkillsAutoEnabled === "boolean"
+      ? record.nativeSkillsAutoEnabled
+      : undefined;
+  return nativeCommandsAutoEnabled !== undefined || nativeSkillsAutoEnabled !== undefined
+    ? {
+        ...(nativeCommandsAutoEnabled !== undefined ? { nativeCommandsAutoEnabled } : {}),
+        ...(nativeSkillsAutoEnabled !== undefined ? { nativeSkillsAutoEnabled } : {}),
+      }
+    : undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function mergePackageChannelMetaIntoChannelConfigs(params: {
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
   packageChannel?: OpenClawPackageManifest["channel"];
@@ -321,7 +353,11 @@ function mergePackageChannelMetaIntoChannelConfigs(params: {
   const preferOver =
     existing.preferOver ?? normalizePreferredPluginIds(params.packageChannel?.preferOver);
   const commands =
+<<<<<<< HEAD
     existing.commands ?? normalizeManifestChannelCommandDefaults(params.packageChannel?.commands);
+=======
+    existing.commands ?? normalizePackageChannelCommands(params.packageChannel?.commands);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const merged: Record<string, PluginManifestChannelConfig> = Object.create(null);
   for (const [key, value] of Object.entries(params.channelConfigs)) {
@@ -480,7 +516,11 @@ function buildRecord(params: {
     }),
     packageChannel: params.candidate.packageManifest?.channel,
   });
+<<<<<<< HEAD
   const packageChannelCommands = normalizeManifestChannelCommandDefaults(
+=======
+  const packageChannelCommands = normalizePackageChannelCommands(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     params.candidate.packageManifest?.channel?.commands,
   );
   return {
@@ -488,7 +528,10 @@ function buildRecord(params: {
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.packageName,
     description:
       normalizeOptionalString(params.manifest.description) ?? params.candidate.packageDescription,
+<<<<<<< HEAD
     icon: normalizeOptionalString(params.manifest.icon),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     version: normalizeOptionalString(params.manifest.version) ?? params.candidate.packageVersion,
     packageName: params.candidate.packageName,
     packageVersion: params.candidate.packageVersion,

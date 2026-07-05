@@ -137,3 +137,22 @@ export function createMSTeamsSsoTokenStoreFs(params?: {
     },
   };
 }
+<<<<<<< HEAD
+=======
+
+/** In-memory store, primarily useful for tests. */
+export function createMSTeamsSsoTokenStoreMemory(): MSTeamsSsoTokenStore {
+  const tokens = new Map<string, MSTeamsSsoStoredToken>();
+  return {
+    async get({ connectionName, userId }) {
+      return tokens.get(makeMSTeamsSsoTokenStoreKey(connectionName, userId)) ?? null;
+    },
+    async save(token) {
+      tokens.set(makeMSTeamsSsoTokenStoreKey(token.connectionName, token.userId), { ...token });
+    },
+    async remove({ connectionName, userId }) {
+      return tokens.delete(makeMSTeamsSsoTokenStoreKey(connectionName, userId));
+    },
+  };
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

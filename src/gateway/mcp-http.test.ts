@@ -1688,6 +1688,7 @@ describe("mcp loopback server", () => {
 describe("createMcpLoopbackServerConfig", () => {
   it("builds a server entry with env-driven headers", () => {
     const config = createMcpLoopbackServerConfig(23119) as {
+<<<<<<< HEAD
       mcpServers?: Record<
         string,
         { alwaysLoad?: boolean; url?: string; headers?: Record<string, string> }
@@ -1695,6 +1696,11 @@ describe("createMcpLoopbackServerConfig", () => {
     };
     expect(config.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
     expect(config.mcpServers?.openclaw?.alwaysLoad).toBe(true);
+=======
+      mcpServers?: Record<string, { url?: string; headers?: Record<string, string> }>;
+    };
+    expect(config.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(config.mcpServers?.openclaw?.headers?.Authorization).toBe(
       "Bearer ${OPENCLAW_MCP_TOKEN}",
     );

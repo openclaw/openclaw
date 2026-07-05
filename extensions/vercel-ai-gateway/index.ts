@@ -4,7 +4,10 @@ import { applyVercelAiGatewayConfig, VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF } from 
 import {
   buildStaticVercelAiGatewayProvider,
   buildVercelAiGatewayProvider,
+<<<<<<< HEAD
   resolveVercelAiGatewayModel,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./provider-catalog.js";
 import { resolveVercelAiGatewayThinkingProfile } from "./thinking.js";
 
@@ -38,7 +41,10 @@ export default defineSingleProviderPluginEntry({
       buildProvider: buildVercelAiGatewayProvider,
       buildStaticProvider: buildStaticVercelAiGatewayProvider,
     },
+<<<<<<< HEAD
     resolveDynamicModel: ({ modelId }) => resolveVercelAiGatewayModel(modelId),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resolveThinkingProfile: ({ modelId }) => resolveVercelAiGatewayThinkingProfile(modelId),
   },
 });

@@ -1,7 +1,11 @@
 // Gateway call helper tests pin URL override, token, and RPC scope behavior for
 // agent tools that route through the local gateway client.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import type { CallGatewayOptions } from "../../gateway/call.js";
+=======
+import type { CallGatewayScopedOptions } from "../../gateway/call.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { callGatewayTool, readGatewayCallOptions, resolveGatewayOptions } from "./gateway.js";
@@ -46,13 +50,21 @@ vi.mock("../../infra/device-identity.js", () => ({
   },
 }));
 
+<<<<<<< HEAD
 function capturedGatewayCall(): CallGatewayOptions {
+=======
+function capturedGatewayCall(): CallGatewayScopedOptions {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   expect(mocks.callGateway).toHaveBeenCalledTimes(1);
   const call = mocks.callGateway.mock.calls[0];
   if (!call) {
     throw new Error("expected callGateway to be called");
   }
+<<<<<<< HEAD
   return call[0] as CallGatewayOptions;
+=======
+  return call[0] as CallGatewayScopedOptions;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 describe("gateway tool defaults", () => {
@@ -315,7 +327,10 @@ describe("gateway tool defaults", () => {
     expect(call.method).toBe("exec.approval.request");
     expect(call.scopes).toEqual(["operator.approvals"]);
     expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+<<<<<<< HEAD
     expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("marks local approval wait calls as approval runtime calls", async () => {
@@ -327,6 +342,7 @@ describe("gateway tool defaults", () => {
     expect(call.method).toBe("exec.approval.waitDecision");
     expect(call.scopes).toEqual(["operator.approvals"]);
     expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+<<<<<<< HEAD
     expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
   });
 
@@ -352,6 +368,8 @@ describe("gateway tool defaults", () => {
     expect(call.scopes).toEqual(["operator.approvals"]);
     expect(call.approvalRuntimeToken).toEqual(expect.any(String));
     expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("marks local approval resolve calls as approval runtime calls", async () => {
@@ -367,6 +385,7 @@ describe("gateway tool defaults", () => {
     expect(call.method).toBe("exec.approval.resolve");
     expect(call.scopes).toEqual(["operator.approvals"]);
     expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+<<<<<<< HEAD
     expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
   });
 
@@ -379,6 +398,8 @@ describe("gateway tool defaults", () => {
     const call = capturedGatewayCall();
     expect(call.approvalRuntimeToken).toEqual(expect.any(String));
     expect(call).not.toHaveProperty("deviceIdentity");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("does not send the local approval runtime token to configured remote gateways", async () => {
@@ -413,7 +434,11 @@ describe("gateway tool defaults", () => {
     await callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" });
 
     const call = capturedGatewayCall();
+<<<<<<< HEAD
     expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+=======
+    expect(call).not.toHaveProperty("deviceIdentity");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(call.approvalRuntimeToken).toEqual(expect.any(String));
   });
 

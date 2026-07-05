@@ -508,7 +508,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       : `Teams message in ${conversationType} from ${senderName}`;
 
     const enqueuePrimaryMessageSystemEvent = () =>
+<<<<<<< HEAD
       core.system.enqueueSystemEvent(inboundLabel, {
+=======
+      core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         sessionKey: route.sessionKey,
         contextKey: `msteams:message:${conversationId}:${activity.id ?? "unknown"}`,
       });

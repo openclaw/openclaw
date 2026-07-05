@@ -49,6 +49,7 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   throw new Error(`expected missing path: ${targetPath}`);
 }
 
+<<<<<<< HEAD
 function cancelTrackedResponse(init?: ResponseInit): {
   response: Response;
   wasCanceled: () => boolean;
@@ -68,6 +69,8 @@ function cancelTrackedResponse(init?: ResponseInit): {
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("nodes camera helpers", () => {
   beforeAll(async () => {
     ({
@@ -308,6 +311,7 @@ describe("nodes camera helpers", () => {
     },
   );
 
+<<<<<<< HEAD
   it.each([
     {
       name: "non-ok status",
@@ -354,6 +358,8 @@ describe("nodes camera helpers", () => {
     expect(tracked.wasCanceled()).toBe(true);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("removes partially written file when url stream fails", async () => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {

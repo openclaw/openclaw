@@ -102,6 +102,7 @@ describe("nostr doctor state migration", () => {
       lastPublishResults: { "wss://relay.example": "ok" },
     });
   });
+<<<<<<< HEAD
 
   it("preserves legacy account key bytes when importing state files", async () => {
     const nostrDir = path.join(stateDir, "nostr");
@@ -131,4 +132,6 @@ describe("nostr doctor state migration", () => {
     });
     await expect(store.lookup("team-a")).resolves.toBeUndefined();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

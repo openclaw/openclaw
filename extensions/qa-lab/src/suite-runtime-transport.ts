@@ -9,10 +9,13 @@ import {
 import { extractQaFailureReplyText } from "./reply-failure.js";
 import type { QaBusMessage } from "./runtime-api.js";
 
+<<<<<<< HEAD
 type WaitForNoOutboundOptions = {
   sinceIndex?: number;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function findFailureOutboundMessage(
   state: QaTransportState,
   options?: { sinceIndex?: number; cursorSpace?: "all" | "outbound" },
@@ -51,6 +54,7 @@ async function waitForOutboundMessage(
   }, timeoutMs);
 }
 
+<<<<<<< HEAD
 async function waitForNoOutbound(
   state: QaTransportState,
   timeoutMs = 1_200,
@@ -70,6 +74,15 @@ async function waitForNoOutbound(
       )
       .join(" | ");
     throw new Error(`expected no outbound messages, saw ${outbound.length}: ${summary}`);
+=======
+async function waitForNoOutbound(state: QaTransportState, timeoutMs = 1_200) {
+  await sleep(timeoutMs);
+  const outbound = state
+    .getSnapshot()
+    .messages.filter((message: QaBusMessage) => message.direction === "outbound");
+  if (outbound.length > 0) {
+    throw new Error(`expected no outbound messages, saw ${outbound.length}`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 
@@ -157,12 +170,17 @@ async function waitForChannelOutboundMessage(
   return await waitForTransportOutboundMessage(state, predicate, timeoutMs);
 }
 
+<<<<<<< HEAD
 async function waitForNoTransportOutbound(
   state: QaTransportState,
   timeoutMs = 1_200,
   options?: WaitForNoOutboundOptions,
 ) {
   await waitForNoOutbound(state, timeoutMs, options);
+=======
+async function waitForNoTransportOutbound(state: QaTransportState, timeoutMs = 1_200) {
+  await waitForNoOutbound(state, timeoutMs);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export {

@@ -14,9 +14,13 @@ function ensureRecord(target: Record<string, unknown>, key: string): Record<stri
 export const FIRECRAWL_WEB_FETCH_PROVIDER_SHARED = {
   id: "firecrawl",
   label: "Firecrawl",
+<<<<<<< HEAD
   hint: "Fetch pages with keyless starter access; add a key for higher limits.",
   requiresCredential: false,
   credentialLabel: "Firecrawl API key (optional)",
+=======
+  hint: "Fetch pages with Firecrawl for JS-heavy or bot-protected sites.",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   envVars: ["FIRECRAWL_API_KEY"],
   placeholder: "fc-...",
   signupUrl: "https://www.firecrawl.dev/",

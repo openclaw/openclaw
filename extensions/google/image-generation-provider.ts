@@ -1,18 +1,27 @@
 // Google provider module implements model/runtime integration.
 import {
   generatedImageAssetFromBase64,
+<<<<<<< HEAD
   resolveInlineImageJsonResponseMaxBytes,
   type GeneratedImageAsset,
   type ImageGenerationProvider,
 } from "openclaw/plugin-sdk/image-generation";
 import { MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
+=======
+  type GeneratedImageAsset,
+  type ImageGenerationProvider,
+} from "openclaw/plugin-sdk/image-generation";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
+<<<<<<< HEAD
   readProviderJsonResponse,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import {
@@ -25,8 +34,11 @@ import { normalizeGoogleModelId, resolveGoogleGenerativeAiHttpRequestConfig } fr
 const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image-preview";
 const DEFAULT_IMAGE_TIMEOUT_MS = 180_000;
 const DEFAULT_OUTPUT_MIME = "image/png";
+<<<<<<< HEAD
 const GOOGLE_MAX_IMAGE_RESULTS = 4;
 const MB = 1024 * 1024;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const GOOGLE_SUPPORTED_SIZES = [
   "1024x1024",
   "1024x1536",
@@ -54,6 +66,7 @@ function normalizeGoogleImageModel(model: string | undefined): string {
   return normalizeGoogleModelId(trimmed || DEFAULT_GOOGLE_IMAGE_MODEL);
 }
 
+<<<<<<< HEAD
 function resolveGeneratedImageMaxBytes(req: {
   cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
 }): number {
@@ -64,6 +77,8 @@ function resolveGeneratedImageMaxBytes(req: {
   return MAX_IMAGE_BYTES;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function mapSizeToImageConfig(
   size: string | undefined,
 ): { aspectRatio?: string; imageSize?: "2K" | "4K" } | undefined {
@@ -164,14 +179,22 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
       }),
     capabilities: {
       generate: {
+<<<<<<< HEAD
         maxCount: GOOGLE_MAX_IMAGE_RESULTS,
+=======
+        maxCount: 4,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         supportsSize: true,
         supportsAspectRatio: true,
         supportsResolution: true,
       },
       edit: {
         enabled: true,
+<<<<<<< HEAD
         maxCount: GOOGLE_MAX_IMAGE_RESULTS,
+=======
+        maxCount: 4,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         maxInputImages: 5,
         supportsSize: true,
         supportsAspectRatio: true,
@@ -246,12 +269,16 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
       try {
         await assertOkOrThrowHttpError(res, "Google image generation failed");
 
+<<<<<<< HEAD
         const payload = await readProviderJsonResponse(res, "google.image-generation", {
           maxBytes: resolveInlineImageJsonResponseMaxBytes(
             GOOGLE_MAX_IMAGE_RESULTS,
             resolveGeneratedImageMaxBytes(req),
           ),
         });
+=======
+        const payload = await res.json();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         let imageIndex = 0;
         const images: GeneratedImageAsset[] = [];
         for (const part of googleResponseParts(payload)) {

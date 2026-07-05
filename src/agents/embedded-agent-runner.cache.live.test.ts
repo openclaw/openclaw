@@ -6,15 +6,24 @@ import type { AssistantMessage, Message, Tool } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+<<<<<<< HEAD
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { runEmbeddedAgent } from "./embedded-agent-runner.js";
 import { compactEmbeddedAgentSessionDirect } from "./embedded-agent-runner/compact.runtime.js";
 import { extractAssistantText } from "./embedded-agent-utils.js";
+=======
+import { runEmbeddedAgent } from "./embedded-agent-runner.js";
+import { compactEmbeddedAgentSessionDirect } from "./embedded-agent-runner/compact.runtime.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   buildAssistantHistoryTurn as buildTypedAssistantHistoryTurn,
   buildStableCachePrefix,
   completeSimpleWithLiveTimeout,
   computeCacheHitRate,
+<<<<<<< HEAD
+=======
+  extractAssistantText,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   LIVE_CACHE_TEST_ENABLED,
   logLiveCache,
   resolveLiveDirectModel,
@@ -36,7 +45,10 @@ const OPENAI_TOOL_MIN_CACHE_READ = 4_096;
 const OPENAI_TOOL_MIN_HIT_RATE = 0.85;
 const OPENAI_IMAGE_MIN_CACHE_READ = 3_840;
 const OPENAI_IMAGE_MIN_HIT_RATE = 0.82;
+<<<<<<< HEAD
 const LARGE_CACHE_PROMPT_SECTIONS = 1_024;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const LIVE_TEST_PNG_URL = new URL(
   "../../apps/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png",
   import.meta.url,
@@ -242,8 +254,11 @@ function normalizeLiveUsage(
 function buildEmbeddedRunnerConfig(
   params: LiveResolvedModel & {
     cacheRetention: "none" | "short" | "long";
+<<<<<<< HEAD
     compactionModel?: string;
     modelAlias?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     transport?: "sse" | "websocket";
   },
 ): OpenClawConfig {
@@ -267,14 +282,20 @@ function buildEmbeddedRunnerConfig(
       defaults: {
         models: {
           [modelKey]: {
+<<<<<<< HEAD
             ...(params.modelAlias ? { alias: params.modelAlias } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             params: {
               cacheRetention: params.cacheRetention,
               ...(params.transport ? { transport: params.transport } : {}),
             },
           },
         },
+<<<<<<< HEAD
         ...(params.compactionModel ? { compaction: { model: params.compactionModel } } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     },
   };
@@ -376,9 +397,13 @@ async function compactLiveCacheSession(params: {
       config: buildEmbeddedRunnerConfig({
         apiKey: params.apiKey,
         cacheRetention: params.cacheRetention,
+<<<<<<< HEAD
         compactionModel: "live-compaction",
         model: params.model,
         modelAlias: "live-compaction",
+=======
+        model: params.model,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }),
       provider: params.model.provider,
       model: params.model.id,
@@ -779,11 +804,19 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
       prompt: process.env.OPENCLAW_CACHE_TRACE_PROMPT,
       system: process.env.OPENCLAW_CACHE_TRACE_SYSTEM,
     };
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_CACHE_TRACE", "1");
     setTestEnvValue("OPENCLAW_CACHE_TRACE_FILE", liveCacheTraceFile);
     setTestEnvValue("OPENCLAW_CACHE_TRACE_MESSAGES", "0");
     setTestEnvValue("OPENCLAW_CACHE_TRACE_PROMPT", "0");
     setTestEnvValue("OPENCLAW_CACHE_TRACE_SYSTEM", "0");
+=======
+    process.env.OPENCLAW_CACHE_TRACE = "1";
+    process.env.OPENCLAW_CACHE_TRACE_FILE = liveCacheTraceFile;
+    process.env.OPENCLAW_CACHE_TRACE_MESSAGES = "0";
+    process.env.OPENCLAW_CACHE_TRACE_PROMPT = "0";
+    process.env.OPENCLAW_CACHE_TRACE_SYSTEM = "0";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }, 120_000);
 
   afterAll(async () => {
@@ -798,9 +831,15 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
         value: string | undefined,
       ) => {
         if (value === undefined) {
+<<<<<<< HEAD
           deleteTestEnvValue(key);
         } else {
           setTestEnvValue(key, value);
+=======
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }
       };
       restore("OPENCLAW_CACHE_TRACE", previousCacheTraceEnv.enabled);
@@ -1028,6 +1067,7 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
     );
 
     it(
+<<<<<<< HEAD
       "keeps OpenAI cache reuse across a large embedded prompt",
       async () => {
         const sessionId = `${OPENAI_SESSION_ID}-large`;
@@ -1062,6 +1102,8 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
     );
 
     it(
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "keeps OpenAI cache reuse when structured system context only changes by whitespace and line endings",
       async () => {
         const sessionId = `${OPENAI_SESSION_ID}-structured-normalization`;
@@ -1398,6 +1440,7 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
       },
       8 * 60_000,
     );
+<<<<<<< HEAD
 
     it(
       "keeps Anthropic cache reuse across a large embedded prompt",
@@ -1432,5 +1475,7 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
       },
       12 * 60_000,
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

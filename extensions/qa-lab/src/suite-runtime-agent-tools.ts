@@ -26,6 +26,7 @@ function findSkill(skills: QaSkillStatusEntry[], name: string) {
   return skills.find((skill) => skill.name === name);
 }
 
+<<<<<<< HEAD
 function resolveWorkspaceSkillPath(workspaceDir: string, name: string) {
   const trimmed = name.trim();
   if (
@@ -48,14 +49,22 @@ function resolveWorkspaceSkillPath(workspaceDir: string, name: string) {
   return path.join(skillDir, "SKILL.md");
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function writeWorkspaceSkill(params: {
   env: Pick<QaSuiteRuntimeEnv, "gateway">;
   name: string;
   body: string;
 }) {
+<<<<<<< HEAD
   const skillPath = resolveWorkspaceSkillPath(params.env.gateway.workspaceDir, params.name);
   const skillDir = path.dirname(skillPath);
   await fs.mkdir(skillDir, { recursive: true });
+=======
+  const skillDir = path.join(params.env.gateway.workspaceDir, "skills", params.name);
+  await fs.mkdir(skillDir, { recursive: true });
+  const skillPath = path.join(skillDir, "SKILL.md");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   await fs.writeFile(skillPath, `${params.body.trim()}\n`, "utf8");
   return skillPath;
 }
@@ -135,6 +144,7 @@ async function handleQaAction(params: {
   return extractQaToolPayload(result as Parameters<typeof extractQaToolPayload>[0]);
 }
 
+<<<<<<< HEAD
 export {
   callPluginToolsMcp,
   findSkill,
@@ -142,3 +152,6 @@ export {
   resolveWorkspaceSkillPath,
   writeWorkspaceSkill,
 };
+=======
+export { callPluginToolsMcp, findSkill, handleQaAction, writeWorkspaceSkill };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

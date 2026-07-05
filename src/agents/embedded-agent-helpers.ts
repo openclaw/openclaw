@@ -1,6 +1,9 @@
 /** Embedded-agent helper barrel for bootstrap, provider error, media, and turn sanitizers. */
+<<<<<<< HEAD
 export { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export {
   buildBootstrapContextFiles,
   DEFAULT_BOOTSTRAP_MAX_CHARS,
@@ -28,6 +31,10 @@ export {
   isAuthAssistantError,
   isAuthErrorMessage,
   isAuthPermanentErrorMessage,
+<<<<<<< HEAD
+=======
+  isModelNotFoundErrorMessage,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   isBillingAssistantError,
   extractObservedOverflowTokenCount,
   parseApiErrorInfo,
@@ -60,7 +67,14 @@ export {
   downgradeOpenAIReasoningBlocks,
   normalizeOpenAIResponsesToolCallIds,
 } from "./embedded-agent-helpers/openai.js";
+<<<<<<< HEAD
 export { sanitizeSessionMessagesImages } from "./embedded-agent-helpers/images.js";
+=======
+export {
+  isEmptyAssistantMessageContent,
+  sanitizeSessionMessagesImages,
+} from "./embedded-agent-helpers/images.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export {
   isMessagingToolDuplicate,
   isMessagingToolDuplicateNormalized,

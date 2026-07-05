@@ -2,11 +2,33 @@
 import { describe, expect, it } from "vitest";
 import {
   inspectDiscordSetupAccount,
+<<<<<<< HEAD
+=======
+  listDiscordSetupAccountIds,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveDefaultDiscordSetupAccountId,
   resolveDiscordSetupAccountConfig,
 } from "./setup-account-state.js";
 
 describe("discord setup account state", () => {
+<<<<<<< HEAD
+=======
+  it("lists normalized setup account ids plus the implicit default account", () => {
+    expect(
+      listDiscordSetupAccountIds({
+        channels: {
+          discord: {
+            accounts: {
+              Work: { token: "work-token" },
+              alerts: { token: "alerts-token" },
+            },
+          },
+        },
+      }),
+    ).toEqual(["alerts", "default", "work"]);
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("resolves setup account config when account key casing differs from normalized id", () => {
     const resolved = resolveDiscordSetupAccountConfig({
       cfg: {

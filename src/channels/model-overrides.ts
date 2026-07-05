@@ -44,7 +44,10 @@ type ChannelModelOverrideParams = {
   groupChannel?: string | null;
   groupSubject?: string | null;
   parentSessionKey?: string | null;
+<<<<<<< HEAD
   directUserIds?: (string | null | undefined)[];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 function resolveProviderEntry(
@@ -131,6 +134,7 @@ function buildGenericParentOverrideCandidates(sessionKey: string | null | undefi
   return buildChannelKeyCandidates(threadId ? baseSessionKey : raw.rawId);
 }
 
+<<<<<<< HEAD
 /** Expand prefixed peer IDs by also trying the raw form after the channel prefix. */
 function expandPeerIds(
   ids: (string | null | undefined)[],
@@ -149,17 +153,25 @@ function expandPeerIds(
   return expanded;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveDirectChannelModelMatch(params: {
   channel: string;
   providerEntries: Record<string, string>;
   groupId?: string | null;
   parentSessionKey?: string | null;
+<<<<<<< HEAD
   directUserIds?: (string | null | undefined)[];
 }): { model: string; matchKey?: string; matchSource?: ChannelMatchSource } | null {
   const expandedUserIds = expandPeerIds(params.directUserIds ?? [], params.channel);
   const directKeys = buildChannelKeyCandidates(
     params.groupId,
     ...expandedUserIds,
+=======
+}): { model: string; matchKey?: string; matchSource?: ChannelMatchSource } | null {
+  const directKeys = buildChannelKeyCandidates(
+    params.groupId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ...buildGenericParentOverrideCandidates(params.parentSessionKey),
   );
   if (directKeys.length === 0) {
@@ -201,6 +213,7 @@ export function resolveChannelModelOverride(
   if (!providerEntries) {
     return null;
   }
+<<<<<<< HEAD
   const isDirectChat = normalizeChatType(params.groupChatType ?? undefined) === "direct";
   let directMatch = null;
   if (isDirectChat) {
@@ -212,6 +225,14 @@ export function resolveChannelModelOverride(
       directUserIds: params.directUserIds,
     });
   }
+=======
+  const directMatch = resolveDirectChannelModelMatch({
+    channel,
+    providerEntries,
+    groupId: params.groupId,
+    parentSessionKey: params.parentSessionKey,
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (directMatch) {
     return {
       channel: normalizeMessageChannel(channel) ?? normalizeOptionalLowercaseString(channel) ?? "",

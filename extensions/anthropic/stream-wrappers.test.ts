@@ -8,7 +8,10 @@ import {
   createAnthropicServiceTierWrapper,
   createAnthropicThinkingPrefillWrapper,
   resolveAnthropicBetas,
+<<<<<<< HEAD
   resolveAnthropicFastMode,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   wrapAnthropicProviderStream,
 } from "./stream-wrappers.js";
 
@@ -173,10 +176,13 @@ describe("anthropic stream wrappers", () => {
     expect(captured.headers?.["anthropic-beta"]).toContain(OAUTH_BETA);
     expect(captured.headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
   });
+<<<<<<< HEAD
 
   it("ignores unresolved auto fast mode at the provider boundary", () => {
     expect(resolveAnthropicFastMode({ fastMode: "auto" })).toBeUndefined();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("createAnthropicThinkingPrefillWrapper", () => {
@@ -287,6 +293,7 @@ describe("Anthropic service_tier payload wrappers", () => {
     expect(payload?.service_tier).toBe("standard_only");
   });
 
+<<<<<<< HEAD
   it("fast mode resolves dynamic service_tier for each stream call", () => {
     let enabled = true;
     const first = runPayloadWrapper({ apiKey: "sk-ant-api03-test-key" }, (base) =>
@@ -300,6 +307,8 @@ describe("Anthropic service_tier payload wrappers", () => {
     expect(second?.service_tier).toBe("standard_only");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("explicit service tier injects service_tier=standard_only for regular API keys", () => {
     const payload = serviceTierWrapperCases[1].run({
       apiKey: "sk-ant-api03-test-key",

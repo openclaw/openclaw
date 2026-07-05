@@ -172,6 +172,7 @@ export const DEFAULT_COMMAND_SPECS: MattermostCommandSpec[] = [
     autoComplete: true,
     autoCompleteHint: "[on|off]",
   },
+<<<<<<< HEAD
   {
     trigger: "oc_queue",
     originalName: "queue",
@@ -179,6 +180,8 @@ export const DEFAULT_COMMAND_SPECS: MattermostCommandSpec[] = [
     autoComplete: true,
     autoCompleteHint: "[steer|followup|collect|interrupt] [debounce:2s] [cap:N] [drop:old|new|summarize]",
   },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ];
 
 // ─── Command registration ────────────────────────────────────────────────────

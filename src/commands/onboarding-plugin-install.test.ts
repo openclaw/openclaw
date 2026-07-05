@@ -23,11 +23,17 @@ vi.mock("../cli/plugin-install-plan.js", () => ({
   resolveBundledInstallPlanForCatalogEntry,
 }));
 
+<<<<<<< HEAD
 const invalidatePluginRuntimeDiscoveryAfterConfigMutation = vi.hoisted(() =>
   vi.fn(async () => undefined),
 );
 vi.mock("../cli/plugins-registry-refresh.js", () => ({
   invalidatePluginRuntimeDiscoveryAfterConfigMutation,
+=======
+const refreshPluginRegistryAfterConfigMutation = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("../cli/plugins-registry-refresh.js", () => ({
+  refreshPluginRegistryAfterConfigMutation,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 const resolveBundledPluginSources = vi.hoisted(() => vi.fn(() => new Map()));
@@ -102,6 +108,7 @@ vi.mock("../plugins/installs.js", () => ({
   resolveNpmInstallRecordSpec,
 }));
 
+<<<<<<< HEAD
 const clearPluginMetadataLifecycleCaches = vi.hoisted(() => vi.fn());
 vi.mock("../plugins/plugin-metadata-lifecycle.js", () => ({
   clearPluginMetadataLifecycleCaches,
@@ -111,6 +118,8 @@ vi.mock("../plugins/installed-plugin-index-records.js", () => ({
   clearLoadInstalledPluginIndexInstallRecordsCache,
 }));
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const withTimeout = vi.hoisted(() => vi.fn(async <T>(promise: Promise<T>) => await promise));
 vi.mock("../utils/with-timeout.js", () => ({
   withTimeout,
@@ -160,6 +169,7 @@ type NpmSpecInstallCall = {
 type ClawHubInstallCall = {
   config?: OpenClawConfig;
   expectedPluginId?: string;
+<<<<<<< HEAD
   logger?: {
     info?: (message: string) => void;
     warn?: (message: string) => void;
@@ -172,6 +182,9 @@ type ClawHubInstallCall = {
     version: string;
     warning: string;
   }) => boolean | Promise<boolean>;
+=======
+  mode?: string;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   spec?: string;
   timeoutMs?: number;
 };
@@ -204,7 +217,11 @@ describe("ensureOnboardingPluginInstalled", () => {
     delete process.env.OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES;
     delete process.env.OPENCLAW_PLUGIN_INSTALL_OVERRIDES;
     withTimeout.mockImplementation(async <T>(promise: Promise<T>) => await promise);
+<<<<<<< HEAD
     invalidatePluginRuntimeDiscoveryAfterConfigMutation.mockResolvedValue(undefined);
+=======
+    refreshPluginRegistryAfterConfigMutation.mockResolvedValue(undefined);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("localizes plugin install choices", async () => {
@@ -390,7 +407,10 @@ describe("ensureOnboardingPluginInstalled", () => {
         progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
       } as never,
       runtime: { log: vi.fn() } as never,
+<<<<<<< HEAD
       workspaceDir: "/tmp/workspace",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     expect(select).not.toHaveBeenCalled();
@@ -421,6 +441,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       npmTarballName: "demo-plugin-1.2.3.tgz",
     });
     expect(result.status).toBe("installed");
+<<<<<<< HEAD
     expect(clearLoadInstalledPluginIndexInstallRecordsCache).toHaveBeenCalledOnce();
     expect(clearPluginMetadataLifecycleCaches).toHaveBeenCalledOnce();
     expect(invalidatePluginRuntimeDiscoveryAfterConfigMutation).toHaveBeenCalledWith(
@@ -428,6 +449,8 @@ describe("ensureOnboardingPluginInstalled", () => {
         logger: expect.objectContaining({ warn: expect.any(Function) }),
       }),
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("uses a guarded npm install override without official-trust flags", async () => {
@@ -543,7 +566,10 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(clawHubCall.expectedPluginId).toBe("demo-plugin");
     expect(clawHubCall.mode).toBe("install");
     expect(clawHubCall.timeoutMs).toBe(300_000);
+<<<<<<< HEAD
     expect(typeof clawHubCall.onClawHubRisk).toBe("function");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(update).toHaveBeenCalledWith("Downloading");
     expect(stop).toHaveBeenCalledWith("Installed Demo Provider plugin");
     const [, recordUpdate] = readFirstMockCall(recordPluginInstall, "recordPluginInstall") as [
@@ -568,6 +594,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(installed?.spec).toBe("clawhub:demo-plugin@2026.5.2");
   });
 
+<<<<<<< HEAD
   it("renders ClawHub trust warnings with line breaks before prompting during onboarding", async () => {
     const warning = [
       "╭─ WARNING - ClawHub found security risks in this release ─╮",
@@ -627,6 +654,8 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(log.mock.invocationCallOrder[0]).toBeLessThan(text.mock.invocationCallOrder[0]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("passes npm specs and optional expected integrity to npm installs with progress", async () => {
     const cfg: OpenClawConfig = {
       security: {
@@ -725,6 +754,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(installed?.pluginId).toBe("demo-plugin");
     expect(installed?.source).toBe("npm");
     expect(installed?.spec).toBe("@wecom/wecom-openclaw-plugin@1.2.3");
+<<<<<<< HEAD
     expect(clearLoadInstalledPluginIndexInstallRecordsCache).toHaveBeenCalledOnce();
     expect(clearPluginMetadataLifecycleCaches).toHaveBeenCalledOnce();
     expect(invalidatePluginRuntimeDiscoveryAfterConfigMutation).toHaveBeenCalledWith(
@@ -732,6 +762,9 @@ describe("ensureOnboardingPluginInstalled", () => {
         logger: expect.objectContaining({ warn: expect.any(Function) }),
       }),
     );
+=======
+    expect(refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("logs npm install warnings once while shortening the progress label", async () => {
@@ -804,9 +837,12 @@ describe("ensureOnboardingPluginInstalled", () => {
       pluginId: "demo-plugin",
       status: "timed_out",
     });
+<<<<<<< HEAD
     expect(clearLoadInstalledPluginIndexInstallRecordsCache).not.toHaveBeenCalled();
     expect(clearPluginMetadataLifecycleCaches).not.toHaveBeenCalled();
     expect(invalidatePluginRuntimeDiscoveryAfterConfigMutation).not.toHaveBeenCalled();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(stop).toHaveBeenCalledWith("Install timed out: Demo Plugin");
     expect(note).toHaveBeenCalledWith(
       "Installing @demo/plugin@1.2.3 timed out after 5 minutes.\nReturning to selection.",
@@ -1169,7 +1205,10 @@ describe("ensureOnboardingPluginInstalled", () => {
       ]);
       expect(prompt.message).not.toContain("\x1b");
       expect(prompt.options[0]?.label).not.toContain("\x1b");
+<<<<<<< HEAD
       expect(clearPluginMetadataLifecycleCaches).not.toHaveBeenCalled();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   });
 
@@ -1313,6 +1352,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       });
       expect(result.installed).toBe(true);
       expect(result.status).toBe("installed");
+<<<<<<< HEAD
       expect(clearLoadInstalledPluginIndexInstallRecordsCache).toHaveBeenCalledOnce();
       expect(clearPluginMetadataLifecycleCaches).toHaveBeenCalledOnce();
       expect(invalidatePluginRuntimeDiscoveryAfterConfigMutation).toHaveBeenCalledWith(
@@ -1320,6 +1360,8 @@ describe("ensureOnboardingPluginInstalled", () => {
           logger: expect.objectContaining({ warn: expect.any(Function) }),
         }),
       );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(result.cfg.plugins?.installs).toEqual({
         "demo-plugin": {
           pluginId: "demo-plugin",

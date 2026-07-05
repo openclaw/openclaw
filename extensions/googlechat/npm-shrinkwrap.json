@@ -1,19 +1,31 @@
 {
   "name": "@openclaw/googlechat",
+<<<<<<< HEAD
   "version": "2026.6.10",
+=======
+  "version": "2026.6.8",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/googlechat",
+<<<<<<< HEAD
       "version": "2026.6.10",
+=======
+      "version": "2026.6.8",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "dependencies": {
         "gaxios": "7.1.4",
         "google-auth-library": "10.6.2",
         "zod": "4.4.3"
       },
       "peerDependencies": {
+<<<<<<< HEAD
         "openclaw": ">=2026.6.10"
+=======
+        "openclaw": ">=2026.6.8"
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
       "peerDependenciesMeta": {
         "openclaw": {

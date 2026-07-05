@@ -18,8 +18,13 @@ import {
   resolveExecApprovalsFromFile,
   resolveExecModeFromPolicy,
   resolveExecModePolicy,
+<<<<<<< HEAD
 } from "../infra/exec-approvals.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
+=======
+  resolveExecPolicyForMode,
+} from "../infra/exec-approvals.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveAgentConfig, resolveSessionAgentId } from "./agent-scope.js";
 import { isRequestedExecTargetAllowed, resolveExecTarget } from "./bash-tools.exec-runtime.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
@@ -36,6 +41,15 @@ type ResolvedExecConfig = {
 
 type ExecOverridesConfig = Omit<ResolvedExecConfig, "mode">;
 
+<<<<<<< HEAD
+=======
+// Legacy security/ask values remain accepted on existing sessions/config, but
+// mode wins when present because it expands to a complete policy tuple.
+function hasLegacyExecPolicyOverride(exec?: ResolvedExecConfig): boolean {
+  return exec?.security !== undefined || exec?.ask !== undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // Layering keeps the most specific mode/security/ask while preserving policy
 // bounds from approvals and sandbox availability later in resolution.
 type LayeredExecPolicy = {
@@ -44,6 +58,31 @@ type LayeredExecPolicy = {
   ask: ExecAsk;
 };
 
+<<<<<<< HEAD
+=======
+function applyExecPolicyLayer(
+  base: LayeredExecPolicy,
+  layer?: ResolvedExecConfig,
+): LayeredExecPolicy {
+  if (!layer) {
+    return base;
+  }
+  if (layer.mode) {
+    return {
+      mode: layer.mode,
+      ...resolveExecPolicyForMode(layer.mode),
+    };
+  }
+  if (hasLegacyExecPolicyOverride(layer)) {
+    return {
+      security: layer.security ?? base.security,
+      ask: layer.ask ?? base.ask,
+    };
+  }
+  return base;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function applySessionLegacyExecPolicyLayer(
   base: LayeredExecPolicy,
   sessionEntry?: SessionEntry,

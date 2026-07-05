@@ -93,6 +93,7 @@ export function applyModelOverrideToSessionEntry(params: {
     }
   }
 
+<<<<<<< HEAD
   // When switching back to the default model without override fields to delete
   // (e.g. model comes from steering/fallback runtime fields), the isDefault
   // branch at line 42 won't set selectionUpdated. Mark it here so that
@@ -101,6 +102,8 @@ export function applyModelOverrideToSessionEntry(params: {
     selectionUpdated = true;
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   // contextTokens are derived from the active session model. When the selected
   // model changes (or runtime model is already stale), the cached window can
   // pin the session to an older/smaller limit until another run refreshes it.

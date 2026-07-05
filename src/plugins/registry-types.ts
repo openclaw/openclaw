@@ -39,6 +39,10 @@ type ImageGenerationProviderPlugin = import("./types.js").ImageGenerationProvide
 type MediaUnderstandingProviderPlugin = import("./types.js").MediaUnderstandingProviderPlugin;
 type TranscriptSourceProvider = import("./types.js").TranscriptSourceProvider;
 type MusicGenerationProviderPlugin = import("./types.js").MusicGenerationProviderPlugin;
+<<<<<<< HEAD
+=======
+type OpenClawPluginChannelRegistration = import("./types.js").OpenClawPluginChannelRegistration;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type OpenClawPluginCliCommandDescriptor = import("./types.js").OpenClawPluginCliCommandDescriptor;
 type OpenClawPluginCliRegistrar = import("./types.js").OpenClawPluginCliRegistrar;
 type OpenClawPluginCommandDefinition = import("./types.js").OpenClawPluginCommandDefinition;
@@ -502,3 +506,8 @@ export type OpenClawPluginHttpRouteParams = import("./types.js").OpenClawPluginH
 export type OpenClawPluginHookOptions = import("./types.js").OpenClawPluginHookOptions;
 export type PluginHookHandlerMap = import("./types.js").PluginHookHandlerMap;
 export type OpenClawPluginApi = import("./types.js").OpenClawPluginApi;
+<<<<<<< HEAD
+=======
+export type TypedPluginHook = TypedPluginHookRegistration;
+export type OpenClawPluginChannelReg = OpenClawPluginChannelRegistration;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

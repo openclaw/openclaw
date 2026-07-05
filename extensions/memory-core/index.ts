@@ -17,6 +17,10 @@ import type { TSchema } from "typebox";
 import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
+<<<<<<< HEAD
+=======
+import { registerBuiltInMemoryEmbeddingProviders } from "./src/memory/provider-adapters.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { buildPromptSection } from "./src/prompt-section.js";
 
 type MemoryToolsModule = typeof import("./src/tools.js");
@@ -184,6 +188,10 @@ export default definePluginEntry({
     configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
       api.runtime.state.openKeyedStore<T>(options),
     );
+<<<<<<< HEAD
+=======
+    registerBuiltInMemoryEmbeddingProviders(api);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     registerShortTermPromotionDreaming(api);
     api.registerMemoryCapability({
       promptBuilder: buildPromptSection,

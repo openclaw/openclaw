@@ -67,7 +67,10 @@ describe("slash command browser import", () => {
       'import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";',
     ]);
     expect(importDeclarations(sharedRegistry)).toEqual([
+<<<<<<< HEAD
       'import { formatFastModeAutoLabel, resolveFastModeModelAutoOnSeconds } from "../shared/fast-mode.js";',
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       'import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";',
       'import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";',
       'import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";',

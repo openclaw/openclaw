@@ -98,11 +98,18 @@ type CallGatewayBaseOptions = {
    * Does not affect config loading; callers still control auth via opts.token/password/env/config.
    */
   configPath?: string;
+<<<<<<< HEAD
   /**
    * Explicit local gateway port for command-line overrides such as `gateway health --port`.
    * Bypasses OPENCLAW_GATEWAY_URL and OPENCLAW_GATEWAY_PORT for this call only.
    */
   localPortOverride?: number;
+=======
+};
+
+export type CallGatewayScopedOptions = CallGatewayBaseOptions & {
+  scopes: OperatorScope[];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 export type CallGatewayCliOptions = CallGatewayBaseOptions & {
@@ -426,8 +433,11 @@ export function buildGatewayConnectionDetails(
     url?: string;
     configPath?: string;
     urlSource?: "cli" | "env";
+<<<<<<< HEAD
     ignoreEnvUrlOverride?: boolean;
     localPortOverride?: number;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } = {},
 ): GatewayConnectionDetails {
   return buildGatewayConnectionDetailsWithResolvers(options, {
@@ -456,6 +466,13 @@ export const testing = {
     gatewayCallDeps.loadDeviceAuthToken =
       deps?.loadDeviceAuthToken ?? defaultGatewayCallDeps.loadDeviceAuthToken;
   },
+<<<<<<< HEAD
+=======
+  setCreateGatewayClientForTests(createGatewayClient?: typeof defaultCreateGatewayClient): void {
+    gatewayCallDeps.createGatewayClient =
+      createGatewayClient ?? defaultGatewayCallDeps.createGatewayClient;
+  },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resetDepsForTests(): void {
     gatewayCallDeps.createGatewayClient = defaultGatewayCallDeps.createGatewayClient;
     gatewayCallDeps.getRuntimeConfig = defaultGatewayCallDeps.getRuntimeConfig;
@@ -680,10 +697,16 @@ async function resolveGatewayCallContext(
 ): Promise<ResolvedGatewayCallContext> {
   const cliUrlOverride = trimToUndefined(opts.url);
   const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
+<<<<<<< HEAD
   const envUrlOverride =
     cliUrlOverride || opts.localPortOverride !== undefined
       ? undefined
       : trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
+=======
+  const envUrlOverride = cliUrlOverride
+    ? undefined
+    : trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const urlOverride = cliUrlOverride ?? envUrlOverride;
   const urlOverrideSource = cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined;
   const canSkipConfigLoad = canSkipGatewayConfigLoad({
@@ -1131,8 +1154,11 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     config: context.config,
     url: context.urlOverride,
     urlSource: context.urlOverrideSource,
+<<<<<<< HEAD
     ignoreEnvUrlOverride: opts.localPortOverride !== undefined,
     localPortOverride: opts.localPortOverride,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
   const url = connectionDetails.url;
@@ -1208,7 +1234,11 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
 export async function buildGatewayProbeConnectionDetails(
   opts: Pick<
     CallGatewayBaseOptions,
+<<<<<<< HEAD
     "config" | "configPath" | "localPortOverride" | "password" | "tlsFingerprint" | "token" | "url"
+=======
+    "config" | "configPath" | "password" | "tlsFingerprint" | "token" | "url"
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   > = {},
 ): Promise<GatewayProbeConnectionDetails> {
   const callOpts = {
@@ -1221,8 +1251,11 @@ export async function buildGatewayProbeConnectionDetails(
     config: context.config,
     url: context.urlOverride,
     urlSource: context.urlOverrideSource,
+<<<<<<< HEAD
     ignoreEnvUrlOverride: opts.localPortOverride !== undefined,
     localPortOverride: opts.localPortOverride,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
   const tlsFingerprint = await resolveGatewayTlsFingerprint({
@@ -1239,6 +1272,15 @@ export async function buildGatewayProbeConnectionDetails(
   };
 }
 
+<<<<<<< HEAD
+=======
+export async function callGatewayScoped<T = Record<string, unknown>>(
+  opts: CallGatewayScopedOptions,
+): Promise<T> {
+  return await callGatewayWithScopes(opts, opts.scopes);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function callGatewayCli<T = Record<string, unknown>>(
   opts: CallGatewayCliOptions,
 ): Promise<T> {

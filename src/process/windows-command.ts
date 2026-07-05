@@ -2,6 +2,7 @@
 import path from "node:path";
 import process from "node:process";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+<<<<<<< HEAD
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 
 const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>%\r\n]/;
@@ -43,6 +44,8 @@ export function resolveTrustedWindowsCmdExe(platform: NodeJS.Platform = process.
   }
   return getWindowsCmdExePath();
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /**
  * Resolve package-manager commands that Windows exposes through .cmd shims.

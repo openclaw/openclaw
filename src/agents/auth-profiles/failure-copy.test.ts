@@ -23,13 +23,20 @@ const REASONS_WITH_RECOVERY: readonly FailoverReason[] = [
   "auth_permanent",
   "billing",
 ];
+<<<<<<< HEAD
 const REASONS_WITHOUT_RECOVERY: readonly FailoverReason[] = [
+=======
+const REASONS_TRANSIENT: readonly FailoverReason[] = [
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "rate_limit",
   "overloaded",
   "timeout",
   "server_error",
   "model_not_found",
+<<<<<<< HEAD
   "format",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ];
 
 describe("formatAuthProfileFailureMessage", () => {
@@ -46,7 +53,11 @@ describe("formatAuthProfileFailureMessage", () => {
     });
 
     it("omits the login command for transient cooldown reasons", () => {
+<<<<<<< HEAD
       for (const reason of REASONS_WITHOUT_RECOVERY) {
+=======
+      for (const reason of REASONS_TRANSIENT) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const message = formatAuthProfileFailureMessage({
           reason,
           provider: PROVIDER,
@@ -66,11 +77,15 @@ describe("formatAuthProfileFailureMessage", () => {
     });
 
     it("always mentions the provider name", () => {
+<<<<<<< HEAD
       for (const reason of [
         ...REASONS_WITH_RECOVERY,
         ...REASONS_WITHOUT_RECOVERY,
         "unknown",
       ] as const) {
+=======
+      for (const reason of [...REASONS_WITH_RECOVERY, ...REASONS_TRANSIENT, "unknown"] as const) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const message = formatAuthProfileFailureMessage({
           reason,
           provider: PROVIDER,

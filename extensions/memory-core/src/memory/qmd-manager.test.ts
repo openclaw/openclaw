@@ -199,11 +199,15 @@ vi.mock("openclaw/plugin-sdk/file-lock", async () => {
 import { spawn as mockedSpawn } from "node:child_process";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
+<<<<<<< HEAD
   type MemorySearchRuntimeDebug,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   requireNodeSqlite,
   resolveMemoryBackendConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+<<<<<<< HEAD
 import { formatSessionTranscriptMemoryHitKey } from "openclaw/plugin-sdk/session-transcript-hit";
 import {
   configureMemoryCoreDreamingState,
@@ -211,12 +215,15 @@ import {
   resetMemoryCoreDreamingStateForTests,
 } from "../dreaming-state.js";
 import { resolveQmdSessionArtifactIdentity } from "../qmd-session-artifacts.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { QmdMemoryManager, resolveQmdMcporterSearchProcessTimeoutMs } from "./qmd-manager.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
 const originalPath = process.env.PATH;
 const originalPathExt = process.env.PATHEXT;
 const originalWindowsPath = process.env.Path;
+<<<<<<< HEAD
 const originalQmdStateDir = process.env.OPENCLAW_STATE_DIR;
 
 function setQmdStateDir(stateDir: string): void {
@@ -230,6 +237,8 @@ function restoreQmdStateDir(): void {
     Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalQmdStateDir);
   }
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("QmdMemoryManager", () => {
   let fixtureRoot: string;
@@ -276,6 +285,7 @@ describe("QmdMemoryManager", () => {
     return mock.mock.calls.map((call: unknown[]) => String(call[0]));
   }
 
+<<<<<<< HEAD
   function qmdCommandCalls(): string[][] {
     return spawnMock.mock.calls.map((call: unknown[]) => call[1] as string[]);
   }
@@ -284,6 +294,8 @@ describe("QmdMemoryManager", () => {
     return qmdCommandCalls().filter(predicate).length;
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   function expectMockMessageContains(mock: Mock, text: string): void {
     expect(mockMessages(mock).join("\n")).toContain(text);
   }
@@ -304,6 +316,7 @@ describe("QmdMemoryManager", () => {
     );
   });
 
+<<<<<<< HEAD
   it("reuses persisted collection validation across transient cli managers", async () => {
     await configureMemoryCoreDreamingStateForTests();
     const first = await createManager({ mode: "cli" });
@@ -685,6 +698,8 @@ describe("QmdMemoryManager", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   async function expectPathMissing(targetPath: string): Promise<void> {
     try {
       await fs.lstat(targetPath);
@@ -748,7 +763,11 @@ describe("QmdMemoryManager", () => {
     // Only workspace must exist for configured collection paths; state paths are
     // created lazily by manager code when needed.
     await fs.mkdir(workspaceDir, { recursive: true });
+<<<<<<< HEAD
     setQmdStateDir(stateDir);
+=======
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     // Keep the default Windows path unresolved for most tests so spawn mocks can
     // match the logical package command. Tests that verify wrapper resolution
     // install explicit shim fixtures inline.
@@ -759,7 +778,11 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
+<<<<<<< HEAD
             store: { vector: { enabled: false } },
+=======
+            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             sync: { watch: false, onSessionStart: false, onSearch: false },
           },
         },
@@ -795,7 +818,11 @@ describe("QmdMemoryManager", () => {
     embedStartupJitterSpy?.mockRestore();
     embedStartupJitterSpy = null;
     vi.useRealTimers();
+<<<<<<< HEAD
     restoreQmdStateDir();
+=======
+    delete process.env.OPENCLAW_STATE_DIR;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (originalPath === undefined) {
       delete process.env.PATH;
     } else {
@@ -814,7 +841,10 @@ describe("QmdMemoryManager", () => {
     delete (globalThis as Record<PropertyKey, unknown>)[MCPORTER_STATE_KEY];
     delete (globalThis as Record<PropertyKey, unknown>)[QMD_EMBED_QUEUE_KEY];
     delete (globalThis as Record<PropertyKey, unknown>)[MEMORY_EMBEDDING_PROVIDERS_KEY];
+<<<<<<< HEAD
     resetMemoryCoreDreamingStateForTests();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("debounces back-to-back sync calls", async () => {
@@ -845,7 +875,11 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
+<<<<<<< HEAD
             store: { vector: { enabled: false } },
+=======
+            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             sync: { watch: false, onSessionStart: true, onSearch: false },
           },
         },
@@ -889,7 +923,11 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
+<<<<<<< HEAD
             store: { vector: { enabled: false } },
+=======
+            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             sync: { watch: false, onSessionStart: true, onSearch: false },
           },
         },
@@ -944,7 +982,11 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
+<<<<<<< HEAD
             store: { vector: { enabled: false } },
+=======
+            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
           },
         },
@@ -1012,7 +1054,11 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
+<<<<<<< HEAD
             store: { vector: { enabled: false } },
+=======
+            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
           },
         },
@@ -1059,7 +1105,11 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
+<<<<<<< HEAD
             store: { vector: { enabled: false } },
+=======
+            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
           },
         },
@@ -1097,7 +1147,11 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
+<<<<<<< HEAD
             store: { vector: { enabled: false } },
+=======
+            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
           },
         },
@@ -3130,6 +3184,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+<<<<<<< HEAD
   it("aborts the in-flight qmd search subprocess when the caller signal aborts", async () => {
     cfg = {
       ...cfg,
@@ -3438,6 +3493,8 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not pass --no-rerank to direct query fallback from search mode", async () => {
     cfg = {
       ...cfg,
@@ -5540,6 +5597,7 @@ describe("QmdMemoryManager", () => {
     }
   });
 
+<<<<<<< HEAD
   it("maps exported QMD artifacts to the persisted session identity", async () => {
     cfg = {
       ...cfg,
@@ -5595,6 +5653,8 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("skips queued session export work after close while waiting on the shared update queue", async () => {
     cfg = {
       ...cfg,
@@ -6859,7 +6919,11 @@ describe("QmdMemoryManager", () => {
       // directory instead of the real ~/.cache.
       savedXdgCacheHome = process.env.XDG_CACHE_HOME;
       const fakeCacheHome = path.join(tmpRoot, "fake-cache");
+<<<<<<< HEAD
       Reflect.set(process.env, "XDG_CACHE_HOME", fakeCacheHome);
+=======
+      process.env.XDG_CACHE_HOME = fakeCacheHome;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       defaultModelsDir = path.join(fakeCacheHome, "qmd", "models");
       await fs.mkdir(defaultModelsDir, { recursive: true });
@@ -6870,9 +6934,15 @@ describe("QmdMemoryManager", () => {
 
     afterEach(() => {
       if (savedXdgCacheHome === undefined) {
+<<<<<<< HEAD
         Reflect.deleteProperty(process.env, "XDG_CACHE_HOME");
       } else {
         Reflect.set(process.env, "XDG_CACHE_HOME", savedXdgCacheHome);
+=======
+        delete process.env.XDG_CACHE_HOME;
+      } else {
+        process.env.XDG_CACHE_HOME = savedXdgCacheHome;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     });
 

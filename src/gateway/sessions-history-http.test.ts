@@ -10,10 +10,14 @@ import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
 } from "../config/sessions/transcript.js";
+<<<<<<< HEAD
 import {
   emitInternalSessionTranscriptUpdate,
   emitSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
+=======
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
@@ -31,8 +35,11 @@ const READ_SCOPE_HEADER = { "x-openclaw-scopes": "operator.read" };
 const cleanupDirs: string[] = [];
 
 afterEach(async () => {
+<<<<<<< HEAD
   testState.sessionConfig = undefined;
   testState.agentsConfig = undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   await Promise.all(
     cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
   );
@@ -520,8 +527,11 @@ describe("session history HTTP endpoints", () => {
   });
 
   test("prefers the freshest duplicate row for direct history reads", async () => {
+<<<<<<< HEAD
     testState.agentsConfig = { list: [{ id: "main", default: true }] };
     testState.sessionConfig = { mainKey: "work" };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const storePath = await createSessionStoreFile();
     const dir = path.dirname(storePath);
     const staleTranscriptPath = path.join(dir, "sess-stale-main.jsonl");
@@ -547,12 +557,20 @@ describe("session history HTTP endpoints", () => {
       "utf-8",
     );
     await writeSessionStoreForTestAsync(storePath, {
+<<<<<<< HEAD
       "agent:main:work": {
+=======
+      "agent:main:main": {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         sessionId: "sess-stale-main",
         sessionFile: staleTranscriptPath,
         updatedAt: 1,
       },
+<<<<<<< HEAD
       "agent:main:main": {
+=======
+      "agent:main:MAIN": {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         sessionId: "sess-fresh-main",
         sessionFile: freshTranscriptPath,
         updatedAt: 2,
@@ -560,7 +578,11 @@ describe("session history HTTP endpoints", () => {
     });
 
     await expectSessionHistoryText({
+<<<<<<< HEAD
       sessionKey: "agent:main:work",
+=======
+      sessionKey: "agent:main:main",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expectedText: "fresh history",
     });
   });
@@ -743,6 +765,7 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
+<<<<<<< HEAD
   test("streams identity-only transcript updates over SSE", async () => {
     await seedSession({ text: "first message" });
 
@@ -771,6 +794,8 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   test("refreshes SSE history for non-monotonic carried sequence", async () => {
     const storePath = await createSessionStoreFile();
     const transcriptPath = path.join(path.dirname(storePath), "sess-main.jsonl");

@@ -3,21 +3,27 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
+<<<<<<< HEAD
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+<<<<<<< HEAD
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { UpdateCheckResult } from "./update-check.js";
 
 const {
@@ -90,6 +96,7 @@ vi.mock("./update-managed-service-handoff.js", () => ({
   startManagedServiceUpdateHandoff: startManagedServiceUpdateHandoffMock,
 }));
 
+<<<<<<< HEAD
 const UPDATE_CHECK_STATE_KEY = "default";
 
 type UpdateCheckStateDatabase = Pick<OpenClawStateKyselyDatabase, "update_check_state">;
@@ -113,6 +120,8 @@ function presentString(value: string | null): string | undefined {
   return value ?? undefined;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("update-startup", () => {
   let tempDir: string;
   let testState: OpenClawTestState;
@@ -135,6 +144,7 @@ describe("update-startup", () => {
     return call;
   }
 
+<<<<<<< HEAD
   function readPersistedUpdateCheckState(): PersistedUpdateCheckState | null {
     const { db } = openOpenClawStateDatabase();
     const stateDb = getNodeSqliteKysely<UpdateCheckStateDatabase>(db);
@@ -195,6 +205,8 @@ describe("update-startup", () => {
     });
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-17T10:00:00Z"));
@@ -248,7 +260,10 @@ describe("update-startup", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+<<<<<<< HEAD
     closeOpenClawStateDatabaseForTest();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await testState.cleanup();
     resetUpdateAvailableStateForTest();
   });
@@ -285,8 +300,18 @@ describe("update-startup", () => {
       allowInTests: true,
     });
 
+<<<<<<< HEAD
     const parsed = readPersistedUpdateCheckState();
     expect(parsed).not.toBeNull();
+=======
+    const statePath = path.join(tempDir, "update-check.json");
+    const parsed = JSON.parse(await fs.readFile(statePath, "utf-8")) as {
+      lastNotifiedVersion?: string;
+      lastNotifiedTag?: string;
+      lastAvailableVersion?: string;
+      lastAvailableTag?: string;
+    };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return { log, parsed };
   }
 
@@ -367,9 +392,15 @@ describe("update-startup", () => {
     expect(log.info).toHaveBeenCalledWith(
       `update available (latest): v2.0.0 (current v1.0.0). Run: ${formatCliCommand("openclaw update")}`,
     );
+<<<<<<< HEAD
     expect(parsed?.lastNotifiedVersion).toBe("2.0.0");
     expect(parsed?.lastAvailableVersion).toBe("2.0.0");
     expect(parsed?.lastNotifiedTag).toBe("latest");
+=======
+    expect(parsed.lastNotifiedVersion).toBe("2.0.0");
+    expect(parsed.lastAvailableVersion).toBe("2.0.0");
+    expect(parsed.lastNotifiedTag).toBe("latest");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("falls back when the update-check clock is outside Date range", async () => {
@@ -383,6 +414,7 @@ describe("update-startup", () => {
       allowInTests: true,
     });
 
+<<<<<<< HEAD
     const parsed = readPersistedUpdateCheckState();
     expect(parsed?.lastCheckedAt).toBe("1970-01-01T00:00:00.000Z");
     expect(parsed?.lastAvailableVersion).toBe("2.0.0");
@@ -392,6 +424,30 @@ describe("update-startup", () => {
     writePersistedUpdateCheckState({
       lastCheckedAt: "2026-01-17T09:30:00.000Z",
     });
+=======
+    const statePath = path.join(tempDir, "update-check.json");
+    const parsed = JSON.parse(await fs.readFile(statePath, "utf-8")) as {
+      lastCheckedAt?: string;
+      lastAvailableVersion?: string;
+    };
+    expect(parsed.lastCheckedAt).toBe("1970-01-01T00:00:00.000Z");
+    expect(parsed.lastAvailableVersion).toBe("2.0.0");
+  });
+
+  it("does not throttle invalid update-check clocks against persisted state", async () => {
+    const statePath = path.join(tempDir, "update-check.json");
+    await fs.writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          lastCheckedAt: "2026-01-17T09:30:00.000Z",
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mockPackageUpdateStatus("latest", "2.0.0");
     vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
 
@@ -403,6 +459,7 @@ describe("update-startup", () => {
     });
 
     expect(checkUpdateStatus).toHaveBeenCalledTimes(1);
+<<<<<<< HEAD
     const parsed = readPersistedUpdateCheckState();
     expect(parsed?.lastCheckedAt).toBe("1970-01-01T00:00:00.000Z");
     expect(parsed?.lastAvailableVersion).toBe("2.0.0");
@@ -414,6 +471,31 @@ describe("update-startup", () => {
       lastAvailableVersion: "2.0.0",
       lastAvailableTag: "latest",
     });
+=======
+    const parsed = JSON.parse(await fs.readFile(statePath, "utf-8")) as {
+      lastCheckedAt?: string;
+      lastAvailableVersion?: string;
+    };
+    expect(parsed.lastCheckedAt).toBe("1970-01-01T00:00:00.000Z");
+    expect(parsed.lastAvailableVersion).toBe("2.0.0");
+  });
+
+  it("hydrates cached update from persisted state during throttle window", async () => {
+    const statePath = path.join(tempDir, "update-check.json");
+    await fs.writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          lastCheckedAt: new Date(Date.now()).toISOString(),
+          lastAvailableVersion: "2.0.0",
+          lastAvailableTag: "latest",
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const onUpdateAvailableChange = vi.fn();
     await runGatewayUpdateCheck({
@@ -474,7 +556,10 @@ describe("update-startup", () => {
     });
 
     expect(log.info).not.toHaveBeenCalled();
+<<<<<<< HEAD
     expect(readPersistedUpdateCheckState()).toBeNull();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await expectPathMissing(path.join(tempDir, "update-check.json"));
   });
 

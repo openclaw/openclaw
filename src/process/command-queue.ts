@@ -5,7 +5,10 @@ import {
   logLaneEnqueue,
 } from "../logging/diagnostic-runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+<<<<<<< HEAD
 import { clampPositiveTimerTimeoutMs } from "../shared/number-coercion.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import { CommandLane } from "./lanes.js";
 /**
@@ -70,9 +73,12 @@ type QueueEntry = {
   activeAheadAtEnqueue: number;
   taskTimeoutMs?: number;
   taskTimeoutProgressAtMs?: () => number | undefined;
+<<<<<<< HEAD
   taskTimeoutAbortSignal?: AbortSignal;
   taskTimeoutAbortGraceMs?: number;
   taskTimeoutReleaseSignal?: AbortSignal;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   onWait?: (waitMs: number, queuedAhead: number) => void;
 };
 
@@ -245,7 +251,11 @@ function normalizeTaskTimeoutMs(value: number | undefined): number | undefined {
   if (value === undefined || !Number.isFinite(value) || value <= 0) {
     return undefined;
   }
+<<<<<<< HEAD
   return clampPositiveTimerTimeoutMs(value);
+=======
+  return Math.max(1, Math.floor(value));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]): number {
@@ -281,8 +291,11 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
     return await taskPromise;
   }
 
+<<<<<<< HEAD
   const taskTimeoutAbortGraceMs =
     normalizeTaskTimeoutMs(entry.taskTimeoutAbortGraceMs) ?? taskTimeoutMs;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const startedAtMs = Date.now();
   const readLastProgressAtMs = () => {
     let value: number | undefined;
@@ -296,6 +309,7 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
       : startedAtMs;
   };
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+<<<<<<< HEAD
   let removeAbortListener: (() => void) | undefined;
   let removeReleaseListener: (() => void) | undefined;
   let timedOut = false;
@@ -354,6 +368,22 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
       releaseSignal.addEventListener("abort", onRelease, { once: true });
       removeReleaseListener = () => releaseSignal.removeEventListener("abort", onRelease);
     }
+=======
+  let timedOut = false;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    const armTimeout = () => {
+      const elapsedMs = Math.max(0, Date.now() - readLastProgressAtMs());
+      const remainingMs = taskTimeoutMs - elapsedMs;
+      if (remainingMs <= 0) {
+        timedOut = true;
+        reject(new CommandLaneTaskTimeoutError(lane, taskTimeoutMs));
+        return;
+      }
+      timeoutHandle = setTimeout(armTimeout, remainingMs);
+      timeoutHandle.unref?.();
+    };
+    armTimeout();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   try {
@@ -368,11 +398,17 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
     }
     throw err;
   } finally {
+<<<<<<< HEAD
     if (timeoutHandle) {
       clearTimeout(timeoutHandle);
     }
     removeAbortListener?.();
     removeReleaseListener?.();
+=======
+    if (!timedOut && timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 
@@ -497,9 +533,12 @@ export function enqueueCommandInLane<T>(
       activeAheadAtEnqueue: 0,
       taskTimeoutMs: normalizeTaskTimeoutMs(opts?.taskTimeoutMs),
       taskTimeoutProgressAtMs: opts?.taskTimeoutProgressAtMs,
+<<<<<<< HEAD
       taskTimeoutAbortSignal: opts?.taskTimeoutAbortSignal,
       taskTimeoutAbortGraceMs: normalizeTaskTimeoutMs(opts?.taskTimeoutAbortGraceMs),
       taskTimeoutReleaseSignal: opts?.taskTimeoutReleaseSignal,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       onWait: opts?.onWait,
     });
     logLaneEnqueue(cleaned, getLaneDepth(state));
@@ -507,6 +546,16 @@ export function enqueueCommandInLane<T>(
   });
 }
 
+<<<<<<< HEAD
+=======
+export function enqueueCommand<T>(
+  task: () => Promise<T>,
+  opts?: CommandQueueEnqueueOptions,
+): Promise<T> {
+  return enqueueCommandInLane(CommandLane.Main, task, opts);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function getQueueSize(lane: string = CommandLane.Main) {
   const resolved = normalizeLane(lane);
   const state = getQueueState().lanes.get(resolved);

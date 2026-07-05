@@ -7,10 +7,14 @@ import type {
   SessionAcpIdentityState,
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
+<<<<<<< HEAD
 import {
   normalizeOptionalString,
   type FastMode,
 } from "@openclaw/normalization-core/string-coerce";
+=======
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
@@ -293,7 +297,11 @@ export type SessionEntry = {
   abortCutoffTimestamp?: number;
   chatType?: SessionChatType;
   thinkingLevel?: string;
+<<<<<<< HEAD
   fastMode?: FastMode;
+=======
+  fastMode?: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   verboseLevel?: string;
   traceLevel?: string;
   reasoningLevel?: string;
@@ -635,6 +643,15 @@ export function resolveFreshSessionTotalTokens(
   return total;
 }
 
+<<<<<<< HEAD
+=======
+export function isSessionTotalTokensFresh(
+  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
+): boolean {
+  return resolveFreshSessionTotalTokens(entry) !== undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type GroupKeyResolution = {
   key: string;
   channel?: string;
@@ -729,5 +746,9 @@ export type SessionSystemPromptReport = {
   };
 };
 
+<<<<<<< HEAD
+=======
+export const DEFAULT_RESET_TRIGGER = "/new";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export const DEFAULT_RESET_TRIGGERS = ["/new", "/reset"];
 export const DEFAULT_IDLE_MINUTES = 0;

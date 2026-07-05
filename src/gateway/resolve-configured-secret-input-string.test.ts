@@ -56,6 +56,7 @@ describe("resolveConfiguredSecretInputWithFallback", () => {
     });
   });
 
+<<<<<<< HEAD
   it("ignores blank fallback values when no SecretRef is configured", async () => {
     const resolved = await resolveConfiguredSecretInputWithFallback({
       config: createConfig(""),
@@ -86,6 +87,8 @@ describe("resolveConfiguredSecretInputWithFallback", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("returns resolved SecretRef value with fallback metadata", async () => {
     const resolved = await resolveConfiguredSecretInputWithFallback({
       config: createConfig("${CUSTOM_GATEWAY_TOKEN}"),
@@ -118,6 +121,7 @@ describe("resolveConfiguredSecretInputWithFallback", () => {
     });
   });
 
+<<<<<<< HEAD
   it("ignores blank fallback values when SecretRef cannot be resolved", async () => {
     const resolved = await resolveConfiguredSecretInputWithFallback({
       config: createConfig("${MISSING_GATEWAY_TOKEN}"),
@@ -133,6 +137,8 @@ describe("resolveConfiguredSecretInputWithFallback", () => {
     expect(resolved.unresolvedRefReason).toContain("gateway.auth.token SecretRef is unresolved");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("returns unresolved reason when SecretRef cannot be resolved and no fallback exists", async () => {
     const resolved = await resolveConfiguredSecretInputWithFallback({
       config: createConfig("${MISSING_GATEWAY_TOKEN}"),

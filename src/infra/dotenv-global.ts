@@ -29,7 +29,11 @@ type GlobalRuntimeDotEnvOptions = {
   stateEnvPath?: string;
 };
 
+<<<<<<< HEAD
 export function readDotEnvFile(params: {
+=======
+function readGlobalRuntimeDotEnvFile(params: {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   entryFilter?: (key: string, value: string) => boolean;
   filePath: string;
   quiet?: boolean;
@@ -137,12 +141,20 @@ export function loadGlobalRuntimeDotEnvFiles(opts?: GlobalRuntimeDotEnvOptions) 
     process.env.OPENCLAW_STATE_DIR?.trim() !== undefined &&
     path.resolve(stateEnvPath) !== path.resolve(defaultStateEnvPath);
   const globalEnvs = globalEnvPaths.map((filePath) =>
+<<<<<<< HEAD
     readDotEnvFile({ entryFilter: opts?.entryFilter, filePath, quiet }),
+=======
+    readGlobalRuntimeDotEnvFile({ entryFilter: opts?.entryFilter, filePath, quiet }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
   const parsedFiles = [...globalEnvs];
   let gatewayEnv: LoadedDotEnvFile | null = null;
   if (!hasExplicitNonDefaultStateDir) {
+<<<<<<< HEAD
     gatewayEnv = readDotEnvFile({
+=======
+    gatewayEnv = readGlobalRuntimeDotEnvFile({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       entryFilter: opts?.entryFilter,
       filePath: path.join(
         resolveRequiredHomeDir(process.env, os.homedir),

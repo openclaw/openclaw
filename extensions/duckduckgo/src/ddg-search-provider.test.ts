@@ -1,6 +1,9 @@
 // Duckduckgo tests cover ddg search provider plugin behavior.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createDuckDuckGoWebSearchProvider as createDuckDuckGoWebSearchContractProvider } from "../web-search-contract-api.js";
 import { DEFAULT_DDG_SAFE_SEARCH, resolveDdgRegion, resolveDdgSafeSearch } from "./config.js";
 
@@ -105,6 +108,7 @@ describe("duckduckgo web search provider", () => {
     expect(runDuckDuckGoSearch).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("bounds successful DuckDuckGo HTML bodies without using response.text()", async () => {
     const streamed = createStreamingResponse({
       chunkCount: 32,
@@ -123,6 +127,8 @@ describe("duckduckgo web search provider", () => {
     expect(textSpy).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("reads region from plugin config and normalizes empty values away", () => {
     expect(
       resolveDdgRegion({
@@ -205,6 +211,7 @@ describe("duckduckgo web search provider", () => {
     );
   });
 
+<<<<<<< HEAD
   it("does not double-decode escaped entities (decodes &amp; last)", () => {
     // A result whose text literally shows "&lt;" arrives double-encoded as
     // "&amp;lt;". Decoding &amp; first would re-decode it into "<", corrupting
@@ -216,6 +223,8 @@ describe("duckduckgo web search provider", () => {
     expect(ddgClientTesting.decodeHtmlEntities("a&#x26;amp;b")).toBe("a&amp;b");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("parses results when href appears before class", () => {
     const html = `
       <a href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com" class="result__a">

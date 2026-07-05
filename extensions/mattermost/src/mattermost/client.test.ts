@@ -1,5 +1,6 @@
 // Mattermost tests cover client plugin behavior.
 import { describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
@@ -11,6 +12,8 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   createMattermostClient,
   createMattermostPost,
@@ -60,6 +63,7 @@ function parseRequestJson(init: RequestInit | undefined): Record<string, unknown
   return parsed as Record<string, unknown>;
 }
 
+<<<<<<< HEAD
 function streamingMattermostResponse(body: unknown): {
   response: Response;
   arrayBuffer: ReturnType<typeof vi.fn>;
@@ -109,6 +113,8 @@ function cancelTrackedResponse(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function createTestClient(response?: { status?: number; body?: unknown; contentType?: string }) {
   const { mockFetch, calls } = createMockFetch(response);
   const client = createMattermostClient({
@@ -158,6 +164,7 @@ describe("normalizeMattermostBaseUrl", () => {
 // ── createMattermostClient ───────────────────────────────────────────
 
 describe("createMattermostClient", () => {
+<<<<<<< HEAD
   it("keeps guarded Mattermost responses streaming until callers consume them", async () => {
     const release = vi.fn(async () => {});
     const { response, arrayBuffer } = streamingMattermostResponse({ id: "u1" });
@@ -224,6 +231,8 @@ describe("createMattermostClient", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("creates a client with normalized baseUrl", () => {
     const { mockFetch } = createMockFetch();
     const client = createMattermostClient({

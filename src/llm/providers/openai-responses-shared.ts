@@ -13,7 +13,10 @@ import type {
   ResponseReasoningItem,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
+<<<<<<< HEAD
 import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE,
   OPENAI_RESPONSES_OUTPUT_TEXT_CONTENT_PART_TYPE,
@@ -21,7 +24,10 @@ import {
   type AzureResponsesTextDeltaEvent,
   isAzureResponsesTextDeltaEvent,
   isResponsesTextContentPartType,
+<<<<<<< HEAD
   resolveResponsesMessageSnapshotCollapse,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "../../shared/openai-responses-stream-compat.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
@@ -255,12 +261,16 @@ export function convertResponsesMessages<TApi extends Api>(
     messages.push({
       type: "message",
       role,
+<<<<<<< HEAD
       content: [
         {
           type: "input_text",
           text: sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt)),
         },
       ],
+=======
+      content: [{ type: "input_text", text: sanitizeSurrogates(context.systemPrompt) }],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   }
 
@@ -586,6 +596,7 @@ export async function processResponsesStream<TApi extends Api>(
     | null = null;
   let currentBlock: ThinkingContent | TextContent | (ToolCall & { partialJson: string }) | null =
     null;
+<<<<<<< HEAD
   let lastTextBlock: {
     block: TextContent;
     index: number;
@@ -616,18 +627,25 @@ export async function processResponsesStream<TApi extends Api>(
     });
     pendingMessageText = null;
   };
+=======
+  const blocks = output.content;
+  const blockIndex = () => blocks.length - 1;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   for await (const event of openaiStream) {
     if (event.type === "response.created") {
       output.responseId = event.response.id;
     } else if (event.type === "response.output_item.added") {
       const item = event.item;
+<<<<<<< HEAD
       if (item.type !== "message") {
         // Snapshot collapse only applies to back-to-back message items; any
         // other item is a real boundary (see resolveResponsesMessageSnapshotCollapse).
         lastTextBlock = null;
         pendingMessageText = null;
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (item.type === "reasoning") {
         currentItem = item;
         currentBlock = { type: "thinking", thinking: "" };
@@ -635,6 +653,7 @@ export async function processResponsesStream<TApi extends Api>(
         stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
       } else if (item.type === "message") {
         currentItem = item;
+<<<<<<< HEAD
         if (lastTextBlock) {
           currentBlock = null;
           pendingMessageText = "";
@@ -643,6 +662,11 @@ export async function processResponsesStream<TApi extends Api>(
           output.content.push(currentBlock);
           stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
         }
+=======
+        currentBlock = { type: "text", text: "" };
+        output.content.push(currentBlock);
+        stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       } else if (item.type === "function_call") {
         currentItem = item;
         currentBlock = {
@@ -712,12 +736,17 @@ export async function processResponsesStream<TApi extends Api>(
         }
       }
     } else if (event.type === "response.output_text.delta") {
+<<<<<<< HEAD
       if (currentItem?.type === "message") {
+=======
+      if (currentItem?.type === "message" && currentBlock?.type === "text") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         if (!currentItem.content || currentItem.content.length === 0) {
           continue;
         }
         const lastPart = currentItem.content[currentItem.content.length - 1];
         if (isResponsesTextContentPartType(lastPart?.type)) {
+<<<<<<< HEAD
           lastPart.text += event.delta;
           if (pendingMessageText !== null) {
             appendPendingMessageDelta(event.delta);
@@ -745,6 +774,10 @@ export async function processResponsesStream<TApi extends Api>(
           appendPendingMessageDelta(event.delta);
         } else if (currentBlock?.type === "text") {
           currentBlock.text += event.delta;
+=======
+          currentBlock.text += event.delta;
+          lastPart.text += event.delta;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           stream.push({
             type: "text_delta",
             contentIndex: blockIndex(),
@@ -753,13 +786,36 @@ export async function processResponsesStream<TApi extends Api>(
           });
         }
       }
+<<<<<<< HEAD
     } else if (event.type === "response.refusal.delta") {
       if (currentItem?.type === "message") {
+=======
+    } else if (isAzureResponsesTextDeltaEvent(event)) {
+      if (currentItem?.type === "message" && currentBlock?.type === "text") {
+        currentItem.content = currentItem.content || [];
+        let lastPart = currentItem.content[currentItem.content.length - 1];
+        if (lastPart?.type !== "text") {
+          lastPart = { type: "text", text: "" };
+          currentItem.content.push(lastPart);
+        }
+        currentBlock.text += event.delta;
+        lastPart.text += event.delta;
+        stream.push({
+          type: "text_delta",
+          contentIndex: blockIndex(),
+          delta: event.delta,
+          partial: output,
+        });
+      }
+    } else if (event.type === "response.refusal.delta") {
+      if (currentItem?.type === "message" && currentBlock?.type === "text") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         if (!currentItem.content || currentItem.content.length === 0) {
           continue;
         }
         const lastPart = currentItem.content[currentItem.content.length - 1];
         if (lastPart?.type === "refusal") {
+<<<<<<< HEAD
           lastPart.refusal += event.delta;
           if (pendingMessageText !== null) {
             appendPendingMessageDelta(event.delta);
@@ -772,6 +828,16 @@ export async function processResponsesStream<TApi extends Api>(
               partial: output,
             });
           }
+=======
+          currentBlock.text += event.delta;
+          lastPart.refusal += event.delta;
+          stream.push({
+            type: "text_delta",
+            contentIndex: blockIndex(),
+            delta: event.delta,
+            partial: output,
+          });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }
       }
     } else if (event.type === "response.function_call_arguments.delta") {
@@ -812,10 +878,13 @@ export async function processResponsesStream<TApi extends Api>(
       }
     } else if (event.type === "response.output_item.done") {
       const item = event.item;
+<<<<<<< HEAD
       if (item.type !== "message") {
         lastTextBlock = null;
         pendingMessageText = null;
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       if (item.type === "reasoning" && currentBlock?.type === "thinking") {
         const summaryText = item.summary?.map((s) => s.text).join("\n\n") || "";
@@ -829,6 +898,7 @@ export async function processResponsesStream<TApi extends Api>(
           partial: output,
         });
         currentBlock = null;
+<<<<<<< HEAD
       } else if (
         item.type === "message" &&
         (currentBlock?.type === "text" || pendingMessageText !== null)
@@ -881,6 +951,20 @@ export async function processResponsesStream<TApi extends Api>(
             partial: output,
           });
         }
+=======
+      } else if (item.type === "message" && currentBlock?.type === "text") {
+        // Support both OpenAI "output_text" and Azure "text" content types
+        currentBlock.text = item.content
+          .map((c) => (c.type === "output_text" || c.type === "text" ? c.text : c.refusal))
+          .join("");
+        currentBlock.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
+        stream.push({
+          type: "text_end",
+          contentIndex: blockIndex(),
+          content: currentBlock.text,
+          partial: output,
+        });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         currentBlock = null;
       } else if (item.type === "function_call") {
         const args =

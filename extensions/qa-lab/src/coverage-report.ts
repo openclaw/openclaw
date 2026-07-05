@@ -27,7 +27,10 @@ type QaScenarioSearchMatch = QaCoverageScenarioSummary & {
   executionPath?: string;
   runtimeParityTier?: string;
   requiredProviderMode?: string;
+<<<<<<< HEAD
   requiredChannelDriver?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   requiredProvider?: string;
   requiredModel?: string;
 };
@@ -145,7 +148,10 @@ function summarizeScenarioSearchMatch(scenario: QaSeedScenarioWithSource): QaSce
     ...(scenario.execution.kind !== "flow" ? { executionPath: scenario.execution.path } : {}),
     runtimeParityTier: scenario.runtimeParityTier,
     requiredProviderMode: stringifyConfigValue(config.requiredProviderMode),
+<<<<<<< HEAD
     requiredChannelDriver: stringifyConfigValue(config.requiredChannelDriver),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     requiredProvider: stringifyConfigValue(config.requiredProvider),
     requiredModel: stringifyConfigValue(config.requiredModel),
   };
@@ -331,7 +337,11 @@ function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomy
     `- Fulfilled taxonomy categories: ${report.fulfilledCategoryCount}/${report.requiredCategoryCount} (${report.categoryFulfillmentPercent}%)`,
   );
   lines.push(
+<<<<<<< HEAD
     `- Fulfilled taxonomy coverage IDs: ${report.fulfilledCoverageIdCount}/${report.requiredCoverageIdCount} (${report.coverageIdFulfillmentPercent}%)`,
+=======
+    `- Fulfilled taxonomy features: ${report.fulfilledFeatureCount}/${report.requiredFeatureCount} (${report.taxonomyFulfillmentPercent}%)`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
   lines.push(`- Evidence refs: ${report.evidenceRefCount}`);
   lines.push(`- Scenario coverage IDs: ${report.scenarioCoverageIdCount}`);
@@ -449,7 +459,10 @@ function formatOptionalScenarioMetadata(match: QaScenarioSearchMatch) {
   const metadata = [
     match.runtimeParityTier ? `runtimeParityTier=${match.runtimeParityTier}` : "",
     match.requiredProviderMode ? `providerMode=${match.requiredProviderMode}` : "",
+<<<<<<< HEAD
     match.requiredChannelDriver ? `channelDriver=${match.requiredChannelDriver}` : "",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     match.requiredProvider ? `provider=${match.requiredProvider}` : "",
     match.requiredModel ? `model=${match.requiredModel}` : "",
   ].filter(Boolean);

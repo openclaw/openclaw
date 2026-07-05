@@ -10,7 +10,10 @@ export {
 export { getRuntimeConfig } from "../config/config.js";
 export { loadSessionStore, mergeSessionEntry, updateSessionStore } from "../config/sessions.js";
 export {
+<<<<<<< HEAD
   forkSessionEntryFromParent,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   forkSessionFromParent,
   resolveParentForkDecision,
   type ParentForkDecision,

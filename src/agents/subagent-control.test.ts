@@ -4,11 +4,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import type {
   SessionAccessScope,
   SessionEntryPatchContext,
   SessionEntryPatchOptions,
 } from "../config/sessions/session-accessor.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
@@ -125,6 +128,7 @@ function setSubagentControlDepsForTest(
   testing.setDepsForTest({
     abortEmbeddedAgentRun: () => false,
     clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+<<<<<<< HEAD
     patchSessionEntry: async (
       scope: SessionAccessScope,
       patcher: (
@@ -152,6 +156,16 @@ function setSubagentControlDepsForTest(
       store[scope.sessionKey] = next;
       fs.writeFileSync(scope.storePath, JSON.stringify(store, null, 2), "utf-8");
       return next;
+=======
+    updateSessionStore: async <T>(
+      storePath: string,
+      mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
+    ) => {
+      const store = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<string, SessionEntry>;
+      const result = await mutator(store);
+      fs.writeFileSync(storePath, JSON.stringify(store, null, 2), "utf-8");
+      return result;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
     ...overrides,
   });
@@ -663,7 +677,11 @@ describe("killSubagentRunAdmin", () => {
     });
 
     setSubagentControlDepsForTest({
+<<<<<<< HEAD
       patchSessionEntry: async () => {
+=======
+      updateSessionStore: async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         throw new Error("session store unavailable");
       },
     });

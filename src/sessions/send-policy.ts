@@ -6,10 +6,13 @@ import {
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { SessionChatType, SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+<<<<<<< HEAD
 import {
   hasAmbiguousCanonicalSessionPeerShape,
   parseCanonicalSessionPeerShape,
 } from "./session-chat-type-shared.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { deriveSessionChatType } from "./session-chat-type.js";
 
 /** Session send-policy decision after config and per-session overrides are evaluated. */
@@ -36,30 +39,72 @@ function stripAgentSessionKeyPrefix(key?: string): string | undefined {
   if (!key) {
     return undefined;
   }
+<<<<<<< HEAD
   const parts = key.split(":");
   // Canonical agent session keys: agent:<agentId>:<sessionKey...>
   if (parts[0] === "agent") {
     if (parts.length < 3 || !parts[1] || !parts[2]) {
       return undefined;
     }
+=======
+  const parts = key.split(":").filter(Boolean);
+  // Canonical agent session keys: agent:<agentId>:<sessionKey...>
+  if (parts.length >= 3 && parts[0] === "agent") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return parts.slice(2).join(":");
   }
   return key;
 }
 
+<<<<<<< HEAD
+=======
+const CHANNEL_SESSION_KEY_PEER_KINDS = new Set(["group", "channel", "direct", "dm"]);
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function deriveChannelFromKey(key?: string) {
   const normalizedKey = stripAgentSessionKeyPrefix(key);
   if (!normalizedKey) {
     return undefined;
   }
+<<<<<<< HEAD
   return normalizeMatchValue(parseCanonicalSessionPeerShape(normalizedKey)?.channel);
+=======
+  const parts = normalizedKey.split(":").filter(Boolean);
+  // Key layout is <channel>:[<accountId>:]<peerKind>:<peerId>; parts[0] is the
+  // channel for account-scoped DM keys too, so channel-scoped rules also fire
+  // for per-account-channel-peer sessions, not just 3-part direct/group keys.
+  const hasChannelPeerShape =
+    parts.length >= 3 && CHANNEL_SESSION_KEY_PEER_KINDS.has(parts[1] ?? "");
+  const hasAccountScopedPeerShape =
+    parts.length >= 4 && CHANNEL_SESSION_KEY_PEER_KINDS.has(parts[2] ?? "");
+  if (hasChannelPeerShape || hasAccountScopedPeerShape) {
+    return normalizeMatchValue(parts[0]);
+  }
+  return undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function deriveChatTypeFromKey(key?: string): SessionChatType | undefined {
   const normalizedKey = normalizeOptionalLowercaseString(stripAgentSessionKeyPrefix(key));
+<<<<<<< HEAD
   if (!normalizedKey || normalizedKey.startsWith("agent:")) {
     return undefined;
   }
+=======
+  if (!normalizedKey) {
+    return undefined;
+  }
+  const tokens = new Set(normalizedKey.split(":").filter(Boolean));
+  if (tokens.has("group")) {
+    return "group";
+  }
+  if (tokens.has("channel")) {
+    return "channel";
+  }
+  if (tokens.has("direct") || tokens.has("dm")) {
+    return "direct";
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const derived = deriveSessionChatType(normalizedKey);
   if (derived !== "unknown") {
     return derived;
@@ -67,11 +112,14 @@ function deriveChatTypeFromKey(key?: string): SessionChatType | undefined {
   return undefined;
 }
 
+<<<<<<< HEAD
 function hasAmbiguousPeerShape(key?: string): boolean {
   const normalizedKey = normalizeOptionalLowercaseString(stripAgentSessionKeyPrefix(key));
   return normalizedKey ? hasAmbiguousCanonicalSessionPeerShape(normalizedKey) : false;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Resolves whether a session send is allowed by entry override and config rules. */
 export function resolveSendPolicy(params: {
   cfg: OpenClawConfig;
@@ -89,11 +137,14 @@ export function resolveSendPolicy(params: {
   if (!policy) {
     return "allow";
   }
+<<<<<<< HEAD
   // The legacy key grammar cannot distinguish a peer-kind-shaped account id
   // from a channel peer. Never let that ambiguity satisfy an allow policy.
   if (hasAmbiguousPeerShape(params.sessionKey)) {
     return "deny";
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const rawSessionKey = params.sessionKey ?? "";
   const strippedSessionKey = stripAgentSessionKeyPrefix(rawSessionKey) ?? "";

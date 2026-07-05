@@ -134,6 +134,7 @@ describe("buildQaRuntimeEnv", () => {
     await expect(readdir(tempParent)).resolves.toStrictEqual([]);
   });
 
+<<<<<<< HEAD
   it("reports command spawn errors instead of leaking unhandled child errors", async () => {
     const tempParent = await mkdtemp(path.join(os.tmpdir(), "qa-gateway-spawn-fail-"));
     cleanups.push(async () => {
@@ -160,6 +161,8 @@ describe("buildQaRuntimeEnv", () => {
     await expect(readdir(tempParent)).resolves.toStrictEqual([]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps the slow-reply QA opt-out enabled under fast mode", () => {
     const env = buildQaRuntimeEnv({
       ...createParams(),
@@ -1004,6 +1007,7 @@ describe("buildQaRuntimeEnv", () => {
     expect([child.exitCode, child.signalCode]).not.toEqual([null, null]);
   });
 
+<<<<<<< HEAD
   it("force-kills Windows gateway process trees when graceful taskkill fails", () => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
     const originalSystemRoot = process.env.SystemRoot;
@@ -1056,6 +1060,8 @@ describe("buildQaRuntimeEnv", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not trust an exited gateway wrapper while its process group is alive", async () => {
     const child = Object.assign(new EventEmitter(), {
       pid: 12346,
@@ -1165,6 +1171,7 @@ describe("buildQaRuntimeEnv", () => {
         "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER=convex-maintainer-secret",
         "OPENCLAW_LIVE_CODEX_API_KEY=codex-live-secret",
         "botToken=12345:AbCdEfGhIjKl",
+<<<<<<< HEAD
         "--botToken=12345:flag-secret",
         '"driverToken":"12345:driver-secr3t"',
         "sutToken='12345:sut-secr3t'",
@@ -1186,6 +1193,16 @@ describe("buildQaRuntimeEnv", () => {
       ].join("\n"),
       "utf8",
     );
+=======
+        '"driverToken":"12345:driver-secr3t"',
+        "sutToken='12345:sut-secr3t'",
+        "leaseToken=lease-12345",
+        "url=http://127.0.0.1:18789/#token=abc123",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(stderrLogPath, "Authorization: Bearer secret+/token=123456", "utf8");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await mkdir(path.join(tempRoot, "state"), { recursive: true });
     await writeFile(path.join(tempRoot, "state", "secret.txt"), "do-not-copy", "utf8");
 
@@ -1210,6 +1227,7 @@ describe("buildQaRuntimeEnv", () => {
         "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER=<redacted>",
         "OPENCLAW_LIVE_CODEX_API_KEY=<redacted>",
         "botToken=<redacted>",
+<<<<<<< HEAD
         "--botToken=<redacted>",
         '"driverToken":"<redacted>"',
         "sutToken=<redacted>",
@@ -1227,13 +1245,26 @@ describe("buildQaRuntimeEnv", () => {
         "Set-Cookie: <redacted>",
         "x-api-key: <redacted>",
       ].join("\n"),
+=======
+        '"driverToken":"<redacted>"',
+        "sutToken=<redacted>",
+        "leaseToken=<redacted>",
+        "url=http://127.0.0.1:18789/#token=<redacted>",
+      ].join("\n"),
+    );
+    await expect(readFile(path.join(artifactDir, "gateway.stderr.log"), "utf8")).resolves.toBe(
+      "Authorization: Bearer <redacted>",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
     await expect(readFile(path.join(artifactDir, "README.txt"), "utf8")).resolves.toContain(
       "was not copied because it may contain credentials or auth tokens",
     );
+<<<<<<< HEAD
     await expect(readFile(path.join(artifactDir, "README.txt"), "utf8")).resolves.not.toContain(
       tempRoot,
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("rejects preserved gateway artifacts outside the repo root", async () => {

@@ -1,7 +1,10 @@
 // Plugin runtime index tests cover runtime entrypoint exports and registry setup.
+<<<<<<< HEAD
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
@@ -9,13 +12,20 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../../config/config.js";
+<<<<<<< HEAD
+=======
+import { listSessionEntries, loadSessionEntry } from "../../config/sessions/session-accessor.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { onAgentEvent } from "../../infra/agent-events.js";
 import {
   requestHeartbeat,
   resetHeartbeatWakeStateForTests,
   setHeartbeatWakeHandler,
 } from "../../infra/heartbeat-wake.js";
+<<<<<<< HEAD
 import * as jsonFiles from "../../infra/json-files.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import * as execModule from "../../process/exec.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { VERSION } from "../../version.js";
@@ -317,16 +327,27 @@ describe("plugin runtime command execution", () => {
         ]);
         expect(runtime.agent.runEmbeddedPiAgent).toBe(runtime.agent.runEmbeddedAgent);
         expectFunctionKeys(runtime.agent.session as Record<string, unknown>, [
+<<<<<<< HEAD
           "loadSessionStore",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           "getSessionEntry",
           "listSessionEntries",
           "patchSessionEntry",
           "upsertSessionEntry",
+<<<<<<< HEAD
           "saveSessionStore",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           "updateSessionStore",
           "updateSessionStoreEntry",
           "resolveSessionFilePath",
         ]);
+<<<<<<< HEAD
+=======
+        expect(runtime.agent.session.getSessionEntry).toBe(loadSessionEntry);
+        expect(runtime.agent.session.listSessionEntries).toBe(listSessionEntries);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     },
     {
@@ -343,6 +364,7 @@ describe("plugin runtime command execution", () => {
     expectRuntimeShape(assert);
   });
 
+<<<<<<< HEAD
   it("preserves requireWriteSuccess through runtime session entry updates", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-runtime-session-store-"));
     const storePath = path.join(tempDir, "sessions.json");
@@ -378,6 +400,8 @@ describe("plugin runtime command execution", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("modelAuth wrappers strip agentDir and store to prevent credential steering", async () => {
     // The wrappers should not forward agentDir or store from plugin callers.
     // We verify this by checking the wrapper functions exist and are not the

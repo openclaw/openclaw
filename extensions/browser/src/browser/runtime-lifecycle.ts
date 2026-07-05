@@ -1,11 +1,20 @@
 /**
+<<<<<<< HEAD
  * Browser plugin runtime lifecycle helpers for startup and shutdown cleanup.
+=======
+ * Browser plugin runtime lifecycle helpers for startup relay setup and shutdown
+ * cleanup.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
  */
 import type { Server } from "node:http";
 import { getPwAiModule } from "./pw-ai-module.js";
 import { isPwAiLoaded } from "./pw-ai-state.js";
 import type { BrowserServerState } from "./server-context.js";
+<<<<<<< HEAD
 import { stopKnownBrowserProfiles } from "./server-lifecycle.js";
+=======
+import { ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } from "./server-lifecycle.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { startTrackedBrowserTabCleanupTimer } from "./session-tab-cleanup.js";
 import { registerBrowserUnhandledRejectionHandler } from "./unhandled-rejections.js";
 
@@ -26,6 +35,13 @@ export async function createBrowserRuntimeState(params: {
     onWarn: params.onWarn,
   });
 
+<<<<<<< HEAD
+=======
+  await ensureExtensionRelayForProfiles({
+    resolved: params.resolved,
+    onWarn: params.onWarn,
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   state.stopUnhandledRejectionHandler = registerBrowserUnhandledRejectionHandler();
 
   return state;

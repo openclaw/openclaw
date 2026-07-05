@@ -5,7 +5,10 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+<<<<<<< HEAD
 import { withEnvAsync } from "../../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { AuthProfileStore } from "./types.js";
 
 vi.mock("../cli-credentials.js", () => ({
@@ -84,7 +87,21 @@ async function resolveWithConfig(params: {
 }
 
 async function withEnvVar<T>(key: string, value: string, run: () => Promise<T>): Promise<T> {
+<<<<<<< HEAD
   return await withEnvAsync({ [key]: value }, run);
+=======
+  const previous = process.env[key];
+  process.env[key] = value;
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = previous;
+    }
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function expectResolvedApiKey(params: {

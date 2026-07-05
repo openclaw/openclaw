@@ -18,7 +18,10 @@ import type { MsgContext, TemplateContext } from "../templating.js";
 import {
   normalizeThinkLevel,
   type ElevatedLevel,
+<<<<<<< HEAD
   type FastMode,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type ReasoningLevel,
   type ThinkLevel,
   type VerboseLevel,
@@ -119,10 +122,14 @@ type ReplyDirectiveContinuation = {
   elevatedFailures: Array<{ gate: string; key: string }>;
   defaultActivation: ReturnType<typeof defaultGroupActivation>;
   resolvedThinkLevel: ThinkLevel | undefined;
+<<<<<<< HEAD
   resolvedFastMode: FastMode;
   resolvedFastModeAutoOnSeconds: number;
   resolvedFastModeOverride: boolean;
   resolvedFastModeAutoOnSecondsOverride: boolean;
+=======
+  resolvedFastMode: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel: ElevatedLevel;
@@ -178,7 +185,10 @@ export async function resolveReplyDirectives(params: {
   aliasIndex: ModelAliasIndex;
   provider: string;
   model: string;
+<<<<<<< HEAD
   hasOneTurnModelOverride?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   skipStoredModelOverride?: boolean;
   hasResolvedHeartbeatModelOverride: boolean;
   typing: TypingController;
@@ -209,7 +219,10 @@ export async function resolveReplyDirectives(params: {
     primaryModel,
     provider: initialProvider,
     model: initialModel,
+<<<<<<< HEAD
     hasOneTurnModelOverride,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     skipStoredModelOverride,
     hasResolvedHeartbeatModelOverride,
     typing,
@@ -444,6 +457,19 @@ export async function resolveReplyDirectives(params: {
     : (targetSessionEntry?.thinkingLevel as ThinkLevel | undefined);
   const resolvedThinkLevel =
     normalizeThinkLevel(opts?.thinkingLevelOverride) ?? directives.thinkLevel ?? sessionThinkLevel;
+<<<<<<< HEAD
+=======
+  const resolvedFastMode =
+    opts?.fastModeOverride ??
+    directives.fastMode ??
+    resolveFastModeState({
+      cfg,
+      provider,
+      model,
+      agentId,
+      sessionEntry: directives.clearFastMode ? undefined : targetSessionEntry,
+    }).enabled;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const resolvedVerboseLevel =
     directives.verboseLevel ??
@@ -536,7 +562,10 @@ export async function resolveReplyDirectives(params: {
         provider,
         model,
         hasModelDirective: directives.hasModelDirective,
+<<<<<<< HEAD
         hasOneTurnModelOverride,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         skipStoredModelOverride,
         hasResolvedHeartbeatModelOverride,
         isHeartbeat: opts?.isHeartbeat === true,
@@ -641,6 +670,7 @@ export async function resolveReplyDirectives(params: {
   model = applyResult.model;
   contextTokens = applyResult.contextTokens;
   const { directiveAck, perMessageQueueMode, perMessageQueueOptions } = applyResult;
+<<<<<<< HEAD
   const resolvedFastModeState = resolveFastModeState({
     cfg,
     provider,
@@ -655,6 +685,8 @@ export async function resolveReplyDirectives(params: {
   const resolvedFastModeOverride =
     opts?.fastModeOverride !== undefined || directives.fastMode !== undefined;
   const resolvedFastModeAutoOnSecondsOverride = opts?.fastModeAutoOnSecondsOverride !== undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const execOverrides = resolveReplyExecOverrides({
     directives,
     sessionEntry: targetSessionEntry,
@@ -677,9 +709,12 @@ export async function resolveReplyDirectives(params: {
       defaultActivation,
       resolvedThinkLevel: resolvedThinkLevelWithDefault,
       resolvedFastMode,
+<<<<<<< HEAD
       resolvedFastModeAutoOnSeconds,
       resolvedFastModeOverride,
       resolvedFastModeAutoOnSecondsOverride,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       resolvedVerboseLevel,
       resolvedReasoningLevel,
       resolvedElevatedLevel,

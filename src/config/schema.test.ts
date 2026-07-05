@@ -253,6 +253,7 @@ describe("config schema", () => {
     }
   });
 
+<<<<<<< HEAD
   it("accepts stdio transport for command-bearing MCP servers", () => {
     const result = OpenClawSchema.safeParse({
       mcp: {
@@ -313,6 +314,8 @@ describe("config schema", () => {
     expect(result.success).toBe(false);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("merges plugin ui hints", () => {
     const res = buildConfigSchema(pluginUiHintInput);
 

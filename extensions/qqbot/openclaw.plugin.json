@@ -2,7 +2,10 @@
   "id": "qqbot",
   "name": "QQ Bot",
   "description": "OpenClaw QQ Bot channel plugin for group and direct-message workflows.",
+<<<<<<< HEAD
   "icon": "https://cdn.simpleicons.org/qq",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "activation": {
     "onStartup": false
   },
@@ -61,6 +64,7 @@
       "secretInput": {
         "anyOf": [{ "type": "string", "minLength": 1 }, { "$ref": "#/$defs/secretRef" }]
       },
+<<<<<<< HEAD
       "group": {
         "type": "object",
         "additionalProperties": true,
@@ -82,6 +86,8 @@
           "$ref": "#/$defs/group"
         }
       },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "account": {
         "type": "object",
         "additionalProperties": true,
@@ -129,8 +135,12 @@
                 }
               }
             ]
+<<<<<<< HEAD
           },
           "groups": { "$ref": "#/$defs/groups" }
+=======
+          }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }
       }
     },
@@ -186,8 +196,12 @@
           "$ref": "#/$defs/account"
         }
       },
+<<<<<<< HEAD
       "defaultAccount": { "type": "string" },
       "groups": { "$ref": "#/$defs/groups" }
+=======
+      "defaultAccount": { "type": "string" }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   }
 }

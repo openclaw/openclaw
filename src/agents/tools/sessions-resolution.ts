@@ -88,7 +88,11 @@ export function resolveCurrentSessionClientAlias(params: {
   return requesterKey;
 }
 
+<<<<<<< HEAD
 async function isRequesterSpawnedSessionVisible(params: {
+=======
+export async function isRequesterSpawnedSessionVisible(params: {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   requesterSessionKey: string;
   targetSessionKey: string;
   limit?: number;
@@ -117,6 +121,48 @@ async function isRequesterSpawnedSessionVisible(params: {
   return keys.has(params.targetSessionKey);
 }
 
+<<<<<<< HEAD
+=======
+export function shouldVerifyRequesterSpawnedSessionVisibility(params: {
+  requesterSessionKey: string;
+  targetSessionKey: string;
+  restrictToSpawned: boolean;
+  resolvedViaSessionId: boolean;
+}): boolean {
+  return (
+    params.restrictToSpawned &&
+    !params.resolvedViaSessionId &&
+    params.requesterSessionKey !== params.targetSessionKey
+  );
+}
+
+export async function isResolvedSessionVisibleToRequester(params: {
+  requesterSessionKey: string;
+  targetSessionKey: string;
+  restrictToSpawned: boolean;
+  resolvedViaSessionId: boolean;
+  limit?: number;
+}): Promise<boolean> {
+  if (
+    !shouldVerifyRequesterSpawnedSessionVisibility({
+      requesterSessionKey: params.requesterSessionKey,
+      targetSessionKey: params.targetSessionKey,
+      restrictToSpawned: params.restrictToSpawned,
+      resolvedViaSessionId: params.resolvedViaSessionId,
+    })
+  ) {
+    return true;
+  }
+  return await isRequesterSpawnedSessionVisible({
+    requesterSessionKey: params.requesterSessionKey,
+    targetSessionKey: params.targetSessionKey,
+    limit: params.limit,
+  });
+}
+
+export { looksLikeSessionId };
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function looksLikeSessionKey(value: string): boolean {
   const raw = normalizeOptionalString(value) ?? "";
   if (!raw) {
@@ -450,6 +496,7 @@ export async function resolveVisibleSessionReference(params: {
 }): Promise<VisibleSessionReferenceResolution> {
   const resolvedKey = params.resolvedSession.key;
   const displayKey = params.resolvedSession.displayKey;
+<<<<<<< HEAD
   const shouldVerifySpawnedVisibility =
     params.restrictToSpawned &&
     !params.resolvedSession.resolvedViaSessionId &&
@@ -460,6 +507,14 @@ export async function resolveVisibleSessionReference(params: {
       requesterSessionKey: params.requesterSessionKey,
       targetSessionKey: resolvedKey,
     }));
+=======
+  const visible = await isResolvedSessionVisibleToRequester({
+    requesterSessionKey: params.requesterSessionKey,
+    targetSessionKey: resolvedKey,
+    restrictToSpawned: params.restrictToSpawned,
+    resolvedViaSessionId: params.resolvedSession.resolvedViaSessionId,
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!visible) {
     return {
       ok: false,

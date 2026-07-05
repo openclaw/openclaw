@@ -3229,6 +3229,7 @@ describe("matrix monitor handler draft streaming", () => {
     expect(editMessageMatrixMock).toHaveBeenCalledWith(
       "!room:example.org",
       "$draft1",
+<<<<<<< HEAD
       expect.stringContaining("Exec"),
       expect.any(Object),
     );
@@ -3236,6 +3237,15 @@ describe("matrix monitor handler draft streaming", () => {
       ([, eventId, body]) => eventId === "$draft1" && typeof body === "string",
     );
     expect(recoveredEdit?.[2]).not.toContain("completed");
+=======
+      expect.stringContaining("completed"),
+      expect.any(Object),
+    );
+    const recoveredEdit = mockCalls(editMessageMatrixMock, "editMessageMatrix").find(
+      ([, eventId, body]) =>
+        eventId === "$draft1" && typeof body === "string" && body.includes("completed"),
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(recoveredEdit?.[2]).not.toContain("failed");
     expect(recoveredEdit?.[2]).not.toContain("run openclaw cron -> run jq");
   });
@@ -3293,8 +3303,12 @@ describe("matrix monitor handler draft streaming", () => {
       ([, eventId, body]) =>
         eventId === "$draft1" && typeof body === "string" && body.includes("completed"),
     );
+<<<<<<< HEAD
     expect(completedEdit).toBeUndefined();
     expect(singleTextMessageBody()).toContain("install dependencies");
+=======
+    expect(completedEdit?.[2]).not.toContain("install dependencies");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("replaces Matrix patch progress when the patch summary completes", async () => {

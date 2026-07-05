@@ -1,7 +1,10 @@
 // Whatsapp plugin module implements session behavior.
 import { randomUUID } from "node:crypto";
 import type { Agent } from "node:https";
+<<<<<<< HEAD
 import type { GroupMetadata, WAMessageKey, proto } from "baileys";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import {
@@ -135,8 +138,11 @@ export async function createWaSocket(
   opts: {
     authDir?: string;
     onQr?: (qr: string) => void;
+<<<<<<< HEAD
     getMessage?: (key: WAMessageKey) => Promise<proto.IMessage | undefined>;
     cachedGroupMetadata?: (jid: string) => Promise<GroupMetadata | undefined>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } & WhatsAppSocketTimingOptions = {},
 ): Promise<ReturnType<typeof makeWASocket>> {
   const baseLogger = getChildLogger(
@@ -188,8 +194,11 @@ export async function createWaSocket(
     // Baileys types still model `fetchAgent` as a Node agent even though the
     // runtime path accepts an undici dispatcher for upload fetches.
     fetchAgent: fetchAgent as Agent | undefined,
+<<<<<<< HEAD
     ...(opts.getMessage ? { getMessage: opts.getMessage } : {}),
     ...(opts.cachedGroupMetadata ? { cachedGroupMetadata: opts.cachedGroupMetadata } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));

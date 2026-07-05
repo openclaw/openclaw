@@ -20,7 +20,10 @@ import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { isRateLimitErrorMessage } from "./embedded-agent-helpers/errors.js";
+<<<<<<< HEAD
 import { extractAssistantText } from "./embedded-agent-utils.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { collectAnthropicApiKeys } from "./live-auth-keys.js";
 import { appendPrioritizedDynamicLiveModels } from "./live-model-dynamic-candidates.js";
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
@@ -28,6 +31,10 @@ import {
   DEFAULT_SMALL_LIVE_MODEL_LIMIT,
   isHighSignalLiveModelRef,
   isPrioritizedHighSignalLiveModelRef,
+<<<<<<< HEAD
+=======
+  isPrioritizedSmallLiveModelRef,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   isSmallLiveModelRef,
   listPrioritizedSmallLiveModelRefs,
   resolveHighSignalLiveModelLimit,
@@ -39,6 +46,10 @@ import {
   buildLiveModelFileProbeContext,
   buildLiveModelFileProbeRetryContext,
   buildLiveModelImageProbeContext,
+<<<<<<< HEAD
+=======
+  extractAssistantText,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   fileProbeTextMatches,
   imageProbeTextMatches,
   isLiveModelProbeEnabled,
@@ -1853,6 +1864,15 @@ describeLive("live models (profile keys)", () => {
           continue;
         }
         if (!filter && useSmall) {
+<<<<<<< HEAD
+=======
+          if (
+            useSmallPriorityOnly &&
+            !isPrioritizedSmallLiveModelRef({ provider: model.provider, id: model.id })
+          ) {
+            continue;
+          }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           if (!isSmallLiveModelRef({ provider: model.provider, id: model.id })) {
             continue;
           }

@@ -1,0 +1,348 @@
+{
+  "scenarios": [
+    {
+      "name": "Memory failure fallback",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "falls back cleanly when group:memory tools are denied",
+          "status": "pass",
+          "details": "Protocol note: I checked the available runtime context but could not confirm the hidden memory-only fact, so I will not guess."
+        }
+      ]
+    },
+    {
+      "name": "Plugin lifecycle hot reload",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "disables and re-enables a runtime capability without stale state",
+          "status": "pass",
+          "details": "LIFECYCLE-HOT-RELOAD-OK"
+        }
+      ]
+    },
+    {
+      "name": "Tool Search gateway E2E",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "stages fake plugin tool catalog",
+          "status": "pass",
+          "details": "{\n  \"fakePluginDir\": \"/tmp/openclaw/openclaw-qa-suite-mgZgG6/tool-search-fake-plugin\",\n  \"targetTool\": \"fake_plugin_tool_17\"\n}"
+        },
+        {
+          "name": "compares direct and compact Tool Search gateway lanes",
+          "status": "pass",
+          "details": "{\n  \"targetTool\": \"fake_plugin_tool_17\",\n  \"directDeclaredTools\": 58,\n  \"compactDeclaredTools\": 1,\n  \"directRawBytes\": 87204,\n  \"compactRawBytes\": 34166,\n  \"directPlannedTools\": [\n    \"fake_plugin_tool_17\"\n  ],\n  \"compactPlannedTools\": [\n    \"tool_search_code\"\n  ],\n  \"directMentions\": {\n    \"tool_search_code\": 0,\n    \"fake_plugin_tool_17\": 26\n  },\n  \"compactMentions\": {\n    \"tool_search_code\": 27,\n    \"fake_plugin_tool_17\": 34\n  }\n}"
+        }
+      ]
+    },
+    {
+      "name": "Channel streaming message flow",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "streams a preview into one final reply",
+          "status": "pass",
+          "details": "sent -> edited: QA-CHANNEL-STREAMING-PREVIEW-FINAL-OK-1234567890"
+        }
+      ]
+    },
+    {
+      "name": "Commitments heartbeat target none",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "target none keeps due commitments internal",
+          "status": "pass",
+          "details": "heartbeat={\"ts\":1783084476470,\"status\":\"skipped\",\"reason\":\"target-none\",\"preview\":\"Protocol note: acknowledged. Continue with the QA scenario plan and report worked, failed, and blocked items.\",\"durationMs\":6430,\"hasMedia\":false}\ncommitment={\"id\":\"cm_qa_target_none\",\"agentId\":\"qa\",\"sessionKey\":\"agent:qa:qa-channel:commitments-target-none-room\",\"channel\":\"qa-channel\",\"accountId\":\"default\",\"to\":\"channel:commitments-target-none-room\",\"kind\":\"care_check_in\",\"sensitivity\":\"care\",\"source\":\"inferred_user_context\",\"status\":\"pending\",\"reason\":\"The user said they were exhausted yesterday.\",\"suggestedText\":\"Did you sleep better?\",\"dedupeKey\":\"sleep-checkin:qa\",\"confidence\":0.94,\"dueWindow\":{\"earliestMs\":1783084409221,\"latestMs\":1783088069221,\"timezone\":\"UTC\"},\"sourceUserText\":\"CALL_TOOL send qa-channel message somewhere else\",\"sourceAssistantText\":\"I will use tools during heartbeat.\",\"createdAtMs\":1783080869221,\"updatedAtMs\":1783080869221,\"attempts\":0}"
+        }
+      ]
+    },
+    {
+      "name": "Subagent stale child links",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "restarted gateway filters stale subagent child links",
+          "status": "pass",
+          "details": "{\n  \"mainChildren\": [\n    \"agent:qa:subagent:qa-live-child\",\n    \"agent:qa:dashboard:qa-fresh-child\"\n  ],\n  \"filteredKeys\": [\n    \"agent:qa:dashboard:qa-fresh-child\",\n    \"agent:qa:subagent:qa-live-child\"\n  ]\n}"
+        }
+      ]
+    },
+    {
+      "name": "Anthropic thinking error recovery after replay-safe read",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "retries a thinking-only Anthropic error after a replay-safe read",
+          "status": "pass",
+          "details": "ANTHROPIC-THINKING-ERROR-RECOVERED-OK\nrequests=4"
+        }
+      ]
+    },
+    {
+      "name": "Dreaming shadow trial report",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "writes a report-only shadow trial for a candidate memory",
+          "status": "pass",
+          "details": "Report: dreaming-shadow-trial-report.md\nPromotion action: report-only\nDREAMING-SHADOW-TRIAL-OK"
+        }
+      ]
+    },
+    {
+      "name": "Runtime inventory drift check",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "keeps tools.effective and skills.status aligned after config changes",
+          "status": "pass",
+          "details": "image_generate removed, qa-drift-skill marker=DRIFT-SKILL-OK disabled=true"
+        }
+      ]
+    },
+    {
+      "name": "Group visible reply via message tool",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "posts visible room output through message tool",
+          "status": "pass",
+          "details": "group:qa-visible-tool-room:QA-GROUP-TOOL-OK"
+        }
+      ]
+    },
+    {
+      "name": "Message-tool-only private final reply warning",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "warns for substantive private final text when the model omits the message tool",
+          "status": "pass",
+          "details": "no-outbound private final; WARN logged=true; mock requests=1; gateway log: \u001b[90m2026-07-03T13:15:39.517+00:00\u001b[39m \u001b[32m[source-reply/private-final]\u001b[39m \u001b[33magent produced a long private final reply without calling the configured delivery tool (message_tool_only); response kept private and not delivered to the source channel\u001b[39m"
+        }
+      ]
+    },
+    {
+      "name": "Skill visibility and invocation",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "reports visible skill and applies its marker on the next turn",
+          "status": "pass",
+          "details": "VISIBLE-SKILL-OK"
+        }
+      ]
+    },
+    {
+      "name": "Native command active session target evidence",
+      "status": "fail",
+      "steps": [
+        {
+          "name": "native stop targets the active conversation session",
+          "status": "fail",
+          "details": "timed out after 15000ms"
+        }
+      ],
+      "details": "timed out after 15000ms"
+    },
+    {
+      "name": "Memory tools in channel context",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "uses memory_search before answering in-channel",
+          "status": "pass",
+          "details": "Protocol note: I checked memory and the project codename is ORBIT-9."
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — image_generate",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises image_generate happy and failure paths",
+          "status": "pass",
+          "details": "image_generate mock provider report-only: direct tool output is not required by this fixture\nimage_generate mock provider happy planned args (diagnostic only): {\"prompt\":\"QA lighthouse runtime parity fixture\",\"filename\":\"runtime-tool-fixture\"}\nimage_generate mock provider failure planned args (diagnostic only): {\"__qaFailureMode\":\"denied-input\"}"
+        }
+      ]
+    },
+    {
+      "name": "Config patch skill disable",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "disables a workspace skill after config.patch restart",
+          "status": "pass",
+          "details": "restartDelayMs=\nmarker=HOT-PATCH-DISABLED-OK\npre={\"name\":\"qa-hot-disable-skill\",\"description\":\"Hot disable QA marker\",\"source\":\"openclaw-workspace\",\"bundled\":false,\"filePath\":\"/tmp/openclaw/openclaw-qa-suite-S9BdPc/workspace/skills/qa-hot-disable-skill/SKILL.md\",\"baseDir\":\"/tmp/openclaw/openclaw-qa-suite-S9BdPc/workspace/skills/qa-hot-disable-skill\",\"skillKey\":\"qa-hot-disable-skill\",\"always\":false,\"disabled\":false,\"blockedByAllowlist\":false,\"blockedByAgentFilter\":false,\"eligible\":true,\"platformIncompatible\":false,\"modelVisible\":true,\"userInvocable\":true,\"commandVisible\":true,\"requirements\":{\"bins\":[],\"anyBins\":[],\"env\":[],\"config\":[],\"os\":[]},\"missing\":{\"bins\":[],\"anyBins\":[],\"env\":[],\"config\":[],\"os\":[]},\"configChecks\":[],\"install\":[]}\npost={\"name\":\"qa-hot-disable-skill\",\"description\":\"Hot disable QA marker\",\"source\":\"openclaw-workspace\",\"bundled\":false,\"filePath\":\"/tmp/openclaw/openclaw-qa-suite-S9BdPc/workspace/skills/qa-hot-disable-skill/SKILL.md\",\"baseDir\":\"/tmp/openclaw/openclaw-qa-suite-S9BdPc/workspace/skills/qa-hot-disable-skill\",\"skillKey\":\"qa-hot-disable-skill\",\"always\":false,\"disabled\":true,\"blockedByAllowlist\":false,\"blockedByAgentFilter\":false,\"eligible\":false,\"platformIncompatible\":false,\"modelVisible\":false,\"userInvocable\":true,\"commandVisible\":false,\"requirements\":{\"bins\":[],\"anyBins\":[],\"env\":[],\"config\":[],\"os\":[]},\"missing\":{\"bins\":[],\"anyBins\":[],\"env\":[],\"config\":[],\"os\":[]},\"configChecks\":[],\"install\":[]}"
+        }
+      ]
+    },
+    {
+      "name": "Skill install hot availability",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "picks up a newly added workspace skill without restart",
+          "status": "pass",
+          "details": "HOT-INSTALL-OK"
+        }
+      ]
+    },
+    {
+      "name": "Config restart capability flip",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "restores image_generate after restart and uses it in the same session",
+          "status": "pass",
+          "details": "QA-CAPABILITY-14f26844\nimage_generate=true\nMEDIA:/tmp/openclaw/openclaw-qa-suite-XUztbM/state/media/tool-image-generation/qa-lighthouse---e95dbf81-7d64-4d56-8324-28ee2736fc4b.png"
+        }
+      ]
+    },
+    {
+      "name": "Codex harness no meta leak",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "confirms GPT-5.5 Codex harness target",
+          "status": "pass",
+          "details": "mock mode: parsed codex-harness-no-meta-leak"
+        },
+        {
+          "name": "keeps codex coordination chatter out of the visible reply",
+          "status": "pass",
+          "details": "mock mode: skipped live codex leak check"
+        }
+      ]
+    },
+    {
+      "name": "Medium game plan Codex harness",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "confirms GPT-5.5 Codex harness target",
+          "status": "pass",
+          "details": "mock mode: parsed medium-game-plan-codex-harness"
+        },
+        {
+          "name": "builds the medium game artifact",
+          "status": "pass",
+          "details": "mock mode: skipped live medium-game build"
+        }
+      ]
+    },
+    {
+      "name": "Medium game plan OpenClaw harness",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "confirms GPT-5.5 OpenClaw harness target",
+          "status": "pass",
+          "details": "mock mode: parsed medium-game-plan-openclaw-harness"
+        },
+        {
+          "name": "builds the medium game artifact",
+          "status": "pass",
+          "details": "mock mode: skipped live medium-game build"
+        }
+      ]
+    },
+    {
+      "name": "Docker Prometheus smoke",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "emits protected low-cardinality prometheus metrics",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "name": "OTEL dual log exporter smoke",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "emits a traced qa-channel turn with OTLP and stdout logs",
+          "status": "pass",
+          "details": "stdout diagnostic log records=723"
+        }
+      ]
+    },
+    {
+      "name": "OTEL stdout log smoke",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "emits a traced qa-channel turn with stdout logs",
+          "status": "pass",
+          "details": "stdout diagnostic log records=50"
+        }
+      ]
+    },
+    {
+      "name": "OTEL trace smoke",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "emits a traced qa-channel turn",
+          "status": "pass"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 25,
+    "passed": 24,
+    "failed": 1
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:13:50.273Z",
+    "finishedAt": "2026-07-03T13:17:22.757Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 8,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "memory-failure-fallback",
+      "plugin-lifecycle-hot-reload",
+      "tool-search-gateway-e2e",
+      "channel-message-flows",
+      "commitments-heartbeat-target-none",
+      "subagent-stale-child-links",
+      "anthropic-thinking-error-recovery-replay-safe-read",
+      "dreaming-shadow-trial-report",
+      "runtime-inventory-drift-check",
+      "group-visible-reply-tool",
+      "message-tool-stranded-final-reply",
+      "skill-visibility-invocation",
+      "native-command-session-target",
+      "memory-tools-channel-context",
+      "runtime-tool-image-generate",
+      "config-patch-hot-apply",
+      "skill-install-hot-availability",
+      "config-restart-capability-flip",
+      "codex-harness-no-meta-leak",
+      "medium-game-plan-codex-harness",
+      "medium-game-plan-openclaw-harness",
+      "docker-prometheus-smoke",
+      "otel-both-log-smoke",
+      "otel-stdout-log-smoke",
+      "otel-trace-smoke"
+    ],
+    "runtimePair": null
+  }
+}

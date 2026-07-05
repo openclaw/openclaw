@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
+<<<<<<< HEAD
   bindApprovalReviewerDeviceIds,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   handleApprovalResolve,
   handleApprovalWaitDecision,
   handlePendingApprovalRequest,
@@ -166,6 +169,7 @@ describe("handlePendingApprovalRequest", () => {
     ).toBe(false);
   });
 
+<<<<<<< HEAD
   it("allows approval-scoped reviewer devices to see approvals requested by the backend runtime", () => {
     const manager = new ExecApprovalManager();
     const record = manager.create(
@@ -224,6 +228,8 @@ describe("handlePendingApprovalRequest", () => {
     ).toBe(false);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("allows gateway-client approval runtimes to see requester-bound approvals", () => {
     const manager = new ExecApprovalManager();
     const record = manager.create(
@@ -422,7 +428,11 @@ describe("handlePendingApprovalRequest", () => {
           ]),
         ),
         hasExecApprovalClients: vi.fn(() => {
+<<<<<<< HEAD
           throw new Error("expected visibility-filtered approval client lookup");
+=======
+          throw new Error("expected targeted approval client lookup");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }),
       } as unknown as GatewayRequestContext,
       clientConnId: "conn-requester",
@@ -450,6 +460,7 @@ describe("handlePendingApprovalRequest", () => {
     await requestPromise;
   });
 
+<<<<<<< HEAD
   it("routes backend-runtime approval events to the authorized approval reviewer device", async () => {
     const manager = new ExecApprovalManager();
     const record = manager.create(
@@ -519,6 +530,8 @@ describe("handlePendingApprovalRequest", () => {
     await requestPromise;
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("targets requester-bound approval events to gateway-client approval runtimes", async () => {
     const manager = new ExecApprovalManager();
     const record = manager.create(
@@ -559,7 +572,11 @@ describe("handlePendingApprovalRequest", () => {
           ]),
         ),
         hasExecApprovalClients: vi.fn(() => {
+<<<<<<< HEAD
           throw new Error("expected visibility-filtered approval client lookup");
+=======
+          throw new Error("expected targeted approval client lookup");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }),
       } as unknown as GatewayRequestContext,
       clientConnId: "conn-owner",
@@ -626,7 +643,11 @@ describe("handlePendingApprovalRequest", () => {
           ]),
         ),
         hasExecApprovalClients: vi.fn(() => {
+<<<<<<< HEAD
           throw new Error("expected visibility-filtered approval client lookup");
+=======
+          throw new Error("expected targeted approval client lookup");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }),
       } as unknown as GatewayRequestContext,
       clientConnId: "conn-gateway",
@@ -749,7 +770,11 @@ describe("handlePendingApprovalRequest", () => {
           ]),
         ),
         hasExecApprovalClients: vi.fn(() => {
+<<<<<<< HEAD
           throw new Error("expected visibility-filtered approval client lookup");
+=======
+          throw new Error("expected targeted approval client lookup");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }),
       } as unknown as GatewayRequestContext,
       clientConnId: "conn-control-ui",
@@ -824,7 +849,11 @@ describe("handlePendingApprovalRequest", () => {
           ]),
         ),
         hasExecApprovalClients: vi.fn(() => {
+<<<<<<< HEAD
           throw new Error("expected visibility-filtered approval client lookup");
+=======
+          throw new Error("expected targeted approval client lookup");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }),
       } as unknown as GatewayRequestContext,
       clientConnId: "conn-gateway",
@@ -899,7 +928,11 @@ describe("handlePendingApprovalRequest", () => {
           ]),
         ),
         hasExecApprovalClients: vi.fn(() => {
+<<<<<<< HEAD
           throw new Error("expected visibility-filtered approval client lookup");
+=======
+          throw new Error("expected targeted approval client lookup");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }),
       } as unknown as GatewayRequestContext,
       clientConnId: "conn-requester",

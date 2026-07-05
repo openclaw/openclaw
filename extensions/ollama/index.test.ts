@@ -30,15 +30,23 @@ const queryOllamaModelShowInfoMock = vi.hoisted(() => vi.fn());
 const buildOllamaModelDefinitionMock = vi.hoisted(() =>
   vi.fn((modelId: string, contextWindow?: number, capabilities?: string[]) => {
     const normalized = modelId.trim().toLowerCase();
+<<<<<<< HEAD
     const isKnownCloudReasoningModel =
       normalized === "glm-5.2:cloud" || /^deepseek-v4-(?:flash|pro):cloud$/.test(normalized);
+=======
+    const isKnownCloudReasoningModel = /^deepseek-v4-(?:flash|pro):cloud$/.test(normalized);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return {
       id: modelId,
       name: modelId,
       reasoning: isKnownCloudReasoningModel || (capabilities?.includes("thinking") ?? false),
       input: capabilities?.includes("vision") ? ["text", "image"] : ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+<<<<<<< HEAD
       contextWindow: contextWindow ?? (normalized === "glm-5.2:cloud" ? 1_000_000 : 8192),
+=======
+      contextWindow: contextWindow ?? 8192,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       maxTokens: 8192,
       compat: capabilities
         ? { supportsTools: capabilities.includes("tools"), supportsUsageInStreaming: true }
@@ -1394,7 +1402,10 @@ describe("ollama plugin", () => {
       "kimi-k2.5:cloud",
       "minimax-m2.7:cloud",
       "glm-5.1:cloud",
+<<<<<<< HEAD
       "glm-5.2:cloud",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ]);
 
     provider.createStreamFn?.({
@@ -1405,6 +1416,7 @@ describe("ollama plugin", () => {
     expect(requireConfiguredStreamParams().providerBaseUrl).toBe("https://ollama.com");
   });
 
+<<<<<<< HEAD
   it("uses Ollama Cloud auth for live catalog discovery", async () => {
     const provider = registerOllamaCloudProvider();
     buildOllamaProviderMock.mockResolvedValueOnce({
@@ -1496,6 +1508,8 @@ describe("ollama plugin", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not mint synthetic auth for public IPv4 baseUrl", () => {
     const provider = registerProvider();
 

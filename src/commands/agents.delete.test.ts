@@ -2,7 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { resolveWorkspaceAttestationPaths } from "../agents/workspace.js";
+=======
+import { resolveWorkspaceAttestationPath } from "../agents/workspace.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { loadSessionStore, resolveStorePath, saveSessionStore } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
@@ -27,6 +31,7 @@ const gatewayMocks = vi.hoisted(() => ({
   isGatewayTransportError: vi.fn(),
 }));
 
+<<<<<<< HEAD
 function resolveCurrentWorkspaceAttestationPath(dir: string): string {
   const [attestationPath] = resolveWorkspaceAttestationPaths(dir);
   if (!attestationPath) {
@@ -35,6 +40,8 @@ function resolveCurrentWorkspaceAttestationPath(dir: string): string {
   return attestationPath;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
   readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
@@ -264,9 +271,13 @@ describe("agents delete command", () => {
         deletedAgentId: "ops",
         sessions: {},
       });
+<<<<<<< HEAD
       const attestationPath = resolveCurrentWorkspaceAttestationPath(
         path.join(stateDir, "workspace-ops"),
       );
+=======
+      const attestationPath = resolveWorkspaceAttestationPath(path.join(stateDir, "workspace-ops"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       await fs.mkdir(path.dirname(attestationPath), { recursive: true });
       await fs.writeFile(
         attestationPath,
@@ -356,7 +367,11 @@ describe("agents delete command", () => {
     await withStateDirEnv("openclaw-agents-delete-shared-workspace-", async ({ stateDir }) => {
       const sharedWorkspace = path.join(stateDir, "workspace-shared");
       await fs.mkdir(sharedWorkspace, { recursive: true });
+<<<<<<< HEAD
       const attestationPath = resolveCurrentWorkspaceAttestationPath(sharedWorkspace);
+=======
+      const attestationPath = resolveWorkspaceAttestationPath(sharedWorkspace);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       await fs.mkdir(path.dirname(attestationPath), { recursive: true });
       await fs.writeFile(
         attestationPath,

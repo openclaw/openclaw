@@ -42,7 +42,10 @@ export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   requestedByDeviceId?: string | null;
   requestedByClientId?: string | null;
   requestedByDeviceTokenAuth?: boolean;
+<<<<<<< HEAD
   approvalReviewerDeviceIds?: string[];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolvedAtMs?: number;
   decision?: ExecApprovalDecision;
   consumedDecision?: ExecApprovalDecision;
@@ -122,6 +125,19 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     return promise;
   }
 
+<<<<<<< HEAD
+=======
+  /**
+   * @deprecated Use register() instead for explicit separation of registration and waiting.
+   */
+  async waitForDecision(
+    record: ExecApprovalRecord<TPayload>,
+    timeoutMs: number,
+  ): Promise<ExecApprovalDecision | null> {
+    return this.register(record, timeoutMs);
+  }
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolve(recordId: string, decision: ExecApprovalDecision, resolvedBy?: string | null): boolean {
     const pending = this.pending.get(recordId);
     if (!pending) {

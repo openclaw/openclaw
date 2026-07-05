@@ -21,6 +21,7 @@ function mockGuardedTokenResponse(body: BodyInit, init?: ResponseInit): ReturnTy
   return release;
 }
 
+<<<<<<< HEAD
 function cancelTrackedResponse(
   text: string,
   init: ResponseInit,
@@ -48,6 +49,8 @@ function cancelTrackedResponse(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("QQBot token manager", () => {
   beforeEach(() => {
     fetchWithSsrFGuardMock.mockReset();
@@ -86,6 +89,7 @@ describe("QQBot token manager", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+<<<<<<< HEAD
   it("bounds access token responses without using response.text()", async () => {
     const logger = { debug: vi.fn(), info: vi.fn(), error: vi.fn() };
     const tracked = cancelTrackedResponse(`${"qqbot token unavailable ".repeat(1024)}tail`, {
@@ -105,6 +109,8 @@ describe("QQBot token manager", () => {
     expect(logger.debug.mock.calls.join("\n")).not.toContain("tail");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("passes the RFC2544 SSRF allowance to the token fetch (regression for #88984)", async () => {
     mockGuardedTokenResponse('{"access_token":"token-1","expires_in":7200}', {
       status: 200,

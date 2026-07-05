@@ -4,7 +4,11 @@ import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core
 import chalk from "chalk";
 import { resolveDefaultAgentId, resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+<<<<<<< HEAD
 import { formatFastModeValue, resolveFastModeState } from "../agents/fast-mode.js";
+=======
+import { resolveFastModeState } from "../agents/fast-mode.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { legacyModelKey, modelKey } from "../agents/model-selection-normalize.js";
 import {
@@ -162,7 +166,11 @@ export function formatAgentModelStartupDetails(params: {
     agentId: defaultAgentId,
   });
 
+<<<<<<< HEAD
   return `thinking=${thinking}, fast=${formatFastModeValue(fast.mode)}`;
+=======
+  return `thinking=${thinking}, fast=${fast.enabled ? "on" : "off"}`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /** Format plugin count/list and optional startup duration for the ready log line. */

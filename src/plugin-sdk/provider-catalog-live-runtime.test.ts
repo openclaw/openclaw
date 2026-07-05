@@ -126,6 +126,7 @@ describe("provider-catalog-live-runtime", () => {
     ).resolves.toEqual(["custom-a", "custom-b"]);
   });
 
+<<<<<<< HEAD
   it("accepts UTF-8 BOM-prefixed catalog responses", async () => {
     const release = vi.fn(async () => undefined);
     const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
@@ -144,6 +145,8 @@ describe("provider-catalog-live-runtime", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("caches raw live model rows for provider-specific projection", async () => {
     const { fetchGuard, fetchGuardMock } = buildFetchGuard({
       models: [{ slug: "custom-a" }, { slug: "custom-b" }],
@@ -175,6 +178,7 @@ describe("provider-catalog-live-runtime", () => {
     expect(fetchGuardMock).toHaveBeenCalledTimes(1);
   });
 
+<<<<<<< HEAD
   it("bounds an unbounded live catalog success stream and cancels the body", async () => {
     const encoder = new TextEncoder();
     let pullCount = 0;
@@ -266,6 +270,12 @@ describe("provider-catalog-live-runtime", () => {
     const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
     const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
       response,
+=======
+  it("throws structured HTTP errors after releasing guarded fetches", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
+      response: new Response("{}", { status: 401 }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       finalUrl: "https://provider.example.test/v1/models",
       release,
     }));
@@ -278,7 +288,10 @@ describe("provider-catalog-live-runtime", () => {
 
     expect(error).toBeInstanceOf(LiveModelCatalogHttpError);
     expect(error).toMatchObject({ status: 401 });
+<<<<<<< HEAD
     expect(cancel).toHaveBeenCalledOnce();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(release).toHaveBeenCalledTimes(1);
   });
 

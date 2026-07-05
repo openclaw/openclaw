@@ -1,7 +1,11 @@
 // Copilot plugin module implements auth bridge behavior.
 import { createHash } from "node:crypto";
 import { homedir as osHomedir } from "node:os";
+<<<<<<< HEAD
 import { join, resolve } from "node:path";
+=======
+import { join, normalize, resolve, sep } from "node:path";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /**
  * Pure functional auth resolver for the copilot agent runtime.
@@ -54,12 +58,21 @@ export const COPILOT_DEFAULT_AGENT_ID = "copilot";
 
 /** Resolved auth shape that the runtime / pool consumes. */
 export interface ResolvedCopilotAuth {
+<<<<<<< HEAD
   authMode: "useLoggedInUser" | "gitHubToken" | "byok";
   /** Present only when authMode is "gitHubToken". */
   gitHubToken?: string;
   /** Present for token and BYOK auth modes. */
   authProfileId?: string;
   /** Present for token and BYOK auth modes. */
+=======
+  authMode: "useLoggedInUser" | "gitHubToken";
+  /** Present only when authMode is "gitHubToken". */
+  gitHubToken?: string;
+  /** Present only when authMode is "gitHubToken". */
+  authProfileId?: string;
+  /** Present only when authMode is "gitHubToken". */
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   authProfileVersion?: string;
   /** Absolute, normalized path. */
   copilotHome: string;
@@ -67,6 +80,7 @@ export interface ResolvedCopilotAuth {
   agentId: string;
 }
 
+<<<<<<< HEAD
 export function createCopilotByokAuth(input: {
   agentId?: string;
   agentDir?: string;
@@ -94,6 +108,8 @@ export function createCopilotByokAuth(input: {
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export interface ResolveCopilotAuthInput {
   agentId?: string;
   agentDir?: string;
@@ -334,3 +350,19 @@ export function tokenFingerprint(token: string): string {
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
+<<<<<<< HEAD
+=======
+
+/**
+ * Normalize a copilotHome path for cross-platform pool keying.
+ * Re-exported so attempt.ts / runtime.ts can share the same
+ * normalization without re-implementing.
+ */
+export function normalizeCopilotHomePath(value: string): string {
+  return normalize(resolve(value)).replace(new RegExp(`${escapeForRegex(sep)}+$`), "");
+}
+
+function escapeForRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

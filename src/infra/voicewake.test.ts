@@ -32,8 +32,16 @@ describe("voicewake config", () => {
     });
   });
 
+<<<<<<< HEAD
   it("does not read retired JSON trigger files at runtime", async () => {
     await withTempDir("openclaw-voicewake-", async (baseDir) => {
+=======
+  it("falls back to defaults for empty or malformed persisted values", async () => {
+    await withTempDir("openclaw-voicewake-", async (baseDir) => {
+      const emptySaved = await setVoiceWakeTriggers(["", "   "], baseDir);
+      expect(emptySaved.triggers).toEqual(defaultVoiceWakeTriggers());
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       await fs.mkdir(path.join(baseDir, "settings"), { recursive: true });
       await fs.writeFile(
         path.join(baseDir, "settings", "voicewake.json"),
@@ -45,11 +53,16 @@ describe("voicewake config", () => {
       );
 
       await expect(loadVoiceWakeConfig(baseDir)).resolves.toEqual({
+<<<<<<< HEAD
         triggers: defaultVoiceWakeTriggers(),
+=======
+        triggers: ["wake"],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         updatedAtMs: 0,
       });
     });
   });
+<<<<<<< HEAD
 
   it("does not recreate the retired JSON trigger file", async () => {
     await withTempDir("openclaw-voicewake-", async (baseDir) => {
@@ -59,4 +72,6 @@ describe("voicewake config", () => {
       );
     });
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

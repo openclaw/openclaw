@@ -6,10 +6,23 @@ import { normalizeProviderId } from "../../model-selection.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { log } from "../logger.js";
+<<<<<<< HEAD
 import { createHtmlEntityToolCallArgumentDecodingWrapper } from "../tool-call-argument-decoding.js";
 import { isRunnerToolCallBlockType } from "./attempt.tool-call-block-type.js";
 import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 
+=======
+import {
+  createHtmlEntityToolCallArgumentDecodingWrapper,
+  decodeHtmlEntitiesInObject,
+} from "../tool-call-argument-decoding.js";
+import { wrapStreamObjectEvents } from "./stream-wrapper.js";
+
+function isToolCallBlockType(type: unknown): boolean {
+  return type === "toolCall" || type === "toolUse" || type === "functionCall";
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const MAX_TOOLCALL_REPAIR_BUFFER_CHARS = 64_000;
 const MAX_TOOLCALL_REPAIR_LEADING_CHARS = 96;
 const MAX_TOOLCALL_REPAIR_TRAILING_CHARS = 3;
@@ -575,7 +588,11 @@ function readToolCallNameInMessage(message: unknown, contentIndex: number): stri
     return undefined;
   }
   const typedBlock = block as { type?: unknown; name?: unknown };
+<<<<<<< HEAD
   if (!isRunnerToolCallBlockType(typedBlock.type) || typeof typedBlock.name !== "string") {
+=======
+  if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.name !== "string") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return undefined;
   }
   return normalizeToolCallRepairToolName(typedBlock.name);
@@ -598,7 +615,11 @@ function repairToolCallArgumentsInMessage(
     return;
   }
   const typedBlock = block as { type?: unknown; arguments?: unknown };
+<<<<<<< HEAD
   if (!isRunnerToolCallBlockType(typedBlock.type)) {
+=======
+  if (!isToolCallBlockType(typedBlock.type)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return;
   }
   typedBlock.arguments = repairedArgs;
@@ -617,7 +638,11 @@ function hasMeaningfulToolCallArgumentsInMessage(message: unknown, contentIndex:
     return false;
   }
   const typedBlock = block as { type?: unknown; arguments?: unknown };
+<<<<<<< HEAD
   if (!isRunnerToolCallBlockType(typedBlock.type)) {
+=======
+  if (!isToolCallBlockType(typedBlock.type)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return false;
   }
   return (
@@ -641,7 +666,11 @@ function clearToolCallArgumentsInMessage(message: unknown, contentIndex: number)
     return;
   }
   const typedBlock = block as { type?: unknown; arguments?: unknown };
+<<<<<<< HEAD
   if (!isRunnerToolCallBlockType(typedBlock.type)) {
+=======
+  if (!isToolCallBlockType(typedBlock.type)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return;
   }
   typedBlock.arguments = {};
@@ -793,3 +822,8 @@ export function shouldRepairMalformedToolCallArguments(params: {
 export function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
   return createHtmlEntityToolCallArgumentDecodingWrapper(baseFn);
 }
+<<<<<<< HEAD
+=======
+
+export { decodeHtmlEntitiesInObject };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

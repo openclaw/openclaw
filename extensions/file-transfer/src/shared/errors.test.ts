@@ -1,6 +1,10 @@
 // File Transfer tests cover errors plugin behavior.
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { err, throwFromNodePayload } from "./errors.js";
+=======
+import { classifyFsError, err, throwFromNodePayload } from "./errors.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("err", () => {
   it("returns an error envelope without canonicalPath when omitted", () => {
@@ -18,6 +22,31 @@ describe("err", () => {
   });
 });
 
+<<<<<<< HEAD
+=======
+describe("classifyFsError", () => {
+  it("maps ENOENT to NOT_FOUND", () => {
+    expect(classifyFsError({ code: "ENOENT" })).toBe("NOT_FOUND");
+  });
+
+  it("maps EACCES and EPERM to PERMISSION_DENIED", () => {
+    expect(classifyFsError({ code: "EACCES" })).toBe("PERMISSION_DENIED");
+    expect(classifyFsError({ code: "EPERM" })).toBe("PERMISSION_DENIED");
+  });
+
+  it("maps EISDIR to IS_DIRECTORY", () => {
+    expect(classifyFsError({ code: "EISDIR" })).toBe("IS_DIRECTORY");
+  });
+
+  it("falls back to READ_ERROR for unknown / null / non-object input", () => {
+    expect(classifyFsError({ code: "EUNKNOWN" })).toBe("READ_ERROR");
+    expect(classifyFsError(null)).toBe("READ_ERROR");
+    expect(classifyFsError(undefined)).toBe("READ_ERROR");
+    expect(classifyFsError("nope")).toBe("READ_ERROR");
+  });
+});
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("throwFromNodePayload", () => {
   it("preserves code and message in the thrown Error", () => {
     expect(() =>

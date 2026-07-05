@@ -2,6 +2,7 @@
 import path from "node:path";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+<<<<<<< HEAD
 import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
@@ -9,10 +10,18 @@ import { splitQaModelRef as splitModelRef, type QaProviderMode } from "./model-s
 import { getQaProvider } from "./providers/index.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
+=======
+import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "./cli-paths.js";
+import type { QaCliBackendAuthMode } from "./gateway-child.js";
+import type { QaProviderMode } from "./model-selection.js";
+import { getQaProvider } from "./providers/index.js";
+import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { applyQaMergePatch, isQaMergePatchObject } from "./suite-merge-patch.js";
 
 const DEFAULT_QA_SUITE_CONCURRENCY = 64;
 const DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS = 1_500;
+<<<<<<< HEAD
 const QA_IMPLICIT_ISOLATION_FLOW_CALLS = new Set([
   "ensureImageGenerationConfigured",
   "forceMemoryIndex",
@@ -22,6 +31,22 @@ const QA_IMPLICIT_ISOLATION_FLOW_CALLS = new Set([
 
 type QaSeedScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
 
+=======
+
+type QaSeedScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
+
+function splitModelRef(ref: string) {
+  const slash = ref.indexOf("/");
+  if (slash <= 0 || slash === ref.length - 1) {
+    return null;
+  }
+  return {
+    provider: ref.slice(0, slash),
+    model: ref.slice(slash + 1),
+  };
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function normalizeQaConfigString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -30,7 +55,10 @@ function scenarioMatchesQaProviderLane(params: {
   scenario: QaSeedScenario;
   primaryModel: string;
   providerMode: QaProviderMode;
+<<<<<<< HEAD
   channelDriver?: QaScorecardChannelDriver | null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
   const provider = getQaProvider(params.providerMode);
@@ -42,11 +70,14 @@ function scenarioMatchesQaProviderLane(params: {
   if (requiredProviderMode && params.providerMode !== requiredProviderMode) {
     return false;
   }
+<<<<<<< HEAD
   const requiredChannelDriver = normalizeQaConfigString(config.requiredChannelDriver);
   const effectiveChannelDriver = params.channelDriver ?? "qa-channel";
   if (requiredChannelDriver && effectiveChannelDriver !== requiredChannelDriver) {
     return false;
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (provider.kind !== "live") {
     return true;
   }
@@ -71,7 +102,10 @@ function selectQaFlowSuiteScenarios(params: {
   scenarioIds?: string[];
   providerMode: QaProviderMode;
   primaryModel: string;
+<<<<<<< HEAD
   channelDriver?: QaScorecardChannelDriver | null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
   const requestedScenarioIds =
@@ -107,12 +141,16 @@ function selectQaFlowSuiteScenarios(params: {
         scenario,
         providerMode: params.providerMode,
         primaryModel: params.primaryModel,
+<<<<<<< HEAD
         channelDriver: params.channelDriver,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         claudeCliAuthMode: params.claudeCliAuthMode,
       }),
   );
 }
 
+<<<<<<< HEAD
 function listQaSuiteScenarioChannels(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
 ) {
@@ -152,6 +190,8 @@ function resolveQaSuiteScenarioChannel(params: {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function collectQaSuitePluginIds(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
 ) {
@@ -188,11 +228,15 @@ function collectQaSuiteGatewayRuntimeOptions(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
 ) {
   let forwardHostHome = false;
+<<<<<<< HEAD
   let preserveDebugArtifacts = false;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   for (const scenario of scenarios) {
     if (scenario.gatewayRuntime?.forwardHostHome === true) {
       forwardHostHome = true;
     }
+<<<<<<< HEAD
     if (scenario.gatewayRuntime?.preserveDebugArtifacts === true) {
       preserveDebugArtifacts = true;
     }
@@ -203,6 +247,10 @@ function collectQaSuiteGatewayRuntimeOptions(
         ...(preserveDebugArtifacts ? { preserveDebugArtifacts: true } : {}),
       }
     : undefined;
+=======
+  }
+  return forwardHostHome ? { forwardHostHome: true } : undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
@@ -216,6 +264,7 @@ function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
   );
 }
 
+<<<<<<< HEAD
 function scenarioRequiresIsolatedQaSuiteWorker(scenario: QaSeedScenario) {
   if (scenario.execution.kind !== "flow") {
     return false;
@@ -245,6 +294,8 @@ function flowContainsImplicitIsolationCall(value: unknown): boolean {
   return Object.values(record).some(flowContainsImplicitIsolationCall);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function scenarioRequiresControlUi(scenario: QaSeedScenario) {
   return normalizeLowercaseStringOrEmpty(scenario.surface) === "control-ui";
 }
@@ -267,18 +318,29 @@ function normalizeQaSuiteConcurrency(
 function resolveQaSuiteWorkerStartStaggerMs(
   concurrency: number,
   env: NodeJS.ProcessEnv = process.env,
+<<<<<<< HEAD
   defaultStaggerMs = DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ) {
   if (concurrency <= 1) {
     return 0;
   }
   const raw = env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS;
   if (raw === undefined) {
+<<<<<<< HEAD
     return defaultStaggerMs;
   }
   const parsed = parseStrictNonNegativeInteger(raw);
   if (parsed === undefined) {
     return defaultStaggerMs;
+=======
+    return DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS;
+  }
+  const parsed = parseStrictNonNegativeInteger(raw);
+  if (parsed === undefined) {
+    return DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   return parsed;
 }
@@ -339,7 +401,11 @@ async function mapQaSuiteWithConcurrency<T, U>(
 
 async function resolveQaSuiteOutputDir(repoRoot: string, outputDir?: string) {
   const targetDir = !outputDir
+<<<<<<< HEAD
     ? path.join(repoRoot, ".artifacts", "qa-e2e", `suite-${createQaArtifactRunId()}`)
+=======
+    ? path.join(repoRoot, ".artifacts", "qa-e2e", `suite-${Date.now().toString(36)}`)
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     : outputDir;
   if (!path.isAbsolute(targetDir)) {
     const resolved = resolveRepoRelativeOutputDir(repoRoot, targetDir);
@@ -362,11 +428,17 @@ export {
   collectQaSuitePluginIds,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
+<<<<<<< HEAD
   resolveQaSuiteScenarioChannel,
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
   scenarioRequiresIsolatedQaSuiteWorker,
+=======
+  resolveQaSuiteWorkerStartStaggerMs,
+  resolveQaSuiteOutputDir,
+  scenarioRequiresControlUi,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   scenarioMatchesQaProviderLane,
   selectQaFlowSuiteScenarios,
   shouldUseIsolatedQaSuiteScenarioWorkers,

@@ -10,10 +10,16 @@ import type { DeviceIdentity } from "../infra/device-identity.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { approveDevicePairing, listDevicePairing } from "../infra/device-pairing.js";
 import { approveNodePairing, requestNodePairing } from "../infra/node-pairing.js";
+<<<<<<< HEAD
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
 import { captureEnv, deleteTestEnvValue } from "../test-utils/env.js";
+=======
+import { resolveRestartSentinelPath } from "../infra/restart-sentinel.js";
+import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
+import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -50,15 +56,32 @@ let ws: WebSocket;
 let port: number;
 
 async function withoutSupervisorHints<T>(fn: () => Promise<T>): Promise<T> {
+<<<<<<< HEAD
   const envSnapshot = captureEnv([...SUPERVISOR_HINT_ENV_VARS]);
   for (const key of SUPERVISOR_HINT_ENV_VARS) {
     deleteTestEnvValue(key);
+=======
+  const previousEnv = new Map<string, string | undefined>();
+  for (const key of SUPERVISOR_HINT_ENV_VARS) {
+    previousEnv.set(key, process.env[key]);
+    delete process.env[key];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   try {
     return await fn();
   } finally {
+<<<<<<< HEAD
     envSnapshot.restore();
+=======
+    for (const [key, value] of previousEnv) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 
@@ -411,9 +434,19 @@ describe("gateway update.run", () => {
         }, FAST_WAIT_OPTS);
         expect(sigusr1).toHaveBeenCalled();
 
+<<<<<<< HEAD
         const sentinel = await readRestartSentinel();
         expect(sentinel?.payload.kind).toBe("update");
         expect(sentinel?.payload.stats?.mode).toBe("git");
+=======
+        const sentinelPath = resolveRestartSentinelPath();
+        const raw = await fs.readFile(sentinelPath, "utf-8");
+        const parsed = JSON.parse(raw) as {
+          payload?: { kind?: string; stats?: { mode?: string } };
+        };
+        expect(parsed.payload?.kind).toBe("update");
+        expect(parsed.payload?.stats?.mode).toBe("git");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       } finally {
         process.off("SIGUSR1", sigusr1);
       }

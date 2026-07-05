@@ -39,7 +39,10 @@ import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycl
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+<<<<<<< HEAD
 import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import {
@@ -53,7 +56,10 @@ import {
   mergeCronRunDiagnostics,
 } from "../run-diagnostics.js";
 import { resolveCronAbortReasonText } from "../service/execution-errors.js";
+<<<<<<< HEAD
 import { resolveCronDeliverySessionKey } from "../session-target.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -107,7 +113,10 @@ import {
   setSessionRuntimeModel,
 } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
+<<<<<<< HEAD
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 
@@ -176,6 +185,13 @@ function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
   );
 }
 
+<<<<<<< HEAD
+=======
+function resolveNonNegativeNumber(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isCronNestedLaneTaskTimeoutError(err: unknown): boolean {
   return isCommandLaneTaskTimeoutError(err, CommandLane.CronNested);
 }
@@ -370,8 +386,12 @@ function canPromptForMessageTool(params: {
   );
 }
 
+<<<<<<< HEAD
 /** Exported for #91613 keyless-inherited delivery-context regression coverage. */
 export async function resolveCronDeliveryContext(params: {
+=======
+async function resolveCronDeliveryContext(params: {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   cfg: OpenClawConfig;
   job: CronJob;
   agentId: string;
@@ -417,6 +437,7 @@ export async function resolveCronDeliveryContext(params: {
     to: deliveryPlan.to,
     threadId: deliveryPlan.threadId,
     accountId: deliveryPlan.accountId,
+<<<<<<< HEAD
     // Resolve the job's own session identity (sessionTarget takes precedence over sessionKey, the
     // same as delivery preview) so a session-scoped cron is not misread as keyless by the #91613
     // keyless-inherited refusal inside resolveDeliveryTarget. The refusal itself now lives in the
@@ -424,6 +445,9 @@ export async function resolveCronDeliveryContext(params: {
     // path, and the delivery preview all honor it uniformly (the dispatch gate refuses the send and
     // never enqueues, so a restart has nothing to replay; the agent turn still runs before that).
     sessionKey: resolveCronDeliverySessionKey(params.job),
+=======
+    sessionKey: params.job.sessionKey,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   return {
     deliveryPlan,
@@ -961,7 +985,10 @@ async function finalizeCronRun(params: {
   execution: CronExecutionResult;
   abortReason: () => string;
   isAborted: () => boolean;
+<<<<<<< HEAD
   markCronRunSessionCleanupAttempted: () => void;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }): Promise<RunCronAgentTurnResult> {
   const { prepared, execution } = params;
   const finalRunResult = execution.runResult;
@@ -1160,7 +1187,10 @@ async function finalizeCronRun(params: {
       sessionId: prepared.currentRunSessionId(),
       retireReason: "cron-delete-after-run-aborted",
     });
+<<<<<<< HEAD
     params.markCronRunSessionCleanupAttempted();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return prepared.withRunSession({
       status: "error",
       error,
@@ -1223,6 +1253,7 @@ async function finalizeCronRun(params: {
     didSendViaMessageTool: finalRunResult.didSendViaMessagingTool,
     messageToolSentTargets: finalRunResult.messagingToolSentTargets,
   });
+<<<<<<< HEAD
   if (sourceDeliveryOutcome.visibleDeliveries.length > 0) {
     const { queueCronMessageToolDeliveryAwareness } = await loadCronDeliveryRuntime();
     await queueCronMessageToolDeliveryAwareness({
@@ -1235,6 +1266,8 @@ async function finalizeCronRun(params: {
       sourceDeliveryOutcome,
     });
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (hasFatalStructuredErrorPayload && prepared.deliveryRequested) {
     // Structured run error payloads belong in cron state and failure alerts,
     // not the normal completion announce path where provider JSON can leak.
@@ -1245,7 +1278,10 @@ async function finalizeCronRun(params: {
       sessionId: prepared.currentRunSessionId(),
       retireReason: "cron-delete-after-run-fatal-error",
     });
+<<<<<<< HEAD
     params.markCronRunSessionCleanupAttempted();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const deliveryTrace = buildCronDeliveryTrace({
       deliveryPlan: prepared.deliveryPlan,
       resolvedDelivery: prepared.resolvedDelivery,
@@ -1289,9 +1325,12 @@ async function finalizeCronRun(params: {
     abortReason: params.abortReason,
     withRunSession: prepared.withRunSession,
   });
+<<<<<<< HEAD
   if (deliveryResult.cronRunSessionCleanupAttempted) {
     params.markCronRunSessionCleanupAttempted();
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const deliveryTrace = buildCronDeliveryTrace({
     deliveryPlan: prepared.deliveryPlan,
     resolvedDelivery: prepared.resolvedDelivery,
@@ -1444,7 +1483,10 @@ export async function runCronIsolatedAgentTurn(params: {
 
   let outcome: "completed" | "error" = "completed";
   let outcomeError: string | undefined;
+<<<<<<< HEAD
   let cronRunSessionCleanupAttempted = false;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   try {
     assertAgentRunLifecycleGenerationCurrent(runLifecycleGeneration);
     const existingRunContext = getAgentRunContext(initialSessionId);
@@ -1511,9 +1553,12 @@ export async function runCronIsolatedAgentTurn(params: {
       execution,
       abortReason,
       isAborted,
+<<<<<<< HEAD
       markCronRunSessionCleanupAttempted: () => {
         cronRunSessionCleanupAttempted = true;
       },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     if (finalized.status === "error") {
       outcome = "error";
@@ -1544,6 +1589,7 @@ export async function runCronIsolatedAgentTurn(params: {
       ...finalSessionRef,
       error: outcomeError,
     });
+<<<<<<< HEAD
     try {
       if (!cronRunSessionCleanupAttempted) {
         cronRunSessionCleanupAttempted = await cleanupCronRunSessionAfterRun({
@@ -1564,5 +1610,16 @@ export async function runCronIsolatedAgentTurn(params: {
         runContextOwnerToken,
       });
     }
+=======
+    // Release runtime references after the run completes (success or failure).
+    // The session entry has already been persisted to disk by this point,
+    // so the in-memory store and run context can be safely dropped.
+    await disposeCronRunContext({
+      sessionId: initialSessionId,
+      cronSession: prepared.context.cronSession,
+      ownsRunContext,
+      runContextOwnerToken,
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }

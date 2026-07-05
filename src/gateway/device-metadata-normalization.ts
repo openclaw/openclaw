@@ -7,6 +7,24 @@ function normalizeTrimmedMetadata(value?: string | null): string {
   return trimmed ? trimmed : "";
 }
 
+<<<<<<< HEAD
+=======
+function toLowerAscii(input: string): string {
+  return input.replace(/[A-Z]/g, (char) => String.fromCharCode(char.charCodeAt(0) + 32));
+}
+
+/** Normalize device metadata for cross-runtime auth comparisons. */
+export function normalizeDeviceMetadataForAuth(value?: string | null): string {
+  const trimmed = normalizeTrimmedMetadata(value);
+  if (!trimmed) {
+    return "";
+  }
+  // Keep cross-runtime normalization deterministic (TS/Swift/Kotlin) by only
+  // lowercasing ASCII metadata fields used in auth payloads.
+  return toLowerAscii(trimmed);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Normalize device metadata for policy classification. */
 export function normalizeDeviceMetadataForPolicy(value?: string | null): string {
   const trimmed = normalizeTrimmedMetadata(value);

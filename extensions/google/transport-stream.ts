@@ -1266,10 +1266,13 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
         });
         stream.push({ type: "start", partial: output as never });
         let currentBlockIndex = -1;
+<<<<<<< HEAD
         const toolCallBlocksById = new Map<
           string,
           Extract<GoogleTransportContentBlock, { type: "toolCall" }>
         >();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const chunks =
           sse.firstChunk === undefined
             ? sse.chunks
@@ -1360,9 +1363,24 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                   currentBlockIndex = -1;
                 }
                 const providedId = part.functionCall.id;
+<<<<<<< HEAD
                 const existingToolCall =
                   typeof providedId === "string" ? toolCallBlocksById.get(providedId) : undefined;
                 const isDuplicate = existingToolCall !== undefined;
+=======
+                const isDuplicate = output.content.some(
+                  (block) => block.type === "toolCall" && block.id === providedId,
+                );
+                const existingToolCall =
+                  typeof providedId === "string"
+                    ? output.content.find(
+                        (
+                          block,
+                        ): block is Extract<GoogleTransportContentBlock, { type: "toolCall" }> =>
+                          block.type === "toolCall" && block.id === providedId,
+                      )
+                    : undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 const toolCallId =
                   providedId && !isDuplicate
                     ? providedId
@@ -1378,9 +1396,12 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                   ),
                 };
                 output.content.push(toolCall);
+<<<<<<< HEAD
                 if (!toolCallBlocksById.has(toolCall.id)) {
                   toolCallBlocksById.set(toolCall.id, toolCall);
                 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 const blockIndex = output.content.length - 1;
                 stream.push({
                   type: "toolcall_start",

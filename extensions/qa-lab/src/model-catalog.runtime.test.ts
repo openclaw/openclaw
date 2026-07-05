@@ -145,6 +145,7 @@ describe("qa runner model catalog", () => {
       }
     },
   );
+<<<<<<< HEAD
 
   it.runIf(process.platform !== "win32")(
     "preserves abort grace when catalog descendants exit cleanly",
@@ -200,4 +201,6 @@ describe("qa runner model catalog", () => {
       }
     },
   );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

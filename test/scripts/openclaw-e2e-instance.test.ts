@@ -53,6 +53,7 @@ function shellTestEnv(overrides: Record<string, string | undefined>): NodeJS.Pro
   return env;
 }
 
+<<<<<<< HEAD
 function runSourcedHelper(
   script: string,
   overrides: Record<string, string | undefined> = {},
@@ -64,6 +65,8 @@ function runSourcedHelper(
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function expectShellSuccess(result: ReturnType<typeof spawnSync>) {
   expect(result.status, result.stderr || result.stdout || result.error?.message).toBe(0);
 }
@@ -160,6 +163,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     expect(result.stderr).toContain("decoded to an empty script");
   });
 
+<<<<<<< HEAD
   it("reads positive integer env values without treating decimal input as durations", () => {
     const fallback = runSourcedHelper(
       'printf "%s" "$(openclaw_e2e_read_positive_int_env OPENCLAW_E2E_SAMPLE_SECONDS 180)"',
@@ -202,6 +206,8 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     expect(size.stderr).toContain("invalid OPENCLAW_E2E_SAMPLE_BYTES: 64kb");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("requires /readyz after the gateway ready log", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-readyz-required-"));
     try {
@@ -546,6 +552,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     }
   });
 
+<<<<<<< HEAD
   it.each([
     ["bytes", "OPENCLAW_E2E_LOG_TAIL_BYTES", "64kb"],
     ["lines", "OPENCLAW_E2E_LOG_TAIL_LINES", "25 lines"],
@@ -567,6 +574,8 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("bounds commands with the Node watchdog when timeout is unavailable", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-instance-node-watchdog-"));
     try {
@@ -849,12 +858,15 @@ exit 1
     }
   });
 
+<<<<<<< HEAD
   it("cancels HTTP readiness probe response bodies", () => {
     const helper = fs.readFileSync(helperPath, "utf8");
 
     expect(helper).toContain("await response?.body?.cancel?.().catch(() => undefined);");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not repeatedly grep the full gateway log while waiting for readiness", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-readyz-incremental-"));
     try {

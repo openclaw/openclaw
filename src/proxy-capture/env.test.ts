@@ -1,7 +1,10 @@
 // Proxy capture env tests cover environment variable generation for capture sessions.
 import { describe, expect, it } from "vitest";
 import {
+<<<<<<< HEAD
   applyDebugProxyEnv,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   OPENCLAW_DEBUG_PROXY_ENABLED,
   OPENCLAW_DEBUG_PROXY_SESSION_ID,
   resolveDebugProxySettings,
@@ -27,6 +30,7 @@ describe("resolveDebugProxySettings", () => {
 
     expect(settings.sessionId).toBe("session-explicit");
   });
+<<<<<<< HEAD
 
   it("retains deprecated capture storage settings for Plugin SDK compatibility", () => {
     const settings = resolveDebugProxySettings({
@@ -53,4 +57,6 @@ describe("resolveDebugProxySettings", () => {
     expect(env.OPENCLAW_DEBUG_PROXY_DB_PATH).toBeUndefined();
     expect(env.OPENCLAW_DEBUG_PROXY_BLOB_DIR).toBeUndefined();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

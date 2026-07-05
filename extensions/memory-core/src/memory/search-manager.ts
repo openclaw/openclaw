@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 import { createHash } from "node:crypto";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // Memory Core plugin module implements search manager behavior.
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -20,7 +23,11 @@ import {
   type MemorySearchManager,
   type MemorySearchRuntimeDebug,
   type MemorySource,
+<<<<<<< HEAD
   type MemorySyncParams,
+=======
+  type MemorySyncProgressUpdate,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type ResolvedQmdConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
@@ -49,6 +56,7 @@ type QmdManagerOpenFailure = {
   retryAfterMs: number;
 };
 
+<<<<<<< HEAD
 type MemorySearchManagerCacheState =
   | "cached-full-hit"
   | "cached-full-miss"
@@ -67,6 +75,8 @@ export type MemorySearchManagerDebug = {
   failureCode?: "qmd-unavailable";
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type MemorySearchManagerCacheStore = {
   qmdManagerCache: Map<string, CachedQmdManagerEntry>;
   pendingQmdManagerCreates: Map<string, PendingQmdManagerCreate>;
@@ -128,7 +138,10 @@ function loadQmdManagerModule() {
 export type MemorySearchManagerResult = {
   manager: Maybe<MemorySearchManager>;
   error?: string;
+<<<<<<< HEAD
   debug?: MemorySearchManagerDebug;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 export type MemorySearchManagerPurpose = "default" | "status" | "cli";
@@ -169,6 +182,7 @@ function clearQmdManagerOpenFailure(scopeKey: string, identityKey: string): void
   }
 }
 
+<<<<<<< HEAD
 function hashQmdManagerIdentity(identityKey: string): string {
   return createHash("sha256").update(identityKey).digest("hex");
 }
@@ -189,11 +203,14 @@ function applyManagerDebug(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function getMemorySearchManager(params: {
   cfg: OpenClawConfig;
   agentId: string;
   purpose?: MemorySearchManagerPurpose;
 }): Promise<MemorySearchManagerResult> {
+<<<<<<< HEAD
   const acquireStartedAt = Date.now();
   const purpose = params.purpose ?? "default";
   const finish = (
@@ -205,6 +222,8 @@ export async function getMemorySearchManager(params: {
       managerMs: Math.max(0, Date.now() - acquireStartedAt),
       ...debug,
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const resolved = resolveMemoryBackendConfig(params);
   if (resolved.backend === "qmd" && resolved.qmd) {
     const qmdResolved = resolved.qmd;
@@ -214,7 +233,10 @@ export async function getMemorySearchManager(params: {
     const transient = params.purpose === "status" || params.purpose === "cli";
     const scopeKey = buildQmdManagerScopeKey(normalizedAgentId);
     const identityKey = buildQmdManagerIdentityKey(normalizedAgentId, qmdResolved, runtimeConfig);
+<<<<<<< HEAD
     const debugIdentityHash = hashQmdManagerIdentity(identityKey);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const createPrimaryQmdManager = async (
       mode: "full" | "status" | "cli",
@@ -306,6 +328,7 @@ export async function getMemorySearchManager(params: {
         // Status callers often close the manager they receive. Wrap the live
         // full manager with a no-op close so health/status probes do not tear
         // down the active QMD manager for the process.
+<<<<<<< HEAD
         return finish(
           { manager: new BorrowedMemoryManager(cached.manager) },
           {
@@ -324,6 +347,12 @@ export async function getMemorySearchManager(params: {
             qmdIdentityHash: debugIdentityHash,
           },
         );
+=======
+        return { manager: new BorrowedMemoryManager(cached.manager) };
+      }
+      if (params.purpose !== "cli") {
+        return { manager: cached.manager };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     }
 
@@ -332,6 +361,7 @@ export async function getMemorySearchManager(params: {
         params.purpose === "cli" ? "cli" : "status",
       );
       return manager
+<<<<<<< HEAD
         ? finish(
             { manager },
             {
@@ -346,11 +376,16 @@ export async function getMemorySearchManager(params: {
             qmdIdentityHash: debugIdentityHash,
             failureCode: "qmd-unavailable",
           });
+=======
+        ? { manager }
+        : await getBuiltinMemorySearchManagerAfterQmdFailure(params, failureReason);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
 
     const recentFailure = getActiveQmdManagerOpenFailure(scopeKey, identityKey);
     if (recentFailure) {
       log.debug?.(`qmd memory unavailable; using builtin during cooldown: ${recentFailure.reason}`);
+<<<<<<< HEAD
       return finish(
         await getBuiltinMemorySearchManagerAfterQmdFailure(params, recentFailure.reason),
         {
@@ -360,16 +395,23 @@ export async function getMemorySearchManager(params: {
           failureCode: "qmd-unavailable",
         },
       );
+=======
+      return await getBuiltinMemorySearchManagerAfterQmdFailure(params, recentFailure.reason);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
 
     const pending = PENDING_QMD_MANAGER_CREATES.get(scopeKey);
     if (pending) {
       await pending.promise;
+<<<<<<< HEAD
       return finish(await getMemorySearchManager(params), {
         backend: "qmd",
         managerCacheState: "pending-create-wait",
         qmdIdentityHash: debugIdentityHash,
       });
+=======
+      return await getMemorySearchManager(params);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
 
     let pendingFailureReason: string | undefined;
@@ -399,6 +441,7 @@ export async function getMemorySearchManager(params: {
     PENDING_QMD_MANAGER_CREATES.set(scopeKey, pendingCreate);
     const manager = await pendingCreate.promise;
     return manager
+<<<<<<< HEAD
       ? finish(
           { manager },
           {
@@ -418,6 +461,13 @@ export async function getMemorySearchManager(params: {
   return finish(await getBuiltinMemorySearchManager(params), {
     backend: "builtin",
   });
+=======
+      ? { manager }
+      : await getBuiltinMemorySearchManagerAfterQmdFailure(params, pendingFailureReason);
+  }
+
+  return await getBuiltinMemorySearchManager(params);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function getBuiltinMemorySearchManagerAfterQmdFailure(
@@ -489,7 +539,16 @@ class BorrowedMemoryManager implements MemorySearchManager {
     return this.inner.status();
   }
 
+<<<<<<< HEAD
   async sync(params?: MemorySyncParams) {
+=======
+  async sync(params?: {
+    reason?: string;
+    force?: boolean;
+    sessionFiles?: string[];
+    progress?: (update: MemorySyncProgressUpdate) => void;
+  }) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await this.inner.sync?.(params);
   }
 
@@ -579,7 +638,10 @@ class FallbackMemoryManager implements MemorySearchManager {
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       sources?: MemorySource[];
+<<<<<<< HEAD
       signal?: AbortSignal;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
   ) {
     this.ensureOpen();
@@ -587,11 +649,14 @@ class FallbackMemoryManager implements MemorySearchManager {
       try {
         return await this.deps.primary.search(query, opts);
       } catch (err) {
+<<<<<<< HEAD
         // Caller cancellation is request-scoped, not a QMD health failure.
         // Keep the shared manager active for concurrent and later searches.
         if (opts?.signal?.aborted) {
           throw err;
         }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         this.primaryFailed = true;
         this.lastError = formatErrorMessage(err);
         log.warn(`qmd memory failed; switching to builtin index: ${this.lastError}`);
@@ -649,7 +714,16 @@ class FallbackMemoryManager implements MemorySearchManager {
     };
   }
 
+<<<<<<< HEAD
   async sync(params?: MemorySyncParams) {
+=======
+  async sync(params?: {
+    reason?: string;
+    force?: boolean;
+    sessionFiles?: string[];
+    progress?: (update: MemorySyncProgressUpdate) => void;
+  }) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     this.ensureOpen();
     if (!this.primaryFailed) {
       await this.deps.primary.sync?.(params);

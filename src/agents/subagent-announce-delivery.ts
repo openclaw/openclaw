@@ -285,6 +285,7 @@ async function resolveActiveWakeWithRetries(
       outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
       continue;
     }
+<<<<<<< HEAD
     if (
       outcome.reason === "source_reply_delivery_mode_mismatch" &&
       currentOptions.sourceReplyDeliveryMode !== undefined
@@ -297,6 +298,8 @@ async function resolveActiveWakeWithRetries(
       outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
       continue;
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (outcome.reason === "compacting") {
       const remainingDeliveryTimeoutMs =
         compactionDeadlineMs === undefined ? undefined : compactionDeadlineMs - Date.now();
@@ -667,6 +670,7 @@ function hasVisibleGatewayAgentPayload(response: unknown): boolean {
   );
 }
 
+<<<<<<< HEAD
 function hasVisibleNonSilentGatewayAgentPayload(response: unknown): boolean {
   const result = getGatewayAgentResult(response);
   if (!result) {
@@ -707,6 +711,8 @@ function isVisibleNonSilentGatewayAgentPayload(payload: unknown): boolean {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function hasGatewayAgentMessagingToolDeliveryEvidence(response: unknown): boolean {
   const result = getGatewayAgentResult(response);
   return Boolean(result && hasMessagingToolDeliveryEvidence(result));
@@ -1547,6 +1553,21 @@ async function sendSubagentAnnounceDirectly(params: {
 
     const directAnnounceStillPending = isGatewayAgentRunPending(directAnnounceResponse);
     if (directAnnounceStillPending) {
+<<<<<<< HEAD
+=======
+      if (
+        params.expectsCompletionMessage &&
+        expectedMediaUrls.length === 0 &&
+        !requiresMessageToolDelivery
+      ) {
+        return {
+          delivered: false,
+          path: "direct",
+          reason: "completion_handoff_pending",
+          error: "completion agent handoff is still pending",
+        };
+      }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return {
         delivered: true,
         path: "direct",
@@ -1653,6 +1674,7 @@ async function sendSubagentAnnounceDirectly(params: {
         error: "completion agent did not use the message tool for message-tool-only delivery",
       };
     }
+<<<<<<< HEAD
     const hasVisibleCompletionReply =
       hasVisibleNonSilentGatewayAgentPayload(directAnnounceResponse);
     const hasCompletionSideEffect =
@@ -1661,13 +1683,21 @@ async function sendSubagentAnnounceDirectly(params: {
       hasIntentionalSilentGatewayAgentPayload(directAnnounceResponse);
     const acceptsIntentionalSilentCompletion =
       hasIntentionalSilentCompletionReply && !isSubagentCompletion;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (
       params.expectsCompletionMessage &&
       !shouldDeliverAgentFinal &&
       !requiresMessageToolDelivery &&
+<<<<<<< HEAD
       !hasVisibleCompletionReply &&
       !hasCompletionSideEffect &&
       !acceptsIntentionalSilentCompletion
+=======
+      !hasVisibleGatewayAgentPayload(directAnnounceResponse) &&
+      !hasGatewayAgentCompletionSideEffectEvidence(directAnnounceResponse) &&
+      !hasIntentionalSilentGatewayAgentPayload(directAnnounceResponse)
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ) {
       return {
         delivered: false,

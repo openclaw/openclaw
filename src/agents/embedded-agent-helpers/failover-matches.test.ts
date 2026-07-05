@@ -7,7 +7,10 @@ import {
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
   isServerErrorMessage,
+<<<<<<< HEAD
   isTimeoutErrorMessage,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./failover-matches.js";
 
 describe("Z.ai vendor error codes (#48988)", () => {
@@ -104,6 +107,7 @@ describe("Z.ai vendor error codes (#48988)", () => {
   });
 });
 
+<<<<<<< HEAD
 describe("Chinese provider overload messages", () => {
   const ZHIPU_OVERLOAD = "[1305][该模型当前访问量过大，请您稍后再试]";
 
@@ -117,6 +121,8 @@ describe("Chinese provider overload messages", () => {
   });
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("Volcengine Coding Plan subscription errors", () => {
   it("classifies InvalidSubscription JSON body as billing", () => {
     const raw =
@@ -178,6 +184,7 @@ describe("server error status classification", () => {
     expect(isServerErrorMessage("Proxy notice: Status: Internal Server Error")).toBe(false);
   });
 });
+<<<<<<< HEAD
 
 describe("generic assistant error text classification (#93931)", () => {
   it("classifies the generic 'LLM request failed.' as a timeout (transient)", () => {
@@ -210,3 +217,5 @@ describe("generic assistant error text classification (#93931)", () => {
     ).toBe(false);
   });
 });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

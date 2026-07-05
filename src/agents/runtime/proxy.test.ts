@@ -42,6 +42,7 @@ function responseFromText(text: string): Response {
   );
 }
 
+<<<<<<< HEAD
 function responseFromReaderText(text: string, releaseLock: () => void): Response {
   const chunks: Array<ReadableStreamReadResult<Uint8Array>> = [
     { done: false, value: new TextEncoder().encode(text) },
@@ -60,6 +61,8 @@ function responseFromReaderText(text: string, releaseLock: () => void): Response
   } as Response;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("streamProxy", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -137,6 +140,7 @@ describe("streamProxy", () => {
     });
   });
 
+<<<<<<< HEAD
   it("releases the proxy response reader after a terminal stream", async () => {
     let resolveReleased: (() => void) | undefined;
     const released = new Promise<void>((resolve) => {
@@ -168,6 +172,8 @@ describe("streamProxy", () => {
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("returns an error result when EOF arrives without a terminal event", async () => {
     vi.stubGlobal(
       "fetch",

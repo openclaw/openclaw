@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 // Covers SSH target parsing and tunnel startup preflight behavior.
 import { EventEmitter } from "node:events";
 import net from "node:net";
@@ -20,6 +21,11 @@ vi.mock("node:child_process", async (importOriginal) => ({
 
 import { PortInUseError } from "./ports.js";
 import { parseSshTarget, startSshPortForward } from "./ssh-tunnel.js";
+=======
+// Covers SSH target parsing.
+import { describe, expect, it } from "vitest";
+import { parseSshTarget } from "./ssh-tunnel.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("parseSshTarget", () => {
   it("parses user@host:port targets", () => {
@@ -48,6 +54,7 @@ describe("parseSshTarget", () => {
     expect(parseSshTarget("me@-badhost")).toBeNull();
     expect(parseSshTarget("-oProxyCommand=echo")).toBeNull();
   });
+<<<<<<< HEAD
 
   it("rejects hostnames with stray leading or trailing colons", () => {
     // Default-port branch: the whole host part keeps the stray colon.
@@ -163,4 +170,6 @@ describe("startSshPortForward", () => {
 
     await tunnel.stop();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

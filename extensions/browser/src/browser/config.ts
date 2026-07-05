@@ -655,3 +655,11 @@ export function getManagedBrowserMissingDisplayError(
     `Set ${OPENCLAW_BROWSER_HEADLESS_ENV}=1, remove the headed override, or launch under Xvfb.`
   );
 }
+<<<<<<< HEAD
+=======
+
+/** Return whether local browser control should start for a resolved config. */
+export function shouldStartLocalBrowserServer(_resolved: unknown) {
+  return true;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

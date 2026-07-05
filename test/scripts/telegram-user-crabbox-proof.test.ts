@@ -1,21 +1,31 @@
 // Telegram User Crabbox Proof tests cover telegram user crabbox proof script behavior.
+<<<<<<< HEAD
 import { spawn, spawnSync } from "node:child_process";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+<<<<<<< HEAD
 import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   COMMAND_TIMEOUT_MS,
   createOpenClawGatewaySpawnSpec,
+<<<<<<< HEAD
   parseArgs,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   readLogTail,
   readTelegramUserProofLogTailBytes,
   recordProbeVideo,
   REMOTE_SETUP_COMMAND_TIMEOUT_MS,
   renderLaunchDesktop,
+<<<<<<< HEAD
   renderRemoteProbe,
   renderRemoteSetup,
   renderSelectDesktopChat,
@@ -26,14 +36,23 @@ import {
   waitForLog,
 } from "../../scripts/e2e/telegram-user-crabbox-proof.ts";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
+=======
+  runCommand,
+  startLocalSut,
+  waitForLog,
+} from "../../scripts/e2e/telegram-user-crabbox-proof.ts";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const tempDirs: string[] = [];
 const posixIt = process.platform === "win32" ? it.skip : it;
 
+<<<<<<< HEAD
 function expectedTaskkillPath(): string {
   return resolveWindowsTaskkillPath();
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-proof-"));
   tempDirs.push(dir);
@@ -53,6 +72,7 @@ function writeExecutable(pathname: string, content: string): void {
   fs.writeFileSync(pathname, content, { mode: 0o755 });
 }
 
+<<<<<<< HEAD
 function runProofCli(args: string[]) {
   return spawnSync(
     process.execPath,
@@ -69,6 +89,8 @@ function runProofCli(args: string[]) {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
@@ -131,6 +153,7 @@ describe("telegram user Crabbox proof log polling", () => {
     ).toBe(4096);
   });
 
+<<<<<<< HEAD
   it("rejects loose and out-of-range proof ports before remote setup", () => {
     const looseGatewayPort = runProofCli(["--gateway-port", "1e3", "--dry-run"]);
     expect(looseGatewayPort.status).toBe(1);
@@ -188,6 +211,8 @@ describe("telegram user Crabbox proof log polling", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("reads only the requested log tail", () => {
     const logPath = path.join(makeTempDir(), "gateway.log");
     fs.writeFileSync(logPath, `${"old\n".repeat(2000)}ready\n`, "utf8");
@@ -253,6 +278,7 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(script).not.toContain('cat "$root/telegram-desktop.log"');
   });
 
+<<<<<<< HEAD
   it("shell-quotes generated remote setup and chat literals", () => {
     const payload = "name $(touch /tmp/openclaw-proof-injected) `touch /tmp/also-injected`";
 
@@ -372,6 +398,8 @@ fs.writeFileSync(process.env.OPENCLAW_TEST_ARGV_PATH, JSON.stringify(process.arg
     setTimeoutSpy.mockRestore();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   posixIt("kills timed-out command process groups when the leader exits first", async () => {
     const root = makeTempDir();
     const scriptPath = path.join(root, "trap-term.mjs");
@@ -434,6 +462,7 @@ setInterval(() => {}, 1000);
     }
   });
 
+<<<<<<< HEAD
   it("signals Windows proof command process trees with taskkill", () => {
     const child = {
       kill: vi.fn(),
@@ -630,6 +659,8 @@ setInterval(() => {}, 1000);
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   posixIt("cleans local SUT children when gateway startup fails", async () => {
     const root = makeTempDir();
     const outputDir = makeTempDir();
@@ -691,6 +722,7 @@ process.exit(2);
     await waitFor(() => !isProcessAlive(mockPid));
   });
 
+<<<<<<< HEAD
   posixIt("cleans gateway descendants after a failed gateway leader exits", async () => {
     const root = makeTempDir();
     const outputDir = makeTempDir();
@@ -774,6 +806,8 @@ process.exit(2);
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   posixIt("stops Crabbox recording when the desktop probe fails", async () => {
     const root = makeTempDir();
     const recorderPath = path.join(root, "fake-crabbox-recorder.mjs");
@@ -814,6 +848,7 @@ setInterval(() => {}, 1000);
     const recorderPid = Number.parseInt(fs.readFileSync(recorderPidPath, "utf8"), 10);
     await waitFor(() => !isProcessAlive(recorderPid));
   });
+<<<<<<< HEAD
 
   posixIt(
     "does not wait forever when Crabbox recording exits before the probe returns",
@@ -853,4 +888,6 @@ fs.writeFileSync(${JSON.stringify(recorderExitPath)}, "exited");
       ).resolves.toBeUndefined();
     },
   );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

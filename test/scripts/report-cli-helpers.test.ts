@@ -23,11 +23,15 @@ describe("report-cli-helpers", () => {
     expect(() => parseReportCliArgs(["--root", "--json", "report.json"])).toThrow(
       "Expected --root <value>.",
     );
+<<<<<<< HEAD
     expect(() => parseReportCliArgs(["--root", "-h"])).toThrow("Expected --root <value>.");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(() => parseReportCliArgs(["--json"])).toThrow("Expected --json <value>.");
     expect(() => parseReportCliArgs(["--json", "--markdown", "report.md"])).toThrow(
       "Expected --json <value>.",
     );
+<<<<<<< HEAD
     expect(() => parseReportCliArgs(["--json", "-h"])).toThrow("Expected --json <value>.");
     expect(() => parseReportCliArgs(["--markdown", ""])).toThrow("Expected --markdown <value>.");
     expect(() => parseReportCliArgs(["--markdown", "-h"])).toThrow(
@@ -45,5 +49,8 @@ describe("report-cli-helpers", () => {
     expect(() =>
       parseReportCliArgs(["--markdown", "first.md", "--markdown", "second.md"]),
     ).toThrow("--markdown was provided more than once.");
+=======
+    expect(() => parseReportCliArgs(["--markdown", ""])).toThrow("Expected --markdown <value>.");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

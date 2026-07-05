@@ -34,6 +34,7 @@ export function getDefaultLocalRoots(): readonly string[] {
   return getDefaultMediaLocalRoots();
 }
 
+<<<<<<< HEAD
 /** Resolves an allowlist once for callers that validate several media paths. */
 export async function resolveLocalMediaRoots(
   localRoots?: readonly string[],
@@ -58,15 +59,21 @@ export async function resolveLocalMediaRoots(
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Verifies that a local media path is managed inbound media or lives under allowed roots. */
 export async function assertLocalMediaAllowed(
   mediaPath: string,
   localRoots: readonly string[] | "any" | undefined,
+<<<<<<< HEAD
   options?: {
     inboundRoots?: readonly string[];
     resolvedRoots?: readonly string[];
     resolveRoots?: () => Promise<readonly string[]>;
   },
+=======
+  options?: { inboundRoots?: readonly string[] },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ): Promise<void> {
   if (localRoots === "any") {
     return;
@@ -114,12 +121,22 @@ export async function assertLocalMediaAllowed(
     }
   }
 
+<<<<<<< HEAD
   const resolvedRoots =
     options?.resolvedRoots ??
     (await options?.resolveRoots?.()) ??
     (await resolveLocalMediaRoots(roots));
   for (const [index, resolvedRoot] of resolvedRoots.entries()) {
     const root = roots[index] ?? resolvedRoot;
+=======
+  for (const root of roots) {
+    let resolvedRoot: string;
+    try {
+      resolvedRoot = await fs.realpath(root);
+    } catch {
+      resolvedRoot = path.resolve(root);
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (resolvedRoot === path.parse(resolvedRoot).root) {
       throw new LocalMediaAccessError(
         "invalid-root",

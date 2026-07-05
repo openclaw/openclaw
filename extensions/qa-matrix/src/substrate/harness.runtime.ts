@@ -51,6 +51,7 @@ function buildVersionsUrl(baseUrl: string) {
 }
 
 async function isMatrixVersionsReachable(baseUrl: string, fetchImpl: FetchLike) {
+<<<<<<< HEAD
   let response: Awaited<ReturnType<FetchLike>> | undefined;
   try {
     response = await fetchImpl(buildVersionsUrl(baseUrl));
@@ -62,6 +63,11 @@ async function isMatrixVersionsReachable(baseUrl: string, fetchImpl: FetchLike) 
       await response?.body?.cancel?.();
     } catch {}
   }
+=======
+  return await fetchImpl(buildVersionsUrl(baseUrl))
+    .then((response) => response.ok)
+    .catch(() => false);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function withMatrixQaHarnessTimeout<T>(

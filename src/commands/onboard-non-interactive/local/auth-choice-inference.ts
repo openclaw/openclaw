@@ -6,7 +6,11 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+<<<<<<< HEAD
 import { resolveProviderOnboardAuthFlags } from "../../../plugins/provider-auth-choices.js";
+=======
+import { resolveManifestProviderOnboardAuthFlags } from "../../../plugins/provider-auth-choices.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { CORE_ONBOARD_AUTH_FLAGS } from "../../onboard-core-auth-flags.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 
@@ -39,7 +43,11 @@ export function inferAuthChoiceFromFlags(
     ...CORE_ONBOARD_AUTH_FLAGS,
     // Only trusted manifests can influence implicit auth choice; untrusted
     // workspace plugins require the user to choose them explicitly.
+<<<<<<< HEAD
     ...resolveProviderOnboardAuthFlags({
+=======
+    ...resolveManifestProviderOnboardAuthFlags({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       config: params?.config,
       workspaceDir: params?.workspaceDir,
       env: params?.env,

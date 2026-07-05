@@ -12,9 +12,12 @@ const resolveControlUiLinksMock = vi.hoisted(() =>
 );
 const isSystemdUnavailableDetailMock = vi.hoisted(() => vi.fn(() => false));
 const renderSystemdUnavailableHintsMock = vi.hoisted(() => vi.fn<() => string[]>(() => []));
+<<<<<<< HEAD
 const isWSLEnvMock = vi.hoisted(() =>
   vi.fn((env?: Record<string, string | undefined>) => Boolean(env?.WSL_DISTRO_NAME)),
 );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
@@ -58,7 +61,11 @@ vi.mock("../../daemon/systemd-hints.js", () => ({
 }));
 
 vi.mock("../../infra/wsl.js", () => ({
+<<<<<<< HEAD
   isWSLEnv: isWSLEnvMock,
+=======
+  isWSLEnv: () => false,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("./shared.js", () => ({
@@ -96,7 +103,10 @@ describe("printDaemonStatus", () => {
     resolveControlUiLinksMock.mockClear();
     isSystemdUnavailableDetailMock.mockReset().mockReturnValue(false);
     renderSystemdUnavailableHintsMock.mockReset().mockReturnValue([]);
+<<<<<<< HEAD
     isWSLEnvMock.mockClear();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("prints stale gateway pid guidance when runtime does not own the listener", () => {
@@ -183,6 +193,7 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, "protocol mismatch after rollback");
   });
 
+<<<<<<< HEAD
   it("uses service command env for WSL systemd unavailable hints", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "linux" });
@@ -227,6 +238,8 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, "wsl hint");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("prints stale updater launchd job guidance", () => {
     printDaemonStatus(
       {
@@ -649,6 +662,7 @@ describe("printDaemonStatus", () => {
     );
 
     expectMockLineContains(runtime.log, "- whatsapp: 2026.5.3 (clawhub)");
+<<<<<<< HEAD
     expectMockLineContains(runtime.log, "openclaw plugins update whatsapp");
     expectMockLineContains(runtime.log, "openclaw gateway restart");
   });
@@ -686,6 +700,9 @@ describe("printDaemonStatus", () => {
       runtime.log,
       "openclaw plugins update @openclaw/brave-plugin@2026.6.10-beta.1",
     );
+=======
+    expectMockLineContains(runtime.log, "openclaw plugins update <plugin-id>");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expectMockLineContains(runtime.log, "openclaw gateway restart");
   });
 

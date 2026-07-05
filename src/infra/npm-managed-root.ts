@@ -203,6 +203,7 @@ function filterUnsupportedManagedNpmRootOverrides(value: unknown): Record<string
   return filtered;
 }
 
+<<<<<<< HEAD
 // Object override rules only change the package's own root edge via their "." entry;
 // child-only rules never conflict with a root direct dependency.
 function readRootOverrideSpec(value: unknown): string | undefined {
@@ -286,6 +287,8 @@ function applyManagedNpmRootOverrides(params: {
   return { overrides, managedOverrideKeys };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Read host OpenClaw pnpm overrides for reuse inside a managed npm root. */
 export async function readOpenClawManagedNpmRootOverrides(params?: {
   argv1?: string;
@@ -346,6 +349,7 @@ export async function upsertManagedNpmRootDependency(params: {
   const managedOverrides = params.omitUnsupportedManagedOverrides
     ? filterUnsupportedManagedNpmRootOverrides(params.managedOverrides)
     : readOverrideRecord(params.managedOverrides);
+<<<<<<< HEAD
   const nextDependencies = {
     ...dependencies,
     [params.packageName]: params.dependencySpec,
@@ -364,11 +368,29 @@ export async function upsertManagedNpmRootDependency(params: {
     current: manifest.openclaw,
     managedOverrideKeys,
     managedPeerDependencyKeys: [...managedDependencyNames].toSorted(),
+=======
+  const managedOverrideKeys = Object.keys(managedOverrides).toSorted();
+  const overrides = readOverrideRecord(manifest.overrides);
+  for (const key of readManagedOverrideKeys(manifest.openclaw)) {
+    delete overrides[key];
+  }
+  Object.assign(overrides, managedOverrides);
+  const openclawMetadata = buildManagedOpenClawMetadata({
+    current: manifest.openclaw,
+    managedOverrideKeys,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   const next: ManagedNpmRootManifest = {
     ...manifest,
     private: true,
+<<<<<<< HEAD
     dependencies: nextDependencies,
+=======
+    dependencies: {
+      ...dependencies,
+      [params.packageName]: params.dependencySpec,
+    },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
   if (Object.keys(overrides).length > 0) {
     next.overrides = overrides;
@@ -841,6 +863,7 @@ export async function restoreManagedNpmRootPeerDependencySnapshot(params: {
     delete dependencies[packageName];
   }
   Object.assign(dependencies, params.snapshot.dependencies);
+<<<<<<< HEAD
   const overrides = readOverrideRecord(manifest.overrides);
   const currentManagedOverrideKeys = readManagedOverrideKeys(manifest.openclaw);
   // Restored pins predate the overrides currently in the manifest; realign them so a
@@ -854,6 +877,9 @@ export async function restoreManagedNpmRootPeerDependencySnapshot(params: {
   const managedOverrideKeys = currentManagedOverrideKeys
     .filter((key) => Object.hasOwn(overrides, key))
     .toSorted();
+=======
+  const managedOverrideKeys = readManagedOverrideKeys(manifest.openclaw).toSorted();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const openclawMetadata = buildManagedOpenClawMetadata({
     current: manifest.openclaw,
     managedOverrideKeys,
@@ -864,11 +890,14 @@ export async function restoreManagedNpmRootPeerDependencySnapshot(params: {
     private: true,
     dependencies,
   };
+<<<<<<< HEAD
   if (Object.keys(overrides).length > 0) {
     next.overrides = overrides;
   } else {
     delete next.overrides;
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (openclawMetadata) {
     next.openclaw = openclawMetadata;
   } else {
@@ -895,6 +924,7 @@ export async function syncManagedNpmRootPeerDependencies(params: {
     runCommand: params.runCommand,
     timeoutMs: params.timeoutMs,
   });
+<<<<<<< HEAD
   const managedPeerDependencyNames = new Set(
     Object.keys(peerPins).filter(
       (packageName) =>
@@ -902,6 +932,8 @@ export async function syncManagedNpmRootPeerDependencies(params: {
         !Object.hasOwn(dependencies, packageName),
     ),
   );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const nextDependencies = { ...dependencies };
   for (const packageName of previousManagedPeerDependencies) {
     if (!Object.hasOwn(peerPins, packageName)) {
@@ -909,17 +941,22 @@ export async function syncManagedNpmRootPeerDependencies(params: {
     }
   }
   for (const [packageName, dependencySpec] of Object.entries(peerPins)) {
+<<<<<<< HEAD
     // Managed pins follow the fresh plan, which npm resolved with the managed overrides
     // applied. Preserving a stale pin instead can contradict a managed override and npm
     // then rejects the whole root with EOVERRIDE. Owned root deps keep their spec.
     if (managedPeerDependencyNames.has(packageName)) {
       nextDependencies[packageName] = dependencySpec;
     }
+=======
+    nextDependencies[packageName] = dependencies[packageName] ?? dependencySpec;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   const managedOverrides = params.omitUnsupportedManagedOverrides
     ? filterUnsupportedManagedNpmRootOverrides(params.managedOverrides)
     : readOverrideRecord(params.managedOverrides);
+<<<<<<< HEAD
   // Also catches the plan-failure fallback (stale pins reused) and alias overrides whose
   // lock-resolved version can never string-match the override spec.
   const { overrides, managedOverrideKeys } = applyManagedNpmRootOverrides({
@@ -929,6 +966,21 @@ export async function syncManagedNpmRootPeerDependencies(params: {
     managedDependencyNames: managedPeerDependencyNames,
   });
   const managedPeerDependencyKeys = [...managedPeerDependencyNames].toSorted();
+=======
+  const managedOverrideKeys = Object.keys(managedOverrides).toSorted();
+  const overrides = readOverrideRecord(manifest.overrides);
+  for (const key of readManagedOverrideKeys(manifest.openclaw)) {
+    delete overrides[key];
+  }
+  Object.assign(overrides, managedOverrides);
+  const managedPeerDependencyKeys = Object.keys(peerPins)
+    .filter(
+      (packageName) =>
+        previousManagedPeerDependencySet.has(packageName) ||
+        !Object.hasOwn(dependencies, packageName),
+    )
+    .toSorted();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const openclawMetadata = buildManagedOpenClawMetadata({
     current: manifest.openclaw,
     managedOverrideKeys,

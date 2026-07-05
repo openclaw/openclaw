@@ -498,6 +498,7 @@ describe("resolveOutboundSessionRoute", () => {
         chatType: "direct",
       },
     },
+<<<<<<< HEAD
     {
       name: "uses resolved direct-only channel user targets to avoid phantom group sessions",
       target: "wxid_abc123@im.wechat",
@@ -515,6 +516,8 @@ describe("resolveOutboundSessionRoute", () => {
         chatType: "direct",
       },
     },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ])("$name", async ({ channel = "guildchat", target, threadId, resolvedTarget, expected }) => {
     const route = await resolveOutboundSessionRoute({
       cfg: perChannelPeerSessionCfg,

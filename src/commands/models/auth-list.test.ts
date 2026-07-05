@@ -10,10 +10,14 @@ const mocks = vi.hoisted(() => ({
   externalCliDiscoveryForProviderAuth: vi.fn(() => ({ kind: "none" })),
   loadModelsConfig: vi.fn(),
   resolveAuthProfileDisplayLabel: vi.fn(({ profileId }: { profileId: string }) => profileId),
+<<<<<<< HEAD
   resolveModelsTargetAgent: vi.fn((_cfg: OpenClawConfig, rawAgentId?: string) => {
     const agentId = rawAgentId ?? "main";
     return { agentDir: `/tmp/openclaw/agents/${agentId}`, agentId };
   }),
+=======
+  resolveKnownAgentId: vi.fn(({ rawAgentId }: { rawAgentId?: string }) => rawAgentId ?? undefined),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -33,7 +37,11 @@ vi.mock("./load-config.js", () => ({
 }));
 
 vi.mock("./shared.js", () => ({
+<<<<<<< HEAD
   resolveModelsTargetAgent: mocks.resolveModelsTargetAgent,
+=======
+  resolveKnownAgentId: mocks.resolveKnownAgentId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 function createRuntime(): OutputRuntimeEnv & { logs: string[]; jsonPayloads: unknown[] } {
@@ -62,7 +70,11 @@ describe("modelsAuthListCommand", () => {
     mocks.ensureAuthProfileStore.mockReset();
     mocks.externalCliDiscoveryForProviderAuth.mockClear();
     mocks.resolveAuthProfileDisplayLabel.mockClear();
+<<<<<<< HEAD
     mocks.resolveModelsTargetAgent.mockClear();
+=======
+    mocks.resolveKnownAgentId.mockClear();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("filters profiles by provider and redacts credential material in JSON output", async () => {

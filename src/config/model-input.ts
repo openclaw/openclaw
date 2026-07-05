@@ -6,10 +6,17 @@ import {
 } from "@openclaw/model-catalog-core/provider-model-id-normalize";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+<<<<<<< HEAD
   normalizeOptionalString,
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { modelKey } from "../shared/model-key.js";
+=======
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  resolvePrimaryStringValue,
+} from "@openclaw/normalization-core/string-coerce";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { AgentModelConfig, AgentToolModelConfig } from "./types.agents-shared.js";
 
 type AgentModelListLike = {
@@ -17,6 +24,25 @@ type AgentModelListLike = {
   fallbacks?: string[];
 };
 
+<<<<<<< HEAD
+=======
+function modelKeyForConfig(provider: string, model: string): string {
+  const providerId = provider.trim();
+  const modelId = model.trim();
+  if (!providerId) {
+    return modelId;
+  }
+  if (!modelId) {
+    return providerId;
+  }
+  return normalizeLowercaseStringOrEmpty(modelId).startsWith(
+    `${normalizeLowercaseStringOrEmpty(providerId)}/`,
+  )
+    ? modelId
+    : `${providerId}/${modelId}`;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type AgentModelInput = AgentModelConfig | AgentToolModelConfig;
 
 /** Returns the primary model ref from either string or object-style agent model config. */
@@ -74,7 +100,11 @@ export function normalizeAgentModelRefForConfig(model: string): string {
       : provider === "together"
         ? normalizeTogetherModelId(modelSuffix)
         : modelSuffix;
+<<<<<<< HEAD
   return modelKey(provider, normalizedModel);
+=======
+  return modelKeyForConfig(provider, normalizedModel);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function mergeAgentModelEntryForConfig(existing: unknown, incoming: unknown): unknown {

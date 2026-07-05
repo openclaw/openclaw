@@ -25,7 +25,10 @@ import {
   registerMemoryCapability,
   type MemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
+<<<<<<< HEAD
 import { GatewayDrainingError } from "../../process/command-queue.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { scheduleFollowupDrain } from "./queue.js";
@@ -445,6 +448,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     expect(stored[sessionKey].totalTokens).toBe(55_000);
   }, 180_000);
 
+<<<<<<< HEAD
   it("keeps an unarmed preflight drain visible instead of dropping the reply", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-preflight-drain-"));
     const storePath = path.join(tmp, "sessions.json");
@@ -489,6 +493,8 @@ describe("runReplyAgent auto-compaction token update", () => {
     expectReplyText(result, "⚠️ Gateway is restarting. Please wait a few seconds and try again.");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("starts queued followup drain only after clearing the active reply operation", async () => {
     const sessionKey = "main";
     const sessionEntry = {

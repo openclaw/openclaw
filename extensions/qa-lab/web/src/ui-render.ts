@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import type {
   QaEvidenceArtifactView,
   QaEvidenceGalleryEntryView,
@@ -7,6 +8,8 @@ import type {
   QaEvidenceProducerContextFile,
 } from "../../shared/evidence-gallery-types.js";
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /* ===== Shared types (unchanged from the bus protocol) ===== */
 
 type Conversation = {
@@ -147,7 +150,10 @@ type RunnerSnapshot = {
   startedAt?: string;
   finishedAt?: string;
   artifacts: null | {
+<<<<<<< HEAD
     evidencePath: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     outputDir: string;
     reportPath: string;
     summaryPath: string;
@@ -260,6 +266,7 @@ export type CaptureStartupStatusEnvelope = {
   status: CaptureStartupStatus;
 };
 
+<<<<<<< HEAD
 type EvidenceStatus = QaEvidenceGalleryEntryView["status"];
 type EvidenceArtifactView = QaEvidenceArtifactView;
 type EvidenceEntryView = QaEvidenceGalleryEntryView;
@@ -272,6 +279,8 @@ export type EvidenceEnvelope = {
   evidence: EvidenceGalleryModel | null;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type CaptureSavedView = {
   id: string;
   name: string;
@@ -293,7 +302,11 @@ export type CaptureSavedView = {
   payloadExtent: "preview" | "full";
 };
 
+<<<<<<< HEAD
 export type TabId = "chat" | "results" | "report" | "events" | "capture" | "evidence";
+=======
+export type TabId = "chat" | "results" | "report" | "events" | "capture";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type UiState = {
   theme: "light" | "dark";
@@ -343,6 +356,7 @@ export type UiState = {
   captureErrorsOnly: boolean;
   captureCoverage: CaptureCoverageSummary | null;
   captureStartupStatus: CaptureStartupStatus | null;
+<<<<<<< HEAD
   evidence: EvidenceGalleryModel | null;
   evidenceArtifactFilter: "all" | EvidenceArtifactView["mediaKind"];
   evidenceError: string | null;
@@ -350,6 +364,8 @@ export type UiState = {
   evidencePathDraft: string;
   evidenceSearchText: string;
   evidenceStatusFilter: "all" | EvidenceStatus;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   captureControlsExpanded: boolean;
   captureSummaryExpanded: boolean;
   captureSavedViews: CaptureSavedView[];
@@ -360,7 +376,10 @@ export type UiState = {
   capturePinnedLaneIds: string[];
   selectedCaptureSessionIds: string[];
   selectedCaptureEventKey: string | null;
+<<<<<<< HEAD
   selectedEvidenceEntryId: string | null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   selectedConversationId: string | null;
   selectedThreadId: string | null;
   selectedScenarioId: string | null;
@@ -531,6 +550,7 @@ function renderCaptureHeaders(raw: string | undefined, mode: UiState["captureHea
   );
 }
 
+<<<<<<< HEAD
 const NON_SECRET_CAPTURE_TOKEN_FIELDS = new Set([
   "completiontokens",
   "inputtokens",
@@ -557,6 +577,11 @@ function isSensitiveCaptureField(label: string): boolean {
     normalized.includes("password") ||
     normalized.includes("session") ||
     tokenMarker
+=======
+function isSensitiveCaptureField(label: string): boolean {
+  return /authorization|proxy-authorization|cookie|set-cookie|api[-_]?key|x[-_]?api[-_]?key|token|secret|password|session/i.test(
+    label,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
 }
 
@@ -581,9 +606,12 @@ function redactCaptureValue(value: unknown, label?: string): unknown {
   if (typeof value === "string") {
     return redactCaptureScalar(value, label);
   }
+<<<<<<< HEAD
   if (label && isSensitiveCaptureField(label)) {
     return "[redacted]";
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (Array.isArray(value)) {
     return value.map((entry) => redactCaptureValue(entry, label));
   }
@@ -597,6 +625,7 @@ function redactCaptureValue(value: unknown, label?: string): unknown {
   return out;
 }
 
+<<<<<<< HEAD
 function readCaptureQuotedSpan(
   value: string,
   start: number,
@@ -706,6 +735,8 @@ function redactCapturePayloadPreview(payload: string): string {
   return redactCaptureScalar(redactCaptureInlineSecretPairs(payload));
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function formatCaptureFieldValue(value: unknown, label?: string): string {
   const redacted = redactCaptureValue(value, label);
   if (typeof redacted === "string") {
@@ -731,7 +762,11 @@ function renderCaptureFormPayload(payload: string): string {
   }));
   return rows.length > 0
     ? renderCaptureKeyValueGrid(rows)
+<<<<<<< HEAD
     : `<pre class="report-pre capture-pre">${esc(redactCapturePayloadPreview(payload))}</pre>`;
+=======
+    : `<pre class="report-pre capture-pre">${esc(redactCaptureScalar(payload))}</pre>`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function renderCaptureSsePayload(
@@ -756,10 +791,14 @@ function renderCaptureSsePayload(
           const label =
             separatorIndex >= 0 ? line.slice(0, separatorIndex).trim() || "field" : "line";
           const value = separatorIndex >= 0 ? line.slice(separatorIndex + 1).trim() : line;
+<<<<<<< HEAD
           return {
             label,
             value: redactCaptureScalar(redactCaptureInlineSecretPairs(value), label),
           };
+=======
+          return { label, value: redactCaptureScalar(value, label) };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         });
       const eventName = rows.find((row) => row.label === "event")?.value || "message";
       const dataText = rows
@@ -796,7 +835,11 @@ function renderCaptureSsePayload(
   });
   if (frames.length === 0) {
     return {
+<<<<<<< HEAD
       body: `<pre class="report-pre capture-pre">${esc(redactCapturePayloadPreview(payload))}</pre>`,
+=======
+      body: `<pre class="report-pre capture-pre">${esc(redactCaptureScalar(payload))}</pre>`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       eventCount: 0,
       visibleCount: 0,
     };
@@ -891,7 +934,11 @@ function renderCapturePayload(
     }
   }
   return {
+<<<<<<< HEAD
     body: `<pre class="report-pre capture-pre">${esc(redactCapturePayloadPreview(payload))}</pre>`,
+=======
+    body: `<pre class="report-pre capture-pre">${esc(redactCaptureScalar(payload))}</pre>`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mode: "text",
     byteLength,
     looksStructured: false,
@@ -934,7 +981,11 @@ pnpm openclaw gateway --port 18789 --bind loopback`;
   const qaStart = "pnpm qa:lab:ui --port 43124 --control-ui-url http://127.0.0.1:18789/";
   const caInstall = "pnpm proxy:install-ca";
   const caTrust =
+<<<<<<< HEAD
     'sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$HOME/.openclaw/debug-proxy/certs/root-ca.pem"';
+=======
+    "sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /Users/thoffman/.openclaw/debug-proxy/certs/root-ca.pem";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return `<div class="capture-startup-state">
     <div class="capture-startup-title">Proxy capture is not running yet.</div>
     <div class="text-dimmed text-sm capture-startup-copy">
@@ -1131,6 +1182,7 @@ function statusDotClass(status: ScenarioOutcome["status"] | "pending"): string {
   return `scenario-item-dot scenario-item-dot-${status}`;
 }
 
+<<<<<<< HEAD
 function statusTone(status: string): string {
   if (status === "failed") {
     return "fail";
@@ -1149,6 +1201,10 @@ function statusTone(status: string): string {
 
 function badgeHtml(status: string): string {
   const tone = statusTone(status);
+=======
+function badgeHtml(status: string): string {
+  const tone = status === "failed" ? "fail" : status === "completed" ? "pass" : status;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return `<span class="badge badge-${esc(tone)}">${esc(status)}</span>`;
 }
 
@@ -1352,7 +1408,10 @@ function renderTabBar(state: UiState): string {
   const tabs: Array<{ id: TabId; label: string }> = [
     { id: "chat", label: "Chat" },
     { id: "results", label: "Results" },
+<<<<<<< HEAD
     { id: "evidence", label: "Evidence Archive" },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     { id: "report", label: "Report" },
     { id: "events", label: "Events" },
     { id: "capture", label: "Capture" },
@@ -1624,7 +1683,10 @@ function renderResultsView(state: UiState): string {
 
 function renderInspector(state: UiState, scenario: SeedScenario): string {
   const outcome = findScenarioOutcome(state, scenario);
+<<<<<<< HEAD
   const evidencePath = state.bootstrap?.runner.artifacts?.evidencePath ?? null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   return `
     <div class="inspector-layout">
@@ -1634,11 +1696,14 @@ function renderInspector(state: UiState, scenario: SeedScenario): string {
             <div class="inspector-title">${esc(scenario.title)}</div>
             ${badgeHtml(outcome?.status ?? "pending")}
           </div>
+<<<<<<< HEAD
           ${
             evidencePath
               ? `<button class="btn-sm" data-action="open-run-evidence" title="${esc(evidencePath)}">Open evidence</button>`
               : ""
           }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         </div>
         <div class="inspector-objective">${esc(scenario.objective)}</div>
         <div class="inspector-meta">
@@ -1719,6 +1784,7 @@ function renderReportView(state: UiState): string {
     </div>`;
 }
 
+<<<<<<< HEAD
 /* ===== Render: Evidence tab ===== */
 
 function evidenceEntryMatches(state: UiState, entry: EvidenceEntryView): boolean {
@@ -2154,6 +2220,8 @@ function renderEvidenceView(state: UiState): string {
   </div>`;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /* ===== Render: Events tab ===== */
 
 function renderEventsView(state: UiState): string {
@@ -2785,9 +2853,13 @@ function renderCaptureView(state: UiState): string {
       ].filter((row) => row.value.trim().length > 0)
     : [];
   const rawPayloadBody = selectedEvent?.dataText?.length
+<<<<<<< HEAD
     ? `<pre class="report-pre capture-pre">${esc(
         redactCapturePayloadPreview(selectedEvent.dataText),
       )}</pre>`
+=======
+    ? `<pre class="report-pre capture-pre">${esc(redactCaptureScalar(selectedEvent.dataText))}</pre>`
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     : '<div class="empty-state">No inline payload preview for this event.</div>';
   const availableDetailViews: Array<{
     value: UiState["captureDetailView"];
@@ -3818,11 +3890,15 @@ function renderCaptureView(state: UiState): string {
                                       selectedLaneEvent.errorText
                                         ? `<div class="capture-timeline-quick-preview-error">${esc(selectedLaneEvent.errorText)}</div>`
                                         : selectedLaneEvent.payloadPreview
+<<<<<<< HEAD
                                           ? `<div class="capture-timeline-quick-preview-snippet">${esc(
                                               redactCapturePayloadPreview(
                                                 selectedLaneEvent.payloadPreview,
                                               ),
                                             )}</div>`
+=======
+                                          ? `<div class="capture-timeline-quick-preview-snippet">${esc(selectedLaneEvent.payloadPreview)}</div>`
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                                           : ""
                                     }
                                   </div>`
@@ -4012,11 +4088,15 @@ function renderCaptureView(state: UiState): string {
                                             ${paired ? '<div class="capture-pair-badge">paired counterpart</div>' : ""}
                                             ${
                                               event.payloadPreview
+<<<<<<< HEAD
                                                 ? `<div class="capture-event-card-preview">${esc(
                                                     redactCapturePayloadPreview(
                                                       event.payloadPreview,
                                                     ),
                                                   )}</div>`
+=======
+                                                ? `<div class="capture-event-card-preview">${esc(event.payloadPreview)}</div>`
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                                                 : ""
                                             }
                                           </div>
@@ -4065,9 +4145,13 @@ function renderCaptureView(state: UiState): string {
                                     }
                                     ${
                                       event.payloadPreview
+<<<<<<< HEAD
                                         ? `<div class="capture-event-card-preview">${esc(
                                             redactCapturePayloadPreview(event.payloadPreview),
                                           )}</div>`
+=======
+                                        ? `<div class="capture-event-card-preview">${esc(event.payloadPreview)}</div>`
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                                         : ""
                                     }
                                     ${event.errorText ? `<div class="capture-error" style="margin-top:8px">${esc(event.errorText)}</div>` : ""}
@@ -4168,8 +4252,11 @@ function renderActiveTab(state: UiState): string {
       return renderChatView(state);
     case "results":
       return renderResultsView(state);
+<<<<<<< HEAD
     case "evidence":
       return renderEvidenceView(state);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     case "report":
       return renderReportView(state);
     case "events":
@@ -4184,6 +4271,7 @@ function renderActiveTab(state: UiState): string {
 /* ===== Main render ===== */
 
 export function renderQaLabUi(state: UiState): string {
+<<<<<<< HEAD
   const shellClasses = [
     "app-shell",
     state.sidebarCollapsed ? "app-shell--sidebar-collapsed" : "",
@@ -4193,6 +4281,10 @@ export function renderQaLabUi(state: UiState): string {
     .join(" ");
   return `
     <div class="${shellClasses}" data-theme="${state.theme}">
+=======
+  return `
+    <div class="app-shell${state.sidebarCollapsed ? " app-shell--sidebar-collapsed" : ""}" data-theme="${state.theme}">
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ${renderHeader(state)}
       <div class="layout">
         ${renderSidebar(state)}

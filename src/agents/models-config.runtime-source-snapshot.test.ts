@@ -17,6 +17,11 @@ vi.mock("../plugins/manifest-registry.js", () => ({
 
 vi.mock("./model-auth-env-vars.js", () => ({
   listKnownProviderEnvApiKeyNames: () => ["OPENAI_API_KEY"],
+<<<<<<< HEAD
+=======
+  resolveProviderEnvApiKeyCandidates: () => ({ openai: ["OPENAI_API_KEY"] }),
+  resolveProviderEnvAuthEvidence: () => ({}),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveProviderEnvAuthLookupMaps: () => ({
     aliasMap: {},
     envCandidateMap: { openai: ["OPENAI_API_KEY"] },

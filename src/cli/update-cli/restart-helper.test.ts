@@ -4,7 +4,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+<<<<<<< HEAD
 import { getWindowsCmdExePath } from "../../infra/windows-install-roots.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 
 vi.mock("node:child_process", async () => {
@@ -617,7 +620,11 @@ exit 0
 
       await runRestartScript(scriptPath);
 
+<<<<<<< HEAD
       expect(spawn).toHaveBeenCalledWith(getWindowsCmdExePath(), ["/d", "/s", "/c", scriptPath], {
+=======
+      expect(spawn).toHaveBeenCalledWith("cmd.exe", ["/d", "/s", "/c", scriptPath], {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         detached: true,
         stdio: "ignore",
         windowsHide: true,
@@ -634,6 +641,7 @@ exit 0
 
       await runRestartScript(scriptPath);
 
+<<<<<<< HEAD
       expect(spawn).toHaveBeenCalledWith(
         getWindowsCmdExePath(),
         ["/d", "/s", "/c", `"${scriptPath}"`],
@@ -643,6 +651,13 @@ exit 0
           windowsHide: true,
         },
       );
+=======
+      expect(spawn).toHaveBeenCalledWith("cmd.exe", ["/d", "/s", "/c", `"${scriptPath}"`], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     it("does not throw when spawn fails synchronously", async () => {

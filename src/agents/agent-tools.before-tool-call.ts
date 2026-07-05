@@ -37,7 +37,10 @@ import {
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+<<<<<<< HEAD
 import { getGlobalHookRunnerRegistry } from "../plugins/hook-runner-global-state.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { deriveToolParams } from "../plugins/host-tool-param-parsers.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
@@ -99,6 +102,23 @@ export type ToolOutcomeObservation = {
 
 export type ToolOutcomeObserver = (observation: ToolOutcomeObservation) => void;
 
+<<<<<<< HEAD
+=======
+/** Detect abort-related errors produced by the supplied signal. */
+export function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): boolean {
+  if (!signal?.aborted) {
+    return false;
+  }
+  if (err === signal.reason) {
+    return true;
+  }
+  return (
+    err instanceof Error &&
+    (err.name === "AbortError" || ("cause" in err && err.cause === signal.reason))
+  );
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type HookContext = {
   agentId?: string;
   config?: OpenClawConfig;
@@ -112,11 +132,14 @@ export type HookContext = {
   runId?: string;
   trace?: DiagnosticTraceContext;
   channelId?: string;
+<<<<<<< HEAD
   /** Originating channel for approval delivery routing; mirrors exec approval turn-source fields. */
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
@@ -198,10 +221,16 @@ export type BeforeToolCallPolicyDiagnosticState = {
 
 /** Return whether before_tool_call hooks or trusted policies are active. */
 export function getBeforeToolCallPolicyDiagnosticState(): BeforeToolCallPolicyDiagnosticState {
+<<<<<<< HEAD
   const policyRegistry = getGlobalHookRunnerRegistry() ?? undefined;
   return {
     hasBeforeToolCallHook: getGlobalHookRunner()?.hasHooks("before_tool_call") === true,
     trustedToolPolicies: getTrustedToolPolicyDiagnosticEntries(policyRegistry),
+=======
+  return {
+    hasBeforeToolCallHook: getGlobalHookRunner()?.hasHooks("before_tool_call") === true,
+    trustedToolPolicies: getTrustedToolPolicyDiagnosticEntries(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }
 
@@ -666,10 +695,13 @@ async function requestPluginToolApproval(params: {
         toolCallId: params.toolCallId,
         agentId: params.ctx?.agentId,
         sessionKey: params.ctx?.sessionKey,
+<<<<<<< HEAD
         turnSourceChannel: params.ctx?.turnSourceChannel,
         turnSourceTo: params.ctx?.turnSourceTo,
         turnSourceAccountId: params.ctx?.turnSourceAccountId,
         turnSourceThreadId: params.ctx?.turnSourceThreadId,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         timeoutMs,
         twoPhase: true,
       },
@@ -779,6 +811,7 @@ async function requestPluginToolApproval(params: {
     };
   } catch (err) {
     notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
+<<<<<<< HEAD
     const signal = params.signal;
     const abortCancelled =
       signal?.aborted === true &&
@@ -786,6 +819,9 @@ async function requestPluginToolApproval(params: {
         (err instanceof Error &&
           (err.name === "AbortError" || ("cause" in err && err.cause === signal.reason))));
     if (abortCancelled) {
+=======
+    if (isAbortSignalCancellation(err, params.signal)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       log.warn(`plugin approval wait cancelled by run abort: ${String(err)}`);
       return {
         blocked: true,
@@ -1116,8 +1152,12 @@ export async function runBeforeToolCallHook(args: {
   const hookRunner = getGlobalHookRunner();
   try {
     const hasBeforeToolCallHooks = hookRunner?.hasHooks("before_tool_call") === true;
+<<<<<<< HEAD
     const policyRegistry = getGlobalHookRunnerRegistry() ?? undefined;
     const shouldRunTrustedPolicies = hasTrustedToolPolicies(policyRegistry);
+=======
+    const shouldRunTrustedPolicies = hasTrustedToolPolicies();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const normalizedParams = isPlainObject(params) ? params : {};
     const initialCorePolicyResult = resolveSkillWorkshopToolApproval({
       toolName,
@@ -1169,7 +1209,10 @@ export async function runBeforeToolCallHook(args: {
           },
           toolContext,
           {
+<<<<<<< HEAD
             ...(policyRegistry ? { registry: policyRegistry } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             ...(args.ctx?.config ? { config: args.ctx.config } : {}),
             deriveEvent: deriveToolEventParams,
             normalizeEvent(eventValue) {

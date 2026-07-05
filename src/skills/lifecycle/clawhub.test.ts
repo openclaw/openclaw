@@ -9,7 +9,10 @@ import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 const fetchClawHubSkillDetailMock = vi.fn();
 const fetchClawHubSkillInstallResolutionMock = vi.fn();
 const fetchClawHubSkillVerificationMock = vi.fn();
+<<<<<<< HEAD
 const fetchClawHubSkillSecurityVerdictsMock = vi.fn();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const downloadClawHubSkillArchiveMock = vi.fn();
 const downloadClawHubSkillArchiveUrlMock = vi.fn();
 const downloadClawHubGitHubSkillArchiveMock = vi.fn();
@@ -28,7 +31,10 @@ vi.mock("../../infra/clawhub.js", () => ({
   fetchClawHubSkillDetail: fetchClawHubSkillDetailMock,
   fetchClawHubSkillInstallResolution: fetchClawHubSkillInstallResolutionMock,
   fetchClawHubSkillVerification: fetchClawHubSkillVerificationMock,
+<<<<<<< HEAD
   fetchClawHubSkillSecurityVerdicts: fetchClawHubSkillSecurityVerdictsMock,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   downloadClawHubSkillArchive: downloadClawHubSkillArchiveMock,
   downloadClawHubSkillArchiveUrl: downloadClawHubSkillArchiveUrlMock,
   downloadClawHubGitHubSkillArchive: downloadClawHubGitHubSkillArchiveMock,
@@ -181,7 +187,10 @@ describe("skills-clawhub", () => {
     fetchClawHubSkillDetailMock.mockReset();
     fetchClawHubSkillInstallResolutionMock.mockReset();
     fetchClawHubSkillVerificationMock.mockReset();
+<<<<<<< HEAD
     fetchClawHubSkillSecurityVerdictsMock.mockReset();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     downloadClawHubSkillArchiveMock.mockReset();
     downloadClawHubSkillArchiveUrlMock.mockReset();
     downloadClawHubGitHubSkillArchiveMock.mockReset();
@@ -198,9 +207,13 @@ describe("skills-clawhub", () => {
     resolveClawHubBaseUrlMock.mockImplementation((baseUrl?: string) =>
       (baseUrl ?? "https://clawhub.ai").replace(/\/+$/, ""),
     );
+<<<<<<< HEAD
     isDefaultClawHubBaseUrlMock.mockImplementation(
       (baseUrl?: string) => !baseUrl || baseUrl.replace(/\/+$/, "") === "https://clawhub.ai",
     );
+=======
+    isDefaultClawHubBaseUrlMock.mockImplementation((baseUrl?: string) => !baseUrl);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     pathExistsMock.mockImplementation(async (input: string) => input.endsWith("SKILL.md"));
     fetchClawHubSkillDetailMock.mockResolvedValue({
       skill: {
@@ -234,6 +247,7 @@ describe("skills-clawhub", () => {
       security: { status: "clean", signals: { staticScan: { engineVersion: "v2.4.24" } } },
       signature: { status: "unsigned" },
     });
+<<<<<<< HEAD
     fetchClawHubSkillSecurityVerdictsMock.mockImplementation(
       async (params: {
         items: Array<{ slug: string; ownerHandle?: string; version: string }>;
@@ -256,6 +270,8 @@ describe("skills-clawhub", () => {
         })),
       }),
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     downloadClawHubSkillArchiveMock.mockResolvedValue({
       archivePath: "/tmp/agentreceipt.zip",
       integrity: "sha256-test",
@@ -337,6 +353,7 @@ describe("skills-clawhub", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("bypasses ClawHub trust checks for official skill install resolutions", async () => {
     fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
       ok: true,
@@ -822,6 +839,10 @@ describe("skills-clawhub", () => {
       security: { status: "clean" },
       signature: { status: "unsigned" },
     });
+=======
+  it("installs owner-qualified ClawHub skills without using owner as a local path", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-owner-skill-");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     installPackageDirMock.mockImplementationOnce(async (params: { targetDir: string }) => {
       await fs.mkdir(params.targetDir, { recursive: true });
       await fs.writeFile(path.join(params.targetDir, "SKILL.md"), "# Weather\n", "utf8");
@@ -838,6 +859,7 @@ describe("skills-clawhub", () => {
       ownerHandle: "demo-owner",
       baseUrl: undefined,
     });
+<<<<<<< HEAD
     expect(fetchClawHubSkillSecurityVerdictsMock).toHaveBeenCalledWith({
       items: [
         {
@@ -858,6 +880,8 @@ describe("skills-clawhub", () => {
       token: undefined,
       timeoutMs: undefined,
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expectInstallPackageSourceDir("/tmp/extracted-skill");
     expect(installPolicyInput()).toMatchObject({
       origin: {
@@ -897,6 +921,7 @@ describe("skills-clawhub", () => {
     });
   });
 
+<<<<<<< HEAD
   it("does not require acknowledgement for owner-qualified clean skills missing only cards", async () => {
     const workspaceDir = await tempDirs.make("openclaw-owner-card-missing-");
     fetchClawHubSkillSecurityVerdictsMock.mockResolvedValueOnce({
@@ -1013,6 +1038,8 @@ describe("skills-clawhub", () => {
     expect(downloadClawHubSkillArchiveMock).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("formats ambiguous ClawHub slug responses with owner-qualified guidance", async () => {
     fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
       ok: false,
@@ -1401,9 +1428,12 @@ describe("skills-clawhub", () => {
       slug: "aiq-deploy",
       baseUrl: undefined,
     });
+<<<<<<< HEAD
     // GitHub-backed skills are approved by the install resolver before it
     // returns this pinned commit; they do not have a ClawHub release version.
     expect(fetchClawHubSkillSecurityVerdictsMock).not.toHaveBeenCalled();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(downloadClawHubGitHubSkillArchiveMock).toHaveBeenCalledWith({
       repo: "NVIDIA/skills",
       commit,
@@ -1458,8 +1488,11 @@ describe("skills-clawhub", () => {
       baseUrl: undefined,
       forceInstall: true,
     });
+<<<<<<< HEAD
     // forceInstall is a resolver policy input for GitHub-backed skills.
     expect(fetchClawHubSkillSecurityVerdictsMock).not.toHaveBeenCalled();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expectInstalledSkill(result, {
       slug: "aiq-deploy",
       version: commit,
@@ -1570,6 +1603,7 @@ describe("skills-clawhub", () => {
     expect(lock.skills.weather?.ownerHandle).toBe("demo-owner");
   });
 
+<<<<<<< HEAD
   it("updates official publisher ClawHub skills without fetching security verdicts", async () => {
     const workspaceDir = await tempDirs.make("openclaw-official-owner-update-");
     await writeClawHubOriginFixture({
@@ -1693,6 +1727,8 @@ describe("skills-clawhub", () => {
     expect(downloadClawHubSkillArchiveMock).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("updates owner-qualified ClawHub skills when the requested owner matches tracking", async () => {
     const workspaceDir = await tempDirs.make("openclaw-owner-update-request-");
     await writeClawHubOriginFixture({
@@ -1878,6 +1914,7 @@ describe("skills-clawhub", () => {
       }
     });
 
+<<<<<<< HEAD
     it("does not install configured skills during update all without ClawHub tracking", async () => {
       const workspaceDir = await tempDirs.make("openclaw-configured-update-");
       const results = await updateSkillsFromClawHub({
@@ -1914,6 +1951,8 @@ describe("skills-clawhub", () => {
       expect(installPackageDirMock).not.toHaveBeenCalled();
     });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     it("updates a legacy Unicode slug when requested explicitly", async () => {
       const slug = "re\u0430ct";
       const { workspaceDir } = await createLegacyTrackedSkillFixture(slug);
@@ -2103,6 +2142,7 @@ describe("skills-clawhub", () => {
       }
     });
 
+<<<<<<< HEAD
     it("accepts owner-qualified installed verification targets", async () => {
       const workspaceDir = await tempDirs.make("openclaw-skill-verify-");
       try {
@@ -2163,6 +2203,8 @@ describe("skills-clawhub", () => {
       }
     });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     it("keeps the installed registry when an explicit version overrides the installed version", async () => {
       const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-verify-"));
       try {
@@ -2468,6 +2510,7 @@ describe("skills-clawhub", () => {
       }
     });
 
+<<<<<<< HEAD
     it("uses owner-qualified registry verification targets", async () => {
       const workspaceDir = await tempDirs.make("openclaw-skill-verify-");
       resolveClawHubBaseUrlMock.mockReturnValueOnce("https://configured.example.com/clawhub");
@@ -2541,6 +2584,8 @@ describe("skills-clawhub", () => {
       }
     });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     it("fails clearly when installed origin metadata is malformed", async () => {
       const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-verify-"));
       try {

@@ -2,7 +2,11 @@
 // Resolves config-backed client credentials with or without async SecretRefs.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
+<<<<<<< HEAD
 import type { resolveGatewayCredentialsFromConfig } from "./credentials.js";
+=======
+import { resolveGatewayCredentialsFromConfig } from "./credentials.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 // Thin public bridge from OpenClawConfig-shaped callers to the lower-level
 // credential resolver. Keep this file policy-free; precedence lives in
@@ -33,3 +37,14 @@ export async function resolveGatewayConnectionAuth(
     ...toGatewayCredentialOptions(params),
   });
 }
+<<<<<<< HEAD
+=======
+
+/** Resolves already-available config credentials without async SecretRef loading. */
+export function resolveGatewayConnectionAuthFromConfig(params: GatewayCredentialConfigOptions): {
+  token?: string;
+  password?: string;
+} {
+  return resolveGatewayCredentialsFromConfig(params);
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

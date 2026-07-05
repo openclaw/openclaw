@@ -222,7 +222,10 @@ describe("provider-usage.load", () => {
         loadProviderUsageSummary({
           now: usageNow,
           auth: [{ provider: "xiaomi", token: "token-x" }],
+<<<<<<< HEAD
           env: {},
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           fetch: undefined,
         }),
       ).rejects.toThrow("fetch is not available");

@@ -14,11 +14,14 @@ import {
   shellCompletionStatusToRepairEffects,
 } from "../commands/doctor-completion.js";
 import {
+<<<<<<< HEAD
   detectStaleSessionLocks,
   sessionLockToHealthFinding,
   sessionLockToRepairEffect,
 } from "../commands/doctor-session-locks.js";
 import {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   disableUnavailableSkillsInConfig,
   formatMissingSkillSummary,
 } from "../commands/doctor-skills-core.js";
@@ -36,6 +39,7 @@ import { resolveGatewayAuth } from "../gateway/auth.js";
 import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { registerHealthCheck } from "./health-check-registry.js";
+<<<<<<< HEAD
 import type { SplitHealthCheckInput } from "./health-check-runner-types.js";
 import type {
   HealthCheck,
@@ -43,10 +47,14 @@ import type {
   HealthFinding,
   HealthRepairContext,
 } from "./health-checks.js";
+=======
+import type { HealthCheck, HealthCheckContext, HealthFinding } from "./health-checks.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
 const CODEX_SESSION_ROUTES_CHECK_ID = "core/doctor/codex-session-routes";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
+<<<<<<< HEAD
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 const SESSION_LOCKS_CHECK_ID = "core/doctor/session-locks";
 
@@ -57,6 +65,8 @@ type CoreHealthCheckContext = HealthCheckContext & {
 type CoreHealthRepairContext = HealthRepairContext & {
   readonly deep?: boolean;
 };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const loadDoctorCoreChecksRuntimeModule = async () =>
   await import("./doctor-core-checks.runtime.js");
@@ -376,6 +386,7 @@ const legacyStateCheck: HealthCheck = {
   async detect(ctx) {
     const { detectLegacyStateMigrations } = await import("../commands/doctor-state-migrations.js");
     const detected = await detectLegacyStateMigrations({ cfg: ctx.cfg });
+<<<<<<< HEAD
     return [
       ...detected.preview.map(
         (line): HealthFinding => ({
@@ -396,6 +407,17 @@ const legacyStateCheck: HealthCheck = {
         }),
       ),
     ];
+=======
+    return detected.preview.map(
+      (line): HealthFinding => ({
+        checkId: "core/doctor/legacy-state",
+        severity: "warning",
+        message: line.replace(/^- /, ""),
+        path: detected.stateDir,
+        fixHint: "Run `openclaw doctor --fix` to migrate legacy state.",
+      }),
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
 };
 
@@ -685,6 +707,7 @@ const codexSessionRoutesCheck: HealthCheck = {
   },
 };
 
+<<<<<<< HEAD
 const gatewayServicesExtraCheck: HealthCheck = {
   id: GATEWAY_SERVICES_EXTRA_CHECK_ID,
   kind: "core",
@@ -717,6 +740,8 @@ const gatewayServicesExtraCheck: HealthCheck = {
   },
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const gatewayPlatformNotesCheck: HealthCheck = {
   id: "core/doctor/gateway-services/platform-notes",
   kind: "core",
@@ -736,6 +761,7 @@ const gatewayPlatformNotesCheck: HealthCheck = {
   },
 };
 
+<<<<<<< HEAD
 const sessionLocksCheck: SplitHealthCheckInput = {
   id: SESSION_LOCKS_CHECK_ID,
   kind: "core",
@@ -763,6 +789,8 @@ const sessionLocksCheck: SplitHealthCheckInput = {
   },
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const browserCheck: HealthCheck = {
   id: "core/doctor/browser",
   kind: "core",
@@ -775,6 +803,36 @@ const browserCheck: HealthCheck = {
   },
 };
 
+<<<<<<< HEAD
+=======
+const workspaceStatusCheck: HealthCheck = {
+  id: "core/doctor/workspace-status",
+  kind: "core",
+  description: "Workspace directory exists and has no legacy duplicates.",
+  source: "doctor",
+  async detect(ctx) {
+    const { detectLegacyWorkspaceDirs } = await loadDoctorWorkspaceModule();
+    const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
+    const legacy = detectLegacyWorkspaceDirs({ workspaceDir });
+    if (legacy.legacyDirs.length === 0) {
+      return [];
+    }
+    return [
+      {
+        checkId: "core/doctor/workspace-status",
+        severity: "info",
+        message: `Detected ${legacy.legacyDirs.length} legacy workspace director${
+          legacy.legacyDirs.length === 1 ? "y" : "ies"
+        } alongside the active workspace.`,
+        path: workspaceDir,
+        fixHint:
+          "Inspect the legacy directories and migrate or remove them; see `openclaw doctor` for the detailed migration prompt.",
+      },
+    ];
+  },
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function createSkillsReadinessCheck(deps: CoreHealthCheckDeps): HealthCheck {
   return {
     id: "core/doctor/skills-readiness",
@@ -1008,19 +1066,28 @@ function createWorkspaceSuggestionsCheck(deps: CoreHealthCheckDeps): HealthCheck
   };
 }
 
+<<<<<<< HEAD
 function createConvertedWorkflowChecks(
   deps: CoreHealthCheckDeps,
 ): readonly SplitHealthCheckInput[] {
+=======
+function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly HealthCheck[] {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return [
     claudeCliCheck,
     gatewayAuthCheck,
     legacyStateCheck,
     legacyWhatsAppCrontabCheck,
     codexSessionRoutesCheck,
+<<<<<<< HEAD
     sessionLocksCheck,
     shellCompletionCheck,
     uiProtocolFreshnessCheck,
     gatewayServicesExtraCheck,
+=======
+    shellCompletionCheck,
+    uiProtocolFreshnessCheck,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     gatewayPlatformNotesCheck,
     createSecurityCheck(deps),
     browserCheck,
@@ -1035,7 +1102,10 @@ function createConvertedWorkflowChecks(
 
 let registered = false;
 
+<<<<<<< HEAD
 /** @deprecated Core doctor flows use ordered doctor contributions; keep this only for SDK compatibility. */
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function registerCoreHealthChecks(): void {
   if (registered) {
     return;
@@ -1052,15 +1122,27 @@ export function resetCoreHealthChecksForTest(): void {
 
 export function createCoreHealthChecks(
   deps: CoreHealthCheckDeps = defaultCoreHealthCheckDeps,
+<<<<<<< HEAD
 ): readonly SplitHealthCheckInput[] {
+=======
+): readonly HealthCheck[] {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return [
     gatewayConfigCheck,
     ...createConvertedWorkflowChecks(deps),
     commandOwnerCheck,
+<<<<<<< HEAD
+=======
+    workspaceStatusCheck,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     createSkillsReadinessCheck(deps),
     browserClawdProfileResidueCheck,
     finalConfigValidationCheck,
   ];
 }
 
+<<<<<<< HEAD
 export const CORE_HEALTH_CHECKS: readonly SplitHealthCheckInput[] = createCoreHealthChecks();
+=======
+export const CORE_HEALTH_CHECKS: readonly HealthCheck[] = createCoreHealthChecks();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

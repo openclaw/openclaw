@@ -80,6 +80,7 @@ describe("verify-pr-hosted-gates", () => {
     });
   });
 
+<<<<<<< HEAD
   it("uses the latest CI run when an older duplicate was cancelled", () => {
     expect(
       collectHostedGateEvidence({
@@ -98,6 +99,8 @@ describe("verify-pr-hosted-gates", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("accepts the explicit exact-SHA manual CI release gate", () => {
     expect(
       collectHostedGateEvidence({
@@ -160,6 +163,7 @@ describe("verify-pr-hosted-gates", () => {
     ).toThrow("Missing successful exact-head CI workflow");
   });
 
+<<<<<<< HEAD
   it("does not mask a failed CI run with a queued rerun and release-gate fallback", () => {
     expect(() =>
       collectHostedGateEvidence({
@@ -184,6 +188,8 @@ describe("verify-pr-hosted-gates", () => {
     ).toThrow("Missing successful exact-head CI workflow");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("covers a queued artifact Testbox only with a completed exact CI fallback", () => {
     expect(
       collectHostedGateEvidence({
@@ -346,6 +352,7 @@ describe("verify-pr-hosted-gates", () => {
       changelogOnly: false,
     });
     expect(() => parseArgs(["--repo", "openclaw/openclaw"])).toThrow("Usage:");
+<<<<<<< HEAD
     expect(() =>
       parseArgs(["--repo", "-h", "--sha", sha, "--output", ".local/gates-hosted-checks.json"]),
     ).toThrow("Expected --repo <value>.");
@@ -392,6 +399,8 @@ describe("verify-pr-hosted-gates", () => {
     for (const [flag, args] of duplicateCases) {
       expect(() => parseArgs(args), flag).toThrow(`${flag} was provided more than once.`);
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("accepts JSON emitted through a colorizing GitHub CLI shim", () => {

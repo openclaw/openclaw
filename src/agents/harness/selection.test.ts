@@ -31,9 +31,12 @@ const compactAuthMocks = vi.hoisted(() => ({
   getApiKeyForModel: vi.fn(),
   resolveModelAsync: vi.fn(),
 }));
+<<<<<<< HEAD
 const providerOwnerMocks = vi.hoisted(() => ({
   resolveProviderRefOwnership: vi.fn(),
 }));
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 vi.mock("./builtin-openclaw.js", () => ({
   createOpenClawAgentHarness: (): AgentHarness => ({
@@ -50,9 +53,12 @@ vi.mock("../model-auth.js", () => ({
 vi.mock("../embedded-agent-runner/model.js", () => ({
   resolveModelAsync: compactAuthMocks.resolveModelAsync,
 }));
+<<<<<<< HEAD
 vi.mock("../../plugins/providers.js", () => ({
   resolveProviderRefOwnership: providerOwnerMocks.resolveProviderRefOwnership,
 }));
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
 
@@ -62,8 +68,11 @@ beforeEach(() => {
     model: { id: "gpt-5.5", provider: "openai" },
   });
   compactAuthMocks.getApiKeyForModel.mockResolvedValue({ apiKey: "test-key" });
+<<<<<<< HEAD
   providerOwnerMocks.resolveProviderRefOwnership.mockReset();
   providerOwnerMocks.resolveProviderRefOwnership.mockReturnValue({ status: "unowned" });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupRegistry: () => ({
       providers: [],
@@ -95,7 +104,10 @@ afterEach(() => {
   agentRunAttempt.mockClear();
   compactAuthMocks.resolveModelAsync.mockReset();
   compactAuthMocks.getApiKeyForModel.mockReset();
+<<<<<<< HEAD
   providerOwnerMocks.resolveProviderRefOwnership.mockReset();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (originalRuntime == null) {
     delete process.env.OPENCLAW_AGENT_RUNTIME;
   } else {
@@ -648,6 +660,7 @@ describe("selectAgentHarness", () => {
     expect(supports).toHaveBeenCalledTimes(1);
   });
 
+<<<<<<< HEAD
   it("passes manifest provider owners into plugin support checks", () => {
     providerOwnerMocks.resolveProviderRefOwnership.mockReturnValue({
       status: "owned",
@@ -783,6 +796,8 @@ describe("selectAgentHarness", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("honors explicit OpenClaw runtime overrides when selecting a harness", async () => {
     registerSuccessfulCodexHarness();
 
@@ -793,7 +808,10 @@ describe("selectAgentHarness", () => {
     });
 
     expect(harness.id).toBe("openclaw");
+<<<<<<< HEAD
     expect(providerOwnerMocks.resolveProviderRefOwnership).not.toHaveBeenCalled();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const result = await runAgentHarnessAttempt({
       ...createAttemptParams(),
@@ -978,7 +996,10 @@ describe("selectAgentHarness", () => {
         workspaceDir: "/tmp/workspace",
         provider: "openai",
         model: "gpt-5.5",
+<<<<<<< HEAD
         authProfileId: "main-profile",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         agentHarnessId: "codex",
         config: {
           agents: {
@@ -996,11 +1017,14 @@ describe("selectAgentHarness", () => {
     expect(compact.mock.calls[0]?.[0]).toMatchObject({
       agentDir: "/tmp/main-agent",
       agentId: "main",
+<<<<<<< HEAD
       resolvedApiKey: "test-key",
       runtimeModel: {
         id: "gpt-5.5",
         provider: "openai",
       },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   });
 
@@ -1142,6 +1166,7 @@ describe("selectAgentHarness", () => {
     );
   });
 
+<<<<<<< HEAD
   it("preserves resolved compaction credentials when model lookup fails", async () => {
     compactAuthMocks.resolveModelAsync.mockRejectedValue(new Error("model lookup unavailable"));
     const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
@@ -1254,6 +1279,8 @@ describe("selectAgentHarness", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not compact a selected plugin harness through OpenClaw when the plugin has no compactor", async () => {
     registerFailingCodexHarness();
 

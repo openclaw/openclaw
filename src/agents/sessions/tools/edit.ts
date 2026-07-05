@@ -13,13 +13,19 @@ import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { renderDiff } from "../../modes/interactive/components/diff.js";
 import type { AgentTool } from "../../runtime/index.js";
+<<<<<<< HEAD
 import { textResult } from "../../tools/common.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ToolDefinition } from "../extensions/types.js";
 import {
   applyEditsToNormalizedContent,
   computeEditsDiff,
   detectLineEnding,
+<<<<<<< HEAD
   EditNoChangeError,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type Edit,
   type EditDiffError,
   type EditDiffResult,
@@ -27,9 +33,13 @@ import {
   generateUnifiedPatch,
   normalizeToLF,
   restoreLineEndings,
+<<<<<<< HEAD
   splitNoOpEdits,
   stripBom,
   validateNoOpEditTargets,
+=======
+  stripBom,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./edit-diff.js";
 import { withFileMutationQueue } from "./file-mutation-queue.js";
 import { resolveToCwd } from "./path-utils.js";
@@ -49,18 +59,26 @@ const replaceEditSchema = Type.Object(
       description:
         "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
     }),
+<<<<<<< HEAD
     newText: Type.String({
       description: "Replacement text for this targeted edit.",
     }),
+=======
+    newText: Type.String({ description: "Replacement text for this targeted edit." }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   { additionalProperties: false },
 );
 
 const editSchema = Type.Object(
   {
+<<<<<<< HEAD
     path: Type.String({
       description: "Path to the file to edit (relative or absolute)",
     }),
+=======
+    path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     edits: Type.Array(replaceEditSchema, {
       description:
         "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
@@ -131,10 +149,14 @@ function prepareEditArguments(input: unknown): EditToolInput {
   return { ...rest, edits } as EditToolInput;
 }
 
+<<<<<<< HEAD
 function validateEditInput(input: EditToolInput): {
   path: string;
   edits: Edit[];
 } {
+=======
+function validateEditInput(input: EditToolInput): { path: string; edits: Edit[] } {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!Array.isArray(input.edits) || input.edits.length === 0) {
     throw new Error("Edit tool input is invalid. edits must contain at least one replacement.");
   }
@@ -194,12 +216,16 @@ type RenderableEditArgs = {
 };
 
 type EditToolResultLike = {
+<<<<<<< HEAD
   content: Array<{
     type: string;
     text?: string;
     data?: string;
     mimeType?: string;
   }>;
+=======
+  content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   details?: EditToolDetails;
 };
 
@@ -395,7 +421,11 @@ export function createEditToolDefinition(
       void toolCallId;
       void onUpdate;
       void ctx;
+<<<<<<< HEAD
       const { path, edits: originalEdits } = validateEditInput(input);
+=======
+      const { path, edits } = validateEditInput(input);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const absolutePath = resolveToCwd(path, cwd);
 
       return withFileMutationQueue(absolutePath, async () => {
@@ -403,8 +433,11 @@ export function createEditToolDefinition(
           throw new Error("Operation aborted");
         }
 
+<<<<<<< HEAD
         let realEdits: Edit[] = [];
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         try {
           await ops.access(absolutePath);
         } catch (error: unknown) {
@@ -427,6 +460,7 @@ export function createEditToolDefinition(
           const { bom, text: content } = stripBom(rawContent);
           const originalEnding = detectLineEnding(content);
           const normalizedContent = normalizeToLF(content);
+<<<<<<< HEAD
           const editSets = splitNoOpEdits(normalizedContent, originalEdits, path);
           const noOpEdits = editSets.noOpEdits;
           realEdits = editSets.realEdits;
@@ -443,6 +477,11 @@ export function createEditToolDefinition(
           const { baseContent, newContent } = applyEditsToNormalizedContent(
             normalizedContent,
             realEdits,
+=======
+          const { baseContent, newContent } = applyEditsToNormalizedContent(
+            normalizedContent,
+            edits,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             path,
           );
           const finalContent = bom + restoreLineEndings(newContent, originalEnding);
@@ -457,7 +496,11 @@ export function createEditToolDefinition(
             content: [
               {
                 type: "text",
+<<<<<<< HEAD
                 text: `Successfully replaced ${realEdits.length} block(s) in ${path}.`,
+=======
+                text: `Successfully replaced ${edits.length} block(s) in ${path}.`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               },
             ],
             details: {
@@ -472,6 +515,7 @@ export function createEditToolDefinition(
             .readFile(absolutePath)
             .then((current) => current.toString("utf-8"))
             .catch(() => rawContent);
+<<<<<<< HEAD
           if (
             didEditLikelyApply({
               originalContent: rawContent,
@@ -479,11 +523,18 @@ export function createEditToolDefinition(
               edits: realEdits,
             })
           ) {
+=======
+          if (didEditLikelyApply({ originalContent: rawContent, currentContent, edits })) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             return {
               content: [
                 {
                   type: "text",
+<<<<<<< HEAD
                   text: `Successfully replaced ${realEdits.length} block(s) in ${path}.`,
+=======
+                  text: `Successfully replaced ${edits.length} block(s) in ${path}.`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 },
               ],
               details: { diff: "", patch: "" },
@@ -492,6 +543,7 @@ export function createEditToolDefinition(
           if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
             throw appendMismatchHint(normalizedError, currentContent);
           }
+<<<<<<< HEAD
           // Terminal no-op: the edit matched but produced identical content.
           if (normalizedError instanceof EditNoChangeError) {
             return {
@@ -502,6 +554,8 @@ export function createEditToolDefinition(
               terminate: true,
             };
           }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           throw normalizedError;
         }
       });
@@ -552,10 +606,14 @@ export function createEditToolDefinition(
           changed =
             setEditPreview(
               callComponent,
+<<<<<<< HEAD
               {
                 diff: resultDiff,
                 firstChangedLine: typedResult.details?.firstChangedLine,
               },
+=======
+              { diff: resultDiff, firstChangedLine: typedResult.details?.firstChangedLine },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               argsKey,
             ) || changed;
         }

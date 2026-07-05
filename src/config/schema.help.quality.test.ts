@@ -99,6 +99,10 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.remote.batch.pollIntervalMs",
   "agents.defaults.memorySearch.remote.batch.timeoutMinutes",
   "agents.defaults.memorySearch.local.modelPath",
+<<<<<<< HEAD
+=======
+  "agents.defaults.memorySearch.store.path",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "agents.defaults.memorySearch.inputType",
   "agents.defaults.memorySearch.queryInputType",
   "agents.defaults.memorySearch.documentInputType",
@@ -457,7 +461,10 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "discovery.mdns.mode": ['"off"', '"minimal"', '"full"'],
   "wizard.lastRunMode": ['"local"', '"remote"'],
   "diagnostics.otel.protocol": ['"http/protobuf"', '"grpc"'],
+<<<<<<< HEAD
   "diagnostics.otel.logsExporter": ['"otlp"', '"stdout"', '"both"'],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "logging.level": ['"silent"', '"fatal"', '"error"', '"warn"', '"info"', '"debug"', '"trace"'],
   "logging.consoleLevel": [
     '"silent"',
@@ -567,7 +574,10 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "diagnostics.otel.headers",
   "diagnostics.otel.logsEndpoint",
   "diagnostics.otel.logs",
+<<<<<<< HEAD
   "diagnostics.otel.logsExporter",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "diagnostics.otel.metricsEndpoint",
   "diagnostics.otel.metrics",
   "diagnostics.otel.sampleRate",
@@ -734,6 +744,12 @@ describe("config help copy quality", () => {
     expect(FIELD_HELP["memory.qmd.paths.pattern"].includes("**/*.md")).toBe(true);
     expect(FIELD_HELP["memory.qmd.update.interval"].includes("5m")).toBe(true);
     expect(FIELD_HELP["memory.qmd.update.embedInterval"].includes("60m")).toBe(true);
+<<<<<<< HEAD
+=======
+    expect(FIELD_HELP["agents.defaults.memorySearch.store.path"]).toContain(
+      "~/.openclaw/memory/{agentId}.sqlite",
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("documents cron deprecation, migration, and retention formats", () => {
@@ -936,7 +952,10 @@ describe("config help copy quality", () => {
 
     const compactionModel = FIELD_HELP["agents.defaults.compaction.model"];
     expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);
+<<<<<<< HEAD
     expect(/alias/i.test(compactionModel)).toBe(true);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const transcriptBytes = FIELD_HELP["agents.defaults.compaction.maxActiveTranscriptBytes"];
     expect(/transcript|bytes|compaction/i.test(transcriptBytes)).toBe(true);

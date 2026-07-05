@@ -1,6 +1,10 @@
 // Slack plugin module implements slash behavior.
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
+<<<<<<< HEAD
 import { loadModelCatalog, resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+=======
+import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import {
   formatCommandArgMenuTitle,
@@ -20,7 +24,11 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
+<<<<<<< HEAD
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+=======
+import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -112,13 +120,22 @@ function resolveSlackCommandMenuModelContext(params: {
       agentId: params.agentId,
     });
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
+<<<<<<< HEAD
     const entry = getSessionEntry({ storePath, sessionKey: params.sessionKey });
+=======
+    const store = loadSessionStore(storePath);
+    const entry = store[params.sessionKey];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
       return { provider: defaultModel.provider, model: defaultModel.model };
     }
     const override = resolveStoredModelOverride({
       sessionEntry: entry,
+<<<<<<< HEAD
       loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
+=======
+      sessionStore: store,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: params.sessionKey,
       defaultProvider: defaultModel.provider,
     });
@@ -595,17 +612,23 @@ export async function registerSlackMonitorSlashCommands(params: {
               sessionKey: menuRoute.sessionKey,
             })
           : {};
+<<<<<<< HEAD
         // Native /think choices need live-discovery metadata; empty keeps config fallback.
         const menuModelCatalog =
           commandDefinition.key === "think" && menuNeedsModelContext
             ? await loadModelCatalog({ config: cfg })
             : undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const menu = resolveCommandArgMenu({
           command: commandDefinition,
           args: commandArgs,
           cfg,
           ...menuModelContext,
+<<<<<<< HEAD
           ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         });
         if (menu) {
           const commandLabel = commandDefinition.nativeName ?? commandDefinition.key;

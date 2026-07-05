@@ -10,6 +10,35 @@ export function parseProcCmdline(raw: string): string[] {
   return normalizeStringEntries(raw.split("\0"));
 }
 
+<<<<<<< HEAD
+=======
+/**
+ * Parse a Windows command line string into argv-style tokens,
+ * handling double-quoted paths (e.g. `"C:\Program Files\node.exe" gateway run`).
+ */
+export function parseWindowsCmdline(raw: string): string[] {
+  const args: string[] = [];
+  let current = "";
+  let inQuote = false;
+  for (const char of raw) {
+    if (char === '"') {
+      inQuote = !inQuote;
+    } else if (char === " " && !inQuote) {
+      if (current) {
+        args.push(current);
+        current = "";
+      }
+    } else {
+      current += char;
+    }
+  }
+  if (current) {
+    args.push(current);
+  }
+  return args;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function isGatewayArgv(args: string[], opts?: { allowGatewayBinary?: boolean }): boolean {
   const normalized = args.map(normalizeProcArg);
   if (!normalized.includes("gateway")) {

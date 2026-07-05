@@ -8,7 +8,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
+<<<<<<< HEAD
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+=======
+import { captureEnv } from "../test-utils/env.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resetProcessRegistryForTests } from "./bash-process-registry.js";
 import { createExecTool } from "./bash-tools.exec.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -68,6 +72,7 @@ describe("exec security floor", () => {
       "SHELL",
     ]);
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-security-floor-"));
+<<<<<<< HEAD
     setTestEnvValue("HOME", tempRoot);
     setTestEnvValue("USERPROFILE", tempRoot);
     setTestEnvValue("OPENCLAW_HOME", tempRoot);
@@ -79,6 +84,19 @@ describe("exec security floor", () => {
     } else {
       deleteTestEnvValue("HOMEDRIVE");
       deleteTestEnvValue("HOMEPATH");
+=======
+    process.env.HOME = tempRoot;
+    process.env.USERPROFILE = tempRoot;
+    process.env.OPENCLAW_HOME = tempRoot;
+    process.env.OPENCLAW_STATE_DIR = path.join(tempRoot, "state");
+    if (process.platform === "win32") {
+      const parsed = path.parse(tempRoot);
+      process.env.HOMEDRIVE = parsed.root.slice(0, 2);
+      process.env.HOMEPATH = tempRoot.slice(2) || "\\";
+    } else {
+      delete process.env.HOMEDRIVE;
+      delete process.env.HOMEPATH;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     resetProcessRegistryForTests();
     vi.mocked(callGatewayTool).mockReset();

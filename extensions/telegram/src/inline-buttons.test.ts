@@ -109,6 +109,7 @@ describe("resolveTelegramInlineButtonsScope (#75433 SecretRef tolerance)", () =>
     expect(isTelegramInlineButtonsEnabled({ cfg })).toBe(true);
   });
 
+<<<<<<< HEAD
   it("preserves the default inline-buttons scope when legacy capabilities are empty", () => {
     const cfg = {
       channels: {
@@ -142,6 +143,8 @@ describe("resolveTelegramInlineButtonsScope (#75433 SecretRef tolerance)", () =>
     expect(isTelegramInlineButtonsEnabled({ cfg, accountId: "ops" })).toBe(false);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it('preserves configured "off" when botToken is an unresolved SecretRef', () => {
     const cfg = {
       channels: {

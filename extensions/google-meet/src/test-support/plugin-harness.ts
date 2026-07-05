@@ -69,7 +69,10 @@ export function setupGoogleMeetPlugin(
   const tools: unknown[] = [];
   const cliRegistrations: unknown[] = [];
   const nodeHostCommands: unknown[] = [];
+<<<<<<< HEAD
   const nodeInvokePolicies: unknown[] = [];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const nodesList = vi.fn(
     async () =>
       options.nodesListResult ?? {
@@ -166,7 +169,10 @@ export function setupGoogleMeetPlugin(
     },
     registerCli: (_registrar: unknown, opts: unknown) => cliRegistrations.push(opts),
     registerNodeHostCommand: (command: unknown) => nodeHostCommands.push(command),
+<<<<<<< HEAD
     registerNodeInvokePolicy: (policy: unknown) => nodeInvokePolicies.push(policy),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   const originalPlatform = process.platform;
   Object.defineProperty(process, "platform", {
@@ -186,7 +192,10 @@ export function setupGoogleMeetPlugin(
     nodesList,
     nodesInvoke,
     nodeHostCommands,
+<<<<<<< HEAD
     nodeInvokePolicies,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }
 

@@ -89,6 +89,18 @@ const mocks = vi.hoisted(() => {
       }
       return null;
     }),
+<<<<<<< HEAD
+=======
+    resolveProviderEnvApiKeyCandidates: vi.fn().mockReturnValue({
+      anthropic: ["ANTHROPIC_API_KEY"],
+      google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+      minimax: ["MINIMAX_API_KEY"],
+      "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
+      openai: ["OPENAI_OAUTH_TOKEN", "OPENAI_API_KEY"],
+      fal: ["FAL_KEY"],
+    }),
+    resolveProviderEnvAuthEvidence: vi.fn().mockReturnValue({}),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resolveProviderEnvAuthLookupMaps: vi.fn().mockReturnValue({
       aliasMap: { "codex-cli": "openai" },
       envCandidateMap: {
@@ -215,6 +227,11 @@ vi.mock("../../agents/model-auth.js", () => ({
 }));
 vi.mock("../../agents/model-auth-env-vars.js", () => ({
   listProviderEnvAuthLookupKeys: mocks.listProviderEnvAuthLookupKeys,
+<<<<<<< HEAD
+=======
+  resolveProviderEnvApiKeyCandidates: mocks.resolveProviderEnvApiKeyCandidates,
+  resolveProviderEnvAuthEvidence: mocks.resolveProviderEnvAuthEvidence,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveProviderEnvAuthLookupMaps: mocks.resolveProviderEnvAuthLookupMaps,
   listKnownProviderEnvApiKeyNames: mocks.listKnownProviderEnvApiKeyNames,
 }));
@@ -2013,6 +2030,7 @@ describe("modelsStatusCommand auth overview", () => {
   it("includes auth-evidence-only providers in the auth overview", async () => {
     const localRuntime = createRuntime();
     const originalKeysImpl = mocks.listProviderEnvAuthLookupKeys.getMockImplementation();
+<<<<<<< HEAD
     const originalLookupImpl = mocks.resolveProviderEnvAuthLookupMaps.getMockImplementation();
     const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
 
@@ -2029,6 +2047,20 @@ describe("modelsStatusCommand auth overview", () => {
           },
         ],
       },
+=======
+    const originalEvidenceImpl = mocks.resolveProviderEnvAuthEvidence.getMockImplementation();
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+
+    mocks.listProviderEnvAuthLookupKeys.mockReturnValue(["workspace-cloud"]);
+    mocks.resolveProviderEnvAuthEvidence.mockReturnValue({
+      "workspace-cloud": [
+        {
+          type: "local-file-with-env",
+          credentialMarker: "workspace-cloud-local-credentials",
+          source: "workspace cloud credentials",
+        },
+      ],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     mocks.resolveEnvApiKey.mockImplementation(
       (provider: string, _env?: NodeJS.ProcessEnv, options?: { workspaceDir?: string }) =>
@@ -2054,8 +2086,13 @@ describe("modelsStatusCommand auth overview", () => {
       if (originalKeysImpl) {
         mocks.listProviderEnvAuthLookupKeys.mockImplementation(originalKeysImpl);
       }
+<<<<<<< HEAD
       if (originalLookupImpl) {
         mocks.resolveProviderEnvAuthLookupMaps.mockImplementation(originalLookupImpl);
+=======
+      if (originalEvidenceImpl) {
+        mocks.resolveProviderEnvAuthEvidence.mockImplementation(originalEvidenceImpl);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
       if (originalEnvImpl) {
         mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);

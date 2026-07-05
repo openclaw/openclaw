@@ -24,8 +24,11 @@ import { listSecretTargetRegistryEntries } from "./target-registry.js";
 describe("exec SecretRef id parity", () => {
   const validateGatewaySecretRef = Compile(GatewaySecretRefSchema);
   const pluginSdkSecretInput = buildSecretInputSchema();
+<<<<<<< HEAD
   const validEnvSecretRefIds = ["OPENAI_API_KEY", "A", "A_1", `A${"B".repeat(127)}`];
   const invalidEnvSecretRefIds = ["", "openai_api_key", "OPENAI-API-KEY", "1OPENAI", "A B"];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   function configAcceptsExecRef(id: string): boolean {
     const result = validateConfigObjectRaw({
@@ -57,6 +60,7 @@ describe("exec SecretRef id parity", () => {
     return result.ok;
   }
 
+<<<<<<< HEAD
   function configAcceptsRef(ref: unknown): boolean {
     const result = validateConfigObjectRaw({
       models: {
@@ -72,6 +76,8 @@ describe("exec SecretRef id parity", () => {
     return result.ok;
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   function planAcceptsExecRef(id: string): boolean {
     return isSecretsApplyPlan({
       version: 1,
@@ -90,6 +96,7 @@ describe("exec SecretRef id parity", () => {
     });
   }
 
+<<<<<<< HEAD
   function planAcceptsRef(ref: unknown) {
     return isSecretsApplyPlan({
       version: 1,
@@ -121,11 +128,16 @@ describe("exec SecretRef id parity", () => {
     });
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   for (const id of [...VALID_FILE_SECRET_REF_IDS, ...INVALID_FILE_SECRET_REF_IDS]) {
     it(`keeps config/gateway/plugin parity for file id "${id}"`, () => {
       const expected = isValidFileSecretRefId(id);
       expect(configAcceptsFileRef(id)).toBe(expected);
+<<<<<<< HEAD
       expect(planAcceptsRef({ source: "file", provider: "default", id })).toBe(expected);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(validateGatewaySecretRef.Check({ source: "file", provider: "default", id })).toBe(
         expected,
       );
@@ -135,6 +147,7 @@ describe("exec SecretRef id parity", () => {
     });
   }
 
+<<<<<<< HEAD
   it("rejects invalid provider aliases across plan/gateway/plugin refs", () => {
     const ref = { source: "env" as const, provider: "Default", id: "OPENAI_API_KEY" };
 
@@ -156,6 +169,8 @@ describe("exec SecretRef id parity", () => {
     });
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   for (const id of [...VALID_EXEC_SECRET_REF_IDS, ...INVALID_EXEC_SECRET_REF_IDS]) {
     it(`keeps config/plan/gateway/plugin parity for exec id "${id}"`, () => {
       const expected = isValidExecSecretRefId(id);

@@ -210,12 +210,15 @@ function applyWhamCooldownResult(params: {
   };
 }
 
+<<<<<<< HEAD
 async function cancelUnreadResponseBody(response: Response): Promise<void> {
   if (!response.bodyUsed) {
     await response.body?.cancel().catch(() => undefined);
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function probeWhamForCooldown(
   store: AuthProfileStore,
   profileId: string,
@@ -255,7 +258,10 @@ async function probeWhamForCooldown(
     });
 
     if (!res.ok) {
+<<<<<<< HEAD
       await cancelUnreadResponseBody(res);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (res.status === 401) {
         return { cooldownMs: WHAM_TOKEN_EXPIRED_COOLDOWN_MS, reason: "wham_token_expired" };
       }
@@ -834,6 +840,7 @@ export async function markAuthProfileFailure(params: {
   }
 }
 
+<<<<<<< HEAD
 function buildBlockedProfileUsageStats(params: {
   previousStats: ProfileUsageStats | undefined;
   blockedUntil: number;
@@ -862,6 +869,8 @@ function buildBlockedProfileUsageStats(params: {
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Marks a profile blocked until a provider-reported reset timestamp. */
 export async function markAuthProfileBlockedUntil(params: {
   store: AuthProfileStore;
@@ -898,6 +907,7 @@ export async function markAuthProfileBlockedUntil(params: {
       }
       previousStats = freshStore.usageStats?.[profileId];
       updateTime = now;
+<<<<<<< HEAD
       nextStats = buildBlockedProfileUsageStats({
         previousStats,
         blockedUntil,
@@ -905,6 +915,24 @@ export async function markAuthProfileBlockedUntil(params: {
         modelId,
         now,
       });
+=======
+      const activeBlockedUntil = resolveActiveWindowUntil(previousStats?.blockedUntil, now);
+      nextStats = {
+        ...previousStats,
+        blockedUntil: Math.max(activeBlockedUntil, blockedUntil),
+        blockedReason: "subscription_limit",
+        blockedSource: source,
+        blockedModel: modelId,
+        cooldownUntil: undefined,
+        cooldownReason: undefined,
+        cooldownModel: undefined,
+        lastFailureAt: now,
+        failureCounts: {
+          ...previousStats?.failureCounts,
+          rate_limit: (previousStats?.failureCounts?.rate_limit ?? 0) + 1,
+        },
+      };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       updateUsageStatsEntry(freshStore, profileId, () => nextStats as ProfileUsageStats);
       return true;
     },
@@ -933,6 +961,7 @@ export async function markAuthProfileBlockedUntil(params: {
     return;
   }
   previousStats = store.usageStats?.[profileId];
+<<<<<<< HEAD
   nextStats = buildBlockedProfileUsageStats({
     previousStats,
     blockedUntil,
@@ -940,6 +969,24 @@ export async function markAuthProfileBlockedUntil(params: {
     modelId,
     now,
   });
+=======
+  const activeBlockedUntil = resolveActiveWindowUntil(previousStats?.blockedUntil, now);
+  nextStats = {
+    ...previousStats,
+    blockedUntil: Math.max(activeBlockedUntil, blockedUntil),
+    blockedReason: "subscription_limit",
+    blockedSource: source,
+    blockedModel: modelId,
+    cooldownUntil: undefined,
+    cooldownReason: undefined,
+    cooldownModel: undefined,
+    lastFailureAt: now,
+    failureCounts: {
+      ...previousStats?.failureCounts,
+      rate_limit: (previousStats?.failureCounts?.rate_limit ?? 0) + 1,
+    },
+  };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   updateUsageStatsEntry(store, profileId, () => nextStats as ProfileUsageStats);
   authProfileUsageDeps.saveAuthProfileStore(store, agentDir);
   logAuthProfileFailureStateChange({

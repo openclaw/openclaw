@@ -19,7 +19,10 @@ import {
 } from "../../agents/tool-catalog.js";
 import { summarizeToolDescriptionText } from "../../agents/tool-description-summary.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+<<<<<<< HEAD
 import type { PluginRegistry } from "../../plugins/registry-types.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   buildPluginToolMetadataKey,
@@ -80,7 +83,11 @@ function buildPluginGroups(params: {
     agentDir,
     agentId: params.agentId,
   };
+<<<<<<< HEAD
   const toolRegistry = ensureStandalonePluginToolRegistryLoaded({
+=======
+  ensureStandalonePluginToolRegistryLoaded({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     context: toolContext,
     toolAllowlist: ["group:plugins"],
     allowGatewaySubagentBinding: true,
@@ -93,14 +100,20 @@ function buildPluginGroups(params: {
     toolAllowlist: ["group:plugins"],
     suppressNameConflicts: true,
     allowGatewaySubagentBinding: true,
+<<<<<<< HEAD
     runtimeRegistry: toolRegistry,
   });
   const catalogRegistry = toolRegistry ?? getActivePluginRegistry();
+=======
+  });
+  const activeRegistry = getActivePluginRegistry();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const groups = new Map<string, ToolCatalogGroup>();
   // Key metadata by plugin ownership and tool name so we only project metadata that
   // was registered BY the tool's owning plugin. Without this scoping, plugin-X
   // could override the catalog label/description/risk/tags for another plugin's
   // tool by registering metadata with the same toolName.
+<<<<<<< HEAD
   const pluginToolMetadata = new Map<
     string,
     NonNullable<PluginRegistry["toolMetadata"]>[number]["metadata"]
@@ -111,6 +124,14 @@ function buildPluginGroups(params: {
       pluginToolMetadata.set(metadataKey, entry.metadata);
     }
   }
+=======
+  const pluginToolMetadata = new Map(
+    (activeRegistry?.toolMetadata ?? []).map((entry) => [
+      buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName),
+      entry.metadata,
+    ]),
+  );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const seenToolIds = new Set<string>();
   for (const tool of pluginTools) {
     const meta = getPluginToolMeta(tool);
@@ -150,7 +171,11 @@ function buildPluginGroups(params: {
     seenToolIds.add(tool.name);
     groups.set(groupId, existing);
   }
+<<<<<<< HEAD
   for (const entry of catalogRegistry?.tools ?? []) {
+=======
+  for (const entry of activeRegistry?.tools ?? []) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const names = entry.names.length > 0 ? entry.names : (entry.declaredNames ?? []);
     for (const name of names) {
       if (seenToolIds.has(name) || params.existingToolNames.has(name)) {

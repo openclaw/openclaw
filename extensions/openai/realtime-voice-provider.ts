@@ -527,7 +527,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private async doConnect(): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       let settled = false;
+<<<<<<< HEAD
       let startupFailureClosing = false;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const settleResolve = () => {
         if (settled) {
           return;
@@ -546,7 +549,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       };
       const connectTimeout: ReturnType<typeof setTimeout> = setTimeout(() => {
         if (!this.sessionConfigured && !this.intentionallyClosed) {
+<<<<<<< HEAD
           startupFailureClosing = true;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           this.ws?.terminate();
           settleReject(new Error("OpenAI realtime connection timeout"));
         }
@@ -571,9 +577,15 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         this.ws = ws;
 
         const rejectStartup = (error: Error) => {
+<<<<<<< HEAD
           startupFailureClosing = true;
           settleReject(error);
           if (ws.readyState !== WebSocket.CLOSED) {
+=======
+          settleReject(error);
+          if (ws.readyState !== WebSocket.CLOSED) {
+            this.intentionallyClosed = true;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             ws.close(1000, "startup failed");
           }
         };
@@ -653,6 +665,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
             code,
             reasonBuffer,
           });
+<<<<<<< HEAD
           if (startupFailureClosing) {
             if (this.ws === ws) {
               this.connected = false;
@@ -661,6 +674,8 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
             return;
           }
           const wasSessionConfigured = this.sessionConfigured;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           this.connected = false;
           this.sessionConfigured = false;
           if (this.intentionallyClosed) {
@@ -668,7 +683,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
             this.config.onClose?.("completed");
             return;
           }
+<<<<<<< HEAD
           if (!wasSessionConfigured && !settled) {
+=======
+          if (!this.sessionConfigured && !settled) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             settleReject(new Error("OpenAI realtime connection closed before ready"));
             return;
           }

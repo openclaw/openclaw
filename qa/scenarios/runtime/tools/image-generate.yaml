@@ -9,7 +9,10 @@ scenario:
       - tools.image-generate
   objective: Verify image_generate preserves arguments and result shape across OpenClaw and Codex.
   successCriteria:
+<<<<<<< HEAD
     - Scenario is mock-openai only because live image generation uses async task lifecycle proof outside this direct failure-path fixture.
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     - Effective tools expose image_generate after QA image-generation config is applied.
     - The mock provider plans exactly one happy-path image_generate call.
     - The mock provider plans one denied-input failure-path image_generate call.
@@ -23,7 +26,10 @@ scenario:
     kind: flow
     summary: Exercise the image_generate runtime tool family.
     config:
+<<<<<<< HEAD
       requiredProviderMode: mock-openai
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       toolName: image_generate
       ensureImageGeneration: true
       toolCoverage:
@@ -39,15 +45,21 @@ scenario:
         reason: image_generate is an OpenClaw integration tool whose happy path yields for async completion, so standard direct call/result parity would compare different lifecycle phases.
       promptSnippet: "target=image_generate"
       failurePromptSnippet: "failure target=image_generate"
+<<<<<<< HEAD
       happyPathOutputRequired: false
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 flow:
   steps:
     - name: exercises image_generate happy and failure paths
       actions:
+<<<<<<< HEAD
         - assert:
             expr: "env.providerMode === config.requiredProviderMode"
             message: this seeded scenario is mock-openai only
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         - call: runRuntimeToolFixture
           saveAs: result
           args:

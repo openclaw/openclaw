@@ -1,7 +1,10 @@
 /**
  * Scans remote provider model catalogs for configured providers.
  */
+<<<<<<< HEAD
 import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   asDateTimestampMs,
@@ -26,12 +29,15 @@ import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const DEFAULT_TIMEOUT_MS = 12_000;
 const DEFAULT_CONCURRENCY = 3;
+<<<<<<< HEAD
 // The OpenRouter /models catalog is a provider-controlled, runtime-fetched body
 // (already >100 KB and growing). Read it under a byte cap before JSON.parse so a
 // faulty or hostile provider cannot stream an unbounded document and exhaust
 // process memory. Keep this aligned with the runtime capability cache for the
 // same endpoint so scan and runtime discovery fail at the same boundary.
 const OPENROUTER_MODELS_BODY_MAX_BYTES = 16 * 1024 * 1024;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const BASE_IMAGE_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=";
@@ -191,6 +197,7 @@ async function withTimeout<T>(
   }
 }
 
+<<<<<<< HEAD
 // Reads the OpenRouter /models success body under a byte cap before JSON.parse.
 // The success path was previously buffered with an unbounded res.json(); a faulty
 // or hostile provider could stream an effectively endless document and exhaust
@@ -211,10 +218,13 @@ async function readOpenRouterModelsJson(response: Response, timeoutMs: number): 
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function fetchOpenRouterModels(
   fetchImpl: typeof fetch,
   timeoutMs: number,
 ): Promise<OpenRouterModelMeta[]> {
+<<<<<<< HEAD
   let res: Response | undefined;
   try {
     res = await withTimeout(timeoutMs, (signal) =>
@@ -290,6 +300,75 @@ async function fetchOpenRouterModels(
       await res.body?.cancel().catch(() => undefined);
     }
   }
+=======
+  const res = await withTimeout(timeoutMs, (signal) =>
+    fetchImpl(OPENROUTER_MODELS_URL, {
+      headers: { Accept: "application/json" },
+      signal,
+    }),
+  );
+  if (!res.ok) {
+    throw new Error(`OpenRouter /models failed: HTTP ${res.status}`);
+  }
+  const payload = (await res.json()) as { data?: unknown };
+  const entries = Array.isArray(payload.data) ? payload.data : [];
+
+  return entries
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+      const obj = entry as Record<string, unknown>;
+      const id = normalizeOptionalString(obj.id) ?? "";
+      if (!id) {
+        return null;
+      }
+      const name = typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : id;
+
+      const contextLength =
+        typeof obj.context_length === "number" && Number.isFinite(obj.context_length)
+          ? obj.context_length
+          : null;
+
+      const maxCompletionTokens =
+        typeof obj.max_completion_tokens === "number" && Number.isFinite(obj.max_completion_tokens)
+          ? obj.max_completion_tokens
+          : typeof obj.max_output_tokens === "number" && Number.isFinite(obj.max_output_tokens)
+            ? obj.max_output_tokens
+            : null;
+
+      const supportedParameters = Array.isArray(obj.supported_parameters)
+        ? normalizeStringEntries(
+            obj.supported_parameters.filter((value) => typeof value === "string"),
+          )
+        : [];
+
+      const supportedParametersCount = supportedParameters.length;
+      const supportsToolsMeta = supportedParameters.includes("tools");
+
+      const modality =
+        typeof obj.modality === "string" && obj.modality.trim() ? obj.modality.trim() : null;
+
+      const inferredParamB = inferParamBFromIdOrName(`${id} ${name}`);
+      const createdAtMs = normalizeCreatedAtMs(obj.created_at);
+      const pricing = parseOpenRouterPricing(obj.pricing);
+
+      return {
+        id,
+        name,
+        contextLength,
+        maxCompletionTokens,
+        supportedParameters,
+        supportedParametersCount,
+        supportsToolsMeta,
+        modality,
+        inferredParamB,
+        createdAtMs,
+        pricing,
+      } satisfies OpenRouterModelMeta;
+    })
+    .filter((entry): entry is OpenRouterModelMeta => Boolean(entry));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function probeTool(

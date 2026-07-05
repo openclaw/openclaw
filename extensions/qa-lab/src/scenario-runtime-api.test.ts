@@ -59,7 +59,10 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     resolveGeneratedImagePath: fn,
     startAgentRun: fn,
     waitForAgentRun: fn,
+<<<<<<< HEAD
     waitForAgentHistoryReply: fn,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     listCronJobs: fn,
     waitForCronRunCompletion: fn,
     findManagedDreamingCronJob: fn,
@@ -75,8 +78,11 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     extractQaToolPayload: fn,
     formatMemoryDreamingDay: fn,
     resolveSessionTranscriptsDirForAgent: fn,
+<<<<<<< HEAD
     activeMemoryToggleKey: fn,
     setActiveMemorySessionDisabled: fn,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     buildAgentSessionKey: fn,
     normalizeLowercaseStringOrEmpty: fn,
     formatErrorMessage: fn,
@@ -165,7 +171,10 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(api.config).toEqual({ expected: "value" });
     expect(api.waitForCondition).toBe(waitForCondition);
     expect(api.waitForChannelReady).toBe(api.waitForTransportReady);
+<<<<<<< HEAD
     expect(api.waitForAgentHistoryReply).toBe(deps.waitForAgentHistoryReply);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(api.markGatewayLogCursor).toBe(deps.markGatewayLogCursor);
     expect(api.assertNoGatewayLogSentinels).toBe(deps.assertNoGatewayLogSentinels);
     expect(api.readSessionTranscriptSummary).toBe(deps.readSessionTranscriptSummary);

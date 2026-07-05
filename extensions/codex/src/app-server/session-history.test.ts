@@ -51,6 +51,7 @@ function messageEntry(params: {
   };
 }
 
+<<<<<<< HEAD
 function mirroredTarget(sessionFile: string) {
   return {
     sessionFile,
@@ -59,6 +60,8 @@ function mirroredTarget(sessionFile: string) {
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("readCodexMirroredSessionHistoryMessages", () => {
   it("replays only the branch selected by a leaf control", async () => {
     const sessionFile = await writeSession([
@@ -83,9 +86,13 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       },
     ]);
 
+<<<<<<< HEAD
     await expect(
       readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
     ).resolves.toMatchObject([
+=======
+    await expect(readCodexMirroredSessionHistoryMessages(sessionFile)).resolves.toMatchObject([
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       { role: "user", content: "root prompt" },
       { role: "assistant", content: "active answer" },
     ]);
@@ -103,9 +110,13 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       },
     ]);
 
+<<<<<<< HEAD
     await expect(
       readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
     ).resolves.toEqual([]);
+=======
+    await expect(readCodexMirroredSessionHistoryMessages(sessionFile)).resolves.toEqual([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("keeps visible history when continuation rows use a disjoint append cursor", async () => {
@@ -137,9 +148,13 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       }),
     ]);
 
+<<<<<<< HEAD
     await expect(
       readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
     ).resolves.toMatchObject([
+=======
+    await expect(readCodexMirroredSessionHistoryMessages(sessionFile)).resolves.toMatchObject([
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       { role: "user", content: "visible prompt" },
       { role: "assistant", content: "continued answer" },
     ]);
@@ -168,9 +183,13 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       }),
     ]);
 
+<<<<<<< HEAD
     await expect(
       readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
     ).resolves.toMatchObject([
+=======
+    await expect(readCodexMirroredSessionHistoryMessages(sessionFile)).resolves.toMatchObject([
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       { role: "user", content: "visible prompt" },
       { role: "assistant", content: "continued answer" },
     ]);

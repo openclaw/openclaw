@@ -16,8 +16,13 @@ type MemorySourceStateDb = {
   };
 };
 
+<<<<<<< HEAD
 export const MEMORY_SOURCE_FILE_STATE_SQL = `SELECT path, hash, mtime, size FROM memory_index_sources WHERE source = ?`;
 export const MEMORY_SOURCE_FILE_HASH_SQL = `SELECT hash FROM memory_index_sources WHERE path = ? AND source = ?`;
+=======
+export const MEMORY_SOURCE_FILE_STATE_SQL = `SELECT path, hash, mtime, size FROM files WHERE source = ?`;
+export const MEMORY_SOURCE_FILE_HASH_SQL = `SELECT hash FROM files WHERE path = ? AND source = ?`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export function loadMemorySourceFileState(params: {
   db: MemorySourceStateDb;

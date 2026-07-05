@@ -47,6 +47,7 @@ function buildModelsResponse(models: Array<{ id: string; supported_endpoints?: u
   return { data: models };
 }
 
+<<<<<<< HEAD
 function cancelTrackedResponse(
   text: string,
   init: ResponseInit,
@@ -69,12 +70,15 @@ function cancelTrackedResponse(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function mockDiscoveryResponse(spec: {
   ok: boolean;
   status?: number;
   json?: unknown;
   text?: string;
 }) {
+<<<<<<< HEAD
   const status = spec.status ?? (spec.ok ? 200 : 500);
   const response =
     spec.json !== undefined
@@ -85,6 +89,15 @@ function mockDiscoveryResponse(spec: {
       : new Response(spec.text ?? "", { status });
   fetchWithSsrFGuardMock.mockImplementationOnce(async () => ({
     response,
+=======
+  fetchWithSsrFGuardMock.mockImplementationOnce(async () => ({
+    response: {
+      ok: spec.ok,
+      status: spec.status ?? (spec.ok ? 200 : 500),
+      json: async () => spec.json,
+      text: async () => spec.text ?? "",
+    },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     release: vi.fn(async () => {}),
   }));
 }
@@ -141,7 +154,10 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+<<<<<<< HEAD
     vi.unstubAllGlobals();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resolveConfiguredSecretInputStringMock.mockReset();
     resolveFirstGithubTokenMock.mockReset();
     resolveCopilotApiTokenMock.mockReset();
@@ -231,15 +247,27 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
 
   it("wraps invalid discovery JSON as a setup error", async () => {
     fetchWithSsrFGuardMock.mockImplementationOnce(async () => ({
+<<<<<<< HEAD
       response: new Response("not-valid-json{{{", {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
+=======
+      response: {
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError("bad json");
+        },
+        text: async () => "",
+      },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       release: vi.fn(async () => {}),
     }));
 
     await expect(
       githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions()),
+<<<<<<< HEAD
     ).rejects.toThrow("github-copilot.model-discovery: malformed JSON response");
   });
 
@@ -298,6 +326,9 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     expect(caught?.message.length).toBeLessThan(8_300);
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
+=======
+    ).rejects.toThrow("GitHub Copilot model discovery returned invalid JSON");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("honors remote overrides when creating the provider", async () => {
@@ -359,7 +390,11 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     ).toBe(true);
     expect(
       shouldContinueAutoSelection(
+<<<<<<< HEAD
         new Error("github-copilot.model-discovery: malformed JSON response"),
+=======
+        new Error("GitHub Copilot model discovery returned invalid JSON"),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ),
     ).toBe(true);
     expect(shouldContinueAutoSelection(new Error("Network timeout"))).toBe(false);

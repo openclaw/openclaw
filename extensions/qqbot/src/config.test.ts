@@ -137,7 +137,10 @@ describe("qqbot config", () => {
       groups: {
         G1: {
           requireMention: true,
+<<<<<<< HEAD
           commandLevel: "safety",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           tools: { deny: ["*"] },
           toolsBySender: {
             "id:alice": { allow: ["read"] },
@@ -147,7 +150,11 @@ describe("qqbot config", () => {
       accounts: {
         bot2: {
           groups: {
+<<<<<<< HEAD
             G1: { commandLevel: "strict", tools: { allow: [] } },
+=======
+            G1: { tools: { allow: [] } },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           },
         },
       },

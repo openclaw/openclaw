@@ -719,6 +719,7 @@ describe("qa confidence report", () => {
     expect(report.lanes[0]?.details).toContain("count/scenario mismatch");
   });
 
+<<<<<<< HEAD
   it("treats impossible suite counts as unknown", async () => {
     for (const [artifact, expectedDetail] of [
       [
@@ -767,6 +768,8 @@ describe("qa confidence report", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("requires generic summary lanes to expose an explicit pass signal", async () => {
     await writeJson("runtime/qa-runtime-parity-summary.json", {});
 

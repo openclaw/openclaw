@@ -377,6 +377,7 @@ export async function probeGateway(opts: {
         connectError = formatErrorMessage(err);
         connectErrorDetails = err instanceof GatewayClientRequestError ? err.details : null;
       },
+<<<<<<< HEAD
       onClose: (code, reason, info) => {
         close = { code, reason };
         if (connectLatencyMs == null) {
@@ -385,6 +386,11 @@ export async function probeGateway(opts: {
           if (info?.transportValidated === true) {
             connectLatencyMs = Date.now() - startedAt;
           }
+=======
+      onClose: (code, reason) => {
+        close = { code, reason };
+        if (connectLatencyMs == null) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           settleProbe({
             ok: false,
             error: connectError || formatProbeCloseError(close),

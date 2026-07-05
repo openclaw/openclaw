@@ -21,6 +21,7 @@ describe("formatModelOverrideResetEvent", () => {
       }),
     ).toBe("Model override not allowed for this agent; reverted to github-copilot/gpt-4o.");
   });
+<<<<<<< HEAD
 
   it("does not tell users to edit the allowlist for stale session overrides", () => {
     expect(
@@ -33,4 +34,6 @@ describe("formatModelOverrideResetEvent", () => {
       "Stored model override openai/gpt-5.5 is stale for this session; reverted to openai/gpt-5.4. Pick a model again with /model if you still want to override the default.",
     );
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

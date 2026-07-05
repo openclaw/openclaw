@@ -58,6 +58,7 @@ describe("resolvePendingDeviceApprovalState", () => {
       },
     });
   });
+<<<<<<< HEAD
 
   it("drops non-string role entries from malformed pairing records instead of crashing", () => {
     // Legacy/malformed on-disk pairing records can carry non-string roles/role (blind-cast JSON);
@@ -110,4 +111,6 @@ describe("resolvePendingDeviceApprovalState", () => {
       },
     });
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

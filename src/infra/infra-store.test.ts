@@ -110,7 +110,11 @@ describe("infra store", () => {
       });
     });
 
+<<<<<<< HEAD
     it("ignores retired JSON trigger files at runtime", async () => {
+=======
+    it("sanitizes malformed persisted config values", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       await withTempDir("openclaw-voicewake-", async (baseDir) => {
         await fs.mkdir(path.join(baseDir, "settings"), { recursive: true });
         await fs.writeFile(
@@ -123,7 +127,11 @@ describe("infra store", () => {
         );
 
         const loaded = await loadVoiceWakeConfig(baseDir);
+<<<<<<< HEAD
         expect(loaded.triggers).toEqual(defaultVoiceWakeTriggers());
+=======
+        expect(loaded.triggers).toEqual(["wake"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         expect(loaded.updatedAtMs).toBe(0);
       });
     });

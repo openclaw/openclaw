@@ -66,6 +66,11 @@ export type ExecPolicyScopeSnapshot = {
   allowedDecisions: readonly ExecApprovalDecision[];
 };
 
+<<<<<<< HEAD
+=======
+type ExecPolicyScopeSummary = Omit<ExecPolicyScopeSnapshot, "allowedDecisions">;
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type ExecPolicyRequestedField = "security" | "ask";
 
 function resolveRequestedHost(params: {
@@ -325,6 +330,23 @@ export function collectExecPolicyScopeSnapshots(params: {
   return snapshots;
 }
 
+<<<<<<< HEAD
+=======
+export function resolveExecPolicyScopeSummary(params: {
+  approvals: ExecApprovalsFile;
+  scopeExecConfig?: ExecPolicyConfig | undefined;
+  globalExecConfig?: ExecPolicyConfig | undefined;
+  configPath: string;
+  scopeLabel: string;
+  agentId?: string;
+  hostPath?: string;
+}): ExecPolicyScopeSummary {
+  const snapshot = resolveExecPolicyScopeSnapshot(params);
+  const { allowedDecisions: _allowedDecisions, ...summary } = snapshot;
+  return summary;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function resolveExecPolicyScopeSnapshot(params: {
   approvals: ExecApprovalsFile;
   scopeExecConfig?: ExecPolicyConfig | undefined;

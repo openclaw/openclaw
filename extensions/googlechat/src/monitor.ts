@@ -29,7 +29,11 @@ import type {
 } from "./monitor-types.js";
 import { warnAppPrincipalMisconfiguration } from "./monitor-webhook.js";
 import { getGoogleChatRuntime } from "./runtime.js";
+<<<<<<< HEAD
 import type { GoogleChatAttachment, GoogleChatEvent, GoogleChatSpace } from "./types.js";
+=======
+import type { GoogleChatAttachment, GoogleChatEvent } from "./types.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 setGoogleChatWebhookEventProcessor(processGoogleChatEvent);
 
@@ -62,6 +66,7 @@ function resolveGoogleChatTimestampMs(eventTime?: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+<<<<<<< HEAD
 function isGoogleChatGroupSpace(space: GoogleChatSpace): boolean {
   const spaceType = (space.spaceType ?? "").toUpperCase();
   // Google Chat deprecates `type` in favor of `spaceType`; known modern
@@ -76,6 +81,8 @@ function isGoogleChatGroupSpace(space: GoogleChatSpace): boolean {
   return space.singleUserBotDm !== true && (space.type ?? "").toUpperCase() !== "DM";
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveGoogleChatBotLoopProtection(params: {
   allowBots: boolean;
   isBotSender: boolean;
@@ -200,7 +207,12 @@ async function processMessageWithPipeline(params: {
   if (!spaceId) {
     return;
   }
+<<<<<<< HEAD
   const isGroup = isGoogleChatGroupSpace(space);
+=======
+  const spaceType = (space.type ?? "").toUpperCase();
+  const isGroup = spaceType !== "DM";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const sender = message.sender ?? event.user;
   const senderId = sender?.name ?? "";
   const senderName = sender?.displayName ?? "";

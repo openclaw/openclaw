@@ -2,7 +2,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+<<<<<<< HEAD
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 
 type EnvValue = string | undefined | ((home: string) => string | undefined);
@@ -37,9 +40,15 @@ function snapshotEnv(): EnvSnapshot {
 function restoreEnv(snapshot: EnvSnapshot) {
   const restoreKey = (key: string, value: string | undefined) => {
     if (value === undefined) {
+<<<<<<< HEAD
       deleteTestEnvValue(key);
     } else {
       setTestEnvValue(key, value);
+=======
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   };
   restoreKey("HOME", snapshot.home);
@@ -61,19 +70,33 @@ function snapshotExtraEnv(keys: string[]): Record<string, string | undefined> {
 function restoreExtraEnv(snapshot: Record<string, string | undefined>) {
   for (const [key, value] of Object.entries(snapshot)) {
     if (value === undefined) {
+<<<<<<< HEAD
       deleteTestEnvValue(key);
     } else {
       setTestEnvValue(key, value);
+=======
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   }
 }
 
 function setTempHome(base: string) {
+<<<<<<< HEAD
   setTestEnvValue("HOME", base);
   setTestEnvValue("USERPROFILE", base);
   // Ensure tests using HOME isolation aren't affected by leaked OPENCLAW_HOME.
   deleteTestEnvValue("OPENCLAW_HOME");
   setTestEnvValue("OPENCLAW_STATE_DIR", path.join(base, ".openclaw"));
+=======
+  process.env.HOME = base;
+  process.env.USERPROFILE = base;
+  // Ensure tests using HOME isolation aren't affected by leaked OPENCLAW_HOME.
+  delete process.env.OPENCLAW_HOME;
+  process.env.OPENCLAW_STATE_DIR = path.join(base, ".openclaw");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   if (process.platform !== "win32") {
     return;
@@ -82,8 +105,13 @@ function setTempHome(base: string) {
   if (!match) {
     return;
   }
+<<<<<<< HEAD
   setTestEnvValue("HOMEDRIVE", match[1]);
   setTestEnvValue("HOMEPATH", match[2] || "\\");
+=======
+  process.env.HOMEDRIVE = match[1];
+  process.env.HOMEPATH = match[2] || "\\";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function allocateTempHomeBase(prefix: string): Promise<string> {
@@ -127,9 +155,15 @@ export async function withTempHome<T>(
     for (const [key, raw] of Object.entries(opts.env)) {
       const value = typeof raw === "function" ? raw(base) : raw;
       if (value === undefined) {
+<<<<<<< HEAD
         deleteTestEnvValue(key);
       } else {
         setTestEnvValue(key, value);
+=======
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     }
   }

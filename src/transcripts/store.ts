@@ -150,6 +150,17 @@ export class TranscriptsStore {
     return session ? { session, sessionDir: dir } : undefined;
   }
 
+<<<<<<< HEAD
+=======
+  /** Append an utterance by session id, creating a dated session directory if needed. */
+  async appendUtterance(sessionId: string, utterance: TranscriptUtterance): Promise<void> {
+    const dir =
+      (await this.findSessionDir(sessionId)) ??
+      path.join(this.rootDir, dateSegment(sessionId), safeSegment(sessionId));
+    await this.appendUtteranceToDir(dir, sessionId, utterance);
+  }
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /** Append an utterance for an exact session descriptor. */
   async appendUtteranceForSession(
     session: TranscriptSessionDescriptor,
@@ -187,6 +198,21 @@ export class TranscriptsStore {
     return await this.readUtterancesFromDir(sessionDir, options);
   }
 
+<<<<<<< HEAD
+=======
+  /** Read utterances by session id or qualified date/id selector. */
+  async readUtterances(
+    sessionId: string,
+    options: { maxUtterances?: number } = {},
+  ): Promise<TranscriptUtterance[]> {
+    const dir = await this.findSessionDir(sessionId);
+    if (!dir) {
+      return [];
+    }
+    return await this.readUtterancesFromDir(dir, options);
+  }
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   private async readUtterancesFromDir(
     dir: string,
     options: { maxUtterances?: number } = {},

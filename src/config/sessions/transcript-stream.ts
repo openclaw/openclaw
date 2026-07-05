@@ -1,7 +1,10 @@
 // Transcript streaming reads large JSONL files forward or backward without whole-file buffering.
 import fs from "node:fs";
 import readline from "node:readline";
+<<<<<<< HEAD
 import { readFileRangeAsync } from "./file-range.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 // Shared streaming helpers for JSONL session transcripts.
 //
@@ -139,3 +142,23 @@ function decodeTrimmedLine(line: Buffer): string {
   const trimmed = line.toString("utf-8").trim();
   return trimmed;
 }
+<<<<<<< HEAD
+=======
+
+async function readFileRangeAsync(
+  fileHandle: Awaited<ReturnType<typeof fs.promises.open>>,
+  position: number,
+  length: number,
+): Promise<Buffer> {
+  const buffer = Buffer.alloc(length);
+  let offset = 0;
+  while (offset < length) {
+    const { bytesRead } = await fileHandle.read(buffer, offset, length - offset, position + offset);
+    if (bytesRead <= 0) {
+      break;
+    }
+    offset += bytesRead;
+  }
+  return offset === length ? buffer : buffer.subarray(0, offset);
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

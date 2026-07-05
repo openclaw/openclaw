@@ -7,7 +7,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import {
   hasOutboundReplyContent,
+<<<<<<< HEAD
   isFastModeAutoProgressPayload,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
@@ -17,6 +20,10 @@ import {
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
 import {
+<<<<<<< HEAD
+=======
+  isToolAllowedByPolicies,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
   resolveInheritedToolPolicyForSession,
@@ -34,7 +41,10 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "../../agents/subagent-capabilities.js";
+<<<<<<< HEAD
 import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
 import {
   resolveConversationBindingRecord,
@@ -394,7 +404,11 @@ const resolveSessionStoreLookup = (
   if (!sessionKey) {
     return {};
   }
+<<<<<<< HEAD
   const agentId = resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId });
+=======
+  const agentId = resolveSessionAgentId({ sessionKey, config: cfg, agentId: ctx.AgentId });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   try {
     const store = loadSessionStore(storePath);
@@ -557,6 +571,7 @@ function resolveChannelModelCandidate(params: {
     groupChannel: params.entry?.groupChannel ?? params.ctx.GroupChannel,
     groupSubject: params.entry?.subject ?? params.ctx.GroupSubject,
     parentSessionKey: params.parentSessionKey,
+<<<<<<< HEAD
     directUserIds: [
       params.entry?.origin?.nativeDirectUserId,
       params.entry?.origin?.from,
@@ -565,6 +580,8 @@ function resolveChannelModelCandidate(params: {
       params.ctx.From,
       params.ctx.SenderId,
     ],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   if (!channelModelOverride) {
     return undefined;
@@ -1275,7 +1292,11 @@ export async function dispatchReplyFromConfig(
   const sessionAgentId = resolveSessionAgentId({
     sessionKey: acpDispatchSessionKey,
     config: cfg,
+<<<<<<< HEAD
     fallbackAgentId: ctx.AgentId,
+=======
+    agentId: ctx.AgentId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   const sessionAgentCfg = resolveAgentConfig(cfg, sessionAgentId);
   const verboseProgress = createShouldEmitVerboseProgress({
@@ -2228,12 +2249,15 @@ export async function dispatchReplyFromConfig(
       !sendPolicyDenied &&
       shouldEmitVerboseProgress() &&
       shouldSendVerboseProgressMessages();
+<<<<<<< HEAD
     const shouldDeliverForcedToolProgressDespiteSourceSuppression = () =>
       suppressAutomaticSourceDelivery &&
       sourceReplyDeliveryMode === "message_tool_only" &&
       ctx.InboundEventKind !== "room_event" &&
       !sendPolicyDenied &&
       params.replyOptions?.forceToolResultProgress === true;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     let finalReplyDeliveryStarted = false;
     const hasExecApprovalPayload = (payload: ReplyPayload) => {
       const execApproval =
@@ -2697,9 +2721,12 @@ export async function dispatchReplyFromConfig(
       if (execApproval && typeof execApproval === "object" && !Array.isArray(execApproval)) {
         return payload;
       }
+<<<<<<< HEAD
       if (isFastModeAutoProgressPayload(payload)) {
         return payload;
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       // Group/native flows intentionally suppress tool summary text, but media-only
       // tool results (for example TTS audio) must still be delivered.
       const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
@@ -2756,6 +2783,7 @@ export async function dispatchReplyFromConfig(
     const onPatchSummaryFromReplyOptions = params.replyOptions?.onPatchSummary;
     const allowSuppressedSourceProgressCallbacks =
       params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed === true;
+<<<<<<< HEAD
     const isChannelOwnedToolResultProgressPayload = (payload: ReplyPayload) => {
       const text = normalizeOptionalString(payload.text);
       return Boolean(text?.startsWith("🛠️") || text?.startsWith("🔧"));
@@ -2775,6 +2803,8 @@ export async function dispatchReplyFromConfig(
       }
       return shouldSendToolSummaries() && shouldForwardProgressCallback();
     };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const shouldAllowQuietChannelOwnedProgressCallbacks = (options?: {
       allowWhenToolSummariesHidden?: boolean;
       requiresToolSummaryVisibility?: boolean;
@@ -2976,6 +3006,7 @@ export async function dispatchReplyFromConfig(
                 markInboundDedupeReplayUnsafe();
                 // Buffered commentary preceded this tool; land it before the summary.
                 await flushPendingCommentaryProgress();
+<<<<<<< HEAD
                 const isFastModeAutoProgress = isFastModeAutoProgressPayload(payload);
                 const isForcedToolProgress =
                   shouldDeliverForcedToolProgressDespiteSourceSuppression();
@@ -2984,11 +3015,15 @@ export async function dispatchReplyFromConfig(
                   isFastModeAutoProgress,
                 );
                 if (progressCallbackForwarded) {
+=======
+                if (!suppressAutomaticSourceDelivery && shouldSendToolSummaries()) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                   await onToolResultFromReplyOptions?.(payload);
                 }
                 if (isDispatchOperationAborted()) {
                   return;
                 }
+<<<<<<< HEAD
                 if (
                   isFastModeAutoProgress &&
                   progressCallbackForwarded &&
@@ -3009,6 +3044,12 @@ export async function dispatchReplyFromConfig(
                 const visibleToolPayload = isForcedToolProgress
                   ? payload
                   : resolveToolDeliveryPayload(payload);
+=======
+                if (shouldSuppressProgressDelivery()) {
+                  return;
+                }
+                const visibleToolPayload = resolveToolDeliveryPayload(payload);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 if (!visibleToolPayload) {
                   return;
                 }
@@ -3023,30 +3064,42 @@ export async function dispatchReplyFromConfig(
                   accountId: replyRoute.accountId,
                 });
                 const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
+<<<<<<< HEAD
                 const deliveryPayload = isForcedToolProgress
                   ? normalizedPayload
                   : resolveToolDeliveryPayload(normalizedPayload);
+=======
+                const deliveryPayload = resolveToolDeliveryPayload(normalizedPayload);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 if (!deliveryPayload) {
                   return;
                 }
                 if (isDispatchOperationAborted()) {
                   return;
                 }
+<<<<<<< HEAD
                 if (
                   shouldSuppressLateTextOnlyToolProgress(deliveryPayload) &&
                   !isFastModeAutoProgressPayload(deliveryPayload) &&
                   !isForcedToolProgress
                 ) {
+=======
+                if (shouldSuppressLateTextOnlyToolProgress(deliveryPayload)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                   return;
                 }
                 if (shouldSuppressMessageToolOnlyTextErrorProgress(deliveryPayload)) {
                   return;
                 }
+<<<<<<< HEAD
                 if (
                   shouldSuppressDefaultToolProgressMessages() &&
                   !isFastModeAutoProgressPayload(deliveryPayload) &&
                   !isForcedToolProgress
                 ) {
+=======
+                if (shouldSuppressDefaultToolProgressMessages()) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                   const hasMedia = resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
                   if (!hasMedia && !hasExecApprovalPayload(deliveryPayload)) {
                     return;

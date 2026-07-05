@@ -36,6 +36,7 @@ function requireFirstFetchParams(): {
   return fetchParams as { auditContext?: string; url?: string };
 }
 
+<<<<<<< HEAD
 function jsonResponse(payload: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(payload), {
     status: 200,
@@ -44,10 +45,13 @@ function jsonResponse(payload: unknown, init?: ResponseInit): Response {
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("nextcloud talk room info", () => {
   it("resolves direct rooms from the room info endpoint", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuard.mockResolvedValue({
+<<<<<<< HEAD
       response: jsonResponse({
         ocs: {
           data: {
@@ -55,6 +59,18 @@ describe("nextcloud talk room info", () => {
           },
         },
       }),
+=======
+      response: {
+        ok: true,
+        json: async () => ({
+          ocs: {
+            data: {
+              type: 1,
+            },
+          },
+        }),
+      },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       release,
     });
 
@@ -81,6 +97,7 @@ describe("nextcloud talk room info", () => {
 
   it("normalizes signed decimal room type strings through the shared parser", async () => {
     fetchWithSsrFGuard.mockResolvedValue({
+<<<<<<< HEAD
       response: jsonResponse({
         ocs: {
           data: {
@@ -88,6 +105,18 @@ describe("nextcloud talk room info", () => {
           },
         },
       }),
+=======
+      response: {
+        ok: true,
+        json: async () => ({
+          ocs: {
+            data: {
+              type: "+01",
+            },
+          },
+        }),
+      },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       release: vi.fn(async () => {}),
     });
 
@@ -108,6 +137,7 @@ describe("nextcloud talk room info", () => {
 
   it("does not coerce partial room type strings", async () => {
     fetchWithSsrFGuard.mockResolvedValue({
+<<<<<<< HEAD
       response: jsonResponse({
         ocs: {
           data: {
@@ -115,6 +145,18 @@ describe("nextcloud talk room info", () => {
           },
         },
       }),
+=======
+      response: {
+        ok: true,
+        json: async () => ({
+          ocs: {
+            data: {
+              type: "1direct",
+            },
+          },
+        }),
+      },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       release: vi.fn(async () => {}),
     });
 
@@ -135,6 +177,7 @@ describe("nextcloud talk room info", () => {
 
   it("does not classify negative room types as group rooms", async () => {
     fetchWithSsrFGuard.mockResolvedValue({
+<<<<<<< HEAD
       response: jsonResponse({
         ocs: {
           data: {
@@ -142,6 +185,18 @@ describe("nextcloud talk room info", () => {
           },
         },
       }),
+=======
+      response: {
+        ok: true,
+        json: async () => ({
+          ocs: {
+            data: {
+              type: -1,
+            },
+          },
+        }),
+      },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       release: vi.fn(async () => {}),
     });
 

@@ -78,8 +78,16 @@ describe("web tool runtime context", () => {
 
     expect(resolved.config).toBe(runtimeConfig);
     expect(resolved.runtimeWebSearch?.selectedProvider).toBe("perplexity");
+<<<<<<< HEAD
     expect(resolved.preferRuntimeProviders).toBe(true);
     expect(mocks.resolveManifestContractOwnerPluginId).not.toHaveBeenCalled();
+=======
+    const ownerLookup = latestOwnerLookupParams();
+    expect(ownerLookup.contract).toBe("webSearchProviders");
+    expect(ownerLookup.value).toBe("perplexity");
+    expect(ownerLookup).not.toHaveProperty("origin");
+    expect(ownerLookup.config).toBe(runtimeConfig);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("falls back to captured search config and runtime metadata when active globals are missing", async () => {
@@ -101,6 +109,7 @@ describe("web tool runtime context", () => {
 
     expect(resolved.config).toBe(capturedConfig);
     expect(resolved.runtimeWebSearch?.selectedProvider).toBe("brave");
+<<<<<<< HEAD
     expect(resolved.preferRuntimeProviders).toBe(true);
     expect(mocks.resolveManifestContractOwnerPluginId).not.toHaveBeenCalled();
   });
@@ -115,6 +124,30 @@ describe("web tool runtime context", () => {
   });
 
   it("keeps search runtime discovery enabled for manifest-owned configured providers", async () => {
+=======
+    const ownerLookup = latestOwnerLookupParams();
+    expect(ownerLookup.contract).toBe("webSearchProviders");
+    expect(ownerLookup.value).toBe("brave");
+    expect(ownerLookup).not.toHaveProperty("origin");
+    expect(ownerLookup.config).toBe(capturedConfig);
+  });
+
+  it("uses configured provider ids when runtime metadata is absent", () => {
+    resolveWebSearchToolRuntimeContext({
+      config: { tools: { web: { search: { provider: "Brave" } } } },
+    });
+
+    const ownerLookup = latestOwnerLookupParams();
+    expect(ownerLookup.contract).toBe("webSearchProviders");
+    expect(ownerLookup.value).toBe("brave");
+    expect(ownerLookup).not.toHaveProperty("origin");
+    expect(ownerLookup.config).toEqual({
+      tools: { web: { search: { provider: "Brave" } } },
+    });
+  });
+
+  it("treats resolved global provider owners as explicit selections", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mocks.resolveManifestContractOwnerPluginId.mockReturnValue("brave");
     const { resolveWebSearchToolRuntimeContext: resolveWebSearchToolRuntimeContextLocal } =
       await import("./web-tool-runtime-context.js");
@@ -123,8 +156,15 @@ describe("web tool runtime context", () => {
       config: { tools: { web: { search: { provider: "brave" } } } },
     });
 
+<<<<<<< HEAD
     expect(resolved.preferRuntimeProviders).toBe(true);
     expect(mocks.resolveManifestContractOwnerPluginId).not.toHaveBeenCalled();
+=======
+    expect(resolved.preferRuntimeProviders).toBe(false);
+    expect(mocks.resolveManifestContractOwnerPluginId.mock.calls.at(-1)?.[0]).not.toHaveProperty(
+      "origin",
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("keeps runtime providers disabled for bundled fetch owners", async () => {

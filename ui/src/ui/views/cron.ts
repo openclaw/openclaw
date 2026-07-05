@@ -925,11 +925,15 @@ export function renderCron(props: CronProps) {
                       ? html`
                           <label class="field cron-span-2">
                             ${renderFieldLabel(t("cron.form.payloadKind"))}
+<<<<<<< HEAD
                             <input
                               id="cron-payload-kind"
                               .value=${t("cron.form.command")}
                               readonly
                             />
+=======
+                            <input id="cron-payload-kind" .value=${"Command"} readonly />
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                           </label>
                         `
                       : html`
@@ -985,7 +989,11 @@ export function renderCron(props: CronProps) {
                   <label class="field cron-span-2">
                     ${renderFieldLabel(
                       payloadLocked
+<<<<<<< HEAD
                         ? t("cron.form.command")
+=======
+                        ? "Command"
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                         : props.form.payloadKind === "systemEvent"
                           ? t("cron.form.mainTimelineMessage")
                           : t("cron.form.assistantTaskPrompt"),

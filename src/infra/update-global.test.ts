@@ -29,6 +29,10 @@ import {
   isMainPackageTarget,
   OPENCLAW_MAIN_PACKAGE_SPEC,
   resolveGlobalInstallCommand,
+<<<<<<< HEAD
+=======
+  resolveGlobalPackageRoot,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
   resolveGlobalRoot,
@@ -131,6 +135,12 @@ describe("update global helpers", () => {
     await expect(resolveGlobalRoot("bun", runCommand, 1000)).resolves.toContain(
       path.join(".bun", "install", "global", "node_modules"),
     );
+<<<<<<< HEAD
+=======
+    await expect(resolveGlobalPackageRoot("npm", runCommand, 1000)).resolves.toBe(
+      path.join("/tmp/npm-root", "openclaw"),
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("maps main and explicit install specs for global installs", () => {
@@ -314,6 +324,12 @@ describe("update global helpers", () => {
           "npm",
         );
         await expect(resolveGlobalRoot("npm", runCommand, 1000, pkgRoot)).resolves.toBe(brewRoot);
+<<<<<<< HEAD
+=======
+        await expect(resolveGlobalPackageRoot("npm", runCommand, 1000, pkgRoot)).resolves.toBe(
+          pkgRoot,
+        );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         await expect(
           resolveGlobalInstallTarget({
             manager: "npm",

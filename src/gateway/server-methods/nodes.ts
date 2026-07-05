@@ -26,12 +26,16 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+<<<<<<< HEAD
 import {
   getPairedDevice,
   listApprovedPairedDeviceRoles,
   listDevicePairing,
   removePairedDeviceRole,
 } from "../../infra/device-pairing.js";
+=======
+import { listDevicePairing } from "../../infra/device-pairing.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   approveNodePairing,
@@ -71,6 +75,7 @@ import { ADMIN_SCOPE, PAIRING_SCOPE } from "../operator-scopes.js";
 import { refreshClientPluginNodeCapability } from "../plugin-node-capability.js";
 import type { NodeEventContext } from "../server-node-events-types.js";
 import {
+<<<<<<< HEAD
   deniesCrossDeviceManagement,
   pairedDeviceHasNonOperatorRole,
   resolveDeviceManagementAuthz,
@@ -78,6 +83,8 @@ import {
 } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
 import {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   NODE_WAKE_RECONNECT_POLL_MS,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
   NODE_WAKE_RECONNECT_WAIT_MS,
@@ -343,6 +350,7 @@ function prunePendingNodeActions(nodeId: string, nowMs: number): PendingNodeActi
   return live;
 }
 
+<<<<<<< HEAD
 function clearRemovedNodeRuntimeState(params: {
   nodeId: string;
   context: Pick<GatewayRequestContext, "nodeRegistry">;
@@ -465,6 +473,8 @@ async function removePairedDeviceBackedNode(params: {
   return { status: "removed", nodeId: removed.deviceId, disconnectDeviceId: removed.deviceId };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function enqueuePendingNodeAction(params: {
   nodeId: string;
   command: string;
@@ -1030,6 +1040,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       respond(true, rejected, undefined);
     });
   },
+<<<<<<< HEAD
   // Remove a node pairing (CLI: `openclaw nodes remove`). For a device-backed
   // node this revokes the device's `node` role in devices/paired.json and
   // disconnects its node-role sessions: a mixed-role device keeps its row and
@@ -1039,6 +1050,9 @@ export const nodeHandlers: GatewayRequestHandlers = {
   // device-token caller revoking its own node role on a mixed-role device
   // additionally needs operator.admin (see removePairedDeviceBackedNode).
   "node.pair.remove": async ({ params, respond, context, client }) => {
+=======
+  "node.pair.remove": async ({ params, respond, context }) => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!validateNodePairRemoveParams(params)) {
       respondInvalidParams({
         respond,
@@ -1049,6 +1063,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
     }
     const { nodeId } = params as { nodeId: string };
     await respondUnavailableOnThrow(respond, async () => {
+<<<<<<< HEAD
       const requestedNodeId = nodeId.trim();
       const deviceBacked = await removePairedDeviceBackedNode({ nodeId, client, context });
       if (deviceBacked.status === "denied") {
@@ -1087,6 +1102,31 @@ export const nodeHandlers: GatewayRequestHandlers = {
           });
         }
       }
+=======
+      const removed = await removePairedNode(nodeId);
+      if (!removed) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
+        return;
+      }
+      pendingNodeActionsById.delete(removed.nodeId);
+      context.nodeRegistry.updateSurface(removed.nodeId, {
+        caps: [],
+        commands: [],
+        permissions: undefined,
+      });
+      removeRemoteNodeInfo(removed.nodeId);
+      context.broadcast(
+        "node.pair.resolved",
+        {
+          requestId: "",
+          nodeId: removed.nodeId,
+          decision: "removed",
+          ts: Date.now(),
+        },
+        { dropIfSlow: true },
+      );
+      respond(true, removed, undefined);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   },
   "node.pair.verify": async ({ params, respond }) => {

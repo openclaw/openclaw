@@ -379,6 +379,14 @@ export async function hasAllGuildPermissionsDiscord(
   );
 }
 
+<<<<<<< HEAD
+=======
+/**
+ * @deprecated Prefer hasAnyGuildPermissionDiscord or hasAllGuildPermissionsDiscord for clarity.
+ */
+export const hasGuildPermissionDiscord = hasAnyGuildPermissionDiscord;
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function fetchChannelPermissionsDiscord(
   channelId: string,
   opts: DiscordReactOpts,

@@ -10,6 +10,7 @@ const QA_GATEWAY_DEBUG_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_GATEWAY_TOKEN",
 ]);
 const QA_GATEWAY_DEBUG_SECRET_VALUE_KEYS = Object.freeze([
+<<<<<<< HEAD
   "accessToken",
   "access_token",
   "apiKey",
@@ -39,6 +40,13 @@ const QA_GATEWAY_DEBUG_SECRET_QUERY_KEYS = Object.freeze([
   "token",
 ]);
 const QA_GATEWAY_DEBUG_SECRET_HEADER_KEYS = Object.freeze(["cookie", "set-cookie", "x-api-key"]);
+=======
+  "botToken",
+  "driverToken",
+  "sutToken",
+  "leaseToken",
+]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function redactSecretEnvKeyPattern(text: string, pattern: RegExp) {
   const source = pattern.source.replace(/^\^/u, "").replace(/\$$/u, "");
@@ -50,6 +58,7 @@ function redactSecretEnvKeyPattern(text: string, pattern: RegExp) {
     .replace(new RegExp(`"(${source})"\\s*:\\s*"[^"]*"`, "g"), `"$1":"<redacted>"`);
 }
 
+<<<<<<< HEAD
 function redactSecretValueKey(text: string, key: string) {
   const escapedKey = escapeRegExp(key);
   return text
@@ -74,6 +83,10 @@ export function redactQaGatewayDebugText(text: string) {
       "$1<redacted>",
     );
   }
+=======
+export function redactQaGatewayDebugText(text: string) {
+  let redacted = text;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   for (const envVar of QA_GATEWAY_DEBUG_SECRET_ENV_VARS) {
     const escapedEnvVar = escapeRegExp(envVar);
     redacted = redacted.replace(
@@ -89,11 +102,24 @@ export function redactQaGatewayDebugText(text: string) {
     redacted = redactSecretEnvKeyPattern(redacted, pattern);
   }
   for (const key of QA_GATEWAY_DEBUG_SECRET_VALUE_KEYS) {
+<<<<<<< HEAD
     redacted = redactSecretValueKey(redacted, key);
+=======
+    const escapedKey = escapeRegExp(key);
+    redacted = redacted.replace(
+      new RegExp(`\\b(${escapedKey})(\\s*[=:]\\s*)([^\\s"';,]+|"[^"]*"|'[^']*')`, "gi"),
+      `$1$2<redacted>`,
+    );
+    redacted = redacted.replace(
+      new RegExp(`("${escapedKey}"\\s*:\\s*)"[^"]*"`, "gi"),
+      `$1"<redacted>"`,
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   return redacted
     .replaceAll(/\bsk-ant-oat01-[A-Za-z0-9_-]+\b/g, "<redacted>")
     .replaceAll(/\bBearer\s+[^\s"'<>]{8,}/gi, "Bearer <redacted>")
+<<<<<<< HEAD
     .replaceAll(
       new RegExp(
         `([?#&](?:${QA_GATEWAY_DEBUG_SECRET_QUERY_KEYS.map(escapeRegExp).join("|")})=)[^&\\s]+`,
@@ -101,6 +127,9 @@ export function redactQaGatewayDebugText(text: string) {
       ),
       "$1<redacted>",
     );
+=======
+    .replaceAll(/([?#&]token=)[^&\s]+/gi, "$1<redacted>");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function formatQaGatewayLogsForError(logs: string) {

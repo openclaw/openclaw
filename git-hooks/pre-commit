@@ -16,6 +16,7 @@ if [[ ! -f "$FILTER_FILES" ]]; then
   exit 1
 fi
 
+<<<<<<< HEAD
 GIT_DIR="$(git rev-parse --git-dir 2>/dev/null || true)"
 if [[ -n "$GIT_DIR" ]] && \
   { [[ -f "$GIT_DIR/MERGE_HEAD" ]] || \
@@ -28,6 +29,8 @@ if [[ -n "$GIT_DIR" ]] && \
   exit 0
 fi
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 # Security: avoid option-injection from malicious file names (e.g. "--all", "--force").
 # Robustness: NUL-delimited file list handles spaces/newlines safely.
 # Compatibility: use read loops instead of `mapfile` so this runs on macOS Bash 3.x.

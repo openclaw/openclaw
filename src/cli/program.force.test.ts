@@ -9,6 +9,7 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+<<<<<<< HEAD
 const probePortUsageMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../infra/ports-probe.js", () => ({
@@ -17,6 +18,15 @@ vi.mock("../infra/ports-probe.js", () => ({
 
 import { execFileSync } from "node:child_process";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
+=======
+const tryListenOnPortMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../infra/ports-probe.js", () => ({
+  tryListenOnPort: (...args: unknown[]) => tryListenOnPortMock(...args),
+}));
+
+import { execFileSync } from "node:child_process";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   forceFreePort,
   forceFreePortAndWait,
@@ -33,8 +43,15 @@ describe("gateway --force helpers", () => {
     vi.clearAllMocks();
     originalKill = process.kill.bind(process);
     originalPlatform = process.platform;
+<<<<<<< HEAD
     probePortUsageMock.mockReset();
     probePortUsageMock.mockResolvedValue("busy");
+=======
+    tryListenOnPortMock.mockReset();
+    tryListenOnPortMock.mockRejectedValue(
+      Object.assign(new Error("in use"), { code: "EADDRINUSE" }),
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     // Pin to linux so all lsof tests are platform-invariant.
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
   });
@@ -63,7 +80,11 @@ describe("gateway --force helpers", () => {
   });
 
   it("skips lsof when the port is already bindable", async () => {
+<<<<<<< HEAD
     probePortUsageMock.mockResolvedValue("free");
+=======
+    tryListenOnPortMock.mockResolvedValue(undefined);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const result = await forceFreePortAndWait(18789, { timeoutMs: 500, intervalMs: 100 });
 
@@ -197,7 +218,13 @@ describe("gateway --force helpers", () => {
       }
       return "18789/tcp: 4242\n";
     });
+<<<<<<< HEAD
     probePortUsageMock.mockResolvedValueOnce("busy").mockResolvedValue("free");
+=======
+    tryListenOnPortMock
+      .mockRejectedValueOnce(Object.assign(new Error("in use"), { code: "EADDRINUSE" }))
+      .mockResolvedValue(undefined);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const result = await forceFreePortAndWait(18789, { timeoutMs: 500, intervalMs: 100 });
 
@@ -227,12 +254,22 @@ describe("gateway --force helpers", () => {
       return "";
     });
 
+<<<<<<< HEAD
     probePortUsageMock
       .mockResolvedValueOnce("busy")
       .mockResolvedValueOnce("busy")
       .mockResolvedValueOnce("busy")
       .mockResolvedValueOnce("busy")
       .mockResolvedValue("free");
+=======
+    const busyErr = Object.assign(new Error("in use"), { code: "EADDRINUSE" });
+    tryListenOnPortMock
+      .mockRejectedValueOnce(busyErr)
+      .mockRejectedValueOnce(busyErr)
+      .mockRejectedValueOnce(busyErr)
+      .mockRejectedValueOnce(busyErr)
+      .mockResolvedValueOnce(undefined);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const promise = forceFreePortAndWait(18789, {
       timeoutMs: 300,
@@ -253,8 +290,11 @@ describe("gateway --force helpers", () => {
   });
 
   it("throws when lsof is unavailable and fuser is missing", async () => {
+<<<<<<< HEAD
     // An inconclusive four-host probe must continue into the cleanup tools.
     probePortUsageMock.mockResolvedValue("unknown");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     (execFileSync as unknown as Mock).mockImplementation((cmd: string) => {
       const err = new Error(`spawnSync ${cmd} ENOENT`) as NodeJS.ErrnoException;
       err.code = "ENOENT";
@@ -299,11 +339,14 @@ describe("gateway --force helpers (Windows netstat path)", () => {
   it("parses PIDs from netstat output correctly", () => {
     (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(18789, 42, 99));
     expect(listPortListeners(18789)).toEqual<PortProcess[]>([{ pid: 42 }, { pid: 99 }]);
+<<<<<<< HEAD
     expect(execFileSync).toHaveBeenCalledWith(
       getWindowsSystem32ExePath("netstat.exe"),
       ["-ano", "-p", "TCP"],
       { encoding: "utf-8" },
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("does not incorrectly match a port that is a substring (e.g. 80 vs 8080)", () => {

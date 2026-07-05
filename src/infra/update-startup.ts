@@ -9,6 +9,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
+<<<<<<< HEAD
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -23,6 +24,14 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+=======
+import { resolveStateDir } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runCommandWithTimeout } from "../process/exec.js";
+import { VERSION } from "../version.js";
+import { isTruthyEnvValue } from "./env.js";
+import { writeJson } from "./json-files.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { scheduleGatewaySigusr1Restart } from "./restart.js";
 import { detectRespawnSupervisor, type RespawnSupervisor } from "./supervisor-markers.js";
@@ -81,7 +90,11 @@ export function resetUpdateAvailableStateForTest(): void {
   updateAvailableCache = null;
 }
 
+<<<<<<< HEAD
 const UPDATE_CHECK_STATE_KEY = "default";
+=======
+const UPDATE_CHECK_FILENAME = "update-check.json";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const AUTO_UPDATE_COMMAND_TIMEOUT_MS = 45 * 60 * 1000;
@@ -90,8 +103,11 @@ const AUTO_STABLE_JITTER_HOURS_DEFAULT = 12;
 const AUTO_BETA_CHECK_INTERVAL_HOURS_DEFAULT = 1;
 const MANAGED_AUTO_UPDATE_SYSTEMD_RESTART_GRACE_MS = 2000;
 
+<<<<<<< HEAD
 type UpdateCheckStateDatabase = Pick<OpenClawStateKyselyDatabase, "update_check_state">;
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function shouldSkipCheck(allowInTests: boolean): boolean {
   if (allowInTests) {
     return false;
@@ -140,6 +156,7 @@ function resolveCheckIntervalMs(cfg: OpenClawConfig): number {
   return UPDATE_CHECK_INTERVAL_MS;
 }
 
+<<<<<<< HEAD
 function presentString(value: string | null): string | undefined {
   return value ?? undefined;
 }
@@ -203,6 +220,20 @@ async function writeState(state: UpdateCheckState): Promise<void> {
       }),
     );
   });
+=======
+async function readState(statePath: string): Promise<UpdateCheckState> {
+  try {
+    const raw = await fs.readFile(statePath, "utf-8");
+    const parsed = JSON.parse(raw) as UpdateCheckState;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+async function writeState(statePath: string, state: UpdateCheckState): Promise<void> {
+  await writeJson(statePath, state);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function sameUpdateAvailable(a: UpdateAvailable | null, b: UpdateAvailable | null): boolean {
@@ -478,7 +509,12 @@ export async function runGatewayUpdateCheck(params: {
     return;
   }
 
+<<<<<<< HEAD
   const state = await readState();
+=======
+  const statePath = path.join(resolveStateDir(), UPDATE_CHECK_FILENAME);
+  const state = await readState(statePath);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const rawNow = Date.now();
   const now = resolveUpdateCheckNowMs(rawNow);
   const rawNowIsValid = asDateTimestampMs(rawNow) !== undefined;
@@ -530,7 +566,11 @@ export async function runGatewayUpdateCheck(params: {
       next: null,
       onUpdateAvailableChange: params.onUpdateAvailableChange,
     });
+<<<<<<< HEAD
     await writeState(nextState);
+=======
+    await writeState(statePath, nextState);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return;
   }
 
@@ -538,7 +578,11 @@ export async function runGatewayUpdateCheck(params: {
   const resolved = await resolveNpmChannelTag({ channel, timeoutMs: 2500 });
   const tag = resolved.tag;
   if (!resolved.version) {
+<<<<<<< HEAD
     await writeState(nextState);
+=======
+    await writeState(statePath, nextState);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return;
   }
 
@@ -658,7 +702,11 @@ export async function runGatewayUpdateCheck(params: {
     });
   }
 
+<<<<<<< HEAD
   await writeState(nextState);
+=======
+  await writeState(statePath, nextState);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (pendingAutoUpdateRestartDelayMs !== null) {
     scheduleGatewaySigusr1Restart({
       delayMs: pendingAutoUpdateRestartDelayMs,

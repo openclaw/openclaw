@@ -403,6 +403,7 @@ describe("buildEmbeddedExtensionFactories", () => {
     expect(consumeEmbeddedToolSendReceipt(sessionManager, "call-message")).toBeUndefined();
   });
 
+<<<<<<< HEAD
   it("keeps a confirmed send successful when result middleware fails", async () => {
     const registry = createEmptyPluginRegistry();
     registry.agentToolResultMiddlewares.push({
@@ -460,6 +461,8 @@ describe("buildEmbeddedExtensionFactories", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("marks status-timeout tool results as model-visible failures", async () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
 

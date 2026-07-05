@@ -25,6 +25,10 @@ import {
   deleteTaskRecordById,
   findTaskByRunId,
   getTaskById,
+<<<<<<< HEAD
+=======
+  getTaskRegistrySnapshot,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   listFreshTasksForOwnerKey,
   markTaskTerminalById,
   maybeDeliverTaskStateChangeUpdate,
@@ -591,7 +595,13 @@ describe("task-registry store runtime", () => {
         expect(findTaskByRunId("run-create-origin")).toMatchObject({
           taskId: created.taskId,
         });
+<<<<<<< HEAD
         const deliveryState = loadTaskRegistryStateFromSqlite().deliveryStates.get(created.taskId);
+=======
+        const deliveryState = getTaskRegistrySnapshot().deliveryStates.find(
+          (state) => state.taskId === created.taskId,
+        );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         expect(deliveryState?.requesterOrigin).toEqual({
           channel: "test-channel",
           to: "C1234567890",

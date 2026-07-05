@@ -5,7 +5,10 @@ import { expect, vi } from "vitest";
 type MockWithReset = {
   mockReset(): void;
   mockResolvedValue?(value: unknown): void;
+<<<<<<< HEAD
   mockReturnValue?(value: unknown): void;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 export const taskExecutorMocks = {
@@ -17,7 +20,10 @@ export const taskExecutorMocks = {
 
 export const announceDeliveryMocks = {
   deliverSubagentAnnouncement: vi.fn(),
+<<<<<<< HEAD
   loadRequesterSessionEntry: vi.fn(() => ({ entry: undefined })),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 export const taskDeliveryRuntimeMocks = {
@@ -37,7 +43,10 @@ type TaskDeliveryBackgroundMocks = {
 
 type AnnouncementBackgroundMocks = {
   deliverSubagentAnnouncement: MockWithReset;
+<<<<<<< HEAD
   loadRequesterSessionEntry: MockWithReset;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 type MediaBackgroundResetMocks = {
@@ -144,8 +153,11 @@ export function resetMediaBackgroundMocks({
     result: { messageId: "msg-1" },
   });
   announceDeliveryMocksLocal.deliverSubagentAnnouncement.mockReset();
+<<<<<<< HEAD
   announceDeliveryMocksLocal.loadRequesterSessionEntry.mockReset();
   announceDeliveryMocksLocal.loadRequesterSessionEntry.mockReturnValue?.({ entry: undefined });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function expectQueuedTaskRun({

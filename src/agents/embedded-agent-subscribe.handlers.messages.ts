@@ -694,23 +694,33 @@ export function handleMessageUpdate(
   if (isPhasePendingOpenAiResponsesTextItem) {
     return;
   }
+<<<<<<< HEAD
   // Subagents have no live consumer; their final result is delivered from
   // message_end. Keep accumulating deltaBuffer, but skip per-chunk visible-text
   // parsing so long parallel subagent streams do not monopolize the event loop.
   const skipLiveStream = ctx.params.suppressLiveStreamOutput === true;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const shouldUsePhaseAwareBlockReply = Boolean(deliveryPhase);
 
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
+<<<<<<< HEAD
     if (!skipLiveStream && !shouldUsePhaseAwareBlockReply) {
+=======
+    if (!shouldUsePhaseAwareBlockReply) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       appendBlockReplyChunk(ctx, chunk);
     }
   }
 
+<<<<<<< HEAD
   if (skipLiveStream) {
     return;
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!suppressMessageToolOnlySourceReplyOutput && ctx.state.streamReasoning) {
     // Handle partial <think> tags: stream whatever reasoning is visible so far.
     ctx.emitReasoningStream(extractThinkingFromTaggedStream(ctx.state.deltaBuffer));

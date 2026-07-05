@@ -44,6 +44,7 @@ export type ContextEngineFactory = (
   ctx: ContextEngineFactoryContext,
 ) => ContextEngine | Promise<ContextEngine>;
 export type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
+<<<<<<< HEAD
 export type ContextEngineRegistrationLifecycle = "runtime" | "readOnlyDiscovery";
 export type ContextEngineRegistration = {
   factory: ContextEngineFactory;
@@ -54,6 +55,11 @@ export type ContextEngineRegistration = {
 type RegisterContextEngineForOwnerOptions = {
   allowSameOwnerRefresh?: boolean;
   lifecycle?: ContextEngineRegistrationLifecycle;
+=======
+
+type RegisterContextEngineForOwnerOptions = {
+  allowSameOwnerRefresh?: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 const LEGACY_SESSION_KEY_COMPAT = Symbol.for("openclaw.contextEngine.sessionKeyCompat");
@@ -396,7 +402,17 @@ export type ContextEngineRuntimeQuarantine = {
 };
 
 type ContextEngineRegistryState = {
+<<<<<<< HEAD
   engines: Map<string, ContextEngineRegistration>;
+=======
+  engines: Map<
+    string,
+    {
+      factory: ContextEngineFactory;
+      owner: string;
+    }
+  >;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   quarantinedEngines: Map<string, ContextEngineRuntimeQuarantine>;
 };
 
@@ -513,7 +529,10 @@ export function registerContextEngineForOwner(
   opts?: RegisterContextEngineForOwnerOptions,
 ): ContextEngineRegistrationResult {
   const normalizedOwner = requireContextEngineOwner(owner);
+<<<<<<< HEAD
   const lifecycle = opts?.lifecycle ?? "runtime";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const registry = getContextEngineRegistryState().engines;
   const existing = registry.get(id);
   if (
@@ -526,6 +545,7 @@ export function registerContextEngineForOwner(
   if (existing && existing.owner !== normalizedOwner) {
     return { ok: false, existingOwner: existing.owner };
   }
+<<<<<<< HEAD
   if (existing?.lifecycle === "runtime" && lifecycle === "readOnlyDiscovery") {
     // Read-only discovery may re-run after live activation. It can collect metadata, but it must
     // not replace the runtime-safe factory with a closure that captured a read-only plugin mode.
@@ -538,6 +558,13 @@ export function registerContextEngineForOwner(
   if (lifecycle === "runtime") {
     clearContextEngineRuntimeQuarantine(id);
   }
+=======
+  if (existing && opts?.allowSameOwnerRefresh !== true) {
+    return { ok: false, existingOwner: existing.owner };
+  }
+  registry.set(id, { factory, owner: normalizedOwner });
+  clearContextEngineRuntimeQuarantine(id);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return { ok: true };
 }
 
@@ -559,6 +586,7 @@ export function registerContextEngine(
  * Return the factory for a registered engine, or undefined.
  */
 export function getContextEngineFactory(id: string): ContextEngineFactory | undefined {
+<<<<<<< HEAD
   const registration = getContextEngineRegistration(id);
   return registration?.lifecycle === "runtime" ? registration.factory : undefined;
 }
@@ -566,6 +594,9 @@ export function getContextEngineFactory(id: string): ContextEngineFactory | unde
 /** Returns registration metadata so callers can distinguish discovery snapshots from runtime entries. */
 export function getContextEngineRegistration(id: string): ContextEngineRegistration | undefined {
   return getContextEngineRegistryState().engines.get(id);
+=======
+  return getContextEngineRegistryState().engines.get(id)?.factory;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /**
@@ -960,6 +991,7 @@ export async function resolveContextEngine(
     return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
   }
 
+<<<<<<< HEAD
   if (!isDefaultEngine && entry.lifecycle === "readOnlyDiscovery") {
     console.warn(
       `[context-engine] Context engine "${engineId}" owner=${entry.owner} is registered for read-only discovery only; falling back to default engine "${defaultEngineId}" without quarantine until runtime activation registers it.`,
@@ -967,6 +999,8 @@ export async function resolveContextEngine(
     return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let engine: ContextEngine;
   try {
     engine = await entry.factory(factoryCtx);

@@ -1,5 +1,10 @@
+<<<<<<< HEAD
 import { rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+=======
+// Telegram tests cover bot plugin behavior.
+import { rm } from "node:fs/promises";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearPluginInteractiveHandlers,
@@ -14,10 +19,13 @@ import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import {
   resolveTelegramConversationBaseSessionKey,
   resolveTelegramConversationRoute,
 } from "./conversation-route.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { TelegramInteractiveHandlerContext } from "./interactive-dispatch.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
@@ -40,6 +48,10 @@ const {
   replySpy,
   resolveExecApprovalSpy,
   sendMessageSpy,
+<<<<<<< HEAD
+=======
+  setSessionStoreEntriesForTest: _setSessionStoreEntriesForTest,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   setMyCommandsSpy,
   telegramBotDepsForTest,
   telegramBotRuntimeForTest,
@@ -148,6 +160,7 @@ function mockMsgContextArg(
   return mockArg(source, callIndex, argIndex, label) as MsgContext;
 }
 
+<<<<<<< HEAD
 async function writeDirectTelegramTranscriptContext(params: {
   cfg: OpenClawConfig;
   storePath: string;
@@ -201,6 +214,8 @@ async function writeDirectTelegramTranscriptContext(params: {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function execApprovalCall(index = 0) {
   return requireRecord(
     mockArg(resolveExecApprovalSpy as unknown as MockCallSource, index, 0, "exec approval call"),
@@ -2082,6 +2097,7 @@ describe("createTelegramBot", () => {
     expect(messagesById.get("35016")?.body).not.toBe("K");
   });
 
+<<<<<<< HEAD
   it("keeps direct Telegram media context when transcript context exists", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
@@ -2229,6 +2245,8 @@ describe("createTelegramBot", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses quote text when a Telegram partial reply is received", async () => {
     onSpy.mockClear();
     sendMessageSpy.mockClear();

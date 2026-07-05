@@ -15,11 +15,14 @@ function makeTempRoot(): string {
   return root;
 }
 
+<<<<<<< HEAD
 function expectNoNodeStack(stderr: string): void {
   expect(stderr).not.toContain("Node.js");
   expect(stderr).not.toContain("\n    at ");
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
@@ -91,11 +94,14 @@ describe("check-cli-startup-memory", () => {
         OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS: "1000.5",
       }),
     ).toThrow("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS must be a positive integer");
+<<<<<<< HEAD
     expect(() =>
       testing.readPositiveIntEnv("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS", 60_000, {
         OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER + 1),
       }),
     ).toThrow("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS must be a positive integer");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(
       testing.readPositiveIntEnv("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS", 60_000, {
         OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS: "1000",
@@ -107,10 +113,15 @@ describe("check-cli-startup-memory", () => {
     for (const args of [
       ["--json"],
       ["--json", "--summary"],
+<<<<<<< HEAD
       ["--json", "-h"],
       ["--summary"],
       ["--summary", "--json"],
       ["--summary", "-h"],
+=======
+      ["--summary"],
+      ["--summary", "--json"],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ]) {
       expect(() => testing.parseArgs(args)).toThrow(/--(?:json|summary) requires a path/u);
     }
@@ -137,6 +148,7 @@ describe("check-cli-startup-memory", () => {
     expect(readdirSync(tempRoot)).toEqual([]);
   });
 
+<<<<<<< HEAD
   it("reports CLI argument errors without a Node stack trace", () => {
     const result = spawnSync(process.execPath, ["scripts/check-cli-startup-memory.mjs", "--wat"], {
       cwd: path.resolve(__dirname, "..", ".."),
@@ -149,6 +161,8 @@ describe("check-cli-startup-memory", () => {
     expectNoNodeStack(result.stderr);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("times out startup probes instead of hanging indefinitely", () => {
     if (process.platform !== "darwin" && process.platform !== "linux") {
       return;
@@ -218,6 +232,7 @@ describe("check-cli-startup-memory", () => {
       ),
     ).toThrow("--help did not report max RSS");
   });
+<<<<<<< HEAD
 
   it("passes the generated RSS hook as a Node import URL", () => {
     if (process.platform !== "darwin" && process.platform !== "linux") {
@@ -256,4 +271,6 @@ describe("check-cli-startup-memory", () => {
       expect(args[1]).toMatch(/^file:/u);
     }
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

@@ -1,7 +1,10 @@
 // Covers gateway-backed approval channel runtime behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
+<<<<<<< HEAD
 import { createDeferred } from "../test-utils/deferred.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
 
@@ -34,6 +37,22 @@ vi.mock("../logging/subsystem.js", () => ({
 let createExecApprovalChannelRuntime: typeof import("./exec-approval-channel-runtime.js").createExecApprovalChannelRuntime;
 let ExecApprovalChannelRuntimeTerminalStartError: typeof import("./exec-approval-channel-runtime.js").ExecApprovalChannelRuntimeTerminalStartError;
 
+<<<<<<< HEAD
+=======
+function createDeferred<T>() {
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
+  return { promise, resolve, reject };
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type GatewayEventClientParams = { onEvent?: (evt: { event: string; payload: unknown }) => void };
 
 function firstMockCall(

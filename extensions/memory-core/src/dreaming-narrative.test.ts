@@ -35,6 +35,7 @@ const NARRATIVE_SESSION_LOCKS_KEY = Symbol.for(
   "openclaw.memoryCore.dreamingNarrative.sessionLocks",
 );
 const EXPECTS_POSIX_PRIVATE_FILE_MODE = process.platform !== "win32";
+<<<<<<< HEAD
 const originalNarrativeStateDir = process.env.OPENCLAW_STATE_DIR;
 
 function setNarrativeTestEnv(stateDir: string): void {
@@ -48,6 +49,8 @@ function restoreNarrativeTestEnv(): void {
     Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalNarrativeStateDir);
   }
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
@@ -102,7 +105,10 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 
 afterEach(() => {
   vi.restoreAllMocks();
+<<<<<<< HEAD
   restoreNarrativeTestEnv();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveGlobalMap<string, unknown>(DREAMS_FILE_LOCKS_KEY).clear();
   resolveGlobalMap<string, unknown>(NARRATIVE_SESSION_LOCKS_KEY).clear();
 });
@@ -1206,7 +1212,10 @@ describe("generateAndAppendDreamNarrative", () => {
     const storePath = path.join(sessionsDir, "sessions.json");
     const orphanPath = path.join(sessionsDir, "orphan.jsonl");
     const livePath = path.join(sessionsDir, "still-live.jsonl");
+<<<<<<< HEAD
     const normalTranscriptPath = path.join(sessionsDir, "normal-user-session.jsonl");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const updatedAt = Date.now();
     await sessionStoreRuntimeModule.saveSessionStore(
       storePath,
@@ -1223,25 +1232,44 @@ describe("generateAndAppendDreamNarrative", () => {
           sessionId: "still-missing-non-dreaming",
           updatedAt,
         },
+<<<<<<< HEAD
         "agent:main:dreaming-narrative-corrupt-normal": {
           sessionId: "normal-user-session",
           updatedAt,
         },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
       { skipMaintenance: true },
     );
     await fs.writeFile(orphanPath, '{"runId":"dreaming-narrative-light-123"}\n', "utf-8");
     await fs.writeFile(livePath, '{"runId":"dreaming-narrative-light-keep"}\n', "utf-8");
+<<<<<<< HEAD
     await fs.writeFile(normalTranscriptPath, '{"runId":"ordinary-user-session"}\n', "utf-8");
     const oldDate = new Date(Date.now() - 600_000);
     await fs.utimes(orphanPath, oldDate, oldDate);
     await fs.utimes(livePath, oldDate, oldDate);
     await fs.utimes(normalTranscriptPath, oldDate, oldDate);
+=======
+    const oldDate = new Date(Date.now() - 600_000);
+    await fs.utimes(orphanPath, oldDate, oldDate);
+    await fs.utimes(livePath, oldDate, oldDate);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfig").mockReturnValue({
       session: {},
     } as never);
+<<<<<<< HEAD
     setNarrativeTestEnv(stateDir);
+=======
+    vi.spyOn(sessionStoreRuntimeModule, "resolveStorePath").mockImplementation(((
+      _store: string | undefined,
+      { agentId }: { agentId: string },
+    ) => {
+      expect(agentId).toBe("main");
+      return storePath;
+    }) as typeof sessionStoreRuntimeModule.resolveStorePath);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     vi.spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir").mockReturnValue(stateDir);
 
     const subagent = createMockSubagent("The repository whispered of forgotten endpoints.");
@@ -1258,13 +1286,19 @@ describe("generateAndAppendDreamNarrative", () => {
       skipCache: true,
     }) as Record<string, unknown>;
     expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-light-1");
+<<<<<<< HEAD
     expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-corrupt-normal");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(updatedStore).toHaveProperty("agent:main:kept-session");
     expect(updatedStore).toHaveProperty("agent:main:telegram:group:dreaming-narrative-room");
     const sessionFiles = await fs.readdir(sessionsDir);
     expect(sessionFiles.filter((file) => file.startsWith("orphan.jsonl.deleted."))).not.toEqual([]);
     expect(sessionFiles).toContain("still-live.jsonl");
+<<<<<<< HEAD
     expect(sessionFiles).toContain("normal-user-session.jsonl");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expectLogIncludes(logger.info, "dreaming cleanup scrubbed");
   });
 
@@ -1310,7 +1344,17 @@ describe("generateAndAppendDreamNarrative", () => {
     vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfig").mockReturnValue({
       session: {},
     } as never);
+<<<<<<< HEAD
     setNarrativeTestEnv(stateDir);
+=======
+    vi.spyOn(sessionStoreRuntimeModule, "resolveStorePath").mockImplementation(((
+      _store: string | undefined,
+      { agentId }: { agentId: string },
+    ) => {
+      expect(agentId).toBe("main");
+      return storePath;
+    }) as typeof sessionStoreRuntimeModule.resolveStorePath);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     vi.spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir").mockReturnValue(stateDir);
 
     const subagent = createMockSubagent("A forgotten endpoint hummed in the dark.");

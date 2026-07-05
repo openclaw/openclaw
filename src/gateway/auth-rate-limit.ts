@@ -8,15 +8,24 @@
  *
  * Design decisions:
  * - Pure in-memory Map – no external dependencies; suitable for a single
+<<<<<<< HEAD
  *   gateway process. The Map is periodically pruned and capped to avoid
  *   unbounded growth.
+=======
+ *   gateway process.  The Map is periodically pruned to avoid unbounded
+ *   growth.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
  * - Loopback addresses (127.0.0.1 / ::1) are exempt by default so that local
  *   CLI sessions are never locked out.
  * - The module is side-effect-free: callers create an instance via
  *   {@link createAuthRateLimiter} and pass it where needed.
  */
 
+<<<<<<< HEAD
 import { resolveIntegerOption, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+=======
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isLoopbackAddress, resolveClientIp } from "./net.js";
 
 // ---------------------------------------------------------------------------
@@ -34,8 +43,11 @@ export interface RateLimitConfig {
   exemptLoopback?: boolean;
   /** Background prune interval in milliseconds; set <= 0 to disable auto-prune.  @default 60_000 */
   pruneIntervalMs?: number;
+<<<<<<< HEAD
   /** Maximum tracked client identities before old unlocked entries are evicted.  @default 10_000 */
   maxEntries?: number;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export const AUTH_RATE_LIMIT_SCOPE_DEFAULT = "default";
@@ -98,7 +110,10 @@ const DEFAULT_MAX_ATTEMPTS = 10;
 const DEFAULT_WINDOW_MS = 60_000; // 1 minute
 const DEFAULT_LOCKOUT_MS = 300_000; // 5 minutes
 const PRUNE_INTERVAL_MS = 60_000; // prune stale entries every minute
+<<<<<<< HEAD
 const DEFAULT_MAX_ENTRIES = 10_000;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 // ---------------------------------------------------------------------------
 // Implementation
@@ -140,10 +155,15 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   const lockoutMs = resolveTimerTimeoutMs(config?.lockoutMs, DEFAULT_LOCKOUT_MS, 0);
   const exemptLoopback = config?.exemptLoopback ?? true;
   const pruneIntervalMs = resolvePruneIntervalMs(config?.pruneIntervalMs);
+<<<<<<< HEAD
   const maxEntries = resolveIntegerOption(config?.maxEntries, DEFAULT_MAX_ENTRIES, { min: 1 });
 
   const entries = new Map<string, RateLimitEntry>();
   let overflowLockedUntil: number | undefined;
+=======
+
+  const entries = new Map<string, RateLimitEntry>();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   // Periodic cleanup to avoid unbounded map growth.
   const pruneTimer = pruneIntervalMs > 0 ? setInterval(() => prune(), pruneIntervalMs) : null;
@@ -192,10 +212,13 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     const entry = entries.get(key);
 
     if (!entry) {
+<<<<<<< HEAD
       const overflowLock = checkOverflowLock(now);
       if (overflowLock) {
         return overflowLock;
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return { allowed: true, remaining: maxAttempts, retryAfterMs: 0 };
     }
 
@@ -229,10 +252,13 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     let entry = entries.get(key);
 
     if (!entry) {
+<<<<<<< HEAD
       if (!enforceMaxEntries(now)) {
         overflowLockedUntil = Math.max(overflowLockedUntil ?? 0, now + lockoutMs);
         return;
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       entry = { attempts: [] };
       entries.set(key, entry);
     }
@@ -255,7 +281,12 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     entries.delete(key);
   }
 
+<<<<<<< HEAD
   function pruneExpiredEntries(now: number): void {
+=======
+  function prune(): void {
+    const now = Date.now();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     for (const [key, entry] of entries) {
       // If locked out, keep the entry until the lockout expires.
       if (entry.lockedUntil && now < entry.lockedUntil) {
@@ -268,6 +299,7 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     }
   }
 
+<<<<<<< HEAD
   function checkOverflowLock(now: number): RateLimitCheckResult | undefined {
     if (!overflowLockedUntil) {
       return undefined;
@@ -314,6 +346,8 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     pruneExpiredEntries(Date.now());
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   function size(): number {
     return entries.size;
   }
@@ -323,7 +357,10 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
       clearInterval(pruneTimer);
     }
     entries.clear();
+<<<<<<< HEAD
     overflowLockedUntil = undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   return { check, recordFailure, reset, size, prune, dispose };

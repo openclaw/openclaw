@@ -47,11 +47,16 @@ import {
 } from "../config/agent-limits.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
+<<<<<<< HEAD
 import {
   listSessionEntries,
   loadSessionEntry,
   resolveSessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
+=======
+import { loadSessionStore } from "../config/sessions/store.js";
+import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
@@ -67,7 +72,10 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
+<<<<<<< HEAD
   normalizeOptionalAgentId,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
@@ -271,6 +279,10 @@ type AcpSpawnInitializedRuntime = {
   runtimeCloseHandle: AcpSpawnRuntimeCloseHandle;
   sessionId?: string;
   sessionEntry: SessionEntry | undefined;
+<<<<<<< HEAD
+=======
+  sessionStore: Record<string, SessionEntry>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   storePath: string;
 };
 
@@ -447,11 +459,16 @@ function hasSessionLocalHeartbeatRelayRoute(params: {
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: params.requesterAgentId,
   });
+<<<<<<< HEAD
   const parentEntry = loadSessionEntry({
     storePath,
     sessionKey: params.parentSessionKey,
     clone: false,
   });
+=======
+  const sessionStore = loadSessionStore(storePath);
+  const parentEntry = sessionStore[params.parentSessionKey];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const parentDeliveryContext = deliveryContextFromSession(parentEntry);
   return Boolean(parentDeliveryContext?.channel && parentDeliveryContext.to);
 }
@@ -537,6 +554,17 @@ function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): string[] {
   return Array.from(ids);
 }
 
+<<<<<<< HEAD
+=======
+function normalizeOptionalAgentId(value: string | undefined | null): string | undefined {
+  const trimmed = normalizeOptionalString(value) ?? "";
+  if (!trimmed) {
+    return undefined;
+  }
+  return normalizeAgentId(trimmed);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function summarizeError(err: unknown): string {
   return formatErrorMessage(err);
 }
@@ -600,19 +628,32 @@ async function persistAcpSpawnSessionFileBestEffort(params: {
   sessionId: string;
   sessionKey: string;
   sessionEntry: SessionEntry | undefined;
+<<<<<<< HEAD
+=======
+  sessionStore: Record<string, SessionEntry>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   storePath: string;
   agentId: string;
   threadId?: string | number;
   stage: "spawn" | "thread-bind";
 }): Promise<SessionEntry | undefined> {
   try {
+<<<<<<< HEAD
     const resolvedSessionFile = await resolveSessionTranscriptRuntimeTarget({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+=======
+    const resolvedSessionFile = await resolveSessionTranscriptFile({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.sessionEntry,
+      sessionStore: params.sessionStore,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       storePath: params.storePath,
       agentId: params.agentId,
       threadId: params.threadId,
     });
+<<<<<<< HEAD
     return (
       loadSessionEntry({
         storePath: params.storePath,
@@ -620,6 +661,9 @@ async function persistAcpSpawnSessionFileBestEffort(params: {
         clone: false,
       }) ?? params.sessionEntry
     );
+=======
+    return resolvedSessionFile.sessionEntry;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } catch (error) {
     log.warn(
       `ACP session-file persistence failed during ${params.stage} for ${params.sessionKey}: ${summarizeError(error)}`,
@@ -972,8 +1016,14 @@ function validateAcpResumeSessionOwnership(params: {
   }
 
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
+<<<<<<< HEAD
   for (const { sessionKey, entry } of listSessionEntries({ storePath, clone: false })) {
     const acp = readAcpSessionMeta({ sessionKey, cfg: params.cfg });
+=======
+  const sessionStore = loadSessionStore(storePath);
+  for (const [sessionKey, entry] of Object.entries(sessionStore)) {
+    const acp = readAcpSessionMeta({ sessionKey });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!sessionEntryMatchesAcpResumeSessionId(acp, resumeSessionId)) {
       continue;
     }
@@ -1071,16 +1121,25 @@ async function initializeAcpSpawnRuntime(params: {
   cwd?: string;
 }): Promise<AcpSpawnInitializedRuntime> {
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
+<<<<<<< HEAD
   let sessionEntry = loadSessionEntry({
     storePath,
     sessionKey: params.sessionKey,
     clone: false,
   });
+=======
+  const sessionStore = loadSessionStore(storePath);
+  let sessionEntry: SessionEntry | undefined = sessionStore[params.sessionKey];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const sessionId = sessionEntry?.sessionId;
   if (sessionId) {
     sessionEntry = await persistAcpSpawnSessionFileBestEffort({
       sessionId,
       sessionKey: params.sessionKey,
+<<<<<<< HEAD
+=======
+      sessionStore,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       storePath,
       sessionEntry,
       agentId: params.targetAgentId,
@@ -1107,6 +1166,10 @@ async function initializeAcpSpawnRuntime(params: {
     },
     sessionId,
     sessionEntry,
+<<<<<<< HEAD
+=======
+    sessionStore,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     storePath,
   };
 }
@@ -1178,6 +1241,10 @@ async function bindPreparedAcpThread(params: {
       sessionEntry = await persistAcpSpawnSessionFileBestEffort({
         sessionId: params.initializedRuntime.sessionId,
         sessionKey: params.sessionKey,
+<<<<<<< HEAD
+=======
+        sessionStore: params.initializedRuntime.sessionStore,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         storePath: params.initializedRuntime.storePath,
         sessionEntry,
         agentId: params.targetAgentId,
@@ -1539,19 +1606,30 @@ export async function spawnAcpDirect(
           childSessionKey: sessionKey,
         })
       : undefined;
+<<<<<<< HEAD
   const parentAgentId = parentSessionKey
     ? resolveAgentIdFromSessionKey(parentSessionKey)
     : undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   // Resolve parent session delivery context so system events route to the
   // correct thread/topic instead of falling back to the main DM.
   const parentDeliveryCtx =
     effectiveStreamToParent && parentSessionKey
       ? deliveryContextFromSession(
+<<<<<<< HEAD
           loadSessionEntry({
             sessionKey: parentSessionKey,
             ...(parentAgentId ? { agentId: parentAgentId } : {}),
             clone: false,
           }),
+=======
+          loadSessionStore(
+            resolveStorePath(cfg.session?.store, {
+              agentId: resolveAgentIdFromSessionKey(parentSessionKey),
+            }),
+          )[parentSessionKey],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         )
       : undefined;
 

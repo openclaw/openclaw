@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+<<<<<<< HEAD
   abortAndDrainAgentHarnessRun,
+=======
+  abortAgentHarnessRun,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness";
 import { AUTH_PROFILE_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
@@ -65,9 +69,16 @@ const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   "features.standalone_web_search": false,
   web_search: "disabled",
 });
+<<<<<<< HEAD
 const APP_SERVER_START_WAIT = { interval: 1, timeout: 5_000 } as const;
 
 function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
+=======
+
+function writeCodexAppServerBinding(
+  ...args: Parameters<typeof writeRawCodexAppServerBinding>
+) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const [sessionFile, binding, lookup] = args;
   return writeRawCodexAppServerBinding(
     sessionFile,
@@ -175,7 +186,11 @@ function createCodexAuthProfileHarness(params: { startMethod: "thread/start" | "
     seenAgentDirs,
     async waitForMethod(method: string) {
       await vi.waitFor(() => expect(requests.map((entry) => entry.method)).toContain(method), {
+<<<<<<< HEAD
         ...APP_SERVER_START_WAIT,
+=======
+        interval: 1,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
     },
     async completeTurn() {
@@ -201,6 +216,7 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+<<<<<<< HEAD
     await abortAndDrainAgentHarnessRun({
       sessionId: AUTH_PROFILE_RUNTIME_CONTRACT.sessionId,
       sessionKey: AUTH_PROFILE_RUNTIME_CONTRACT.sessionKey,
@@ -208,6 +224,9 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
       forceClear: true,
       reason: "test_cleanup",
     });
+=======
+    abortAgentHarnessRun(AUTH_PROFILE_RUNTIME_CONTRACT.sessionId);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resetCodexAppServerClientFactoryForTest();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
@@ -225,7 +244,11 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
         expect(harness.seenAuthProfileIds).toEqual([
           AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
         ]),
+<<<<<<< HEAD
       APP_SERVER_START_WAIT,
+=======
+      { interval: 1 },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
     expect(harness.seenAgentDirs).toEqual([tmpDir]);
     await harness.waitForMethod("turn/start");
@@ -251,7 +274,11 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
         expect(harness.seenAuthProfileIds).toEqual([
           AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
         ]),
+<<<<<<< HEAD
       APP_SERVER_START_WAIT,
+=======
+      { interval: 1 },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
     await harness.waitForMethod("turn/start");
     await harness.completeTurn();
@@ -276,7 +303,11 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
         expect(harness.seenAuthProfileIds).toEqual([
           AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
         ]),
+<<<<<<< HEAD
       APP_SERVER_START_WAIT,
+=======
+      { interval: 1 },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
     await harness.waitForMethod("turn/start");
     await harness.completeTurn();

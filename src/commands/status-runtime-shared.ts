@@ -1,6 +1,7 @@
 // Shared runtime probes used by status text and JSON commands.
 // Heavy modules stay lazily loaded so fast status output avoids security/provider/gateway costs.
 
+<<<<<<< HEAD
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
@@ -15,6 +16,12 @@ import {
   mergeUsageSummaries,
   shouldUseCodexSyntheticUsageForRuntime,
 } from "../status/codex-synthetic-usage.js";
+=======
+import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import type { OpenClawConfig } from "../config/types.js";
+import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { HealthSummary } from "./health.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
 
@@ -43,6 +50,7 @@ function loadGatewayCallModule() {
   return gatewayCallModuleLoader.load();
 }
 
+<<<<<<< HEAD
 function resolveUsageCredentialType(authLabel?: string): "oauth" | "token" | "api_key" | undefined {
   const auth = normalizeOptionalLowercaseString(authLabel);
   if (!auth) {
@@ -95,6 +103,8 @@ function shouldUseConfiguredCodexSyntheticUsage(params: {
   return resolveUsageCredentialType(authLabel) !== "api_key";
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Runs the lightweight security audit used by status JSON/all output. */
 export async function resolveStatusSecurityAudit(params: {
   config: OpenClawConfig;
@@ -131,6 +141,7 @@ type StatusUsageSummaryOptions = {
 /** Loads provider usage for status output, defaulting to the config's default agent directory. */
 export async function resolveStatusUsageSummary(params: StatusUsageSummaryOptions) {
   const { loadProviderUsageSummary } = await loadProviderUsage();
+<<<<<<< HEAD
   const agentDir = params.agentDir ?? resolveDefaultAgentDir(params.config);
   const usage = await loadProviderUsageSummary({
     timeoutMs: params.timeoutMs,
@@ -148,6 +159,13 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
     agentDir,
   });
   return mergeUsageSummaries(usage, codexUsage);
+=======
+  return await loadProviderUsageSummary({
+    timeoutMs: params.timeoutMs,
+    config: params.config,
+    agentDir: params.agentDir ?? resolveDefaultAgentDir(params.config),
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /** Exposes the lazily loaded provider-usage module for callers that need its helpers. */

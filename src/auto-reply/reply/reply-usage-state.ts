@@ -1,13 +1,18 @@
+<<<<<<< HEAD
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import { deriveContextPromptTokens, type NormalizedUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+=======
+import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const TTL_MS = 5 * 60_000;
 
 const store = new Map<string, { snapshot: PluginHookReplyUsageState; expiresAt: number }>();
 
+<<<<<<< HEAD
 export function buildReplyUsageState(params: {
   config: OpenClawConfig;
   provider?: string;
@@ -104,6 +109,8 @@ export function buildReplyUsageState(params: {
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function prune(now: number): void {
   for (const [key, value] of store) {
     if (value.expiresAt < now) {

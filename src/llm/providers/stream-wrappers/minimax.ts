@@ -5,7 +5,10 @@ import { streamSimple } from "../../stream.js";
 const MINIMAX_FAST_MODEL_IDS = new Map<string, string>([
   ["MiniMax-M2.7", "MiniMax-M2.7-highspeed"],
 ]);
+<<<<<<< HEAD
 type DynamicFastMode = boolean | (() => boolean | undefined);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function resolveMinimaxFastModelId(modelId: unknown): string | undefined {
   if (typeof modelId !== "string") {
@@ -65,12 +68,20 @@ function resolvePositiveMaxTokens(value: unknown): number | undefined {
 /** @deprecated MiniMax provider-owned stream helper; do not use from third-party plugins. */
 export function createMinimaxFastModeWrapper(
   baseStreamFn: StreamFn | undefined,
+<<<<<<< HEAD
   fastMode: DynamicFastMode,
+=======
+  fastMode: boolean,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     if (
+<<<<<<< HEAD
       (typeof fastMode === "function" ? fastMode() : fastMode) !== true ||
+=======
+      !fastMode ||
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       model.api !== "anthropic-messages" ||
       (model.provider !== "minimax" && model.provider !== "minimax-portal")
     ) {

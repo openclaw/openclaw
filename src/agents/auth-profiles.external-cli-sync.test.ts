@@ -15,7 +15,11 @@ const mocks = vi.hoisted(() => ({
   readMiniMaxCliCredentialsCached: vi.fn<(options?: unknown) => OAuthCredential | null>(() => null),
 }));
 
+<<<<<<< HEAD
 let readExternalCliBootstrapCredential: typeof import("./auth-profiles/external-cli-sync.js").readExternalCliBootstrapCredential;
+=======
+let readManagedExternalCliCredential: typeof import("./auth-profiles/external-cli-sync.js").readManagedExternalCliCredential;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 let resolveExternalCliAuthProfiles: typeof import("./auth-profiles/external-cli-sync.js").resolveExternalCliAuthProfiles;
 let hasUsableOAuthCredential: typeof import("./auth-profiles/external-cli-sync.js").hasUsableOAuthCredential;
 let isSafeToUseExternalCliCredential: typeof import("./auth-profiles/external-cli-sync.js").isSafeToUseExternalCliCredential;
@@ -121,7 +125,11 @@ describe("external cli oauth resolution", () => {
     ({
       hasUsableOAuthCredential,
       isSafeToUseExternalCliCredential,
+<<<<<<< HEAD
       readExternalCliBootstrapCredential,
+=======
+      readManagedExternalCliCredential,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       resolveExternalCliAuthProfiles,
       shouldBootstrapFromExternalCliCredential,
       shouldReplaceStoredOAuthCredential,
@@ -299,7 +307,11 @@ describe("external cli oauth resolution", () => {
       }),
     );
 
+<<<<<<< HEAD
     const credential = readExternalCliBootstrapCredential({
+=======
+    const credential = readManagedExternalCliCredential({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
       credential: makeOAuthCredential({ provider: "openai" }),
     });
@@ -365,7 +377,11 @@ describe("external cli oauth resolution", () => {
       makeOAuthCredential({ provider: "openai" }),
     );
 
+<<<<<<< HEAD
     const credential = readExternalCliBootstrapCredential({
+=======
+    const credential = readManagedExternalCliCredential({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
       credential: makeOAuthCredential({ provider: "anthropic" }),
     });

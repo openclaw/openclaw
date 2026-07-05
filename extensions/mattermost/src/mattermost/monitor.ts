@@ -116,10 +116,13 @@ import {
 import { sendMessageMattermost } from "./send.js";
 import { cleanupSlashCommands } from "./slash-commands.js";
 import { deactivateSlashCommands, getSlashCommandState } from "./slash-state.js";
+<<<<<<< HEAD
 import {
   hasMattermostThreadParticipationWithPersistence,
   recordMattermostThreadParticipation,
 } from "./thread-participation.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export {
   evaluateMattermostMentionGate,
@@ -299,6 +302,23 @@ export function canFinalizeMattermostPreviewInPlace(params: {
   );
 }
 
+<<<<<<< HEAD
+=======
+export function shouldClearMattermostDraftPreview(params: {
+  finalizedViaPreviewPost: boolean;
+  finalReplyDelivered: boolean;
+}): boolean {
+  return params.finalReplyDelivered && !params.finalizedViaPreviewPost;
+}
+
+export function shouldFinalizeMattermostPreviewAfterDispatch(params: {
+  finalCount: number;
+  canFinalizeInPlace: boolean;
+}): boolean {
+  return params.finalCount === 1 && params.canFinalizeInPlace;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type MattermostDraftPreviewState = {
   finalizedViaPreviewPost: boolean;
 };
@@ -331,10 +351,13 @@ type MattermostDraftPreviewDeliverParams = {
   previewState: MattermostDraftPreviewState;
   logVerboseMessage: (message: string) => void;
   deliverPayload: (payload: ReplyPayload) => Promise<void>;
+<<<<<<< HEAD
   // Visible same-thread finals can be delivered by editing the draft preview in
   // place (onPreviewFinalized) without ever calling deliverPayload; this lets the
   // caller record thread participation on that path too.
   recordThreadParticipation?: () => void;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 export async function deliverMattermostReplyWithDraftPreview(
@@ -382,9 +405,12 @@ export async function deliverMattermostReplyWithDraftPreview(
       },
       onPreviewFinalized: () => {
         params.previewState.finalizedViaPreviewPost = true;
+<<<<<<< HEAD
         // The visible final reply landed by editing the preview post, so the normal
         // deliverPayload record path is skipped; record participation explicitly here.
         params.recordThreadParticipation?.();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
       buildSupplementalPayload: (payload) =>
         getReplyPayloadTtsSupplement(payload) ? buildTtsSupplementMediaPayload(payload) : undefined,
@@ -1256,7 +1282,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           cfg,
           route: modelSessionRoute,
           data,
+<<<<<<< HEAD
           readConsistency: "latest",
+=======
+          skipCache: true,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         });
         const view = renderMattermostModelsPickerView({
           ownerUserId: pickerState.ownerUserId,
@@ -1495,6 +1525,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           : { triggered: false, stripped: rawText };
         const oncharTriggered = oncharResult.triggered;
         const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
+<<<<<<< HEAD
         // Threads the bot already replied in auto-engage: follow-ups resume without
         // a re-mention even under requireMention. Keyed by the thread root id.
         const threadAlreadyEngaged =
@@ -1505,6 +1536,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 threadRootId: effectiveReplyToId,
               })
             : false;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const mentionDecision = evaluateMattermostMentionGate({
           kind,
           cfg,
@@ -1514,7 +1547,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           requireMentionOverride: account.requireMention,
           resolveRequireMention: core.channel.groups.resolveRequireMention,
           wasMentioned,
+<<<<<<< HEAD
           threadAlreadyEngaged,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           isControlCommand,
           commandAuthorized,
           oncharEnabled,
@@ -1803,6 +1839,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               if (info.kind === "final") {
                 progressDraft.markFinalReplyStarted();
               }
+<<<<<<< HEAD
               // A visible same-thread final arrives either via a normal send or by editing
               // the draft preview in place; record participation on whichever path fires.
               const markThreadParticipation = () => {
@@ -1815,6 +1852,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   );
                 }
               };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               await deliverMattermostReplyWithDraftPreview({
                 payload: payloadEntry,
                 info,
@@ -1825,7 +1864,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 resolvePreviewFinalText,
                 previewState,
                 logVerboseMessage,
+<<<<<<< HEAD
                 recordThreadParticipation: markThreadParticipation,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 deliverPayload: async (payloadToDeliver) => {
                   const outcome = await deliverMattermostReplyPayload({
                     core,
@@ -1844,11 +1886,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                     sendMessage: sendMessageMattermost,
                     onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
                   });
+<<<<<<< HEAD
                   // Record only on a visible send so threads we merely observed
                   // (reasoning-only/empty/suppressed) do not auto-engage later.
                   if (outcome === "text" || outcome === "media") {
                     markThreadParticipation();
                   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                   const deliveryLog = formatMattermostFinalDeliveryOutcomeLog({
                     outcome,
                     payload: payloadToDeliver,

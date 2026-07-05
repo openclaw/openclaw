@@ -2,7 +2,10 @@
   "id": "googlechat",
   "name": "Google Chat",
   "description": "OpenClaw Google Chat channel plugin for spaces and direct messages.",
+<<<<<<< HEAD
   "icon": "https://cdn.simpleicons.org/googlechat",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "activation": {
     "onStartup": false
   },

@@ -358,6 +358,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
 
     sessionStore.clearAllSessionsForTest();
   });
+<<<<<<< HEAD
 
   it('maps response_usage "inherit" selection to sessions.patch with responseUsage: null', async () => {
     const sessionStore = createInMemorySessionStore();
@@ -460,4 +461,6 @@ describe("acp setSessionConfigOption bridge behavior", () => {
 
     sessionStore.clearAllSessionsForTest();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

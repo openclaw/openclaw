@@ -216,6 +216,7 @@ function runScript(url: string, extraArgs: readonly string[] = []): Promise<Scri
   });
 }
 
+<<<<<<< HEAD
 function runScriptRaw(args: readonly string[]): Promise<ScriptResult> {
   return new Promise((resolve) => {
     const child = spawn(
@@ -264,6 +265,9 @@ describe("ios-node-e2e", () => {
     expect(result.stdout).toBe("");
   });
 
+=======
+describe("ios-node-e2e", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects malformed wait seconds before connecting", async () => {
     const result = await runScript("ws://127.0.0.1:9", ["--wait-seconds", "1e3"]);
 

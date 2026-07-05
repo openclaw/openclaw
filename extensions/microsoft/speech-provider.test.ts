@@ -99,7 +99,12 @@ describe("listMicrosoftVoices", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "microsoft-voices-capture-"));
     proxyReset.captureProxyEnv();
     process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
+<<<<<<< HEAD
     process.env.OPENCLAW_STATE_DIR = tempDir;
+=======
+    process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
+    process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "ms-voices-session";
 
     globalThis.fetch = vi
@@ -108,13 +113,25 @@ describe("listMicrosoftVoices", () => {
         new Response(JSON.stringify([{ ShortName: "en-US-AvaNeural" }]), { status: 200 }),
       ) as unknown as typeof globalThis.fetch;
 
+<<<<<<< HEAD
     const store = getDebugProxyCaptureStore();
+=======
+    const store = getDebugProxyCaptureStore(
+      process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+      process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     store.upsertSession({
       id: "ms-voices-session",
       startedAt: Date.now(),
       mode: "test",
       sourceScope: "openclaw",
       sourceProcess: "openclaw",
+<<<<<<< HEAD
+=======
+      dbPath: process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+      blobDir: process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     await listMicrosoftVoices();
@@ -138,20 +155,37 @@ describe("listMicrosoftVoices", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "microsoft-voices-global-"));
     proxyReset.captureProxyEnv();
     process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
+<<<<<<< HEAD
     process.env.OPENCLAW_STATE_DIR = tempDir;
+=======
+    process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
+    process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "ms-voices-global-session";
 
     globalThis.fetch = vi.fn(
       async () => new Response(JSON.stringify([{ ShortName: "en-US-AvaNeural" }]), { status: 200 }),
     ) as unknown as typeof globalThis.fetch;
 
+<<<<<<< HEAD
     const store = getDebugProxyCaptureStore();
+=======
+    const store = getDebugProxyCaptureStore(
+      process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+      process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     store.upsertSession({
       id: "ms-voices-global-session",
       startedAt: Date.now(),
       mode: "test",
       sourceScope: "openclaw",
       sourceProcess: "openclaw",
+<<<<<<< HEAD
+=======
+      dbPath: process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+      blobDir: process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     initializeDebugProxyCapture("test");
 

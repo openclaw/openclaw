@@ -370,6 +370,7 @@ async function promptForOllamaCloudCredential(params: {
   prompter: WizardPrompter;
   secretInputMode?: SecretInputMode;
   allowSecretRefPrompt?: boolean;
+<<<<<<< HEAD
 }): Promise<{
   credential: SecretInput;
   credentialMode?: SecretInputMode;
@@ -378,6 +379,12 @@ async function promptForOllamaCloudCredential(params: {
   const captured: { credential?: SecretInput; credentialMode?: SecretInputMode } = {};
   const optionToken = normalizeOptionalSecretInput(params.opts?.ollamaApiKey);
   const discoveryApiKey = await ensureApiKeyFromOptionEnvOrPrompt({
+=======
+}): Promise<{ credential: SecretInput; credentialMode?: SecretInputMode }> {
+  const captured: { credential?: SecretInput; credentialMode?: SecretInputMode } = {};
+  const optionToken = normalizeOptionalSecretInput(params.opts?.ollamaApiKey);
+  await ensureApiKeyFromOptionEnvOrPrompt({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     token: optionToken ?? normalizeOptionalSecretInput(params.opts?.token),
     tokenProvider: optionToken
       ? "ollama"
@@ -409,11 +416,15 @@ async function promptForOllamaCloudCredential(params: {
   ) {
     throw new Error("Cloud-only Ollama setup requires a real OLLAMA_API_KEY.");
   }
+<<<<<<< HEAD
   return {
     credential: captured.credential,
     credentialMode: captured.credentialMode,
     discoveryApiKey,
   };
+=======
+  return { credential: captured.credential, credentialMode: captured.credentialMode };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function buildOllamaModelsConfig(
@@ -600,7 +611,11 @@ export async function promptAndConfigureOllama(params: {
     ],
   })) as OllamaInteractiveMode;
   if (mode === "cloud-only") {
+<<<<<<< HEAD
     const { credential, credentialMode, discoveryApiKey } = await promptForOllamaCloudCredential({
+=======
+    const { credential, credentialMode } = await promptForOllamaCloudCredential({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       cfg: params.cfg,
       env: params.env,
       opts: params.opts,
@@ -608,9 +623,13 @@ export async function promptAndConfigureOllama(params: {
       secretInputMode: params.secretInputMode,
       allowSecretRefPrompt: params.allowSecretRefPrompt,
     });
+<<<<<<< HEAD
     const { models: rawDiscoveredModels } = await fetchOllamaModels(OLLAMA_CLOUD_BASE_URL, {
       apiKey: discoveryApiKey,
     });
+=======
+    const { models: rawDiscoveredModels } = await fetchOllamaModels(OLLAMA_CLOUD_BASE_URL);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const discoveredModels = rawDiscoveredModels.slice(0, OLLAMA_CLOUD_MAX_DISCOVERED_MODELS);
     const discoveredModelNames = discoveredModels.map((model) => model.name);
     const modelNames =

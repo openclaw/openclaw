@@ -15,7 +15,10 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Compile } from "typebox/compile";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+<<<<<<< HEAD
 import { toErrorObject } from "../infra/errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { logWarn } from "../logger.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -23,7 +26,10 @@ import {
   findJsonSchemaShapeError,
   normalizeJsonSchemaForTypeBox,
 } from "../shared/json-schema-defaults.js";
+<<<<<<< HEAD
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import type {
   McpCatalogTool,
@@ -44,11 +50,14 @@ type BundleMcpSession = {
   transportType: "stdio" | "sse" | "streamable-http";
   requestTimeoutMs: number;
   supportsParallelToolCalls: boolean;
+<<<<<<< HEAD
   connected: boolean;
   retiring: boolean;
   catalogUseCount: number;
   sharedAcrossCatalogGenerations: boolean;
   connectPromise?: Promise<void>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   detachStderr?: () => void;
 };
 
@@ -65,7 +74,10 @@ const SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
 const BUNDLE_MCP_FAILURE_THRESHOLD = 3;
 const BUNDLE_MCP_FAILURE_COOLDOWN_MS = 60_000;
 const BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS = 1_500;
+<<<<<<< HEAD
 const BUNDLE_MCP_CATALOG_CONNECT_CONCURRENCY = 6;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const BUNDLE_MCP_METADATA_TEXT_LIMIT = 1_200;
 let bundleMcpCatalogListTimeoutMs: number | undefined;
 
@@ -212,7 +224,11 @@ function connectWithTimeout(
       },
       (error: unknown) => {
         clearTimeout(timer);
+<<<<<<< HEAD
         reject(toErrorObject(error, "Non-Error rejection"));
+=======
+        reject(toLintErrorObject(error, "Non-Error rejection"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     );
   });
@@ -472,6 +488,18 @@ export function resolveSessionMcpConfigSummary(params: {
   };
 }
 
+<<<<<<< HEAD
+=======
+/** Returns the session MCP config fingerprint with the same no-runtime/no-connect contract as the summary helper. */
+export function resolveSessionMcpConfigFingerprint(params: {
+  workspaceDir: string;
+  cfg?: OpenClawConfig;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+}): string {
+  return resolveSessionMcpConfigSummary(params).fingerprint;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function createDisposedError(sessionId: string): Error {
   return new Error(`bundle-mcp runtime disposed for session ${sessionId}`);
 }
@@ -540,6 +568,7 @@ export function createSessionMcpRuntime(params: {
       throw createDisposedError(params.sessionId);
     }
   };
+<<<<<<< HEAD
   const ensureSessionConnected = async (
     session: BundleMcpSession,
     connectionTimeoutMs: number,
@@ -575,6 +604,8 @@ export function createSessionMcpRuntime(params: {
     await disposeSession(session);
     return true;
   };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const getCatalog = async (): Promise<McpToolCatalog> => {
     failIfDisposed();
@@ -601,6 +632,7 @@ export function createSessionMcpRuntime(params: {
       const usedServerNames = new Set<string>();
 
       try {
+<<<<<<< HEAD
         // Pre-compute safe server names sequentially (synchronous, fast — no I/O)
         const preparedEntries: Array<{
           serverName: string;
@@ -608,6 +640,8 @@ export function createSessionMcpRuntime(params: {
           resolved: NonNullable<ReturnType<typeof resolveMcpTransport>>;
           safeServerName: string;
         }> = [];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         for (const [serverName, rawServer] of Object.entries(loaded.mcpServers)) {
           failIfDisposed();
           const resolved = resolveMcpTransport(serverName, rawServer);
@@ -620,6 +654,7 @@ export function createSessionMcpRuntime(params: {
               `bundle-mcp: server key "${serverName}" registered as "${safeServerName}" for provider-safe tool names.`,
             );
           }
+<<<<<<< HEAD
           preparedEntries.push({ serverName, rawServer, resolved, safeServerName });
         }
 
@@ -823,6 +858,139 @@ export function createSessionMcpRuntime(params: {
           }
           tools.push(...toolEntries);
           diagnostics.push(...serverDiags);
+=======
+
+          let session = sessions.get(serverName);
+          const reusedSession = Boolean(session);
+          let connected = Boolean(session);
+          if (!session) {
+            const client = new Client(
+              {
+                name: "openclaw-bundle-mcp",
+                version: "0.0.0",
+              },
+              {
+                jsonSchemaValidator: createBundleMcpJsonSchemaValidator(),
+                listChanged: {
+                  tools: {
+                    autoRefresh: false,
+                    debounceMs: 0,
+                    onChanged: (error) => {
+                      if (error) {
+                        logWarn(
+                          `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactErrorUrls(error)}`,
+                        );
+                      }
+                      catalogInvalidationGeneration += 1;
+                      catalog = null;
+                      catalogInFlight = undefined;
+                    },
+                  },
+                },
+              },
+            );
+            session = {
+              serverName,
+              client,
+              transport: resolved.transport,
+              transportType: resolved.transportType,
+              requestTimeoutMs: resolved.requestTimeoutMs,
+              supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+              detachStderr: resolved.detachStderr,
+            };
+            sessions.set(serverName, session);
+          }
+
+          try {
+            failIfDisposed();
+            if (!connected) {
+              await connectWithTimeout(
+                session.client,
+                session.transport,
+                resolved.connectionTimeoutMs,
+              );
+              connected = true;
+            }
+            failIfDisposed();
+            const capabilities = summarizeServerCapabilities(
+              session.client.getServerCapabilities(),
+            );
+            const listedTools = await listAllToolsBestEffort({
+              client: session.client,
+              timeoutMs: getCatalogListTimeoutMs(rawServer, resolved.requestTimeoutMs),
+              suppressUnsupported: Boolean(
+                !capabilities.tools && (capabilities.resources || capabilities.prompts),
+              ),
+            });
+            failIfDisposed();
+            const selection = getMcpToolSelection(rawServer);
+            const exposedTools = listedTools.filter((tool) =>
+              shouldExposeMcpTool(selection, tool.name.trim()),
+            );
+            servers[serverName] = {
+              serverName,
+              safeServerName,
+              launchSummary: resolved.description,
+              toolCount: exposedTools.length,
+              requestTimeoutMs: resolved.requestTimeoutMs,
+              supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+              ...(capabilities.resources ? { resources: capabilities.resources } : {}),
+              ...(capabilities.prompts ? { prompts: capabilities.prompts } : {}),
+              ...(capabilities.tools
+                ? {
+                    tools: {
+                      ...capabilities.tools,
+                      ...(exposedTools.length !== listedTools.length
+                        ? { filteredCount: listedTools.length - exposedTools.length }
+                        : {}),
+                    },
+                  }
+                : {}),
+              ...(selection.include || selection.exclude
+                ? {
+                    toolFilter: {
+                      ...(selection.include ? { include: [...selection.include] } : {}),
+                      ...(selection.exclude ? { exclude: [...selection.exclude] } : {}),
+                    },
+                  }
+                : {}),
+            };
+            for (const tool of exposedTools) {
+              const toolName = tool.name.trim();
+              if (!toolName) {
+                continue;
+              }
+              tools.push({
+                serverName,
+                safeServerName,
+                toolName,
+                title: tool.title,
+                description: sanitizeMcpMetadataText(tool.description),
+                inputSchema: tool.inputSchema,
+                fallbackDescription: `Provided by bundle MCP server "${serverName}" (${resolved.description}).`,
+              });
+            }
+          } catch (error) {
+            const message = redactErrorUrls(error);
+            if (!disposed) {
+              const action = reusedSession ? "refresh" : "start";
+              logWarn(
+                `bundle-mcp: failed to ${action} server "${serverName}" (${resolved.description}): ${message}`,
+              );
+            }
+            diagnostics.push({
+              serverName,
+              safeServerName,
+              launchSummary: resolved.description,
+              message,
+            });
+            if (!reusedSession) {
+              await disposeSession(session);
+              sessions.delete(serverName);
+            }
+            failIfDisposed();
+          }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }
 
         failIfDisposed();
@@ -1266,3 +1434,20 @@ export const testing = {
   resolveSessionMcpRuntimeIdleTtlMs,
 };
 export { testing as __testing };
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

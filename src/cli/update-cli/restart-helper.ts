@@ -16,7 +16,10 @@ import {
   resolveGatewayRestartLogPath,
   shellEscapeRestartLogValue,
 } from "../../daemon/restart-logs.js";
+<<<<<<< HEAD
 import { getWindowsCmdExePath } from "../../infra/windows-install-roots.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /**
  * Shell-escape a string for embedding in single-quoted shell arguments.
@@ -405,7 +408,11 @@ exit $status
  */
 export async function runRestartScript(scriptPath: string): Promise<void> {
   const isWindows = process.platform === "win32";
+<<<<<<< HEAD
   const file = isWindows ? getWindowsCmdExePath() : "/bin/sh";
+=======
+  const file = isWindows ? "cmd.exe" : "/bin/sh";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const args = isWindows ? ["/d", "/s", "/c", quoteCmdScriptArg(scriptPath)] : [scriptPath];
 
   try {

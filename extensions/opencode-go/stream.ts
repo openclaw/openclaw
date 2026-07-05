@@ -6,11 +6,14 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { isOpencodeGoKimiNoReasoningModelId } from "./provider-catalog.js";
 import { stripOpencodeGoKimiReasoningPayload } from "./reasoning-sanitizer.js";
+<<<<<<< HEAD
 import {
   createOpencodeGoStalledStreamWrapper,
   OPENCODE_GO_STREAM_FIRST_EVENT_TIMEOUT_MS_DEFAULT,
   OPENCODE_GO_STREAM_IDLE_TIMEOUT_MS_DEFAULT,
 } from "./stream-termination.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function isOpencodeGoDeepSeekV4ModelId(modelId: unknown): boolean {
   return modelId === "deepseek-v4-flash" || modelId === "deepseek-v4-pro";
@@ -51,6 +54,7 @@ export function createOpencodeGoWrapper(
   baseStreamFn: ProviderWrapStreamFnContext["streamFn"],
   thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"],
 ): ProviderWrapStreamFnContext["streamFn"] {
+<<<<<<< HEAD
   if (!baseStreamFn) {
     return undefined;
   }
@@ -65,4 +69,8 @@ export function createOpencodeGoWrapper(
     idleTimeoutMs: OPENCODE_GO_STREAM_IDLE_TIMEOUT_MS_DEFAULT,
     firstEventTimeoutMs: OPENCODE_GO_STREAM_FIRST_EVENT_TIMEOUT_MS_DEFAULT,
   });
+=======
+  const kimiWrapped = createOpencodeGoKimiNoReasoningWrapper(baseStreamFn) ?? baseStreamFn;
+  return createOpencodeGoDeepSeekV4Wrapper(kimiWrapped, thinkingLevel) ?? kimiWrapped;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }

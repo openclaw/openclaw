@@ -11,7 +11,11 @@ import {
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
 /**
+<<<<<<< HEAD
  * Shared process state for embedded-agent runs, queues, and snapshots.
+=======
+ * Shared process state for embedded-agent runs, queues, snapshots, and model-switch requests.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
  *
  * The maps are global-singleton backed so reloads and lazy imports inside the same gateway process
  * do not split active-run bookkeeping.
@@ -41,6 +45,16 @@ export type ActiveEmbeddedRunSnapshot = {
   inFlightPrompt?: string;
 };
 
+<<<<<<< HEAD
+=======
+export type EmbeddedRunModelSwitchRequest = {
+  provider: string;
+  model: string;
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type EmbeddedRunWaiter = {
   resolve: (ended: boolean) => void;
   timer: NodeJS.Timeout;
@@ -65,6 +79,10 @@ const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   abandonedRunSessionIdsByKey: new Map<string, string>(),
   abandonedRunSessionIdsByFile: new Map<string, string>(),
   waiters: new Map<string, Set<EmbeddedRunWaiter>>(),
+<<<<<<< HEAD
+=======
+  modelSwitchRequests: new Map<string, EmbeddedRunModelSwitchRequest>(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 export const ACTIVE_EMBEDDED_RUNS =
@@ -91,6 +109,12 @@ export const ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE =
 export const EMBEDDED_RUN_WAITERS =
   embeddedRunState.waiters ??
   (embeddedRunState.waiters = new Map<string, Set<EmbeddedRunWaiter>>());
+<<<<<<< HEAD
+=======
+export const EMBEDDED_RUN_MODEL_SWITCH_REQUESTS =
+  embeddedRunState.modelSwitchRequests ??
+  (embeddedRunState.modelSwitchRequests = new Map<string, EmbeddedRunModelSwitchRequest>());
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Counts active embedded runs while including auto-reply registry runs for shared sessions. */
 export function getActiveEmbeddedRunCount(): number {

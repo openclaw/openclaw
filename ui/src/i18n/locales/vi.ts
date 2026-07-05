@@ -63,6 +63,10 @@ export const vi: TranslationMap = {
     docs: "Tài liệu",
     theme: "Giao diện",
     colorMode: "Chế độ màu",
+<<<<<<< HEAD
+=======
+    colorModeOption: "Chế độ màu: {mode}",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resources: "Tài nguyên",
     search: "Tìm kiếm",
     save: "Lưu",
@@ -200,7 +204,10 @@ export const vi: TranslationMap = {
     inherit: "kế thừa",
     defaultOption: "Mặc định ({value})",
     offExplicit: "tắt (rõ ràng)",
+<<<<<<< HEAD
     auto: "auto",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     on: "bật",
     off: "tắt",
     full: "đầy đủ",
@@ -1432,7 +1439,10 @@ export const vi: TranslationMap = {
     jaJP: "日本語 (Tiếng Nhật)",
     ko: "한국어 (Tiếng Hàn)",
     fr: "Français (Tiếng Pháp)",
+<<<<<<< HEAD
     hi: "हिन्दी (Tiếng Hindi)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ar: "العربية (Tiếng Ả Rập)",
     it: "Italiano (Tiếng Ý)",
     tr: "Türkçe (Tiếng Thổ Nhĩ Kỳ)",
@@ -1443,7 +1453,10 @@ export const vi: TranslationMap = {
     vi: "Tiếng Việt (Tiếng Việt)",
     nl: "Nederlands (Tiếng Hà Lan)",
     fa: "فارسی (Tiếng Ba Tư)",
+<<<<<<< HEAD
     ru: "Русский (Tiếng Nga)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   cron: {
     quickCreate: {
@@ -1612,7 +1625,10 @@ export const vi: TranslationMap = {
       nextHeartbeat: "Nhịp tiếp theo",
       wakeModeHelp: "Ngay sẽ kích hoạt lập tức. Nhịp tiếp theo đợi đến chu kỳ tiếp theo.",
       payloadKind: "Cần chạy gì?",
+<<<<<<< HEAD
       command: "Command",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       systemEvent: "Đăng tin nhắn lên dòng thời gian chính",
       agentTurn: "Chạy tác vụ trợ lý (tách biệt)",
       systemEventHelp:

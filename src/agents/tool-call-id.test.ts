@@ -443,6 +443,7 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expect(bId).not.toMatch(/[_-]/);
     });
 
+<<<<<<< HEAD
     it("rewrites OpenAI-shaped tool result id aliases with the matching assistant id", () => {
       const input = castAgentMessages([
         {
@@ -505,6 +506,8 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expect(toolResult.call_id).toBe(toolCall.id);
     });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     it("assigns distinct strict IDs when identical raw tool call ids repeat", () => {
       const input = buildRepeatedRawIdInput();
 

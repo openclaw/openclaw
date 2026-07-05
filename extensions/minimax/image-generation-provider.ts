@@ -1,15 +1,23 @@
 // Minimax provider module implements model/runtime integration.
+<<<<<<< HEAD
 import {
   resolveInlineImageJsonResponseMaxBytes,
   type ImageGenerationProvider,
 } from "openclaw/plugin-sdk/image-generation";
 import { canonicalizeBase64, MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
+=======
+import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
+<<<<<<< HEAD
   readProviderJsonResponse,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 
@@ -17,8 +25,11 @@ const DEFAULT_MINIMAX_IMAGE_BASE_URL = "https://api.minimax.io";
 const CN_MINIMAX_IMAGE_BASE_URL = "https://api.minimaxi.com";
 const DEFAULT_MODEL = "image-01";
 const DEFAULT_OUTPUT_MIME = "image/png";
+<<<<<<< HEAD
 const MINIMAX_MAX_IMAGE_RESULTS = 9;
 const MB = 1024 * 1024;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const MINIMAX_SUPPORTED_ASPECT_RATIOS = [
   "1:1",
   "16:9",
@@ -78,6 +89,7 @@ function resolveMinimaxImageBaseUrl(
   return DEFAULT_MINIMAX_IMAGE_BASE_URL;
 }
 
+<<<<<<< HEAD
 function resolveGeneratedImageMaxBytes(req: {
   cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
 }): number {
@@ -88,6 +100,8 @@ function resolveGeneratedImageMaxBytes(req: {
   return MAX_IMAGE_BYTES;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider {
   return {
     id: providerId,
@@ -101,14 +115,22 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
       }),
     capabilities: {
       generate: {
+<<<<<<< HEAD
         maxCount: MINIMAX_MAX_IMAGE_RESULTS,
+=======
+        maxCount: 9,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         supportsSize: false,
         supportsAspectRatio: true,
         supportsResolution: false,
       },
       edit: {
         enabled: true,
+<<<<<<< HEAD
         maxCount: MINIMAX_MAX_IMAGE_RESULTS,
+=======
+        maxCount: 9,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         maxInputImages: 1,
         supportsSize: false,
         supportsAspectRatio: true,
@@ -179,6 +201,7 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
       try {
         await assertOkOrThrowHttpError(response, "MiniMax image generation failed");
 
+<<<<<<< HEAD
         const data = await readProviderJsonResponse<MinimaxImageApiResponse>(
           response,
           "minimax.image-generation",
@@ -189,6 +212,9 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
             ),
           },
         );
+=======
+        const data = (await response.json()) as MinimaxImageApiResponse;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
         const baseResp = data.base_resp;
         if (baseResp && typeof baseResp.status_code === "number" && baseResp.status_code !== 0) {

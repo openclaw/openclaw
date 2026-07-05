@@ -12,10 +12,13 @@ type LegacyAgentTurnCommandPayload = {
   timeoutSeconds?: number;
 };
 
+<<<<<<< HEAD
 export type UnresolvedAgentTurnShellToolPromptKind =
   | "commandPromptWithoutShellAccess"
   | "shellToolPrompt";
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const LEGACY_AGENT_TURN_COMMAND_MARKER_RE = /\bCommand to run\s*:/iu;
 const LEGACY_AGENT_TURN_COMMAND_FIELD_RE = /^\s*-\s*(command|workdir|timeout)\s*:\s*(.*?)\s*$/iu;
 const SHELL_TOOL_NAMES = new Set(["bash", "command", "exec", "process", "shell", "sh"]);
@@ -221,6 +224,7 @@ export function migrateLegacyAgentTurnCommandPayload(payload: UnknownRecord): bo
   return true;
 }
 
+<<<<<<< HEAD
 export function classifyUnresolvedAgentTurnShellToolPrompt(
   payload: UnknownRecord,
 ): UnresolvedAgentTurnShellToolPromptKind | null {
@@ -240,4 +244,19 @@ export function classifyUnresolvedAgentTurnShellToolPrompt(
     return "shellToolPrompt";
   }
   return null;
+=======
+export function hasUnresolvedAgentTurnShellToolPrompt(payload: UnknownRecord): boolean {
+  if (payload.kind !== "agentTurn") {
+    return false;
+  }
+  const message = readString(payload.message);
+  if (typeof message !== "string") {
+    return false;
+  }
+  const parsed = parseLegacyAgentTurnCommandMessage(message);
+  return (
+    Boolean(parsed) ||
+    (hasShellToolAccess(payload.toolsAllow) && SHELL_COMMAND_MESSAGE_RE.test(message))
+  );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }

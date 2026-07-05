@@ -15,10 +15,15 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { z } from "zod";
+<<<<<<< HEAD
 import { createQaArtifactRunId } from "../../artifact-run-id.js";
 import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { isTruthyOptIn } from "../../mantis-options.runtime.js";
+=======
+import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
+import { startQaGatewayChild } from "../../gateway-child.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import { fingerprintQaCredentialId } from "../../qa-credentials-fingerprint.runtime.js";
 import {
@@ -32,6 +37,7 @@ import {
   startQaCredentialLeaseHeartbeat,
 } from "../shared/credential-lease.runtime.js";
 import {
+<<<<<<< HEAD
   assertApprovalDecisionResult,
   formatApprovalResultValue,
   readAcceptedApprovalRequestId,
@@ -41,6 +47,12 @@ import {
   redactQaLiveLaneDetails,
 } from "../shared/live-artifacts.js";
 import { inferQaCredentialSource as inferWhatsAppCredentialSource } from "../shared/live-credential-source.js";
+=======
+  appendQaLiveLaneIssue as appendLiveLaneIssue,
+  redactQaLiveLaneDetails,
+  redactQaLiveLaneIssues,
+} from "../shared/live-artifacts.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
 import {
   collectLiveTransportStandardScenarioCoverage,
@@ -71,7 +83,10 @@ type WhatsAppQaScenarioId =
   | "whatsapp-context-command"
   | "whatsapp-group-allowlist-block"
   | "whatsapp-group-audio-gating"
+<<<<<<< HEAD
   | "whatsapp-group-reply-to-message"
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   | "whatsapp-help-command"
   | "whatsapp-inbound-image-caption"
   | "whatsapp-inbound-structured-messages"
@@ -283,12 +298,15 @@ type WhatsAppCredentialLease = Awaited<
   ReturnType<typeof acquireQaCredentialLease<WhatsAppQaRuntimeEnv>>
 >;
 type WhatsAppCredentialHeartbeat = ReturnType<typeof startQaCredentialLeaseHeartbeat>;
+<<<<<<< HEAD
 type WhatsAppQaPreScenarioPhase =
   | "auth archive unpack"
   | "credential heartbeat start"
   | "credential lease acquisition"
   | "driver session start"
   | "scenario execution";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const WHATSAPP_QA_CAPTURE_CONTENT_ENV = "OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT";
 const QA_REDACT_PUBLIC_METADATA_ENV = "OPENCLAW_QA_REDACT_PUBLIC_METADATA";
@@ -425,6 +443,7 @@ const whatsappQaCredentialPayloadSchema = z.object({
   groupJid: z.string().trim().min(1).optional(),
 });
 
+<<<<<<< HEAD
 function buildWhatsAppQuoteReplyRun(target: "dm" | "group"): WhatsAppQaMessageScenarioRun {
   const token = `WHATSAPP_QA_REPLY_TO_${target.toUpperCase()}_${randomUUID().slice(0, 8).toUpperCase()}`;
   const input =
@@ -450,6 +469,8 @@ function buildWhatsAppQuoteReplyRun(target: "dm" | "group"): WhatsAppQaMessageSc
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   {
     id: "whatsapp-canary",
@@ -676,12 +697,16 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   },
   {
     id: "whatsapp-reply-to-message",
+<<<<<<< HEAD
     standardId: "quote-reply",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     title: "WhatsApp DM reply-to mode quotes the triggering message",
     timeoutMs: 60_000,
     configOverrides: {
       replyToMode: "all",
     },
+<<<<<<< HEAD
     buildRun: () => buildWhatsAppQuoteReplyRun("dm"),
   },
   {
@@ -694,6 +719,28 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
     },
     requiresGroupJid: true,
     buildRun: () => buildWhatsAppQuoteReplyRun("group"),
+=======
+    buildRun: () => {
+      const token = `WHATSAPP_QA_REPLY_TO_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        configMode: "allowlist",
+        expectReply: true,
+        input: `Reply with only this exact marker: ${token}`,
+        matchText: token,
+        target: "dm",
+        verify: (reply, context) => {
+          if (!context.sent.messageId) {
+            throw new Error("WhatsApp driver did not return a triggering message id.");
+          }
+          if (reply.quoted?.messageId !== context.sent.messageId) {
+            throw new Error(
+              `expected reply quote ${context.sent.messageId}, got ${reply.quoted?.messageId ?? "<missing>"}`,
+            );
+          }
+        },
+      };
+    },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   {
     id: "whatsapp-reply-context-isolation",
@@ -1414,6 +1461,14 @@ export const WHATSAPP_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardSce
   scenarios: WHATSAPP_QA_SCENARIOS,
 });
 
+<<<<<<< HEAD
+=======
+function isTruthyOptIn(value: string | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof WHATSAPP_QA_ENV_KEYS)[number]) {
   const value = env[key]?.trim();
   if (!value) {
@@ -1422,6 +1477,18 @@ function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof WHATSAPP_QA_ENV_KE
   return value;
 }
 
+<<<<<<< HEAD
+=======
+function inferWhatsAppCredentialSource(
+  value: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): "convex" | "env" {
+  const normalized =
+    value?.trim().toLowerCase() || env.OPENCLAW_QA_CREDENTIAL_SOURCE?.trim().toLowerCase();
+  return normalized === "convex" ? "convex" : "env";
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveWhatsAppMetadataRedaction(env: NodeJS.ProcessEnv = process.env) {
   const raw = env[QA_REDACT_PUBLIC_METADATA_ENV];
   return raw === undefined ? true : isTruthyOptIn(raw);
@@ -2152,6 +2219,42 @@ async function startWhatsAppQaDriverSessionWithRetry(params: { authDir: string }
   throw new Error("unreachable WhatsApp QA driver retry loop exit");
 }
 
+<<<<<<< HEAD
+=======
+function formatApprovalResultValue(value: unknown) {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (value == null) {
+    return "<missing>";
+  }
+  return JSON.stringify(value) ?? "<unserializable>";
+}
+
+function readAcceptedApprovalRequest(result: unknown) {
+  const accepted =
+    typeof result === "object" && result !== null
+      ? (result as { id?: unknown; status?: unknown })
+      : null;
+  if (accepted?.status !== "accepted") {
+    throw new Error(
+      `approval request status was ${formatApprovalResultValue(
+        accepted?.status,
+      )} instead of accepted`,
+    );
+  }
+  return accepted;
+}
+
+function readAcceptedApprovalRequestId(result: unknown) {
+  const id = readAcceptedApprovalRequest(result).id;
+  if (typeof id !== "string" || id.trim().length === 0) {
+    throw new Error(`approval request id was ${formatApprovalResultValue(id)}`);
+  }
+  return id;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function requestWhatsAppApproval(params: {
   approvalId: string;
   driverPhoneE164: string;
@@ -2245,6 +2348,24 @@ async function resolveApprovalDecision(params: {
   );
 }
 
+<<<<<<< HEAD
+=======
+function assertApprovalDecisionResult(params: {
+  decision: WhatsAppQaApprovalDecision;
+  result: unknown;
+}) {
+  const resultDecision =
+    typeof params.result === "object" && params.result !== null
+      ? (params.result as { decision?: unknown }).decision
+      : undefined;
+  if (resultDecision !== params.decision) {
+    throw new Error(
+      `approval decision was ${formatApprovalResultValue(resultDecision)} instead of ${params.decision}`,
+    );
+  }
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function matchesWhatsAppApprovalPendingText(params: {
   approvalId: string;
   approvalKind: WhatsAppQaApprovalKind;
@@ -2860,6 +2981,7 @@ function redactWhatsAppQaScenarioResults(
 
 const SAFE_WHATSAPP_DRIVER_DIAGNOSTICS_PATTERN =
   /observed \d+ WhatsApp driver message\(s\) after (?:(?:pending|resolved) approval )?wait lower bound(?:: [-A-Za-z0-9_#:=()., +;/]+)?/u;
+<<<<<<< HEAD
 const SAFE_WHATSAPP_PRE_SCENARIO_FAILURE_PATTERN =
   /^WhatsApp QA failed during (?:auth archive unpack|credential heartbeat start|credential lease acquisition|driver session start|scenario execution)$/u;
 const SAFE_WHATSAPP_CREDENTIAL_POOL_EXHAUSTED_PATTERN =
@@ -2868,6 +2990,8 @@ const SAFE_WHATSAPP_CREDENTIAL_POOL_EXHAUSTED_PATTERN =
 function formatWhatsAppPreScenarioFailureLabel(phase: WhatsAppQaPreScenarioPhase) {
   return `WhatsApp QA failed during ${phase}`;
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function isRedactionSafeWhatsAppScenarioDetailSegment(segment: string) {
   return (
@@ -2879,6 +3003,7 @@ function isRedactionSafeWhatsAppScenarioDetailSegment(segment: string) {
 
 function redactWhatsAppQaScenarioDetails(details: string) {
   const normalized = details.trim();
+<<<<<<< HEAD
   const firstLine = normalized.split(/\r?\n/u, 1)[0] ?? "";
   const separatorIndex = firstLine.indexOf(":");
   const preScenarioFailureLabel =
@@ -2889,6 +3014,8 @@ function redactWhatsAppQaScenarioDetails(details: string) {
       ? `${preScenarioFailureLabel}: ${poolExhausted[0]}`
       : preScenarioFailureLabel;
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const safeDriverDiagnostics = normalized.match(SAFE_WHATSAPP_DRIVER_DIAGNOSTICS_PATTERN);
   if (safeDriverDiagnostics) {
     return safeDriverDiagnostics[0];
@@ -2900,6 +3027,7 @@ function redactWhatsAppQaScenarioDetails(details: string) {
   return safeSegments.length > 0 ? safeSegments.join("; ") : redactQaLiveLaneDetails();
 }
 
+<<<<<<< HEAD
 function redactWhatsAppQaCleanupIssue(issue: string) {
   const firstLine = issue.split(/\r?\n/u, 1)[0] ?? "";
   const separatorIndex = firstLine.indexOf(":");
@@ -2920,6 +3048,8 @@ function redactWhatsAppQaCleanupIssues(issues: readonly string[]) {
   return issues.map(redactWhatsAppQaCleanupIssue);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function createMissingGroupJidScenarioResult(params: {
   explicitScenarioSelection: boolean;
   scenario: WhatsAppQaScenarioDefinition;
@@ -2977,7 +3107,11 @@ async function buildPublishedWhatsAppQaRunView(params: {
   scenarioResults: WhatsAppQaScenarioResult[];
 }) {
   const publishedCleanupIssues = params.redactMetadata
+<<<<<<< HEAD
     ? redactWhatsAppQaCleanupIssues(params.cleanupIssues)
+=======
+    ? redactQaLiveLaneIssues(params.cleanupIssues)
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     : params.cleanupIssues;
   const publishedScenarioResults = params.redactMetadata
     ? redactWhatsAppQaScenarioResults(params.scenarioResults)
@@ -3034,7 +3168,11 @@ export async function runWhatsAppQaLive(params: {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const outputDir =
     params.outputDir ??
+<<<<<<< HEAD
     path.join(repoRoot, ".artifacts", "qa-e2e", `whatsapp-${createQaArtifactRunId()}`);
+=======
+    path.join(repoRoot, ".artifacts", "qa-e2e", `whatsapp-${Date.now().toString(36)}`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   await fs.mkdir(outputDir, { recursive: true });
 
   const providerMode = normalizeQaProviderMode(
@@ -3059,7 +3197,10 @@ export async function runWhatsAppQaLive(params: {
   let runtimeEnv: WhatsAppQaRuntimeEnv | undefined;
   let tempAuthRoot: string | undefined;
   let closeDriverSession: (() => Promise<void>) | undefined;
+<<<<<<< HEAD
   let preScenarioPhase: WhatsAppQaPreScenarioPhase = "credential lease acquisition";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   try {
     credentialLease = await acquireQaCredentialLease({
@@ -3069,7 +3210,10 @@ export async function runWhatsAppQaLive(params: {
       resolveEnvPayload: () => resolveWhatsAppQaRuntimeEnv(),
       parsePayload: parseWhatsAppQaCredentialPayload,
     });
+<<<<<<< HEAD
     preScenarioPhase = "credential heartbeat start";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     leaseHeartbeat = startQaCredentialLeaseHeartbeat(credentialLease);
     const assertLeaseHealthy = () => {
       leaseHeartbeat?.throwIfFailed();
@@ -3078,7 +3222,10 @@ export async function runWhatsAppQaLive(params: {
     tempAuthRoot = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-whatsapp-qa-"),
     );
+<<<<<<< HEAD
     preScenarioPhase = "auth archive unpack";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const [driverAuthDir, sutAuthDir] = await Promise.all([
       unpackWhatsAppAuthArchive({
         archiveBase64: runtimeEnv.driverAuthArchiveBase64,
@@ -3091,10 +3238,15 @@ export async function runWhatsAppQaLive(params: {
         parentDir: tempAuthRoot,
       }),
     ]);
+<<<<<<< HEAD
     preScenarioPhase = "driver session start";
     let activeDriver = await startWhatsAppQaDriverSessionWithRetry({ authDir: driverAuthDir });
     closeDriverSession = () => activeDriver.close();
     preScenarioPhase = "scenario execution";
+=======
+    let activeDriver = await startWhatsAppQaDriverSessionWithRetry({ authDir: driverAuthDir });
+    closeDriverSession = () => activeDriver.close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     for (const [scenarioIndex, scenario] of scenarios.entries()) {
       const progressIndex = scenarioIndex + 1;
@@ -3220,10 +3372,16 @@ export async function runWhatsAppQaLive(params: {
       }
     }
   } catch (error) {
+<<<<<<< HEAD
     const failureLabel = formatWhatsAppPreScenarioFailureLabel(preScenarioPhase);
     appendLiveLaneIssue(cleanupIssues, failureLabel, error);
     appendPreScenarioFailureResults({
       details: `${failureLabel}: ${formatErrorMessage(error)}`,
+=======
+    appendLiveLaneIssue(cleanupIssues, "WhatsApp QA failed before scenario completion", error);
+    appendPreScenarioFailureResults({
+      details: formatErrorMessage(error),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       scenarioResults,
       scenarios,
     });
@@ -3282,7 +3440,10 @@ export async function runWhatsAppQaLive(params: {
     generatedAt: finishedAt,
     primaryModel,
     providerMode,
+<<<<<<< HEAD
     repoRoot,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     transportId: "whatsapp",
   });
   await fs.writeFile(
@@ -3335,7 +3496,10 @@ export const testing = {
   findUnexpectedWhatsAppNoReplyMessage,
   formatWhatsAppApprovalWaitDiagnostics,
   formatWhatsAppBatchMessageDiagnostics,
+<<<<<<< HEAD
   formatWhatsAppPreScenarioFailureLabel,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   formatWhatsAppScenarioProgressDetails,
   formatWhatsAppScenarioProgressLine,
   fingerprintWhatsAppCredentialId: fingerprintQaCredentialId,

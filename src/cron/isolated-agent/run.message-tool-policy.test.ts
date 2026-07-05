@@ -15,7 +15,10 @@ import {
   makeCronSession,
   mockRunCronFallbackPassthrough,
   preflightCronModelProviderMock,
+<<<<<<< HEAD
   queueCronMessageToolDeliveryAwarenessMock,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveCronPayloadOutcomeMock,
   resolveCronSessionMock,
   resetRunCronIsolatedAgentTurnHarness,
@@ -252,17 +255,26 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   async function expectCronFallbackSkippedForMessageToolDelivery(options: {
     sentTargets: Array<Record<string, unknown>>;
     job?: Parameters<typeof makeAnnounceMessageToolJob>[0];
+<<<<<<< HEAD
     cfg?: Record<string, unknown>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }) {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
     runEmbeddedAgentMock.mockResolvedValue(makeMessageToolRunResult(options.sentTargets));
+<<<<<<< HEAD
     const params = makeParams();
     const cfg = options.cfg ?? params.cfg;
 
     const result = await runCronIsolatedAgentTurn({
       ...params,
       cfg,
+=======
+
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       job: makeAnnounceMessageToolJob(options.job),
     });
 
@@ -289,7 +301,10 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       fallbackUsed: false,
       delivered: true,
     });
+<<<<<<< HEAD
     return { cfg, result };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   beforeEach(() => {
@@ -825,6 +840,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(cliRun.prompt).toContain("Message delivery destination metadata");
   });
 
+<<<<<<< HEAD
   it("drops the auto-applied default toolsAllow cap for CLI-backed runs instead of failing", async () => {
     // A CLI backend cannot enforce a runtime toolsAllow, so the auto-applied
     // creator-surface cap (#91499, flagged toolsAllowIsDefault) is dropped at
@@ -860,6 +876,8 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(cliRun.toolsAllow).toBeUndefined();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps automatic exec completion notifications when announce delivery is active", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
@@ -1217,6 +1235,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("skips cron fallback delivery when the message tool already sent to the same target", async () => {
+<<<<<<< HEAD
     const { cfg } = await expectCronFallbackSkippedForMessageToolDelivery({
       cfg: { session: { dmScope: "agent" } },
       sentTargets: [{ tool: "message", provider: "messagechat", to: "123" }],
@@ -1232,6 +1251,11 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
         satisfiesSourceDelivery: true,
       },
     });
+=======
+    await expectCronFallbackSkippedForMessageToolDelivery({
+      sentTargets: [{ tool: "message", provider: "messagechat", to: "123" }],
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("uses cron fallback delivery when the message tool returns no target evidence", async () => {
@@ -1265,6 +1289,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
+<<<<<<< HEAD
   it("queues awareness for explicit message-tool sends even when they do not satisfy the delivery target", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
@@ -1310,6 +1335,8 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rewrites generic message provider to resolved channel in delivery trace", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());

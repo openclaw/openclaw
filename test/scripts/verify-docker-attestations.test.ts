@@ -69,7 +69,10 @@ describe("verify-docker-attestations", () => {
 
   it("rejects missing platform option values", () => {
     expect(() => parseArgs(["--platform"])).toThrow("--platform requires a value");
+<<<<<<< HEAD
     expect(() => parseArgs(["--platform", "-h"])).toThrow("--platform requires a value");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(() => parseArgs(["--platform", "--help"])).toThrow("--platform requires a value");
     expect(() => parseArgs(["--platform", ""])).toThrow("--platform requires a value");
   });

@@ -7,7 +7,11 @@ import type { RuntimeEnv } from "../runtime.js";
 import { isRecord } from "../utils.js";
 import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
 import {
+<<<<<<< HEAD
   resolveDefaultMemoryDatabasePath,
+=======
+  resolveDefaultMemoryStorePath,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveStatusMemoryStatusSnapshot,
 } from "./status.scan-memory.ts";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
@@ -144,7 +148,11 @@ export async function scanStatusJsonFast(
             cfg,
             agentStatus,
             memoryPlugin,
+<<<<<<< HEAD
             requireDefaultDatabasePath: resolveDefaultMemoryDatabasePath,
+=======
+            requireDefaultStore: resolveDefaultMemoryStorePath,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           })
         : null,
   });

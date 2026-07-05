@@ -6,7 +6,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
+<<<<<<< HEAD
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../../test-helpers/unsafe-mounted-sandbox.js";
 import {
@@ -421,8 +424,12 @@ describe("loadImageFromRef", () => {
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.mkdir(inboundDir, { recursive: true });
     await fs.writeFile(path.join(inboundDir, mediaId), Buffer.from(TINY_PNG_BASE64, "base64"));
+<<<<<<< HEAD
     const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+=======
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     try {
       const image = await loadImageFromRef(
@@ -439,7 +446,11 @@ describe("loadImageFromRef", () => {
       expect(image?.mimeType).toBe("image/png");
       expect(image?.data).toBe(TINY_PNG_BASE64);
     } finally {
+<<<<<<< HEAD
       envSnapshot.restore();
+=======
+      vi.unstubAllEnvs();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
@@ -672,8 +683,12 @@ describe("detectAndLoadPromptImages", () => {
     const imagePath = path.join(inboundDir, "signal-replay.png");
     const pngB64 = TINY_PNG_BASE64;
     await fs.writeFile(imagePath, Buffer.from(pngB64, "base64"));
+<<<<<<< HEAD
     const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+=======
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     try {
       const result = await detectAndLoadPromptImages({
@@ -688,7 +703,11 @@ describe("detectAndLoadPromptImages", () => {
       expect(result.skippedCount).toBe(0);
       expect(result.images).toHaveLength(1);
     } finally {
+<<<<<<< HEAD
       envSnapshot.restore();
+=======
+      vi.unstubAllEnvs();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });

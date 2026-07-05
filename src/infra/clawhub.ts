@@ -3,11 +3,15 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+<<<<<<< HEAD
 import {
   readResponseTextSnippet,
   readResponseWithLimit,
 } from "@openclaw/media-core/read-response-with-limit";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+=======
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -23,11 +27,14 @@ const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
 const DEFAULT_GITHUB_CODELOAD_URL = "https://codeload.github.com";
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 const SKILL_CARD_MAX_BYTES = 256 * 1024;
+<<<<<<< HEAD
 // ClawHub is an external marketplace: bound untrusted JSON and error bodies so
 // a hostile or malfunctioning host cannot exhaust memory with an endless stream.
 const CLAWHUB_JSON_MAX_BYTES = 16 * 1024 * 1024;
 const CLAWHUB_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const CLAWHUB_ERROR_BODY_MAX_CHARS = 400;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type ClawHubPackageFamily = "skill" | "code-plugin" | "bundle-plugin";
 export type ClawHubPackageChannel = "official" | "community" | "private";
@@ -68,6 +75,10 @@ export type ClawHubPackageArtifactSummary = {
   tarballUrl?: string | null;
   legacyDownloadUrl?: string | null;
 };
+<<<<<<< HEAD
+=======
+export type ClawHubArtifactKind = "legacy-zip" | "npm-pack";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type ClawHubArtifactScanState =
   | "pending"
   | "clean"
@@ -76,6 +87,7 @@ export type ClawHubArtifactScanState =
   | "not-run"
   | (string & {});
 export type ClawHubArtifactModerationState = "approved" | "quarantined" | "revoked" | (string & {});
+<<<<<<< HEAD
 export type ClawHubPackageSecurityTrust = {
   scanStatus?: ClawHubArtifactScanState | null;
   moderationState?: ClawHubArtifactModerationState | null;
@@ -84,6 +96,16 @@ export type ClawHubPackageSecurityTrust = {
   pending: boolean;
   stale: boolean;
 };
+=======
+export type ClawHubPackageSecurityState =
+  | "pending"
+  | "approved"
+  | "limited"
+  | "quarantined"
+  | "rejected"
+  | "revoked"
+  | (string & {});
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type ClawHubResolvedArtifact =
   | {
       source: "clawhub";
@@ -130,6 +152,7 @@ export type ClawHubPackageArtifactResolverResponse = {
   artifact?: ClawHubResolvedArtifact | null;
 };
 export type ClawHubPackageSecurityResponse = {
+<<<<<<< HEAD
   package?: {
     name?: string | null;
     displayName?: string | null;
@@ -148,6 +171,18 @@ export type ClawHubPackageReadiness = {
   reasons?: string[];
   checks?: Record<string, unknown>;
 } & Record<string, unknown>;
+=======
+  packageId?: string | null;
+  releaseId?: string | null;
+  state: ClawHubPackageSecurityState;
+  reasonCode?: string | null;
+  moderatorNote?: string | null;
+  actorId?: string | null;
+  createdAt?: number | null;
+  scanState?: ClawHubArtifactScanState | null;
+  moderationState?: ClawHubArtifactModerationState | null;
+};
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type ClawHubPackageClawPackSummary = {
   available: boolean;
   specVersion?: number | null;
@@ -165,6 +200,36 @@ export type ClawHubPackageClawPackSummary = {
   environment?: ClawHubPackageEnvironmentSummary | null;
   runtimeBundles?: unknown[];
 };
+<<<<<<< HEAD
+=======
+export type ClawHubPackageReadinessPhase =
+  | "planned"
+  | "published"
+  | "clawpack-ready"
+  | "legacy-zip-only"
+  | "metadata-ready"
+  | "blocked"
+  | "ready-for-openclaw"
+  | (string & {});
+export type ClawHubPackageReadiness = {
+  ready?: boolean | null;
+  readyForOpenClaw?: boolean | null;
+  installReady?: boolean | null;
+  phase?: ClawHubPackageReadinessPhase | null;
+  status?: ClawHubPackageReadinessPhase | null;
+  package?: {
+    name?: string | null;
+    family?: ClawHubPackageFamily | (string & {}) | null;
+    channel?: ClawHubPackageChannel | (string & {}) | null;
+    isOfficial?: boolean | null;
+  } | null;
+  packageName?: string | null;
+  artifactKind?: ClawHubArtifactKind | (string & {}) | null;
+  blockers?: string[];
+  scanState?: ClawHubArtifactScanState | null;
+  moderationState?: ClawHubArtifactModerationState | null;
+};
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type ClawHubPackageListItem = {
   name: string;
   displayName: string;
@@ -277,8 +342,11 @@ export type ClawHubSkillDetail = {
     displayName: string;
     summary?: string;
     tags?: Record<string, string>;
+<<<<<<< HEAD
     channel?: string | null;
     isOfficial?: boolean | null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     createdAt: number;
     updatedAt: number;
   } | null;
@@ -295,9 +363,12 @@ export type ClawHubSkillDetail = {
     handle?: string | null;
     displayName?: string | null;
     image?: string | null;
+<<<<<<< HEAD
     official?: boolean | null;
     channel?: string | null;
     isOfficial?: boolean | null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } | null;
 };
 
@@ -305,23 +376,33 @@ export type ClawHubSkillInstallResolutionResponse =
   | {
       ok: true;
       slug: string;
+<<<<<<< HEAD
       channel?: string | null;
       isOfficial?: boolean | null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       installKind: "archive";
       archive: {
         version: string;
         downloadUrl: string;
+<<<<<<< HEAD
         channel?: string | null;
         isOfficial?: boolean | null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       };
     }
   | {
       ok: true;
       slug: string;
+<<<<<<< HEAD
       channel?: string | null;
       isOfficial?: boolean | null;
       installKind: "github";
       /** Commit-pinned source approved by ClawHub's install resolver policy. */
+=======
+      installKind: "github";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       github: {
         repo: string;
         path: string;
@@ -345,12 +426,15 @@ export type ClawHubSkillVerificationResponse = {
   ok: boolean;
   decision: ClawHubSkillVerificationDecision;
   reasons: string[];
+<<<<<<< HEAD
   slug?: string | null;
   displayName?: string | null;
   pageUrl?: string | null;
   publisherHandle?: string | null;
   publisherDisplayName?: string | null;
   createdAt?: number | null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   skill: unknown;
   publisher: unknown;
   version: unknown;
@@ -363,7 +447,10 @@ export type ClawHubSkillVerificationResponse = {
 
 export type ClawHubSkillSecurityVerdictRequestItem = {
   slug: string;
+<<<<<<< HEAD
   ownerHandle?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   version: string;
 };
 
@@ -437,10 +524,13 @@ type ClawHubConfigLike = {
   user?: ClawHubConfigLike | null;
 };
 
+<<<<<<< HEAD
 function resolveClawHubRequestTimeoutMs(timeoutMs: unknown): number {
   return resolveTimerTimeoutMs(timeoutMs, DEFAULT_FETCH_TIMEOUT_MS);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export class ClawHubRequestError extends Error {
   readonly status: number;
   readonly requestPath: string;
@@ -696,11 +786,23 @@ async function clawhubRequest(
   const token = params.skipAuth
     ? undefined
     : normalizeOptionalString(params.token) || (await resolveClawHubAuthToken());
+<<<<<<< HEAD
   const timeoutMs = resolveClawHubRequestTimeoutMs(params.timeoutMs);
   const controller = new AbortController();
   const timeout = setTimeout(
     () => controller.abort(new Error(`ClawHub request timed out after ${timeoutMs}ms`)),
     timeoutMs,
+=======
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () =>
+      controller.abort(
+        new Error(
+          `ClawHub request timed out after ${params.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS}ms`,
+        ),
+      ),
+    params.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
   try {
     const headers = {
@@ -724,6 +826,7 @@ async function clawhubRequest(
   }
 }
 
+<<<<<<< HEAD
 async function readErrorBody(response: Response, timeoutMs?: number): Promise<string> {
   try {
     const snippet = await readResponseTextSnippet(response, {
@@ -732,6 +835,12 @@ async function readErrorBody(response: Response, timeoutMs?: number): Promise<st
       chunkTimeoutMs: resolveClawHubRequestTimeoutMs(timeoutMs),
     });
     return snippet || response.statusText || `HTTP ${response.status}`;
+=======
+async function readErrorBody(response: Response): Promise<string> {
+  try {
+    const text = (await response.text()).trim();
+    return text || response.statusText || `HTTP ${response.status}`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } catch {
     return response.statusText || `HTTP ${response.status}`;
   }
@@ -741,9 +850,14 @@ async function buildClawHubError(
   response: Response,
   url: URL,
   hasToken: boolean,
+<<<<<<< HEAD
   timeoutMs?: number,
 ): Promise<ClawHubRequestError> {
   let body = await readErrorBody(response, timeoutMs);
+=======
+): Promise<ClawHubRequestError> {
+  let body = await readErrorBody(response);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (response.status === 429) {
     const suffix = formatRateLimitSuffix(response.headers, hasToken);
     if (suffix) {
@@ -774,6 +888,7 @@ function formatRateLimitSuffix(headers: Headers, hasToken: boolean): string {
 async function fetchJson<T>(params: ClawHubRequestParams): Promise<T> {
   const { response, url, hasToken } = await clawhubRequest(params);
   if (!response.ok) {
+<<<<<<< HEAD
     throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
   }
   return parseClawHubJsonBody<T>(response, url, params.timeoutMs);
@@ -795,6 +910,12 @@ async function parseClawHubJsonBody<T>(
   });
   try {
     return JSON.parse(new TextDecoder().decode(buffer)) as T;
+=======
+    throw await buildClawHubError(response, url, hasToken);
+  }
+  try {
+    return (await response.json()) as T;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } catch (cause) {
     throw new Error(`ClawHub ${url.pathname} returned malformed JSON`, { cause });
   }
@@ -806,7 +927,11 @@ async function readClawHubResponseBytes(params: {
   timeoutMs?: number;
   resourceLabel: string;
 }): Promise<Uint8Array> {
+<<<<<<< HEAD
   const timeoutMs = resolveClawHubRequestTimeoutMs(params.timeoutMs);
+=======
+  const timeoutMs = params.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return await readResponseWithLimit(params.response, params.maxBytes ?? Number.MAX_SAFE_INTEGER, {
     chunkTimeoutMs: timeoutMs,
     onOverflow: ({ size, maxBytes }) =>
@@ -818,6 +943,7 @@ async function readClawHubResponseBytes(params: {
   });
 }
 
+<<<<<<< HEAD
 function isJsonObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -940,6 +1066,8 @@ function parseClawHubPackageSecurityResponse(value: unknown): ClawHubPackageSecu
   return result;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Resolves the configured ClawHub base URL, falling back to the default public host. */
 export function resolveClawHubBaseUrl(baseUrl?: string): string {
   return normalizeBaseUrl(baseUrl);
@@ -1107,7 +1235,11 @@ export async function fetchClawHubPackageSecurity(params: {
   timeoutMs?: number;
   fetchImpl?: FetchLike;
 }): Promise<ClawHubPackageSecurityResponse> {
+<<<<<<< HEAD
   const response = await fetchJson<unknown>({
+=======
+  return await fetchJson<ClawHubPackageSecurityResponse>({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     baseUrl: params.baseUrl,
     path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
       params.version,
@@ -1116,7 +1248,10 @@ export async function fetchClawHubPackageSecurity(params: {
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
   });
+<<<<<<< HEAD
   return parseClawHubPackageSecurityResponse(response);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export async function fetchClawHubPackageReadiness(params: {
@@ -1221,6 +1356,7 @@ export async function fetchClawHubSkillInstallResolution(params: {
   });
   const isStructuredBlock = [403, 409, 410, 423].includes(response.status);
   if (!response.ok && !isStructuredBlock) {
+<<<<<<< HEAD
     throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
   }
   return parseClawHubJsonBody<ClawHubSkillInstallResolutionResponse>(
@@ -1228,6 +1364,15 @@ export async function fetchClawHubSkillInstallResolution(params: {
     url,
     params.timeoutMs,
   );
+=======
+    throw await buildClawHubError(response, url, hasToken);
+  }
+  try {
+    return (await response.json()) as ClawHubSkillInstallResolutionResponse;
+  } catch (cause) {
+    throw new Error(`ClawHub ${url.pathname} returned malformed JSON`, { cause });
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export async function fetchClawHubSkillVerification(params: {
@@ -1303,7 +1448,11 @@ export async function fetchClawHubSkillCard(params: {
     skipAuth,
   });
   if (!response.ok) {
+<<<<<<< HEAD
     throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
+=======
+    throw await buildClawHubError(response, url, hasToken);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   const bytes = await readClawHubResponseBytes({
     response,
@@ -1338,7 +1487,11 @@ export async function downloadClawHubPackageArchive(params: {
       fetchImpl: params.fetchImpl,
     });
     if (!response.ok) {
+<<<<<<< HEAD
       throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
+=======
+      throw await buildClawHubError(response, url, hasToken);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     const bytes = await readClawHubResponseBytes({
       response,
@@ -1417,7 +1570,11 @@ export async function downloadClawHubPackageArchive(params: {
     fetchImpl: params.fetchImpl,
   });
   if (!response.ok) {
+<<<<<<< HEAD
     throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
+=======
+    throw await buildClawHubError(response, url, hasToken);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   const bytes = await readClawHubResponseBytes({
     response,
@@ -1464,7 +1621,11 @@ export async function downloadClawHubSkillArchive(params: {
     },
   });
   if (!response.ok) {
+<<<<<<< HEAD
     throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
+=======
+    throw await buildClawHubError(response, url, hasToken);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   const bytes = await readClawHubResponseBytes({
     response,
@@ -1507,7 +1668,11 @@ export async function downloadClawHubSkillArchiveUrl(params: {
     skipAuth,
   });
   if (!response.ok) {
+<<<<<<< HEAD
     throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
+=======
+    throw await buildClawHubError(response, url, hasToken);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   const bytes = await readClawHubResponseBytes({
     response,
@@ -1544,7 +1709,11 @@ export async function downloadClawHubGitHubSkillArchive(params: {
     fetchImpl: params.fetchImpl,
   });
   if (!response.ok) {
+<<<<<<< HEAD
     throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
+=======
+    throw await buildClawHubError(response, url, hasToken);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   const bytes = await readClawHubResponseBytes({
     response,
@@ -1604,7 +1773,11 @@ export async function reportClawHubSkillInstallTelemetry(params: {
     },
   });
   if (!response.ok) {
+<<<<<<< HEAD
     throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
+=======
+    throw await buildClawHubError(response, url, hasToken);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 

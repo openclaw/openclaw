@@ -7,7 +7,10 @@ import type {
 } from "@openclaw/acp-core/runtime/types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+<<<<<<< HEAD
 import { toErrorObject } from "../../infra/errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import { runManagerCancelSession } from "./manager.cancel-session.js";
@@ -585,7 +588,11 @@ export class AcpSessionManager {
         }
         settled = true;
         cleanup();
+<<<<<<< HEAD
         reject(toErrorObject(error, "Non-Error rejection"));
+=======
+        reject(toLintErrorObject(error, "Non-Error rejection"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       };
       const onAbort = () => {
         if (actorStarted) {
@@ -613,3 +620,20 @@ export class AcpSessionManager {
     throw new AcpRuntimeError("ACP_TURN_FAILED", "ACP operation aborted.");
   }
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

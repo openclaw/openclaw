@@ -7,11 +7,15 @@ import { promisify } from "node:util";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { danger, shouldLogVerbose } from "../globals.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
+<<<<<<< HEAD
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
+<<<<<<< HEAD
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { logDebug, logError } from "../logger.js";
 import { killProcessTree as terminateProcessTree } from "./kill-tree.js";
@@ -25,6 +29,52 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+=======
+import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
+import { logDebug, logError } from "../logger.js";
+import { killProcessTree as terminateProcessTree } from "./kill-tree.js";
+import { resolveCommandStdio } from "./spawn-utils.js";
+import { resolveWindowsCommandShim } from "./windows-command.js";
+
+const execFileAsync = promisify(execFile);
+
+const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>^%\r\n]/;
+
+function isWindowsBatchCommand(resolvedCommand: string): boolean {
+  if (process.platform !== "win32") {
+    return false;
+  }
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(resolvedCommand));
+  return ext === ".cmd" || ext === ".bat";
+}
+
+function escapeForCmdExe(arg: string): string {
+  // Reject cmd metacharacters to avoid injection when we must pass a single command line.
+  if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
+    throw new Error(
+      `Unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}. ` +
+        "Pass an explicit shell-wrapper argv at the call site instead.",
+    );
+  }
+  // Quote when needed; double inner quotes for cmd parsing.
+  if (!arg.includes(" ") && !arg.includes('"')) {
+    return arg;
+  }
+  return `"${arg.replace(/"/g, '""')}"`;
+}
+
+function buildCmdExeCommandLine(resolvedCommand: string, args: string[]): string {
+  return [escapeForCmdExe(resolvedCommand), ...args.map(escapeForCmdExe)].join(" ");
+}
+
+function resolveTrustedWindowsCmdExe(): string {
+  if (process.platform !== "win32") {
+    return "cmd.exe";
+  }
+  return path.win32.join(getWindowsInstallRoots().systemRoot, "System32", "cmd.exe");
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function assignChildEnvValue(params: {
   env: NodeJS.ProcessEnv;
   key: string;
@@ -124,7 +174,11 @@ function resolveChildProcessInvocation(params: {
   return {
     command: useCmdWrapper ? resolveTrustedWindowsCmdExe() : resolvedCommand,
     args: useCmdWrapper
+<<<<<<< HEAD
       ? ["/d", "/s", "/c", buildWindowsCmdExeCommandLine(resolvedCommand, finalArgv.slice(1))]
+=======
+      ? ["/d", "/s", "/c", buildCmdExeCommandLine(resolvedCommand, finalArgv.slice(1))]
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       : finalArgv.slice(1),
     usesWindowsExitCodeShim:
       process.platform === "win32" && (useCmdWrapper || finalArgv !== params.argv),
@@ -154,12 +208,18 @@ export async function runExec(
 ): Promise<{ stdout: string; stderr: string }> {
   const options =
     typeof opts === "number"
+<<<<<<< HEAD
       ? { timeout: resolveTimerTimeoutMs(opts, 1), encoding: "buffer" as const }
       : {
           timeout:
             typeof opts.timeoutMs === "number"
               ? resolveTimerTimeoutMs(opts.timeoutMs, 1)
               : undefined,
+=======
+      ? { timeout: opts, encoding: "buffer" as const }
+      : {
+          timeout: opts.timeoutMs,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           maxBuffer: opts.maxBuffer,
           cwd: opts.cwd,
           encoding: "buffer" as const,
@@ -346,7 +406,10 @@ export async function runCommandWithTimeout(
     typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
   const { timeoutMs, cwd, input, baseEnv, env, noOutputTimeoutMs, signal, killProcessTree } =
     options;
+<<<<<<< HEAD
   const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const hasInput = input !== undefined;
   const resolvedEnv = resolveCommandEnv({ argv, baseEnv, env });
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
@@ -399,9 +462,12 @@ export async function runCommandWithTimeout(
       typeof noOutputTimeoutMs === "number" &&
       Number.isFinite(noOutputTimeoutMs) &&
       noOutputTimeoutMs > 0;
+<<<<<<< HEAD
     const resolvedNoOutputTimeoutMs = shouldTrackOutputTimeout
       ? resolveTimerTimeoutMs(noOutputTimeoutMs, 1)
       : undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     let removeAbortListener: (() => void) | null = null;
 
     const clearNoOutputTimer = () => {
@@ -437,11 +503,22 @@ export async function runCommandWithTimeout(
       } else {
         killIssuedByAbort = true;
       }
+<<<<<<< HEAD
       if (killProcessTree && typeof child.pid === "number" && child.pid > 0) {
         if (process.platform === "win32") {
           const taskkillPath = getWindowsSystem32ExePath("taskkill.exe");
           try {
             spawn(taskkillPath, ["/PID", String(child.pid), "/T"], {
+=======
+      if (
+        killProcessTree &&
+        typeof child.pid === "number" &&
+        child.pid > 0
+      ) {
+        if (process.platform === "win32") {
+          try {
+            spawn("taskkill", ["/PID", String(child.pid), "/T"], {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               stdio: "ignore",
               windowsHide: true,
             });
@@ -457,7 +534,11 @@ export async function runCommandWithTimeout(
                   return;
                 }
                 try {
+<<<<<<< HEAD
                   spawn(taskkillPath, ["/PID", String(child.pid), "/T", "/F"], {
+=======
+                  spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                     stdio: "ignore",
                     windowsHide: true,
                   });
@@ -477,6 +558,7 @@ export async function runCommandWithTimeout(
       }
       if (process.platform === "win32" && typeof child.pid === "number" && child.pid > 0) {
         try {
+<<<<<<< HEAD
           spawn(
             getWindowsSystem32ExePath("taskkill.exe"),
             ["/PID", String(child.pid), "/T", "/F"],
@@ -485,6 +567,12 @@ export async function runCommandWithTimeout(
               windowsHide: true,
             },
           );
+=======
+          spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+            stdio: "ignore",
+            windowsHide: true,
+          });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           return;
         } catch {
           // Fall through to Node's direct child kill as a last resort.
@@ -504,13 +592,21 @@ export async function runCommandWithTimeout(
         }
         noOutputTimedOut = true;
         killChild();
+<<<<<<< HEAD
       }, resolvedNoOutputTimeoutMs);
+=======
+      }, Math.floor(noOutputTimeoutMs));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
 
     const timer = setTimeout(() => {
       timedOut = true;
       killChild();
+<<<<<<< HEAD
     }, resolvedTimeoutMs);
+=======
+    }, timeoutMs);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     armNoOutputTimer();
     if (signal) {
       const onAbort = () => killChild(false);

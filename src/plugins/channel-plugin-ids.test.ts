@@ -20,6 +20,10 @@ const listExplicitlyDisabledChannelIdsForConfig = vi.hoisted(() =>
   }),
 );
 const listPotentialConfiguredChannelPresenceSignals = vi.hoisted(() => vi.fn());
+<<<<<<< HEAD
+=======
+const hasPotentialConfiguredChannels = vi.hoisted(() => vi.fn());
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const hasMeaningfulChannelConfig = vi.hoisted(() =>
   vi.fn((value: unknown) => {
     return (
@@ -39,6 +43,10 @@ vi.mock("../channels/config-presence.js", () => ({
   listPotentialConfiguredChannelIds,
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelPresenceSignals,
+<<<<<<< HEAD
+=======
+  hasPotentialConfiguredChannels,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   hasMeaningfulChannelConfig,
 }));
 
@@ -151,6 +159,7 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         contracts: { speechProviders: ["tts-local-cli", "cli"] },
       },
       {
+<<<<<<< HEAD
         id: "gradium",
         channels: [],
         origin: "global",
@@ -160,6 +169,8 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         contracts: { speechProviders: ["gradium"] },
       },
       {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         id: "anthropic",
         channels: [],
         origin: "bundled",
@@ -737,6 +748,15 @@ describe("resolveGatewayStartupPluginIds", () => {
           source: "config",
         }));
       });
+<<<<<<< HEAD
+=======
+    hasPotentialConfiguredChannels.mockReset().mockImplementation((config: OpenClawConfig) => {
+      if (Object.hasOwn(config, "channels")) {
+        return Object.keys(config.channels ?? {}).length > 0;
+      }
+      return true;
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     useManifestRegistryFixture();
     loadPluginManifestRegistryForInstalledIndex
       .mockReset()
@@ -811,6 +831,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["browser", "microsoft", "memory-core"],
     ],
     [
+<<<<<<< HEAD
       "includes explicitly enabled external speech providers at startup",
       {
         channels: {},
@@ -820,6 +841,8 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["browser", "gradium", "memory-core"],
     ],
     [
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "includes active persona speech providers at startup",
       {
         channels: {},
@@ -2805,6 +2828,15 @@ describe("resolveConfiguredChannelPluginIds", () => {
           source: "config",
         }));
       });
+<<<<<<< HEAD
+=======
+    hasPotentialConfiguredChannels.mockReset().mockImplementation((config: OpenClawConfig) => {
+      if (Object.hasOwn(config, "channels")) {
+        return Object.keys(config.channels ?? {}).length > 0;
+      }
+      return false;
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     useManifestRegistryFixture();
   });
 
@@ -2981,6 +3013,10 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
   beforeEach(() => {
     listPotentialConfiguredChannelIds.mockReset().mockReturnValue([]);
     listPotentialConfiguredChannelPresenceSignals.mockReset().mockReturnValue([]);
+<<<<<<< HEAD
+=======
+    hasPotentialConfiguredChannels.mockReset().mockReturnValue(false);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     hasMeaningfulChannelConfig.mockClear();
     useManifestRegistryFixture();
   });
@@ -3420,6 +3456,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
     ).toEqual(["demo-other-channel"]);
   });
 
+<<<<<<< HEAD
   it("announces explicit configured channels without installed owners", () => {
     expect(
       listConfiguredAnnounceChannelIdsForConfig({
@@ -3599,6 +3636,8 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
     ).toStrictEqual(["shared"]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not treat activation-only declarations as channel ownership", () => {
     listPotentialConfiguredChannelIds.mockReturnValue(["activation-only-channel"]);
     listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
@@ -3756,6 +3795,10 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
   it("uses manifest env vars for read-only channel presence checks", () => {
     listPotentialConfiguredChannelIds.mockReturnValue([]);
     listPotentialConfiguredChannelPresenceSignals.mockReturnValue([]);
+<<<<<<< HEAD
+=======
+    hasPotentialConfiguredChannels.mockReturnValue(false);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(
       hasConfiguredChannelsForReadOnlyScope({

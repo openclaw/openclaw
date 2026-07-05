@@ -5,6 +5,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installWebAutoReplyUnitTestHooks, makeSessionStore } from "./auto-reply.test-harness.js";
 import { buildMentionConfig } from "./auto-reply/mentions.js";
 import { createEchoTracker } from "./auto-reply/monitor/echo.js";
+<<<<<<< HEAD
+=======
+import { awaitBackgroundTasks } from "./auto-reply/monitor/last-route.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createWebOnMessageHandler } from "./auto-reply/monitor/on-message.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 
@@ -133,8 +137,12 @@ describe("web auto-reply last-route", () => {
       }),
     );
 
+<<<<<<< HEAD
     await Promise.allSettled(backgroundTasks);
     backgroundTasks.clear();
+=======
+    await awaitBackgroundTasks(backgroundTasks);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(updateLastRouteInBackgroundMock).toHaveBeenCalledTimes(1);
     const updateParams = updateLastRouteInBackgroundMock.mock.calls.at(0)?.[0] as
@@ -211,8 +219,12 @@ describe("web auto-reply last-route", () => {
       }),
     );
 
+<<<<<<< HEAD
     await Promise.allSettled(backgroundTasks);
     backgroundTasks.clear();
+=======
+    await awaitBackgroundTasks(backgroundTasks);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(updateLastRouteInBackgroundMock).toHaveBeenCalledTimes(1);
     const updateParams = updateLastRouteInBackgroundMock.mock.calls.at(0)?.[0] as

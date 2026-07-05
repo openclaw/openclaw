@@ -1,7 +1,20 @@
+<<<<<<< HEAD
 // Sandbox formatter tests cover duration and sandbox diagnostic display helpers.
 import { describe, expect, it } from "vitest";
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { formatImageMatch, formatSimpleStatus, formatStatus } from "./sandbox-formatters.js";
+=======
+// Sandbox formatter tests cover duration, mismatch, and sandbox diagnostic display helpers.
+import { describe, expect, it } from "vitest";
+import { formatDurationCompact } from "../infra/format-time/format-duration.js";
+import {
+  countMismatches,
+  countRunning,
+  formatImageMatch,
+  formatSimpleStatus,
+  formatStatus,
+} from "./sandbox-formatters.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Helper matching old formatAge behavior: spaced compound duration */
 const formatAge = (ms: number) => formatDurationCompact(ms, { spaced: true }) ?? "0s";
@@ -57,4 +70,79 @@ describe("sandbox-formatters", () => {
       expect(formatAge(ms)).toBe(expected);
     });
   });
+<<<<<<< HEAD
+=======
+
+  describe("countRunning", () => {
+    it.each([
+      {
+        items: [
+          { running: true, name: "a" },
+          { running: false, name: "b" },
+          { running: true, name: "c" },
+          { running: false, name: "d" },
+        ],
+        expected: 2,
+      },
+      {
+        items: [
+          { running: false, name: "a" },
+          { running: false, name: "b" },
+        ],
+        expected: 0,
+      },
+      {
+        items: [
+          { running: true, name: "a" },
+          { running: true, name: "b" },
+          { running: true, name: "c" },
+        ],
+        expected: 3,
+      },
+    ])("counts running items", ({ items, expected }) => {
+      expect(countRunning(items)).toBe(expected);
+    });
+  });
+
+  describe("countMismatches", () => {
+    it.each([
+      {
+        items: [
+          { imageMatch: true, name: "a" },
+          { imageMatch: false, name: "b" },
+          { imageMatch: true, name: "c" },
+          { imageMatch: false, name: "d" },
+          { imageMatch: false, name: "e" },
+        ],
+        expected: 3,
+      },
+      {
+        items: [
+          { imageMatch: true, name: "a" },
+          { imageMatch: true, name: "b" },
+        ],
+        expected: 0,
+      },
+      {
+        items: [
+          { imageMatch: false, name: "a" },
+          { imageMatch: false, name: "b" },
+          { imageMatch: false, name: "c" },
+        ],
+        expected: 3,
+      },
+    ])("counts image mismatches", ({ items, expected }) => {
+      expect(countMismatches(items)).toBe(expected);
+    });
+  });
+
+  describe("counter empty inputs", () => {
+    it.each([
+      { fn: countRunning as (items: unknown[]) => number },
+      { fn: countMismatches as (items: unknown[]) => number },
+    ])("should return 0 for empty array", ({ fn }) => {
+      expect(fn([])).toBe(0);
+    });
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

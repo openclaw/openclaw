@@ -222,6 +222,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     );
   });
 
+<<<<<<< HEAD
   it("keeps the configured typing cadence for prestarted feedback", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
@@ -250,6 +251,8 @@ describe("createDiscordMessageHandler queue behavior", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps accepted DM dispatch running when accepted typing feedback fails", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();

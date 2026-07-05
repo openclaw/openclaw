@@ -1,9 +1,16 @@
 // Test Live Shard tests cover test live shard script behavior.
+<<<<<<< HEAD
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+=======
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { describe, expect, it } from "vitest";
 import {
   LIVE_TEST_SHARDS,
@@ -422,6 +429,7 @@ describe("scripts/test-live-shard", () => {
       stdio: "inherit",
     });
   });
+<<<<<<< HEAD
 
   it.skipIf(process.platform === "win32")(
     "cleans live shard descendants before forwarding parent SIGTERM",
@@ -538,3 +546,6 @@ function isProcessAlive(pid: number): boolean {
     return false;
   }
 }
+=======
+});
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

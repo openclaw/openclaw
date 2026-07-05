@@ -184,6 +184,17 @@ export function validateSystemRunCommandConsistency(params: {
   };
 }
 
+<<<<<<< HEAD
+=======
+/** Resolve system-run command fields with strict rawCommand matching. */
+export function resolveSystemRunCommand(params: {
+  command?: unknown;
+  rawCommand?: unknown;
+}): ResolvedSystemRunCommand {
+  return resolveSystemRunCommandWithMode(params, false);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Resolve request command fields while accepting the legacy shell-preview text. */
 export function resolveSystemRunCommandRequest(params: {
   command?: unknown;

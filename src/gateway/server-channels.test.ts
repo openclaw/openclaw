@@ -511,6 +511,7 @@ describe("server-channels auto restart", () => {
     expect(account?.lastError).toContain("channel stop timed out");
   });
 
+<<<<<<< HEAD
   it("resumes startup on the second recovery pass while the stale task is still pending", async () => {
     const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
       abortSignal.addEventListener("abort", () => {}, { once: true });
@@ -587,6 +588,8 @@ describe("server-channels auto restart", () => {
     expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("restarts immediately when recovery stop timeout settles with an error", async () => {
     const rejectFirstTask = createDeferred();
     let startCount = 0;

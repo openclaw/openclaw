@@ -1,7 +1,11 @@
 // Elevenlabs tests cover speech provider plugin behavior.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { isValidElevenLabsVoiceId } from "./shared.js";
 import { buildElevenLabsSpeechProvider } from "./speech-provider.js";
+=======
+import { buildElevenLabsSpeechProvider, isValidVoiceId } from "./speech-provider.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: async ({
@@ -120,7 +124,11 @@ describe("elevenlabs speech provider", () => {
       { value: "voice?param=value", expected: false },
     ] as const;
     for (const testCase of cases) {
+<<<<<<< HEAD
       expect(isValidElevenLabsVoiceId(testCase.value), testCase.value).toBe(testCase.expected);
+=======
+      expect(isValidVoiceId(testCase.value), testCase.value).toBe(testCase.expected);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 

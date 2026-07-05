@@ -11,7 +11,10 @@
 
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { SlashCommandContext } from "../../engine/commands/slash-commands.js";
+<<<<<<< HEAD
 import type { QQBotGroupCommandLevel } from "../../engine/config/group.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ResolvedQQBotAccount } from "../../types.js";
 import type { QQBotFromParseResult } from "./from-parser.js";
 
@@ -33,7 +36,10 @@ interface BuildFrameworkSlashContextInput {
   account: ResolvedQQBotAccount;
   from: QQBotFromParseResult;
   commandName: string;
+<<<<<<< HEAD
   groupCommandLevel?: QQBotGroupCommandLevel;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function buildFrameworkSlashContext({
@@ -41,7 +47,10 @@ export function buildFrameworkSlashContext({
   account,
   from,
   commandName,
+<<<<<<< HEAD
   groupCommandLevel,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }: BuildFrameworkSlashContextInput): SlashCommandContext {
   const args = ctx.args ?? "";
   const rawContent = args ? `/${commandName} ${args}` : `/${commandName}`;
@@ -58,7 +67,10 @@ export function buildFrameworkSlashContext({
     appId: account.appId,
     accountConfig: account.config as unknown as Record<string, unknown>,
     commandAuthorized: ctx.isAuthorizedSender,
+<<<<<<< HEAD
     groupCommandLevel,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     queueSnapshot: { ...DEFAULT_QUEUE_SNAPSHOT },
   };
 }

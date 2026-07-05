@@ -68,7 +68,10 @@ type CronUpdatePatch = {
       input?: string;
       message?: string;
       model?: string;
+<<<<<<< HEAD
       fallbacks?: string[] | null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       thinking?: string;
       lightContext?: boolean;
       timeoutSeconds?: number;
@@ -98,7 +101,10 @@ type CronAddParams = {
     input?: string;
     message?: string;
     model?: string;
+<<<<<<< HEAD
     fallbacks?: string[];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     thinking?: string;
     lightContext?: boolean;
     timeoutSeconds?: number;
@@ -658,6 +664,7 @@ describe("cron cli", () => {
     },
   );
 
+<<<<<<< HEAD
   describe.each(["--no-output-timeout-seconds", "--output-max-bytes"])(
     "cron add %s validation",
     (flag) => {
@@ -681,6 +688,8 @@ describe("cron cli", () => {
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects cron add with both message and command payloads", async () => {
     await expectCronCommandExit([
       "cron",
@@ -1069,6 +1078,7 @@ describe("cron cli", () => {
     expect(params?.payload?.toolsAllow).toEqual(["exec", "read", "write"]);
   });
 
+<<<<<<< HEAD
   it("sets fallback models on cron add", async () => {
     const params = await runCronAddAndGetParams([
       "--name",
@@ -1086,6 +1096,8 @@ describe("cron cli", () => {
     expect(params?.payload?.fallbacks).toEqual(["openrouter/gpt-4.1-mini", "openai/gpt-5"]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.each([
     {
       label: "omits empty model and thinking",
@@ -1116,6 +1128,7 @@ describe("cron cli", () => {
     expect(patch?.patch?.payload?.toolsAllow).toEqual(["exec", "read", "write"]);
   });
 
+<<<<<<< HEAD
   it("sets fallback models on cron edit", async () => {
     const patch = await runCronEditAndGetPatch([
       "--fallbacks",
@@ -1137,6 +1150,8 @@ describe("cron cli", () => {
     expect(patch?.patch?.payload?.fallbacks).toBeNull();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("sets and clears agent id on cron edit", async () => {
     await runCronCommand(["cron", "edit", "job-1", "--agent", " Ops ", "--message", "hello"]);
 

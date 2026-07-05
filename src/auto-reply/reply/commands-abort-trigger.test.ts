@@ -7,9 +7,12 @@ import type { HandleCommandsParams } from "./commands-types.js";
 
 const abortEmbeddedAgentRunMock = vi.hoisted(() => vi.fn());
 const persistAbortTargetEntryMock = vi.hoisted(() => vi.fn());
+<<<<<<< HEAD
 const resolveCommandSessionEntryForKeyMock = vi.hoisted(() =>
   vi.fn(() => ({ entry: undefined, key: "agent:main:main" })),
 );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const setAbortMemoryMock = vi.hoisted(() => vi.fn());
 const abortSessionRunTargetMock = vi.hoisted(() => vi.fn());
 
@@ -35,13 +38,20 @@ vi.mock("./abort.js", () => ({
   abortSessionRunTarget: abortSessionRunTargetMock,
   formatAbortReplyText: vi.fn(() => "⚙️ Agent was aborted."),
   isAbortTrigger: vi.fn((raw: string) => raw === "stop"),
+<<<<<<< HEAD
+=======
+  resolveSessionEntryForKey: vi.fn(() => ({ entry: undefined, key: "agent:main:main" })),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   setAbortMemory: setAbortMemoryMock,
   stopSubagentsForRequester: vi.fn(() => ({ stopped: 0 })),
 }));
 
 vi.mock("./commands-session-store.js", () => ({
   persistAbortTargetEntry: persistAbortTargetEntryMock,
+<<<<<<< HEAD
   resolveCommandSessionEntryForKey: resolveCommandSessionEntryForKeyMock,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("./reply-run-registry.js", () => ({

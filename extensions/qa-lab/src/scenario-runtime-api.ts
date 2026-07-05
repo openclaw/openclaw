@@ -71,7 +71,10 @@ export type QaScenarioRuntimeDeps = {
   resolveGeneratedImagePath: QaScenarioRuntimeFunction;
   startAgentRun: QaScenarioRuntimeFunction;
   waitForAgentRun: QaScenarioRuntimeFunction;
+<<<<<<< HEAD
   waitForAgentHistoryReply: QaScenarioRuntimeFunction;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   listCronJobs: QaScenarioRuntimeFunction;
   findManagedDreamingCronJob: QaScenarioRuntimeFunction;
   waitForCronRunCompletion: QaScenarioRuntimeFunction;
@@ -87,8 +90,11 @@ export type QaScenarioRuntimeDeps = {
   extractQaToolPayload: QaScenarioRuntimeFunction;
   formatMemoryDreamingDay: QaScenarioRuntimeFunction;
   resolveSessionTranscriptsDirForAgent: QaScenarioRuntimeFunction;
+<<<<<<< HEAD
   activeMemoryToggleKey: QaScenarioRuntimeFunction;
   setActiveMemorySessionDisabled: QaScenarioRuntimeFunction;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   buildAgentSessionKey: QaScenarioRuntimeFunction;
   normalizeLowercaseStringOrEmpty: QaScenarioRuntimeFunction;
   formatErrorMessage: QaScenarioRuntimeFunction;
@@ -165,7 +171,10 @@ type QaScenarioRuntimeApi<
   resolveGeneratedImagePath: TDeps["resolveGeneratedImagePath"];
   startAgentRun: TDeps["startAgentRun"];
   waitForAgentRun: TDeps["waitForAgentRun"];
+<<<<<<< HEAD
   waitForAgentHistoryReply: TDeps["waitForAgentHistoryReply"];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   listCronJobs: TDeps["listCronJobs"];
   findManagedDreamingCronJob: TDeps["findManagedDreamingCronJob"];
   waitForCronRunCompletion: TDeps["waitForCronRunCompletion"];
@@ -181,8 +190,11 @@ type QaScenarioRuntimeApi<
   extractQaToolPayload: TDeps["extractQaToolPayload"];
   formatMemoryDreamingDay: TDeps["formatMemoryDreamingDay"];
   resolveSessionTranscriptsDirForAgent: TDeps["resolveSessionTranscriptsDirForAgent"];
+<<<<<<< HEAD
   activeMemoryToggleKey: TDeps["activeMemoryToggleKey"];
   setActiveMemorySessionDisabled: TDeps["setActiveMemorySessionDisabled"];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   buildAgentSessionKey: TDeps["buildAgentSessionKey"];
   normalizeLowercaseStringOrEmpty: TDeps["normalizeLowercaseStringOrEmpty"];
   formatErrorMessage: TDeps["formatErrorMessage"];
@@ -274,7 +286,10 @@ export function createQaScenarioRuntimeApi<
     resolveGeneratedImagePath: params.deps.resolveGeneratedImagePath,
     startAgentRun: params.deps.startAgentRun,
     waitForAgentRun: params.deps.waitForAgentRun,
+<<<<<<< HEAD
     waitForAgentHistoryReply: params.deps.waitForAgentHistoryReply,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     listCronJobs: params.deps.listCronJobs,
     findManagedDreamingCronJob: params.deps.findManagedDreamingCronJob,
     waitForCronRunCompletion: params.deps.waitForCronRunCompletion,
@@ -290,8 +305,11 @@ export function createQaScenarioRuntimeApi<
     extractQaToolPayload: params.deps.extractQaToolPayload,
     formatMemoryDreamingDay: params.deps.formatMemoryDreamingDay,
     resolveSessionTranscriptsDirForAgent: params.deps.resolveSessionTranscriptsDirForAgent,
+<<<<<<< HEAD
     activeMemoryToggleKey: params.deps.activeMemoryToggleKey,
     setActiveMemorySessionDisabled: params.deps.setActiveMemorySessionDisabled,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     buildAgentSessionKey: params.deps.buildAgentSessionKey,
     normalizeLowercaseStringOrEmpty: params.deps.normalizeLowercaseStringOrEmpty,
     formatErrorMessage: params.deps.formatErrorMessage,

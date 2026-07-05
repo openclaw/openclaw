@@ -147,6 +147,7 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 
+<<<<<<< HEAD
   it("accepts 1M-character tool result caps for long-context agents", () => {
     const res = validateConfigObject({
       agents: {
@@ -161,6 +162,8 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("accepts agents.defaults and agents.list contextLimits overrides", () => {
     const res = validateConfigObject({
       agents: {

@@ -79,6 +79,7 @@ describe("test perf budget script", () => {
     expect(() => testing.parseArgs(["--max-wall-ms", "--baseline-wall-ms", "1000"], {})).toThrow(
       "--max-wall-ms requires a value",
     );
+<<<<<<< HEAD
     expect(() => testing.parseArgs(["--max-wall-ms", "-h"], {})).toThrow(
       "--max-wall-ms requires a value",
     );
@@ -88,6 +89,8 @@ describe("test perf budget script", () => {
     expect(() => testing.parseArgs(["--max-wall-ms", "1000", "--max-wall-ms", "2000"], {})).toThrow(
       "--max-wall-ms was provided more than once",
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("requires timed file evidence in the Vitest JSON report", () => {

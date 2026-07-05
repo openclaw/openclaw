@@ -12,10 +12,14 @@ import {
 } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+<<<<<<< HEAD
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
 } from "../plugins/hook-agent-context.js";
+=======
+import { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { CliOutput } from "./cli-output.js";
@@ -418,12 +422,15 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
         workspaceDir: params.workspaceDir,
         trigger: params.trigger,
         ...buildAgentHookContextChannelFields(params),
+<<<<<<< HEAD
         ...buildAgentHookContextIdentityFields({
           trigger: params.trigger,
           senderId: params.senderId,
           chatId: params.chatId,
           channelContext: params.channelContext,
         }),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       } as const;
       params.onExecutionPhase?.({
         phase: "before_agent_reply",
@@ -557,12 +564,15 @@ export async function runPreparedCliAgent(
       ? { contextWindowReferenceTokens: context.contextWindowInfo.referenceTokens }
       : {}),
     ...buildAgentHookContextChannelFields(params),
+<<<<<<< HEAD
     ...buildAgentHookContextIdentityFields({
       trigger: params.trigger,
       senderId: params.senderId,
       chatId: params.chatId,
       channelContext: params.channelContext,
     }),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } as const;
 
   const buildAgentEndMessages = (lastAssistant?: unknown): unknown[] => [

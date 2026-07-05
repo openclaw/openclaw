@@ -76,6 +76,7 @@ describe("resolveDefaultMattermostAccountId", () => {
     expect(listMattermostAccountIds(cfg)).toEqual(["default", "work"]);
     expect(resolveDefaultMattermostAccountId(cfg)).toBe("default");
   });
+<<<<<<< HEAD
 
   it("inherits top-level access policy for named accounts before doctor migration", () => {
     const cfg: OpenClawConfig = {
@@ -102,6 +103,8 @@ describe("resolveDefaultMattermostAccountId", () => {
     expect(account.config.allowFrom).toEqual(["*"]);
     expect(account.config.groupAllowFrom).toEqual(["*"]);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("resolveMattermostReplyToMode", () => {

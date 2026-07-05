@@ -10,10 +10,20 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import type { RuntimeEnv } from "../runtime.js";
+<<<<<<< HEAD
 import { normalizeHealthCheck } from "./health-check-adapter.js";
 import type { HealthCheckInput, RunnableHealthCheck } from "./health-check-runner-types.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 import type { FlowContribution } from "./types.js";
+=======
+import type { HealthFinding } from "./health-checks.js";
+import type { FlowContribution } from "./types.js";
+export {
+  doctorHealthConversionRules,
+  type DoctorHealthConversionKind,
+  type DoctorHealthConversionRule,
+} from "./doctor-health-conversion-plan.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type DoctorFlowMode = "local" | "remote";
 
@@ -49,13 +59,17 @@ export type DoctorHealthFlowContext = {
 type DoctorHealthContribution = FlowContribution & {
   kind: "core";
   surface: "health";
+<<<<<<< HEAD
   // Structured checks listed here belong to this ordered doctor contribution;
   // when legacy run() is absent they also own the doctor execution path.
   healthChecks: readonly HealthCheckInput[];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   healthCheckIds: readonly string[];
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 };
 
+<<<<<<< HEAD
 type DoctorContributionHealthCheck =
   | (Omit<HealthCheck, "id" | "kind" | "source"> & {
       readonly id?: string;
@@ -67,6 +81,9 @@ type DoctorContributionHealthCheck =
       readonly kind?: "core";
       readonly source?: string;
     });
+=======
+const PRE_HEALTH_POSITIONAL_HEALTH_CHECK_IDS = new Set(["core/doctor/ui-protocol-freshness"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const loadAgentDefaultsModule = async () => await import("../agents/defaults.js");
 const loadAgentScopeModule = async () => await import("../agents/agent-scope.js");
@@ -111,6 +128,7 @@ export function shouldSkipLegacyUpdateDoctorConfigWrite(params: {
   return true;
 }
 
+<<<<<<< HEAD
 export function createDoctorHealthContribution(params: {
   id: string;
   label: string;
@@ -127,6 +145,15 @@ export function createDoctorHealthContribution(params: {
   if (params.run === undefined && healthChecks.length === 0) {
     throw new Error(`doctor contribution ${params.id} must define run or healthChecks`);
   }
+=======
+function createDoctorHealthContribution(params: {
+  id: string;
+  label: string;
+  healthCheckIds?: readonly string[];
+  hint?: string;
+  run: (ctx: DoctorHealthFlowContext) => Promise<void>;
+}): DoctorHealthContribution {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return {
     id: params.id,
     kind: "core",
@@ -137,6 +164,7 @@ export function createDoctorHealthContribution(params: {
       ...(params.hint ? { hint: params.hint } : {}),
     },
     source: "doctor",
+<<<<<<< HEAD
     healthChecks,
     healthCheckIds,
     run:
@@ -252,6 +280,24 @@ function formatStructuredHealthFinding(finding: HealthFinding): string {
   const where = finding.path !== undefined ? ` ${finding.path}` : "";
   const line = finding.line !== undefined ? `:${finding.line}` : "";
   return `[${finding.severity}] ${finding.checkId}${where}${line} - ${finding.message}`;
+=======
+    healthCheckIds: params.healthCheckIds ?? [],
+    run: params.run,
+  };
+}
+
+function resolvePositionalHealthCheckIds(): ReadonlySet<string> {
+  const ids = new Set(PRE_HEALTH_POSITIONAL_HEALTH_CHECK_IDS);
+  for (const contribution of resolveDoctorHealthContributions()) {
+    if (contribution.id === "doctor:structured-health-repairs") {
+      continue;
+    }
+    for (const checkId of contribution.healthCheckIds) {
+      ids.add(checkId);
+    }
+  }
+  return ids;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -439,15 +485,29 @@ async function runStructuredHealthRepairs(ctx: DoctorHealthFlowContext): Promise
   if (!ctx.prompter.shouldRepair) {
     return;
   }
+<<<<<<< HEAD
   const { registerBundledHealthChecks } = await import("./bundled-health-checks.js");
   const { listExtensionHealthChecksForDoctor } = await loadHealthCheckRegistryModule();
+=======
+  const { registerCoreHealthChecks } = await loadDoctorCoreChecksModule();
+  const { registerBundledHealthChecks } = await import("./bundled-health-checks.js");
+  const { listHealthChecks } = await loadHealthCheckRegistryModule();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
   const { resolveAgentWorkspaceDir, resolveDefaultAgentId } = await loadAgentScopeModule();
   const { note } = await loadNoteModule();
 
+<<<<<<< HEAD
   const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
   registerBundledHealthChecks({ cfg: ctx.cfg, cwd: workspaceDir });
   const checks = listExtensionHealthChecksForDoctor(await resolveDoctorContributionHealthChecks());
+=======
+  registerCoreHealthChecks();
+  const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
+  registerBundledHealthChecks({ cfg: ctx.cfg, cwd: workspaceDir });
+  const positionalHealthCheckIds = resolvePositionalHealthCheckIds();
+  const checks = listHealthChecks().filter((check) => !positionalHealthCheckIds.has(check.id));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const result = await runDoctorHealthRepairs(
     {
       mode: "fix",
@@ -472,6 +532,7 @@ async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   noteClaudeCliHealth(ctx.cfg);
 }
 
+<<<<<<< HEAD
 async function runCoreContributionHealthRepair(
   ctx: DoctorHealthFlowContext,
   checkIds: readonly string[],
@@ -510,14 +571,19 @@ async function runCoreContributionHealthRepair(
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { detectLegacyStateMigrations, runLegacyStateMigrations } =
     await import("../commands/doctor-state-migrations.js");
   const { note } = await loadNoteModule();
   const legacyState = await detectLegacyStateMigrations({ cfg: ctx.cfg });
+<<<<<<< HEAD
   if (legacyState.warnings.length > 0) {
     note(legacyState.warnings.join("\n"), "Doctor warnings");
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (legacyState.preview.length === 0) {
     return;
   }
@@ -534,7 +600,10 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   }
   const migrated = await runLegacyStateMigrations({
     detected: legacyState,
+<<<<<<< HEAD
     config: ctx.cfg,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
   });
   if (migrated.changes.length > 0) {
@@ -725,13 +794,22 @@ async function runSecurityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
 
 async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteChromeMcpBrowserReadiness } = await import("../commands/doctor-browser.js");
+<<<<<<< HEAD
   await runCoreContributionHealthRepair(ctx, ["core/doctor/browser-clawd-profile-residue"]);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   await noteChromeMcpBrowserReadiness(ctx.cfg);
 }
 
 async function runOpenAIOAuthTlsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+<<<<<<< HEAD
   const { noteOpenAIOAuthTlsPrerequisites } =
     await import("../plugins/provider-openai-chatgpt-oauth-tls.js");
+=======
+  const { noteOpenAIOAuthTlsPrerequisites } = await import(
+    "../plugins/provider-openai-chatgpt-oauth-tls.js"
+  );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   await noteOpenAIOAuthTlsPrerequisites({
     cfg: ctx.cfg,
     deep: ctx.options.deep === true,
@@ -1269,12 +1347,15 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runPluginRegistryHealth,
     }),
     createDoctorHealthContribution({
+<<<<<<< HEAD
       id: "doctor:ui-protocol-freshness",
       label: "UI protocol freshness",
       healthCheckIds: ["core/doctor/ui-protocol-freshness"],
       run: async () => {},
     }),
     createDoctorHealthContribution({
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       id: "doctor:disk-space",
       label: "Disk space",
       run: runDiskSpaceHealth,
@@ -1287,18 +1368,25 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:codex-session-routes",
       label: "Codex session routes",
+<<<<<<< HEAD
       healthCheckIds: ["core/doctor/codex-session-routes"],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       run: runCodexSessionRouteHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-locks",
       label: "Session locks",
+<<<<<<< HEAD
       healthCheckIds: ["core/doctor/session-locks"],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       run: runSessionLocksHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-transcripts",
       label: "Session transcripts",
+<<<<<<< HEAD
       healthChecks: {
         id: "core/doctor/session-transcripts",
         description: "Legacy or branchy session transcript files are represented as findings.",
@@ -1326,11 +1414,14 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
           };
         },
       },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       run: runSessionTranscriptsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-snapshots",
       label: "Session snapshots",
+<<<<<<< HEAD
       healthChecks: {
         id: "core/doctor/session-snapshots",
         description: "Stale cached session snapshot paths are represented as findings.",
@@ -1364,11 +1455,14 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
           };
         },
       },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       run: runSessionSnapshotsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:config-audit-scrub",
       label: "Config audit",
+<<<<<<< HEAD
       healthChecks: {
         description:
           "Historical config-audit argv redaction gaps are represented as structured findings.",
@@ -1395,6 +1489,8 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
           };
         },
       },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       run: runConfigAuditScrubHealth,
     }),
     createDoctorHealthContribution({
@@ -1406,6 +1502,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:sandbox",
       label: "Sandbox",
+<<<<<<< HEAD
       healthChecks: {
         id: "core/doctor/sandbox/registry-files",
         description: "Legacy sandbox registry files are represented in SQLite registry storage.",
@@ -1437,15 +1534,21 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
           };
         },
       },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       run: runSandboxHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:gateway-services",
       label: "Gateway services",
+<<<<<<< HEAD
       healthCheckIds: [
         "core/doctor/gateway-services/extra",
         "core/doctor/gateway-services/platform-notes",
       ],
+=======
+      healthCheckIds: ["core/doctor/gateway-services/platform-notes"],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       run: runGatewayServicesHealth,
     }),
     createDoctorHealthContribution({
@@ -1462,7 +1565,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:browser",
       label: "Browser",
+<<<<<<< HEAD
       healthCheckIds: ["core/doctor/browser", "core/doctor/browser-clawd-profile-residue"],
+=======
+      healthCheckIds: ["core/doctor/browser"],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       run: runBrowserHealth,
     }),
     createDoctorHealthContribution({
@@ -1502,6 +1609,10 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:workspace-status",
       label: "Workspace status",
+<<<<<<< HEAD
+=======
+      healthCheckIds: ["core/doctor/workspace-status"],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       run: runWorkspaceStatusHealth,
     }),
     createDoctorHealthContribution({
@@ -1572,6 +1683,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   ];
 }
 
+<<<<<<< HEAD
 export async function resolveDoctorContributionHealthChecks(): Promise<readonly HealthCheck[]> {
   const { CORE_HEALTH_CHECKS } = await import("./doctor-core-checks.js");
   const checksById = new Map(CORE_HEALTH_CHECKS.map((check) => [check.id, check]));
@@ -1594,6 +1706,8 @@ export async function resolveDoctorContributionHealthChecks(): Promise<readonly 
   return checks;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext): Promise<void> {
   for (const contribution of resolveDoctorHealthContributions()) {
     await contribution.run(ctx);

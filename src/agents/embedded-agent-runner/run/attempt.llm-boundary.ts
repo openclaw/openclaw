@@ -9,7 +9,10 @@ import type { AgentMessage } from "../../runtime/index.js";
 import { stripToolResultDetails } from "../../session-transcript-repair.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { markTranscriptPromptText } from "../tool-result-context-guard.js";
+<<<<<<< HEAD
 import { isRunnerToolCallBlockType } from "./attempt.tool-call-block-type.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 type LlmBoundaryOptions = {
@@ -61,8 +64,27 @@ export function normalizeMessagesForCurrentPromptBoundary(params: {
   includeTimestamp?: boolean;
   currentUserTimestamp?: number;
 }): AgentMessage[] {
+<<<<<<< HEAD
   const { message, options } = buildCurrentPromptBoundaryInput(params);
   return normalizeMessagesForLlmBoundary([...params.messages, message], options).slice(0, -1);
+=======
+  const promptMessage = {
+    role: "user" as const,
+    content: [{ type: "text" as const, text: params.prompt }],
+    timestamp: params.currentUserTimestamp ?? Date.now(),
+  };
+  const boundaryOptions =
+    params.timezone || params.includeTimestamp === false
+      ? {
+          ...(params.timezone ? { timezone: params.timezone } : {}),
+          ...(params.includeTimestamp === false ? { includeTimestamp: false } : {}),
+        }
+      : undefined;
+  return normalizeMessagesForLlmBoundary(
+    [...params.messages, promptMessage],
+    boundaryOptions,
+  ).slice(0, -1);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function normalizeCurrentPromptTextForLlmBoundary(params: {
@@ -71,6 +93,7 @@ export function normalizeCurrentPromptTextForLlmBoundary(params: {
   includeTimestamp?: boolean;
   currentUserTimestamp?: number;
 }): string {
+<<<<<<< HEAD
   const { message, options } = buildCurrentPromptBoundaryInput(params);
   const [normalized] = normalizeMessagesForLlmBoundary([message], options);
   const content = (normalized as { content?: unknown } | undefined)?.content;
@@ -84,12 +107,21 @@ function buildCurrentPromptBoundaryInput(params: {
   currentUserTimestamp?: number;
 }): { message: AgentMessage; options?: LlmBoundaryOptions } {
   const options =
+=======
+  const promptMessage = {
+    role: "user" as const,
+    content: [{ type: "text" as const, text: params.prompt }],
+    timestamp: params.currentUserTimestamp ?? Date.now(),
+  };
+  const boundaryOptions =
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     params.timezone || params.includeTimestamp === false
       ? {
           ...(params.timezone ? { timezone: params.timezone } : {}),
           ...(params.includeTimestamp === false ? { includeTimestamp: false } : {}),
         }
       : undefined;
+<<<<<<< HEAD
   return {
     message: {
       role: "user",
@@ -98,6 +130,11 @@ function buildCurrentPromptBoundaryInput(params: {
     },
     options,
   };
+=======
+  const [normalized] = normalizeMessagesForLlmBoundary([promptMessage], boundaryOptions);
+  const content = (normalized as { content?: unknown } | undefined)?.content;
+  return typeof content === "string" ? content : params.prompt;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /**
@@ -632,6 +669,10 @@ function isToolCallAssistantMessage(message: AgentMessage): boolean {
       return false;
     }
     const type = (block as { type?: unknown }).type;
+<<<<<<< HEAD
     return isRunnerToolCallBlockType(type);
+=======
+    return type === "toolCall" || type === "toolUse" || type === "functionCall";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 }

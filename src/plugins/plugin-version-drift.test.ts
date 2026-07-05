@@ -2,10 +2,14 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+<<<<<<< HEAD
 import {
   detectPluginVersionDrift,
   resolvePluginVersionDriftUpdateCommand,
 } from "./plugin-version-drift.js";
+=======
+import { detectPluginVersionDrift } from "./plugin-version-drift.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function npmRecord(
   version: string,
@@ -321,6 +325,7 @@ describe("detectPluginVersionDrift", () => {
     expect(result.drifts.map((d) => d.pluginId)).toEqual(["discord", "matrix", "whatsapp"]);
   });
 });
+<<<<<<< HEAD
 
 describe("resolvePluginVersionDriftUpdateCommand", () => {
   it("uses an exact npm package target when the drifted install is pinned", () => {
@@ -387,3 +392,5 @@ describe("resolvePluginVersionDriftUpdateCommand", () => {
     ).toBe("openclaw plugins update brave");
   });
 });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

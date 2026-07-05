@@ -179,6 +179,7 @@ async function readOpenRouterAudioStream(
   const result = { audioBuffers: [] as Buffer[], transcriptChunks: [] as string[] };
   let buffer = "";
   let doneSeen = false;
+<<<<<<< HEAD
   try {
     for (;;) {
       const { value, done } = await readOpenRouterStreamChunk(reader, deadline);
@@ -219,6 +220,42 @@ async function readOpenRouterAudioStream(
       reader.releaseLock();
     } catch {}
   }
+=======
+  for (;;) {
+    const { value, done } = await readOpenRouterStreamChunk(reader, deadline);
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split(/\r?\n/u);
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (processOpenRouterSseLine(line.trim(), result)) {
+        await reader.cancel();
+        return {
+          audioBuffer: Buffer.concat(result.audioBuffers),
+          transcript: result.transcriptChunks.join(""),
+        };
+      }
+    }
+  }
+  resolveOpenRouterStreamRemainingMs(deadline);
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    for (const line of buffer.split(/\r?\n/u)) {
+      if (processOpenRouterSseLine(line.trim(), result)) {
+        doneSeen = true;
+      }
+    }
+  }
+  if (!doneSeen) {
+    throw new Error("OpenRouter music generation stream ended before completion");
+  }
+  return {
+    audioBuffer: Buffer.concat(result.audioBuffers),
+    transcript: result.transcriptChunks.join(""),
+  };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvider {

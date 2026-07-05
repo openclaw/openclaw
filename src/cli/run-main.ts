@@ -33,7 +33,10 @@ import {
 } from "./gateway-run-argv.js";
 import { hasJsonOutputFlag, withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
+<<<<<<< HEAD
 import { formatCliCommandSuggestions } from "./program/command-suggestions.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { getCoreCliCommandNames } from "./program/core-command-descriptors.js";
 import { getSubCliEntries } from "./program/subcli-descriptors.js";
 import {
@@ -50,7 +53,10 @@ import {
   shouldUseSecretsHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
+<<<<<<< HEAD
 import { createGatewayStartupTrace } from "./startup-trace.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
 export {
@@ -67,6 +73,11 @@ export {
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
 
+<<<<<<< HEAD
+=======
+type Awaitable<T> = T | Promise<T>;
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const CLI_PROXY_ENV_KEYS = [
   "HTTP_PROXY",
   "HTTPS_PROXY",
@@ -86,6 +97,43 @@ const loadProxyLifecycleModule = async () => await import("../infra/net/proxy/pr
 const loadCrestodianModule = async () => await import("../crestodian/crestodian.js");
 const loadProgressModule = async () => await import("./progress.js");
 
+<<<<<<< HEAD
+=======
+function createGatewayCliMainStartupTrace(argv: string[]) {
+  // Startup trace is scoped to gateway invocations to avoid routine CLI stderr noise.
+  const enabled =
+    isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE) &&
+    argv.slice(2).includes("gateway");
+  const started = performance.now();
+  let last = started;
+  const emit = (name: string, durationMs: number, totalMs: number) => {
+    if (!enabled) {
+      return;
+    }
+    process.stderr.write(
+      `[gateway] startup trace: cli.main.${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms\n`,
+    );
+  };
+  return {
+    mark(name: string) {
+      const now = performance.now();
+      emit(name, now - last, now - started);
+      last = now;
+    },
+    async measure<T>(name: string, run: () => Awaitable<T>): Promise<T> {
+      const before = performance.now();
+      try {
+        return await run();
+      } finally {
+        const now = performance.now();
+        emit(name, now - before, now - started);
+        last = now;
+      }
+    },
+  };
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isRemoteAgentDispatchInvocation(argv: string[], primary: string | null): boolean {
   return primary === "agent" && !argv.includes("--local");
 }
@@ -142,7 +190,11 @@ function isGatewayRunInvocationArgv(argv: string[]): boolean {
 
 async function tryRunGatewayRunFastPath(
   argv: string[],
+<<<<<<< HEAD
   startupTrace: ReturnType<typeof createGatewayStartupTrace>,
+=======
+  startupTrace: ReturnType<typeof createGatewayCliMainStartupTrace>,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ): Promise<boolean> {
   if (!isGatewayRunFastPathArgv(argv)) {
     return false;
@@ -253,9 +305,15 @@ async function closeCliMemoryManagers(): Promise<void> {
 
 async function disposeCliAgentHarnesses(): Promise<void> {
   try {
+<<<<<<< HEAD
     const { listRegisteredAgentHarnesses, disposeRegisteredAgentHarnesses } =
       await import("../agents/harness/registry.js");
     if (listRegisteredAgentHarnesses().length === 0) {
+=======
+    const { listAgentHarnessIds, disposeRegisteredAgentHarnesses } =
+      await import("../agents/harness/registry.js");
+    if (listAgentHarnessIds().length === 0) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return;
     }
     await disposeRegisteredAgentHarnesses();
@@ -566,6 +624,7 @@ async function resolveUnownedCliPrimaryMessage(params: {
   const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
     await loadManifestCommandAliasesRuntimeModule();
   const cliCommandSurfaceOwner = await resolveCliCommandSurfaceOwner(params);
+<<<<<<< HEAD
   const pluginPolicyMessage = resolveMissingPluginCommandMessageFromPolicy(
     params.primary,
     params.config,
@@ -589,6 +648,20 @@ async function resolveUnownedCliPrimaryMessage(params: {
 
 async function bootstrapCliProxyCaptureAndDispatcher(
   startupTrace: ReturnType<typeof createGatewayStartupTrace>,
+=======
+  return (
+    resolveMissingPluginCommandMessageFromPolicy(params.primary, params.config, {
+      resolveCommandAliasOwner: resolveManifestCommandAliasOwner,
+      resolveToolOwner: resolveManifestToolOwner,
+      resolveCliCommandSurfaceOwner: () => cliCommandSurfaceOwner,
+    }) ??
+    `Unknown command: openclaw ${params.primary}. No built-in command or plugin CLI metadata owns "${params.primary}".`
+  );
+}
+
+async function bootstrapCliProxyCaptureAndDispatcher(
+  startupTrace: ReturnType<typeof createGatewayCliMainStartupTrace>,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   options: { ensureDispatcher?: boolean } = {},
 ): Promise<void> {
   const [
@@ -609,7 +682,11 @@ async function bootstrapCliProxyCaptureAndDispatcher(
 
 export async function runCli(argv: string[] = process.argv) {
   const originalArgv = normalizeWindowsArgv(argv);
+<<<<<<< HEAD
   const startupTrace = createGatewayStartupTrace(originalArgv, "cli.main");
+=======
+  const startupTrace = createGatewayCliMainStartupTrace(originalArgv);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const parsedContainer = parseCliContainerArgs(originalArgv);
   if (!parsedContainer.ok) {
     throw new Error(parsedContainer.error);

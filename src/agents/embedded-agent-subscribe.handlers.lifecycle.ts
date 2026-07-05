@@ -4,10 +4,17 @@
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
+<<<<<<< HEAD
 import { sanitizeForConsole } from "./console-sanitize.js";
 import {
   buildApiErrorObservationFields,
   buildTextObservationFields,
+=======
+import {
+  buildApiErrorObservationFields,
+  buildTextObservationFields,
+  sanitizeForConsole,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   shouldSuppressRawErrorConsoleSuffix,
 } from "./embedded-agent-error-observation.js";
 import {

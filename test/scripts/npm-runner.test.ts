@@ -25,6 +25,7 @@ describe("resolveNpmRunner", () => {
     });
   });
 
+<<<<<<< HEAD
   it("uses the active node executable when its basename is not node", () => {
     const execPath = "/Users/test/.toolchains/node-24/bin/node24";
     const expectedNpmCliPath = path.posix.resolve(
@@ -47,6 +48,8 @@ describe("resolveNpmRunner", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("anchors Windows npm staging to the adjacent npm-cli.js without a shell", () => {
     const execPath = "C:\\nodejs\\node.exe";
     const expectedNpmCliPath = path.win32.resolve(
@@ -129,6 +132,7 @@ describe("resolveNpmRunner", () => {
     });
   });
 
+<<<<<<< HEAD
   it("ignores ambient ComSpec when wrapping an adjacent npm.cmd on Windows", () => {
     const execPath = "C:\\nodejs\\node.exe";
     const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
@@ -147,6 +151,8 @@ describe("resolveNpmRunner", () => {
     expect(runner.command).toBe("D:\\Windows\\System32\\cmd.exe");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("prefixes PATH with the active node dir when falling back to bare npm", () => {
     expect(
       resolveNpmRunner({

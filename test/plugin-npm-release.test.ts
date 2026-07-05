@@ -59,6 +59,7 @@ describe("parsePluginReleaseArgs", () => {
     );
   });
 
+<<<<<<< HEAD
   it("rejects flags where option values are required", () => {
     for (const { args, message } of [
       { args: ["--plugins", "--base-ref"], message: "--plugins requires a value." },
@@ -79,6 +80,8 @@ describe("parsePluginReleaseArgs", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("requires plugin names for selected explicit publish mode", () => {
     expect(() => parsePluginReleaseArgs(["--selection-mode", "selected"])).toThrowError(
       "`--selection-mode selected` requires `--plugins`.",

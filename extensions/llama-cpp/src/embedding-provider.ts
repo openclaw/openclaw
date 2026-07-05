@@ -182,6 +182,20 @@ function adaptMemoryEmbeddingProvider(provider: MemoryEmbeddingProvider): Embedd
   };
 }
 
+<<<<<<< HEAD
+=======
+export async function createLlamaCppEmbeddingProvider(
+  options: EmbeddingProviderCreateOptions,
+  runtimeOptions: LlamaCppEmbeddingProviderRuntimeOptions = {},
+): Promise<EmbeddingProvider> {
+  const result = await createLlamaCppEmbeddingProviderResult(options, runtimeOptions);
+  if (!result.provider) {
+    throw new Error("llama.cpp local embedding provider was unavailable");
+  }
+  return result.provider;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function createLlamaCppMemoryEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
   runtimeOptions: LlamaCppEmbeddingProviderRuntimeOptions = {},

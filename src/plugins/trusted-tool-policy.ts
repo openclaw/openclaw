@@ -18,7 +18,10 @@ import type {
 import { getActivePluginRegistry } from "./runtime.js";
 
 type TrustedPolicyRegistration = PluginTrustedToolPolicyRegistryRegistration;
+<<<<<<< HEAD
 type TrustedToolPolicyRegistry = Pick<PluginRegistry, "trustedToolPolicies"> | null | undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Diagnostic entry for an installed trusted tool policy. */
 export type TrustedToolPolicyDiagnosticEntry = {
@@ -27,11 +30,17 @@ export type TrustedToolPolicyDiagnosticEntry = {
   pluginName?: string;
 };
 
+<<<<<<< HEAD
 /** True when the supplied or active plugin registry has trusted tool policies. */
 export function hasTrustedToolPolicies(
   registry: TrustedToolPolicyRegistry = getActivePluginRegistry(),
 ): boolean {
   return copyTrustedPolicyRegistrations(registry).length > 0;
+=======
+/** True when the active plugin registry has trusted tool policies. */
+export function hasTrustedToolPolicies(): boolean {
+  return copyTrustedPolicyRegistrations(getActivePluginRegistry()).length > 0;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function unreadableTrustedPolicyRegistration(): TrustedPolicyRegistration {
@@ -45,7 +54,11 @@ function unreadableTrustedPolicyRegistration(): TrustedPolicyRegistration {
 }
 
 function copyTrustedPolicyRegistrations(
+<<<<<<< HEAD
   registry: TrustedToolPolicyRegistry,
+=======
+  registry: PluginRegistry | null | undefined,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ): TrustedPolicyRegistration[] {
   let policies: unknown;
   try {
@@ -134,10 +147,15 @@ function trustedPolicyFailureResult(
 }
 
 /** Lists trusted tool policies for status and diagnostics. */
+<<<<<<< HEAD
 export function getTrustedToolPolicyDiagnosticEntries(
   registry: TrustedToolPolicyRegistry = getActivePluginRegistry(),
 ): TrustedToolPolicyDiagnosticEntry[] {
   return copyTrustedPolicyRegistrations(registry).map((registration) => {
+=======
+export function getTrustedToolPolicyDiagnosticEntries(): TrustedToolPolicyDiagnosticEntry[] {
+  return copyTrustedPolicyRegistrations(getActivePluginRegistry()).map((registration) => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const entry: TrustedToolPolicyDiagnosticEntry = {
       id: readTrustedPolicyId(registration),
       pluginId: trustedPolicyDiagnosticPluginId(registration),
@@ -189,10 +207,16 @@ export async function runTrustedToolPolicies(
           ctx?: Pick<PluginHookToolContext, "toolKind" | "toolInputKind">;
         }
       | undefined;
+<<<<<<< HEAD
     registry?: TrustedToolPolicyRegistry;
   },
 ): Promise<PluginHookBeforeToolCallResult | undefined> {
   const policies = copyTrustedPolicyRegistrations(options?.registry ?? getActivePluginRegistry());
+=======
+  },
+): Promise<PluginHookBeforeToolCallResult | undefined> {
+  const policies = copyTrustedPolicyRegistrations(getActivePluginRegistry());
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let adjustedParams = event.params;
   let hasAdjustedParams = false;
   let approval: PluginHookBeforeToolCallResult["requireApproval"];

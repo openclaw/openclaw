@@ -2,7 +2,10 @@
  * Prepares Google prompt-cache payloads for embedded-agent stream calls.
  */
 import crypto from "node:crypto";
+<<<<<<< HEAD
 import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
@@ -24,9 +27,12 @@ import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cac
 import { EmbeddedAttemptSessionTakeoverError } from "./run/attempt.session-lock.js";
 
 const GOOGLE_PROMPT_CACHE_CUSTOM_TYPE = "openclaw.google-prompt-cache";
+<<<<<<< HEAD
 // CachedContent metadata responses are tiny (name + expireTime); cap the read so
 // a buggy/hostile Google endpoint cannot stream an unbounded body into memory.
 const GOOGLE_PROMPT_CACHE_RESPONSE_MAX_BYTES = 1024 * 1024;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const GOOGLE_PROMPT_CACHE_RETRY_BACKOFF_MS = 10 * 60_000;
 const GOOGLE_PROMPT_CACHE_SHORT_REFRESH_WINDOW_MS = 30_000;
 const GOOGLE_PROMPT_CACHE_LONG_REFRESH_WINDOW_MS = 5 * 60_000;
@@ -276,6 +282,7 @@ function buildManagedContextForCachedContent(context: GooglePromptCacheContext) 
   };
 }
 
+<<<<<<< HEAD
 async function cancelUnreadResponseBody(response: Response | undefined): Promise<void> {
   if (response && !response.bodyUsed) {
     await response.body?.cancel().catch(() => undefined);
@@ -295,6 +302,8 @@ async function readGooglePromptCacheJson<T>(response: Response): Promise<T> {
   return JSON.parse(buffer.toString("utf8")) as T;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function updateGooglePromptCacheTtl(params: {
   apiKey: string;
   baseUrl: string;
@@ -304,15 +313,22 @@ async function updateGooglePromptCacheTtl(params: {
   headers?: Record<string, string>;
   signal?: AbortSignal;
 }): Promise<{ expireTime?: string } | null> {
+<<<<<<< HEAD
   let response: Response | undefined;
   try {
     response = await params.fetchImpl(`${params.baseUrl}/${params.cachedContent}?updateMask=ttl`, {
+=======
+  const response = await params.fetchImpl(
+    `${params.baseUrl}/${params.cachedContent}?updateMask=ttl`,
+    {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       method: "PATCH",
       headers: mergeTransportHeaders(parseGeminiAuth(params.apiKey).headers, params.headers),
       body: JSON.stringify({
         ttl: resolveGooglePromptCacheTtl(params.cacheRetention),
       }),
       signal: params.signal,
+<<<<<<< HEAD
     });
     if (!response.ok) {
       return null;
@@ -322,6 +338,15 @@ async function updateGooglePromptCacheTtl(params: {
   } finally {
     await cancelUnreadResponseBody(response);
   }
+=======
+    },
+  );
+  if (!response.ok) {
+    return null;
+  }
+  const json = (await response.json()) as { expireTime?: string };
+  return json;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function createGooglePromptCache(params: {
@@ -336,6 +361,7 @@ async function createGooglePromptCache(params: {
   tools?: unknown;
   toolConfig?: unknown;
 }): Promise<{ cachedContent: string; expireTime?: string } | null> {
+<<<<<<< HEAD
   let response: Response | undefined;
   try {
     response = await params.fetchImpl(`${params.baseUrl}/cachedContents`, {
@@ -361,6 +387,28 @@ async function createGooglePromptCache(params: {
   } finally {
     await cancelUnreadResponseBody(response);
   }
+=======
+  const response = await params.fetchImpl(`${params.baseUrl}/cachedContents`, {
+    method: "POST",
+    headers: mergeTransportHeaders(parseGeminiAuth(params.apiKey).headers, params.headers),
+    body: JSON.stringify({
+      model: params.modelId.startsWith("models/") ? params.modelId : `models/${params.modelId}`,
+      ttl: resolveGooglePromptCacheTtl(params.cacheRetention),
+      systemInstruction: {
+        parts: [{ text: params.systemPrompt }],
+      },
+      ...(params.tools ? { tools: params.tools } : {}),
+      ...(params.toolConfig ? { toolConfig: params.toolConfig } : {}),
+    }),
+    signal: params.signal,
+  });
+  if (!response.ok) {
+    return null;
+  }
+  const json = (await response.json()) as { name?: string; expireTime?: string };
+  const cachedContent = normalizeOptionalString(json.name) ?? "";
+  return cachedContent ? { cachedContent, expireTime: json.expireTime } : null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function ensureGooglePromptCache(

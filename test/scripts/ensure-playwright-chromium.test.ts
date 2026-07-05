@@ -2,9 +2,13 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   ensurePlaywrightChromium,
+<<<<<<< HEAD
   installLinuxSystemChromiumPackage,
   resolvePlaywrightInstallRunner,
   shouldEnsureFfmpegFromArgv,
+=======
+  resolvePlaywrightInstallRunner,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   shouldInstallPlaywrightSystemDependencies,
 } from "../../scripts/ensure-playwright-chromium.mjs";
 
@@ -278,6 +282,7 @@ describe("ensurePlaywrightChromium", () => {
     expect(logs.join("\n")).toContain("installing Linux system dependencies");
   });
 
+<<<<<<< HEAD
   it("falls back to distro Chromium when Playwright does not support the Linux runner image", () => {
     const logs: string[] = [];
     let installedSystemChromium = false;
@@ -327,6 +332,8 @@ describe("ensurePlaywrightChromium", () => {
     expect(logs.join("\n")).toContain("Using system Chromium at /usr/bin/chromium-browser");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not install Linux system dependencies for an unprivileged local lane", () => {
     const spawnSync = vi
       .fn()
@@ -394,7 +401,10 @@ describe("ensurePlaywrightChromium", () => {
       ensurePlaywrightChromium({
         executablePath: "/cache/chromium/chrome",
         existsSync: () => false,
+<<<<<<< HEAD
         platform: "darwin",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         spawnSync: vi.fn(() => ({ status: 23 })),
         stdio: "pipe",
         systemExecutablePath: "",
@@ -456,6 +466,7 @@ describe("ensurePlaywrightChromium", () => {
       }),
     ).toBe(true);
   });
+<<<<<<< HEAD
 
   it("installs Linux system Chromium packages with sudo for non-root lanes", () => {
     const spawnSync = vi.fn(() => ({ status: 0 }));
@@ -497,4 +508,6 @@ describe("ensurePlaywrightChromium", () => {
       ]),
     ).toBe(false);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

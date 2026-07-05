@@ -2854,6 +2854,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.commandBody).toContain("System: [t] Node connected.");
   });
 
+<<<<<<< HEAD
   it("forwards resolved fast-mode override into the followup run", async () => {
     await runPreparedReply(
       baseParams({
@@ -2865,6 +2866,8 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.run.fastMode).toBe("auto");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("carries system events into followupRun.prompt for deferred turns", async () => {
     // drainFormattedSystemEvents returns the events block; the caller prepends it to
     // effectiveBaseBody for the queue path so deferred turns see events.

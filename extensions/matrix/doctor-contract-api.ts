@@ -11,6 +11,7 @@ import {
   type MatrixSyncCacheRecord,
 } from "./src/matrix/client/file-sync-store.js";
 import {
+<<<<<<< HEAD
   hasMatrixStorageMetaStateInStore,
   normalizeMatrixStorageMetadata,
   openMatrixStorageMetaStoreOptions,
@@ -18,6 +19,8 @@ import {
   type MatrixStorageMetadata,
 } from "./src/matrix/client/storage.js";
 import {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   MATRIX_IDB_SNAPSHOT_FILENAME,
   MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
   MATRIX_RECOVERY_KEY_FILENAME,
@@ -41,7 +44,10 @@ import type { MatrixStoredRecoveryKey } from "./src/matrix/sdk/types.js";
 export { normalizeCompatibilityConfig, legacyConfigRules } from "./src/doctor-contract.js";
 
 const MATRIX_SYNC_CACHE_FILENAME = "bot-storage.json";
+<<<<<<< HEAD
 const MATRIX_STORAGE_META_FILENAME = "storage-meta.json";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
@@ -84,6 +90,7 @@ async function collectLegacySyncCacheRoots(stateDir: string): Promise<string[]> 
   return collectLegacyMatrixStateRoots(stateDir, MATRIX_SYNC_CACHE_FILENAME);
 }
 
+<<<<<<< HEAD
 async function readLegacyMatrixStorageMetadata(
   storageRootDir: string,
 ): Promise<MatrixStorageMetadata | null> {
@@ -98,6 +105,8 @@ async function readLegacyMatrixStorageMetadata(
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function archiveLegacySyncCache(params: {
   storageRootDir: string;
   changes: string[];
@@ -144,6 +153,7 @@ async function archiveLegacyMatrixStateFile(params: {
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
   {
+<<<<<<< HEAD
     id: "matrix-storage-meta-json-to-plugin-state",
     label: "Matrix storage metadata",
     async detectLegacyState(params) {
@@ -200,6 +210,8 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     },
   },
   {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     id: "matrix-sync-cache-json-to-plugin-state",
     label: "Matrix sync cache",
     async detectLegacyState(params) {

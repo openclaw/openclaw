@@ -107,6 +107,7 @@ describe("createCopilotToolBridge", () => {
     expect(createOpenClawCodingTools).toHaveBeenCalledTimes(0);
   });
 
+<<<<<<< HEAD
   it("allows vetted BYOK providers to expose model tools", async () => {
     const sourceTools = [makeTool()];
     const createOpenClawCodingTools = vi.fn(async () => sourceTools);
@@ -130,6 +131,8 @@ describe("createCopilotToolBridge", () => {
     expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool-a"]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("forwards supported fields to injected createOpenClawCodingTools", async () => {
     const controller = new AbortController();
     const createOpenClawCodingTools = vi.fn(async () => [makeTool()]);
@@ -179,11 +182,16 @@ describe("createCopilotToolBridge", () => {
       sessionId: "session-1",
     });
 
+<<<<<<< HEAD
     expect(result.sourceTools).toEqual(sourceTools);
+=======
+    expect(result.sourceTools).toBe(sourceTools);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(result.sdkTools).toHaveLength(2);
     expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool-a", "tool-b"]);
   });
 
+<<<<<<< HEAD
   it("compacts the Copilot tool surface behind tool_search controls when enabled", async () => {
     const createOpenClawCodingTools = vi.fn(async (opts: unknown) => {
       const includeToolSearchControls = Boolean(
@@ -357,6 +365,8 @@ describe("createCopilotToolBridge", () => {
     expect(catalogRef?.current?.entries?.map((entry) => entry.name)).toEqual(["read"]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("throws when createOpenClawCodingTools returns a non-array", async () => {
     await expect(
       createCopilotToolBridge({
@@ -1371,19 +1381,28 @@ describe("convertOpenClawToolToSdkTool", () => {
 
   it("calls prepareArguments and passes the prepared args and toolCallId to execute", async () => {
     const preparedArgs = { value: "prepared" };
+<<<<<<< HEAD
     const onToolCompleted = vi.fn();
     const prepareArguments = vi.fn(() => preparedArgs);
     const sourceTool = makeTool({ prepareArguments });
     const sdkTool = convertOpenClawToolToSdkTool(sourceTool, { onToolCompleted });
+=======
+    const prepareArguments = vi.fn(() => preparedArgs);
+    const sourceTool = makeTool({ prepareArguments });
+    const sdkTool = convertOpenClawToolToSdkTool(sourceTool, {});
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await runSdkTool(sdkTool, { value: "raw" }, makeInvocation({ toolCallId: "call-99" }));
 
     expect(prepareArguments).toHaveBeenCalledTimes(1);
     expect(prepareArguments).toHaveBeenCalledWith({ value: "raw" });
     expect(sourceTool.execute).toHaveBeenCalledWith("call-99", preparedArgs, undefined, undefined);
+<<<<<<< HEAD
     expect(onToolCompleted).toHaveBeenCalledWith(
       expect.objectContaining({ args: preparedArgs, toolCallId: "call-99" }),
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("returns a failure result when prepareArguments throws", async () => {
@@ -1432,6 +1451,7 @@ describe("convertOpenClawToolToSdkTool", () => {
     });
   });
 
+<<<<<<< HEAD
   it("reports terminal tool results to the harness lifecycle bridge", async () => {
     const onToolCompleted = vi.fn();
     const sourceResult = {
@@ -1455,6 +1475,8 @@ describe("convertOpenClawToolToSdkTool", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("reports thrown tool failures to the private result observer", async () => {
     const error = new Error("backend unavailable");
     const onAgentToolResult = vi.fn();
@@ -1484,6 +1506,7 @@ describe("convertOpenClawToolToSdkTool", () => {
     });
   });
 
+<<<<<<< HEAD
   it("reports terminal tool failures to the harness lifecycle bridge", async () => {
     const onToolCompleted = vi.fn();
     const preparedArgs = { value: "prepared" };
@@ -1513,17 +1536,27 @@ describe("convertOpenClawToolToSdkTool", () => {
   it("reports returned OpenClaw error results to both tool observers", async () => {
     const onAgentToolResult = vi.fn();
     const onToolCompleted = vi.fn();
+=======
+  it("reports returned OpenClaw error results as observer failures", async () => {
+    const onAgentToolResult = vi.fn();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const sourceResult = {
       content: [{ text: '{"status":"error","error":"backend unavailable"}', type: "text" }],
       details: { status: "error", error: "backend unavailable" },
     };
     const sdkTool = convertOpenClawToolToSdkTool(makeTool({}, sourceResult), {
       onAgentToolResult,
+<<<<<<< HEAD
       onToolCompleted,
     });
 
     const result = await runSdkTool(sdkTool, {});
     await flushAsync();
+=======
+    });
+
+    const result = await runSdkTool(sdkTool, {});
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(result).toMatchObject({ resultType: "success" });
     expect(onAgentToolResult).toHaveBeenCalledWith({
@@ -1531,12 +1564,15 @@ describe("convertOpenClawToolToSdkTool", () => {
       result: sourceResult,
       isError: true,
     });
+<<<<<<< HEAD
     expect(onToolCompleted).toHaveBeenCalledWith(
       expect.objectContaining({
         error: "backend unavailable",
         result: sourceResult,
       }),
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("joins multiple text blocks with newlines", async () => {

@@ -1408,6 +1408,7 @@ describe("talk.client.toolCall handler", () => {
     expectRespondOk(respond, { runId: "run-voice-1" });
   });
 
+<<<<<<< HEAD
   it.each([
     ["timeout", "Realtime agent consult ended before the run started."],
     ["error", "Realtime agent consult failed before the run started."],
@@ -1451,6 +1452,8 @@ describe("talk.client.toolCall handler", () => {
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects client tool calls that are not the agent consult tool", async () => {
     const respond = vi.fn();
 

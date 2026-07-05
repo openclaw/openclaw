@@ -1,6 +1,9 @@
 // Tracks plugin loader provenance for diagnostics and policy checks.
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+<<<<<<< HEAD
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../utils.js";
 import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
@@ -68,10 +71,13 @@ function matchesPathMatcher(matcher: PathMatcher, sourcePath: string): boolean {
   return matcher.dirs.some((dirPath) => isPathInside(dirPath, sourcePath));
 }
 
+<<<<<<< HEAD
 function formatPluginInspectCommand(pluginId: string): string {
   return `openclaw plugins inspect ${quoteCliArg(pluginId)}`;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Builds provenance matchers from configured load paths and install records. */
 export function buildProvenanceIndex(params: {
   normalizedLoadPaths: string[];
@@ -228,12 +234,19 @@ export function warnWhenAllowlistIsOpen(params: {
   if (!params.pluginsEnabled) {
     return;
   }
+<<<<<<< HEAD
+=======
+  if (params.allow.length > 0) {
+    return;
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const autoDiscoverable = params.discoverablePlugins.filter(
     (entry) => entry.origin === "workspace" || entry.origin === "global",
   );
   if (autoDiscoverable.length === 0) {
     return;
   }
+<<<<<<< HEAD
   // Match allow entries against every discovered plugin id, including bundled ids. Otherwise a
   // valid bundled-only allowlist would look mismatched whenever workspace/global plugins exist.
   const allDiscoveredIds = new Set(params.discoverablePlugins.map((entry) => entry.id));
@@ -242,6 +255,8 @@ export function warnWhenAllowlistIsOpen(params: {
   if (hasConfiguredAllowlist && allowHasDiscoveredMatch) {
     return;
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (params.warningCache.hasOpenAllowlistWarning(params.warningCacheKey)) {
     return;
   }
@@ -249,6 +264,7 @@ export function warnWhenAllowlistIsOpen(params: {
     .slice(0, 6)
     .map((entry) => `${entry.id} (${entry.source})`)
     .join(", ");
+<<<<<<< HEAD
   const truncated = autoDiscoverable.length > 6;
   const extra = truncated ? ` (+${autoDiscoverable.length - 6} more)` : "";
   const inspectCommands = autoDiscoverable
@@ -278,6 +294,12 @@ export function warnWhenAllowlistIsOpen(params: {
     unmatchedEntries.length > 6 ? ` (+${unmatchedEntries.length - 6} more)` : "";
   params.logger.warn(
     `[plugins] plugins.allow entries ${unmatchedPreview}${unmatchedExtra} do not match any discovered plugin ids; discovered non-bundled plugins: ${preview}${extra}. Use the plugin id (not a channel id or npm package name).`,
+=======
+  const extra = autoDiscoverable.length > 6 ? ` (+${autoDiscoverable.length - 6} more)` : "";
+  params.warningCache.recordOpenAllowlistWarning(params.warningCacheKey);
+  params.logger.warn(
+    `[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: ${preview}${extra}. Set plugins.allow to explicit trusted ids.`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
 }
 
@@ -308,7 +330,12 @@ export function warnAboutUntrackedLoadedPlugins(params: {
     ) {
       continue;
     }
+<<<<<<< HEAD
     const message = `loaded without install/load-path provenance; treat as untracked local code. Verify source with '${formatPluginInspectCommand(plugin.id)}', then pin trust via plugins.allow (e.g. "plugins": { "allow": [${JSON.stringify(plugin.id)}] }) or reinstall from a trusted source so OpenClaw records install provenance.`;
+=======
+    const message =
+      "loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     params.registry.diagnostics.push({
       level: "warn",
       pluginId: plugin.id,

@@ -8,7 +8,10 @@ import {
   type AgentBootstrapHookContext,
 } from "../hooks/internal-hooks.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
+<<<<<<< HEAD
 import { withEnvAsync } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   resetBootstrapWarningCacheForTest,
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
@@ -256,12 +259,29 @@ describe("resolveBootstrapFilesForRun", () => {
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
     await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), "stale ritual", "utf8");
 
+<<<<<<< HEAD
     const files = await withEnvAsync({ OPENCLAW_HOME: parentDir }, async () =>
       resolveBootstrapFilesForRun({ workspaceDir: "~/workspace" }),
     );
 
     expect(files.map((file) => file.name)).toContain("AGENTS.md");
     expect(files.map((file) => file.name)).not.toContain("BOOTSTRAP.md");
+=======
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    process.env.OPENCLAW_HOME = parentDir;
+    try {
+      const files = await resolveBootstrapFilesForRun({ workspaceDir: "~/workspace" });
+
+      expect(files.map((file) => file.name)).toContain("AGENTS.md");
+      expect(files.map((file) => file.name)).not.toContain("BOOTSTRAP.md");
+    } finally {
+      if (previousOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousOpenClawHome;
+      }
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("keeps hook-added nested BOOTSTRAP.md after setup is completed", async () => {

@@ -18,7 +18,10 @@ import {
   getCronChannelOptions,
   parseCronCommandArgv,
   parseCronCommandEnv,
+<<<<<<< HEAD
   parseCronFallbacks,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   parseCronToolsAllow,
   parseDurationMs,
   warnIfCronSchedulerDisabled,
@@ -113,8 +116,11 @@ export function registerCronEditCommand(cron: Command) {
         "Thinking level for agent jobs (off|minimal|low|medium|high|xhigh)",
       )
       .option("--model <model>", "Model override for agent jobs")
+<<<<<<< HEAD
       .option("--fallbacks <list>", "Fallback model list for agent jobs")
       .option("--clear-fallbacks", "Remove per-job fallback override", false)
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       .option(
         "--clear-model",
         "Remove the per-job model override (restore normal cron model precedence)",
@@ -292,10 +298,13 @@ export function registerCronEditCommand(cron: Command) {
             throw new Error("Use --model or --clear-model, not both");
           }
           const thinking = normalizeOptionalString(opts.thinking);
+<<<<<<< HEAD
           const fallbacks = parseCronFallbacks(opts.fallbacks);
           if (typeof opts.fallbacks === "string" && opts.clearFallbacks) {
             throw new Error("Use --fallbacks or --clear-fallbacks, not both");
           }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           const toolsAllow = parseCronToolsAllow(opts.tools);
           const rawTimeoutSeconds =
             opts.timeoutSeconds === undefined ? undefined : String(opts.timeoutSeconds).trim();
@@ -367,8 +376,11 @@ export function registerCronEditCommand(cron: Command) {
             !hasCommandSpecificPayloadField &&
             typeof opts.message !== "string" &&
             !model &&
+<<<<<<< HEAD
             typeof opts.fallbacks !== "string" &&
             !opts.clearFallbacks &&
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             !thinking &&
             typeof opts.lightContext !== "boolean" &&
             typeof opts.tools !== "string" &&
@@ -382,8 +394,11 @@ export function registerCronEditCommand(cron: Command) {
             typeof opts.message === "string" ||
             Boolean(model) ||
             Boolean(opts.clearModel) ||
+<<<<<<< HEAD
             typeof opts.fallbacks === "string" ||
             Boolean(opts.clearFallbacks) ||
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             Boolean(thinking) ||
             (hasTimeoutSeconds &&
               !hasCommandSpecificPayloadField &&
@@ -416,8 +431,11 @@ export function registerCronEditCommand(cron: Command) {
             } else {
               assignIf(payload, "model", model, Boolean(model));
             }
+<<<<<<< HEAD
             assignIf(payload, "fallbacks", fallbacks, typeof opts.fallbacks === "string");
             assignIf(payload, "fallbacks", null, Boolean(opts.clearFallbacks));
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             assignIf(payload, "thinking", thinking, Boolean(thinking));
             assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
             assignIf(

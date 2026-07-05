@@ -1,7 +1,10 @@
 /**
  * Classifies embedded-agent run results for model fallback decisions.
  */
+<<<<<<< HEAD
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../auto-reply/reply/agent-runner-failure-copy.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
@@ -16,9 +19,14 @@ import type { EmbeddedAgentRunResult } from "./types.js";
 /**
  * Classifies embedded-agent terminal results for model fallback decisions.
  *
+<<<<<<< HEAD
  * The classifier only flags failed invisible outcomes or exact generic external-runner failure
  * copy; delivered messages, deliberate silent replies, hook blocks, and aborts must not trigger
  * another model attempt.
+=======
+ * The classifier only flags failed invisible outcomes; delivered messages, deliberate silent
+ * replies, hook blocks, and aborts must not trigger another model attempt.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
  */
 function isEmbeddedAgentRunResult(value: unknown): value is EmbeddedAgentRunResult {
   return Boolean(
@@ -76,6 +84,7 @@ function hasDeliberateSilentTerminalReply(result: EmbeddedAgentRunResult): boole
   );
 }
 
+<<<<<<< HEAD
 function hasNonTextVisiblePayloadContent(
   payload: NonNullable<EmbeddedAgentRunResult["payloads"]>[number],
 ): boolean {
@@ -117,6 +126,8 @@ function classifyGenericExternalRunFailurePayload(params: {
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function classifyHarnessResult(params: {
   provider: string;
   model: string;
@@ -150,7 +161,11 @@ function classifyHarnessResult(params: {
 function classifyBusinessDenialErrorPayloadReason(
   errorText: string,
   provider: string,
+<<<<<<< HEAD
 ): Extract<FailoverReason, "auth" | "auth_permanent" | "billing" | "rate_limit"> | null {
+=======
+): Extract<FailoverReason, "auth" | "auth_permanent" | "billing"> | null {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!errorText.trim()) {
     return null;
   }
@@ -159,7 +174,10 @@ function classifyBusinessDenialErrorPayloadReason(
     case "auth":
     case "auth_permanent":
     case "billing":
+<<<<<<< HEAD
     case "rate_limit":
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return failoverReason;
     default:
       return null;
@@ -180,7 +198,15 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (
     params.result.meta.aborted ||
     params.hasDirectlySentBlockReply === true ||
+<<<<<<< HEAD
     params.hasBlockReplyPipelineOutput === true
+=======
+    params.hasBlockReplyPipelineOutput === true ||
+    hasVisibleAgentPayload(params.result, {
+      includeErrorPayloads: false,
+      includeReasoningPayloads: false,
+    })
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ) {
     return null;
   }
@@ -201,6 +227,7 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     return null;
   }
   const payloads = params.result.payloads ?? [];
+<<<<<<< HEAD
   const genericExternalFailureClassification = classifyGenericExternalRunFailurePayload({
     provider: params.provider,
     model: params.model,
@@ -224,6 +251,8 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   ) {
     return null;
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   if (fallbackSafeIncompleteTurn) {
     const terminalErrorText = payloads.find(

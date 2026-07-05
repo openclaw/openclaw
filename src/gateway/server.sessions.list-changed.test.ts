@@ -23,7 +23,10 @@ import {
   getGatewayConfigModule,
   getSessionsHandlers,
   createDeferred,
+<<<<<<< HEAD
   createLinearSessionTranscript,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sessionStoreEntry,
 } from "./test/server-sessions.test-helpers.js";
 
@@ -45,6 +48,7 @@ type MockCalls = {
 type SessionStoreEntryOptions = Parameters<typeof sessionStoreEntry>[1];
 type MutationMethod = "sessions.patch" | "sessions.compact";
 
+<<<<<<< HEAD
 function expectedLastMessageTranscript(sessionId: string, contents: string[]): string {
   const records = createLinearSessionTranscript(sessionId, contents)
     .trim()
@@ -58,6 +62,8 @@ function expectedLastMessageTranscript(sessionId: string, contents: string[]): s
   return `${JSON.stringify(header)}\n${JSON.stringify({ ...last, parentId: null })}\n`;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -209,9 +215,15 @@ async function writeMainSessionStore(options?: SessionStoreEntryOptions) {
 function expectMainPatchBroadcast(
   result: Awaited<ReturnType<typeof invokeSessionsPatch>>,
   expected: Record<string, unknown>,
+<<<<<<< HEAD
 ): Record<string, unknown> {
   expectFields(result.responsePayload, { ok: true, key: "agent:main:main" });
   return expectChangedBroadcast(result.broadcastToConnIds, {
+=======
+) {
+  expectFields(result.responsePayload, { ok: true, key: "agent:main:main" });
+  expectChangedBroadcast(result.broadcastToConnIds, {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sessionKey: "agent:main:main",
     reason: "patch",
     ...expected,
@@ -445,6 +457,7 @@ test("sessions.list uses the gateway model catalog for effective thinking defaul
   });
 });
 
+<<<<<<< HEAD
 test("sessions.list exposes effective fast auto defaults from the selected model", async () => {
   testState.agentConfig = {
     model: { primary: "openai/gpt-5.5" },
@@ -522,6 +535,8 @@ test("sessions.changed mutation events refresh effective fast metadata", async (
   });
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 test("sessions.list marks sessions with active abortable runs", async () => {
   await expectListedSessionActiveRun("req-sessions-list-active-run", {}, true);
 });
@@ -685,6 +700,7 @@ test("sessions.changed mutation events include live session setting metadata", a
     verboseLevel: "on",
   });
 
+<<<<<<< HEAD
   expectMainPatchBroadcast(result, {
     ...sessionSettings,
     // An explicit session override resolves to the same effective mode and the
@@ -710,6 +726,9 @@ test("sessions.changed mutation events carry the resolved effectiveResponseUsage
   // Raw responseUsage is genuinely absent (no override), proving the event does not
   // merely echo the raw field.
   expect(payload.responseUsage).toBeUndefined();
+=======
+  expectMainPatchBroadcast(result, sessionSettings);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 test("sessions.changed mutation events include sendPolicy metadata", async () => {
@@ -761,11 +780,19 @@ test("sessions.compact scopes selected global truncation to the requested agent"
     params: {
       key: "global",
       agentId: "work",
+<<<<<<< HEAD
       maxLines: 2,
     },
   });
 
   expectFields(responsePayload, { ok: true, key: "global", compacted: true, kept: 2 });
+=======
+      maxLines: 1,
+    },
+  });
+
+  expectFields(responsePayload, { ok: true, key: "global", compacted: true, kept: 1 });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   expectChangedBroadcast(broadcastToConnIds, {
     sessionKey: "global",
     agentId: "work",
@@ -773,11 +800,17 @@ test("sessions.compact scopes selected global truncation to the requested agent"
     compacted: true,
   });
   await expect(fs.readFile(globalStores.mainTranscript, "utf-8")).resolves.toBe(
+<<<<<<< HEAD
     createLinearSessionTranscript("sess-main-global", ["main one", "main two"]),
   );
   await expect(fs.readFile(globalStores.workTranscript, "utf-8")).resolves.toBe(
     expectedLastMessageTranscript("sess-work-global", ["work one", "work two"]),
   );
+=======
+    "main one\nmain two\n",
+  );
+  await expect(fs.readFile(globalStores.workTranscript, "utf-8")).resolves.toBe("work two\n");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   await resetConfiguredGlobalAgentSessionStore(globalStores);
 });
 
@@ -787,22 +820,36 @@ test("sessions.compact trims default global agent when no agentId is supplied", 
     getRuntimeConfig: globalStores.getRuntimeConfig,
     params: {
       key: "global",
+<<<<<<< HEAD
       maxLines: 2,
     },
   });
 
   expectFields(responsePayload, { ok: true, key: "global", compacted: true, kept: 2 });
+=======
+      maxLines: 1,
+    },
+  });
+
+  expectFields(responsePayload, { ok: true, key: "global", compacted: true, kept: 1 });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   expectChangedBroadcast(broadcastToConnIds, {
     sessionKey: "global",
     agentId: "main",
     reason: "compact",
     compacted: true,
   });
+<<<<<<< HEAD
   await expect(fs.readFile(globalStores.mainTranscript, "utf-8")).resolves.toBe(
     expectedLastMessageTranscript("sess-main-global", ["main one", "main two"]),
   );
   await expect(fs.readFile(globalStores.workTranscript, "utf-8")).resolves.toBe(
     createLinearSessionTranscript("sess-work-global", ["work one", "work two"]),
+=======
+  await expect(fs.readFile(globalStores.mainTranscript, "utf-8")).resolves.toBe("main two\n");
+  await expect(fs.readFile(globalStores.workTranscript, "utf-8")).resolves.toBe(
+    "work one\nwork two\n",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
   await resetConfiguredGlobalAgentSessionStore(globalStores);
 });
@@ -818,10 +865,17 @@ test("sessions.compact keeps manual trim no-op response shape", async () => {
     },
   });
 
+<<<<<<< HEAD
   expectFields(responsePayload, { ok: true, key: "global", compacted: false, kept: 3 });
   expect(broadcastToConnIds).not.toHaveBeenCalled();
   await expect(fs.readFile(globalStores.workTranscript, "utf-8")).resolves.toBe(
     createLinearSessionTranscript("sess-work-global", ["work one", "work two"]),
+=======
+  expectFields(responsePayload, { ok: true, key: "global", compacted: false, kept: 2 });
+  expect(broadcastToConnIds).not.toHaveBeenCalled();
+  await expect(fs.readFile(globalStores.workTranscript, "utf-8")).resolves.toBe(
+    "work one\nwork two\n",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
   await resetConfiguredGlobalAgentSessionStore(globalStores);
 });

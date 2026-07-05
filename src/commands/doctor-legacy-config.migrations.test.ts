@@ -391,7 +391,11 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toStrictEqual([]);
   });
 
+<<<<<<< HEAD
   it("preserves inherited WhatsApp access policy when seeding accounts.default", () => {
+=======
+  it("moves WhatsApp access defaults into accounts.default for named accounts", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const res = normalizeCompatibilityConfigValues({
       channels: {
         whatsapp: {
@@ -420,6 +424,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       groupPolicy: "open",
       groupAllowFrom: [],
     });
+<<<<<<< HEAD
     expect(res.config.channels?.whatsapp?.accounts?.work).toEqual({
       enabled: true,
       authDir: "/tmp/wa-work",
@@ -428,10 +433,13 @@ describe("normalizeCompatibilityConfigValues", () => {
       groupPolicy: "open",
       groupAllowFrom: [],
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(res.changes).toContain(
       "Moved channels.whatsapp single-account top-level values into channels.whatsapp.accounts.default.",
     );
   });
+<<<<<<< HEAD
 
   it.each(["discord", "slack", "telegram", "signal", "imessage", "irc"])(
     "preserves inherited %s access policy when seeding accounts.default",
@@ -559,6 +567,8 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("migrates browser ssrfPolicy allowPrivateNetwork to dangerouslyAllowPrivateNetwork", () => {
     const res = normalizeCompatibilityConfigValues({
       browser: {

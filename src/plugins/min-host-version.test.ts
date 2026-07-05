@@ -4,6 +4,10 @@ import {
   checkMinHostVersion,
   MIN_HOST_VERSION_FORMAT,
   parseMinHostVersionRequirement,
+<<<<<<< HEAD
+=======
+  validateMinHostVersion,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./min-host-version.js";
 
 const MIN_HOST_REQUIREMENT = {
@@ -39,7 +43,12 @@ function expectHostCheckResult(params: {
   ).toEqual(params.expected);
 }
 
+<<<<<<< HEAD
 function expectInvalidHostCheck(minHostVersion: string | number) {
+=======
+function expectInvalidMinHostVersion(minHostVersion: string | number) {
+  expect(validateMinHostVersion(minHostVersion)).toBe(MIN_HOST_VERSION_FORMAT);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   expectHostCheckResult({
     currentVersion: "2026.3.22",
     minHostVersion,
@@ -53,6 +62,10 @@ function expectInvalidHostCheck(minHostVersion: string | number) {
 
 describe("min-host-version", () => {
   it("accepts empty metadata", () => {
+<<<<<<< HEAD
+=======
+    expect(validateMinHostVersion(undefined)).toBeNull();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(parseMinHostVersionRequirement(undefined)).toBeNull();
     expectValidHostCheck("2026.3.22");
   });
@@ -89,7 +102,11 @@ describe("min-host-version", () => {
   it.each(["2026.3.22", 123, ">=2026.3.22 garbage"] as const)(
     "rejects invalid floor syntax and host checks: %p",
     (minHostVersion) => {
+<<<<<<< HEAD
       expectInvalidHostCheck(minHostVersion);
+=======
+      expectInvalidMinHostVersion(minHostVersion);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
   );
 

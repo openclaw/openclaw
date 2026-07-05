@@ -11,7 +11,10 @@ import {
   sessionStoreEntry,
   getMainPreviewEntry,
   directSessionReq,
+<<<<<<< HEAD
   createLinearSessionTranscript,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
@@ -80,7 +83,11 @@ test("sessions.preview returns transcript previews", async () => {
   expect(entry?.items[1]?.text).toContain("call weather");
 });
 
+<<<<<<< HEAD
 test("sessions.preview resolves legacy main alias with custom mainKey", async () => {
+=======
+test("sessions.preview resolves legacy mixed-case main alias with custom mainKey", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const sessionId = "sess-legacy-main";
 
   const entry = await previewMainAliasFromStore({
@@ -88,7 +95,11 @@ test("sessions.preview resolves legacy main alias with custom mainKey", async ()
       [sessionId]: "Legacy alias transcript",
     },
     store: {
+<<<<<<< HEAD
       "agent:ops:main": {
+=======
+      "agent:ops:MAIN": {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         sessionId,
         updatedAt: Date.now(),
       },
@@ -97,7 +108,11 @@ test("sessions.preview resolves legacy main alias with custom mainKey", async ()
   expect(entry?.items[0]?.text).toContain("Legacy alias transcript");
 });
 
+<<<<<<< HEAD
 test("sessions.preview prefers the freshest duplicate row for a legacy main alias", async () => {
+=======
+test("sessions.preview prefers the freshest duplicate row for a legacy mixed-case main alias", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const entry = await previewMainAliasFromStore({
     transcripts: {
       "sess-stale-main": "stale preview",
@@ -108,7 +123,11 @@ test("sessions.preview prefers the freshest duplicate row for a legacy main alia
         sessionId: "sess-stale-main",
         updatedAt: 1,
       },
+<<<<<<< HEAD
       "agent:ops:main": {
+=======
+      "agent:ops:WORK": {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         sessionId: "sess-fresh-main",
         updatedAt: 2,
       },
@@ -125,10 +144,16 @@ test("sessions.resolve and mutators clean legacy main-alias ghost keys", async (
   const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
   await fs.writeFile(
     transcriptPath,
+<<<<<<< HEAD
     createLinearSessionTranscript(
       sessionId,
       Array.from({ length: 8 }, (_, index) => `line ${index}`),
     ),
+=======
+    `${Array.from({ length: 8 })
+      .map((_, idx) => JSON.stringify({ role: "assistant", content: `line ${idx}` }))
+      .join("\n")}\n`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     "utf-8",
   );
 
@@ -139,7 +164,12 @@ test("sessions.resolve and mutators clean legacy main-alias ghost keys", async (
     JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, Record<string, unknown>>;
 
   await writeRawStore({
+<<<<<<< HEAD
     "agent:ops:main": { sessionId, updatedAt: Date.now() - 1_000 },
+=======
+    "agent:ops:MAIN": { sessionId, updatedAt: Date.now() - 2_000 },
+    "agent:ops:Main": { sessionId, updatedAt: Date.now() - 1_000 },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   const { ws } = await openClient();
@@ -154,7 +184,11 @@ test("sessions.resolve and mutators clean legacy main-alias ghost keys", async (
 
   await writeRawStore({
     ...store,
+<<<<<<< HEAD
     "agent:ops:main": { ...store["agent:ops:work"] },
+=======
+    "agent:ops:MAIN": { ...store["agent:ops:work"] },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   const patched = await rpcReq<{ ok: true; key: string }>(ws, "sessions.patch", {
     key: "main",
@@ -168,7 +202,11 @@ test("sessions.resolve and mutators clean legacy main-alias ghost keys", async (
 
   await writeRawStore({
     ...store,
+<<<<<<< HEAD
     "agent:ops:main": { ...store["agent:ops:work"] },
+=======
+    "agent:ops:MAIN": { ...store["agent:ops:work"] },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   const compacted = await rpcReq<{ ok: true; compacted: boolean }>(ws, "sessions.compact", {
     key: "main",
@@ -181,7 +219,11 @@ test("sessions.resolve and mutators clean legacy main-alias ghost keys", async (
 
   await writeRawStore({
     ...store,
+<<<<<<< HEAD
     "agent:ops:main": { ...store["agent:ops:work"] },
+=======
+    "agent:ops:MAIN": { ...store["agent:ops:work"] },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", { key: "main" });
   expect(reset.ok).toBe(true);

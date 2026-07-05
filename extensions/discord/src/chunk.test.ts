@@ -78,6 +78,7 @@ describe("chunkDiscordText", () => {
     }
   });
 
+<<<<<<< HEAD
   it("keeps chunks within maxChars when a closing fence line carries trailing text", () => {
     // A line that both closes the fence and carries a long tail must still reserve closing-fence
     // space; otherwise a mid-line flush appended "```" and overflowed maxChars (e.g. 2004 > 2000).
@@ -89,6 +90,8 @@ describe("chunkDiscordText", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves whitespace when splitting long lines", () => {
     const text = Array.from({ length: 40 }, () => "word").join(" ");
     const chunks = chunkDiscordText(text, { maxChars: 20, maxLines: 50 });

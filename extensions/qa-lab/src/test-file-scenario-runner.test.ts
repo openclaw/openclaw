@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+<<<<<<< HEAD
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
@@ -8,11 +9,18 @@ import { readQaScenarioById, type QaSeedScenarioWithSource } from "./scenario-ca
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 import {
   qaTestFileScenarioRunnerTesting,
+=======
+import { afterEach, describe, expect, it } from "vitest";
+import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
+import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
+import {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   runQaTestFileScenarios,
   type QaScenarioCommandExecution,
 } from "./test-file-scenario-runner.js";
 
 const tempRoots: string[] = [];
+<<<<<<< HEAD
 const { cleanup: cleanupTempDirs, makeTempDir } = createTempDirHarness();
 
 function isProcessRunning(pid: number) {
@@ -50,6 +58,8 @@ async function waitForDead(pid: number, timeoutMs: number) {
   }
   throw new Error(`process ${pid} still alive`);
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function makeTestFileScenario(
   executionKind: "script" | "vitest" | "playwright",
@@ -89,6 +99,7 @@ async function makeTempRepo(prefix: string) {
   return repoRoot;
 }
 
+<<<<<<< HEAD
 async function writeScriptProducerEvidence(params: {
   outputDir: string;
   scenarioId?: string;
@@ -153,6 +164,13 @@ describe("qa test file scenario runner", () => {
       cleanupTempDirs(),
       ...tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
     ]);
+=======
+describe("qa test file scenario runner", () => {
+  afterEach(async () => {
+    await Promise.all(
+      tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("runs Playwright scenarios with the repo UI e2e command and writes Playwright evidence", async () => {
@@ -179,7 +197,11 @@ describe("qa test file scenario runner", () => {
 
     expect(result.executionKind).toBe("playwright");
     expect(commands.map((command) => command.args)).toEqual([
+<<<<<<< HEAD
       ["scripts/ensure-playwright-chromium.mjs", "--skip-ffmpeg"],
+=======
+      ["scripts/ensure-playwright-chromium.mjs"],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       [
         "scripts/run-vitest.mjs",
         "run",
@@ -191,7 +213,10 @@ describe("qa test file scenario runner", () => {
         "--reporter=verbose",
       ],
     ]);
+<<<<<<< HEAD
     expect(commands.map((command) => command.timeoutMs)).toEqual([undefined, undefined]);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const evidence = validateQaEvidenceSummaryJson(
       JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
     );
@@ -241,6 +266,7 @@ describe("qa test file scenario runner", () => {
     });
   });
 
+<<<<<<< HEAD
   it("can return aggregate evidence without writing a duplicate evidence file", async () => {
     const repoRoot = await makeTempRepo("qa-playwright-memory-evidence-");
     const result = await runQaTestFileScenarios({
@@ -261,6 +287,8 @@ describe("qa test file scenario runner", () => {
     await expect(fs.access(result.evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("runs Vitest scenarios with the declared test path and writes Vitest evidence", async () => {
     const repoRoot = await makeTempRepo("qa-vitest-scenario-");
     const commands: QaScenarioCommandExecution[] = [];
@@ -288,7 +316,10 @@ describe("qa test file scenario runner", () => {
         "--reporter=verbose",
       ],
     ]);
+<<<<<<< HEAD
     expect(commands.map((command) => command.timeoutMs)).toEqual([undefined]);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const evidence = validateQaEvidenceSummaryJson(
       JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
     );
@@ -425,7 +456,10 @@ describe("qa test file scenario runner", () => {
         path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script", "scenario-script"),
       ],
     ]);
+<<<<<<< HEAD
     expect(commands.map((command) => command.timeoutMs)).toEqual([30 * 60_000]);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const evidence = validateQaEvidenceSummaryJson(
       JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
     );
@@ -457,6 +491,7 @@ describe("qa test file scenario runner", () => {
     });
   });
 
+<<<<<<< HEAD
   it("times out script scenarios and kills descendant process groups", async () => {
     if (process.platform === "win32") {
       return;
@@ -576,6 +611,8 @@ describe("qa test file scenario runner", () => {
     expect(result.results[0]?.failureMessage).toMatch(/timed out after 100ms/u);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("imports producer QA evidence artifacts from failed script scenarios", async () => {
     const repoRoot = await makeTempRepo("qa-script-failed-scenario-");
     const result = await runQaTestFileScenarios({
@@ -807,6 +844,7 @@ describe("qa test file scenario runner", () => {
     });
   });
 
+<<<<<<< HEAD
   it("fails script scenario results when imported producer evidence is blocked by default", async () => {
     const repoRoot = await makeTempRepo("qa-script-producer-blocked-");
     const outputDir = path.join(
@@ -898,6 +936,8 @@ describe("qa test file scenario runner", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("carries the suite profile into merged producer evidence", async () => {
     const repoRoot = await makeTempRepo("qa-script-profile-");
     const result = await runQaTestFileScenarios({
@@ -1021,6 +1061,7 @@ describe("qa test file scenario runner", () => {
     expect(artifactPath).toBe(path.normalize(externalArtifact));
     expect(artifactPath?.includes("..")).toBe(false);
   });
+<<<<<<< HEAD
 
   it("runs the UX Matrix script producer and imports its evidence bundle", async () => {
     const repoRoot = process.cwd();
@@ -1082,4 +1123,6 @@ describe("qa test file scenario runner", () => {
       ),
     );
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

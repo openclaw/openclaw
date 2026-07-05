@@ -2,6 +2,10 @@
 import { describe, expect, it } from "vitest";
 import { createFixtureSkillEntry } from "../test-support/test-helpers.js";
 import {
+<<<<<<< HEAD
+=======
+  buildSkillIndex,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   buildSkillIndexEntries,
   filterPromptVisibleSkillEntries,
   filterUserInvocableSkillEntries,
@@ -18,18 +22,50 @@ describe("skill index", () => {
     expect(normalizeSkillIndexName("@@")).toBe("");
   });
 
+<<<<<<< HEAD
   it("indexes entries without changing input order", () => {
+=======
+  it("indexes entries by exact and normalized name without changing input order", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const entries = [
       createFixtureSkillEntry("Excel XLSX", { skillKey: "excel_xlsx" }),
       createFixtureSkillEntry("GitHub Review"),
     ];
 
+<<<<<<< HEAD
     expect(buildSkillIndexEntries(entries).map((entry) => entry.name)).toEqual([
       "Excel XLSX",
+=======
+    const index = buildSkillIndex(entries);
+
+    expect(index.entries.map((entry) => entry.name)).toEqual(["Excel XLSX", "GitHub Review"]);
+    expect(index.byName.get("Excel XLSX")?.entry).toBe(entries[0]);
+    expect(index.byNormalizedName.get("excel-xlsx")?.map((entry) => entry.name)).toEqual([
+      "Excel XLSX",
+    ]);
+    expect(index.byNormalizedName.get("github-review")?.map((entry) => entry.name)).toEqual([
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "GitHub Review",
     ]);
   });
 
+<<<<<<< HEAD
+=======
+  it("keeps ambiguous normalized names as multiple index entries", () => {
+    const entries = [
+      createFixtureSkillEntry("Excel/XLSX", { skillKey: "excel-slash" }),
+      createFixtureSkillEntry("Excel_XLSX", { skillKey: "excel-underscore" }),
+    ];
+
+    const index = buildSkillIndex(entries);
+
+    expect(index.byNormalizedName.get("excel-xlsx")?.map((entry) => entry.name)).toEqual([
+      "Excel/XLSX",
+      "Excel_XLSX",
+    ]);
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("centralizes runtime, prompt, and command exposure policy", () => {
     const runtimeHidden = createFixtureSkillEntry("runtime-hidden", {
       exposure: {
@@ -56,6 +92,7 @@ describe("skill index", () => {
       invocation: { disableModelInvocation: true, userInvocable: true },
     });
 
+<<<<<<< HEAD
     const entries = [runtimeHidden, promptHidden, commandHidden, legacyPromptHidden];
     const indexEntries = buildSkillIndexEntries(entries);
 
@@ -67,12 +104,34 @@ describe("skill index", () => {
       "command-hidden",
     ]);
     expect(indexEntries.filter((entry) => entry.userInvocable).map((entry) => entry.name)).toEqual([
+=======
+    const index = buildSkillIndex([runtimeHidden, promptHidden, commandHidden, legacyPromptHidden]);
+
+    expect(index.runtimeEntries.map((entry) => entry.skill.name)).toEqual([
+      "prompt-hidden",
+      "command-hidden",
+      "legacy-prompt-hidden",
+    ]);
+    expect(index.promptVisibleEntries.map((entry) => entry.skill.name)).toEqual([
+      "runtime-hidden",
+      "command-hidden",
+    ]);
+    expect(index.userInvocableEntries.map((entry) => entry.skill.name)).toEqual([
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "runtime-hidden",
       "prompt-hidden",
       "legacy-prompt-hidden",
     ]);
+<<<<<<< HEAD
     expect(filterPromptVisibleSkillEntries(entries)).toEqual([runtimeHidden, commandHidden]);
     expect(filterUserInvocableSkillEntries(entries)).toEqual([
+=======
+    expect(filterPromptVisibleSkillEntries(index.entries.map((entry) => entry.entry))).toEqual([
+      runtimeHidden,
+      commandHidden,
+    ]);
+    expect(filterUserInvocableSkillEntries(index.entries.map((entry) => entry.entry))).toEqual([
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       runtimeHidden,
       promptHidden,
       legacyPromptHidden,
@@ -90,22 +149,38 @@ describe("skill index", () => {
       skillKey: "workspace-key",
     });
 
+<<<<<<< HEAD
     const indexEntries = buildSkillIndexEntries([bundled, unknownBundled, workspace], {
+=======
+    const index = buildSkillIndex([bundled, unknownBundled, workspace], {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       bundledNames: new Set(["unknown-bundle"]),
       agentSkillFilter: ["workspace"],
     });
 
+<<<<<<< HEAD
     expect(indexEntries.find((entry) => entry.name === "bundle")).toMatchObject({
+=======
+    expect(index.byName.get("bundle")).toMatchObject({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       source: "openclaw-bundled",
       bundled: true,
       agentAllowed: false,
     });
+<<<<<<< HEAD
     expect(indexEntries.find((entry) => entry.name === "unknown-bundle")).toMatchObject({
+=======
+    expect(index.byName.get("unknown-bundle")).toMatchObject({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       source: "unknown",
       bundled: true,
       agentAllowed: false,
     });
+<<<<<<< HEAD
     expect(indexEntries.find((entry) => entry.name === "workspace")).toMatchObject({
+=======
+    expect(index.byName.get("workspace")).toMatchObject({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       source: "openclaw-workspace",
       bundled: false,
       skillKey: "workspace-key",

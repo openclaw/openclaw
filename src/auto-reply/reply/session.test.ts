@@ -10,7 +10,10 @@ import {
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+<<<<<<< HEAD
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
   testing as sessionBindingTesting,
@@ -51,6 +54,7 @@ type ForkSessionParamsForTest = {
 };
 
 vi.mock("./session-fork.js", () => ({
+<<<<<<< HEAD
   forkSessionEntryFromParent: async (params: {
     fallbackEntry?: SessionEntry;
     parentSessionKey: string;
@@ -142,6 +146,8 @@ vi.mock("./session-fork.js", () => ({
       },
     };
   },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   forkSessionFromParent: (...args: [ForkSessionParamsForTest]) =>
     sessionForkMocks.forkSessionFromParent(...args),
   resolveParentForkTokenCount: (...args: [{ parentEntry: SessionEntry; storePath: string }]) =>
@@ -469,6 +475,7 @@ afterEach(async () => {
   resetSystemEventsForTest();
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
 });
+<<<<<<< HEAD
 describe("initSessionState guarded initialization", () => {
   it("serializes concurrent initializers before reading the guarded snapshot", async () => {
     const storePath = await createStorePath("openclaw-session-init-race-");
@@ -512,6 +519,8 @@ describe("initSessionState guarded initialization", () => {
   });
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("initSessionState thread forking", () => {
   it("forks a new session from the parent session file", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -1195,6 +1204,7 @@ describe("initSessionState RawBody", () => {
     expect(store[sessionKey]?.ttsAuto).toBe("always");
   });
 
+<<<<<<< HEAD
   it("preserves usage footer mode across daily rollover", async () => {
     const root = await makeCaseDir("openclaw-daily-rollover-usage-");
     const storePath = path.join(root, "sessions.json");
@@ -1227,6 +1237,8 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionEntry.responseUsage).toBe("full");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("clears an auto-fallback model override on an implicit daily stale rollover (#90119)", async () => {
     // Counterpart: auto-created fallback overrides must still be cleared on a
     // daily rollover so stale sessions return to the configured default.
@@ -1952,6 +1964,7 @@ describe("initSessionState reset policy", () => {
     expect(result.sessionId).not.toBe(existingSessionId);
   });
 
+<<<<<<< HEAD
   it("preserves idle rollover when an ordinary send asserts the current session id", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
     const root = await makeCaseDir("openclaw-reset-idle-requested-session-ordinary-");
@@ -2047,6 +2060,8 @@ describe("initSessionState reset policy", () => {
     expect(result.sessionId).not.toBe(existingSessionId);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("drains stale system events when idle rollover creates a new session", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
     const root = await makeCaseDir("openclaw-reset-idle-system-events-");
@@ -3327,6 +3342,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     expect(result.sessionEntry.totalTokensFresh).toBe(true);
   });
 
+<<<<<<< HEAD
   it("clears stale runtime model cache fields on /new and /reset (#77322)", async () => {
     const storePath = await createStorePath("openclaw-reset-runtime-model-cache-");
     const sessionKey = "agent:main:telegram:direct:runtime-model-cache";
@@ -3447,6 +3463,8 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves spawned session ownership metadata across /new and /reset", async () => {
     const storePath = await createStorePath("openclaw-reset-spawned-metadata-");
     const sessionKey = "subagent:owned-child";

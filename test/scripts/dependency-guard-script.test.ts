@@ -2,7 +2,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GITHUB_ERROR_BODY_MAX_BYTES,
+<<<<<<< HEAD
   GITHUB_RESPONSE_BODY_MAX_BYTES,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   canAutoscrubPullRequest,
   createAutoscrubCommit,
   dependencyGuardCommentAuthors,
@@ -670,6 +673,7 @@ describe("dependency guard script", () => {
     }
   });
 
+<<<<<<< HEAD
   it("bounds successful GitHub API response bodies", async () => {
     const request = githubApi("token", {
       responseMaxBodyBytes: 64,
@@ -685,6 +689,8 @@ describe("dependency guard script", () => {
     expect(GITHUB_RESPONSE_BODY_MAX_BYTES).toBeGreaterThan(64);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("aborts stalled GitHub API fetches at the request timeout", async () => {
     let signal: AbortSignal | undefined;
     let markFetchStarted!: () => void;

@@ -1,15 +1,22 @@
 /** Tests provider request error classification for retry/fallback decisions. */
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { FailoverError } from "../../agents/failover-error.js";
 import {
   classifyProviderRequestError,
   PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,
   PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
   PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
+=======
+import {
+  classifyProviderRequestError,
+  PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE,
 } from "./provider-request-error-classifier.js";
 
 describe("provider request error classifier", () => {
+<<<<<<< HEAD
   it("classifies provider HTTP 401 authentication failures", () => {
     const message =
       "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses";
@@ -55,6 +62,8 @@ describe("provider request error classifier", () => {
     ).toBeUndefined();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.each([
     [
       "OpenAI missing custom tool output",
@@ -73,10 +82,13 @@ describe("provider request error classifier", () => {
       "alternating role ordering mismatch",
       "messages: roles must alternate between user and assistant",
     ],
+<<<<<<< HEAD
     [
       "local replay invariant guard",
       "invalid_replay_transcript: OpenAI Responses replay contains dangling_tool_call toolCallId=call_1 at message index 4",
     ],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ])("classifies %s as provider conversation-state errors", (_label, message) => {
     expect(classifyProviderRequestError(new Error(message))).toEqual({
       code: "provider_conversation_state_error",
@@ -85,10 +97,13 @@ describe("provider request error classifier", () => {
     });
   });
 
+<<<<<<< HEAD
   it("leaves bare no-body 400 provider failures unclassified", () => {
     expect(classifyProviderRequestError(new Error("400 status code (no body)"))).toBeUndefined();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("leaves explicit HTTP 429 rate-limit failures on the existing rate-limit path", () => {
     expect(classifyProviderRequestError(new Error("429: rate limit exceeded"))).toBeUndefined();
   });
@@ -115,6 +130,7 @@ describe("provider request error classifier", () => {
       classifyProviderRequestError(new Error("INVALID_ARGUMENT: some other failure")),
     ).toBeUndefined();
   });
+<<<<<<< HEAD
 
   it("surfaces provider internal errors without suggesting session reset", () => {
     expect(
@@ -138,4 +154,6 @@ describe("provider request error classifier", () => {
       technicalMessage: message,
     });
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

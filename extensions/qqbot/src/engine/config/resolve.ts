@@ -146,11 +146,16 @@ export function resolveAccountBase(
   let appId;
 
   if (resolvedAccountId === DEFAULT_ACCOUNT_ID) {
+<<<<<<< HEAD
     accountConfig = normalizeAccountConfig({
       ...asRecord(qqbot),
       ...asRecord(qqbot?.accounts?.[DEFAULT_ACCOUNT_ID]),
     });
     appId = normalizeAppId(accountConfig.appId);
+=======
+    accountConfig = normalizeAccountConfig(asRecord(qqbot));
+    appId = normalizeAppId(qqbot?.appId);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } else {
     const account = qqbot?.accounts?.[resolvedAccountId];
     accountConfig = normalizeAccountConfig(asRecord(account));

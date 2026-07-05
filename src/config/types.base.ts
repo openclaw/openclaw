@@ -303,8 +303,11 @@ export type DiagnosticsOtelConfig = {
   traces?: boolean;
   metrics?: boolean;
   logs?: boolean;
+<<<<<<< HEAD
   /** Log export sink: OTLP by default, stdout JSONL, or both. */
   logsExporter?: "otlp" | "stdout" | "both";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /** Trace sample rate (0.0 - 1.0). */
   sampleRate?: number;
   /** Metric export interval (ms). */

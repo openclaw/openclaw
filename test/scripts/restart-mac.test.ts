@@ -132,6 +132,7 @@ function runCanonicalizeAppBundle(appBundle: string) {
   };
 }
 
+<<<<<<< HEAD
 function runRestartArgParser(...args: string[]) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-restart-mac-test-"));
   tempRoots.push(root);
@@ -193,6 +194,8 @@ function runRestartLockHarness(lockDir: string) {
   return spawnSync("bash", [harnessPath], { encoding: "utf8" });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { force: true, recursive: true });
@@ -200,6 +203,7 @@ afterEach(() => {
 });
 
 describe("scripts/restart-mac.sh", () => {
+<<<<<<< HEAD
   it("rejects unknown restart options before side effects", () => {
     const result = runRestartArgParser("--wat");
 
@@ -216,6 +220,8 @@ describe("scripts/restart-mac.sh", () => {
     expect(result.stderr).toBe("");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("fails the gateway verification when lsof finds no listener", () => {
     const result = runGatewayPortCheck("#!/usr/bin/env bash\nexit 1\n");
 
@@ -257,6 +263,7 @@ describe("scripts/restart-mac.sh", () => {
     expect(script).not.toContain('LOG_PATH="${OPENCLAW_RESTART_LOG:-/tmp/openclaw-restart.log}"');
   });
 
+<<<<<<< HEAD
   it("does not remove a live restart lock it did not acquire", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-restart-mac-test-"));
     tempRoots.push(root);
@@ -286,6 +293,8 @@ describe("scripts/restart-mac.sh", () => {
     expect(existsSync(lockDir)).toBe(false);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("prefers the freshly packaged app unless an explicit app bundle is set", () => {
     const script = readFileSync(restartScriptPath, "utf8");
     const chooseBlock = script.slice(

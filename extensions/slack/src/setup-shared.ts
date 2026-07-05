@@ -3,7 +3,10 @@ import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { patchChannelConfigForAccount } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+<<<<<<< HEAD
 import { isSlackPluginAccountConfigured } from "./account-configured.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ResolvedSlackAccount } from "./accounts.js";
 import type { OpenClawConfig } from "./channel-api.js";
 
@@ -134,9 +137,12 @@ export function setSlackChannelAllowlist(
 }
 
 export function isSlackSetupAccountConfigured(account: ResolvedSlackAccount): boolean {
+<<<<<<< HEAD
   if (account.config.mode === "relay") {
     return isSlackPluginAccountConfigured(account);
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const hasConfiguredBotToken =
     Boolean(account.botToken?.trim()) || hasConfiguredSecretInput(account.config.botToken);
   const hasConfiguredAppToken =

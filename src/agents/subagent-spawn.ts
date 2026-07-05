@@ -57,6 +57,10 @@ import {
   resolveSpawnedWorkspaceInheritance,
 } from "./spawned-context.js";
 import {
+<<<<<<< HEAD
+=======
+  decodeStrictBase64,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   materializeSubagentAttachments,
   type SubagentAttachmentReceiptFile,
 } from "./subagent-attachments.js";
@@ -88,7 +92,11 @@ import {
   callGateway,
   dispatchGatewayMethodInProcess,
   emitSessionLifecycleEvent,
+<<<<<<< HEAD
   forkSessionEntryFromParent,
+=======
+  forkSessionFromParent,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   getGlobalHookRunner,
   getSessionBindingService,
   getRuntimeConfig,
@@ -99,6 +107,10 @@ import {
   normalizeDeliveryContext,
   pruneLegacyStoreKeys,
   ensureContextEnginesInitialized,
+<<<<<<< HEAD
+=======
+  resolveParentForkDecision,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveAgentConfig,
   resolveContextEngine,
   resolveGatewaySessionStoreTarget,
@@ -125,6 +137,11 @@ export type {
   SpawnSubagentSandboxMode,
 } from "./subagent-spawn.types.js";
 
+<<<<<<< HEAD
+=======
+export { decodeStrictBase64 };
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveConfiguredAgentIds(cfg: OpenClawConfig): string[] {
   return listAgentIds(cfg);
 }
@@ -132,24 +149,40 @@ function resolveConfiguredAgentIds(cfg: OpenClawConfig): string[] {
 type SubagentSpawnDeps = {
   callGateway: typeof callGateway;
   dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
+<<<<<<< HEAD
   forkSessionEntryFromParent: typeof forkSessionEntryFromParent;
+=======
+  forkSessionFromParent: typeof forkSessionFromParent;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   getGlobalHookRunner: () => SubagentLifecycleHookRunner | null;
   getRuntimeConfig: typeof getRuntimeConfig;
   hasInProcessGatewayContext: typeof hasInProcessGatewayContext;
   ensureContextEnginesInitialized: typeof ensureContextEnginesInitialized;
   resolveContextEngine: typeof resolveContextEngine;
+<<<<<<< HEAD
+=======
+  resolveParentForkDecision: typeof resolveParentForkDecision;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   updateSessionStore: typeof updateSessionStore;
 };
 
 const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   callGateway,
   dispatchGatewayMethodInProcess,
+<<<<<<< HEAD
   forkSessionEntryFromParent,
+=======
+  forkSessionFromParent,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   getGlobalHookRunner,
   getRuntimeConfig,
   hasInProcessGatewayContext,
   ensureContextEnginesInitialized,
   resolveContextEngine,
+<<<<<<< HEAD
+=======
+  resolveParentForkDecision,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   updateSessionStore,
 };
 
@@ -507,6 +540,7 @@ async function prepareSubagentSessionContext(params: {
   const sessionsDir = path.dirname(parentTarget.storePath);
 
   try {
+<<<<<<< HEAD
     if (params.targetAgentId !== params.requesterAgentId) {
       throw new Error(
         'context="fork" currently requires the same target agent as the requester; use context="isolated" for cross-agent spawns.',
@@ -546,6 +580,54 @@ async function prepareSubagentSessionContext(params: {
             sessionFile: forkedResult.fork.sessionFile,
           }
         : null;
+=======
+    const forked = (await updateSubagentSessionStore(childTarget.storePath, async (store) => {
+      parentEntry = resolveStoreEntryByKeys(store, parentTarget.storeKeys);
+      childEntry = resolveStoreEntryByKeys(store, childTarget.storeKeys);
+
+      if (params.targetAgentId !== params.requesterAgentId) {
+        throw new Error(
+          'context="fork" currently requires the same target agent as the requester; use context="isolated" for cross-agent spawns.',
+        );
+      }
+      if (!parentEntry?.sessionId) {
+        throw new Error(
+          'context="fork" requested but the requester session transcript is not available.',
+        );
+      }
+      const forkDecision = await subagentSpawnDeps.resolveParentForkDecision({
+        parentEntry,
+        storePath: parentTarget.storePath,
+      });
+      if (forkDecision.status === "skip") {
+        forkFallbackNote = forkDecision.message;
+        return null;
+      }
+
+      const fork = await subagentSpawnDeps.forkSessionFromParent({
+        parentEntry,
+        agentId: params.requesterAgentId,
+        sessionsDir,
+      });
+      if (!fork) {
+        throw new Error(
+          'context="fork" requested but OpenClaw could not fork the requester transcript.',
+        );
+      }
+      pruneLegacyStoreKeys({
+        store,
+        canonicalKey: childTarget.canonicalKey,
+        candidates: childTarget.storeKeys,
+      });
+      store[childTarget.canonicalKey] = mergeSessionEntry(store[childTarget.canonicalKey], {
+        sessionId: fork.sessionId,
+        sessionFile: fork.sessionFile,
+        forkedFromParent: true,
+      });
+      childEntry = store[childTarget.canonicalKey];
+      return fork;
+    })) as { sessionId: string; sessionFile: string } | null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     if (params.contextMode === "fork") {
       if (!parentEntry || !forked) {

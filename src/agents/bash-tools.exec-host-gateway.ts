@@ -35,7 +35,11 @@ import {
   type ExecAutoReviewInput,
 } from "../infra/exec-auto-review.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
+<<<<<<< HEAD
 import { isNativeApprovalChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+=======
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
   buildExecApprovalRequesterContext,
@@ -95,7 +99,10 @@ type ProcessGatewayAllowlistParams = {
   /** Session-store template, so the direct/denied followup can detect a rebind. */
   sessionStore?: string;
   bashElevated?: ExecElevatedDefaults;
+<<<<<<< HEAD
   approvalReviewerDeviceId?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
@@ -401,6 +408,7 @@ function shouldAwaitGatewayApprovalInline(params: {
   if (params.approvalFollowupMode !== undefined) {
     return false;
   }
+<<<<<<< HEAD
   // Native chat approval clients (Telegram /approve, Discord buttons,
   // etc.) resolve the approval back into the same session, so the agent can
   // wait inline and return the real exec output as the tool result. This
@@ -408,6 +416,9 @@ function shouldAwaitGatewayApprovalInline(params: {
   // terminates on the "approval-pending" tool result and the operator must
   // send a follow-up chat message to recover the turn (issue #93918).
   return isNativeApprovalChannel(normalizeMessageChannel(params.turnSourceChannel));
+=======
+  return normalizeMessageChannel(params.turnSourceChannel) === INTERNAL_MESSAGE_CHANNEL;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function buildGatewayExecApprovalDeniedToolResult(params: {
@@ -696,9 +707,12 @@ export async function processGatewayAllowlist(
           agentId: params.agentId,
           sessionKey: params.sessionKey,
         }),
+<<<<<<< HEAD
         approvalReviewerDeviceIds: params.approvalReviewerDeviceId
           ? [params.approvalReviewerDeviceId]
           : undefined,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         resolvedPath: resolveApprovalAuditTrustPath(
           allowlistEval.segments[0]?.resolution ?? null,
           params.workdir,

@@ -4,6 +4,7 @@
 export type AgentHarnessSupportContext = {
   provider: string;
   modelId?: string;
+<<<<<<< HEAD
   modelProvider?: {
     api?: string;
     baseUrl?: string;
@@ -18,6 +19,9 @@ export type AgentHarnessSupportContext = {
   requestedRuntime: import("../agent-runtime-id.js").EmbeddedAgentRuntime;
   providerOwnerStatus?: "unowned" | "owned" | "ambiguous";
   providerOwnerPluginIds?: readonly string[];
+=======
+  requestedRuntime: import("../agent-runtime-id.js").EmbeddedAgentRuntime;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 export type AgentHarnessSupport =

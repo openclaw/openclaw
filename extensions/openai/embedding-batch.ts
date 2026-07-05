@@ -18,7 +18,10 @@ import {
   uploadBatchJsonlFile,
   withRemoteHttpResponse,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+<<<<<<< HEAD
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenAiEmbeddingClient } from "./embedding-provider.js";
 
@@ -56,7 +59,10 @@ const OPENAI_BATCH_MAX_REQUESTS = 50000;
 // splitter avoids boundary-size uploads while preserving source-wide batching.
 const OPENAI_BATCH_MAX_JSONL_BYTES = 190 * 1024 * 1024;
 const OPENAI_BATCH_MAX_POLL_BACKOFF_MS = 5 * 60_000;
+<<<<<<< HEAD
 const OPENAI_BATCH_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 async function submitOpenAiBatch(params: {
   openAi: OpenAiEmbeddingClient;
@@ -128,7 +134,11 @@ async function fetchOpenAiBatchResource<T>(params: {
     },
     onResponse: async (res) => {
       if (!res.ok) {
+<<<<<<< HEAD
         const text = await readResponseTextLimited(res, OPENAI_BATCH_ERROR_BODY_LIMIT_BYTES);
+=======
+        const text = await res.text();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         throw new Error(`${params.errorPrefix} failed: ${res.status} ${text}`);
       }
       return await params.parse(res);

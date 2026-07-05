@@ -4,7 +4,10 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createBundleMcpJsonSchemaValidator } from "./agent-bundle-mcp-runtime.js";
 import { cleanupBundleMcpHarness } from "./agent-bundle-mcp-test-harness.js";
 import {
@@ -27,8 +30,11 @@ vi.mock("./embedded-agent-mcp.js", () => ({
   }),
 }));
 
+<<<<<<< HEAD
 const tempDirs: string[] = [];
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type RuntimeFactoryOptions = NonNullable<
   Parameters<typeof testing.createSessionMcpRuntimeManager>[0]
 >;
@@ -40,12 +46,18 @@ async function writeListToolsMcpServer(params: {
   filePath: string;
   logPath: string;
   delayMs?: number;
+<<<<<<< HEAD
   initializeDelayMs?: number;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   hang?: boolean;
   inputSchema?: unknown;
   tools?: Array<{ name: string; description?: string; inputSchema?: unknown }>;
   capabilities?: Record<string, unknown>;
+<<<<<<< HEAD
   notifyListChangedOnInitialized?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   listToolsMethodNotFound?: boolean;
   callToolIsError?: boolean;
   callToolJsonRpcError?: boolean;
@@ -58,10 +70,15 @@ import fs from "node:fs/promises";
 
 const logPath = ${JSON.stringify(params.logPath)};
 const delayMs = ${params.delayMs ?? 0};
+<<<<<<< HEAD
 const initializeDelayMs = ${params.initializeDelayMs ?? 0};
 const hang = ${params.hang === true};
 const capabilities = ${JSON.stringify(params.capabilities ?? { tools: {} })};
 const notifyListChangedOnInitialized = ${params.notifyListChangedOnInitialized === true};
+=======
+const hang = ${params.hang === true};
+const capabilities = ${JSON.stringify(params.capabilities ?? { tools: {} })};
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const listToolsMethodNotFound = ${params.listToolsMethodNotFound === true};
 const tools = ${JSON.stringify(
       params.tools ?? [
@@ -91,7 +108,11 @@ function handle(message) {
   }
   log("recv " + String(message.method ?? "unknown"));
   if (message.method === "initialize") {
+<<<<<<< HEAD
     const response = {
+=======
+    send({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       jsonrpc: "2.0",
       id: message.id,
       result: {
@@ -99,6 +120,7 @@ function handle(message) {
         capabilities,
         serverInfo: { name: "test-list-tools", version: "1.0.0" },
       },
+<<<<<<< HEAD
     };
     if (initializeDelayMs > 0) {
       setTimeout(() => send(response), initializeDelayMs);
@@ -112,6 +134,12 @@ function handle(message) {
       log("notify tools/list_changed");
       send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
     }
+=======
+    });
+    return;
+  }
+  if (message.method === "notifications/initialized") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return;
   }
   if (message.method === "tools/list") {
@@ -297,7 +325,10 @@ function makeRuntime(
 }
 
 afterEach(async () => {
+<<<<<<< HEAD
   cleanupTempDirs(tempDirs);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   await cleanupBundleMcpHarness();
 });
 
@@ -682,11 +713,19 @@ describe("session MCP runtime", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-slow-listtools-"));
     const serverPath = path.join(tempDir, "slow-list-tools.mjs");
     const logPath = path.join(tempDir, "server.log");
+<<<<<<< HEAD
     testing.setBundleMcpCatalogListTimeoutMsForTest(3_000);
     await writeListToolsMcpServer({
       filePath: serverPath,
       logPath,
       delayMs: 1_250,
+=======
+    testing.setBundleMcpCatalogListTimeoutMsForTest(2_000);
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      delayMs: 250,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     const runtime = await getOrCreateSessionMcpRuntime({
@@ -699,7 +738,11 @@ describe("session MCP runtime", () => {
             slowListTools: {
               command: process.execPath,
               args: [serverPath],
+<<<<<<< HEAD
               connectionTimeoutMs: 1_000,
+=======
+              connectionTimeoutMs: 150,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             },
           },
         },
@@ -714,7 +757,11 @@ describe("session MCP runtime", () => {
         serverName: "slowListTools",
         toolCount: 1,
       });
+<<<<<<< HEAD
       await expect(fs.readFile(logPath, "utf8")).resolves.toContain("delay tools/list 1250");
+=======
+      await expect(fs.readFile(logPath, "utf8")).resolves.toContain("delay tools/list 250");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -2052,6 +2099,7 @@ process.stdin.on("end", () => {
       }
     },
   );
+<<<<<<< HEAD
 
   it(
     "parallelizes MCP server catalog loading across multiple slow servers",
@@ -2577,4 +2625,6 @@ process.on("SIGINT", shutdown);`,
       }
     },
   );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

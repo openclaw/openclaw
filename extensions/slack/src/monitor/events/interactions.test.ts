@@ -1,5 +1,8 @@
 // Slack tests cover interactions plugin behavior.
+<<<<<<< HEAD
 import type { SlackShortcutMiddlewareArgs } from "@slack/bolt";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
@@ -181,10 +184,13 @@ type RegisteredViewClosedHandler = (args: {
   };
 }) => Promise<void>;
 
+<<<<<<< HEAD
 type RegisteredShortcutHandler = (
   args: Pick<SlackShortcutMiddlewareArgs, "ack" | "body">,
 ) => Promise<void>;
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function createContext(overrides?: {
   dmEnabled?: boolean;
   dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
@@ -209,7 +215,10 @@ function createContext(overrides?: {
   let actionMatcher: RegExp | null = null;
   let viewHandler: RegisteredViewHandler | null = null;
   let viewClosedHandler: RegisteredViewClosedHandler | null = null;
+<<<<<<< HEAD
   let shortcutHandler: RegisteredShortcutHandler | null = null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const app = {
     action: vi.fn((matcher: RegExp, next: RegisteredHandler) => {
       actionMatcher = matcher;
@@ -221,9 +230,12 @@ function createContext(overrides?: {
     viewClosed: vi.fn((_matcher: RegExp, next: RegisteredViewClosedHandler) => {
       viewClosedHandler = next;
     }),
+<<<<<<< HEAD
     shortcut: vi.fn((_matcher: RegExp, next: RegisteredShortcutHandler) => {
       shortcutHandler = next;
     }),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     client: {
       chat: {
         update: vi.fn().mockResolvedValue(undefined),
@@ -316,12 +328,15 @@ function createContext(overrides?: {
       }
       return viewClosedHandler;
     },
+<<<<<<< HEAD
     getShortcutHandler: () => {
       if (!shortcutHandler) {
         throw new Error("Expected Slack shortcut handler to be registered");
       }
       return shortcutHandler;
     },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }
 
@@ -412,6 +427,7 @@ describe("registerSlackInteractionEvents", () => {
     });
   });
 
+<<<<<<< HEAD
   it("routes global shortcuts to the actor's direct session", async () => {
     const { ctx, getShortcutHandler, resolveSessionKey } = createContext();
     const trackEvent = vi.fn();
@@ -571,6 +587,8 @@ describe("registerSlackInteractionEvents", () => {
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("enqueues structured events and updates button rows", async () => {
     const { ctx, app, getHandler, resolveSessionKey } = createContext();
     const trackEvent = vi.fn();

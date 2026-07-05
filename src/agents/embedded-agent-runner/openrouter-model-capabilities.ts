@@ -18,7 +18,10 @@
  * capabilities instead of the text-only fallback.
  */
 
+<<<<<<< HEAD
 import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveProxyFetchFromEnv } from "../../infra/net/proxy-fetch.js";
 import { parseStrictFiniteNumber } from "../../infra/parse-finite-number.js";
@@ -29,10 +32,13 @@ const log = createSubsystemLogger("openrouter-model-capabilities");
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const FETCH_TIMEOUT_MS = 10_000;
+<<<<<<< HEAD
 // Cap the catalog body so an untrusted/oversized OpenRouter response cannot force
 // the runtime to buffer an unbounded payload before parsing. Mirrors the bound
 // applied to the sibling pricing-cache endpoint (16 MiB).
 const OPENROUTER_MODELS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const SQLITE_CACHE_OWNER_ID = "core:openrouter-model-capabilities";
 const SQLITE_CACHE_NAMESPACE = "models.v3";
 const SQLITE_CACHE_MAX_ENTRIES = 10_000;
@@ -177,12 +183,15 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
   };
 }
 
+<<<<<<< HEAD
 async function cancelUnreadResponseBody(response: Response | undefined): Promise<void> {
   if (response && !response.bodyUsed) {
     await response.body?.cancel().catch(() => undefined);
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // ---------------------------------------------------------------------------
 // API fetch
 // ---------------------------------------------------------------------------
@@ -190,11 +199,18 @@ async function cancelUnreadResponseBody(response: Response | undefined): Promise
 async function doFetch(): Promise<void> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+<<<<<<< HEAD
   let response: Response | undefined;
   try {
     const fetchFn = resolveProxyFetchFromEnv() ?? globalThis.fetch;
 
     response = await fetchFn(OPENROUTER_MODELS_URL, {
+=======
+  try {
+    const fetchFn = resolveProxyFetchFromEnv() ?? globalThis.fetch;
+
+    const response = await fetchFn(OPENROUTER_MODELS_URL, {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       signal: controller.signal,
     });
 
@@ -203,10 +219,14 @@ async function doFetch(): Promise<void> {
       return;
     }
 
+<<<<<<< HEAD
     const bytes = await readResponseWithLimit(response, OPENROUTER_MODELS_RESPONSE_MAX_BYTES, {
       onOverflow: ({ size }) => new Error(`OpenRouter models response too large: ${size} bytes`),
     });
     const data = JSON.parse(bytes.toString("utf8")) as { data?: OpenRouterApiModel[] };
+=======
+    const data = (await response.json()) as { data?: OpenRouterApiModel[] };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const models = data.data ?? [];
     const map = new Map<string, OpenRouterModelCapabilities>();
 
@@ -225,7 +245,10 @@ async function doFetch(): Promise<void> {
     log.warn(`Failed to fetch OpenRouter models: ${message}`);
   } finally {
     clearTimeout(timeout);
+<<<<<<< HEAD
     await cancelUnreadResponseBody(response);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 
@@ -298,17 +321,25 @@ export async function loadOpenRouterModelCapabilities(modelId: string): Promise<
 export function getOpenRouterModelCapabilities(
   modelId: string,
 ): OpenRouterModelCapabilities | undefined {
+<<<<<<< HEAD
   // A failed awaited load, such as an oversized catalog body, already attempted
   // a refresh. Do not let the follow-up sync lookup immediately retry it.
   const skipMissRefresh = skipNextMissRefresh.delete(modelId);
   if (!skipMissRefresh) {
     ensureOpenRouterModelCache();
   }
+=======
+  ensureOpenRouterModelCache();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const result = cache?.get(modelId);
 
   // Model not found but cache exists — may be a newly added model.
   // Trigger a refresh so the next call picks it up.
+<<<<<<< HEAD
   if (!result && skipMissRefresh) {
+=======
+  if (!result && skipNextMissRefresh.delete(modelId)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return undefined;
   }
   if (!result && cache && !fetchInFlight) {

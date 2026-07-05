@@ -5,7 +5,10 @@
  */
 import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { redactToolPayloadText } from "../logging/redact.js";
+<<<<<<< HEAD
 import { sliceUtf16Safe } from "../shared/utf16-slice.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   binaryName,
   firstPositional,
@@ -443,7 +446,11 @@ function compactRawCommand(raw: string, maxLength = 120): string {
     return oneLine;
   }
   const half = Math.floor((maxLength - 1) / 2);
+<<<<<<< HEAD
   return `${sliceUtf16Safe(oneLine, 0, half)}…${sliceUtf16Safe(oneLine, -(maxLength - 1 - half))}`;
+=======
+  return `${oneLine.slice(0, half)}…${oneLine.slice(-(maxLength - 1 - half))}`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export type ToolDetailMode = "explain" | "raw";

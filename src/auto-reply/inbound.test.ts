@@ -6,16 +6,27 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GroupKeyResolution } from "../config/sessions.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
+<<<<<<< HEAD
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createInboundDebouncer } from "./inbound-debounce.js";
+=======
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
+import { createInboundDebouncer } from "./inbound-debounce.js";
+import { installGroupRequireMentionTestPlugins } from "./inbound.group-require-mention-test-plugins.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
   buildInboundDedupeKey,
+<<<<<<< HEAD
   claimInboundDedupe,
   commitInboundDedupe,
   resetInboundDedupe,
+=======
+  resetInboundDedupe,
+  shouldSkipDuplicateInbound,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./reply/inbound-dedupe.js";
 import { normalizeInboundTextNewlines, sanitizeInboundSystemTags } from "./reply/inbound-text.js";
 import {
@@ -27,6 +38,7 @@ import {
 import { initSessionState } from "./reply/session.js";
 import { applyTemplate, type MsgContext, type TemplateContext } from "./templating.js";
 
+<<<<<<< HEAD
 type TestChannelGroupContext = {
   cfg: OpenClawConfig;
   groupId?: string | null;
@@ -152,6 +164,8 @@ function installGroupRequireMentionTestPlugins() {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("applyTemplate", () => {
   it("renders primitive values", () => {
     const ctx = { MessageSid: "sid", IsNewSession: "no" } as TemplateContext;
@@ -437,8 +451,13 @@ describe("inbound dedupe", () => {
       OriginatingTo: "whatsapp:+1555",
       MessageSid: "msg-1",
     };
+<<<<<<< HEAD
     const key = commitInboundForTest(ctx);
     expect(claimInboundDedupe(ctx)).toEqual({ status: "duplicate", key });
+=======
+    expect(shouldSkipDuplicateInbound(ctx, { now: 100 })).toBe(false);
+    expect(shouldSkipDuplicateInbound(ctx, { now: 200 })).toBe(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("does not dedupe when the peer changes", () => {
@@ -448,8 +467,17 @@ describe("inbound dedupe", () => {
       OriginatingChannel: "whatsapp",
       MessageSid: "msg-1",
     };
+<<<<<<< HEAD
     commitInboundForTest({ ...base, OriginatingTo: "whatsapp:+1000" });
     expect(claimInboundDedupe({ ...base, OriginatingTo: "whatsapp:+2000" }).status).toBe("claimed");
+=======
+    expect(
+      shouldSkipDuplicateInbound({ ...base, OriginatingTo: "whatsapp:+1000" }, { now: 100 }),
+    ).toBe(false);
+    expect(
+      shouldSkipDuplicateInbound({ ...base, OriginatingTo: "whatsapp:+2000" }, { now: 200 }),
+    ).toBe(false);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("does not dedupe across agent ids", () => {
@@ -460,6 +488,7 @@ describe("inbound dedupe", () => {
       OriginatingTo: "whatsapp:+1555",
       MessageSid: "msg-1",
     };
+<<<<<<< HEAD
     const alphaKey = commitInboundForTest({ ...base, SessionKey: "agent:alpha:main" });
     expect(
       claimInboundDedupe({ ...base, SessionKey: "agent:bravo:whatsapp:direct:+1555" }).status,
@@ -468,6 +497,22 @@ describe("inbound dedupe", () => {
       status: "duplicate",
       key: alphaKey,
     });
+=======
+    expect(
+      shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:alpha:main" }, { now: 100 }),
+    ).toBe(false);
+    expect(
+      shouldSkipDuplicateInbound(
+        { ...base, SessionKey: "agent:bravo:whatsapp:direct:+1555" },
+        {
+          now: 200,
+        },
+      ),
+    ).toBe(false);
+    expect(
+      shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:alpha:main" }, { now: 300 }),
+    ).toBe(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("dedupes when the same agent sees the same inbound message under different session keys", () => {
@@ -478,10 +523,22 @@ describe("inbound dedupe", () => {
       OriginatingTo: "telegram:7463849194",
       MessageSid: "msg-1",
     };
+<<<<<<< HEAD
     const key = commitInboundForTest({ ...base, SessionKey: "agent:main:main" });
     expect(
       claimInboundDedupe({ ...base, SessionKey: "agent:main:telegram:direct:7463849194" }),
     ).toEqual({ status: "duplicate", key });
+=======
+    expect(
+      shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:main:main" }, { now: 100 }),
+    ).toBe(false);
+    expect(
+      shouldSkipDuplicateInbound(
+        { ...base, SessionKey: "agent:main:telegram:direct:7463849194" },
+        { now: 200 },
+      ),
+    ).toBe(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });
 

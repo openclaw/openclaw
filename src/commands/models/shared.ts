@@ -1,5 +1,9 @@
 /** Shared helpers for model commands that read or mutate model config. */
+<<<<<<< HEAD
 import { resolveAgentDir, resolveDefaultAgentId, listAgentIds } from "../../agents/agent-scope.js";
+=======
+import { listAgentIds } from "../../agents/agent-scope.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
   buildModelAliasIndex,
@@ -19,6 +23,11 @@ import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { canonicalizeModelCatalogProviderRef } from "./provider-aliases.js";
+<<<<<<< HEAD
+=======
+export { normalizeAlias } from "./alias-name.js";
+export { isLocalBaseUrl } from "./list.local-url.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export const ensureFlagCompatibility = (opts: { json?: boolean; plain?: boolean }) => {
   if (opts.json && opts.plain) {
@@ -163,6 +172,7 @@ export function resolveKnownAgentId(params: {
   return agentId;
 }
 
+<<<<<<< HEAD
 /** Resolves the selected model-command agent and its profile directory. */
 export function resolveModelsTargetAgent(
   cfg: OpenClawConfig,
@@ -176,6 +186,8 @@ export function resolveModelsTargetAgent(
   return { agentId, agentDir };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Normalized primary/fallback config shape used by text and image defaults. */
 export type PrimaryFallbackConfig = { primary?: string; fallbacks?: string[] };
 

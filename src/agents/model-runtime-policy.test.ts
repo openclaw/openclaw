@@ -2,17 +2,25 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+<<<<<<< HEAD
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 
 const ORIGINAL_BUILD_PRIVATE_QA = process.env.OPENCLAW_BUILD_PRIVATE_QA;
 const ORIGINAL_QA_FORCE_RUNTIME = process.env.OPENCLAW_QA_FORCE_RUNTIME;
 
+<<<<<<< HEAD
 const createModelConfig = (
   agentRuntimeId: string,
   modelId = "qwen-local",
 ): ModelDefinitionConfig => ({
   id: modelId,
+=======
+const createModelConfig = (agentRuntimeId: string): ModelDefinitionConfig => ({
+  id: "qwen-local",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   name: "Qwen Local",
   reasoning: false,
   input: ["text"],
@@ -33,10 +41,17 @@ function restoreEnv(
 ): void {
   // Tests mutate private QA env gates; restore exact process state after each.
   if (value == null) {
+<<<<<<< HEAD
     deleteTestEnvValue(name);
     return;
   }
   setTestEnvValue(name, value);
+=======
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = value;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function makeProviderRuntimeConfig(runtime: string): OpenClawConfig {
@@ -60,8 +75,13 @@ afterEach(() => {
 
 describe("resolveModelRuntimePolicy", () => {
   it("ignores the QA force-runtime override when the private QA gate is unset", () => {
+<<<<<<< HEAD
     deleteTestEnvValue("OPENCLAW_BUILD_PRIVATE_QA");
     setTestEnvValue("OPENCLAW_QA_FORCE_RUNTIME", "openclaw");
+=======
+    delete process.env.OPENCLAW_BUILD_PRIVATE_QA;
+    process.env.OPENCLAW_QA_FORCE_RUNTIME = "openclaw";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(
       resolveModelRuntimePolicy({
@@ -78,8 +98,13 @@ describe("resolveModelRuntimePolicy", () => {
   it("respects the QA force-runtime override when the private QA gate is set", () => {
     // The force-runtime override is intentionally gated to private QA builds so
     // normal users cannot accidentally change model runtime selection via env.
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_BUILD_PRIVATE_QA", "1");
     setTestEnvValue("OPENCLAW_QA_FORCE_RUNTIME", "openclaw");
+=======
+    process.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
+    process.env.OPENCLAW_QA_FORCE_RUNTIME = "openclaw";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(
       resolveModelRuntimePolicy({
@@ -94,8 +119,13 @@ describe("resolveModelRuntimePolicy", () => {
   });
 
   it("ignores invalid QA force-runtime values even when the private QA gate is set", () => {
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_BUILD_PRIVATE_QA", "1");
     setTestEnvValue("OPENCLAW_QA_FORCE_RUNTIME", "bogus");
+=======
+    process.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
+    process.env.OPENCLAW_QA_FORCE_RUNTIME = "bogus";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(
       resolveModelRuntimePolicy({
@@ -214,6 +244,7 @@ describe("resolveModelRuntimePolicy", () => {
     });
   });
 
+<<<<<<< HEAD
   it("uses provider-qualified model ids to resolve provider model runtime policies", () => {
     const config = {
       models: {
@@ -290,6 +321,8 @@ describe("resolveModelRuntimePolicy", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("prefers agent provider wildcard runtime policy over provider runtime policy", () => {
     const config = {
       agents: {

@@ -1,5 +1,10 @@
 // Generic current-conversation bindings persist lightweight conversation ->
 // session links for plugin channels without a custom binding adapter.
+<<<<<<< HEAD
+=======
+import fs from "node:fs";
+import path from "node:path";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
@@ -8,6 +13,7 @@ import {
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
+<<<<<<< HEAD
 import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
@@ -16,6 +22,12 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
+=======
+import { resolveStateDir } from "../../config/paths.js";
+import { loadJsonFile } from "../../infra/json-file.js";
+import { saveJsonFile } from "../../plugin-sdk/json-store.js";
+import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeConversationRef } from "./session-binding-normalization.js";
 import type {
   ConversationRef,
@@ -25,6 +37,7 @@ import type {
   SessionBindingUnbindInput,
 } from "./session-binding.types.js";
 
+<<<<<<< HEAD
 const CURRENT_BINDINGS_ID_PREFIX = "generic:";
 const CURRENT_BINDING_CONVERSATION_KIND = "current";
 
@@ -32,6 +45,15 @@ type CurrentConversationBindingDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "current_conversation_bindings"
 >;
+=======
+type PersistedCurrentConversationBindingsFile = {
+  version: 1;
+  bindings: SessionBindingRecord[];
+};
+
+const CURRENT_BINDINGS_FILE_VERSION = 1;
+const CURRENT_BINDINGS_ID_PREFIX = "generic:";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 let bindingsLoaded = false;
 const bindingsByConversationKey = new Map<string, SessionBindingRecord>();
@@ -50,6 +72,13 @@ function buildBindingId(ref: ConversationRef): string {
   return `${CURRENT_BINDINGS_ID_PREFIX}${buildConversationKey(ref)}`;
 }
 
+<<<<<<< HEAD
+=======
+function resolveBindingsFilePath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveStateDir(env), "bindings", "current-conversations.json");
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isBindingExpired(record: SessionBindingRecord, now = Date.now()): boolean {
   if (record.expiresAt === undefined) {
     return false;
@@ -62,6 +91,7 @@ function isBindingExpired(record: SessionBindingRecord, now = Date.now()): boole
   return nowMs !== undefined && !isFutureDateTimestampMs(expiresAt, { nowMs });
 }
 
+<<<<<<< HEAD
 function normalizePersistedBindingRecord(
   record: SessionBindingRecord,
 ): SessionBindingRecord | null {
@@ -161,6 +191,16 @@ function writePersistedBindings(): void {
       ),
     );
   });
+=======
+function toPersistedFile(): PersistedCurrentConversationBindingsFile {
+  const bindings = [...bindingsByConversationKey.values()]
+    .filter((record) => !isBindingExpired(record))
+    .toSorted((a, b) => a.bindingId.localeCompare(b.bindingId));
+  return {
+    version: CURRENT_BINDINGS_FILE_VERSION,
+    bindings,
+  };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function loadBindingsIntoMemory(): void {
@@ -169,11 +209,40 @@ function loadBindingsIntoMemory(): void {
   }
   bindingsLoaded = true;
   bindingsByConversationKey.clear();
+<<<<<<< HEAD
   for (const record of readPersistedBindings()) {
     bindingsByConversationKey.set(buildConversationKey(record.conversation), record);
   }
 }
 
+=======
+  const parsed = loadJsonFile(resolveBindingsFilePath()) as
+    | PersistedCurrentConversationBindingsFile
+    | undefined;
+  const bindings = parsed?.version === CURRENT_BINDINGS_FILE_VERSION ? parsed.bindings : [];
+  for (const record of bindings ?? []) {
+    if (!record?.bindingId || !record?.conversation?.conversationId || isBindingExpired(record)) {
+      continue;
+    }
+    const conversation = normalizeConversationRef(record.conversation);
+    const targetSessionKey = record.targetSessionKey?.trim() ?? "";
+    if (!targetSessionKey) {
+      continue;
+    }
+    bindingsByConversationKey.set(buildConversationKey(conversation), {
+      ...record,
+      bindingId: buildBindingId(conversation),
+      targetSessionKey,
+      conversation,
+    });
+  }
+}
+
+function persistBindingsToDisk(): void {
+  saveJsonFile(resolveBindingsFilePath(), toPersistedFile());
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function pruneExpiredBinding(key: string): SessionBindingRecord | null {
   loadBindingsIntoMemory();
   const record = bindingsByConversationKey.get(key) ?? null;
@@ -184,7 +253,11 @@ function pruneExpiredBinding(key: string): SessionBindingRecord | null {
     return record;
   }
   bindingsByConversationKey.delete(key);
+<<<<<<< HEAD
   writePersistedBindings();
+=======
+  persistBindingsToDisk();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return null;
 }
 
@@ -277,7 +350,11 @@ export async function bindGenericCurrentConversation(
     },
   };
   bindingsByConversationKey.set(key, record);
+<<<<<<< HEAD
   writePersistedBindings();
+=======
+  persistBindingsToDisk();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return record;
 }
 
@@ -322,7 +399,11 @@ export function touchGenericCurrentConversationBinding(bindingId: string, at = D
       lastActivityAt: at,
     },
   });
+<<<<<<< HEAD
   writePersistedBindings();
+=======
+  persistBindingsToDisk();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /** Removes generic current-conversation bindings by binding id or target session key. */
@@ -339,7 +420,11 @@ export async function unbindGenericCurrentConversationBindings(
     if (record) {
       bindingsByConversationKey.delete(key);
       removed.push(record);
+<<<<<<< HEAD
       writePersistedBindings();
+=======
+      persistBindingsToDisk();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     return removed;
   }
@@ -355,7 +440,11 @@ export async function unbindGenericCurrentConversationBindings(
     removed.push(record);
   }
   if (removed.length > 0) {
+<<<<<<< HEAD
     writePersistedBindings();
+=======
+    persistBindingsToDisk();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   return removed;
 }
@@ -368,6 +457,7 @@ export const testing = {
     bindingsLoaded = false;
     bindingsByConversationKey.clear();
     if (params?.deletePersistedFile) {
+<<<<<<< HEAD
       runOpenClawStateWriteTransaction(
         ({ db }) => {
           const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(db);
@@ -377,5 +467,16 @@ export const testing = {
       );
     }
   },
+=======
+      const filePath = resolveBindingsFilePath(params.env);
+      try {
+        fs.rmSync(filePath, { force: true });
+      } catch {
+        // ignore test cleanup failures
+      }
+    }
+  },
+  resolveBindingsFilePath,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 export { testing as __testing };

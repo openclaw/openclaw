@@ -462,6 +462,7 @@ describe("Anthropic provider", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("routes interleaved active content blocks by their event indexes", async () => {
     const client = {
       messages: {
@@ -519,6 +520,8 @@ describe("Anthropic provider", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("discards buffered Fable output when the stream fails before terminal status", async () => {
     const client = {
       messages: {

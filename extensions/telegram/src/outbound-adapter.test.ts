@@ -5,12 +5,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageTelegramMock = vi.fn();
 const pinMessageTelegramMock = vi.fn();
+<<<<<<< HEAD
 const reactMessageTelegramMock = vi.fn();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const sendPollTelegramMock = vi.fn();
 
 vi.mock("./send.js", () => ({
   pinMessageTelegram: (...args: unknown[]) => pinMessageTelegramMock(...args),
+<<<<<<< HEAD
   reactMessageTelegram: (...args: unknown[]) => reactMessageTelegramMock(...args),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sendPollTelegram: (...args: unknown[]) => sendPollTelegramMock(...args),
   sendMessageTelegram: (...args: unknown[]) => sendMessageTelegramMock(...args),
 }));
@@ -62,7 +68,10 @@ function callOptionsFromEnd(
 describe("telegramOutbound", () => {
   beforeEach(() => {
     pinMessageTelegramMock.mockReset();
+<<<<<<< HEAD
     reactMessageTelegramMock.mockReset();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sendPollTelegramMock.mockReset();
     sendMessageTelegramMock.mockReset();
   });
@@ -158,6 +167,7 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-buttons", chatId: "12345" });
   });
 
+<<<<<<< HEAD
   it("applies reaction-only payloads without sending empty Telegram text", async () => {
     reactMessageTelegramMock.mockResolvedValueOnce({ ok: true });
 
@@ -303,6 +313,8 @@ describe("telegramOutbound", () => {
     expect(sendMessageTelegramMock).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses presentation button labels as fallback text for presentation-only payloads", async () => {
     sendMessageTelegramMock.mockResolvedValueOnce({
       messageId: "tg-presentation-buttons",

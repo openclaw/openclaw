@@ -1,6 +1,9 @@
 // Implements `openclaw channels status` with gateway status and config-only fallback.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+<<<<<<< HEAD
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
@@ -15,7 +18,11 @@ import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js
 import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
+<<<<<<< HEAD
 import { listConfiguredAnnounceChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
+=======
+import { listConfiguredChannelIdsForReadOnlyScope } from "../../plugins/channel-plugin-ids.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import {
   appendBaseUrlBit,
@@ -223,9 +230,13 @@ export async function channelsStatusCommand(
   const timeoutMs = parseTimeoutMsWithFallback(opts.timeout, opts.probe ? 30_000 : 10_000, {
     invalidType: "error",
   });
+<<<<<<< HEAD
   const requestedChannel = opts.channel
     ? (normalizeChannelId(opts.channel) ?? normalizeOptionalLowercaseString(opts.channel))
     : null;
+=======
+  const requestedChannel = opts.channel ? normalizeChannelId(opts.channel) : null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const statusLabel = opts.probe ? "Checking channel status (probe)…" : "Checking channel status…";
   const shouldLogStatus = opts.json !== true && !process.stderr.isTTY;
   if (shouldLogStatus) {
@@ -290,10 +301,18 @@ export async function channelsStatusCommand(
           path: snapshot.path,
           mode,
         },
+<<<<<<< HEAD
         configuredChannels: listConfiguredAnnounceChannelIdsForConfig({
           config: resolvedConfig,
           activationSourceConfig: cfg,
           env: process.env,
+=======
+        configuredChannels: listConfiguredChannelIdsForReadOnlyScope({
+          config: resolvedConfig,
+          activationSourceConfig: cfg,
+          env: process.env,
+          includePersistedAuthState: false,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }).filter((channelId) => !requestedChannel || channelId === requestedChannel),
       });
       return;

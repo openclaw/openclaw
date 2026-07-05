@@ -1,5 +1,8 @@
 /** Shared command registry builders used by browser-safe and runtime command lists. */
+<<<<<<< HEAD
 import { formatFastModeAutoLabel, resolveFastModeModelAutoOnSeconds } from "../shared/fast-mode.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
@@ -743,6 +746,7 @@ export function buildBuiltinChatCommands(
       tier: "essential",
     }),
     defineChatCommand({
+<<<<<<< HEAD
       key: "name",
       nativeName: "name",
       description: "Name or rename the current session.",
@@ -760,6 +764,8 @@ export function buildBuiltinChatCommands(
       ],
     }),
     defineChatCommand({
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       key: "compact",
       nativeName: "compact",
       description: "Compact the session context.",
@@ -836,6 +842,7 @@ export function buildBuiltinChatCommands(
       args: [
         {
           name: "mode",
+<<<<<<< HEAD
           description: "on, off, auto, default, or status",
           type: "string",
           choices: ({ cfg, provider, model }) => [
@@ -850,6 +857,11 @@ export function buildBuiltinChatCommands(
             "default",
             "status",
           ],
+=======
+          description: "status, on, off, or default",
+          type: "string",
+          choices: ["status", "on", "off", "default"],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
       ],
       argsMenu: "auto",

@@ -10,12 +10,19 @@ import type {
   ChannelPlugin,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+<<<<<<< HEAD
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { runMessageAction } from "./message-action-runner.js";
+<<<<<<< HEAD
+=======
+import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type ChannelActionHandler = NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>;
 
@@ -401,7 +408,10 @@ describe("runMessageAction plugin dispatch", () => {
             messageId: "om_123",
           },
           defaultAccountId: "ops",
+<<<<<<< HEAD
           requesterAccountId: "ops",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           requesterSenderId: "trusted-user",
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
@@ -422,7 +432,10 @@ describe("runMessageAction plugin dispatch", () => {
           {
             action: "pin",
             accountId: "ops",
+<<<<<<< HEAD
             requesterAccountId: "ops",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             requesterSenderId: "trusted-user",
             sessionKey: "agent:alpha:main",
             sessionId: "session-123",

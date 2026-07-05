@@ -1,7 +1,10 @@
 // Whatsapp plugin module implements monitor inbox.streams inbound messages support behavior.
 import fsSync from "node:fs";
 import path from "node:path";
+<<<<<<< HEAD
 import type { GroupMetadata, WAMessageKey } from "baileys";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import "./monitor-inbox.test-harness.js";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,12 +13,16 @@ import {
   unregisterWhatsAppConnectionController,
 } from "./connection-controller-registry.js";
 import { WhatsAppRetryableInboundError } from "./inbound/dedupe.js";
+<<<<<<< HEAD
 import {
   readWhatsAppBaileysCacheEntry,
   type WhatsAppBaileysGroupMetadataCache,
   type WhatsAppBaileysMessageCache,
   WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES,
 } from "./inbound/monitor.js";
+=======
+import { WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES } from "./inbound/monitor.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { WebInboundMessage } from "./inbound/types.js";
 import {
   type InboxMonitorOptions,
@@ -112,6 +119,7 @@ async function expectSocketOperationTimeout(
   await rejection;
 }
 
+<<<<<<< HEAD
 function groupMetadata(params: {
   id?: string;
   subject: string;
@@ -162,20 +170,28 @@ async function expectCachedGroupMetadata(
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function primeInboundReplyHandle(params: {
   onMessage: ReturnType<typeof vi.fn>;
   socketRef: NonNullable<InboxMonitorOptions["socketRef"]>;
   upsertId: string;
   retryPolicy: NonNullable<InboxMonitorOptions["disconnectRetryPolicy"]>;
+<<<<<<< HEAD
   baileysCache?: ReturnType<typeof createBaileysCacheSupport>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   useCurrentSock?: boolean;
 }) {
   const { listener, sock } = await startInboxMonitor(params.onMessage as InboxOnMessage, {
     socketRef: params.socketRef,
     shouldRetryDisconnect: () => true,
     disconnectRetryPolicy: params.retryPolicy,
+<<<<<<< HEAD
     recentMessageKeys: params.baileysCache?.recentMessageKeys,
     baileysGroupMetaCache: params.baileysCache?.baileysGroupMetaCache,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   const sourceSock = params.useCurrentSock ? getSock() : sock;
   sourceSock.ev.emit(
@@ -539,6 +555,7 @@ describe("web monitor inbox", () => {
     await second.listener.close();
   });
 
+<<<<<<< HEAD
   it("keeps full participating group metadata available to Baileys", async () => {
     const sock = getSock();
     sock.groupFetchAllParticipating.mockResolvedValueOnce({
@@ -707,6 +724,8 @@ describe("web monitor inbox", () => {
     expect(sock.ev.listenerCount("group-participants.update")).toBe(0);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("bounds cached group metadata kept across reconnects", async () => {
     const groupMetadataCache: NonNullable<InboxMonitorOptions["groupMetadataCache"]> = new Map();
     const groups = Object.fromEntries(
@@ -1161,6 +1180,7 @@ describe("web monitor inbox", () => {
     }
   });
 
+<<<<<<< HEAD
   it("records outbound replies for Baileys retry lookup", async () => {
     const onMessage = vi.fn(async () => undefined);
     const socketRef = createSocketRef();
@@ -1205,6 +1225,18 @@ describe("web monitor inbox", () => {
     let acceptLateSend:
       | ((value: { key: { id: string }; message: { conversation: string } }) => void)
       | undefined;
+=======
+  it("suppresses self-echo when a timed-out socket send is later accepted", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const socketRef = createSocketRef();
+    const { listener, sock, inbound } = await primeInboundReplyHandle({
+      onMessage,
+      socketRef,
+      upsertId: "late-accept",
+      retryPolicy: fastReconnectPolicy(2),
+    });
+    let acceptLateSend: ((value: { key: { id: string } }) => void) | undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     vi.useFakeTimers();
     try {
       sock.sendMessage.mockImplementationOnce(
@@ -1220,6 +1252,7 @@ describe("web monitor inbox", () => {
       vi.useRealTimers();
     }
 
+<<<<<<< HEAD
     acceptLateSend?.({ key: { id: "late-accepted" }, message });
     await settleInboundWork();
     await expect(
@@ -1228,6 +1261,10 @@ describe("web monitor inbox", () => {
         remoteJid: "999@s.whatsapp.net",
       }),
     ).resolves.toBe(message);
+=======
+    acceptLateSend?.({ key: { id: "late-accepted" } });
+    await settleInboundWork();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sock.ev.emit("messages.upsert", {
       type: "notify",
       messages: [

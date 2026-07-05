@@ -8,7 +8,13 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { bm25RankToScore, buildFtsQuery } from "./hybrid.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
+<<<<<<< HEAD
 import { vectorToBlob } from "./vector-blob.js";
+=======
+
+const vectorToBlob = (embedding: number[]): Buffer =>
+  Buffer.from(new Float32Array(embedding).buffer);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function insertKeywordFixture(
   db: DatabaseSync,
@@ -23,7 +29,11 @@ function insertKeywordFixture(
   },
 ): void {
   db.prepare(
+<<<<<<< HEAD
     "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+=======
+    "INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ).run(
     params.id,
     params.path,
@@ -37,7 +47,11 @@ function insertKeywordFixture(
     Date.now(),
   );
   db.prepare(
+<<<<<<< HEAD
     "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+=======
+    "INSERT INTO chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ).run(
     params.text,
     params.id,
@@ -57,7 +71,13 @@ describe("searchKeyword trigram fallback", () => {
     try {
       const result = ensureMemoryIndexSchema({
         db,
+<<<<<<< HEAD
         cacheEnabled: false,
+=======
+        embeddingCacheTable: "embedding_cache",
+        cacheEnabled: false,
+        ftsTable: "chunks_fts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         ftsEnabled: true,
         ftsTokenizer: "trigram",
       });
@@ -71,7 +91,13 @@ describe("searchKeyword trigram fallback", () => {
     const db = new DatabaseSync(":memory:");
     const result = ensureMemoryIndexSchema({
       db,
+<<<<<<< HEAD
       cacheEnabled: false,
+=======
+      embeddingCacheTable: "embedding_cache",
+      cacheEnabled: false,
+      ftsTable: "chunks_fts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ftsEnabled: true,
       ftsTokenizer: "trigram",
     });
@@ -102,7 +128,11 @@ describe("searchKeyword trigram fallback", () => {
       }
       return await searchKeyword({
         db,
+<<<<<<< HEAD
         ftsTable: "memory_index_chunks_fts",
+=======
+        ftsTable: "chunks_fts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         query: params.query,
         ftsTokenizer: "trigram",
         limit: 10,
@@ -226,7 +256,13 @@ describe("searchKeyword FTS MATCH fallback", () => {
     try {
       const result = ensureMemoryIndexSchema({
         db,
+<<<<<<< HEAD
         cacheEnabled: false,
+=======
+        embeddingCacheTable: "embedding_cache",
+        cacheEnabled: false,
+        ftsTable: "chunks_fts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         ftsEnabled: true,
       });
       return result.ftsAvailable;
@@ -239,7 +275,13 @@ describe("searchKeyword FTS MATCH fallback", () => {
     const db = new DatabaseSync(":memory:");
     const result = ensureMemoryIndexSchema({
       db,
+<<<<<<< HEAD
       cacheEnabled: false,
+=======
+      embeddingCacheTable: "embedding_cache",
+      cacheEnabled: false,
+      ftsTable: "chunks_fts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ftsEnabled: true,
     });
     if (!result.ftsAvailable) {
@@ -278,7 +320,11 @@ describe("searchKeyword FTS MATCH fallback", () => {
 
       const results = await searchKeyword({
         db,
+<<<<<<< HEAD
         ftsTable: "memory_index_chunks_fts",
+=======
+        ftsTable: "chunks_fts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         query: "Agent",
         ftsTokenizer: "unicode61",
         limit: 10,
@@ -313,7 +359,11 @@ describe("searchKeyword FTS MATCH fallback", () => {
 
       const results = await searchKeyword({
         db,
+<<<<<<< HEAD
         ftsTable: "memory_index_chunks_fts",
+=======
+        ftsTable: "chunks_fts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         query: "Transformer",
         ftsTokenizer: "unicode61",
         limit: 10,
@@ -358,7 +408,11 @@ describe("searchKeyword FTS MATCH fallback", () => {
       const brokenBuildFtsQuery = () => "BROKEN <<<";
       const results = await searchKeyword({
         db,
+<<<<<<< HEAD
         ftsTable: "memory_index_chunks_fts",
+=======
+        ftsTable: "chunks_fts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         query: "Agent",
         ftsTokenizer: "unicode61",
         limit: 10,
@@ -405,7 +459,11 @@ describe("searchKeyword FTS MATCH fallback", () => {
       const brokenBuildFtsQuery = () => "BROKEN <<<";
       const results = await searchKeyword({
         db,
+<<<<<<< HEAD
         ftsTable: "memory_index_chunks_fts",
+=======
+        ftsTable: "chunks_fts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         query: "Agent cron",
         ftsTokenizer: "unicode61",
         limit: 10,
@@ -439,7 +497,11 @@ describe("searchKeyword FTS MATCH fallback", () => {
 
       await searchKeyword({
         db,
+<<<<<<< HEAD
         ftsTable: "memory_index_chunks_fts",
+=======
+        ftsTable: "chunks_fts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         query: "test",
         ftsTokenizer: "unicode61",
         limit: 10,
@@ -472,7 +534,13 @@ describe("searchKeyword cross-model FTS visibility (issue #48300)", () => {
     try {
       const result = ensureMemoryIndexSchema({
         db,
+<<<<<<< HEAD
         cacheEnabled: false,
+=======
+        embeddingCacheTable: "embedding_cache",
+        cacheEnabled: false,
+        ftsTable: "chunks_fts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         ftsEnabled: true,
       });
       return result.ftsAvailable;
@@ -488,7 +556,13 @@ describe("searchKeyword cross-model FTS visibility (issue #48300)", () => {
     try {
       const result = ensureMemoryIndexSchema({
         db,
+<<<<<<< HEAD
         cacheEnabled: false,
+=======
+        embeddingCacheTable: "embedding_cache",
+        cacheEnabled: false,
+        ftsTable: "chunks_fts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         ftsEnabled: true,
       });
       if (!result.ftsAvailable) {
@@ -515,7 +589,11 @@ describe("searchKeyword cross-model FTS visibility (issue #48300)", () => {
 
       const results = await searchKeyword({
         db,
+<<<<<<< HEAD
         ftsTable: "memory_index_chunks_fts",
+=======
+        ftsTable: "chunks_fts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         query: "Clyde",
         ftsTokenizer: "unicode61",
         limit: 10,
@@ -536,7 +614,13 @@ describe("searchKeyword cross-model FTS visibility (issue #48300)", () => {
     try {
       const result = ensureMemoryIndexSchema({
         db,
+<<<<<<< HEAD
         cacheEnabled: false,
+=======
+        embeddingCacheTable: "embedding_cache",
+        cacheEnabled: false,
+        ftsTable: "chunks_fts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         ftsEnabled: true,
       });
       if (!result.ftsAvailable) {
@@ -552,7 +636,11 @@ describe("searchKeyword cross-model FTS visibility (issue #48300)", () => {
         endLine: 3,
       });
       db.prepare(
+<<<<<<< HEAD
         "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+=======
+        "INSERT INTO chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ).run(
         "Deleted Clyde notes from an older model",
         "orphan-clyde",
@@ -565,7 +653,11 @@ describe("searchKeyword cross-model FTS visibility (issue #48300)", () => {
 
       const results = await searchKeyword({
         db,
+<<<<<<< HEAD
         ftsTable: "memory_index_chunks_fts",
+=======
+        ftsTable: "chunks_fts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         query: "Clyde",
         ftsTokenizer: "unicode61",
         limit: 10,
@@ -626,7 +718,11 @@ describe("searchVector sqlite-vec KNN", () => {
 
     const results = await searchVector({
       db: { prepare } as unknown as Parameters<typeof searchVector>[0]["db"],
+<<<<<<< HEAD
       vectorTable: "memory_index_chunks_vec",
+=======
+      vectorTable: "chunks_vec",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       providerModel: "target-model",
       queryVec: [1, 0],
       limit: 2,
@@ -651,12 +747,22 @@ describe("searchVector sqlite-vec KNN", () => {
     try {
       ensureMemoryIndexSchema({
         db,
+<<<<<<< HEAD
         cacheEnabled: false,
+=======
+        embeddingCacheTable: "embedding_cache",
+        cacheEnabled: false,
+        ftsTable: "chunks_fts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         ftsEnabled: false,
       });
 
       const insertChunk = db.prepare(
+<<<<<<< HEAD
         "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+=======
+        "INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       );
       // Just over 3x the yield batch (FALLBACK_VECTOR_BATCH_SIZE=256), so we
       // expect at least 3 yield points to fire during the scan.
@@ -690,7 +796,11 @@ describe("searchVector sqlite-vec KNN", () => {
       try {
         const results = await searchVector({
           db,
+<<<<<<< HEAD
           vectorTable: "memory_index_chunks_vec",
+=======
+          vectorTable: "chunks_vec",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           providerModel: "yield-model",
           queryVec: [1, 0],
           limit: 4,
@@ -718,7 +828,13 @@ describe("searchVector sqlite-vec KNN", () => {
     const db = new DatabaseSync(":memory:");
     ensureMemoryIndexSchema({
       db,
+<<<<<<< HEAD
       cacheEnabled: false,
+=======
+      embeddingCacheTable: "embedding_cache",
+      cacheEnabled: false,
+      ftsTable: "chunks_fts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ftsEnabled: false,
     });
     return db;
@@ -733,7 +849,11 @@ describe("searchVector sqlite-vec KNN", () => {
     },
   ): void {
     db.prepare(
+<<<<<<< HEAD
       "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+=======
+      "INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ).run(
       params.id,
       `memory/${params.id}.md`,
@@ -755,7 +875,11 @@ describe("searchVector sqlite-vec KNN", () => {
       insertFallbackChunk(db, { id: "other-only", model: "other-model", vector: [1, 0] });
       const results = await searchVector({
         db,
+<<<<<<< HEAD
         vectorTable: "memory_index_chunks_vec",
+=======
+        vectorTable: "chunks_vec",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         providerModel: "target-model",
         queryVec: [1, 0],
         limit: 5,
@@ -779,7 +903,11 @@ describe("searchVector sqlite-vec KNN", () => {
 
       const results = await searchVector({
         db,
+<<<<<<< HEAD
         vectorTable: "memory_index_chunks_vec",
+=======
+        vectorTable: "chunks_vec",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         providerModel: "canonical-model",
         providerModelAliases: ["/cache/default.gguf"],
         queryVec: [1, 0],
@@ -804,7 +932,11 @@ describe("searchVector sqlite-vec KNN", () => {
 
       const results = await searchVector({
         db,
+<<<<<<< HEAD
         vectorTable: "memory_index_chunks_vec",
+=======
+        vectorTable: "chunks_vec",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         providerModel: "",
         queryVec: [1, 0],
         limit: 5,
@@ -826,7 +958,11 @@ describe("searchVector sqlite-vec KNN", () => {
       insertFallbackChunk(db, { id: "lone", model: "target-model", vector: [1, 0] });
       const results = await searchVector({
         db,
+<<<<<<< HEAD
         vectorTable: "memory_index_chunks_vec",
+=======
+        vectorTable: "chunks_vec",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         providerModel: "target-model",
         queryVec: [1, 0],
         limit: 5,
@@ -858,7 +994,11 @@ describe("searchVector sqlite-vec KNN", () => {
       }
       const results = await searchVector({
         db,
+<<<<<<< HEAD
         vectorTable: "memory_index_chunks_vec",
+=======
+        vectorTable: "chunks_vec",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         providerModel: "target-model",
         queryVec: [1, 0],
         limit: 3,
@@ -921,7 +1061,11 @@ describe("searchVector sqlite-vec KNN", () => {
 
       const results = await searchVector({
         db,
+<<<<<<< HEAD
         vectorTable: "memory_index_chunks_vec",
+=======
+        vectorTable: "chunks_vec",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         providerModel: "target-model",
         queryVec,
         limit,
@@ -979,7 +1123,11 @@ describe("searchVector sqlite-vec KNN", () => {
 
       const results = await searchVector({
         db,
+<<<<<<< HEAD
         vectorTable: "memory_index_chunks_vec",
+=======
+        vectorTable: "chunks_vec",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         providerModel: "target-model",
         queryVec: [1, 0],
         limit: 2,
@@ -1006,22 +1154,38 @@ describe("searchVector sqlite-vec KNN", () => {
       expect(loaded.ok, loaded.error).toBe(true);
       ensureMemoryIndexSchema({
         db,
+<<<<<<< HEAD
         cacheEnabled: false,
         ftsEnabled: false,
       });
       db.exec(`
         CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(
+=======
+        embeddingCacheTable: "embedding_cache",
+        cacheEnabled: false,
+        ftsTable: "chunks_fts",
+        ftsEnabled: false,
+      });
+      db.exec(`
+        CREATE VIRTUAL TABLE chunks_vec USING vec0(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           id TEXT PRIMARY KEY,
           embedding FLOAT[2]
         );
       `);
 
       const insertChunk = db.prepare(
+<<<<<<< HEAD
         "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       );
       const insertVector = db.prepare(
         "INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)",
       );
+=======
+        "INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      );
+      const insertVector = db.prepare("INSERT INTO chunks_vec (id, embedding) VALUES (?, ?)");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const addChunk = (params: { id: string; model: string; vector: [number, number] }) => {
         insertChunk.run(
           params.id,
@@ -1047,7 +1211,11 @@ describe("searchVector sqlite-vec KNN", () => {
 
       const results = await searchVector({
         db,
+<<<<<<< HEAD
         vectorTable: "memory_index_chunks_vec",
+=======
+        vectorTable: "chunks_vec",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         providerModel: "target-model",
         providerModelAliases: ["alias-model"],
         queryVec: [1, 0],

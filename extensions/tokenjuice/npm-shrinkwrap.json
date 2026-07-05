@@ -1,17 +1,29 @@
 {
   "name": "@openclaw/tokenjuice",
+<<<<<<< HEAD
   "version": "2026.6.10",
+=======
+  "version": "2026.6.8",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/tokenjuice",
+<<<<<<< HEAD
       "version": "2026.6.10",
+=======
+      "version": "2026.6.8",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "dependencies": {
         "tokenjuice": "0.8.1"
       },
       "peerDependencies": {
+<<<<<<< HEAD
         "openclaw": ">=2026.6.10"
+=======
+        "openclaw": ">=2026.6.8"
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
       "peerDependenciesMeta": {
         "openclaw": {

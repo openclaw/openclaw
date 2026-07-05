@@ -4,7 +4,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { parseArgs, shouldPrintHelp } from "../../scripts/perf/summarize-cpuprofile.mjs";
+=======
+import { parseArgs } from "../../scripts/perf/summarize-cpuprofile.mjs";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("scripts/perf/summarize-cpuprofile.mjs", () => {
   it("parses split and inline positive limit flags", () => {
@@ -16,6 +20,7 @@ describe("scripts/perf/summarize-cpuprofile.mjs", () => {
       files: ["a.cpuprofile", "b.cpuprofile"],
       limit: 7,
     });
+<<<<<<< HEAD
     expect(parseArgs(["--limit", "5", "--", "--dash.cpuprofile"])).toEqual({
       files: ["--dash.cpuprofile"],
       limit: 5,
@@ -41,19 +46,25 @@ describe("scripts/perf/summarize-cpuprofile.mjs", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Usage: scripts/perf/summarize-cpuprofile.mjs");
     expect(result.stderr).toBe("");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("rejects malformed limit flags instead of falling back", () => {
     for (const args of [
       ["--limit", "3frames", "a.cpuprofile"],
+<<<<<<< HEAD
       ["--limit", "-h", "a.cpuprofile"],
       ["--limit", "--", "--help"],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ["--limit", "0", "a.cpuprofile"],
       ["--limit=1e3", "a.cpuprofile"],
       ["--limit"],
     ]) {
       expect(() => parseArgs(args)).toThrow("--limit must be a positive integer");
     }
+<<<<<<< HEAD
 
     const result = spawnSync(
       process.execPath,
@@ -80,6 +91,8 @@ describe("scripts/perf/summarize-cpuprofile.mjs", () => {
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr.trim()).toBe("Unknown option: --wat");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("rejects empty CPU profiles instead of printing zero-sample summaries", () => {

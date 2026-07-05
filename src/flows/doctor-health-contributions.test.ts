@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
+<<<<<<< HEAD
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
 import {
   createDoctorHealthContribution,
@@ -56,6 +57,20 @@ const mocks = vi.hoisted(() => ({
   runLegacyStateMigrations: vi.fn(),
   detectLegacyClawdBrowserProfileResidue: vi.fn(),
   maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn(),
+=======
+import {
+  resolveDoctorHealthContributions,
+  shouldSkipLegacyUpdateDoctorConfigWrite,
+} from "./doctor-health-contributions.js";
+
+const mocks = vi.hoisted(() => ({
+  maybeRunConfiguredPluginInstallReleaseStep: vi.fn(),
+  registerCoreHealthChecks: vi.fn(),
+  registerBundledHealthChecks: vi.fn(),
+  runDoctorHealthRepairs: vi.fn(),
+  listHealthChecks: vi.fn(),
+  getHealthCheck: vi.fn(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
   resolveDefaultAgentId: vi.fn(() => "default"),
   note: vi.fn(),
@@ -70,6 +85,11 @@ const mocks = vi.hoisted(() => ({
     config: {},
     issues: [],
   }),
+<<<<<<< HEAD
+=======
+  checkGatewayHealth: vi.fn(),
+  probeGatewayMemoryStatus: vi.fn(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   gatherDaemonStatus: vi.fn(),
   noteWorkspaceStatus: vi.fn(),
   applyWizardMetadata: vi.fn((cfg: unknown) => cfg),
@@ -88,6 +108,13 @@ vi.mock("../commands/doctor/shared/release-configured-plugin-installs.js", () =>
   maybeRunConfiguredPluginInstallReleaseStep: mocks.maybeRunConfiguredPluginInstallReleaseStep,
 }));
 
+<<<<<<< HEAD
+=======
+vi.mock("./doctor-core-checks.js", () => ({
+  registerCoreHealthChecks: mocks.registerCoreHealthChecks,
+}));
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.mock("./bundled-health-checks.js", () => ({
   registerBundledHealthChecks: mocks.registerBundledHealthChecks,
 }));
@@ -96,6 +123,7 @@ vi.mock("./doctor-repair-flow.js", () => ({
   runDoctorHealthRepairs: mocks.runDoctorHealthRepairs,
 }));
 
+<<<<<<< HEAD
 vi.mock("../config/types.secrets.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/types.secrets.js")>();
   return {
@@ -213,6 +241,11 @@ vi.mock("../commands/doctor-browser.js", () => ({
   noteChromeMcpBrowserReadiness: mocks.noteChromeMcpBrowserReadiness,
   detectLegacyClawdBrowserProfileResidue: mocks.detectLegacyClawdBrowserProfileResidue,
   maybeArchiveLegacyClawdBrowserProfileResidue: mocks.maybeArchiveLegacyClawdBrowserProfileResidue,
+=======
+vi.mock("./health-check-registry.js", () => ({
+  listHealthChecks: mocks.listHealthChecks,
+  getHealthCheck: mocks.getHealthCheck,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -237,8 +270,11 @@ vi.mock("../agents/model-selection.js", () => ({
 vi.mock("../version.js", async () => ({
   ...(await vi.importActual<typeof import("../version.js")>("../version.js")),
   VERSION: "2026.5.2-test",
+<<<<<<< HEAD
   resolveCompatibilityHostVersion: vi.fn(() => "2026.5.2-test"),
   resolveIsNixMode: vi.fn(() => false),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -262,13 +298,17 @@ vi.mock("../commands/doctor-workspace-status.js", () => ({
 
 vi.mock("../commands/onboard-helpers.js", () => ({
   applyWizardMetadata: mocks.applyWizardMetadata,
+<<<<<<< HEAD
   randomToken: vi.fn(() => "generated-gateway-token"),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("../config/logging.js", () => ({
   logConfigUpdated: mocks.logConfigUpdated,
 }));
 
+<<<<<<< HEAD
 vi.mock("../utils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../utils.js")>();
   return {
@@ -279,6 +319,13 @@ vi.mock("../utils.js", async (importOriginal) => {
     shortenHomePath: mocks.shortenHomePath,
   };
 });
+=======
+vi.mock("../utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils.js")>()),
+  isRecord: mocks.isRecord,
+  shortenHomePath: mocks.shortenHomePath,
+}));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 vi.mock("../cli/command-format.js", () => ({
   formatCliCommand: mocks.formatCliCommand,
@@ -314,6 +361,7 @@ function buildDoctorPrompter(shouldRepair: boolean): DoctorPrompter {
 describe("doctor health contributions", () => {
   beforeEach(() => {
     mocks.maybeRunConfiguredPluginInstallReleaseStep.mockReset();
+<<<<<<< HEAD
     mocks.registerBundledHealthChecks.mockReset();
     mocks.runDoctorHealthRepairs.mockReset();
     mocks.maybeRepairLegacyFlatAuthProfileStores.mockClear();
@@ -364,6 +412,11 @@ describe("doctor health contributions", () => {
       ready: true,
       skipped: false,
     });
+=======
+    mocks.registerCoreHealthChecks.mockReset();
+    mocks.registerBundledHealthChecks.mockReset();
+    mocks.runDoctorHealthRepairs.mockReset();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mocks.runDoctorHealthRepairs.mockResolvedValue({
       config: {},
       findings: [],
@@ -378,6 +431,7 @@ describe("doctor health contributions", () => {
     });
     mocks.listHealthChecks.mockReset();
     mocks.listHealthChecks.mockReturnValue([
+<<<<<<< HEAD
       { id: "core/example/internal", kind: "core" },
       { id: "plugin/example/unrelated", kind: "plugin" },
     ]);
@@ -397,6 +451,14 @@ describe("doctor health contributions", () => {
       changes: [],
       warnings: [],
     });
+=======
+      { id: "core/doctor/shell-completion" },
+      { id: "core/doctor/ui-protocol-freshness" },
+      { id: "core/doctor/unrelated" },
+    ]);
+    mocks.getHealthCheck.mockReset();
+    mocks.getHealthCheck.mockReturnValue(undefined);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mocks.resolveAgentWorkspaceDir.mockReset();
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
     mocks.resolveDefaultAgentId.mockReset();
@@ -447,7 +509,10 @@ describe("doctor health contributions", () => {
     mocks.checkGatewayHealth.mockResolvedValue({
       authenticated: false,
       healthOk: true,
+<<<<<<< HEAD
       status: { ok: true },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     const contribution = requireDoctorContribution(DOCTOR_GATEWAY_HEALTH_ID);
     const ctx = {
@@ -474,12 +539,16 @@ describe("doctor health contributions", () => {
     mocks.checkGatewayHealth.mockResolvedValue({
       authenticated: false,
       healthOk: true,
+<<<<<<< HEAD
       status: { ok: true },
     });
     mocks.gatewaySecretInputPathCanWin.mockImplementation(
       ({ path }: { path: string }) => path === "gateway.auth.token",
     );
     mocks.readGatewaySecretInputValue.mockReturnValue("exec-token");
+=======
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const contribution = requireDoctorContribution(DOCTOR_GATEWAY_HEALTH_ID);
     const cfg = {
       gateway: {
@@ -522,10 +591,13 @@ describe("doctor health contributions", () => {
   });
 
   it("skips local gateway health probes for remote fallback exec SecretRefs", async () => {
+<<<<<<< HEAD
     mocks.gatewaySecretInputPathCanWin.mockImplementation(
       ({ path }: { path: string }) => path === "gateway.remote.token",
     );
     mocks.readGatewaySecretInputValue.mockReturnValue("exec-token");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const contribution = requireDoctorContribution(DOCTOR_GATEWAY_HEALTH_ID);
     const cfg = {
       gateway: {
@@ -574,7 +646,11 @@ describe("doctor health contributions", () => {
       sourceConfigValid: true,
       prompter: buildDoctorPrompter(false),
       env: {},
+<<<<<<< HEAD
     } as unknown as Parameters<(typeof contribution)["run"]>[0];
+=======
+    } as Parameters<(typeof contribution)["run"]>[0];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await contribution.run(ctx);
 
@@ -595,7 +671,11 @@ describe("doctor health contributions", () => {
       sourceConfigValid: true,
       prompter: buildDoctorPrompter(true),
       env: {},
+<<<<<<< HEAD
     } as unknown as Parameters<(typeof contribution)["run"]>[0];
+=======
+    } as Parameters<(typeof contribution)["run"]>[0];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await contribution.run(ctx);
 
@@ -631,7 +711,11 @@ describe("doctor health contributions", () => {
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
         OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
       },
+<<<<<<< HEAD
     } as unknown as Parameters<(typeof contribution)["run"]>[0];
+=======
+    } as Parameters<(typeof contribution)["run"]>[0];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await contribution.run(ctx);
 
@@ -861,7 +945,11 @@ describe("doctor health contributions", () => {
     const ctx = {
       cfg,
       options: {},
+<<<<<<< HEAD
     } as unknown as Parameters<(typeof contribution)["run"]>[0];
+=======
+    } as Parameters<(typeof contribution)["run"]>[0];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await contribution.run(ctx);
 
@@ -877,6 +965,7 @@ describe("doctor health contributions", () => {
     );
   });
 
+<<<<<<< HEAD
   it("preserves allow-exec Gateway SecretRef resolution in auth health", async () => {
     const contribution = requireDoctorContribution("doctor:gateway-auth");
     const ctx = {
@@ -1278,6 +1367,8 @@ describe("doctor health contributions", () => {
     expect(calls).toEqual(["repair", "note"]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("runs structured repairs before legacy skill repairs and config writes", () => {
     const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
 
@@ -1290,7 +1381,11 @@ describe("doctor health contributions", () => {
     );
   });
 
+<<<<<<< HEAD
   it("keeps core-kind repairs out of the extension repair pass", async () => {
+=======
+  it("keeps legacy positional repairs out of the broad structured repair pass", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const contribution = requireDoctorContribution("doctor:structured-health-repairs");
     const ctx = {
       cfg: {},
@@ -1302,11 +1397,16 @@ describe("doctor health contributions", () => {
       cfgForPersistence: {},
       configPath: "/tmp/fake-openclaw.json",
       env: {},
+<<<<<<< HEAD
     } as unknown as Parameters<(typeof contribution)["run"]>[0];
+=======
+    } as Parameters<(typeof contribution)["run"]>[0];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await contribution.run(ctx);
 
     expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(expect.any(Object), {
+<<<<<<< HEAD
       checks: [{ id: "plugin/example/unrelated", kind: "plugin" }],
     });
   });
@@ -1359,6 +1459,12 @@ describe("doctor health contributions", () => {
     expect(mocks.runDoctorHealthRepairs).not.toHaveBeenCalled();
   });
 
+=======
+      checks: [{ id: "core/doctor/unrelated" }],
+    });
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("reports runtime tool schema blockers during normal doctor runs", async () => {
     const contribution = requireDoctorContribution("doctor:runtime-tool-schemas");
     mocks.getHealthCheck.mockReturnValue({
@@ -1387,7 +1493,11 @@ describe("doctor health contributions", () => {
       cfgForPersistence: {},
       configPath: "/tmp/fake-openclaw.json",
       env: {},
+<<<<<<< HEAD
     } as unknown as Parameters<(typeof contribution)["run"]>[0];
+=======
+    } as Parameters<(typeof contribution)["run"]>[0];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await contribution.run(ctx);
 

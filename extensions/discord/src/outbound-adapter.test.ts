@@ -345,7 +345,11 @@ describe("discordOutbound", () => {
       2,
     );
     expect(messageOptions.accountId).toBe("default");
+<<<<<<< HEAD
     expect(messageOptions.replyTo).toBe("reply-1");
+=======
+    expect(messageOptions.replyTo).toBeUndefined();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const mediaCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1);
     expect(mediaCall[0]).toBe("channel:123456");
@@ -353,7 +357,11 @@ describe("discordOutbound", () => {
     const mediaOptions = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1, 2);
     expect(mediaOptions.accountId).toBe("default");
     expect(mediaOptions.mediaUrl).toBe("https://example.com/extra.png");
+<<<<<<< HEAD
     expect(mediaOptions.replyTo).toBe("reply-1");
+=======
+    expect(mediaOptions.replyTo).toBeUndefined();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(result).toEqual({
       channel: "discord",
       messageId: "msg-1",
@@ -361,6 +369,7 @@ describe("discordOutbound", () => {
     });
   });
 
+<<<<<<< HEAD
   it("keeps captured replyTo on audioAsVoice sends when replyToMode is batched", async () => {
     await discordOutbound.sendPayload?.({
       cfg: {},
@@ -386,6 +395,8 @@ describe("discordOutbound", () => {
     ).toEqual(["reply-1", "reply-1"]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps replyToId on every internal audioAsVoice send when replyToMode is all", async () => {
     await discordOutbound.sendPayload?.({
       cfg: {},

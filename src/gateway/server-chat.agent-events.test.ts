@@ -34,7 +34,10 @@ vi.mock("./session-utils.js", () => ({
     store: {},
     entry: undefined,
     canonicalKey: "session-1",
+<<<<<<< HEAD
     storeKeys: ["session-1"],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     legacyKey: undefined,
   })),
 }));
@@ -45,7 +48,10 @@ import {
   createAgentEventHandler,
   createChatRunState,
   createSessionEventSubscriberRegistry,
+<<<<<<< HEAD
   createChatAbortMarker,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   createSessionMessageSubscriberRegistry,
   createToolEventRecipientRegistry,
   type AgentEventHandlerOptions,
@@ -61,6 +67,7 @@ describe("agent event handler", () => {
       showAlerts: true,
       useIndicator: true,
     });
+<<<<<<< HEAD
     vi.mocked(loadSessionEntry)
       .mockReset()
       .mockReturnValue({
@@ -72,6 +79,16 @@ describe("agent event handler", () => {
         storeKeys: ["session-1"],
         legacyKey: undefined,
       });
+=======
+    vi.mocked(loadSessionEntry).mockReset().mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      store: {},
+      entry: undefined,
+      canonicalKey: "session-1",
+      legacyKey: undefined,
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
     persistGatewaySessionLifecycleEventMock.mockReset().mockResolvedValue(undefined);
     resetAgentRunContextForTest();
@@ -1497,7 +1514,10 @@ describe("agent event handler", () => {
       store: {},
       entry: { sessionId: "session-1", verboseLevel: "on", updatedAt: 1_500 },
       canonicalKey: "session-1",
+<<<<<<< HEAD
       storeKeys: ["session-1"],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       legacyKey: undefined,
     });
 
@@ -1536,7 +1556,10 @@ describe("agent event handler", () => {
       store: {},
       entry: { sessionId: "session-1", verboseLevel: "off", updatedAt: 1_500 },
       canonicalKey: "session-1",
+<<<<<<< HEAD
       storeKeys: ["session-1"],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       legacyKey: undefined,
     });
 
@@ -2108,7 +2131,10 @@ describe("agent event handler", () => {
         ],
       },
       canonicalKey: "session-recovery",
+<<<<<<< HEAD
       storeKeys: ["session-recovery"],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       legacyKey: undefined,
     });
     const {
@@ -2177,7 +2203,10 @@ describe("agent event handler", () => {
         ],
       },
       canonicalKey: "session-recovery",
+<<<<<<< HEAD
       storeKeys: ["session-recovery"],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       legacyKey: undefined,
     });
     const markTrackedRunTerminalPersisted = vi.fn();
@@ -2268,7 +2297,10 @@ describe("agent event handler", () => {
         restartRecoveryRuns,
       },
       canonicalKey: "session-recovery",
+<<<<<<< HEAD
       storeKeys: ["session-recovery"],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       legacyKey: undefined,
     });
     vi.mocked(loadGatewaySessionRow).mockReturnValue({
@@ -2339,7 +2371,10 @@ describe("agent event handler", () => {
         restartRecoveryRuns,
       },
       canonicalKey: "session-recovery",
+<<<<<<< HEAD
       storeKeys: ["session-recovery"],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       legacyKey: undefined,
     });
     let currentRow = {
@@ -2429,7 +2464,10 @@ describe("agent event handler", () => {
         status: "running",
       },
       canonicalKey: "session-recovery",
+<<<<<<< HEAD
       storeKeys: ["session-recovery"],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       legacyKey: undefined,
     });
     let currentRow = {
@@ -2552,7 +2590,10 @@ describe("agent event handler", () => {
         ],
       },
       canonicalKey: "session-recovery",
+<<<<<<< HEAD
       storeKeys: ["session-recovery"],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       legacyKey: undefined,
     });
     registerAgentRunContext("shared-run", {
@@ -2645,7 +2686,10 @@ describe("agent event handler", () => {
         ],
       },
       canonicalKey: "session-recovery",
+<<<<<<< HEAD
       storeKeys: ["session-recovery"],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       legacyKey: undefined,
     });
     resetAgentRunContextForTest();
@@ -2776,7 +2820,11 @@ describe("agent event handler", () => {
       sessionKey: "session-aborted",
       clientRunId: "client-aborted",
     });
+<<<<<<< HEAD
     chatRunState.abortedRuns.set("client-aborted", createChatAbortMarker());
+=======
+    chatRunState.abortedRuns.set("client-aborted", 1_000);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     handler({
       runId: "run-aborted",
@@ -2791,6 +2839,7 @@ describe("agent event handler", () => {
     expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
   });
 
+<<<<<<< HEAD
   it.each([
     {
       name: "older timestamp",
@@ -2866,6 +2915,8 @@ describe("agent event handler", () => {
     expect(chatRunState.registry.peek("run-current-abort")).toBeUndefined();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps live session setting metadata at the top level for lifecycle updates", async () => {
     vi.mocked(loadGatewaySessionRow).mockReturnValue({
       key: "session-finished",
@@ -3255,7 +3306,11 @@ describe("agent event handler", () => {
       data: { phase: "error", error: "provider failed" },
     });
 
+<<<<<<< HEAD
     expect(chatRunState.registry.peek("run-fallback-retry")).toMatchObject({
+=======
+    expect(chatRunState.registry.peek("run-fallback-retry")).toEqual({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: "session-fallback",
       clientRunId: "run-fallback-client",
     });
@@ -3278,7 +3333,11 @@ describe("agent event handler", () => {
 
     vi.advanceTimersByTime(100);
 
+<<<<<<< HEAD
     expect(chatRunState.registry.peek("run-fallback-retry")).toMatchObject({
+=======
+    expect(chatRunState.registry.peek("run-fallback-retry")).toEqual({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: "session-fallback",
       clientRunId: "run-fallback-client",
     });
@@ -3885,6 +3944,7 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+<<<<<<< HEAD
   it("sends non-control-UI-visible status item events to exact session message subscribers", () => {
     const { broadcast, broadcastToConnIds, nodeSendToSession, sessionMessageSubscribers, handler } =
       createHarness({
@@ -3930,6 +3990,8 @@ describe("agent event handler", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses agent event sessionKey when run-context lookup cannot resolve", () => {
     const { broadcast, handler } = createHarness({
       resolveSessionKeyForRun: () => undefined,

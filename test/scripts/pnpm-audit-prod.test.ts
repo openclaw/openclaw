@@ -26,7 +26,10 @@ describe("pnpm-audit-prod", () => {
     expect(() => parseArgs(["--min-severity", "--audit-level", "critical"])).toThrow(
       "--min-severity requires a value",
     );
+<<<<<<< HEAD
     expect(() => parseArgs(["--min-severity", "-h"])).toThrow("--min-severity requires a value");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(() => parseArgs(["--audit-level="])).toThrow("--audit-level requires a value");
   });
 
@@ -274,6 +277,7 @@ snapshots:
     expect(signal?.aborted).toBe(true);
   });
 
+<<<<<<< HEAD
   it("clamps oversized bulk advisory request timers before scheduling", async () => {
     let signal: AbortSignal | undefined;
     const request = fetchBulkAdvisories({
@@ -340,6 +344,8 @@ snapshots:
     expect(cancelled).toBe(true);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("bounds successful bulk advisory response bodies", async () => {
     let cancelled = false;
     const body = new ReadableStream({
@@ -364,6 +370,7 @@ snapshots:
     expect(cancelled).toBe(true);
   });
 
+<<<<<<< HEAD
   it("streams non-decimal bulk advisory content-length values through the body cap", async () => {
     let readStarted = false;
     let cancelled = false;
@@ -391,6 +398,8 @@ snapshots:
     expect(cancelled).toBe(true);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("fails closed on empty successful bulk advisory response bodies", async () => {
     const request = fetchBulkAdvisories({
       payload: { axios: ["1.0.0"] },

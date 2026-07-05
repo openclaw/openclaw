@@ -29,6 +29,7 @@ function setInstallNumberField<Key extends keyof Omit<InstalledPluginInstallReco
   }
 }
 
+<<<<<<< HEAD
 function setInstallBooleanField<Key extends keyof Omit<InstalledPluginInstallRecordInfo, "source">>(
   target: InstalledPluginInstallRecordInfo,
   key: Key,
@@ -54,6 +55,8 @@ function setInstallStringArrayField<
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function normalizeInstallRecord(
   record: PluginInstallRecord | undefined,
 ): InstalledPluginInstallRecordInfo | undefined {
@@ -78,6 +81,7 @@ function normalizeInstallRecord(
   setInstallStringField(normalized, "clawhubPackage", record.clawhubPackage);
   setInstallStringField(normalized, "clawhubFamily", record.clawhubFamily);
   setInstallStringField(normalized, "clawhubChannel", record.clawhubChannel);
+<<<<<<< HEAD
   setInstallStringField(normalized, "clawhubTrustDisposition", record.clawhubTrustDisposition);
   setInstallStringField(normalized, "clawhubTrustScanStatus", record.clawhubTrustScanStatus);
   setInstallStringField(
@@ -94,6 +98,8 @@ function normalizeInstallRecord(
     "clawhubTrustAcknowledgedAt",
     record.clawhubTrustAcknowledgedAt,
   );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   setInstallStringField(normalized, "artifactKind", record.artifactKind);
   setInstallStringField(normalized, "artifactFormat", record.artifactFormat);
   setInstallStringField(normalized, "npmIntegrity", record.npmIntegrity);

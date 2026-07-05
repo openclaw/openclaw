@@ -83,6 +83,7 @@ async function extractPdfContent(
       return { text, images: [] };
     }
 
+<<<<<<< HEAD
     // clawpdf's image render budget (maxPixels) is shared across every page in one
     // extract() call: the first page consumes it and later pages collapse to 1x1
     // PNGs that vision models reject. Render each page separately, allocating the
@@ -115,6 +116,19 @@ async function extractPdfContent(
         }
       }
       return { text, images };
+=======
+    try {
+      const imageResult = await pdf.extract({
+        mode: "images",
+        ...pageSelection,
+        image: {
+          maxDimension: MAX_RENDER_DIMENSION,
+          maxPixels: request.maxPixels,
+          forms: true,
+        },
+      });
+      return { text, images: imageResult.images.map(toDocumentImage) };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } catch (err) {
       request.onImageExtractionError?.(err);
       return { text, images: [] };

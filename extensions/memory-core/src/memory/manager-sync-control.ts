@@ -2,11 +2,15 @@
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+<<<<<<< HEAD
 import type {
   MemorySessionSyncTarget,
   MemorySyncParams,
   MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+=======
+import type { MemorySyncProgressUpdate } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const log = createSubsystemLogger("memory");
 
@@ -23,7 +27,10 @@ export type MemoryReadonlyRecoveryState = {
   runSync: (params?: {
     reason?: string;
     force?: boolean;
+<<<<<<< HEAD
     sessions?: MemorySessionSyncTarget[];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) => Promise<void>;
@@ -85,7 +92,16 @@ export function extractMemoryErrorReason(err: unknown): string {
 
 export async function runMemorySyncWithReadonlyRecovery(
   state: MemoryReadonlyRecoveryState,
+<<<<<<< HEAD
   params?: MemorySyncParams,
+=======
+  params?: {
+    reason?: string;
+    force?: boolean;
+    sessionFiles?: string[];
+    progress?: (update: MemorySyncProgressUpdate) => void;
+  },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ): Promise<void> {
   try {
     await state.runSync(params);
@@ -121,6 +137,7 @@ export function enqueueMemoryTargetedSessionSync(
     isClosed: () => boolean;
     getSyncing: () => Promise<void> | null;
     getQueuedSessionFiles: () => Set<string>;
+<<<<<<< HEAD
     getQueuedSessions: () => Map<string, MemorySessionSyncTarget>;
     getQueuedSessionSync: () => Promise<void> | null;
     setQueuedSessionSync: (value: Promise<void> | null) => void;
@@ -130,11 +147,27 @@ export function enqueueMemoryTargetedSessionSync(
 ): Promise<void> {
   const queuedSessionFiles = state.getQueuedSessionFiles();
   for (const sessionFile of targets?.sessionFiles ?? []) {
+=======
+    getQueuedSessionSync: () => Promise<void> | null;
+    setQueuedSessionSync: (value: Promise<void> | null) => void;
+    sync: (params?: {
+      reason?: string;
+      force?: boolean;
+      sessionFiles?: string[];
+      progress?: (update: MemorySyncProgressUpdate) => void;
+    }) => Promise<void>;
+  },
+  sessionFiles?: string[],
+): Promise<void> {
+  const queuedSessionFiles = state.getQueuedSessionFiles();
+  for (const sessionFile of sessionFiles ?? []) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const trimmed = sessionFile.trim();
     if (trimmed) {
       queuedSessionFiles.add(trimmed);
     }
   }
+<<<<<<< HEAD
   const queuedSessions = state.getQueuedSessions();
   for (const session of targets?.sessions ?? []) {
     const normalized = normalizeQueuedMemorySessionSyncTarget(session);
@@ -143,6 +176,9 @@ export function enqueueMemoryTargetedSessionSync(
     }
   }
   if (queuedSessionFiles.size === 0 && queuedSessions.size === 0) {
+=======
+  if (queuedSessionFiles.size === 0) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return state.getSyncing() ?? Promise.resolve();
   }
   if (!state.getQueuedSessionSync()) {
@@ -150,6 +186,7 @@ export function enqueueMemoryTargetedSessionSync(
       (async () => {
         try {
           await state.getSyncing()?.catch(() => undefined);
+<<<<<<< HEAD
           while (
             !state.isClosed() &&
             (state.getQueuedSessionFiles().size > 0 || state.getQueuedSessions().size > 0)
@@ -161,6 +198,13 @@ export function enqueueMemoryTargetedSessionSync(
             await state.sync({
               reason: "queued-sessions",
               sessions: pendingSessions,
+=======
+          while (!state.isClosed() && state.getQueuedSessionFiles().size > 0) {
+            const pendingSessionFiles = Array.from(state.getQueuedSessionFiles());
+            state.getQueuedSessionFiles().clear();
+            await state.sync({
+              reason: "queued-session-files",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               sessionFiles: pendingSessionFiles,
             });
           }
@@ -172,6 +216,7 @@ export function enqueueMemoryTargetedSessionSync(
   }
   return state.getQueuedSessionSync() ?? Promise.resolve();
 }
+<<<<<<< HEAD
 
 function normalizeQueuedMemorySessionSyncTarget(
   target: MemorySessionSyncTarget,
@@ -192,3 +237,5 @@ function normalizeQueuedMemorySessionSyncTarget(
 function memorySessionSyncTargetKey(target: MemorySessionSyncTarget): string {
   return [target.agentId ?? "", target.sessionId, target.sessionKey ?? ""].join("\0");
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

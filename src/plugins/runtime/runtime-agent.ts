@@ -12,6 +12,7 @@ import { normalizeThinkLevel, resolveThinkingProfile } from "../../auto-reply/th
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionFilePath, resolveStorePath } from "../../config/sessions/paths.js";
 import {
+<<<<<<< HEAD
   listSessionEntries as listAccessorSessionEntries,
   loadSessionEntry,
   patchSessionEntry as patchAccessorSessionEntry,
@@ -27,10 +28,24 @@ import {
   type ResolvedSessionMaintenanceConfigInput,
 } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+=======
+  listSessionEntries,
+  loadSessionEntry as getSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionStore,
+  patchSessionEntry,
+  saveSessionStore,
+  updateSessionStore,
+  updateSessionStoreEntry,
+  upsertSessionEntry,
+} from "../../config/sessions/store.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import type { PluginRuntime } from "./types.js";
 
+<<<<<<< HEAD
 type RuntimeSessionStoreReadParams = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
@@ -73,6 +88,8 @@ type RuntimeUpsertSessionEntryParams = RuntimeSessionStoreReadParams & {
   entry: SessionEntry;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const loadEmbeddedAgentRuntime = createLazyRuntimeModule(
   () => import("./runtime-embedded-agent.runtime.js"),
 );
@@ -87,6 +104,7 @@ function resolveRuntimeThinkingCatalog(
   return configuredCatalog.length > 0 ? configuredCatalog : undefined;
 }
 
+<<<<<<< HEAD
 function toSessionAccessScope(params: RuntimeSessionStoreReadParams): SessionAccessScope {
   // Keep plugin runtime parameters aligned with the public SDK wrapper while
   // avoiding direct exposure of internal accessor-only options.
@@ -158,6 +176,8 @@ async function upsertSessionEntry(params: RuntimeUpsertSessionEntryParams): Prom
   await replaceSessionEntry(toSessionAccessScope(params), params.entry);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Creates the plugin runtime agent facade with lazy embedded-agent/session helpers. */
 export function createRuntimeAgent(): PluginRuntime["agent"] {
   const agentRuntime = {

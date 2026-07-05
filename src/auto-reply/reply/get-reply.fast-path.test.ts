@@ -663,6 +663,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(result.sessionCtx.SessionKey).toBe("agent:main:main");
   });
 
+<<<<<<< HEAD
   it("preserves usage footer mode during fast reset bootstrap", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fast-reset-usage-"));
     const storePath = path.join(home, "sessions.json");
@@ -692,6 +693,8 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(result.sessionEntry.responseUsage).toBe("full");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("maps explicit gateway origin into command context", () => {
     const command = buildFastReplyCommandContext({
       ctx: buildGetReplyCtx({

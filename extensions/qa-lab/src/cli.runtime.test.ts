@@ -340,8 +340,11 @@ describe("qa cli runtime", () => {
       repoRoot: process.cwd(),
       outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "scenario-test"),
       transportId: "qa-channel",
+<<<<<<< HEAD
       channelDriver: undefined,
       channelDriverSelection: undefined,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       primaryModel: "mock-openai/gpt-5.5",
       alternateModel: undefined,
       fastMode: undefined,
@@ -431,9 +434,14 @@ describe("qa cli runtime", () => {
         repoRoot: "/tmp/openclaw-repo",
         outputDir: ".artifacts/qa-e2e/smoke-ci",
         profile: "smoke-ci",
+<<<<<<< HEAD
         surface: "channel-framework",
         category: "channel-framework.conversation-routing-and-delivery",
         scenarioIds: ["dm-chat-baseline"],
+=======
+        surface: "agent-runtime-and-provider-execution",
+        category: "agent-runtime-and-provider-execution.agent-turn-execution",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         transportId: "qa-channel",
         fastMode: true,
         concurrency: 2,
@@ -445,16 +453,24 @@ describe("qa cli runtime", () => {
         repoRoot: path.resolve("/tmp/openclaw-repo"),
         outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa-e2e/smoke-ci"),
         transportId: "qa-channel",
+<<<<<<< HEAD
         channelDriver: "crabline",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         providerMode: "mock-openai",
         fastMode: true,
         concurrency: 2,
       });
+<<<<<<< HEAD
       expect(suiteArgs.channelDriverSelection).toMatchObject({
         channel: "telegram",
         channelDriver: "crabline",
       });
       expect(suiteArgs.scenarioIds).toEqual(["dm-chat-baseline"]);
+=======
+      expect(suiteArgs.scenarioIds).toEqual(expect.arrayContaining(["dm-chat-baseline"]));
+      expect(suiteArgs.scenarioIds).not.toContain("thinking-slash-model-remap");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
       const evidence = JSON.parse(await fs.readFile(suiteEvidencePath, "utf8")) as {
         evidenceMode?: unknown;
@@ -462,10 +478,17 @@ describe("qa cli runtime", () => {
         profile?: unknown;
         scorecard?: {
           run?: { evidenceEntryCount?: unknown };
+<<<<<<< HEAD
           coverageIds?: { fulfilled?: unknown };
           categoryReports?: Array<{
             id?: unknown;
             coverageIds?: { fulfilled?: unknown };
+=======
+          features?: { fulfilled?: unknown };
+          categoryReports?: Array<{
+            id?: unknown;
+            features?: { fulfilled?: unknown };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             missingCoverageIds?: unknown;
           }>;
         };
@@ -480,11 +503,19 @@ describe("qa cli runtime", () => {
       expect(evidence.scorecard).not.toHaveProperty("kind");
       expect(evidence.scorecard).not.toHaveProperty("taxonomy");
       expect(evidence.scorecard).not.toHaveProperty("profile");
+<<<<<<< HEAD
       expect(evidence.scorecard?.coverageIds?.fulfilled).toBe(1);
       expect(evidence.scorecard?.categoryReports?.[0]).toMatchObject({
         id: "channel-framework.conversation-routing-and-delivery",
         coverageIds: {
           fulfilled: 1,
+=======
+      expect(evidence.scorecard?.features?.fulfilled).toBe(0);
+      expect(evidence.scorecard?.categoryReports?.[0]).toMatchObject({
+        id: "agent-runtime-and-provider-execution.agent-turn-execution",
+        features: {
+          fulfilled: 0,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
       });
       expect(evidence.entries?.[0]).not.toHaveProperty("execution");
@@ -500,6 +531,7 @@ describe("qa cli runtime", () => {
     }
   });
 
+<<<<<<< HEAD
   it("passes non-Crabline profile channel drivers as declarative suite metadata", async () => {
     await runQaProfileCommand({
       repoRoot: "/tmp/openclaw-repo",
@@ -579,6 +611,8 @@ describe("qa cli runtime", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects qa profile runs that do not match taxonomy categories", async () => {
     await expect(
       runQaProfileCommand({
@@ -592,6 +626,7 @@ describe("qa cli runtime", () => {
     expect(runQaSuite).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("rejects qa profile scenario filters outside the selected taxonomy categories", async () => {
     await expect(
       runQaProfileCommand({
@@ -606,13 +641,19 @@ describe("qa cli runtime", () => {
     expect(runQaSuite).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects qa profile runs whose profile is not declared in taxonomy.yaml", async () => {
     await expect(
       runQaProfileCommand({
         repoRoot: "/tmp/openclaw-repo",
         profile: "nightly",
       }),
+<<<<<<< HEAD
     ).rejects.toThrow('--qa-profile must be one of smoke-ci, release, all, got "nightly".');
+=======
+    ).rejects.toThrow('--qa-profile must be one of smoke-ci, release, got "nightly".');
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(runQaSuite).not.toHaveBeenCalled();
   });
 
@@ -632,8 +673,11 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/frontier"),
       transportId: "qa-channel",
+<<<<<<< HEAD
       channelDriver: undefined,
       channelDriverSelection: undefined,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.5",
       alternateModel: "anthropic/claude-sonnet-4-6",
@@ -643,6 +687,7 @@ describe("qa cli runtime", () => {
     });
   });
 
+<<<<<<< HEAD
   it("uses the Crabline default channel when selected scenarios do not request one", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
@@ -695,6 +740,8 @@ describe("qa cli runtime", () => {
     expect(runQaSuite).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("passes explicit suite plugin enablements into the host gateway run", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
@@ -707,8 +754,11 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: undefined,
       transportId: "qa-channel",
+<<<<<<< HEAD
       channelDriver: undefined,
       channelDriverSelection: undefined,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       providerMode: "mock-openai",
       primaryModel: undefined,
       alternateModel: undefined,
@@ -718,6 +768,7 @@ describe("qa cli runtime", () => {
     });
   });
 
+<<<<<<< HEAD
   it("passes explicit suite plugin enablements through to the multipass runner", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
@@ -736,6 +787,8 @@ describe("qa cli runtime", () => {
     expect(runQaSuite).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("passes runtime-pair suite selection through to the host runner", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
@@ -748,8 +801,11 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: undefined,
       transportId: "qa-channel",
+<<<<<<< HEAD
       channelDriver: undefined,
       channelDriverSelection: undefined,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       providerMode: "mock-openai",
       primaryModel: undefined,
       alternateModel: undefined,
@@ -800,8 +856,11 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: undefined,
       transportId: "qa-channel",
+<<<<<<< HEAD
       channelDriver: undefined,
       channelDriverSelection: undefined,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       providerMode: "mock-openai",
       primaryModel: undefined,
       alternateModel: undefined,
@@ -1386,7 +1445,10 @@ describe("qa cli runtime", () => {
 
     expectFields(mockFirstObjectArg(runQaSuite), {
       scenarioIds: [
+<<<<<<< HEAD
         "runtime-long-context-cache-stability",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         "runtime-soak-100-turn",
         "runtime-tool-image-generate",
         "runtime-tool-memory-add",
@@ -2198,8 +2260,11 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: undefined,
       transportId: "qa-channel",
+<<<<<<< HEAD
       channelDriver: undefined,
       channelDriverSelection: undefined,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.5",
       alternateModel: "anthropic/claude-opus-4-8",

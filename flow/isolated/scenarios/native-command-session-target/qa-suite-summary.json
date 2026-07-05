@@ -1,0 +1,74 @@
+{
+  "scenarios": [
+    {
+      "name": "Native command active session target evidence",
+      "status": "fail",
+      "steps": [
+        {
+          "name": "native stop targets the active conversation session",
+          "status": "fail",
+          "details": "timed out after 15000ms"
+        }
+      ],
+      "details": "timed out after 15000ms"
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 0,
+    "failed": 1
+  },
+  "metrics": {
+    "wallMs": 71855,
+    "gatewayProcessCpuMs": 4000,
+    "gatewayCpuCoreRatio": 0.056,
+    "gatewayProcessRssStartBytes": 1001488384,
+    "gatewayProcessRssEndBytes": 451584000,
+    "gatewayProcessRssDeltaBytes": -549904384,
+    "gatewayProcessRssPeakBytes": 1001754624,
+    "gatewayProcessRssPeakDeltaBytes": 266240,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:15:38.874Z",
+        "gatewayProcessRssBytes": 1001488384
+      },
+      {
+        "label": "scenario:native-command-session-target:start",
+        "at": "2026-07-03T13:15:38.899Z",
+        "gatewayProcessRssBytes": 1001754624
+      },
+      {
+        "label": "scenario:native-command-session-target:finish",
+        "at": "2026-07-03T13:16:00.512Z",
+        "gatewayProcessRssBytes": 451579904
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:16:00.636Z",
+        "gatewayProcessRssBytes": 451584000
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:14:48.657Z",
+    "finishedAt": "2026-07-03T13:16:00.512Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "native-command-session-target"
+    ],
+    "runtimePair": null
+  }
+}

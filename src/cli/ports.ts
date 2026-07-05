@@ -3,8 +3,12 @@ import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveLsofCommandSync } from "../infra/ports-lsof.js";
+<<<<<<< HEAD
 import { probePortUsage } from "../infra/ports-probe.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
+=======
+import { tryListenOnPort } from "../infra/ports-probe.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolvePositiveTimerTimeoutMs, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { sleep } from "../utils.js";
 
@@ -131,12 +135,25 @@ function killPortWithFuser(port: number, signal: "SIGTERM" | "SIGKILL"): PortPro
 }
 
 async function isPortBusy(port: number): Promise<boolean> {
+<<<<<<< HEAD
   // Route through probePortUsage which probes all four endpoints
   // (127.0.0.1, 0.0.0.0, ::1, ::) instead of a single hostless bind
   // that defaults to IPv6 wildcard and misses IPv4-only occupants.
   // Treat "unknown" as busy — inconclusive probe failures must not cause
   // forceFreePortAndWait to exit early before lsof/fuser can inspect.
   return (await probePortUsage(port)) !== "free";
+=======
+  try {
+    await tryListenOnPort({ port, exclusive: true });
+    return false;
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EADDRINUSE") {
+      return true;
+    }
+    throw err instanceof Error ? err : new Error(String(err));
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function parseLsofOutput(output: string): PortProcess[] {
@@ -162,9 +179,13 @@ export function parseLsofOutput(output: string): PortProcess[] {
 export function listPortListeners(port: number): PortProcess[] {
   if (process.platform === "win32") {
     try {
+<<<<<<< HEAD
       const out = execFileSync(getWindowsSystem32ExePath("netstat.exe"), ["-ano", "-p", "TCP"], {
         encoding: "utf-8",
       });
+=======
+      const out = execFileSync("netstat", ["-ano", "-p", "TCP"], { encoding: "utf-8" });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const lines = out.split(/\r?\n/).filter(Boolean);
       const results: PortProcess[] = [];
       for (const line of lines) {

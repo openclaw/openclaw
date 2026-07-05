@@ -72,7 +72,10 @@ const mocks = vi.hoisted(() => {
     return skillStatusReportFixture;
   });
   return {
+<<<<<<< HEAD
     callGatewayMock: vi.fn(),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     loadConfigMock: vi.fn(() => ({})),
     resolveDefaultAgentIdMock: vi.fn((_configForTest: unknown) => "main"),
     resolveAgentIdByWorkspacePathMock: vi.fn(
@@ -103,7 +106,10 @@ const mocks = vi.hoisted(() => {
 });
 
 const {
+<<<<<<< HEAD
   callGatewayMock,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   loadConfigMock,
   resolveDefaultAgentIdMock,
   resolveAgentIdByWorkspacePathMock,
@@ -171,10 +177,13 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.defaultRuntime,
 }));
 
+<<<<<<< HEAD
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => mocks.callGatewayMock(...args),
 }));
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.mock("../utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../utils.js")>()),
   CONFIG_DIR: "/tmp/openclaw-config",
@@ -256,7 +265,10 @@ describe("skills cli commands", () => {
     runtimeLogs.length = 0;
     runtimeStdout.length = 0;
     runtimeErrors.length = 0;
+<<<<<<< HEAD
     callGatewayMock.mockReset();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     loadConfigMock.mockReset();
     resolveDefaultAgentIdMock.mockReset();
     resolveAgentIdByWorkspacePathMock.mockReset();
@@ -275,7 +287,10 @@ describe("skills cli commands", () => {
     fetchClawHubSkillCardMock.mockReset();
     buildWorkspaceSkillStatusMock.mockReset();
 
+<<<<<<< HEAD
     callGatewayMock.mockRejectedValue(new Error("gateway unavailable"));
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     loadConfigMock.mockReturnValue({});
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentIdByWorkspacePathMock.mockReturnValue(undefined);
@@ -449,6 +464,7 @@ describe("skills cli commands", () => {
     expect(help).not.toContain("openclaw skills install weather");
   });
 
+<<<<<<< HEAD
   it("documents owner-qualified ClawHub verify refs in command help", () => {
     const skillsCommand = createProgram().commands.find((command) => command.name() === "skills");
     const verifyCommand = skillsCommand?.commands.find((command) => command.name() === "verify");
@@ -467,6 +483,8 @@ describe("skills cli commands", () => {
     expect(help).not.toContain("openclaw skills verify weather");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("installs a skill from a git source into the active workspace", async () => {
     installSkillFromSourceMock.mockResolvedValue({
       ok: true,
@@ -659,6 +677,7 @@ describe("skills cli commands", () => {
     );
   });
 
+<<<<<<< HEAD
   it("passes --acknowledge-clawhub-risk through for ClawHub skill installs", async () => {
     installSkillFromClawHubMock.mockResolvedValue({
       ok: true,
@@ -709,6 +728,8 @@ describe("skills cli commands", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects using --global and --agent together for installs", async () => {
     await expect(
       runCommand(["skills", "install", "calendar", "--global", "--agent", "main"]),
@@ -748,7 +769,10 @@ describe("skills cli commands", () => {
       workspaceDir: "/tmp/workspace",
       slug: undefined,
     });
+<<<<<<< HEAD
     expect(updateAllArgs.config).toEqual({});
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expectLogger(updateAllArgs.logger);
     expect(
       runtimeLogs.some((line) => line.includes("Updated calendar: 1.2.2 -> 1.2.3")),
@@ -757,6 +781,7 @@ describe("skills cli commands", () => {
     expect(runtimeErrors).toStrictEqual([]);
   });
 
+<<<<<<< HEAD
   it("does not bootstrap configured skills during update all", async () => {
     loadConfigMock.mockReturnValueOnce({
       agents: {
@@ -775,6 +800,8 @@ describe("skills cli commands", () => {
     expect(runtimeErrors).toStrictEqual([]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("passes --force-install through for ClawHub skill updates", async () => {
     readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
     updateSkillsFromClawHubMock.mockResolvedValue([
@@ -799,6 +826,7 @@ describe("skills cli commands", () => {
     );
   });
 
+<<<<<<< HEAD
   it("passes --acknowledge-clawhub-risk through for ClawHub skill updates", async () => {
     readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
     updateSkillsFromClawHubMock.mockResolvedValue([
@@ -841,6 +869,8 @@ describe("skills cli commands", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("updates tracked ClawHub skills in the cwd-inferred agent workspace", async () => {
     routeWorkspaceByAgent();
     resolveAgentIdByWorkspacePathMock.mockReturnValue("writer");
@@ -920,7 +950,10 @@ describe("skills cli commands", () => {
       workspaceDir: "/tmp/openclaw-config",
       slug: undefined,
       logger: expect.any(Object),
+<<<<<<< HEAD
       config: {},
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   });
 
@@ -947,7 +980,10 @@ describe("skills cli commands", () => {
       workspaceDir: "/tmp/openclaw-config",
       slug: "calendar",
       logger: expect.any(Object),
+<<<<<<< HEAD
       config: {},
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   });
 
@@ -1045,6 +1081,7 @@ describe("skills cli commands", () => {
     });
   });
 
+<<<<<<< HEAD
   it("passes owner-qualified verify refs and selectors through the resolver", async () => {
     resolveClawHubSkillVerificationTargetMock.mockResolvedValueOnce({
       ok: true,
@@ -1083,6 +1120,8 @@ describe("skills cli commands", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("passes explicit verify selectors and shared workspace options to the resolver", async () => {
     await runCommand(["skills", "verify", "agentreceipt", "--version", "2.0.0", "--global"]);
 
@@ -1372,6 +1411,7 @@ describe("skills cli commands", () => {
     expectStatusWorkspaceCall("/tmp/workspace-writer");
   });
 
+<<<<<<< HEAD
   it("uses gateway skills.status for read-only status commands when reachable", async () => {
     routeWorkspaceByAgent();
     const gatewayReport = {
@@ -1426,6 +1466,8 @@ describe("skills cli commands", () => {
     expect(output.missingRequirements).toEqual([]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.each([
     ["list", ["skills", "list", "--agent", "writer", "--json"]],
     ["info", ["skills", "info", "calendar", "--agent", "writer", "--json"]],

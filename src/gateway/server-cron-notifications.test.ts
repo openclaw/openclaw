@@ -1,5 +1,6 @@
 // Cron notification tests protect completion-delivery warning behavior,
 // including URL redaction for invalid webhook destinations.
+<<<<<<< HEAD
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { CronJob } from "../cron/types.js";
@@ -23,6 +24,14 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     vi.clearAllMocks();
   });
 
+=======
+import { describe, expect, it, vi } from "vitest";
+import type { CliDeps } from "../cli/deps.types.js";
+import type { CronJob } from "../cron/types.js";
+import { dispatchGatewayCronFinishedNotifications } from "./server-cron-notifications.js";
+
+describe("dispatchGatewayCronFinishedNotifications", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("redacts invalid completion webhook targets in warnings", () => {
     const logger = {
       warn: vi.fn(),
@@ -63,6 +72,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       "cron: skipped completion webhook delivery, delivery.completionDestination.to must be a valid http(s) URL",
     );
   });
+<<<<<<< HEAD
 
   it("keeps configured failure destinations from inheriting the primary delivery thread", () => {
     const logger = {
@@ -115,4 +125,6 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       inheritSessionThread: false,
     });
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

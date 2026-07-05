@@ -32,10 +32,13 @@ function escapeHtmlAttr(text: string): string {
   return escapeHtml(text).replace(/"/g, "&quot;");
 }
 
+<<<<<<< HEAD
 function isTelegramRichLinkHref(href: string): boolean {
   return /^(?:https?:\/\/|tg:\/\/|mailto:|tel:|#)/i.test(href);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * File extensions that share TLDs and commonly appear in code/documentation.
  * These are wrapped in <code> tags to prevent Telegram from generating
@@ -55,11 +58,14 @@ function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
   if (link.start === link.end) {
     return null;
   }
+<<<<<<< HEAD
   // Telegram rich links reject local or relative hrefs; keep the label visible
   // instead of letting one unsupported link drop the whole message.
   if (!isTelegramRichLinkHref(href)) {
     return null;
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   // Suppress auto-linkified file references (e.g. README.md → http://README.md)
   const label = text.slice(link.start, link.end);
   if (isAutoLinkedFileRef(href, label)) {
@@ -346,8 +352,11 @@ type TelegramHtmlTagSupport = {
   attrPatterns: ReadonlyMap<string, RegExp>;
 };
 
+<<<<<<< HEAD
 type TelegramTableAlignment = NonNullable<MarkdownTableMeta["aligns"]>[number];
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const TELEGRAM_LEGACY_HTML_TAG_SUPPORT: TelegramHtmlTagSupport = {
   simpleTags: TELEGRAM_SIMPLE_HTML_TAGS,
   attrPatterns: TELEGRAM_ATTR_HTML_TAG_PATTERNS,
@@ -715,7 +724,11 @@ export function renderTelegramHtmlText(
 ): string {
   const textMode = options.textMode ?? "markdown";
   if (textMode === "html") {
+<<<<<<< HEAD
     return escapeUnsupportedTelegramHtmlWithTableFallback(text);
+=======
+    return escapeUnsupportedTelegramHtml(text);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   // markdownToTelegramHtml already wraps file references by default
   return markdownToTelegramHtml(text, { tableMode: options.tableMode });
@@ -729,6 +742,7 @@ export function sanitizeTelegramRichHtml(html: string): string {
   );
 }
 
+<<<<<<< HEAD
 function escapeUnsupportedTelegramHtmlWithTableFallback(html: string): string {
   return escapeUnsupportedTelegramHtml(
     normalizeTelegramLegacyHtmlTables(html),
@@ -767,6 +781,8 @@ function normalizeTelegramLegacyHtmlTables(html: string): string {
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function limitTelegramRichHtmlNesting(html: string, maxDepth: number): string {
   const normalizedMaxDepth = Math.max(1, Math.floor(maxDepth));
   const stack: Array<{ name: string; kept: boolean }> = [];
@@ -974,6 +990,7 @@ function renderTelegramRichHtmlTable(table: MarkdownTableMeta): string {
   }
   const renderCellValue = (cell: MarkdownTableCell | undefined) =>
     cell ? renderTelegramHtml(cell) : "";
+<<<<<<< HEAD
   const renderCell = (
     tag: "td" | "th",
     value: MarkdownTableCell | undefined,
@@ -984,15 +1001,29 @@ function renderTelegramRichHtmlTable(table: MarkdownTableMeta): string {
   };
   const head = table.headers.length
     ? `<thead><tr>${table.headerCells.map((cell, index) => renderCell("th", cell, table.aligns?.[index])).join("")}</tr></thead>`
+=======
+  const renderCell = (tag: "td" | "th", value: MarkdownTableCell | undefined) =>
+    `<${tag}>${renderCellValue(value)}</${tag}>`;
+  const head = table.headers.length
+    ? `<thead><tr>${table.headerCells.map((cell) => renderCell("th", cell)).join("")}</tr></thead>`
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     : "";
   const bodyRows = table.rowCells
     .map(
       (row) =>
+<<<<<<< HEAD
         `<tr>${Array.from({ length: columnCount }, (_value, index) => renderCell("td", row[index], table.aligns?.[index])).join("")}</tr>`,
     )
     .join("");
   const body = bodyRows ? `<tbody>${bodyRows}</tbody>` : "";
   return `<table bordered striped>${head}${body}</table>\n\n`;
+=======
+        `<tr>${Array.from({ length: columnCount }, (_value, index) => renderCell("td", row[index])).join("")}</tr>`,
+    )
+    .join("");
+  const body = bodyRows ? `<tbody>${bodyRows}</tbody>` : "";
+  return `<table>${head}${body}</table>\n\n`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function renderTelegramRichHtmlDocument(
@@ -1024,6 +1055,7 @@ function renderTelegramRichHtmlDocument(
   );
 }
 
+<<<<<<< HEAD
 function convertTelegramRichSegmentNewlines(
   segment: string,
   prevStructural: boolean,
@@ -1120,6 +1152,8 @@ export function materializeTelegramRichHtmlLineBreaks(html: string): string {
   return result;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function markdownToTelegramRichHtml(
   markdown: string,
   options: { tableMode?: MarkdownTableMode; skipEntityDetection?: boolean } = {},

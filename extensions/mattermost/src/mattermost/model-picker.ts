@@ -7,7 +7,11 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+<<<<<<< HEAD
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+=======
+import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
@@ -237,13 +241,18 @@ export function resolveMattermostModelPickerCurrentModel(params: {
   cfg: OpenClawConfig;
   route: { agentId: string; sessionKey: string };
   data: ModelsProviderData;
+<<<<<<< HEAD
   readConsistency?: "latest";
+=======
+  skipCache?: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }): string {
   const fallback = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
   try {
     const storePath = resolveStorePath(params.cfg.session?.store, {
       agentId: params.route.agentId,
     });
+<<<<<<< HEAD
     const sessionEntry = getSessionEntry({
       storePath,
       sessionKey: params.route.sessionKey,
@@ -259,6 +268,16 @@ export function resolveMattermostModelPickerCurrentModel(params: {
         }),
       sessionKey: params.route.sessionKey,
       parentSessionKey: sessionEntry?.parentSessionKey,
+=======
+    const sessionStore = params.skipCache
+      ? loadSessionStore(storePath, { skipCache: true })
+      : loadSessionStore(storePath);
+    const sessionEntry = sessionStore[params.route.sessionKey];
+    const override = resolveStoredModelOverride({
+      sessionEntry,
+      sessionStore,
+      sessionKey: params.route.sessionKey,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       defaultProvider: params.data.resolvedDefault.provider,
     });
     if (!override?.model) {

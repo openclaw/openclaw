@@ -20,7 +20,10 @@ import { isMatrixDeviceOwnerVerified } from "./verification-status.js";
 export type MatrixCryptoBootstrapperDeps<TRawEvent extends MatrixRawEvent> = {
   getUserId: () => Promise<string>;
   getPassword?: () => string | undefined;
+<<<<<<< HEAD
   canUnlockSecretStorage: () => Promise<boolean>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   getDeviceId: () => string | null | undefined;
   verificationManager: MatrixVerificationManager;
   recoveryKeyStore: MatrixRecoveryKeyStore;
@@ -52,6 +55,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     options: MatrixCryptoBootstrapOptions = {},
   ): Promise<MatrixCryptoBootstrapResult> {
     const strict = options.strict === true;
+<<<<<<< HEAD
     const forceReset = options.forceResetCrossSigning === true;
     const deferSecretStorageBootstrapUntilAfterCrossSigning = forceReset;
     if (forceReset && !(await this.deps.canUnlockSecretStorage())) {
@@ -63,6 +67,13 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     // are not missed during startup.
     this.registerVerificationRequestHandler(crypto);
 
+=======
+    const deferSecretStorageBootstrapUntilAfterCrossSigning =
+      options.forceResetCrossSigning === true;
+    // Register verification listeners before expensive bootstrap work so incoming requests
+    // are not missed during startup.
+    this.registerVerificationRequestHandler(crypto);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!deferSecretStorageBootstrapUntilAfterCrossSigning) {
       await this.bootstrapSecretStorage(crypto, {
         strict,
@@ -70,6 +81,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
           options.allowSecretStorageRecreateWithoutRecoveryKey === true,
       });
     }
+<<<<<<< HEAD
 
     const crossSigning = await this.bootstrapCrossSigning(crypto, {
       forceResetCrossSigning: forceReset,
@@ -91,12 +103,36 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     }
 
     // Second SSSS pass to pick up cross-signing keys published during bootstrap.
+=======
+    let crossSigning = await this.bootstrapCrossSigning(crypto, {
+      forceResetCrossSigning: options.forceResetCrossSigning === true,
+      allowAutomaticCrossSigningReset: options.allowAutomaticCrossSigningReset !== false,
+      allowSecretStorageRecreateWithoutRecoveryKey:
+        options.allowSecretStorageRecreateWithoutRecoveryKey === true,
+      strict,
+    });
+    // Forced repair may need password UIA to upload new cross-signing keys. Delay any
+    // secret-storage repair/recreation until after that step succeeds so passwordless bots do
+    // not partially mutate SSSS on homeservers that require password-based UIA.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await this.bootstrapSecretStorage(crypto, {
       strict,
       allowSecretStorageRecreateWithoutRecoveryKey:
         options.allowSecretStorageRecreateWithoutRecoveryKey === true,
     });
+<<<<<<< HEAD
 
+=======
+    if (deferSecretStorageBootstrapUntilAfterCrossSigning) {
+      crossSigning = await this.bootstrapCrossSigning(crypto, {
+        forceResetCrossSigning: false,
+        allowAutomaticCrossSigningReset: false,
+        allowSecretStorageRecreateWithoutRecoveryKey:
+          options.allowSecretStorageRecreateWithoutRecoveryKey === true,
+        strict,
+      });
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const ownDeviceVerified = await this.ensureOwnDeviceTrust(crypto, {
       strict,
     });
@@ -244,12 +280,15 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
         }
         LogService.warn("MatrixClientLite", "Forced cross-signing reset failed:", err);
         if (options.strict) {
+<<<<<<< HEAD
           if (isRepairableSecretStorageAccessError(err)) {
             throw new Error(
               "Forced cross-signing reset cannot access secret storage; restore the Matrix recovery key before retrying",
               { cause: err },
             );
           }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           throw err instanceof Error ? err : new Error(String(err));
         }
         return { ready: false, published: false };

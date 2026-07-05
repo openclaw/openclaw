@@ -2,7 +2,10 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
+<<<<<<< HEAD
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import {
   expectAugmentedCodexCatalog,
@@ -749,22 +752,47 @@ describe("provider-runtime", () => {
       auth: [],
     };
     const config = {} as OpenClawConfig;
+<<<<<<< HEAD
     const envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME"]);
     try {
       setTestEnvValue("HOME", "/home/one");
       deleteTestEnvValue("OPENCLAW_HOME");
+=======
+    const originalHome = process.env.HOME;
+    const originalOpenClawHome = process.env.OPENCLAW_HOME;
+    try {
+      process.env.HOME = "/home/one";
+      delete process.env.OPENCLAW_HOME;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       resolvePluginProvidersMock.mockReturnValueOnce([firstProvider]);
       expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID, config })).toBe(
         firstProvider,
       );
 
+<<<<<<< HEAD
       setTestEnvValue("HOME", "/home/two");
+=======
+      process.env.HOME = "/home/two";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       resolvePluginProvidersMock.mockReturnValueOnce([secondProvider]);
       expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID, config })).toBe(
         secondProvider,
       );
     } finally {
+<<<<<<< HEAD
       envSnapshot.restore();
+=======
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      if (originalOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = originalOpenClawHome;
+      }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
 
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);

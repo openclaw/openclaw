@@ -11,9 +11,12 @@ scenario:
       - tools.message
       - channels.webchat
   objective: Verify a current-chat reply is delivered as assistant text, not by calling `message(action=send)` and ending with `Sent.`.
+<<<<<<< HEAD
   gatewayConfigPatch:
     session:
       dmScope: per-channel-peer
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   successCriteria:
     - The visible outbound reply contains the requested marker exactly once.
     - The session transcript does not include a `message(action=send)` call followed by final assistant text `Sent.`.
@@ -27,9 +30,13 @@ scenario:
     kind: flow
     summary: Run a direct current-chat reply and inspect the actual transcript for self-message routing.
     config:
+<<<<<<< HEAD
       conversationId: qa-operator
       expectedMarker: WEBCHAT-DIRECT-REPLY-OK
       promptSnippet: Reply exactly
+=======
+      expectedMarker: WEBCHAT-DIRECT-REPLY-OK
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 flow:
   steps:
@@ -44,6 +51,7 @@ flow:
             - ref: env
             - 60000
         - call: reset
+<<<<<<< HEAD
         - set: conversationId
           value:
             expr: config.conversationId
@@ -94,6 +102,33 @@ flow:
                   expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBefore).map((request) => ({ plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null, allInputText: String(request.allInputText ?? '').slice(0, 400), finalText: String(request.finalText ?? '').slice(0, 200), toolOutput: request.toolOutput ? String(request.toolOutput).slice(0, 200) : null })) : []"
               - throw:
                   expr: "`direct reply marker missing: ${directReplyError?.message ?? directReplyError}; transcript=${formatTransportTranscript(state, { conversationId })}; requests=${JSON.stringify(directReplyDebugRequests)}`"
+=======
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:webchat-direct-reply:${randomUUID().slice(0, 8)}`"
+        - set: startIndex
+          value:
+            expr: state.getSnapshot().messages.length
+        - call: runAgentPrompt
+          args:
+            - ref: env
+            - sessionKey:
+                ref: sessionKey
+              message:
+                expr: "`Reply directly in this current chat with exactly ${config.expectedMarker}. Do not call the message tool.`"
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 60000)
+        - call: waitForOutboundMessage
+          saveAs: outbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === 'qa-operator' && normalizeLowercaseStringOrEmpty(candidate.text).includes(normalizeLowercaseStringOrEmpty(config.expectedMarker))"
+            - expr: liveTurnTimeoutMs(env, 30000)
+            - sinceIndex:
+                ref: startIndex
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         - set: transcriptSummary
           value:
             expr: "await readSessionTranscriptSummary(env, sessionKey)"

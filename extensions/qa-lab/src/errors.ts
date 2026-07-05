@@ -34,6 +34,7 @@ export class QaSuiteInfraError extends Error {
     this.code = code;
   }
 }
+<<<<<<< HEAD
 
 export function toQaErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
@@ -48,3 +49,5 @@ export function toQaErrorObject(value: unknown, fallbackMessage: string): Error 
   }
   return error;
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

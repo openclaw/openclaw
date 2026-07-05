@@ -54,6 +54,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
 
 function releasedJson(value: unknown) {
   return {
+<<<<<<< HEAD
     response: new Response(JSON.stringify(value), {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -79,6 +80,12 @@ function releasedOversizedJsonStream() {
     }),
     release: vi.fn(async () => {}),
     wasCanceled: () => canceled,
+=======
+    response: {
+      json: async () => value,
+    },
+    release: vi.fn(async () => {}),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }
 
@@ -313,6 +320,7 @@ describe("openrouter video generation provider", () => {
     });
   });
 
+<<<<<<< HEAD
   it("cancels oversized OpenRouter video catalog success bodies", async () => {
     const oversized = releasedOversizedJsonStream();
     fetchWithTimeoutGuardedMock.mockResolvedValueOnce(oversized);
@@ -347,6 +355,8 @@ describe("openrouter video generation provider", () => {
     expect(oversized.release).toHaveBeenCalledOnce();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("skips live OpenRouter video catalog discovery without an API key", async () => {
     await expect(
       listOpenRouterVideoModelCatalog({

@@ -446,6 +446,7 @@ describe("commands registry", () => {
     expect(fast.textAliases).toEqual(["/fast"]);
     expect(fast.category).toBe("options");
     const modeArg = requireCommandArg(fast, "mode");
+<<<<<<< HEAD
     expect(typeof modeArg.choices).toBe("function");
     const menu = requireCommandArgMenu({
       command: fast,
@@ -472,6 +473,9 @@ describe("commands registry", () => {
       { label: "default", value: "default" },
       { label: "status", value: "status" },
     ]);
+=======
+    expect(modeArg.choices).toEqual(["status", "on", "off", "default"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("detects known text commands", () => {
@@ -765,13 +769,24 @@ describe("commands registry args", () => {
     expect(seenChoice.catalogLength).toBe(0);
   });
 
+<<<<<<< HEAD
   it.each([
     {
       source: "configured",
+=======
+  it("uses configured model catalog reasoning for /think arg menus", () => {
+    installOllamaThinkingProvider();
+    const command = requireNativeCommand("think");
+
+    const menu = requireCommandArgMenu({
+      command,
+      args: undefined,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       cfg: {
         models: {
           providers: {
             ollama: {
+<<<<<<< HEAD
               models: [{ id: "glm-5.2:cloud", name: "GLM 5.2 Cloud", reasoning: true }],
             },
           },
@@ -796,6 +811,15 @@ describe("commands registry args", () => {
       provider: "ollama",
       model: "glm-5.2:cloud",
       catalog,
+=======
+              models: [{ id: "glm-5.1:cloud", name: "GLM 5.1 Cloud", reasoning: true }],
+            },
+          },
+        },
+      } as never,
+      provider: "ollama",
+      model: "glm-5.1:cloud",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     expect(menu.arg.name).toBe("level");

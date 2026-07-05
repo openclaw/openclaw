@@ -85,6 +85,7 @@ export function consumeGatewayFastPathRootOptionToken(
   return 0;
 }
 
+<<<<<<< HEAD
 function resolveGatewayCommandStart(argv: string[]): {
   args: string[];
   startIndex: number;
@@ -120,6 +121,35 @@ export function resolveGatewayCatalogCommandPath(argv: string[]): string[] | nul
       break;
     }
     const consumed = consumeGatewayRunOptionToken(gateway.args, index);
+=======
+/** Resolve the gateway command path from raw argv for catalog/policy lookups. */
+export function resolveGatewayCatalogCommandPath(argv: string[]): string[] | null {
+  const args = argv.slice(2);
+  let sawGateway = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === "--") {
+      break;
+    }
+    if (!sawGateway) {
+      const consumed = consumeRootOptionToken(args, index);
+      if (consumed > 0) {
+        index += consumed - 1;
+        continue;
+      }
+      if (arg.startsWith("-")) {
+        continue;
+      }
+      if (arg !== "gateway") {
+        return null;
+      }
+      sawGateway = true;
+      continue;
+    }
+
+    const consumed = consumeGatewayRunOptionToken(args, index);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (consumed > 0) {
       index += consumed - 1;
       continue;
@@ -130,13 +160,18 @@ export function resolveGatewayCatalogCommandPath(argv: string[]): string[] | nul
     return ["gateway", arg];
   }
 
+<<<<<<< HEAD
   return ["gateway"];
+=======
+  return sawGateway ? ["gateway"] : null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /** Resolve destructive gateway-run flags before Commander registration. */
 export function resolveGatewayRunPreBootstrapOptions(
   argv: string[],
 ): { force: boolean; reset: boolean } | null {
+<<<<<<< HEAD
   const gateway = resolveGatewayCommandStart(argv);
   if (!gateway) {
     return null;
@@ -150,11 +185,43 @@ export function resolveGatewayRunPreBootstrapOptions(
     if (!arg || arg === "--") {
       break;
     }
+=======
+  const args = argv.slice(2);
+  let force = false;
+  let reset = false;
+  let sawGateway = false;
+  let sawRun = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === "--") {
+      break;
+    }
+    if (!sawGateway) {
+      const consumed = consumeRootOptionToken(args, index);
+      if (consumed > 0) {
+        index += consumed - 1;
+        continue;
+      }
+      if (arg.startsWith("-")) {
+        continue;
+      }
+      if (arg !== "gateway") {
+        return null;
+      }
+      sawGateway = true;
+      continue;
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!sawRun && arg === "run") {
       sawRun = true;
       continue;
     }
+<<<<<<< HEAD
     const consumed = consumeGatewayRunPreBootstrapOptionToken(gateway.args, index);
+=======
+    const consumed = consumeGatewayRunPreBootstrapOptionToken(args, index);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (consumed > 0) {
       if (arg === "--force") {
         force = true;
@@ -174,5 +241,9 @@ export function resolveGatewayRunPreBootstrapOptions(
     }
   }
 
+<<<<<<< HEAD
   return { force, reset };
+=======
+  return sawGateway ? { force, reset } : null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }

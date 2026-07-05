@@ -10,7 +10,10 @@ import {
   writePersistedInstalledPluginIndex,
 } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
+<<<<<<< HEAD
 import { markRetainedManagedNpmInstall } from "../plugins/managed-npm-retention.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
 import { maybeRepairPluginRegistryState } from "./doctor-plugin-registry.js";
 import { DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV } from "./doctor/shared/plugin-registry-migration.js";
@@ -434,6 +437,7 @@ describe("maybeRepairPluginRegistryState", () => {
     );
   });
 
+<<<<<<< HEAD
   it("does not remove retained managed npm packages during stale bundled repair", async () => {
     const stateDir = makeTempDir();
     const bundledDir = path.join(stateDir, "bundled", "google-meet");
@@ -483,6 +487,8 @@ describe("maybeRepairPluginRegistryState", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("removes recovered npm install records when a managed package shadows a bundled plugin", async () => {
     const stateDir = makeTempDir();
     const bundledDir = path.join(stateDir, "bundled", "google-meet");

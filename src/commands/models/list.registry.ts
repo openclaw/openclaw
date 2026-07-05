@@ -12,6 +12,11 @@ import {
   MODEL_AVAILABILITY_UNAVAILABLE_CODE,
   shouldFallbackToAuthHeuristics,
 } from "./list.errors.js";
+<<<<<<< HEAD
+=======
+import { toModelRow as toModelRowBase } from "./list.model-row.js";
+import type { ModelRow } from "./list.types.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { modelKey } from "./shared.js";
 
 function createAvailabilityUnavailableError(message: string): Error {
@@ -138,3 +143,11 @@ export async function loadModelRegistry(
   }
   return { registry, models, availableKeys, availabilityErrorMessage };
 }
+<<<<<<< HEAD
+=======
+
+/** Compatibility wrapper around the shared model-row builder. */
+export function toModelRow(params: Parameters<typeof toModelRowBase>[0]): ModelRow {
+  return toModelRowBase(params);
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

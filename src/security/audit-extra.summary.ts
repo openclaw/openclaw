@@ -1,4 +1,5 @@
 // Summarizes extra security audit findings for user-facing output.
+<<<<<<< HEAD
 import {
   resolveConfiguredToolPolicies,
   resolveProviderToolPolicy,
@@ -7,12 +8,25 @@ import { parseModelRef } from "../agents/model-selection-normalize.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
+=======
+import { resolveProviderToolPolicy } from "../agents/agent-tools.policy.js";
+import { parseModelRef } from "../agents/model-selection-normalize.js";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
+import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
+import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
+import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
+import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { hasConfiguredWebSearchCredential } from "../plugins/web-search-credential-presence.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
+<<<<<<< HEAD
+=======
+import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Lightweight audit finding shape used by summary-only audit helpers. */
 export type SecurityAuditFinding = {
@@ -67,16 +81,44 @@ function resolveToolPolicies(params: {
   modelProvider?: string;
   modelId?: string;
 }): SandboxToolPolicy[] {
+<<<<<<< HEAD
+=======
+  const policies: SandboxToolPolicy[] = [];
+  const profile = params.agentTools?.profile ?? params.cfg.tools?.profile;
+  const profilePolicy = resolveToolProfilePolicy(profile);
+  if (profilePolicy) {
+    policies.push(profilePolicy);
+  }
+
+  const globalPolicy = pickSandboxToolPolicy(params.cfg.tools ?? undefined);
+  if (globalPolicy) {
+    policies.push(globalPolicy);
+  }
+
+  const agentPolicy = pickSandboxToolPolicy(params.agentTools);
+  if (agentPolicy) {
+    policies.push(agentPolicy);
+  }
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const globalProviderPolicy = resolveProviderToolPolicy({
     byProvider: params.cfg.tools?.byProvider,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
+<<<<<<< HEAD
+=======
+  if (globalProviderPolicy) {
+    policies.push(globalProviderPolicy);
+  }
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const agentProviderPolicy = resolveProviderToolPolicy({
     byProvider: params.agentTools?.byProvider,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
+<<<<<<< HEAD
   return resolveConfiguredToolPolicies({
     cfg: params.cfg,
     agentTools: params.agentTools,
@@ -84,6 +126,17 @@ function resolveToolPolicies(params: {
     agentId: params.agentId,
     extraPolicies: [globalProviderPolicy, agentProviderPolicy],
   });
+=======
+  if (agentProviderPolicy) {
+    policies.push(agentProviderPolicy);
+  }
+
+  if (params.sandboxMode === "all") {
+    policies.push(resolveSandboxToolPolicyForAgent(params.cfg, params.agentId ?? undefined));
+  }
+
+  return policies;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {

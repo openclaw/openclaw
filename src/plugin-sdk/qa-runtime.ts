@@ -249,11 +249,15 @@ export type QaDockerRunCommand = (
 ) => Promise<{ stdout: string; stderr: string }>;
 
 /** Minimal fetch-like health probe used by QA Docker runtime helpers. */
+<<<<<<< HEAD
 export type QaDockerFetchResponse = {
   ok: boolean;
   body?: { cancel?: () => unknown } | null;
 };
 export type QaDockerFetchLike = (input: string) => Promise<QaDockerFetchResponse>;
+=======
+export type QaDockerFetchLike = (input: string) => Promise<{ ok: boolean }>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const DEFAULT_QA_DOCKER_COMMAND_TIMEOUT_MS = 120_000;
 
@@ -488,6 +492,7 @@ function parseDockerComposePsRows(stdout: string) {
 }
 
 async function isQaDockerHealthy(url: string, fetchImpl: QaDockerFetchLike) {
+<<<<<<< HEAD
   let response: QaDockerFetchResponse | undefined;
   try {
     response = await fetchImpl(url);
@@ -505,6 +510,16 @@ async function releaseQaDockerFetchResponse(response: QaDockerFetchResponse | un
   } catch {}
 }
 
+=======
+  try {
+    const response = await fetchImpl(url);
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Create Docker command, health-check, and compose helpers for QA harnesses. */
 export function createQaDockerRuntime(params: {
   auditContext: string;
@@ -561,17 +576,25 @@ export function createQaDockerRuntime(params: {
     let lastError: unknown = null;
 
     while (Date.now() < deadline) {
+<<<<<<< HEAD
       let response: QaDockerFetchResponse | undefined;
       try {
         response = await deps.fetchImpl(url);
+=======
+      try {
+        const response = await deps.fetchImpl(url);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         if (response.ok) {
           return;
         }
         lastError = new Error(`Health check returned non-OK for ${url}`);
       } catch (error) {
         lastError = error;
+<<<<<<< HEAD
       } finally {
         await releaseQaDockerFetchResponse(response);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
       await deps.sleepImpl(pollMs);
     }

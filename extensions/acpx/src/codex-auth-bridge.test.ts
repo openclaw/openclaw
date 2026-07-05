@@ -251,6 +251,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(wrapper).not.toMatch(
       /forceKillTimer = setTimeout\(\(\) => killChildTree\("SIGKILL"\), 1_500\);\s*forceKillTimer\.unref\?\.\(\);\s*process\.exit\(1\);/s,
     );
+<<<<<<< HEAD
     // Orphan detection must trigger on any PPID change, not only when the new
     // PPID is init (1). Systemd user services and container init reparent
     // orphaned processes to a session manager or container init (PID != 1),
@@ -260,6 +261,8 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(wrapper).toMatch(
       /setInterval\(\(\) => \{[\s\S]*?if \(process\.ppid === originalParentPid\) \{\s*return;\s*\}/,
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("uses the bundled Claude ACP dependency by default when it is installed", async () => {

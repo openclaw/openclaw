@@ -1,6 +1,9 @@
 // Model-backed image understanding runtime for providers without a native media
 // provider hook.
+<<<<<<< HEAD
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import {
@@ -431,7 +434,14 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
 }
 
 function resolveImageDescriptionTimeoutMs(timeoutMs: number | undefined) {
+<<<<<<< HEAD
   return clampPositiveTimerTimeoutMs(timeoutMs);
+=======
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return undefined;
+  }
+  return Math.floor(timeoutMs);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function buildImageDescriptionTimeoutError(params: {
@@ -602,8 +612,28 @@ async function describeImagesWithModelInternal(
   return { text, model: model.id };
 }
 
+<<<<<<< HEAD
 function toImagesDescriptionRequest(params: ImageDescriptionRequest): ImagesDescriptionRequest {
   return {
+=======
+export async function describeImagesWithModel(
+  params: ImagesDescriptionRequest,
+): Promise<ImagesDescriptionResult> {
+  return await describeImagesWithModelInternal(params);
+}
+
+export async function describeImagesWithModelPayloadTransform(
+  params: ImagesDescriptionRequest,
+  onPayload: ProviderStreamOptions["onPayload"],
+): Promise<ImagesDescriptionResult> {
+  return await describeImagesWithModelInternal(params, { onPayload });
+}
+
+export async function describeImageWithModel(
+  params: ImageDescriptionRequest,
+): Promise<ImageDescriptionResult> {
+  return await describeImagesWithModel({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     images: [
       {
         buffer: params.buffer,
@@ -622,6 +652,7 @@ function toImagesDescriptionRequest(params: ImageDescriptionRequest): ImagesDesc
     agentDir: params.agentDir,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     cfg: params.cfg,
+<<<<<<< HEAD
   };
 }
 
@@ -642,6 +673,9 @@ export async function describeImageWithModel(
   params: ImageDescriptionRequest,
 ): Promise<ImageDescriptionResult> {
   return await describeImagesWithModel(toImagesDescriptionRequest(params));
+=======
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export async function describeImageWithModelPayloadTransform(
@@ -649,7 +683,30 @@ export async function describeImageWithModelPayloadTransform(
   onPayload: ProviderStreamOptions["onPayload"],
 ): Promise<ImageDescriptionResult> {
   return await describeImagesWithModelPayloadTransform(
+<<<<<<< HEAD
     toImagesDescriptionRequest(params),
+=======
+    {
+      images: [
+        {
+          buffer: params.buffer,
+          fileName: params.fileName,
+          mime: params.mime,
+        },
+      ],
+      model: params.model,
+      provider: params.provider,
+      prompt: params.prompt,
+      maxTokens: params.maxTokens,
+      timeoutMs: params.timeoutMs,
+      profile: params.profile,
+      preferredProfile: params.preferredProfile,
+      authStore: params.authStore,
+      agentDir: params.agentDir,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      cfg: params.cfg,
+    },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     onPayload,
   );
 }

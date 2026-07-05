@@ -31,6 +31,10 @@ import {
   isJobEnabled,
   isJobDue,
   nextWakeAtMs,
+<<<<<<< HEAD
+=======
+  recomputeNextRuns,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   recomputeNextRunsForMaintenance,
 } from "./jobs.js";
 import type {
@@ -86,7 +90,11 @@ function clearManualCronJobActive(
   state.activeManualRunJobIds.delete(jobId);
   clearCronJobActive(jobId, activeJobMarker);
   if (state.activeManualRunJobIds.size === 0) {
+<<<<<<< HEAD
     state.manualSetupTimeoutNotified = false;
+=======
+    state.manualSetupTimeoutRestartNotified = false;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 
@@ -98,11 +106,19 @@ function maybeNotifyManualIsolatedSetupTimeout(
     isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
   },
 ): boolean {
+<<<<<<< HEAD
   if (!result.isolatedAgentSetupTimeout || state.manualSetupTimeoutNotified) {
     return false;
   }
   const notified = maybeNotifyIsolatedAgentSetupTimeout(state, result);
   state.manualSetupTimeoutNotified ||= notified;
+=======
+  if (!result.isolatedAgentSetupTimeout || state.manualSetupTimeoutRestartNotified) {
+    return false;
+  }
+  const notified = maybeNotifyIsolatedAgentSetupTimeout(state, result);
+  state.manualSetupTimeoutRestartNotified ||= notified;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return notified;
 }
 
@@ -478,11 +494,20 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
 export async function add(state: CronServiceState, input: CronJobCreate) {
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
+<<<<<<< HEAD
     await ensureLoaded(state, { skipRecompute: true });
     const job = createJob(state, input);
     state.store?.jobs.push(job);
 
     recomputeNextRunsForMaintenance(state);
+=======
+    await ensureLoaded(state);
+    const job = createJob(state, input);
+    state.store?.jobs.push(job);
+
+    // Defensive: recompute all next-run times to ensure consistency
+    recomputeNextRuns(state);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await persist(state);
     armTimer(state);
@@ -579,7 +604,11 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
 export async function remove(state: CronServiceState, id: string) {
   return await locked(state, async () => {
     warnIfDisabled(state, "remove");
+<<<<<<< HEAD
     await ensureLoaded(state, { skipRecompute: true });
+=======
+    await ensureLoaded(state);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const before = state.store?.jobs.length ?? 0;
     if (!state.store) {
       return { ok: false, removed: false } as const;
@@ -587,9 +616,12 @@ export async function remove(state: CronServiceState, id: string) {
     const removedJob = state.store.jobs.find((j) => j.id === id);
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = (state.store.jobs.length ?? 0) !== before;
+<<<<<<< HEAD
 
     recomputeNextRunsForMaintenance(state);
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await persist(state);
     armTimer(state);
     if (removed) {

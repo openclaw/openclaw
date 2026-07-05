@@ -20,10 +20,13 @@ import {
   stripSystemPromptCacheBoundary,
 } from "../../agents/system-prompt-cache-boundary.js";
 import {
+<<<<<<< HEAD
   omitFoundryBearerCredentialHeaders,
   usesFoundryBearerAuth,
 } from "../../shared/anthropic-auth-headers.js";
 import {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveClaudeNativeThinkingLevelMap,
   requiresClaudeAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
@@ -65,7 +68,10 @@ import {
   ANTHROPIC_OMITTED_REASONING_TEXT,
   findActiveAnthropicToolTurnAssistantIndex,
 } from "./anthropic-thinking-replay.js";
+<<<<<<< HEAD
 import { resolveCacheRetention } from "./cache-retention.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.js";
@@ -73,6 +79,23 @@ import { transformMessages } from "./transform-messages.js";
 
 const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
 
+<<<<<<< HEAD
+=======
+/**
+ * Resolve cache retention preference.
+ * Defaults to "short" and uses OPENCLAW_CACHE_RETENTION for backward compatibility.
+ */
+function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention {
+  if (cacheRetention) {
+    return cacheRetention;
+  }
+  if (typeof process !== "undefined" && process.env.OPENCLAW_CACHE_RETENTION === "long") {
+    return "long";
+  }
+  return "short";
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function getCacheControl(
   model: Model<"anthropic-messages">,
   cacheRetention?: CacheRetention,
@@ -250,6 +273,42 @@ function mergeHeaders(
   return merged;
 }
 
+<<<<<<< HEAD
+=======
+function hasBearerAuthorizationHeader(headers?: Record<string, string>): boolean {
+  if (!headers) {
+    return false;
+  }
+  return Object.entries(headers).some(
+    ([key, value]) => key.toLowerCase() === "authorization" && /^bearer\s+\S+/i.test(value.trim()),
+  );
+}
+
+function usesFoundryBearerAuth(model: Model<"anthropic-messages">): boolean {
+  return (
+    model.provider === "microsoft-foundry" &&
+    (model.authHeader === true || hasBearerAuthorizationHeader(model.headers))
+  );
+}
+
+function omitFoundryBearerCredentialHeaders(
+  headers?: Record<string, string>,
+): Record<string, string> | undefined {
+  if (!headers) {
+    return undefined;
+  }
+  const next: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    const lower = key.toLowerCase();
+    if (lower === "authorization" || lower === "x-api-key" || lower === "api-key") {
+      continue;
+    }
+    next[key] = value;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 interface ServerSentEvent {
   event: string | null;
   data: string;
@@ -536,7 +595,10 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         index: number;
       };
       const blocks = output.content as Block[];
+<<<<<<< HEAD
       const blockIndexes = new Map<number, number>();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       for await (const event of iterateAnthropicEvents(
         response,
@@ -569,7 +631,10 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               index: event.index,
             };
             output.content.push(block);
+<<<<<<< HEAD
             blockIndexes.set(event.index, output.content.length - 1);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             eventSink.push({
               type: "text_start",
               contentIndex: output.content.length - 1,
@@ -583,7 +648,10 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               index: event.index,
             };
             output.content.push(block);
+<<<<<<< HEAD
             blockIndexes.set(event.index, output.content.length - 1);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             eventSink.push({
               type: "thinking_start",
               contentIndex: output.content.length - 1,
@@ -598,7 +666,10 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               index: event.index,
             };
             output.content.push(block);
+<<<<<<< HEAD
             blockIndexes.set(event.index, output.content.length - 1);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             eventSink.push({
               type: "thinking_start",
               contentIndex: output.content.length - 1,
@@ -616,7 +687,10 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               index: event.index,
             };
             output.content.push(block);
+<<<<<<< HEAD
             blockIndexes.set(event.index, output.content.length - 1);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             eventSink.push({
               type: "toolcall_start",
               contentIndex: output.content.length - 1,
@@ -625,9 +699,15 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
           }
         } else if (event.type === "content_block_delta") {
           if (event.delta.type === "text_delta") {
+<<<<<<< HEAD
             const index = blockIndexes.get(event.index);
             const block = index === undefined ? undefined : blocks[index];
             if (index !== undefined && block?.type === "text") {
+=======
+            const index = blocks.findIndex((b) => b.index === event.index);
+            const block = blocks[index];
+            if (block && block.type === "text") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               block.text += event.delta.text;
               eventSink.push({
                 type: "text_delta",
@@ -637,9 +717,15 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               });
             }
           } else if (event.delta.type === "thinking_delta") {
+<<<<<<< HEAD
             const index = blockIndexes.get(event.index);
             const block = index === undefined ? undefined : blocks[index];
             if (index !== undefined && block?.type === "thinking") {
+=======
+            const index = blocks.findIndex((b) => b.index === event.index);
+            const block = blocks[index];
+            if (block && block.type === "thinking") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               block.thinking += event.delta.thinking;
               eventSink.push({
                 type: "thinking_delta",
@@ -649,9 +735,15 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               });
             }
           } else if (event.delta.type === "input_json_delta") {
+<<<<<<< HEAD
             const index = blockIndexes.get(event.index);
             const block = index === undefined ? undefined : blocks[index];
             if (index !== undefined && block?.type === "toolCall") {
+=======
+            const index = blocks.findIndex((b) => b.index === event.index);
+            const block = blocks[index];
+            if (block && block.type === "toolCall") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               block.partialJson += event.delta.partial_json;
               block.arguments = parseStreamingJson(block.partialJson);
               eventSink.push({
@@ -662,18 +754,30 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               });
             }
           } else if (event.delta.type === "signature_delta") {
+<<<<<<< HEAD
             const index = blockIndexes.get(event.index);
             const block = index === undefined ? undefined : blocks[index];
             if (index !== undefined && block?.type === "thinking") {
+=======
+            const index = blocks.findIndex((b) => b.index === event.index);
+            const block = blocks[index];
+            if (block && block.type === "thinking") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               block.thinkingSignature = block.thinkingSignature || "";
               block.thinkingSignature += event.delta.signature;
             }
           }
         } else if (event.type === "content_block_stop") {
+<<<<<<< HEAD
           const index = blockIndexes.get(event.index);
           const block = index === undefined ? undefined : blocks[index];
           if (index !== undefined && block) {
             blockIndexes.delete(event.index);
+=======
+          const index = blocks.findIndex((b) => b.index === event.index);
+          const block = blocks[index];
+          if (block) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             delete (block as Partial<Block>).index;
             if (block.type === "text") {
               eventSink.push({

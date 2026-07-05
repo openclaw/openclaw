@@ -13,6 +13,7 @@ function envRef(id: string) {
 }
 
 describe("collectPluginConfigAssignments bundled plugin manifests", () => {
+<<<<<<< HEAD
   it("collects Codex app-server SecretRefs from bundled manifest contracts", () => {
     expect(
       findBundledPluginMetadataById("codex", {
@@ -93,6 +94,8 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("collects voice-call SecretRef assignments from bundled manifest contracts", () => {
     expect(
       findBundledPluginMetadataById("voice-call", {

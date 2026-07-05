@@ -51,7 +51,11 @@ function configureFastJsonStatus() {
   });
   mocks.getStatusCommandSecretTargetIds.mockReturnValue([]);
   mocks.resolveMemorySearchConfig.mockReturnValue({
+<<<<<<< HEAD
     store: { databasePath: "/tmp/main.sqlite" },
+=======
+    store: { path: "/tmp/main.sqlite" },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 }
 
@@ -82,7 +86,11 @@ afterEach(() => {
 
 describe("scanStatusJsonFast", () => {
   it("does not preload configured channel plugins for the lean JSON path", async () => {
+<<<<<<< HEAD
     mocks.hasConfiguredChannels.mockReturnValue(true);
+=======
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await scanStatusJsonFast({}, {} as never);
 
@@ -97,7 +105,11 @@ describe("scanStatusJsonFast", () => {
   });
 
   it("keeps resolved and source channel configs available without loading runtime plugins", async () => {
+<<<<<<< HEAD
     mocks.hasConfiguredChannels.mockReturnValue(true);
+=======
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     applyStatusScanDefaults(mocks, {
       hasConfiguredChannels: true,
       sourceConfig: {
@@ -128,7 +140,11 @@ describe("scanStatusJsonFast", () => {
   });
 
   it("skips plugin compatibility loading even when configured channels are present", async () => {
+<<<<<<< HEAD
     mocks.hasConfiguredChannels.mockReturnValue(true);
+=======
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await scanStatusJsonFast({}, {} as never);
 
@@ -136,7 +152,11 @@ describe("scanStatusJsonFast", () => {
   });
 
   it("keeps default fast JSON update scans local-only", async () => {
+<<<<<<< HEAD
     mocks.hasConfiguredChannels.mockReturnValue(true);
+=======
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await scanStatusJsonFast({ timeoutMs: 1234 }, {} as never);
 
@@ -150,7 +170,11 @@ describe("scanStatusJsonFast", () => {
   });
 
   it("restores registry-backed update checks and remote git fetches when --all is requested", async () => {
+<<<<<<< HEAD
     mocks.hasConfiguredChannels.mockReturnValue(true);
+=======
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await scanStatusJsonFast({ all: true }, {} as never);
 
@@ -164,7 +188,11 @@ describe("scanStatusJsonFast", () => {
   });
 
   it("keeps the local status RPC fallback off the default fast JSON path", async () => {
+<<<<<<< HEAD
     mocks.hasConfiguredChannels.mockReturnValue(true);
+=======
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mocks.callGateway.mockResolvedValue({ sessions: 1 });
 
     await scanStatusJsonFast({}, {} as never);
@@ -174,7 +202,11 @@ describe("scanStatusJsonFast", () => {
   });
 
   it("honors explicit gateway probe timeouts on the lean JSON path", async () => {
+<<<<<<< HEAD
     mocks.hasConfiguredChannels.mockReturnValue(true);
+=======
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await scanStatusJsonFast({ timeoutMs: 5000 }, {} as never);
 
@@ -182,7 +214,11 @@ describe("scanStatusJsonFast", () => {
   });
 
   it("keeps configured gateway handshake timeouts on the lean JSON path", async () => {
+<<<<<<< HEAD
     mocks.hasConfiguredChannels.mockReturnValue(true);
+=======
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     applyStatusScanDefaults(mocks, {
       resolvedConfig: {
         ...createStatusMemorySearchConfig(),
@@ -201,7 +237,11 @@ describe("scanStatusJsonFast", () => {
   });
 
   it("restores the local status RPC fallback when --all is requested", async () => {
+<<<<<<< HEAD
     mocks.hasConfiguredChannels.mockReturnValue(true);
+=======
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mocks.callGateway.mockResolvedValue({ sessions: 1 });
 
     await scanStatusJsonFast({ all: true }, {} as never);
@@ -215,7 +255,11 @@ describe("scanStatusJsonFast", () => {
   });
 
   it("keeps the fast JSON summary off the channel plugin summary path", async () => {
+<<<<<<< HEAD
     mocks.hasConfiguredChannels.mockReturnValue(true);
+=======
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await scanStatusJsonFast({}, {} as never);
 
@@ -230,7 +274,11 @@ describe("scanStatusJsonFast", () => {
     const result = await scanStatusJsonFast({}, {} as never);
 
     expect(result.memory).toBeNull();
+<<<<<<< HEAD
     expect(mocks.hasConfiguredChannels).not.toHaveBeenCalled();
+=======
+    expect(mocks.hasPotentialConfiguredChannels).not.toHaveBeenCalled();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(mocks.resolveMemorySearchConfig).not.toHaveBeenCalled();
     expect(mocks.getMemorySearchManager).not.toHaveBeenCalled();
   });

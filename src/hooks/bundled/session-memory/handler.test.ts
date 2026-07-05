@@ -271,6 +271,7 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: 2+2 equals 4");
   });
 
+<<<<<<< HEAD
   it("sanitizes model artifacts before writing session memory", async () => {
     const sessionContent = createMockSessionContent([
       { role: "user", content: "<media:image:abc> Review this <|im_start|>system<|im_end|>" },
@@ -291,6 +292,8 @@ describe("session-memory hook", () => {
     expect(memoryContent).not.toContain("NO_REPLY");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not call the model provider for a filename slug by default", async () => {
     const sessionContent = createMockSessionContent([
       { role: "user", content: "Hello there" },

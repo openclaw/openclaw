@@ -26,6 +26,7 @@ export function listHealthChecks(): readonly HealthCheck[] {
   return [...REGISTRY.values()];
 }
 
+<<<<<<< HEAD
 /** Returns registered extension checks after rejecting any reserved core doctor id claims. */
 export function listExtensionHealthChecksForDoctor(
   coreChecks: readonly HealthCheck[],
@@ -40,6 +41,8 @@ export function listExtensionHealthChecksForDoctor(
   return registeredChecks.filter((check) => check.kind !== "core");
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Looks up a registered health check by its stable id. */
 export function getHealthCheck(id: string): HealthCheck | undefined {
   return REGISTRY.get(id);

@@ -10,12 +10,16 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildPluginApi } from "./api-builder.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
+<<<<<<< HEAD
 import { getCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata-state.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataSnapshotMemoEnvFingerprint } from "./plugin-metadata-snapshot.js";
+=======
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   createPluginModuleLoaderCache,
   getCachedPluginModuleLoader,
@@ -100,6 +104,7 @@ const NOOP_LOGGER: PluginLogger = {
 const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
 let moduleLoaderFactoryForTest: PluginModuleLoaderFactory | undefined;
 
+<<<<<<< HEAD
 const MAX_SETUP_REGISTRY_CACHE_ENTRIES = 16;
 let setupRegistrySnapshotIdSeq = 0;
 let setupRegistrySnapshotIds = new WeakMap<object, string>();
@@ -119,12 +124,22 @@ export function clearPluginSetupRegistryCache(): void {
 
 registerPluginMetadataProcessMemoLifecycleClear(clearPluginSetupRegistryCache);
 
+=======
+export function clearPluginSetupRegistryCache(): void {
+  moduleLoaders.clear();
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function setPluginSetupRegistryModuleLoaderFactoryForTest(
   factory: PluginModuleLoaderFactory | undefined,
 ): void {
   moduleLoaderFactoryForTest = factory;
+<<<<<<< HEAD
   // Cached results were built through the previous factory; drop them too.
   clearPluginSetupRegistryCache();
+=======
+  moduleLoaders.clear();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function getModuleLoader(modulePath: string) {
@@ -357,6 +372,7 @@ function matchesProvider(provider: ProviderPlugin, providerId: string): boolean 
   );
 }
 
+<<<<<<< HEAD
 function resolveSetupRegistryCacheKey(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -460,6 +476,8 @@ function cloneSetupRegistry(registry: PluginSetupRegistry): PluginSetupRegistry 
   return cloneSetupRegistryValue(registry);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function loadSetupManifestRegistry(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -467,6 +485,7 @@ function loadSetupManifestRegistry(params?: {
   pluginIds?: readonly string[];
 }) {
   const env = params?.env ?? process.env;
+<<<<<<< HEAD
   const cacheKey = resolveSetupRegistryCacheKey(params);
   if (cacheKey !== null) {
     const cached = setupManifestRegistryCache.get(cacheKey);
@@ -475,16 +494,22 @@ function loadSetupManifestRegistry(params?: {
     }
   }
   const registry = loadPluginManifestRegistryForPluginRegistry({
+=======
+  return loadPluginManifestRegistryForPluginRegistry({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     config: params?.config,
     workspaceDir: params?.workspaceDir,
     env,
     pluginIds: params?.pluginIds,
     includeDisabled: true,
   });
+<<<<<<< HEAD
   if (cacheKey !== null) {
     setupManifestRegistryCache.set(cacheKey, registry);
   }
   return registry;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function findUniqueSetupManifestOwner(params: {
@@ -609,6 +634,7 @@ export function resolvePluginSetupRegistry(params?: {
     return empty;
   }
 
+<<<<<<< HEAD
   // Cache only self-scanned results; a caller-supplied manifestRegistry owns the derivation.
   const resultCacheKey = params?.manifestRegistry ? null : resolveSetupRegistryCacheKey(params);
   if (resultCacheKey !== null) {
@@ -618,6 +644,8 @@ export function resolvePluginSetupRegistry(params?: {
     }
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const providers: SetupProviderEntry[] = [];
   const cliBackends: SetupCliBackendEntry[] = [];
   const configMigrations: SetupConfigMigrationEntry[] = [];
@@ -720,10 +748,13 @@ export function resolvePluginSetupRegistry(params?: {
     autoEnableProbes,
     diagnostics,
   } satisfies PluginSetupRegistry;
+<<<<<<< HEAD
   if (resultCacheKey === null) {
     return registry;
   }
   pluginSetupRegistryCache.set(resultCacheKey, cloneSetupRegistry(registry));
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return registry;
 }
 

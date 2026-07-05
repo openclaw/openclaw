@@ -1,10 +1,15 @@
 // Check Memory Fd Repro tests cover check memory fd repro script behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
+<<<<<<< HEAD
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+=======
+import os from "node:os";
+import path from "node:path";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_READY_OUTPUT_MAX_CHARS,
@@ -12,7 +17,10 @@ import {
   MEMORY_SEARCH_RESPONSE_MAX_BYTES,
   classifyMemorySearchInvokeResponse,
   hasChildExited,
+<<<<<<< HEAD
   invokeMemorySearch,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   parseArgs,
   readBoundedResponseText,
   readNumber,
@@ -22,6 +30,7 @@ import {
   waitForGatewayReady,
   writeConfig,
 } from "../../scripts/check-memory-fd-repro.mjs";
+<<<<<<< HEAD
 import { withEnv } from "../../src/test-utils/env.js";
 
 async function listen(server: Server): Promise<number> {
@@ -37,6 +46,30 @@ async function listen(server: Server): Promise<number> {
     throw new Error("test server did not expose a TCP port");
   }
   return address.port;
+=======
+
+function withEnv<T>(env: Record<string, string | undefined>, callback: () => T): T {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(env)) {
+    previous.set(key, process.env[key]);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  try {
+    return callback();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 describe("check-memory-fd-repro", () => {
@@ -58,17 +91,25 @@ describe("check-memory-fd-repro", () => {
           OPENCLAW_MEMORY_FD_REPRO_FILES: "17",
           OPENCLAW_MEMORY_FD_REPRO_MAX_WORKSPACE_REG_FDS: "0",
           OPENCLAW_MEMORY_FD_REPRO_SAMPLE_DELAY_MS: "0",
+<<<<<<< HEAD
           OPENCLAW_MEMORY_FD_REPRO_SETTLE_DELAY_MS: String(MAX_TIMER_TIMEOUT_MS + 1),
           OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS: String(MAX_TIMER_TIMEOUT_MS + 1),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
         () => parseArgs([]),
       ),
     ).toMatchObject({
       fileCount: 17,
+<<<<<<< HEAD
       invokeTimeoutMs: MAX_TIMER_TIMEOUT_MS,
       maxWorkspaceRegFds: 0,
       sampleDelayMs: 0,
       settleDelayMs: MAX_TIMER_TIMEOUT_MS,
+=======
+      maxWorkspaceRegFds: 0,
+      sampleDelayMs: 0,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     expect(() =>
@@ -112,6 +153,7 @@ describe("check-memory-fd-repro", () => {
     });
   });
 
+<<<<<<< HEAD
   it("rejects missing valued options instead of consuming the next flag", () => {
     for (const flag of [
       "--files",
@@ -129,6 +171,8 @@ describe("check-memory-fd-repro", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("stops parsing options after the argument terminator", () => {
     expect(parseArgs(["--files", "20", "--", "--files", "99"])).toMatchObject({
       fileCount: 20,
@@ -148,6 +192,7 @@ describe("check-memory-fd-repro", () => {
     });
   });
 
+<<<<<<< HEAD
   it("clamps oversized memory_search invoke timers before scheduling", async () => {
     const server = createServer((_request, response) => {
       setTimeout(() => {
@@ -179,6 +224,8 @@ describe("check-memory-fd-repro", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses a fast matching probe query instead of a no-hit stress query", () => {
     expect(MEMORY_SEARCH_PROBE_QUERY).toBe("Top-level memory file");
     expect(MEMORY_SEARCH_PROBE_QUERY).not.toContain("nomatch");

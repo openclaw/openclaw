@@ -64,19 +64,28 @@ function shouldImportArtifact(
 
 async function collectBridgeArtifacts(
   bridgeConfig: ResolvedMemoryWikiConfig["bridge"],
+<<<<<<< HEAD
   vaultRoot: string,
   artifacts: MemoryPluginPublicArtifact[],
 ): Promise<BridgeArtifact[]> {
   const collected: BridgeArtifact[] = [];
   const vaultRootKey = await resolveArtifactKey(vaultRoot);
+=======
+  artifacts: MemoryPluginPublicArtifact[],
+): Promise<BridgeArtifact[]> {
+  const collected: BridgeArtifact[] = [];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   for (const artifact of artifacts) {
     if (!shouldImportArtifact(artifact, bridgeConfig)) {
       continue;
     }
     const syncKey = await resolveArtifactKey(artifact.absolutePath);
+<<<<<<< HEAD
     if (isPathInsideOrEqual(vaultRootKey, syncKey)) {
       continue;
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     collected.push({
       syncKey,
       artifactType: artifact.kind === "event-log" ? "memory-events" : "markdown",
@@ -92,6 +101,7 @@ async function collectBridgeArtifacts(
   return [...deduped.values()];
 }
 
+<<<<<<< HEAD
 function isPathInsideOrEqual(parentPath: string, candidatePath: string): boolean {
   const relative = path.relative(parentPath, candidatePath);
   return (
@@ -100,6 +110,8 @@ function isPathInsideOrEqual(parentPath: string, candidatePath: string): boolean
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveBridgeTitle(artifact: BridgeArtifact, agentIds: string[]): string {
   if (artifact.artifactType === "memory-events") {
     if (agentIds.length === 0) {
@@ -240,11 +252,15 @@ export async function syncMemoryWikiBridgeSources(params: {
   const publicArtifacts = await listActiveMemoryPublicArtifacts({ cfg: params.appConfig });
   const results: Array<{ pagePath: string; changed: boolean; created: boolean }> = [];
   const activeKeys = new Set<string>();
+<<<<<<< HEAD
   const artifacts = await collectBridgeArtifacts(
     params.config.bridge,
     params.config.vault.path,
     publicArtifacts,
   );
+=======
+  const artifacts = await collectBridgeArtifacts(params.config.bridge, publicArtifacts);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const state = await readMemoryWikiSourceSyncState(params.config.vault.path);
   assertMemoryWikiSourceSyncStateCapacity({
     state,

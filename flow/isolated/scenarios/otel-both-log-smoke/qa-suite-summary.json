@@ -1,0 +1,73 @@
+{
+  "scenarios": [
+    {
+      "name": "OTEL dual log exporter smoke",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "emits a traced qa-channel turn with OTLP and stdout logs",
+          "status": "pass",
+          "details": "stdout diagnostic log records=723"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 33206,
+    "gatewayProcessCpuMs": 3000,
+    "gatewayCpuCoreRatio": 0.09,
+    "gatewayProcessRssStartBytes": 832831488,
+    "gatewayProcessRssEndBytes": 1125134336,
+    "gatewayProcessRssDeltaBytes": 292302848,
+    "gatewayProcessRssPeakBytes": 1125134336,
+    "gatewayProcessRssPeakDeltaBytes": 292302848,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:17:08.744Z",
+        "gatewayProcessRssBytes": 832831488
+      },
+      {
+        "label": "scenario:otel-both-log-smoke:start",
+        "at": "2026-07-03T13:17:08.748Z",
+        "gatewayProcessRssBytes": 832831488
+      },
+      {
+        "label": "scenario:otel-both-log-smoke:finish",
+        "at": "2026-07-03T13:17:14.937Z",
+        "gatewayProcessRssBytes": 1125134336
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:17:14.960Z",
+        "gatewayProcessRssBytes": 1125134336
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:16:41.731Z",
+    "finishedAt": "2026-07-03T13:17:14.937Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "otel-both-log-smoke"
+    ],
+    "runtimePair": null
+  }
+}

@@ -1,4 +1,8 @@
 // Discord plugin module implements message handler.process behavior.
+<<<<<<< HEAD
+=======
+import path from "node:path";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { MessageFlags } from "discord-api-types/v10";
 import { resolveAckReaction, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
@@ -37,8 +41,18 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+<<<<<<< HEAD
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { readLatestAssistantTextByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+=======
+import {
+  loadSessionStore,
+  readLatestAssistantTextFromSessionTranscript,
+  resolveAndPersistSessionFile,
+  resolveSessionStoreEntry,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveDiscordAccount, resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
 import { beginDiscordInboundEventDeliveryCorrelation } from "../inbound-event-delivery.js";
@@ -107,7 +121,14 @@ function isFallbackOnlyToolWarningFinal(payload: ReplyPayload): boolean {
   return !resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
+<<<<<<< HEAD
 type DiscordReplySkipReason = "aborted before delivery" | "internal-only payload";
+=======
+type DiscordReplySkipReason =
+  | "aborted before delivery"
+  | "reasoning payload"
+  | "internal-only payload";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export function formatDiscordReplySkip(params: {
   kind: "tool" | "block" | "final";
@@ -251,6 +272,7 @@ async function processDiscordMessageInner(
     },
   });
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
+<<<<<<< HEAD
   const configuredTypingMode = cfg.session?.typingMode ?? cfg.agents?.defaults?.typingMode;
   const configuredTypingInterval =
     cfg.agents?.defaults?.typingIntervalSeconds ?? cfg.session?.typingIntervalSeconds;
@@ -259,6 +281,8 @@ async function processDiscordMessageInner(
     (sourceRepliesAreToolOnly &&
       configuredTypingMode === undefined &&
       configuredTypingInterval === undefined);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "discord",
     accountId,
@@ -468,7 +492,10 @@ async function processDiscordMessageInner(
       channelId: typingChannelId,
       rest: feedbackRest,
       log: logVerbose,
+<<<<<<< HEAD
       keepaliveIntervalMs: shouldDisableCoreTypingKeepalive ? undefined : 0,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   if (replyTypingFeedback) {
     // A carried prestart only covers queue wait time; dispatch needs a fresh
@@ -525,6 +552,7 @@ async function processDiscordMessageInner(
     }
     try {
       const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
+<<<<<<< HEAD
       const sessionEntry = getSessionEntry({
         agentId: route.agentId,
         sessionKey,
@@ -539,6 +567,23 @@ async function processDiscordMessageInner(
         sessionKey,
         storePath,
       });
+=======
+      const store = loadSessionStore(storePath, { clone: false });
+      const sessionEntry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+      if (!sessionEntry?.sessionId) {
+        return undefined;
+      }
+      const { sessionFile } = await resolveAndPersistSessionFile({
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionStore: store,
+        storePath,
+        sessionEntry,
+        agentId: route.agentId,
+        sessionsDir: path.dirname(storePath),
+      });
+      const latest = await readLatestAssistantTextFromSessionTranscript(sessionFile);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (!latest?.timestamp || latest.timestamp < dispatchStartedAt) {
         return undefined;
       }
@@ -608,6 +653,21 @@ async function processDiscordMessageInner(
       );
       return null;
     }
+<<<<<<< HEAD
+=======
+    if (payload.isReasoning) {
+      // Reasoning/thinking payloads should not be delivered to Discord.
+      logVerbose(
+        formatDiscordReplySkip({
+          kind: info.kind,
+          reason: "reasoning payload",
+          target: deliverTarget,
+          sessionKey: ctxPayload.SessionKey,
+        }),
+      );
+      return null;
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (draftPreview.draftStream && draftPreview.isProgressMode && info.kind === "block") {
       const reply = resolveSendableOutboundReplyParts(payload);
       if (!reply.hasMedia && !payload.isError) {
@@ -639,6 +699,21 @@ async function processDiscordMessageInner(
       return { visibleReplySent: false };
     }
     const isFinal = info.kind === "final";
+<<<<<<< HEAD
+=======
+    if (payload.isReasoning) {
+      // Reasoning/thinking payloads should not be delivered to Discord.
+      logVerbose(
+        formatDiscordReplySkip({
+          kind: info.kind,
+          reason: "reasoning payload",
+          target: deliverTarget,
+          sessionKey: ctxPayload.SessionKey,
+        }),
+      );
+      return { visibleReplySent: false };
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (
       isFinal &&
       !options?.allowFallbackOnlyToolWarning &&
@@ -964,7 +1039,10 @@ async function processDiscordMessageInner(
         abortSignal,
         skillFilter: channelConfig?.skills,
         sourceReplyDeliveryMode,
+<<<<<<< HEAD
         typingKeepalive: shouldDisableCoreTypingKeepalive ? false : undefined,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         queuedDeliveryCorrelations: isRoomEvent ? [{ begin: beginDeliveryCorrelation }] : undefined,
         suppressTyping: isRoomEvent ? true : undefined,
         allowProgressCallbacksWhenSourceDeliverySuppressed:

@@ -11,10 +11,15 @@ import {
   MINIMAX_M27_API_COST,
   MINIMAX_M25_API_COST,
   MINIMAX_M25_API_HIGHSPEED_COST,
+<<<<<<< HEAD
 } from "./model-definitions.js";
 import { MINIMAX_TEXT_MODEL_CATALOG } from "./provider-models.js";
 
 const MINIMAX_M3_CATALOG_CONTEXT_WINDOW = MINIMAX_TEXT_MODEL_CATALOG["MiniMax-M3"].contextWindow;
+=======
+  MINIMAX_M3_CONTEXT_WINDOW,
+} from "./model-definitions.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("minimax model definitions", () => {
   it("uses M3 as default hosted model", () => {
@@ -22,7 +27,11 @@ describe("minimax model definitions", () => {
   });
 
   it("uses the current upstream MiniMax context, token, and pricing defaults", () => {
+<<<<<<< HEAD
     expect(MINIMAX_M3_CATALOG_CONTEXT_WINDOW).toBe(1_000_000);
+=======
+    expect(MINIMAX_M3_CONTEXT_WINDOW).toBe(1_000_000);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(DEFAULT_MINIMAX_CONTEXT_WINDOW).toBe(204800);
     expect(DEFAULT_MINIMAX_MAX_TOKENS).toBe(131072);
     expect(MINIMAX_API_COST).toEqual({
@@ -37,11 +46,19 @@ describe("minimax model definitions", () => {
     const model = buildMinimaxModelDefinition({
       id: "MiniMax-M3",
       cost: MINIMAX_API_COST,
+<<<<<<< HEAD
       contextWindow: MINIMAX_M3_CATALOG_CONTEXT_WINDOW,
       maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
     });
     expect(model).toEqual({
       contextWindow: MINIMAX_M3_CATALOG_CONTEXT_WINDOW,
+=======
+      contextWindow: MINIMAX_M3_CONTEXT_WINDOW,
+      maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
+    });
+    expect(model).toEqual({
+      contextWindow: MINIMAX_M3_CONTEXT_WINDOW,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       cost: MINIMAX_API_COST,
       id: "MiniMax-M3",
       input: ["text", "image"],
@@ -72,7 +89,11 @@ describe("minimax model definitions", () => {
   it("builds API model definition with standard cost for M3", () => {
     const model = buildMinimaxApiModelDefinition("MiniMax-M3");
     expect(model.cost).toEqual(MINIMAX_API_COST);
+<<<<<<< HEAD
     expect(model.contextWindow).toBe(MINIMAX_M3_CATALOG_CONTEXT_WINDOW);
+=======
+    expect(model.contextWindow).toBe(MINIMAX_M3_CONTEXT_WINDOW);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(model.maxTokens).toBe(DEFAULT_MINIMAX_MAX_TOKENS);
     expect(model.input).toEqual(["text", "image"]);
   });

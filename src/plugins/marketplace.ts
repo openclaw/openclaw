@@ -6,7 +6,11 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveArchiveKind } from "../infra/archive.js";
+<<<<<<< HEAD
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
+=======
+import { formatErrorMessage } from "../infra/errors.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { pathExists } from "../infra/fs-safe.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { tryReadJson } from "../infra/json-files.js";
@@ -140,6 +144,17 @@ function splitRef(value: string): { base: string; ref?: string } {
   };
 }
 
+<<<<<<< HEAD
+=======
+function toOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function normalizeEntrySource(
   raw: unknown,
 ): { ok: true; source: MarketplaceEntrySource } | { ok: false; error: string } {
@@ -159,13 +174,21 @@ function normalizeEntrySource(
   }
 
   const rec = raw as Record<string, unknown>;
+<<<<<<< HEAD
   const kind = normalizeOptionalString(rec.type) ?? normalizeOptionalString(rec.source);
+=======
+  const kind = toOptionalString(rec.type) ?? toOptionalString(rec.source);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!kind) {
     return { ok: false, error: 'plugin source object missing "type" or "source"' };
   }
 
   if (kind === "path") {
+<<<<<<< HEAD
     const sourcePath = normalizeOptionalString(rec.path);
+=======
+    const sourcePath = toOptionalString(rec.path);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!sourcePath) {
       return { ok: false, error: 'path source missing "path"' };
     }
@@ -173,7 +196,11 @@ function normalizeEntrySource(
   }
 
   if (kind === "github") {
+<<<<<<< HEAD
     const repo = normalizeOptionalString(rec.repo) ?? normalizeOptionalString(rec.url);
+=======
+    const repo = toOptionalString(rec.repo) ?? toOptionalString(rec.url);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!repo) {
       return { ok: false, error: 'github source missing "repo"' };
     }
@@ -182,17 +209,26 @@ function normalizeEntrySource(
       source: {
         kind: "github",
         repo,
+<<<<<<< HEAD
         path: normalizeOptionalString(rec.path),
         ref:
           normalizeOptionalString(rec.ref) ??
           normalizeOptionalString(rec.branch) ??
           normalizeOptionalString(rec.tag),
+=======
+        path: toOptionalString(rec.path),
+        ref: toOptionalString(rec.ref) ?? toOptionalString(rec.branch) ?? toOptionalString(rec.tag),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     };
   }
 
   if (kind === "git") {
+<<<<<<< HEAD
     const url = normalizeOptionalString(rec.url) ?? normalizeOptionalString(rec.repo);
+=======
+    const url = toOptionalString(rec.url) ?? toOptionalString(rec.repo);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!url) {
       return { ok: false, error: 'git source missing "url"' };
     }
@@ -201,18 +237,28 @@ function normalizeEntrySource(
       source: {
         kind: "git",
         url,
+<<<<<<< HEAD
         path: normalizeOptionalString(rec.path),
         ref:
           normalizeOptionalString(rec.ref) ??
           normalizeOptionalString(rec.branch) ??
           normalizeOptionalString(rec.tag),
+=======
+        path: toOptionalString(rec.path),
+        ref: toOptionalString(rec.ref) ?? toOptionalString(rec.branch) ?? toOptionalString(rec.tag),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     };
   }
 
   if (kind === "git-subdir") {
+<<<<<<< HEAD
     const url = normalizeOptionalString(rec.url) ?? normalizeOptionalString(rec.repo);
     const sourcePath = normalizeOptionalString(rec.path) ?? normalizeOptionalString(rec.subdir);
+=======
+    const url = toOptionalString(rec.url) ?? toOptionalString(rec.repo);
+    const sourcePath = toOptionalString(rec.path) ?? toOptionalString(rec.subdir);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!url) {
       return { ok: false, error: 'git-subdir source missing "url"' };
     }
@@ -225,16 +271,24 @@ function normalizeEntrySource(
         kind: "git-subdir",
         url,
         path: sourcePath,
+<<<<<<< HEAD
         ref:
           normalizeOptionalString(rec.ref) ??
           normalizeOptionalString(rec.branch) ??
           normalizeOptionalString(rec.tag),
+=======
+        ref: toOptionalString(rec.ref) ?? toOptionalString(rec.branch) ?? toOptionalString(rec.tag),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     };
   }
 
   if (kind === "url") {
+<<<<<<< HEAD
     const url = normalizeOptionalString(rec.url);
+=======
+    const url = toOptionalString(rec.url);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!url) {
       return { ok: false, error: 'url source missing "url"' };
     }
@@ -382,7 +436,11 @@ function parseMarketplaceManifest(
       return { ok: false, error: `invalid marketplace entry in ${sourceLabel}: expected object` };
     }
     const plugin = entry as Record<string, unknown>;
+<<<<<<< HEAD
     const name = normalizeOptionalString(plugin.name);
+=======
+    const name = toOptionalString(plugin.name);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!name) {
       return { ok: false, error: `invalid marketplace entry in ${sourceLabel}: missing name` };
     }
@@ -395,8 +453,13 @@ function parseMarketplaceManifest(
     }
     plugins.push({
       name,
+<<<<<<< HEAD
       version: normalizeOptionalString(plugin.version),
       description: normalizeOptionalString(plugin.description),
+=======
+      version: toOptionalString(plugin.version),
+      description: toOptionalString(plugin.description),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       source: normalizedSource.source,
     });
   }
@@ -404,8 +467,13 @@ function parseMarketplaceManifest(
   return {
     ok: true,
     manifest: {
+<<<<<<< HEAD
       name: normalizeOptionalString(rec.name),
       version: normalizeOptionalString(rec.version),
+=======
+      name: toOptionalString(rec.name),
+      version: toOptionalString(rec.version),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       plugins,
     },
   };
@@ -431,7 +499,11 @@ async function readClaudeKnownMarketplaces(): Promise<Record<string, KnownMarket
     }
     const record = value as Record<string, unknown>;
     result[name] = {
+<<<<<<< HEAD
       installLocation: normalizeOptionalString(record.installLocation),
+=======
+      installLocation: toOptionalString(record.installLocation),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       source: record.source,
     };
   }
@@ -745,10 +817,13 @@ function hasStreamingResponseBody(
   );
 }
 
+<<<<<<< HEAD
 async function cancelUnreadMarketplaceResponseBody(response: Response): Promise<void> {
   await response.body?.cancel().catch(() => undefined);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function parseMarketplaceContentLength(raw: string): number {
   const trimmed = raw.trim();
   if (!/^\d+$/.test(trimmed)) {
@@ -793,7 +868,11 @@ async function readMarketplaceChunkWithTimeout(
       (err: unknown) => {
         clear();
         if (!timedOut) {
+<<<<<<< HEAD
           reject(toErrorObject(err, "Non-Error rejection"));
+=======
+          reject(toLintErrorObject(err, "Non-Error rejection"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }
       },
     );
@@ -842,11 +921,14 @@ async function streamMarketplaceResponseToFile(params: {
       await writeMarketplaceChunk(fileHandle, value);
       total = nextTotal;
     }
+<<<<<<< HEAD
   } catch (error) {
     if (typeof reader.cancel === "function") {
       await reader.cancel().catch(() => undefined);
     }
     throw error;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } finally {
     await fileHandle.close().catch(() => undefined);
     try {
@@ -881,7 +963,10 @@ async function downloadUrlToTempFile(
     });
     try {
       if (!response.ok) {
+<<<<<<< HEAD
         await cancelUnreadMarketplaceResponseBody(response);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         return {
           ok: false,
           error: formatMarketplaceDownloadError(url, `HTTP ${response.status}`),
@@ -895,7 +980,10 @@ async function downloadUrlToTempFile(
       }
       // Fail closed unless we can stream and enforce the archive size bound incrementally.
       if (!hasStreamingResponseBody(response)) {
+<<<<<<< HEAD
         await cancelUnreadMarketplaceResponseBody(response);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         return {
           ok: false,
           error: formatMarketplaceDownloadError(url, "streaming response body unavailable"),
@@ -904,6 +992,7 @@ async function downloadUrlToTempFile(
 
       const contentLength = response.headers.get("content-length");
       if (contentLength) {
+<<<<<<< HEAD
         let size: number;
         try {
           size = parseMarketplaceContentLength(contentLength);
@@ -913,6 +1002,10 @@ async function downloadUrlToTempFile(
         }
         if (size > MAX_MARKETPLACE_ARCHIVE_BYTES) {
           await cancelUnreadMarketplaceResponseBody(response);
+=======
+        const size = parseMarketplaceContentLength(contentLength);
+        if (size > MAX_MARKETPLACE_ARCHIVE_BYTES) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           throw new Error(
             `download too large: ${size} bytes (limit: ${MAX_MARKETPLACE_ARCHIVE_BYTES} bytes)`,
           );
@@ -1335,3 +1428,20 @@ export async function installPluginFromMarketplace(
     await loaded.marketplace.cleanup?.();
   }
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

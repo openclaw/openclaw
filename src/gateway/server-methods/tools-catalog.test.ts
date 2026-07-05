@@ -3,7 +3,10 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+<<<<<<< HEAD
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   ensureStandalonePluginToolRegistryLoaded,
   resolvePluginTools,
@@ -39,6 +42,7 @@ vi.mock("../../plugins/tools.js", () => ({
   getPluginToolMeta: vi.fn((tool: { name: string }) => pluginToolMetaState.get(tool.name)),
 }));
 
+<<<<<<< HEAD
 const getActivePluginRegistryMock = vi.hoisted(() => vi.fn<() => unknown>(() => null));
 vi.mock("../../plugins/runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../plugins/runtime.js")>();
@@ -49,6 +53,8 @@ vi.mock("../../plugins/runtime.js", async (importOriginal) => {
   };
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type RespondCall = [boolean, unknown?, { code: number; message: string }?];
 type CatalogTool = {
   id: string;
@@ -122,8 +128,11 @@ describe("tools.catalog handler", () => {
     pluginToolMetaState.clear();
     pluginToolMetaState.set("voice_call", { pluginId: "voice-call", optional: true });
     pluginToolMetaState.set("matrix_room", { pluginId: "matrix", optional: false });
+<<<<<<< HEAD
     getActivePluginRegistryMock.mockReturnValue(null);
     vi.mocked(ensureStandalonePluginToolRegistryLoaded).mockReturnValue(undefined);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("rejects invalid params", async () => {
@@ -228,6 +237,7 @@ describe("tools.catalog handler", () => {
       agentId: "main",
     });
   });
+<<<<<<< HEAD
 
   it("projects metadata from the exact tool-discovery registry", async () => {
     const toolRegistry = createEmptyPluginRegistry();
@@ -271,4 +281,6 @@ describe("tools.catalog handler", () => {
       expect.objectContaining({ runtimeRegistry: toolRegistry }),
     );
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

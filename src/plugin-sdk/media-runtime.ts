@@ -11,12 +11,16 @@ export * from "../media/fetch.js";
 export * from "../media/ffmpeg-limits.js";
 export * from "@openclaw/media-core/inbound-path-policy";
 export * from "../media/load-options.js";
+<<<<<<< HEAD
 export {
   assertLocalMediaAllowed,
   getDefaultLocalRoots,
   LocalMediaAccessError,
   type LocalMediaAccessErrorCode,
 } from "../media/local-media-access.js";
+=======
+export * from "../media/local-media-access.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export * from "../media/local-roots.js";
 export {
   IMAGE_REDUCE_QUALITY_STEPS,

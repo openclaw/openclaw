@@ -4,6 +4,7 @@ import { parseAgentSessionKey } from "./session-key-utils.js";
 
 export type SessionKeyChatType = "direct" | "group" | "channel" | "unknown";
 
+<<<<<<< HEAD
 type CanonicalPeerKind = "direct" | "dm" | "group" | "channel";
 
 const CANONICAL_PEER_KINDS: ReadonlySet<string> = new Set(["direct", "dm", "group", "channel"]);
@@ -84,6 +85,14 @@ function deriveBuiltInLegacySessionChatType(
   if (/^channel:[^:]+(?::.*)?$/u.test(scopedSessionKey)) {
     return "channel";
   }
+=======
+function deriveBuiltInLegacySessionChatType(
+  scopedSessionKey: string,
+): SessionKeyChatType | undefined {
+  if (/^group:[^:]+$/.test(scopedSessionKey)) {
+    return "group";
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (/^(?:whatsapp:)?[^:]+@g\.us$/.test(scopedSessionKey)) {
     return "group";
   }
@@ -99,9 +108,21 @@ export function deriveSessionChatTypeFromScopedKey(
     (scopedSessionKey: string) => SessionKeyChatType | undefined
   > = [],
 ): SessionKeyChatType {
+<<<<<<< HEAD
   const canonical = deriveCanonicalSessionChatType(scopedSessionKey);
   if (canonical) {
     return canonical;
+=======
+  const tokens = new Set(scopedSessionKey.split(":").filter(Boolean));
+  if (tokens.has("group")) {
+    return "group";
+  }
+  if (tokens.has("channel")) {
+    return "channel";
+  }
+  if (tokens.has("direct") || tokens.has("dm")) {
+    return "direct";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   const builtInLegacy = deriveBuiltInLegacySessionChatType(scopedSessionKey);
   if (builtInLegacy) {

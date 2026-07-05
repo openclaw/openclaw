@@ -72,9 +72,12 @@ export function createDiscordDraftPreviewController(params: {
   let hasStreamedMessage = false;
   let finalizedViaPreviewMessage = false;
   let finalReplyDelivered = false;
+<<<<<<< HEAD
   // Final delivery cancels the compositor gate before Discord decides whether
   // to edit the progress preview, so keep the pre-final eligibility bit.
   let progressDraftStartedBeforeFinal = false;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const previewToolProgressEnabled =
     Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(params.discordConfig);
   const suppressDefaultToolProgressMessages =
@@ -135,13 +138,20 @@ export function createDiscordDraftPreviewController(params: {
       return discordStreamMode === "progress";
     },
     get hasProgressDraftStarted() {
+<<<<<<< HEAD
       return progressDraft.hasStarted || progressDraftStartedBeforeFinal;
+=======
+      return progressDraft.hasStarted;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
     get finalizedViaPreviewMessage() {
       return finalizedViaPreviewMessage;
     },
     markFinalReplyStarted() {
+<<<<<<< HEAD
       progressDraftStartedBeforeFinal ||= progressDraft.hasStarted;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       progressDraft.markFinalReplyStarted();
     },
     markFinalReplyDelivered() {
@@ -152,6 +162,15 @@ export function createDiscordDraftPreviewController(params: {
       finalizedViaPreviewMessage = true;
     },
     disableBlockStreamingForDraft: draftStream ? true : undefined,
+<<<<<<< HEAD
+=======
+    async startProgressDraft() {
+      if (!draftStream || discordStreamMode !== "progress") {
+        return;
+      }
+      await progressDraft.start();
+    },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     async pushToolProgress(
       line?: string | ChannelProgressDraftLine,
       options?: { toolName?: string },

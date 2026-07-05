@@ -8,16 +8,22 @@ import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugi
 type CodexContextProjection = {
   developerInstructionAddition?: string;
   promptText: string;
+<<<<<<< HEAD
   promptContextRange?: CodexProjectedContextRange;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   assembledMessages: AgentMessage[];
   prePromptMessageCount: number;
 };
 
+<<<<<<< HEAD
 export type CodexProjectedContextRange = {
   start: number;
   end: number;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const CONTEXT_HEADER = "OpenClaw assembled context for this turn:";
 const CONTEXT_OPEN = "<conversation_context>";
 const CONTEXT_CLOSE = "</conversation_context>";
@@ -29,9 +35,12 @@ const MAX_RENDERED_CONTEXT_CHARS = 1_000_000;
 const DEFAULT_TEXT_PART_CHARS = 6_000;
 const MAX_TEXT_PART_CHARS = 128_000;
 const APPROX_RENDERED_CHARS_PER_TOKEN = 4;
+<<<<<<< HEAD
 // Codex app-server validates the summed v2 turn/start text input against
 // codex-rs/protocol/src/user_input.rs::MAX_USER_INPUT_TEXT_CHARS.
 export const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Default token reserve kept out of rendered context-engine prompt text. */
 export const DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS = 20_000;
 const MIN_PROMPT_BUDGET_RATIO = 0.5;
@@ -53,6 +62,7 @@ export function projectContextEngineAssemblyForCodex(params: {
     maxTextPartChars: resolveTextPartMaxChars(maxRenderedContextChars),
     toolPayloadMode: params.toolPayloadMode ?? "elide",
   });
+<<<<<<< HEAD
   const boundedContext = renderedContext
     ? truncateOlderContext(renderedContext, maxRenderedContextChars)
     : undefined;
@@ -65,13 +75,31 @@ export function projectContextEngineAssemblyForCodex(params: {
     promptPrefix && boundedContext
       ? { start: promptPrefix.length, end: promptPrefix.length + boundedContext.length }
       : undefined;
+=======
+  const promptText = renderedContext
+    ? [
+        CONTEXT_HEADER,
+        CONTEXT_SAFETY_NOTE,
+        "",
+        CONTEXT_OPEN,
+        truncateOlderContext(renderedContext, maxRenderedContextChars),
+        CONTEXT_CLOSE,
+        "",
+        REQUEST_HEADER,
+        prompt,
+      ].join("\n")
+    : prompt;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   return {
     ...(params.systemPromptAddition?.trim()
       ? { developerInstructionAddition: params.systemPromptAddition.trim() }
       : {}),
     promptText,
+<<<<<<< HEAD
     ...(promptContextRange ? { promptContextRange } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     assembledMessages: params.assembledMessages,
     prePromptMessageCount: params.originalHistoryMessages.length,
   };
@@ -117,6 +145,7 @@ export function resolveCodexContextEngineProjectionReserveTokens(params: {
   return undefined;
 }
 
+<<<<<<< HEAD
 /** Fits projected context prompts under Codex app-server turn/start text limits. */
 export function fitCodexProjectedContextForTurnStart(params: {
   promptText: string;
@@ -211,6 +240,8 @@ function normalizeProjectedContextRange(
   return { start, end };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveProjectionPromptBudgetTokens(params: {
   contextTokenBudget: number;
   reserveTokens?: number;
@@ -507,6 +538,7 @@ function truncateOlderContext(text: string, maxChars: number): string {
     return marker.slice(0, maxChars);
   }
   tailChars = maxChars - marker.length;
+<<<<<<< HEAD
   return `${marker}${sliceTailFromCodePointBoundary(text, tailChars).trimStart()}`;
 }
 
@@ -523,4 +555,7 @@ function sliceTailFromCodePointBoundary(text: string, tailChars: number): string
     }
   }
   return text.slice(start);
+=======
+  return `${marker}${text.slice(text.length - tailChars).trimStart()}`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }

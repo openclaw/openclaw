@@ -16,6 +16,7 @@ import {
   writeQaRequestBodyLimitError,
 } from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
+<<<<<<< HEAD
 import {
   QaEvidenceGalleryError,
   buildQaEvidenceGalleryModel,
@@ -23,6 +24,8 @@ import {
   resolveQaEvidenceArtifactFile,
   resolveQaEvidenceProducerFile,
 } from "./evidence-gallery.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createQaRunnerRuntime } from "./harness-runtime.js";
 import {
   isCaptureQueryPreset,
@@ -76,10 +79,13 @@ export function writeQaLabServerError(res: Parameters<typeof writeError>[0], err
   if (writeQaRequestBodyLimitError(res, error)) {
     return;
   }
+<<<<<<< HEAD
   if (error instanceof QaEvidenceGalleryError) {
     writeError(res, error.statusCode, error.message);
     return;
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   writeError(res, 500, error);
 }
 
@@ -101,6 +107,7 @@ function withQaLabRunCounts(run: Omit<QaLabScenarioRun, "counts">): QaLabScenari
   };
 }
 
+<<<<<<< HEAD
 function parseQaEvidenceArtifactIndexText(value: string): number {
   if (!/^(0|[1-9]\d*)$/.test(value)) {
     throw new QaEvidenceGalleryError("Evidence artifact index is invalid.", 400);
@@ -112,6 +119,8 @@ function parseQaEvidenceArtifactIndexText(value: string): number {
   return index;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function injectKickoffMessage(params: {
   state: QaBusState;
   defaults: QaLabBootstrapDefaults;
@@ -150,15 +159,21 @@ function createBootstrapDefaults(autoKickoffTarget?: string): QaLabBootstrapDefa
 
 const CONTROL_UI_CREDENTIAL_QUERY_KEYS = new Set([
   "access_token",
+<<<<<<< HEAD
   "api_key",
   "apikey",
   "auth",
   "devicetoken",
   "id_token",
+=======
+  "auth",
+  "devicetoken",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "password",
   "refresh_token",
   "token",
 ]);
+<<<<<<< HEAD
 const CONTROL_UI_CREDENTIAL_QUERY_PATTERN =
   /([?&])(?:access_token|api_?key|auth|deviceToken|id_token|password|refresh_token|token)=[^&#\s]*&?/gi;
 
@@ -177,6 +192,8 @@ function stripSensitiveQueryParamsFromText(rawUrl: string): string {
     sanitized = next;
   }
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function stripSensitiveQueryParams(rawUrl: string): string {
   try {
@@ -188,7 +205,17 @@ function stripSensitiveQueryParams(rawUrl: string): string {
     }
     return url.toString();
   } catch {
+<<<<<<< HEAD
     return stripSensitiveQueryParamsFromText(rawUrl);
+=======
+    return rawUrl
+      .replace(
+        /([?&])(?:access_token|auth|deviceToken|password|refresh_token|token)=[^&#\s]*&?/gi,
+        (match: string, separator: string) => (match.endsWith("&") ? separator : ""),
+      )
+      .replace(/[?&]$/, "")
+      .replace("?&", "?");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 
@@ -209,6 +236,7 @@ function normalizeQaLabCleanupError(error: unknown): Error {
   return error instanceof Error ? error : new Error(formatErrorMessage(error));
 }
 
+<<<<<<< HEAD
 function detectQaEvidenceArtifactContentType(filePath: string): string {
   const lower = filePath.toLowerCase();
   if (lower.endsWith(".png")) {
@@ -241,6 +269,8 @@ function detectQaEvidenceArtifactContentType(filePath: string): string {
   return "application/octet-stream";
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function startQaGatewayLoop(params: { state: QaBusState; baseUrl: string }) {
   const runtime = createQaRunnerRuntime();
   setQaChannelRuntime(runtime);
@@ -288,7 +318,14 @@ export async function startQaLabServer(
 ): Promise<QaLabServerHandle> {
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
   const captureSettings = resolveDebugProxySettings();
+<<<<<<< HEAD
   const captureStoreLease = acquireDebugProxyCaptureStore();
+=======
+  const captureStoreLease = acquireDebugProxyCaptureStore(
+    captureSettings.dbPath,
+    captureSettings.blobDir,
+  );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const captureStore = captureStoreLease.store;
   const state = createQaBusState();
   let latestReport: QaLabLatestReport | null = null;
@@ -446,13 +483,18 @@ export async function startQaLabServer(
             "content-type": "application/json; charset=utf-8",
             "cache-control": "no-store",
           });
+<<<<<<< HEAD
           res.end(JSON.stringify({ version: resolveUiAssetVersion(params?.uiDistDir, repoRoot) }));
+=======
+          res.end(JSON.stringify({ version: resolveUiAssetVersion(params?.uiDistDir) }));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           return;
         }
         if (req.method === "GET" && url.pathname === "/api/outcomes") {
           writeJson(res, 200, { run: latestScenarioRun });
           return;
         }
+<<<<<<< HEAD
         if (req.method === "GET" && url.pathname === "/api/evidence") {
           const evidencePath =
             url.searchParams.get("path")?.trim() || runnerSnapshot.artifacts?.evidencePath;
@@ -525,6 +567,8 @@ export async function startQaLabServer(
             .pipe(res);
           return;
         }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         if (req.method === "GET" && url.pathname === "/api/capture/sessions") {
           writeJson(res, 200, {
             sessions: captureStore.listSessions(50),

@@ -1,6 +1,11 @@
 {
   "name": "@openclaw/fireworks-provider",
+<<<<<<< HEAD
   "version": "2026.6.10",
+=======
+  "version": "2026.6.8",
+  "private": true,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "description": "OpenClaw Fireworks provider plugin",
   "type": "module",
   "devDependencies": {
@@ -9,6 +14,7 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
+<<<<<<< HEAD
     ],
     "install": {
       "clawhubSpec": "clawhub:@openclaw/fireworks-provider",
@@ -31,5 +37,8 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
+=======
+    ]
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }

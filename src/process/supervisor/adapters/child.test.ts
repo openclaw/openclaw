@@ -1,6 +1,7 @@
 // Child adapter tests cover adapting child processes to supervisor runs.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+<<<<<<< HEAD
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +10,11 @@ import {
   resetWindowsInstallRootsForTests,
 } from "../../../infra/windows-install-roots.js";
 import {
+=======
+import { PassThrough } from "node:stream";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   expectRealExitWinsOverSigkillFallback,
   expectWaitStaysPendingUntilSigkillFallback,
 } from "./test-support.js";
@@ -88,8 +94,11 @@ type SpawnWithFallbackParams = {
     detached?: boolean;
     env?: NodeJS.ProcessEnv | Record<string, string>;
     stdio?: string[];
+<<<<<<< HEAD
     windowsHide?: boolean;
     windowsVerbatimArguments?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
   fallbacks?: Array<{ options?: { detached?: boolean } }>;
 };
@@ -114,10 +123,13 @@ function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }, label: st
   return call[0];
 }
 
+<<<<<<< HEAD
 function expectedTrustedCmdExe(): string {
   return path.win32.join(getWindowsInstallRoots().systemRoot, "System32", "cmd.exe");
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("createChildAdapter", () => {
   const originalServiceMarker = process.env.OPENCLAW_SERVICE_MARKER;
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -134,7 +146,10 @@ describe("createChildAdapter", () => {
   });
 
   beforeEach(() => {
+<<<<<<< HEAD
     resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     spawnWithFallbackMock.mockClear();
     signalProcessTreeMock.mockClear();
     createWindowsOutputDecoderMock.mockClear();
@@ -402,6 +417,7 @@ describe("createChildAdapter", () => {
     expect(spawnArgs.options?.env).toBeUndefined();
   });
 
+<<<<<<< HEAD
   it("wraps Windows command shims through trusted cmd.exe", async () => {
     setPlatform("win32");
 
@@ -424,6 +440,8 @@ describe("createChildAdapter", () => {
     expect(spawnArgs.fallbacks).toStrictEqual([]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("wraps Linux child spawns and strips shell-init env", async () => {
     const originalBashEnv = process.env.BASH_ENV;
     const originalEnv = process.env.ENV;

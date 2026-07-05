@@ -2,8 +2,13 @@
 import { describe, expect, it } from "vitest";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import {
+<<<<<<< HEAD
   loadBundledWebFetchProviderEntriesFromDir,
   loadBundledWebSearchProviderEntriesFromDir,
+=======
+  hasBundledWebFetchProviderPublicArtifact,
+  hasBundledWebSearchProviderPublicArtifact,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./web-provider-public-artifacts.explicit.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -45,19 +50,30 @@ function bundledPluginIdsWithContract(
 }
 
 describe("web provider public artifacts", () => {
+<<<<<<< HEAD
   it("loads public artifacts for every bundled web provider declared in manifests", () => {
     expect(webSearchPluginIds).not.toHaveLength(0);
     for (const pluginId of webSearchPluginIds) {
       expect(
         loadBundledWebSearchProviderEntriesFromDir({ dirName: pluginId, pluginId }),
       ).not.toBeNull();
+=======
+  it("has public artifacts for every bundled web provider declared in manifests", () => {
+    expect(webSearchPluginIds).not.toHaveLength(0);
+    for (const pluginId of webSearchPluginIds) {
+      expect(hasBundledWebSearchProviderPublicArtifact(pluginId)).toBe(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
 
     expect(webFetchPluginIds).not.toHaveLength(0);
     for (const pluginId of webFetchPluginIds) {
+<<<<<<< HEAD
       expect(
         loadBundledWebFetchProviderEntriesFromDir({ dirName: pluginId, pluginId }),
       ).not.toBeNull();
+=======
+      expect(hasBundledWebFetchProviderPublicArtifact(pluginId)).toBe(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 

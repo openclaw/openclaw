@@ -254,7 +254,31 @@ type BedrockControlPlane = {
   }) => Promise<BedrockGetInferenceProfileResponse>;
 };
 
+<<<<<<< HEAD
 async function createBedrockControlPlane(region: string | undefined): Promise<BedrockControlPlane> {
+=======
+type BedrockControlPlaneFactory = (region: string | undefined) => BedrockControlPlane;
+
+let bedrockControlPlaneOverride: BedrockControlPlaneFactory | undefined;
+
+/** Reset app-profile prompt-cache eligibility state for tests. */
+export function resetBedrockAppProfileCacheEligibilityForTest(): void {
+  appProfileTraitsCache.clear();
+}
+
+/** Override Bedrock app-profile control-plane checks for tests. */
+export function setBedrockAppProfileControlPlaneForTest(
+  controlPlane: BedrockControlPlaneFactory | undefined,
+): void {
+  bedrockControlPlaneOverride = controlPlane;
+  resetBedrockAppProfileCacheEligibilityForTest();
+}
+
+async function createBedrockControlPlane(region: string | undefined): Promise<BedrockControlPlane> {
+  if (bedrockControlPlaneOverride) {
+    return bedrockControlPlaneOverride(region);
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   await refreshAwsSharedConfigCacheForBedrock();
   const { BedrockClient, GetInferenceProfileCommand } = await import("@aws-sdk/client-bedrock");
   const client = new BedrockClient(region ? { region } : {});

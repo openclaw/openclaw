@@ -12,11 +12,18 @@ import {
   resetTaskRegistryForTests,
 } from "../../tasks/runtime-internal.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
+<<<<<<< HEAD
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { tasksHandlers } from "./tasks.js";
 import type { RespondFn } from "./types.js";
 
 const stateDirEnvSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+=======
+import { tasksHandlers } from "./tasks.js";
+import type { RespondFn } from "./types.js";
+
+const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type TaskResponsePayload = {
   tasks?: Array<Record<string, unknown>>;
   task?: Record<string, unknown>;
@@ -36,13 +43,25 @@ function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]):
 
 beforeEach(async () => {
   stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-tasks-"));
+<<<<<<< HEAD
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+=======
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resetTaskRegistryForTests();
 });
 
 afterEach(async () => {
   resetTaskRegistryForTests();
+<<<<<<< HEAD
   stateDirEnvSnapshot.restore();
+=======
+  if (ORIGINAL_STATE_DIR === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   await fs.rm(stateDir, { recursive: true, force: true });
 });
 

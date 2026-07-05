@@ -1,18 +1,30 @@
 {
   "name": "@openclaw/google-meet",
+<<<<<<< HEAD
   "version": "2026.6.10",
+=======
+  "version": "2026.6.8",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/google-meet",
+<<<<<<< HEAD
       "version": "2026.6.10",
+=======
+      "version": "2026.6.8",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "dependencies": {
         "commander": "14.0.3",
         "typebox": "1.1.39"
       },
       "peerDependencies": {
+<<<<<<< HEAD
         "openclaw": ">=2026.6.10"
+=======
+        "openclaw": ">=2026.6.8"
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
       "peerDependenciesMeta": {
         "openclaw": {

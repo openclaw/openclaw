@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // Shared queue type contracts for admission, drain, and fallback handling.
 import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
@@ -10,7 +13,10 @@ import type { SessionEntry } from "../../../config/sessions.js";
 import type { ReplyToMode } from "../../../config/types.base.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
+<<<<<<< HEAD
 import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import type { SkillSnapshot } from "../../../skills/types.js";
@@ -80,8 +86,11 @@ export type FollowupRun = {
    * The chat/channel/user ID where the reply should be sent.
    */
   originatingTo?: string;
+<<<<<<< HEAD
   /** Transport-native chat/conversation ID for hook identity context. */
   originatingChatId?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /** Provider account id (multi-account). */
   originatingAccountId?: string;
   /** Thread id for reply routing (Telegram topic id or Matrix thread event id). */
@@ -105,13 +114,19 @@ export type FollowupRun = {
     groupChannel?: string;
     groupSpace?: string;
     senderId?: string;
+<<<<<<< HEAD
     channelContext?: PluginHookChannelContext;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     senderName?: string;
     senderUsername?: string;
     senderE164?: string;
     senderIsOwner?: boolean;
     traceAuthorized?: boolean;
+<<<<<<< HEAD
     approvalReviewerDeviceId?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sessionFile: string;
     workspaceDir: string;
     /** Task working directory for runtime execution. Defaults to workspaceDir. */
@@ -127,10 +142,13 @@ export type FollowupRun = {
     authProfileId?: string;
     authProfileIdSource?: "auto" | "user";
     thinkLevel?: ThinkLevel;
+<<<<<<< HEAD
     fastMode?: FastMode;
     fastModeAutoOnSeconds?: number;
     fastModeOverride?: boolean;
     fastModeAutoOnSecondsOverride?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     verboseLevel?: VerboseLevel;
     reasoningLevel?: ReasoningLevel;
     elevatedLevel?: ElevatedLevel;

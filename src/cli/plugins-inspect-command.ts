@@ -10,7 +10,11 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
+<<<<<<< HEAD
 import { quietPluginJsonLogger } from "./plugins-json-logger.js";
+=======
+import { quietPluginJsonLogger } from "./plugins-command-helpers.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Options accepted by `openclaw plugins inspect`. */
 export type PluginInspectOptions = {

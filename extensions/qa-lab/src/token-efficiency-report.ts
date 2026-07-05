@@ -181,6 +181,7 @@ function liveEvidenceFailures(row: TokenEfficiencyRow): string[] {
   return failures;
 }
 
+<<<<<<< HEAD
 function liveUsageShapeFailures(
   scenarioId: string,
   runtime: RuntimeId,
@@ -201,6 +202,8 @@ function liveUsageShapeFailures(
   return failures;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function buildTokenEfficiencyReport(
   params: BuildTokenEfficiencyReportParams,
 ): TokenEfficiencyReport {
@@ -238,6 +241,7 @@ export function buildTokenEfficiencyReport(
     }),
   );
   const aggregate = buildAggregate(rows);
+<<<<<<< HEAD
   const failures = rows.flatMap((row, index) => {
     const result = parityResults[index];
     const rowFailures =
@@ -248,6 +252,10 @@ export function buildTokenEfficiencyReport(
             ...liveEvidenceFailures(row),
           ]
         : [];
+=======
+  const failures = rows.flatMap((row) => {
+    const rowFailures = liveUsage ? liveEvidenceFailures(row) : [];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (row.flagged) {
       rowFailures.push(
         `${row.scenarioId} token delta=${formatPercent(row.deltaPercent)} exceeds ${thresholdPercent.toFixed(1)}% Codex increase threshold`,

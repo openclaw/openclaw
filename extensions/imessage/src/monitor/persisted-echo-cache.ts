@@ -3,7 +3,10 @@ import { createHash } from "node:crypto";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getIMessageRuntime } from "../runtime.js";
+<<<<<<< HEAD
 import { stripLeadingEchoTextCorruptionMarkers } from "./echo-text-corruption.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type PersistedEchoEntry = {
   scope: string;
@@ -27,6 +30,7 @@ export const IMESSAGE_SENT_ECHOES_MAX_ENTRIES = 256;
 type PersistedEchoStore = PluginStateSyncKeyedStore<PersistedEchoEntry>;
 
 function normalizeText(text: string | undefined): string | undefined {
+<<<<<<< HEAD
   if (!text) {
     return undefined;
   }
@@ -35,6 +39,9 @@ function normalizeText(text: string | undefined): string | undefined {
   const normalized = stripLeadingEchoTextCorruptionMarkers(
     text.replace(/\r\n?/g, "\n").trim(),
   ).trim();
+=======
+  const normalized = text?.replace(/\r\n?/g, "\n").trim();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return normalized || undefined;
 }
 

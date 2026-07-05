@@ -175,6 +175,7 @@ export function authorizeOperatorScopesForMethod(
     return missingScope ? { allowed: false, missingScope } : { allowed: true };
   }
   const requiredScope = resolveRequiredOperatorScopeForMethod(method) ?? ADMIN_SCOPE;
+<<<<<<< HEAD
   return authorizeOperatorScopesForRequiredScope(requiredScope, scopes);
 }
 
@@ -186,6 +187,8 @@ export function authorizeOperatorScopesForRequiredScope(
   if (scopes.includes(ADMIN_SCOPE)) {
     return { allowed: true };
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (requiredScope === READ_SCOPE) {
     if (scopes.includes(READ_SCOPE) || scopes.includes(WRITE_SCOPE)) {
       return { allowed: true };

@@ -16,10 +16,13 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { enablePluginInConfig } from "../../../plugins/enable.js";
 import { resolvePreferredProviderForAuthChoice } from "../../../plugins/provider-auth-choice-preference.js";
 import { resolveManifestProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
+<<<<<<< HEAD
 import {
   resolveDeprecatedProviderInstallCatalogEntry,
   resolveProviderInstallCatalogEntry,
 } from "../../../plugins/provider-install-catalog.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type {
   ProviderAuthOptionBag,
   ProviderNonInteractiveApiKeyCredentialParams,
@@ -66,7 +69,10 @@ export async function applyNonInteractivePluginProviderChoice(params: {
   const agentDir = resolveAgentDir(params.nextConfig, agentId);
   const workspaceDir =
     resolveAgentWorkspaceDir(params.nextConfig, agentId) ?? resolveDefaultAgentWorkspaceDir();
+<<<<<<< HEAD
   let nextConfig = params.nextConfig;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const prefixedProviderId = params.authChoice.startsWith(PROVIDER_PLUGIN_CHOICE_PREFIX)
     ? params.authChoice.slice(PROVIDER_PLUGIN_CHOICE_PREFIX.length).split(":", 1)[0]?.trim()
     : undefined;
@@ -74,7 +80,11 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     prefixedProviderId ||
     (await resolvePreferredProviderForAuthChoice({
       choice: params.authChoice,
+<<<<<<< HEAD
       config: nextConfig,
+=======
+      config: params.nextConfig,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       workspaceDir,
       includeUntrustedWorkspacePlugins: false,
     }));
@@ -88,6 +98,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
   const owningPluginIds = preferredProviderId
     ? resolveOwningPluginIdsForProviderRef({
         provider: preferredProviderId,
+<<<<<<< HEAD
         config: nextConfig,
         workspaceDir,
       })
@@ -95,6 +106,15 @@ export async function applyNonInteractivePluginProviderChoice(params: {
   let providerChoice = resolveProviderPluginChoice({
     providers: resolvePluginProviders({
       config: nextConfig,
+=======
+        config: params.nextConfig,
+        workspaceDir,
+      })
+    : undefined;
+  const providerChoice = resolveProviderPluginChoice({
+    providers: resolvePluginProviders({
+      config: params.nextConfig,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       workspaceDir,
       onlyPluginIds: owningPluginIds,
       mode: "setup",
@@ -117,14 +137,22 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     }
     // Keep mismatch diagnostics metadata-only so untrusted workspace plugins are not loaded.
     const trustedManifestMatch = resolveManifestProviderAuthChoice(params.authChoice, {
+<<<<<<< HEAD
       config: nextConfig,
+=======
+      config: params.nextConfig,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       workspaceDir,
       includeUntrustedWorkspacePlugins: false,
     });
     const untrustedOnlyManifestMatch =
       !trustedManifestMatch &&
       resolveManifestProviderAuthChoice(params.authChoice, {
+<<<<<<< HEAD
         config: nextConfig,
+=======
+        config: params.nextConfig,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         workspaceDir,
         includeUntrustedWorkspacePlugins: true,
       });
@@ -140,6 +168,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       params.runtime.exit(1);
       return null;
     }
+<<<<<<< HEAD
     const installCatalogParams = {
       config: nextConfig,
       workspaceDir,
@@ -211,6 +240,13 @@ export async function applyNonInteractivePluginProviderChoice(params: {
 
   const enableResult = enablePluginInConfig(
     nextConfig,
+=======
+    return undefined;
+  }
+
+  const enableResult = enablePluginInConfig(
+    params.nextConfig,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     providerChoice.provider.pluginId ?? providerChoice.provider.id,
   );
   if (!enableResult.enabled) {

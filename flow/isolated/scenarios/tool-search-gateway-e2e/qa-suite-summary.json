@@ -1,0 +1,78 @@
+{
+  "scenarios": [
+    {
+      "name": "Tool Search gateway E2E",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "stages fake plugin tool catalog",
+          "status": "pass",
+          "details": "{\n  \"fakePluginDir\": \"/tmp/openclaw/openclaw-qa-suite-mgZgG6/tool-search-fake-plugin\",\n  \"targetTool\": \"fake_plugin_tool_17\"\n}"
+        },
+        {
+          "name": "compares direct and compact Tool Search gateway lanes",
+          "status": "pass",
+          "details": "{\n  \"targetTool\": \"fake_plugin_tool_17\",\n  \"directDeclaredTools\": 58,\n  \"compactDeclaredTools\": 1,\n  \"directRawBytes\": 87204,\n  \"compactRawBytes\": 34166,\n  \"directPlannedTools\": [\n    \"fake_plugin_tool_17\"\n  ],\n  \"compactPlannedTools\": [\n    \"tool_search_code\"\n  ],\n  \"directMentions\": {\n    \"tool_search_code\": 0,\n    \"fake_plugin_tool_17\": 26\n  },\n  \"compactMentions\": {\n    \"tool_search_code\": 27,\n    \"fake_plugin_tool_17\": 34\n  }\n}"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 108639,
+    "gatewayProcessCpuMs": 4000,
+    "gatewayCpuCoreRatio": 0.037,
+    "gatewayProcessRssStartBytes": 843034624,
+    "gatewayProcessRssEndBytes": 891318272,
+    "gatewayProcessRssDeltaBytes": 48283648,
+    "gatewayProcessRssPeakBytes": 891318272,
+    "gatewayProcessRssPeakDeltaBytes": 48283648,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:14:20.141Z",
+        "gatewayProcessRssBytes": 843034624
+      },
+      {
+        "label": "scenario:tool-search-gateway-e2e:start",
+        "at": "2026-07-03T13:14:20.153Z",
+        "gatewayProcessRssBytes": 843034624
+      },
+      {
+        "label": "scenario:tool-search-gateway-e2e:finish",
+        "at": "2026-07-03T13:15:41.980Z",
+        "gatewayProcessRssBytes": 891318272
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:15:42.007Z",
+        "gatewayProcessRssBytes": 891318272
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:13:53.345Z",
+    "finishedAt": "2026-07-03T13:15:41.984Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "tool-search-gateway-e2e"
+    ],
+    "runtimePair": null
+  }
+}

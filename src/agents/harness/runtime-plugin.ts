@@ -3,7 +3,10 @@
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
+<<<<<<< HEAD
 import { resolveManifestActivationPlan } from "../../plugins/activation-planner.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveEffectivePluginActivationState } from "../../plugins/config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "../../plugins/default-enablement.js";
 import {
@@ -17,9 +20,22 @@ import {
 } from "../../plugins/providers.js";
 import { isDefaultAgentRuntimeId, OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
+<<<<<<< HEAD
 import { isCliRuntimeAliasForProvider } from "../model-runtime-aliases.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 
+=======
+import { resolveAgentHarnessPolicy } from "./policy.js";
+
+/**
+ * Lazy-loads plugin-backed harness runtimes before selection.
+ *
+ * Only cold-loadable runtimes live here; always-loaded core/openclaw runtimes should not trigger
+ * plugin registry scans on every embedded-agent turn.
+ */
+const COLD_LOADABLE_HARNESS_PLUGIN_IDS = new Set(["codex", "copilot"]);
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function dedupePluginIds(values: readonly string[]): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
@@ -76,6 +92,7 @@ function resolveHarnessPluginIds(params: {
   config?: OpenClawConfig;
   workspaceDir: string;
 }): string[] {
+<<<<<<< HEAD
   const activationPlan = resolveManifestActivationPlan({
     trigger: { kind: "agentHarness", runtime: params.runtime },
     config: params.config,
@@ -91,11 +108,19 @@ function resolveHarnessPluginIds(params: {
   }
   if (!harnessPluginIds.includes("codex")) {
     return harnessPluginIds;
+=======
+  if (params.runtime !== "codex") {
+    return [params.runtime];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   if (restrictiveAllowlistOmitsPlugin(params.config, "codex")) {
     // Respect a restrictive allowlist even when Codex would normally pull in provider owner
     // plugins. Operators who set an allowlist expect no implicit plugin expansion.
+<<<<<<< HEAD
     return harnessPluginIds;
+=======
+    return ["codex"];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   const providerOwnerPluginIds = dedupePluginIds(
     resolveOwningPluginIdsForProviderRef({
@@ -105,7 +130,11 @@ function resolveHarnessPluginIds(params: {
     }) ?? [],
   );
   if (providerOwnerPluginIds.length === 0) {
+<<<<<<< HEAD
     return harnessPluginIds;
+=======
+    return ["codex"];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   const safeProviderOwnerPluginIds = dedupePluginIds([
     ...resolveBundledProviderCompatPluginIds({
@@ -121,7 +150,10 @@ function resolveHarnessPluginIds(params: {
   ]);
   return dedupePluginIds([
     "codex",
+<<<<<<< HEAD
     ...harnessPluginIds,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ...providerOwnerPluginIds.filter(
       (pluginId) => pluginId !== "codex" && safeProviderOwnerPluginIds.includes(pluginId),
     ),
@@ -172,11 +204,15 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
   if (
     isDefaultAgentRuntimeId(runtime) ||
     runtime === OPENCLAW_AGENT_RUNTIME_ID ||
+<<<<<<< HEAD
     isCliRuntimeAliasForProvider({
       runtime,
       provider: params.provider,
       cfg: params.config,
     })
+=======
+    !COLD_LOADABLE_HARNESS_PLUGIN_IDS.has(runtime)
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ) {
     return;
   }
@@ -189,9 +225,12 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
   });
+<<<<<<< HEAD
   if (pluginIds.length === 0) {
     return;
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const memoryPluginIds = resolveSelectedMemoryPluginIds({
     config: params.config,
     workspaceDir: params.workspaceDir,

@@ -2,7 +2,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildAgentHookContextChannelFields,
+<<<<<<< HEAD
   buildAgentHookContextIdentityFields,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveAgentHookChannelId,
 } from "./hook-agent-context.js";
 
@@ -91,6 +94,7 @@ describe("buildAgentHookContextChannelFields", () => {
     });
   });
 });
+<<<<<<< HEAD
 
 describe("buildAgentHookContextIdentityFields", () => {
   it("mirrors flat sender and chat ids into channel-owned context", () => {
@@ -135,3 +139,5 @@ describe("buildAgentHookContextIdentityFields", () => {
     ).toEqual({});
   });
 });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

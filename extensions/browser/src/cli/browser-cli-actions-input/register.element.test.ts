@@ -36,17 +36,21 @@ function createElementProgram(): Command {
   return program;
 }
 
+<<<<<<< HEAD
 function getLastActionBody(): Record<string, unknown> | undefined {
   return (mocks.callBrowserRequest.mock.calls.at(-1)?.[1] as { body?: Record<string, unknown> })
     ?.body;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("browser element commands", () => {
   beforeEach(() => {
     mocks.callBrowserRequest.mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
   });
 
+<<<<<<< HEAD
   it.each([
     {
       name: "click",
@@ -163,6 +167,8 @@ describe("browser element commands", () => {
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects non-decimal coordinate values before dispatch", async () => {
     const program = createElementProgram();
 

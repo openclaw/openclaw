@@ -6,7 +6,10 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/constants.js";
+<<<<<<< HEAD
 import { deleteTestEnvValue } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { testing as controlPlaneRateLimitTesting } from "./control-plane-rate-limit.js";
 import {
   connectOk,
@@ -148,7 +151,11 @@ async function expectSchemaLookupInvalid(pathValue: unknown) {
 }
 
 async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
+<<<<<<< HEAD
   deleteTestEnvValue(missingEnvVar);
+=======
+  delete process.env[missingEnvVar];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const authStorePath = path.join(resolveDefaultAgentDir({}), AUTH_PROFILE_FILENAME);
   await fs.mkdir(path.dirname(authStorePath), { recursive: true });
   await fs.writeFile(
@@ -178,7 +185,11 @@ beforeEach(() => {
 describe("gateway config methods", () => {
   it("rejects config.set when SecretRef resolution fails", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_${Date.now()}`;
+<<<<<<< HEAD
     deleteTestEnvValue(missingEnvVar);
+=======
+    delete process.env[missingEnvVar];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const current = await getCurrentConfigObject();
     const nextConfig = configWithGatewayTokenSecretRef(current.config, missingEnvVar);
 
@@ -806,7 +817,11 @@ describe("gateway config methods", () => {
 
   it("rejects config.patch when merged SecretRefs cannot resolve", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_PATCH_${Date.now()}`;
+<<<<<<< HEAD
     deleteTestEnvValue(missingEnvVar);
+=======
+    delete process.env[missingEnvVar];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const beforeHash = await getConfigHash();
     const res = await rpcReq<{ ok?: boolean; error?: { message?: string } }>(
       requireWs(),
@@ -838,7 +853,11 @@ describe("gateway config methods", () => {
 describe("gateway config.apply", () => {
   it("rejects config.apply when SecretRef resolution fails", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_APPLY_${Date.now()}`;
+<<<<<<< HEAD
     deleteTestEnvValue(missingEnvVar);
+=======
+    delete process.env[missingEnvVar];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const current = await getCurrentConfigObject();
     const nextConfig = configWithGatewayTokenSecretRef(current.config, missingEnvVar);
 

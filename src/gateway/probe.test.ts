@@ -7,8 +7,11 @@ const gatewayClientState = vi.hoisted(() => ({
   requests: [] as string[],
   startCalls: 0,
   startMode: "hello" as "hello" | "close" | "connect-error-close" | "startup-retry-then-hello",
+<<<<<<< HEAD
   socketOpened: true,
   transportValidated: true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   close: { code: 1008, reason: "pairing required" },
   helloAuth: {
     role: "operator",
@@ -86,12 +89,16 @@ class MockGatewayClient {
   private emitClose(): void {
     const onClose = this.opts.onClose;
     if (typeof onClose === "function") {
+<<<<<<< HEAD
       onClose(gatewayClientState.close.code, gatewayClientState.close.reason, {
         phase: "pre-hello",
         socketOpened: gatewayClientState.socketOpened,
         transportValidated: gatewayClientState.transportValidated,
         transientPreHelloCleanClose: false,
       });
+=======
+      onClose(gatewayClientState.close.code, gatewayClientState.close.reason);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   }
 
@@ -287,8 +294,11 @@ describe("probeGateway", () => {
     deviceIdentityState.identityPaths = [];
     deviceIdentityState.tokenParams = [];
     gatewayClientState.startMode = "hello";
+<<<<<<< HEAD
     gatewayClientState.socketOpened = true;
     gatewayClientState.transportValidated = true;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     gatewayClientState.options = null;
     gatewayClientState.requests = [];
     gatewayClientState.startCalls = 0;
@@ -595,7 +605,10 @@ describe("probeGateway", () => {
 
   it("prefers the structured connect error over the generic close reason", async () => {
     gatewayClientState.startMode = "connect-error-close";
+<<<<<<< HEAD
     gatewayClientState.socketOpened = true;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const result = await runTokenLightweightProbe({
       timeoutMs: 5_000,
@@ -606,6 +619,7 @@ describe("probeGateway", () => {
       error: "scope upgrade pending approval (requestId: req-123)",
       close: { code: 1008, reason: "pairing required" },
     });
+<<<<<<< HEAD
     expect(result.connectLatencyMs).not.toBeNull();
   });
 
@@ -617,6 +631,8 @@ describe("probeGateway", () => {
     const result = await runTokenLightweightProbe({ timeoutMs: 5_000 });
 
     expect(result.connectLatencyMs).toBeNull();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("keeps probing through internally retried startup-unavailable handshakes", async () => {

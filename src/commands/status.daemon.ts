@@ -16,7 +16,10 @@ type DaemonStatusSummary = {
   runtime: Awaited<ReturnType<typeof readServiceStatusSummary>>["runtime"];
   runtimeShort: string | null;
   layout: Awaited<ReturnType<typeof readServiceStatusSummary>>["layout"];
+<<<<<<< HEAD
   wrapperPath: Awaited<ReturnType<typeof readServiceStatusSummary>>["wrapperPath"];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 async function buildDaemonStatusSummary(
@@ -35,7 +38,10 @@ async function buildDaemonStatusSummary(
     runtime: summary.runtime,
     runtimeShort: formatDaemonRuntimeShort(summary.runtime),
     layout: summary.layout,
+<<<<<<< HEAD
     wrapperPath: summary.wrapperPath,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }
 

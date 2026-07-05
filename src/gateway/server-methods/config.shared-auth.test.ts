@@ -21,7 +21,13 @@ const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({
   coalesced: false,
 }));
 const restartSentinelMocks = vi.hoisted(() => ({
+<<<<<<< HEAD
   writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => undefined),
+=======
+  writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => {
+    return "/tmp/restart-sentinel.json";
+  }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -353,6 +359,7 @@ describe("config shared auth disconnects", () => {
     await runConfigPatch({ gateway: { port: 19001 } });
 
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+<<<<<<< HEAD
     const payload = restartSentinelMocks.writeRestartSentinel.mock.calls.at(-1)?.[0];
     expect(payload?.stats?.requiresRestart).toBe(true);
   });
@@ -380,6 +387,8 @@ describe("config shared auth disconnects", () => {
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
     const payload = restartSentinelMocks.writeRestartSentinel.mock.calls.at(-1)?.[0];
     expect(payload?.stats?.requiresRestart).toBe(false);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("does not add an agent continuation from generic control-plane sessionKey params", async () => {

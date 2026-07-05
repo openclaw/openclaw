@@ -37,7 +37,11 @@ export function normalizeMediaSource(src: string): string {
   return src.startsWith("file://") ? src.replace("file://", "") : src;
 }
 
+<<<<<<< HEAD
 const TRAILING_SERIALIZED_JSON_AFTER_EXT_RE = /^(.*\.\w{1,10})\\?"(?=[\]},:]|$).*/s;
+=======
+const TRAILING_SERIALIZED_JSON_AFTER_EXT_RE = /^(.*\.\w{1,10})\\?"(?=[\]},:,]|$).*/s;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function cleanCandidate(raw: string) {
   const stripped = raw.replace(/^[`"'[{(]+/, "").replace(/[`"'\\})\],]+$/, "");

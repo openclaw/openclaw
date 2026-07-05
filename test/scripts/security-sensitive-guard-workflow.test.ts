@@ -136,8 +136,11 @@ describe("security-sensitive guard workflow", () => {
   it("uses a dedicated checked-in script and detects the intended file surfaces", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
     const script = readFileSync("scripts/github/security-sensitive-guard.mjs", "utf8");
+<<<<<<< HEAD
     const sharedScript = readFileSync("scripts/github/guard-shared.mjs", "utf8");
     const guardSources = `${script}\n${sharedScript}`;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(workflow).toContain("scripts/github/security-sensitive-guard.mjs");
     expect(script).toContain('"security-sensitive-changed"');
@@ -145,7 +148,11 @@ describe("security-sensitive guard workflow", () => {
     expect(script).toContain(".env");
     expect(script).toContain("/allow-security-sensitive-change");
     expect(script).toContain("openclaw-secops");
+<<<<<<< HEAD
     expect(guardSources).toContain("/memberships/");
+=======
+    expect(script).toContain("/memberships/");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(script).toContain("A later push requires a fresh approval.");
     expect(script).toContain("process.exitCode = 1");
   });

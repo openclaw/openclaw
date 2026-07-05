@@ -47,6 +47,7 @@ describe("provider auth env trust", () => {
     });
   });
 
+<<<<<<< HEAD
   it("buildApiKeyCredential rejects malformed object SecretRefs", async () => {
     const { buildApiKeyCredential } = await import("./provider-auth-helpers.js");
     const malformedRefs = [
@@ -75,6 +76,8 @@ describe("provider auth env trust", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("resolveRefFallbackInput excludes untrusted workspace plugin env vars", async () => {
     const { resolveRefFallbackInput } = await import("./provider-auth-ref.js");
     const config = { plugins: {} };

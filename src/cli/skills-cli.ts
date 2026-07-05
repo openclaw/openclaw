@@ -1,10 +1,13 @@
 // Skills CLI for workspace status, install/update, ClawHub verification, and workshop proposals.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+<<<<<<< HEAD
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
@@ -13,7 +16,10 @@ import {
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
+<<<<<<< HEAD
 import { CLAWHUB_TRUST_ERROR_CODE } from "../infra/clawhub-install-trust.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   fetchClawHubSkillCard,
   fetchClawHubSkillVerification,
@@ -50,7 +56,10 @@ import type {
   SkillProposalSupportFileInput,
 } from "../skills/workshop/types.js";
 import { CONFIG_DIR } from "../utils.js";
+<<<<<<< HEAD
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveOptionFromCommand } from "./cli-utils.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
@@ -70,6 +79,7 @@ type ResolvedClawHubSkillVerificationTarget = Extract<
   { ok: true }
 >;
 
+<<<<<<< HEAD
 function resolveSkillClawHubRiskOptions(
   acknowledgeClawHubRisk: boolean,
   action: "installing" | "updating",
@@ -96,15 +106,20 @@ function isClawHubSkillBlockedCliFailure(result: { code?: string; warning?: stri
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type ResolveSkillsWorkspaceOptions = {
   agentId?: string;
   cwd?: string;
 };
 
+<<<<<<< HEAD
 type ResolvedSkillsWorkspace = ReturnType<typeof resolveSkillsWorkspace>;
 
 const GATEWAY_SKILLS_STATUS_TIMEOUT_MS = 1_500;
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   config: ReturnType<typeof getRuntimeConfig>;
   workspaceDir: string;
@@ -131,6 +146,7 @@ function resolveAgentOption(
   return resolveOptionFromCommand<string>(command, "agent") ?? opts?.agent;
 }
 
+<<<<<<< HEAD
 async function loadGatewaySkillsStatusReport(
   resolved: ResolvedSkillsWorkspace,
 ): Promise<SkillStatusReport | null> {
@@ -162,6 +178,14 @@ async function loadSkillsStatusReport(
     config: resolved.config,
     agentId: resolved.agentId,
   });
+=======
+async function loadSkillsStatusReport(
+  options?: ResolveSkillsWorkspaceOptions,
+): Promise<SkillStatusReport> {
+  const { config, workspaceDir, agentId } = resolveSkillsWorkspace(options);
+  const { buildWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
+  return buildWorkspaceSkillStatus(workspaceDir, { config, agentId });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function runSkillsAction(
@@ -177,6 +201,13 @@ async function runSkillsAction(
   }
 }
 
+<<<<<<< HEAD
+=======
+function resolveActiveWorkspaceDir(options?: ResolveSkillsWorkspaceOptions): string {
+  return resolveSkillsWorkspace(options).workspaceDir;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveSkillsWorkspaceForCommand(
   command: Command | null | undefined,
   opts?: { agent?: string },
@@ -188,6 +219,7 @@ function resolveClawHubTargetWorkspaceDir(
   command: Command | undefined,
   opts: { agent?: string; global?: boolean },
 ): string | undefined {
+<<<<<<< HEAD
   return resolveClawHubTargetWorkspace(command, opts)?.workspaceDir;
 }
 
@@ -195,6 +227,8 @@ function resolveClawHubTargetWorkspace(
   command: Command | undefined,
   opts: { agent?: string; global?: boolean },
 ): Pick<ResolvedSkillsWorkspace, "config" | "workspaceDir"> | undefined {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const agentId = resolveAgentOption(command, opts);
   if (opts.global && normalizeOptionalString(agentId)) {
     defaultRuntime.error("Use either --global or --agent, not both.");
@@ -202,9 +236,15 @@ function resolveClawHubTargetWorkspace(
     return undefined;
   }
   if (opts.global) {
+<<<<<<< HEAD
     return { config: getRuntimeConfig(), workspaceDir: CONFIG_DIR };
   }
   return resolveSkillsWorkspace({ agentId });
+=======
+    return CONFIG_DIR;
+  }
+  return resolveActiveWorkspaceDir({ agentId });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function shouldFailSkillVerification(result: ClawHubSkillVerificationResponse): boolean {
@@ -362,11 +402,14 @@ export function registerSkillsCli(program: Command) {
       "Install a pending GitHub-backed skill before ClawHub scan completes",
       false,
     )
+<<<<<<< HEAD
     .option(
       "--acknowledge-clawhub-risk",
       "Acknowledge ClawHub release trust warnings without prompting",
       false,
     )
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     .option("--global", "Install into the shared managed skills directory", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .option("--as <slug>", "Install a git/local skill under this slug")
@@ -378,8 +421,11 @@ export function registerSkillsCli(program: Command) {
           version?: string;
           force?: boolean;
           forceInstall?: boolean;
+<<<<<<< HEAD
           acknowledgeClawhubRisk?: boolean;
           acknowledgeClawHubRisk?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           global?: boolean;
           agent?: string;
           as?: string;
@@ -404,7 +450,11 @@ export function registerSkillsCli(program: Command) {
               force: Boolean(opts.force),
               logger: {
                 info: (message) => defaultRuntime.log(message),
+<<<<<<< HEAD
                 warn: (message) => defaultRuntime.log(formatSkillWarning(message)),
+=======
+                warn: (message) => defaultRuntime.log(theme.warn(message)),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               },
             });
             if (!result.ok) {
@@ -430,6 +480,7 @@ export function registerSkillsCli(program: Command) {
             version: opts.version,
             force: Boolean(opts.force),
             ...(opts.forceInstall ? { forceInstall: true } : {}),
+<<<<<<< HEAD
             ...resolveSkillClawHubRiskOptions(
               opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true,
               "installing",
@@ -443,6 +494,14 @@ export function registerSkillsCli(program: Command) {
             if (!isClawHubSkillBlockedCliFailure(result)) {
               defaultRuntime.error(result.error);
             }
+=======
+            logger: {
+              info: (message) => defaultRuntime.log(message),
+            },
+          });
+          if (!result.ok) {
+            defaultRuntime.error(result.error);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             defaultRuntime.exit(1);
             return;
           }
@@ -457,23 +516,31 @@ export function registerSkillsCli(program: Command) {
   skills
     .command("update")
     .description("Update ClawHub-installed skills in the active or shared managed directory")
+<<<<<<< HEAD
     .argument("[skill-ref]", "Single ClawHub skill ref (@owner/slug)")
+=======
+    .argument("[slug]", "Single skill slug")
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     .option("--all", "Update all tracked ClawHub skills", false)
     .option(
       "--force-install",
       "Install a pending GitHub-backed skill before ClawHub scan completes",
       false,
     )
+<<<<<<< HEAD
     .option(
       "--acknowledge-clawhub-risk",
       "Acknowledge ClawHub release trust warnings without prompting",
       false,
     )
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     .option("--global", "Update skills in the shared managed skills directory", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .action(
       async (
         slug: string | undefined,
+<<<<<<< HEAD
         opts: {
           all?: boolean;
           forceInstall?: boolean;
@@ -482,6 +549,9 @@ export function registerSkillsCli(program: Command) {
           global?: boolean;
           agent?: string;
         },
+=======
+        opts: { all?: boolean; forceInstall?: boolean; global?: boolean; agent?: string },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         command: Command,
       ) => {
         try {
@@ -495,16 +565,25 @@ export function registerSkillsCli(program: Command) {
             defaultRuntime.exit(1);
             return;
           }
+<<<<<<< HEAD
           const target = resolveClawHubTargetWorkspace(command, opts);
           if (!target) {
             return;
           }
           const tracked = await readTrackedClawHubSkillSlugs(target.workspaceDir);
+=======
+          const workspaceDir = resolveClawHubTargetWorkspaceDir(command, opts);
+          if (!workspaceDir) {
+            return;
+          }
+          const tracked = await readTrackedClawHubSkillSlugs(workspaceDir);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           if (opts.all && tracked.length === 0) {
             defaultRuntime.log("No tracked ClawHub skills to update.");
             return;
           }
           const results = await updateSkillsFromClawHub({
+<<<<<<< HEAD
             workspaceDir: target.workspaceDir,
             slug,
             ...(opts.forceInstall ? { forceInstall: true } : {}),
@@ -517,14 +596,26 @@ export function registerSkillsCli(program: Command) {
               warn: (message) => defaultRuntime.log(formatSkillWarning(message)),
             },
             config: target.config,
+=======
+            workspaceDir,
+            slug,
+            ...(opts.forceInstall ? { forceInstall: true } : {}),
+            logger: {
+              info: (message) => defaultRuntime.log(message),
+            },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           });
           let failed = false;
           for (const result of results) {
             if (!result.ok) {
               failed = true;
+<<<<<<< HEAD
               if (!isClawHubSkillBlockedCliFailure(result)) {
                 defaultRuntime.error(result.error);
               }
+=======
+              defaultRuntime.error(result.error);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               continue;
             }
             if (result.changed) {
@@ -548,7 +639,11 @@ export function registerSkillsCli(program: Command) {
   skills
     .command("verify")
     .description("Verify a ClawHub skill with ClawHub")
+<<<<<<< HEAD
     .argument("<skill-ref>", "ClawHub skill ref (@owner/slug)")
+=======
+    .argument("<slug>", "ClawHub skill slug")
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     .option("--version <version>", "Verify a specific version")
     .option("--tag <tag>", "Verify a dist tag")
     .option("--card", "Print the generated Skill Card Markdown", false)
@@ -558,7 +653,10 @@ export function registerSkillsCli(program: Command) {
       false,
     )
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
+<<<<<<< HEAD
     .addHelpText("after", "\nExamples:\n  openclaw skills verify @owner/weather\n")
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     .action(
       async (
         slug: string,

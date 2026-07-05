@@ -15,7 +15,10 @@ const getSessionGoalMock = vi.fn();
 const updateSessionGoalStatusMock = vi.fn();
 const ensureRuntimePluginsLoadedMock = vi.fn();
 const ensureContextWindowCacheLoadedMock = vi.fn(async () => undefined);
+<<<<<<< HEAD
 const runSessionStartupMigrationMock = vi.fn<() => Promise<void>>(async () => undefined);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const listSessionsFromStoreAsyncMock = vi.fn(
   async (_options?: unknown): Promise<{ sessions: unknown[] }> => ({ sessions: [] }),
 );
@@ -149,11 +152,14 @@ vi.mock("../config/config.js", () => ({
   loadConfig: () => getRuntimeConfigMock(),
 }));
 
+<<<<<<< HEAD
 vi.mock("../config/sessions/startup-migration.js", () => ({
   runSessionStartupMigration: (...args: Parameters<typeof runSessionStartupMigrationMock>) =>
     runSessionStartupMigrationMock(...args),
 }));
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.mock("../gateway/cli-session-history.js", () => ({
   augmentChatHistoryWithCliSessionImports: ({ localMessages }: { localMessages?: unknown[] }) =>
     localMessages ?? [],
@@ -274,8 +280,11 @@ describe("EmbeddedTuiBackend", () => {
     ensureRuntimePluginsLoadedMock.mockReset();
     ensureContextWindowCacheLoadedMock.mockReset();
     ensureContextWindowCacheLoadedMock.mockResolvedValue(undefined);
+<<<<<<< HEAD
     runSessionStartupMigrationMock.mockReset();
     runSessionStartupMigrationMock.mockResolvedValue(undefined);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     listSessionsFromStoreAsyncMock.mockReset();
     listSessionsFromStoreAsyncMock.mockResolvedValue({ sessions: [] });
     loadCombinedSessionStoreForGatewayMock.mockReset();
@@ -565,6 +574,7 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
+<<<<<<< HEAD
   it("gates session reads on the startup migration so legacy keys are never observed early", async () => {
     let resolveMigration: () => void = () => {};
     const migrationDone = new Promise<void>((resolve) => {
@@ -593,6 +603,8 @@ describe("EmbeddedTuiBackend", () => {
     expect(listSessionsFromStoreAsyncMock).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("creates a local session entry before starting a goal", async () => {
     loadSessionEntryMock.mockReturnValueOnce({
       cfg: {},
@@ -710,9 +722,14 @@ describe("EmbeddedTuiBackend", () => {
     expect(readSessionMessagesAsyncMock).toHaveBeenCalledWith(
       {
         agentId: "main",
+<<<<<<< HEAD
         sessionEntry: { sessionId: "sess-main" },
         sessionId: "sess-main",
         sessionKey: "agent:main:main",
+=======
+        sessionFile: undefined,
+        sessionId: "sess-main",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         storePath: "/tmp/openclaw-sessions.json",
       },
       {
@@ -1538,6 +1555,10 @@ describe("EmbeddedTuiBackend", () => {
       .mockResolvedValueOnce({ payloads: [{ text: "second done" }], meta: {} });
 
     const backend = new EmbeddedTuiBackend();
+<<<<<<< HEAD
+=======
+    let callsAfterSendDuringError = 0;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     let sentDuringError: Promise<{ runId: string }> | undefined;
     backend.onEvent = (evt) => {
       const payload = evt.payload as { runId?: string; state?: string };
@@ -1551,6 +1572,10 @@ describe("EmbeddedTuiBackend", () => {
           message: "second",
           runId: "run-local-second",
         });
+<<<<<<< HEAD
+=======
+        callsAfterSendDuringError = agentCommandFromIngressMock.mock.calls.length;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     };
 
@@ -1564,9 +1589,15 @@ describe("EmbeddedTuiBackend", () => {
     await vi.waitFor(() => {
       expect(sentDuringError).toBeDefined();
     });
+<<<<<<< HEAD
     await sentDuringError;
     await flushMicrotasks();
     expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
+=======
+    expect(callsAfterSendDuringError).toBe(2);
+    await sentDuringError;
+    await flushMicrotasks();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("keeps final short replies like No after suppressing lead-fragment deltas", async () => {

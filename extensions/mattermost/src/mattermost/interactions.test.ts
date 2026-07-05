@@ -10,6 +10,10 @@ import {
   computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
   generateInteractionToken,
+<<<<<<< HEAD
+=======
+  getInteractionCallbackUrl,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   getInteractionSecret,
   resolveInteractionCallbackPath,
   resolveInteractionCallbackUrl,
@@ -196,6 +200,24 @@ describe("generateInteractionToken / verifyInteractionToken", () => {
   });
 });
 
+<<<<<<< HEAD
+=======
+// ── Callback URL registry ────────────────────────────────────────────
+
+describe("callback URL registry", () => {
+  it("stores and retrieves callback URLs", () => {
+    setInteractionCallbackUrl("acct1", "http://localhost:18789/mattermost/interactions/acct1");
+    expect(getInteractionCallbackUrl("acct1")).toBe(
+      "http://localhost:18789/mattermost/interactions/acct1",
+    );
+  });
+
+  it("returns undefined for unknown account", () => {
+    expect(getInteractionCallbackUrl("nonexistent-account-id")).toBeUndefined();
+  });
+});
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("resolveInteractionCallbackUrl", () => {
   afterEach(() => {
     for (const accountId of ["cached", "default", "acct", "myaccount"]) {

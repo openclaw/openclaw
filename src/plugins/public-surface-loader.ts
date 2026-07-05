@@ -168,6 +168,7 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
   }
 }
 
+<<<<<<< HEAD
 /** Loads the first resolvable bundled public artifact from an ordered candidate list. */
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
 export function loadBundledPluginPublicArtifactModuleFromCandidatesSync<T extends object>(params: {
@@ -193,6 +194,8 @@ export function loadBundledPluginPublicArtifactModuleFromCandidatesSync<T extend
   return null;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function resolveBundledPluginPublicArtifactPath(params: {
   dirName: string;
   artifactBasename: string;

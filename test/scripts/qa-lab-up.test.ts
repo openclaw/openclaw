@@ -34,6 +34,7 @@ describe("scripts/qa-lab-up", () => {
     );
   });
 
+<<<<<<< HEAD
   it("accepts the pnpm run argument separator", async () => {
     const runQaDockerUpCommand = vi.fn(async () => {});
     const loadRuntime = vi.fn(async () => ({ runQaDockerUpCommand }));
@@ -72,6 +73,14 @@ describe("scripts/qa-lab-up", () => {
     [["--qa-lab-port", "1e4"], "--qa-lab-port must be a positive integer."],
     [["--qa-lab-port", "65536"], "--qa-lab-port must be a TCP port from 1 to 65535."],
   ])("rejects invalid TCP ports: %j", async (args, errorMessage) => {
+=======
+  it.each([
+    [["--gateway-port", "1.5"], "--gateway-port must be a positive integer."],
+    [["--gateway-port", "0x1000"], "--gateway-port must be a positive integer."],
+    [["--gateway-port", "0"], "--gateway-port must be a positive integer."],
+    [["--qa-lab-port", "1e4"], "--qa-lab-port must be a positive integer."],
+  ])("rejects non-decimal positive integer ports: %j", async (args, errorMessage) => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const loadRuntime = vi.fn(async () => ({ runQaDockerUpCommand: vi.fn(async () => {}) }));
 
     await expect(qaLabUpTesting.runQaLabUp(args, { loadRuntime })).rejects.toThrow(errorMessage);

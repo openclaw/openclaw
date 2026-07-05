@@ -6,12 +6,15 @@ import { resolveUserPath } from "../utils.js";
 import { createCacheTrace } from "./cache-trace.js";
 
 describe("createCacheTrace", () => {
+<<<<<<< HEAD
   const bareAnthropicKey = "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWx"; // pragma: allowlist secret
   const bareAwsKey = "AKIAIOSFODNN7EXAMPLE"; // pragma: allowlist secret
   const bareGithubKey = "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz1234567890"; // pragma: allowlist secret
   const bareGoogleKey = "AIzaSyA1bC2dE3fG4hI5jK6lM7nO8pQrStUvW"; // pragma: allowlist secret
   const barePerplexityKey = "pplx-AbCdEfGhIjKlMnOpQrStUvWx"; // pragma: allowlist secret
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   function createMemoryTraceForTest() {
     const lines: string[] = [];
     // In-memory writer keeps cache trace assertions deterministic without
@@ -185,21 +188,31 @@ describe("createCacheTrace", () => {
 
     trace?.recordStage("stream:context", {
       system: {
+<<<<<<< HEAD
         provider: {
           apiKey: "sk-system-secret",
           baseUrl: "https://api.example.com",
           diagnosticText: bareAwsKey,
         },
+=======
+        provider: { apiKey: "sk-system-secret", baseUrl: "https://api.example.com" },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
       model: {
         id: "test-model",
         apiKey: "sk-model-secret",
         tokenCount: 8192,
+<<<<<<< HEAD
         diagnosticText: bareGoogleKey,
       },
       options: {
         apiKey: "sk-options-secret",
         diagnosticText: bareGithubKey,
+=======
+      },
+      options: {
+        apiKey: "sk-options-secret",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         nested: {
           password: "super-secret-password",
           safe: "keep-me",
@@ -217,10 +230,13 @@ describe("createCacheTrace", () => {
           },
           content: [
             {
+<<<<<<< HEAD
               type: "text",
               text: barePerplexityKey,
             },
             {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               type: "image",
               source: { type: "base64", media_type: "image/jpeg", data: "U0VDUkVU" },
             },
@@ -230,6 +246,7 @@ describe("createCacheTrace", () => {
     });
 
     const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+<<<<<<< HEAD
     const systemProvider =
       (event.system as { provider?: Record<string, unknown> } | undefined)?.provider ?? {};
     expect(systemProvider).toMatchObject({
@@ -249,6 +266,18 @@ describe("createCacheTrace", () => {
     );
     expect(event.options).toEqual({
       diagnosticText: expect.any(String),
+=======
+    expect(event.system).toEqual({
+      provider: {
+        baseUrl: "https://api.example.com",
+      },
+    });
+    expect(event.model).toEqual({
+      id: "test-model",
+      tokenCount: 8192,
+    });
+    expect(event.options).toEqual({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       nested: {
         safe: "keep-me",
         tokenCount: 42,
@@ -263,10 +292,13 @@ describe("createCacheTrace", () => {
         },
       ],
     });
+<<<<<<< HEAD
     expect((event.options as { diagnosticText?: string }).diagnosticText).not.toBe(bareGithubKey);
     expect((event.options as { diagnosticText?: string }).diagnosticText).not.toContain(
       bareGithubKey,
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const optionsImages = (
       ((event.options as { images?: unknown[] } | undefined)?.images ?? []) as Array<
@@ -286,6 +318,7 @@ describe("createCacheTrace", () => {
     expect(firstMessage?.metadata).toEqual({
       label: "preserve-me",
     });
+<<<<<<< HEAD
     const content = (firstMessage?.content as Array<Record<string, unknown>> | undefined) ?? [];
     expect(content[0]).toEqual({
       type: "text",
@@ -324,6 +357,13 @@ describe("createCacheTrace", () => {
     expect(serialized).not.toContain(bareAnthropicKey);
     expect(serialized).not.toContain(bareGithubKey);
     expect(serialized).not.toContain(bareGoogleKey);
+=======
+    const source = (((firstMessage?.content as Array<Record<string, unknown>> | undefined) ?? [])[0]
+      ?.source ?? {}) as Record<string, unknown>;
+    expect(source.data).toBe("<redacted>");
+    expect(source.bytes).toBe(6);
+    expect(source.sha256).toBe(crypto.createHash("sha256").update("U0VDUkVU").digest("hex"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("handles circular references in messages without stack overflow", () => {

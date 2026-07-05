@@ -27,7 +27,10 @@ import {
   resolveOutboundChannelPlugin,
 } from "./channel-resolution.js";
 import { resolveOutboundSessionRoute } from "./outbound-session.js";
+<<<<<<< HEAD
 import { isReservedTargetLiteralError } from "./target-errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import {
   resolveOutboundTargetWithPlugin,
@@ -362,6 +365,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
   })();
   if (targetResolution?.ok) {
     routeResolvedTarget = targetResolution.target;
+<<<<<<< HEAD
   } else if (targetResolution && isReservedTargetLiteralError(targetResolution.error)) {
     return buildNoHeartbeatDeliveryTarget({
       reason: "no-target",
@@ -369,6 +373,8 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
       lastChannel: delivery.lastChannel,
       lastAccountId: delivery.lastAccountId,
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   if (routeResolvedTarget?.kind === "user" && heartbeat?.directPolicy === "block") {
     return buildNoHeartbeatDeliveryTarget({

@@ -2,10 +2,17 @@
 import { describe, expect, it } from "vitest";
 import { resolveCronAgentLane } from "../agents/lanes.js";
 import {
+<<<<<<< HEAD
   makeIsolatedAgentJobFixture,
   makeIsolatedAgentParamsFixture,
 } from "./isolated-agent/job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./isolated-agent/run.suite-helpers.js";
+=======
+  makeIsolatedAgentTurnJob,
+  makeIsolatedAgentTurnParams,
+  setupRunCronIsolatedAgentTurnSuite,
+} from "./isolated-agent/run.suite-helpers.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   loadRunCronIsolatedAgentTurn,
   mockRunCronFallbackPassthrough,
@@ -28,8 +35,13 @@ async function runLaneCase(lane?: string) {
   mockRunCronFallbackPassthrough();
 
   await runCronIsolatedAgentTurn(
+<<<<<<< HEAD
     makeIsolatedAgentParamsFixture({
       job: makeIsolatedAgentJobFixture({
+=======
+    makeIsolatedAgentTurnParams({
+      job: makeIsolatedAgentTurnJob({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         delivery: { mode: "none" },
         payload: { kind: "agentTurn", message: "do it" },
       }),

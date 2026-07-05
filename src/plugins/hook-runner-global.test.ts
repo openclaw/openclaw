@@ -1,6 +1,7 @@
 /** Verifies global hook runner sequencing, mutation, and error behavior. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
+<<<<<<< HEAD
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   pinActivePluginChannelRegistry,
@@ -8,15 +9,20 @@ import {
   setActivePluginRegistry,
 } from "./runtime.js";
 import { createPluginRecord } from "./status.test-helpers.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 async function importHookRunnerGlobalModule() {
   return import("./hook-runner-global.js");
 }
 
+<<<<<<< HEAD
 async function importHookRunnerGlobalStateModule() {
   return import("./hook-runner-global-state.js");
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type HookRunnerGlobalModule = Awaited<ReturnType<typeof importHookRunnerGlobalModule>>;
 type HookRunner = NonNullable<ReturnType<HookRunnerGlobalModule["getGlobalHookRunner"]>>;
 
@@ -42,7 +48,10 @@ async function expectGlobalRunnerState(expected: { hasRunner: boolean; registry?
 afterEach(async () => {
   const mod = await importHookRunnerGlobalModule();
   mod.resetGlobalHookRunner();
+<<<<<<< HEAD
   setActivePluginRegistry(createEmptyPluginRegistry());
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("hook-runner-global", () => {
@@ -81,6 +90,7 @@ describe("hook-runner-global", () => {
 
     await expectGlobalRunnerState({ hasRunner: false });
   });
+<<<<<<< HEAD
 
   it("exposes trusted policies from the same live registry set as hooks", async () => {
     const mod = await importHookRunnerGlobalModule();
@@ -131,4 +141,6 @@ describe("hook-runner-global", () => {
       releasePinnedPluginChannelRegistry(gatewayRegistry);
     }
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

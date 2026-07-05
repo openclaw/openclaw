@@ -20,7 +20,10 @@ import { formatMissingPluginMessage } from "./error-format.js";
 import type { PluginMarketplaceListOptions, PluginRegistryOptions } from "./plugins-cli.js";
 
 type PluginInstallActionOptions = {
+<<<<<<< HEAD
   acknowledgeClawHubRisk?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   dangerouslyForceUnsafeInstall?: boolean;
   force?: boolean;
   link?: boolean;

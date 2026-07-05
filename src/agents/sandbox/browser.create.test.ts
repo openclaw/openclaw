@@ -26,6 +26,11 @@ const dockerMocks = vi.hoisted(() => ({
   execDocker: vi.fn(),
   readDockerContainerEnvVar: vi.fn(),
   readDockerContainerLabel: vi.fn(),
+<<<<<<< HEAD
+=======
+  readDockerNetworkDriver: vi.fn(),
+  readDockerNetworkGateway: vi.fn(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   readDockerPort: vi.fn(),
 }));
 
@@ -55,6 +60,11 @@ vi.mock("./docker.js", async () => {
     execDocker: dockerMocks.execDocker,
     readDockerContainerEnvVar: dockerMocks.readDockerContainerEnvVar,
     readDockerContainerLabel: dockerMocks.readDockerContainerLabel,
+<<<<<<< HEAD
+=======
+    readDockerNetworkDriver: dockerMocks.readDockerNetworkDriver,
+    readDockerNetworkGateway: dockerMocks.readDockerNetworkGateway,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     readDockerPort: dockerMocks.readDockerPort,
   };
 });
@@ -209,6 +219,11 @@ describe("ensureSandboxBrowser create args", () => {
     dockerMocks.execDocker.mockClear();
     dockerMocks.readDockerContainerEnvVar.mockClear();
     dockerMocks.readDockerContainerLabel.mockClear();
+<<<<<<< HEAD
+=======
+    dockerMocks.readDockerNetworkDriver.mockClear();
+    dockerMocks.readDockerNetworkGateway.mockClear();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     dockerMocks.readDockerPort.mockClear();
     registryMocks.readBrowserRegistry.mockClear();
     registryMocks.updateBrowserRegistry.mockClear();
@@ -224,6 +239,11 @@ describe("ensureSandboxBrowser create args", () => {
     });
     dockerMocks.readDockerContainerLabel.mockResolvedValue(null);
     dockerMocks.readDockerContainerEnvVar.mockResolvedValue(null);
+<<<<<<< HEAD
+=======
+    dockerMocks.readDockerNetworkDriver.mockResolvedValue("bridge");
+    dockerMocks.readDockerNetworkGateway.mockResolvedValue("172.21.0.1");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     dockerMocks.readDockerPort.mockImplementation(async (_containerName: string, port: number) => {
       if (port === 9222) {
         return 49100;
@@ -645,6 +665,11 @@ describe("ensureSandboxBrowser create args", () => {
   });
 
   it("requires auth for the sandbox CDP relay without auto-derived source ranges", async () => {
+<<<<<<< HEAD
+=======
+    dockerMocks.readDockerNetworkGateway.mockResolvedValue("172.21.0.1");
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await ensureTestSandboxBrowser({
       scopeKey: "session:test",
       workspaceDir: "/tmp/workspace",
@@ -659,6 +684,11 @@ describe("ensureSandboxBrowser create args", () => {
     );
     expect(authEntry).toMatch(/^OPENCLAW_BROWSER_CDP_AUTH_TOKEN=[0-9a-f]{48}$/);
     expect(envEntries).not.toContain("OPENCLAW_BROWSER_CDP_SOURCE_RANGE=172.21.0.1/32");
+<<<<<<< HEAD
+=======
+    expect(dockerMocks.readDockerNetworkDriver).not.toHaveBeenCalled();
+    expect(dockerMocks.readDockerNetworkGateway).not.toHaveBeenCalled();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const token = requireValue(authEntry, "CDP auth env").slice(
       "OPENCLAW_BROWSER_CDP_AUTH_TOKEN=".length,
@@ -672,6 +702,10 @@ describe("ensureSandboxBrowser create args", () => {
   });
 
   it("passes explicit cdpSourceRange as an additional relay filter", async () => {
+<<<<<<< HEAD
+=======
+    dockerMocks.readDockerNetworkGateway.mockResolvedValue("172.21.0.1");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const cfg = buildConfig(false);
     cfg.browser.cdpSourceRange = "10.0.0.0/24";
 
@@ -685,6 +719,10 @@ describe("ensureSandboxBrowser create args", () => {
     const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
     const envEntries = collectDockerFlagValues(createArgs ?? [], "-e");
     expect(envEntries).toContain("OPENCLAW_BROWSER_CDP_SOURCE_RANGE=10.0.0.0/24");
+<<<<<<< HEAD
+=======
+    expect(dockerMocks.readDockerNetworkGateway).not.toHaveBeenCalled();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("recreates existing browser containers that do not expose relay auth", async () => {
@@ -706,6 +744,10 @@ describe("ensureSandboxBrowser create args", () => {
   });
 
   it("does not inject a source range for network=none by default", async () => {
+<<<<<<< HEAD
+=======
+    dockerMocks.readDockerNetworkGateway.mockResolvedValue(null);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const cfg = buildConfig(false);
     cfg.browser.network = "none";
 

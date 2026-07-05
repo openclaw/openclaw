@@ -290,6 +290,7 @@ describe("handleCommands /plugins install", () => {
         version: "1.2.3",
         integrity: "sha512-demo",
         resolvedAt: "2026-03-22T12:00:00.000Z",
+<<<<<<< HEAD
         artifactKind: "npm-pack",
         artifactFormat: "tgz",
         npmIntegrity: "sha512-npm-pack",
@@ -300,6 +301,8 @@ describe("handleCommands /plugins install", () => {
         clawhubTrustReasons: ["scan:pending"],
         clawhubTrustPending: true,
         clawhubTrustCheckedAt: "2026-03-22T11:59:59.000Z",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     });
     persistPluginInstallMock.mockResolvedValue({});
@@ -326,6 +329,7 @@ describe("handleCommands /plugins install", () => {
         integrity: "sha512-demo",
         clawhubPackage: "@openclaw/clawhub-demo",
         clawhubChannel: "official",
+<<<<<<< HEAD
         artifactKind: "npm-pack",
         artifactFormat: "tgz",
         npmIntegrity: "sha512-npm-pack",
@@ -336,10 +340,13 @@ describe("handleCommands /plugins install", () => {
         clawhubTrustReasons: ["scan:pending"],
         clawhubTrustPending: true,
         clawhubTrustCheckedAt: "2026-03-22T11:59:59.000Z",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
     });
   });
 
+<<<<<<< HEAD
   it("includes non-blocking ClawHub warnings in successful chat install replies", async () => {
     const warning =
       'ClawHub trust warning for "@openclaw/clawhub-demo@1.2.3": scan=pending; reasons=pending.';
@@ -467,6 +474,8 @@ describe("handleCommands /plugins install", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("refuses plugin installs in Nix mode before package installer side effects", async () => {
     const previousNixMode = process.env.OPENCLAW_NIX_MODE;
     process.env.OPENCLAW_NIX_MODE = "1";

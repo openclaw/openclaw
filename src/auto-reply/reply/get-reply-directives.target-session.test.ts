@@ -146,6 +146,7 @@ async function resolveHelloWithModelDefaults(params: {
   sessionEntry?: SessionEntry;
   agentCfg?: { reasoningDefault?: "off" | "on" | "stream" };
   commandAuthorized?: boolean;
+<<<<<<< HEAD
   hasOneTurnModelOverride?: boolean;
   selectedProvider?: string;
   selectedModel?: string;
@@ -153,12 +154,22 @@ async function resolveHelloWithModelDefaults(params: {
   model?: string;
   ctx?: Parameters<typeof buildTestCtx>[0];
   opts?: Parameters<typeof resolveReplyDirectives>[0]["opts"];
+=======
+  provider?: string;
+  model?: string;
+  ctx?: Parameters<typeof buildTestCtx>[0];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }) {
   const resolveDefaultThinkingLevel = vi.fn(async () => params.defaultThinking);
   const resolveDefaultReasoningLevel = vi.fn(async () => params.defaultReasoning);
   mocks.createModelSelectionState.mockResolvedValueOnce({
+<<<<<<< HEAD
     provider: params.selectedProvider ?? "openai",
     model: params.selectedModel ?? "gpt-4o-mini",
+=======
+    provider: "openai",
+    model: "gpt-4o-mini",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     allowedModelKeys: new Set<string>(),
     allowedModelCatalog: [],
     resetModelOverride: false,
@@ -199,10 +210,16 @@ async function resolveHelloWithModelDefaults(params: {
     aliasIndex: { byAlias: new Map(), byKey: new Map() },
     provider: params.provider ?? "openai",
     model: params.model ?? "gpt-4o-mini",
+<<<<<<< HEAD
     hasOneTurnModelOverride: params.hasOneTurnModelOverride,
     hasResolvedHeartbeatModelOverride: false,
     typing: makeTypingController(),
     opts: params.opts,
+=======
+    hasResolvedHeartbeatModelOverride: false,
+    typing: makeTypingController(),
+    opts: undefined,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     skillFilter: undefined,
   });
 
@@ -317,14 +334,19 @@ describe("resolveReplyDirectives", () => {
       contextTokens: params.contextTokens,
     }));
     mocks.resolveFastModeState.mockImplementation(({ sessionEntry }) => ({
+<<<<<<< HEAD
       mode: sessionEntry?.sessionId === "target-session",
       enabled: sessionEntry?.sessionId === "target-session",
       source: "session",
       fastAutoOnSeconds: 60,
+=======
+      enabled: sessionEntry?.sessionId === "target-session",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }));
     mocks.resolveReplyExecOverrides.mockReturnValue(undefined);
   });
 
+<<<<<<< HEAD
   it("passes one-turn model override state into model selection", async () => {
     await resolveHelloWithModelDefaults({
       defaultThinking: "off",
@@ -386,6 +408,8 @@ describe("resolveReplyDirectives", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("prefers the target session entry from sessionStore for directive state", async () => {
     const wrapperSessionEntry = makeSessionEntry({
       sessionId: "wrapper-session",

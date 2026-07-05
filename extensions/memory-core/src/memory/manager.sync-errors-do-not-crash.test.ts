@@ -17,6 +17,7 @@ describe("memory manager sync failures", () => {
       unhandled.push(reason);
     };
     process.on("unhandledRejection", handler);
+<<<<<<< HEAD
     try {
       const syncSpy = vi
         .fn()
@@ -33,5 +34,20 @@ describe("memory manager sync failures", () => {
     } finally {
       process.off("unhandledRejection", handler);
     }
+=======
+    const syncSpy = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("openai embeddings failed: 400 bad request"));
+    setTimeout(() => {
+      runDetachedMemorySync(syncSpy, "watch");
+    }, 1);
+
+    await vi.runOnlyPendingTimersAsync();
+    vi.useRealTimers();
+    await syncSpy.mock.results[0]?.value?.catch(() => undefined);
+
+    process.off("unhandledRejection", handler);
+    expect(unhandled).toHaveLength(0);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

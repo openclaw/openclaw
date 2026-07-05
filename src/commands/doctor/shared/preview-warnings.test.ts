@@ -7,16 +7,23 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import {
   collectDoctorPreviewNotes,
   collectChannelBoundMessageToolPolicyWarnings,
+<<<<<<< HEAD
+=======
+  collectDoctorPreviewWarnings,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   collectProfileConfiguredToolSectionWarnings,
   collectVisibleReplyToolPolicyWarnings,
 } from "./preview-warnings.js";
 
+<<<<<<< HEAD
 async function collectDoctorPreviewWarnings(
   params: Parameters<typeof collectDoctorPreviewNotes>[0],
 ): Promise<string[]> {
   return (await collectDoctorPreviewNotes(params)).warningNotes;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type TestManifestRecord = {
   id: string;
   channels: string[];
@@ -1006,6 +1013,7 @@ describe("doctor preview warnings", () => {
     expect(warnings).toStrictEqual([]);
   });
 
+<<<<<<< HEAD
   it("does not warn for configured tool sections when the profile id is unknown", () => {
     const malformedConfig = {
       tools: {
@@ -1043,6 +1051,8 @@ describe("doctor preview warnings", () => {
     expect(warnings).toStrictEqual([]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not warn when default group visible replies are automatic", () => {
     const warnings = collectVisibleReplyToolPolicyWarnings({
       channels: {

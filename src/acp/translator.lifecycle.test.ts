@@ -111,6 +111,7 @@ function createSessionRow(params: {
   };
 }
 
+<<<<<<< HEAD
 async function settlePromptQuickly<T>(promise: Promise<T>): Promise<T | "pending"> {
   return await Promise.race([
     promise,
@@ -120,6 +121,8 @@ async function settlePromptQuickly<T>(promise: Promise<T>): Promise<T | "pending
   ]);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function startPendingPrompt(params: {
   agent: AcpGatewayAgent;
   sentRunIds: string[];
@@ -418,6 +421,7 @@ describe("acp translator stable lifecycle handlers", () => {
     sessionStore.clearAllSessionsForTest();
   });
 
+<<<<<<< HEAD
   it("resolves prompts when chat send returns a terminal timeout ack", async () => {
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "chat.send") {
@@ -493,6 +497,8 @@ describe("acp translator stable lifecycle handlers", () => {
     expect(requestMock.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("closes sessions by aborting active work, resolving pending prompts, and deleting bridge state", async () => {
     const sentRunIds: string[] = [];
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {

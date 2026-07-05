@@ -5,7 +5,10 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
+<<<<<<< HEAD
 import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type MantisDiscordSmokeOptions = {
   channelId?: string;
@@ -101,6 +104,19 @@ const DEFAULT_GUILD_ID_ENV = "OPENCLAW_QA_DISCORD_GUILD_ID";
 const DEFAULT_CHANNEL_ID_ENV = "OPENCLAW_QA_DISCORD_CHANNEL_ID";
 const QA_REDACT_PUBLIC_METADATA_ENV = "OPENCLAW_QA_REDACT_PUBLIC_METADATA";
 
+<<<<<<< HEAD
+=======
+function trimToValue(value: string | undefined) {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+function isTruthyOptIn(value: string | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function assertDiscordSnowflake(value: string, label: string) {
   if (!/^\d{17,20}$/u.test(value)) {
     throw new Error(`${label} must be a Discord snowflake.`);

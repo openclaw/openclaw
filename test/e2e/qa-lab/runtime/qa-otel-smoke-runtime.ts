@@ -3,19 +3,29 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+<<<<<<< HEAD
 import { mkdir, mkdtemp, open, rm, writeFile } from "node:fs/promises";
+=======
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
+<<<<<<< HEAD
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { stripLeadingPackageManagerSeparator } from "../../../../scripts/lib/arg-utils.mjs";
 import { resolveWindowsTaskkillPath } from "../../../../scripts/lib/windows-taskkill.mjs";
 
 type CollectorMode = "local" | "docker";
 type OtelLogsExporter = "otlp" | "stdout" | "both";
+=======
+import { stripLeadingPackageManagerSeparator } from "../../../../scripts/lib/arg-utils.mjs";
+
+type CollectorMode = "local" | "docker";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type OtlpAnyValue = {
   stringValue?: string;
@@ -50,7 +60,10 @@ type OtlpSignal = "logs" | "metrics" | "traces";
 
 type CliOptions = {
   collectorMode: CollectorMode;
+<<<<<<< HEAD
   logsExporter: OtelLogsExporter;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   outputDir: string;
   providerMode: string;
   scenarioId: string;
@@ -86,6 +99,7 @@ type CapturedLogRecord = {
   traceId: string;
 };
 
+<<<<<<< HEAD
 type StdoutDiagnosticLogRecord = {
   signal: "openclaw.diagnostic.log";
   ts?: unknown;
@@ -106,6 +120,9 @@ const LOGS_EXPORTER_SCENARIO_IDS = {
   stdout: "otel-stdout-log-smoke",
   both: "otel-both-log-smoke",
 } satisfies Record<OtelLogsExporter, string>;
+=======
+const DEFAULT_SCENARIO_ID = "otel-trace-smoke";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const DEFAULT_DOCKER_COLLECTOR_IMAGE =
   process.env.OPENCLAW_QA_OTEL_COLLECTOR_IMAGE || "otel/opentelemetry-collector:0.104.0";
 const OTLP_SIGNAL_PATHS = new Map<string, OtlpSignal>([
@@ -156,6 +173,7 @@ const QA_SUITE_TIMEOUT_MS = readPositiveIntegerEnv(
   10 * 60 * 1000,
 );
 const QA_SUITE_KILL_GRACE_MS = readPositiveIntegerEnv("OPENCLAW_QA_OTEL_SUITE_KILL_GRACE_MS", 5000);
+<<<<<<< HEAD
 const MAX_STDOUT_DIAGNOSTIC_LINE_BYTES = readPositiveIntegerEnv(
   "OPENCLAW_QA_OTEL_MAX_STDOUT_DIAGNOSTIC_LINE_BYTES",
   512 * 1024,
@@ -180,6 +198,8 @@ const QA_OTEL_ENV_TO_CLEAR = [
   "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
   "OTEL_RESOURCE_ATTRIBUTES",
 ] as const;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function readPositiveIntegerEnv(
   name: string,
@@ -201,10 +221,13 @@ function readPositiveIntegerEnv(
   return parsed;
 }
 
+<<<<<<< HEAD
 function createOtelSmokeRunId(): string {
   return `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function oversizedBodyError(
   label: string,
   actualBytes: number,
@@ -218,7 +241,11 @@ function oversizedBodyError(
 }
 
 function usage(): string {
+<<<<<<< HEAD
   return `Usage: pnpm qa:otel:smoke [--collector local|docker] [--logs-exporter otlp|stdout|both] [--output-dir <path>] [--provider-mode <mode>] [--scenario <id>] [--model <ref>] [--alt-model <ref>]
+=======
+  return `Usage: pnpm qa:otel:smoke [--collector local|docker] [--output-dir <path>] [--provider-mode <mode>] [--scenario <id>] [--model <ref>] [--alt-model <ref>]
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 Runs a QA-lab scenario with diagnostics-otel enabled, then asserts the emitted
 signal shape and privacy contract. The default collector is an in-process
@@ -229,15 +256,22 @@ Collector container in front of the receiver.
 
 function parseArgs(argv: string[]): CliOptions {
   const args = stripLeadingPackageManagerSeparator(argv);
+<<<<<<< HEAD
   let scenarioExplicit = false;
   const options: CliOptions = {
     collectorMode: "local",
     logsExporter: "otlp",
     outputDir: path.join(".artifacts", "qa-e2e", `otel-smoke-${createOtelSmokeRunId()}`),
+=======
+  const options: CliOptions = {
+    collectorMode: "local",
+    outputDir: path.join(".artifacts", "qa-e2e", `otel-smoke-${Date.now().toString(36)}`),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     providerMode: "mock-openai",
     scenarioId: DEFAULT_SCENARIO_ID,
     help: false,
   };
+<<<<<<< HEAD
   const seen = new Set<string>();
   const recordOnce = (flag: string) => {
     if (seen.has(flag)) {
@@ -245,6 +279,8 @@ function parseArgs(argv: string[]): CliOptions {
     }
     seen.add(flag);
   };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -254,23 +290,34 @@ function parseArgs(argv: string[]): CliOptions {
     }
     const readValue = () => {
       const value = args[index + 1]?.trim();
+<<<<<<< HEAD
       if (!value || value.startsWith("-")) {
+=======
+      if (!value) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         throw new Error(`${arg} requires a value`);
       }
       index += 1;
       return value;
     };
     if (arg === "--output-dir") {
+<<<<<<< HEAD
       const value = readValue();
       recordOnce(arg);
       options.outputDir = value;
     } else if (arg === "--collector") {
       const value = readValue();
       recordOnce(arg);
+=======
+      options.outputDir = readValue();
+    } else if (arg === "--collector") {
+      const value = readValue();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (value !== "local" && value !== "docker") {
         throw new Error(`--collector must be local or docker, got ${JSON.stringify(value)}`);
       }
       options.collectorMode = value;
+<<<<<<< HEAD
     } else if (arg === "--logs-exporter") {
       const value = readValue();
       recordOnce(arg);
@@ -297,11 +344,22 @@ function parseArgs(argv: string[]): CliOptions {
       const value = readValue();
       recordOnce(arg);
       options.alternateModel = value;
+=======
+    } else if (arg === "--provider-mode") {
+      options.providerMode = readValue();
+    } else if (arg === "--scenario") {
+      options.scenarioId = readValue();
+    } else if (arg === "--model") {
+      options.primaryModel = readValue();
+    } else if (arg === "--alt-model") {
+      options.alternateModel = readValue();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } else {
       throw new Error(`unknown argument: ${arg}`);
     }
   }
 
+<<<<<<< HEAD
   const expectedScenarioId = LOGS_EXPORTER_SCENARIO_IDS[options.logsExporter];
   const knownLogsExporterScenarioIds = new Set(Object.values(LOGS_EXPORTER_SCENARIO_IDS));
   if (
@@ -318,6 +376,8 @@ function parseArgs(argv: string[]): CliOptions {
     options.scenarioId = expectedScenarioId;
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return options;
 }
 
@@ -1041,6 +1101,7 @@ function createBoundedTextAccumulator(maxBytes: number) {
   };
 }
 
+<<<<<<< HEAD
 function trimUtf8Tail(value: string, maxBytes: number): string {
   const buffer = Buffer.from(value, "utf8");
   if (buffer.length <= maxBytes) {
@@ -1153,6 +1214,8 @@ async function appendUtf8FileToStdoutDiagnosticCapture(
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function stopDockerContainer(name: string): Promise<void> {
   await new Promise<void>((resolve) => {
     const child = spawn("docker", ["stop", name], {
@@ -1191,6 +1254,7 @@ async function startDockerOtelCollector(
   const osTmpdir = deps.tmpdir ?? tmpdir;
 
   const collectorPort = await reservePort();
+<<<<<<< HEAD
   let collectorTelemetryPort = await reservePort();
   for (let attempt = 0; collectorTelemetryPort === collectorPort && attempt < 5; attempt += 1) {
     collectorTelemetryPort = await reservePort();
@@ -1198,6 +1262,8 @@ async function startDockerOtelCollector(
   if (collectorTelemetryPort === collectorPort) {
     throw new Error("OpenTelemetry collector telemetry port matched receiver port after retries.");
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const tempDir = await makeTempDir(path.join(osTmpdir(), "openclaw-otel-collector-"));
   const configPath = path.join(tempDir, "collector.yaml");
   const containerName = `openclaw-otel-smoke-${makeUuid()}`;
@@ -1215,9 +1281,12 @@ exporters:
   otlphttp/openclaw:
     endpoint: ${receiverEndpoint}
 service:
+<<<<<<< HEAD
   telemetry:
     metrics:
       address: 127.0.0.1:${collectorTelemetryPort}
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   pipelines:
     traces:
       receivers: [otlp]
@@ -1309,13 +1378,20 @@ async function waitForChild(
   timeoutMs = QA_SUITE_TIMEOUT_MS,
   killGraceMs = QA_SUITE_KILL_GRACE_MS,
 ): Promise<number> {
+<<<<<<< HEAD
   const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, QA_SUITE_TIMEOUT_MS);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const childExit = new Promise<number>((resolve) => {
     child.once("close", (code) => resolve(code ?? 1));
   });
   let timeoutHandle: NodeJS.Timeout | undefined;
   const timeout = new Promise<"timeout">((resolve) => {
+<<<<<<< HEAD
     timeoutHandle = setTimeout(() => resolve("timeout"), resolvedTimeoutMs);
+=======
+    timeoutHandle = setTimeout(() => resolve("timeout"), timeoutMs);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     timeoutHandle.unref();
   });
   const result = await Promise.race([childExit, timeout]).finally(() => {
@@ -1333,7 +1409,11 @@ async function waitForChild(
     terminateChildTree(child, "SIGKILL", cleanupPids);
     await waitForProcessTreeExit(child, 1000, cleanupPids);
   }
+<<<<<<< HEAD
   throw new Error(`openclaw qa suite timed out after ${resolvedTimeoutMs}ms`);
+=======
+  throw new Error(`openclaw qa suite timed out after ${timeoutMs}ms`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function collectChildProcessTreePids(child: ChildProcess): number[] {
@@ -1374,6 +1454,7 @@ function terminateChildTree(
 ): void {
   if (platform === "win32") {
     if (typeof child.pid === "number") {
+<<<<<<< HEAD
       const result = runTaskkill(
         resolveWindowsTaskkillPath(),
         ["/PID", String(child.pid), "/T", "/F"],
@@ -1381,6 +1462,11 @@ function terminateChildTree(
           stdio: "ignore",
         },
       );
+=======
+      const result = runTaskkill("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+        stdio: "ignore",
+      });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (result.status === 0) {
         return;
       }
@@ -1485,9 +1571,15 @@ function relayParentSignalsToChild(child: ChildProcess): () => void {
 
 function buildQaEnv(port: number): NodeJS.ProcessEnv {
   const env = { ...process.env };
+<<<<<<< HEAD
   for (const key of QA_OTEL_ENV_TO_CLEAR) {
     delete env[key];
   }
+=======
+  delete env.OTEL_SDK_DISABLED;
+  delete env.OTEL_TRACES_EXPORTER;
+  delete env.OTEL_EXPORTER_OTLP_ENDPOINT;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = `http://127.0.0.1:${port}/v1/traces`;
   env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = `http://127.0.0.1:${port}/v1/metrics`;
   env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = `http://127.0.0.1:${port}/v1/logs`;
@@ -1571,33 +1663,51 @@ async function delay(ms: number): Promise<void> {
   });
 }
 
+<<<<<<< HEAD
 function hasRequiredSmokeSignals(params: {
   logsExporter: OtelLogsExporter;
   receiver: ReturnType<typeof startLocalOtlpReceiver>;
 }): boolean {
   const expectsOtlpLogs = params.logsExporter === "otlp" || params.logsExporter === "both";
   const receiver = params.receiver;
+=======
+function hasRequiredSmokeSignals(receiver: ReturnType<typeof startLocalOtlpReceiver>): boolean {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const spanNames = new Set(receiver.capturedSpans.map((span) => span.name));
   const metricNames = new Set(receiver.capturedMetrics.map((metric) => metric.name));
   return (
     REQUIRED_SPAN_NAMES.every((name) => spanNames.has(name)) &&
     receiver.capturedSpans.some(isLatestGenAiModelCallSpan) &&
     REQUIRED_METRIC_NAMES.every((name) => metricNames.has(name)) &&
+<<<<<<< HEAD
     (!expectsOtlpLogs || receiver.capturedLogRecords.length > 0) &&
     receiver.capturedRequests.some((request) => request.signal === "traces") &&
     receiver.capturedRequests.some((request) => request.signal === "metrics") &&
     (!expectsOtlpLogs || receiver.capturedRequests.some((request) => request.signal === "logs"))
+=======
+    receiver.capturedLogRecords.length > 0 &&
+    ["traces", "metrics", "logs"].every((signal) =>
+      receiver.capturedRequests.some((request) => request.signal === signal),
+    )
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
 }
 
 async function waitForExpectedTelemetry(
   receiver: ReturnType<typeof startLocalOtlpReceiver>,
+<<<<<<< HEAD
   logsExporter: OtelLogsExporter,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   timeoutMs: number,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+<<<<<<< HEAD
     if (hasRequiredSmokeSignals({ logsExporter, receiver })) {
+=======
+    if (hasRequiredSmokeSignals(receiver)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return;
     }
     await delay(250);
@@ -1617,23 +1727,36 @@ function formatBoundedList(values: readonly string[], maxItems: number): string 
 function assertSmoke(params: {
   childExitCode: number;
   disallowedBodyNeedles: string[];
+<<<<<<< HEAD
   logsExporter: OtelLogsExporter;
   spans: CapturedSpan[];
   metrics: CapturedMetric[];
   logRecords: CapturedLogRecord[];
   stdoutLogRecords: StdoutDiagnosticLogRecord[];
   stdoutLogLines: string[];
+=======
+  spans: CapturedSpan[];
+  metrics: CapturedMetric[];
+  logRecords: CapturedLogRecord[];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   requests: CapturedRequest[];
   bodyText: Partial<Record<OtlpSignal, string[]>>;
 }) {
   const failures: string[] = [];
   const leakContexts: Partial<Record<OtlpSignal, string[]>> = {};
+<<<<<<< HEAD
   const expectsOtlpLogs = params.logsExporter === "otlp" || params.logsExporter === "both";
   const expectsStdoutLogs = params.logsExporter === "stdout" || params.logsExporter === "both";
   if (params.childExitCode !== 0) {
     failures.push(`qa suite exited with ${params.childExitCode}`);
   }
   for (const signal of ["traces", "metrics"] as const) {
+=======
+  if (params.childExitCode !== 0) {
+    failures.push(`qa suite exited with ${params.childExitCode}`);
+  }
+  for (const signal of ["traces", "metrics", "logs"] as const) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const requests = params.requests.filter((request) => request.signal === signal);
     if (requests.length === 0) {
       failures.push(`no OTLP ${signal} requests were received`);
@@ -1646,6 +1769,7 @@ function assertSmoke(params: {
       failures.push(`OTLP ${signal} request ${request.path} returned status ${request.status}`);
     }
   }
+<<<<<<< HEAD
   const logRequests = params.requests.filter((request) => request.signal === "logs");
   if (expectsOtlpLogs && logRequests.length === 0) {
     failures.push("no OTLP logs requests were received");
@@ -1661,12 +1785,15 @@ function assertSmoke(params: {
       failures.push(`OTLP logs request ${request.path} returned status ${request.status}`);
     }
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (params.spans.length === 0) {
     failures.push("no OTLP trace spans were decoded");
   }
   if (params.metrics.length === 0) {
     failures.push("no OTLP metrics were decoded");
   }
+<<<<<<< HEAD
   if (expectsOtlpLogs && params.logRecords.length === 0) {
     failures.push("no OTLP log records were decoded");
   }
@@ -1679,6 +1806,11 @@ function assertSmoke(params: {
   if (expectsStdoutLogs && params.stdoutLogRecords.length === 0) {
     failures.push("no stdout diagnostic log records were captured");
   }
+=======
+  if (params.logRecords.length === 0) {
+    failures.push("no OTLP log records were decoded");
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const spanNames = new Set(params.spans.map((span) => span.name));
   for (const name of REQUIRED_SPAN_NAMES) {
@@ -1702,6 +1834,7 @@ function assertSmoke(params: {
   const correlatedLogRecords = params.logRecords.filter(
     (record) => record.traceId && record.spanId,
   );
+<<<<<<< HEAD
   if (expectsOtlpLogs && correlatedLogRecords.length === 0) {
     failures.push("no OTLP log records included trace/span correlation ids");
   }
@@ -1729,6 +1862,11 @@ function assertSmoke(params: {
       failures.push("stdout diagnostic log record missing attributes object");
     }
   }
+=======
+  if (correlatedLogRecords.length === 0) {
+    failures.push("no OTLP log records included trace/span correlation ids");
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const attributeKeys = collectAttributeKeys(params.spans);
   const disallowed = [...DISALLOWED_ATTRIBUTE_KEYS].filter((key) => attributeKeys.has(key));
@@ -1770,6 +1908,7 @@ function assertSmoke(params: {
       failures.push(`OTLP ${signal} payload leaked content: ${leakedNeedles.join(", ")}`);
     }
   }
+<<<<<<< HEAD
   const stdoutLogText = params.stdoutLogLines.join("\n");
   const stdoutLeakedNeedles = params.disallowedBodyNeedles.filter((needle) =>
     stdoutLogText.includes(needle),
@@ -1780,6 +1919,8 @@ function assertSmoke(params: {
       `stdout diagnostic log payload leaked content: ${stdoutLeakedNeedles.join(", ")}`,
     );
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   return {
     passed: failures.length === 0,
@@ -1797,7 +1938,10 @@ function assertSmoke(params: {
       metrics: params.requests.filter((request) => request.signal === "metrics").length,
       logs: params.requests.filter((request) => request.signal === "logs").length,
     },
+<<<<<<< HEAD
     stdoutLogRecordCount: params.stdoutLogRecords.length,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }
 
@@ -1817,7 +1961,10 @@ async function main() {
 
   let collector: Awaited<ReturnType<typeof startDockerOtelCollector>> | undefined;
   let childExitCode = 1;
+<<<<<<< HEAD
   const stdoutDiagnosticLogs = createStdoutDiagnosticLogCapture();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   try {
     let exportPort = port;
     if (options.collectorMode === "docker") {
@@ -1830,15 +1977,20 @@ async function main() {
 
     const child = spawnOpenClaw(buildQaArgs(options), buildQaEnv(exportPort));
     const cleanupSignalRelay = relayParentSignalsToChild(child);
+<<<<<<< HEAD
     child.stdout?.on("data", (chunk) => {
       stdoutDiagnosticLogs.append(chunk);
       process.stdout.write(chunk);
     });
+=======
+    child.stdout?.on("data", (chunk) => process.stdout.write(chunk));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     child.stderr?.on("data", (chunk) => process.stderr.write(chunk));
     try {
       childExitCode = await waitForChild(child);
     } finally {
       cleanupSignalRelay();
+<<<<<<< HEAD
       stdoutDiagnosticLogs.flush();
     }
     if (stdoutDiagnosticLogs.records.length === 0) {
@@ -1849,6 +2001,11 @@ async function main() {
     }
     if (childExitCode === 0) {
       await waitForExpectedTelemetry(receiver, options.logsExporter, 15_000);
+=======
+    }
+    if (childExitCode === 0) {
+      await waitForExpectedTelemetry(receiver, 15_000);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } else {
       await delay(3000);
     }
@@ -1863,12 +2020,18 @@ async function main() {
   const assertion = assertSmoke({
     childExitCode,
     disallowedBodyNeedles: disallowedBodyNeedles(options),
+<<<<<<< HEAD
     logsExporter: options.logsExporter,
     spans: receiver.capturedSpans,
     metrics: receiver.capturedMetrics,
     logRecords: receiver.capturedLogRecords,
     stdoutLogRecords: stdoutDiagnosticLogs.records,
     stdoutLogLines: stdoutDiagnosticLogs.lines,
+=======
+    spans: receiver.capturedSpans,
+    metrics: receiver.capturedMetrics,
+    logRecords: receiver.capturedLogRecords,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     requests: receiver.capturedRequests,
     bodyText: receiver.capturedBodyText,
   });
@@ -1879,12 +2042,18 @@ async function main() {
     scenarioId: options.scenarioId,
     providerMode: options.providerMode,
     collectorMode: options.collectorMode,
+<<<<<<< HEAD
     logsExporter: options.logsExporter,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     requests: receiver.capturedRequests,
     spanCount: receiver.capturedSpans.length,
     metricCount: receiver.capturedMetrics.length,
     logRecordCount: receiver.capturedLogRecords.length,
+<<<<<<< HEAD
     stdoutLogRecordCount: stdoutDiagnosticLogs.records.length,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     logRecordsWithTraceContext: receiver.capturedLogRecords.filter(
       (record) => record.traceId && record.spanId,
     ).length,
@@ -1893,7 +2062,10 @@ async function main() {
     signalRequestCounts: assertion.signalRequestCounts,
     modelSpanCount: assertion.modelSpanCount,
     modelErrorSpanCount: assertion.modelErrorSpanCount,
+<<<<<<< HEAD
     stdoutLogRecordCountFromAssertion: assertion.stdoutLogRecordCount,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     disallowedAttributeKeys: assertion.disallowedAttributeKeys,
     contentAttributeKeys: assertion.contentAttributeKeys,
     leakContexts: assertion.leakContexts,
@@ -1912,6 +2084,7 @@ async function main() {
     logBodyKinds: [
       ...new Set(receiver.capturedLogRecords.map((record) => capturedValueKind(record.body))),
     ],
+<<<<<<< HEAD
     stdoutLogBodyKinds: [
       ...new Set(
         stdoutDiagnosticLogs.records.map((record) =>
@@ -1919,6 +2092,8 @@ async function main() {
         ),
       ),
     ],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
   const summaryPath = path.join(options.outputDir, "otel-smoke-summary.json");
   await writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
@@ -1934,8 +2109,12 @@ async function main() {
     );
     process.stderr.write(
       `qa-otel-smoke: captured decoded counts spans=${receiver.capturedSpans.length} ` +
+<<<<<<< HEAD
         `metrics=${receiver.capturedMetrics.length} logs=${receiver.capturedLogRecords.length} ` +
         `stdoutLogs=${stdoutDiagnosticLogs.records.length}\n`,
+=======
+        `metrics=${receiver.capturedMetrics.length} logs=${receiver.capturedLogRecords.length}\n`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
     process.stderr.write(
       `qa-otel-smoke: captured span names: ${formatBoundedList(assertion.spanNames, 40)}\n`,
@@ -1958,7 +2137,10 @@ async function main() {
   process.stdout.write(
     `qa-otel-smoke: passed spans=${receiver.capturedSpans.length} ` +
       `metrics=${receiver.capturedMetrics.length} logs=${receiver.capturedLogRecords.length} ` +
+<<<<<<< HEAD
       `stdoutLogs=${stdoutDiagnosticLogs.records.length} ` +
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       `traces=${assertion.signalRequestCounts.traces} ` +
       `metricRequests=${assertion.signalRequestCounts.metrics} ` +
       `logRequests=${assertion.signalRequestCounts.logs}\n`,
@@ -1966,6 +2148,7 @@ async function main() {
 }
 
 export const testing = {
+<<<<<<< HEAD
   appendGatewayStdoutArtifactLogs,
   appendCapturedBodyText,
   assertSmoke,
@@ -1978,6 +2161,15 @@ export const testing = {
   readPositiveIntegerEnv,
   readRequestBody,
   appendUtf8FileToStdoutDiagnosticCapture,
+=======
+  appendCapturedBodyText,
+  assertSmoke,
+  createBoundedTextAccumulator,
+  decodeRequestBody,
+  parseArgs,
+  readPositiveIntegerEnv,
+  readRequestBody,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   startLocalOtlpReceiver,
   startDockerOtelCollector,
   terminateChildTree,

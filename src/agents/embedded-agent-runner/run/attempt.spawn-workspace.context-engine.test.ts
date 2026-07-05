@@ -2840,7 +2840,11 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     ).toBe(1_000_000);
   });
 
+<<<<<<< HEAD
   it("preserves the cacheable prefix while bounding current prompt results", async () => {
+=======
+  it("bounds aggregate tool-result prompt history without rewriting append results", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const toolText = "process output ".repeat(70);
     const sessionMessages: AgentMessage[] = [{ role: "user", content: "seed", timestamp: 1 }];
     for (let index = 0; index < 8; index += 1) {
@@ -2880,7 +2884,11 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
           agents: {
             defaults: {
               contextLimits: {
+<<<<<<< HEAD
                 toolResultMaxChars: 2_000,
+=======
+                toolResultMaxChars: 1_000,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               },
             },
             list: [{ id: "main" }],
@@ -2902,6 +2910,7 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
           };
         };
         session.prompt = async (_prompt, options) => {
+<<<<<<< HEAD
           for (let index = 0; index < 8; index += 1) {
             session.messages.push({
               role: "toolResult",
@@ -2914,6 +2923,8 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
               timestamp: 100 + index,
             } as AgentMessage);
           }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           promptHandlerMessages = session.messages.map((message) => message as AgentMessage);
           options?.preflightResult?.(true);
           await session.agent.streamFn?.({} as never, { messages: session.messages } as never, {});
@@ -2925,6 +2936,7 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
 
     expect(sumToolResultTextChars(sessionMessages)).toBeGreaterThan(4_000);
     expect(sumToolResultTextChars(promptHandlerMessages)).toBeGreaterThan(4_000);
+<<<<<<< HEAD
     const submittedCurrentPromptMessages = submittedMessages.slice(sessionMessages.length);
     expect(
       submittedMessages
@@ -2932,6 +2944,10 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
         .every((message) => sumToolResultTextChars([message]) <= 2_000),
     ).toBe(true);
     expect(JSON.stringify(submittedCurrentPromptMessages)).toContain("truncated");
+=======
+    expect(sumToolResultTextChars(submittedMessages)).toBeLessThanOrEqual(4_000);
+    expect(JSON.stringify(submittedMessages)).toContain("truncated");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(afterTurn).toHaveBeenCalledTimes(1);
     expect(sumToolResultTextChars(afterTurnMessages)).toBeGreaterThan(4_000);
     expect(JSON.stringify(afterTurnMessages)).not.toContain("truncated");

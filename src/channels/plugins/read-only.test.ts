@@ -1075,6 +1075,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(inheritedAccount?.config?.token).not.toBe("prototype-token");
   });
 
+<<<<<<< HEAD
   it("ignores manifest account keys that normalize to blocked object keys", () => {
     const { pluginDir } = writeExternalSetupChannelPlugin({
       setupEntry: false,
@@ -1150,6 +1151,8 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps setup-entry precedence when channel config descriptors are not runtime cutoffs", () => {
     const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
       pluginId: "external-chat-plugin",

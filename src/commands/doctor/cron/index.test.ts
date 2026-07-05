@@ -600,6 +600,7 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoteContaining("1 job still uses legacy", "Cron");
   });
 
+<<<<<<< HEAD
   it("advises on isolated shell-prompt jobs without a non-actionable --fix repair note (#94655)", async () => {
     const storePath = await makeTempStorePath();
     const shellPromptJobs: Array<Record<string, unknown>> = [
@@ -738,6 +739,8 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(payload.toolsAllow).toEqual(["read", "message"]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("repairs malformed persisted cron ids before list rendering sees them", async () => {
     const storePath = await makeTempStorePath();
     await writeCronStore(storePath, [

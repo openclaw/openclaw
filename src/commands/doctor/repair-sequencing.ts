@@ -1,9 +1,13 @@
 // Doctor repair sequence coordinator for config, auth, plugin, and warning repairs.
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+<<<<<<< HEAD
 import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
 } from "../../config/plugin-auto-enable.js";
+=======
+import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   collectOpenAICodexAuthProfileStoreIdMap,
   maybeMigrateAuthProfileJsonStoresToSqlite,
@@ -126,6 +130,7 @@ export async function runDoctorRepairSequence(params: {
   if (missingConfiguredPluginInstallRepair.changes.length > 0) {
     changeNotes.push(sanitizeLines(missingConfiguredPluginInstallRepair.changes));
     applyMutation(applyPluginAutoEnable({ config: state.candidate, env }));
+<<<<<<< HEAD
     const repairedPluginIds = missingConfiguredPluginInstallRepair.repairedPluginIds ?? [];
     if (repairedPluginIds.length > 0) {
       applyMutation(
@@ -139,14 +144,19 @@ export async function runDoctorRepairSequence(params: {
         }),
       );
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   if (missingConfiguredPluginInstallRepair.warnings.length > 0) {
     warningNotes.push(sanitizeLines(missingConfiguredPluginInstallRepair.warnings));
   }
+<<<<<<< HEAD
   const missingConfiguredPluginInstallNotices = missingConfiguredPluginInstallRepair.notices ?? [];
   if (missingConfiguredPluginInstallNotices.length > 0) {
     warningNotes.push(sanitizeLines(missingConfiguredPluginInstallNotices));
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const failedPluginIds = missingConfiguredPluginInstallRepair.failedPluginIds ?? [];
   const hasUnscopedInstallRepairWarnings =
     missingConfiguredPluginInstallRepair.warnings.length > 0 && failedPluginIds.length === 0;

@@ -55,11 +55,14 @@ type CatalogTool = AnyAgentTool | ToolDefinition;
 type CatalogVisibilityOptions = {
   includeMcp?: boolean;
 };
+<<<<<<< HEAD
 type UnknownToolRecoverySurface = "raw-tools" | "code-mode" | "tools";
 type UnknownToolErrorOptions = {
   exactIdOnly?: boolean;
   recoverySurface?: UnknownToolRecoverySurface;
 };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type ReusableCatalogSnapshot = {
   entries: ToolSearchCatalogEntry[];
@@ -1544,6 +1547,7 @@ function visibleCatalogEntries(
     : catalog.entries;
 }
 
+<<<<<<< HEAD
 function tokenizeLookupValue(input: string): Set<string> {
   return new Set(normalizeStringEntries(input.toLowerCase().split(/[^a-z0-9]+/u)));
 }
@@ -1607,11 +1611,16 @@ function formatUnknownToolIdError(
   return `Unknown tool id: ${needle}. Did you mean: ${suggestions.join(", ")}? ${recoveryText}`;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function findEntry(
   catalog: ToolSearchCatalogSession,
   id: string,
   options?: CatalogVisibilityOptions,
+<<<<<<< HEAD
   errorOptions?: UnknownToolErrorOptions,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ): ToolSearchCatalogEntry {
   const needle = id.trim();
   const entries = visibleCatalogEntries(catalog, options);
@@ -1625,11 +1634,16 @@ function findEntry(
   }
   const namedEntry = namedEntries[0];
   if (!namedEntry) {
+<<<<<<< HEAD
     throw new ToolInputError(formatUnknownToolIdError(needle, entries, errorOptions));
+=======
+    throw new ToolInputError(`Unknown tool id: ${needle}`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   return namedEntry;
 }
 
+<<<<<<< HEAD
 function findEntryByExactId(
   catalog: ToolSearchCatalogSession,
   id: string,
@@ -1641,6 +1655,13 @@ function findEntryByExactId(
     throw new ToolInputError(
       formatUnknownToolIdError(needle, catalog.entries, { ...errorOptions, exactIdOnly: true }),
     );
+=======
+function findEntryByExactId(catalog: ToolSearchCatalogSession, id: string): ToolSearchCatalogEntry {
+  const needle = id.trim();
+  const entry = catalog.entries.find((candidate) => candidate.id === needle);
+  if (!entry) {
+    throw new ToolInputError(`Unknown tool id: ${needle}`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   return entry;
 }
@@ -1745,10 +1766,17 @@ export class ToolSearchRuntime {
     );
   };
 
+<<<<<<< HEAD
   describe = async (id: string, options?: CatalogVisibilityOptions & UnknownToolErrorOptions) => {
     const catalog = resolveCatalog(this.ctx);
     catalog.describeCount += 1;
     return describeEntry(findEntry(catalog, id, options, options));
+=======
+  describe = async (id: string, options?: CatalogVisibilityOptions) => {
+    const catalog = resolveCatalog(this.ctx);
+    catalog.describeCount += 1;
+    return describeEntry(findEntry(catalog, id, options));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 
   call = async (
@@ -1758,11 +1786,18 @@ export class ToolSearchRuntime {
       parentToolCallId?: string;
       signal?: AbortSignal;
       onUpdate?: AgentToolUpdateCallback;
+<<<<<<< HEAD
       recoverySurface?: UnknownToolRecoverySurface;
     },
   ) => {
     const catalog = resolveCatalog(this.ctx);
     const entry = findEntry(catalog, id, undefined, options);
+=======
+    },
+  ) => {
+    const catalog = resolveCatalog(this.ctx);
+    const entry = findEntry(catalog, id);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return await this.callEntry(catalog, entry, input, options);
   };
 
@@ -1773,11 +1808,18 @@ export class ToolSearchRuntime {
       parentToolCallId?: string;
       signal?: AbortSignal;
       onUpdate?: AgentToolUpdateCallback;
+<<<<<<< HEAD
       recoverySurface?: UnknownToolRecoverySurface;
     },
   ) => {
     const catalog = resolveCatalog(this.ctx);
     const entry = findEntryByExactId(catalog, id, options);
+=======
+    },
+  ) => {
+    const catalog = resolveCatalog(this.ctx);
+    const entry = findEntryByExactId(catalog, id);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return await this.callEntry(catalog, entry, input, options);
   };
 
@@ -2077,17 +2119,25 @@ async function runCodeModeBridgeRequest(
       if (typeof id !== "string") {
         throw new ToolInputError("describe id must be a string.");
       }
+<<<<<<< HEAD
       return await runtime.describe(id, { recoverySurface: "code-mode" });
+=======
+      return await runtime.describe(id);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     case "call": {
       const id = values[0];
       if (typeof id !== "string") {
         throw new ToolInputError("call id must be a string.");
       }
+<<<<<<< HEAD
       return await runtime.call(id, values[1] ?? {}, {
         ...options,
         recoverySurface: "code-mode",
       });
+=======
+      return await runtime.call(id, values[1] ?? {}, options);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   }
   throw new ToolInputError("Unsupported tool_search_code bridge method.");

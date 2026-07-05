@@ -278,6 +278,7 @@ describe("createMinimaxFastModeWrapper", () => {
 
     expect(capturedId).toBe("MiniMax-M2.7-highspeed");
   });
+<<<<<<< HEAD
 
   it("resolves dynamic fast mode for each stream call", () => {
     const capturedIds: string[] = [];
@@ -300,4 +301,6 @@ describe("createMinimaxFastModeWrapper", () => {
 
     expect(capturedIds).toEqual(["MiniMax-M2.7-highspeed", "MiniMax-M2.7"]);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

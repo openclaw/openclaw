@@ -9,6 +9,10 @@ const mocks = vi.hoisted(() => ({
   ensureBrowserControlAuth: vi.fn(async () => ({ auth: {} })),
   resolveBrowserControlAuth: vi.fn(() => ({})),
   shouldAutoGenerateBrowserAuth: vi.fn(() => false),
+<<<<<<< HEAD
+=======
+  ensureExtensionRelayForProfiles: vi.fn(async () => {}),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   stopKnownBrowserProfiles: vi.fn(async () => {}),
   isChromeReachable: vi.fn(async () => false),
   isChromeCdpReady: vi.fn(async () => false),
@@ -31,6 +35,10 @@ vi.mock("../browser/control-auth.js", () => ({
 }));
 
 vi.mock("../browser/server-lifecycle.js", () => ({
+<<<<<<< HEAD
+=======
+  ensureExtensionRelayForProfiles: mocks.ensureExtensionRelayForProfiles,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   stopKnownBrowserProfiles: mocks.stopKnownBrowserProfiles,
 }));
 

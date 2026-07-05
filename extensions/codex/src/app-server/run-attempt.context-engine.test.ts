@@ -9,6 +9,7 @@ import {
   type HarnessContextEngine as ContextEngine,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+<<<<<<< HEAD
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -19,6 +20,11 @@ import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClientFactory } from "./client-factory.js";
 import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
+=======
+import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CodexAppServerClientFactory } from "./client-factory.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt as runCodexAppServerAttemptImpl } from "./run-attempt.js";
 import {
@@ -78,7 +84,13 @@ const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   web_search: "disabled",
 });
 
+<<<<<<< HEAD
 function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
+=======
+function writeCodexAppServerBinding(
+  ...args: Parameters<typeof writeRawCodexAppServerBinding>
+) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const [sessionFile, binding, lookup] = args;
   return writeRawCodexAppServerBinding(
     sessionFile,
@@ -354,7 +366,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
   afterEach(async () => {
     resetCodexAppServerClientFactoryForTest();
+<<<<<<< HEAD
     resetGlobalHookRunner();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     vi.restoreAllMocks();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
@@ -499,6 +514,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await run;
   });
 
+<<<<<<< HEAD
   it("bounds active context-engine projections when prompt hooks append context", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([
@@ -627,6 +643,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await run;
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses configured compaction reserve when sizing Codex context-engine projections", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

@@ -475,6 +475,7 @@ const parentWatcher =
   process.platform === "win32"
     ? undefined
     : setInterval(() => {
+<<<<<<< HEAD
         // Orphan detection: parent PID changed means our original parent died.
         // The new parent could be PID 1 (init) on bare-metal hosts, OR a
         // systemd user-session manager, OR a container init, OR a session
@@ -482,6 +483,9 @@ const parentWatcher =
         // on PPID == 1, which missed all systemd-managed deployments and
         // leaked codex-acp adapter trees on every gateway restart.
         if (process.ppid === originalParentPid) {
+=======
+        if (process.ppid === originalParentPid || process.ppid !== 1) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           return;
         }
         if (orphanCleanupStarted) {

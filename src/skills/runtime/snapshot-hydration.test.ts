@@ -2,7 +2,11 @@
 import { describe, expect, it } from "vitest";
 import type { SessionSkillSnapshot } from "../../config/sessions/types.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
+<<<<<<< HEAD
 import { hydrateResolvedSkills } from "./snapshot-hydration.js";
+=======
+import { hydrateResolvedSkills, hydrateResolvedSkillsAsync } from "./snapshot-hydration.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function makeFixtureSkill(name: string, bodySize = 3000) {
   const source = `# ${name}\n\n${"x".repeat(bodySize)}`;
@@ -73,4 +77,26 @@ describe("hydrateResolvedSkills", () => {
     expect(result).toBe(snapshot);
     expect(buildCalls).toBe(0);
   });
+<<<<<<< HEAD
+=======
+
+  it("supports async runtime hydration for CLI resume paths", async () => {
+    const stripped: SessionSkillSnapshot = {
+      prompt: "cached-prompt",
+      skills: [{ name: "x" }],
+      version: 2,
+    };
+    const rebuiltSkills = [makeFixtureSkill("x", 120)];
+    const result = await hydrateResolvedSkillsAsync(stripped, async () => ({
+      prompt: "fresh-prompt",
+      skills: [{ name: "y" }],
+      resolvedSkills: rebuiltSkills,
+      version: 3,
+    }));
+    expect(result.prompt).toBe("cached-prompt");
+    expect(result.skills).toEqual([{ name: "x" }]);
+    expect(result.version).toBe(2);
+    expect(result.resolvedSkills).toBe(rebuiltSkills);
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

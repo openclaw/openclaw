@@ -10,6 +10,7 @@ describe("decodeHtmlEntitiesInObject", () => {
   it("decodes valid HTML entities in nested tool arguments", () => {
     expect(
       decodeHtmlEntitiesInObject({
+<<<<<<< HEAD
         query: "Rock &amp; Roll &#65; &#39;ok&#39; &#x27;hex&#x27;",
         args: ["--flag=&quot;value&quot;", "&lt;input&gt;"],
         nested: { deep: "a &amp; b" },
@@ -29,6 +30,15 @@ describe("decodeHtmlEntitiesInObject", () => {
     expect(decodeHtmlEntitiesInObject("plain string")).toBe("plain string");
   });
 
+=======
+        query: "Rock &amp; Roll &#65; &#39;ok&#39;",
+      }),
+    ).toEqual({
+      query: "Rock & Roll A 'ok'",
+    });
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves invalid numeric HTML entities", () => {
     expect(
       decodeHtmlEntitiesInObject({

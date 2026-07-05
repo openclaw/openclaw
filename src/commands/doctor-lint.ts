@@ -2,18 +2,31 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { registerBundledHealthChecks } from "../flows/bundled-health-checks.js";
+<<<<<<< HEAD
 import { configValidationIssuesToHealthFindings } from "../flows/doctor-core-checks.js";
 import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
+=======
+import {
+  configValidationIssuesToHealthFindings,
+  registerCoreHealthChecks,
+} from "../flows/doctor-core-checks.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   exitCodeFromFindings,
   runDoctorLintChecks,
   type DoctorLintRunOptions,
 } from "../flows/doctor-lint-flow.js";
+<<<<<<< HEAD
 import { listExtensionHealthChecksForDoctor } from "../flows/health-check-registry.js";
 import {
   healthFindingMeetsSeverity,
   parseHealthFindingSeverity,
   type HealthCheck,
+=======
+import {
+  healthFindingMeetsSeverity,
+  parseHealthFindingSeverity,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type HealthCheckContext,
   type HealthFinding,
 } from "../flows/health-checks.js";
@@ -25,8 +38,11 @@ interface DoctorLintCliOptions {
   readonly skipIds?: readonly string[];
   readonly onlyIds?: readonly string[];
   readonly allowExec?: boolean;
+<<<<<<< HEAD
   readonly deep?: boolean;
   readonly includeAllChecks?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function detectMode(opts: DoctorLintCliOptions): "human" | "json" {
@@ -46,8 +62,15 @@ export async function runDoctorLintCli(
   runtime: RuntimeEnv,
   opts: DoctorLintCliOptions,
 ): Promise<number> {
+<<<<<<< HEAD
   const sevMin =
     opts.severityMin === undefined ? "warning" : parseHealthFindingSeverity(opts.severityMin);
+=======
+  registerCoreHealthChecks();
+
+  const sevMin =
+    opts.severityMin === undefined ? "info" : parseHealthFindingSeverity(opts.severityMin);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (sevMin === null) {
     throw new Error("Invalid --severity-min value. Expected one of: info, warning, error.");
   }
@@ -81,6 +104,7 @@ export async function runDoctorLintCli(
     ...(snapshot.path !== undefined ? { configPath: snapshot.path } : {}),
   };
   registerBundledHealthChecks({ cfg: snapshot.config, cwd: ctx.cwd });
+<<<<<<< HEAD
   const coreChecks = await resolveDoctorContributionHealthChecks();
   const extensionChecks = listExtensionHealthChecksForDoctor(coreChecks);
   const coreCtx = { ...ctx, deep: opts.deep === true };
@@ -88,6 +112,10 @@ export async function runDoctorLintCli(
   const runOpts: DoctorLintRunOptions = {
     checks: [...coreChecks.map((check) => withCoreLintContext(check, coreCtx)), ...extensionChecks],
     includeAllChecks: opts.includeAllChecks === true,
+=======
+
+  const runOpts: DoctorLintRunOptions = {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ...(opts.skipIds && opts.skipIds.length > 0 ? { skipIds: opts.skipIds } : {}),
     ...(opts.onlyIds && opts.onlyIds.length > 0 ? { onlyIds: opts.onlyIds } : {}),
   };
@@ -123,6 +151,7 @@ export async function runDoctorLintCli(
   return exitCodeFromFindings(result.findings, sevMin);
 }
 
+<<<<<<< HEAD
 function withCoreLintContext(
   check: HealthCheck,
   ctx: HealthCheckContext & { readonly deep?: boolean },
@@ -135,6 +164,8 @@ function withCoreLintContext(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function writeJsonResult(result: {
   ok: boolean;
   checksRun: number;

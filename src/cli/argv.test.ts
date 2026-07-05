@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildParseArgv,
   getFlagValue,
+<<<<<<< HEAD
+=======
+  getCommandPath,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   getCommandPositionalsWithRootOptions,
   getCommandPathWithRootOptions,
   getPrimaryCommand,
@@ -17,6 +21,10 @@ import {
   normalizeRootHelpTargetArgv,
   normalizeRootLogLevelArgv,
   normalizeRootNoColorArgv,
+<<<<<<< HEAD
+=======
+  shouldMigrateState,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   shouldMigrateStateFromPath,
 } from "./argv.js";
 
@@ -440,7 +448,11 @@ describe("argv helpers", () => {
       expected: ["status"],
     },
   ])("extracts command path: $name", ({ argv, expected }) => {
+<<<<<<< HEAD
     expect(getCommandPathWithRootOptions(argv, 2)).toEqual(expected);
+=======
+    expect(getCommandPath(argv, 2)).toEqual(expected);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("extracts command path while skipping known root option values", () => {
@@ -560,6 +572,7 @@ describe("argv helpers", () => {
       argv: ["node", "openclaw", "--", "--timeout=99"],
       expected: undefined,
     },
+<<<<<<< HEAD
     {
       name: "repeated flag uses final value",
       argv: ["node", "openclaw", "status", "--timeout", "100", "--timeout=200"],
@@ -570,6 +583,8 @@ describe("argv helpers", () => {
       argv: ["node", "openclaw", "status", "--timeout", "--timeout", "200"],
       expected: null,
     },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ])("extracts flag values: $name", ({ argv, expected }) => {
     expect(getFlagValue(argv, "--timeout")).toBe(expected);
   });
@@ -606,16 +621,25 @@ describe("argv helpers", () => {
     {
       name: "invalid integer",
       argv: ["node", "openclaw", "status", "--timeout", "nope"],
+<<<<<<< HEAD
       expected: null,
+=======
+      expected: undefined,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
     {
       name: "non-decimal integer",
       argv: ["node", "openclaw", "status", "--timeout", "0x10"],
+<<<<<<< HEAD
       expected: null,
+=======
+      expected: undefined,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
     {
       name: "partial integer",
       argv: ["node", "openclaw", "status", "--timeout", "5s"],
+<<<<<<< HEAD
       expected: null,
     },
     {
@@ -637,6 +661,9 @@ describe("argv helpers", () => {
       name: "repeated value rejects final invalid integer",
       argv: ["node", "openclaw", "status", "--timeout", "5000", "--timeout", "nope"],
       expected: null,
+=======
+      expected: undefined,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
   ])("parses positive integer flag values: $name", ({ argv, expected }) => {
     expect(getPositiveIntFlagValue(argv, "--timeout")).toBe(expected);
@@ -739,8 +766,12 @@ describe("argv helpers", () => {
     { argv: ["node", "openclaw", "agents", "list"], expected: true },
     { argv: ["node", "openclaw", "message", "send"], expected: true },
   ] as const)("decides when to migrate state: $argv", ({ argv, expected }) => {
+<<<<<<< HEAD
     const commandPath = getCommandPathWithRootOptions([...argv], 2);
     expect(shouldMigrateStateFromPath(commandPath)).toBe(expected);
+=======
+    expect(shouldMigrateState([...argv])).toBe(expected);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it.each([

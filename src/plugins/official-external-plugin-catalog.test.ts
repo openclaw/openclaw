@@ -3,10 +3,13 @@ import {
   type OfficialExternalPluginCatalogEntry,
   getOfficialExternalPluginCatalogEntry,
   listOfficialExternalPluginCatalogEntries,
+<<<<<<< HEAD
   resolveOfficialExternalProviderContractPluginIds,
   resolveOfficialExternalProviderPluginIds,
   resolveOfficialExternalProviderPluginIdsForEnv,
   resolveOfficialExternalWebProviderContractPluginIdsForEnv,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
@@ -20,6 +23,7 @@ function expectCatalogEntry(id: string): OfficialExternalPluginCatalogEntry {
 }
 
 describe("official external plugin catalog", () => {
+<<<<<<< HEAD
   it("lists the externalized provider and capability plugins with install metadata", () => {
     const providers = [
       ["arcee", "@openclaw/arcee-provider"],
@@ -85,6 +89,8 @@ describe("official external plugin catalog", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("resolves third-party channel lookup aliases to published plugin ids", () => {
     const wecomByChannel = expectCatalogEntry("wecom");
     const wecomByPlugin = expectCatalogEntry("wecom-openclaw-plugin");
@@ -97,7 +103,11 @@ describe("official external plugin catalog", () => {
     );
     expect(resolveOfficialExternalPluginId(yuanbaoByChannel)).toBe("openclaw-plugin-yuanbao");
     expect(resolveOfficialExternalPluginInstall(yuanbaoByChannel)?.npmSpec).toBe(
+<<<<<<< HEAD
       "openclaw-plugin-yuanbao@2.15.0",
+=======
+      "openclaw-plugin-yuanbao@2.13.1",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
   });
 
@@ -128,7 +138,10 @@ describe("official external plugin catalog", () => {
     const gmi = expectCatalogEntry("gmi");
 
     expect(resolveOfficialExternalPluginId(gmi)).toBe("gmi");
+<<<<<<< HEAD
     expect(getOfficialExternalPluginCatalogEntry("gmi-cloud")).toBe(gmi);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(resolveOfficialExternalPluginInstall(gmi)).toEqual({
       clawhubSpec: "clawhub:@openclaw/gmi-provider",
       npmSpec: "@openclaw/gmi-provider",
@@ -149,6 +162,7 @@ describe("official external plugin catalog", () => {
     });
   });
 
+<<<<<<< HEAD
   it("resolves external provider aliases beyond the primary provider id", () => {
     const qwen = expectCatalogEntry("qwen");
 
@@ -260,6 +274,8 @@ describe("official external plugin catalog", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("allows invalid-config recovery for externalized stock plugins", () => {
     expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("brave"))).toMatchObject({
       npmSpec: "@openclaw/brave-plugin",
@@ -273,6 +289,7 @@ describe("official external plugin catalog", () => {
       npmSpec: "@openclaw/discord",
       allowInvalidConfigRecovery: true,
     });
+<<<<<<< HEAD
     expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("mattermost"))).toMatchObject({
       npmSpec: "@openclaw/mattermost",
       allowInvalidConfigRecovery: true,
@@ -281,6 +298,8 @@ describe("official external plugin catalog", () => {
       npmSpec: "@openclaw/tavily-plugin",
       allowInvalidConfigRecovery: true,
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("lists Matrix as an official external ClawHub channel after cutover", () => {
@@ -293,7 +312,11 @@ describe("official external plugin catalog", () => {
     }
 
     expect(ids.has("matrix")).toBe(true);
+<<<<<<< HEAD
     expect(ids.has("mattermost")).toBe(true);
+=======
+    expect(ids.has("mattermost")).toBe(false);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("matrix"))).toEqual({
       clawhubSpec: "clawhub:@openclaw/matrix",
       npmSpec: "@openclaw/matrix",

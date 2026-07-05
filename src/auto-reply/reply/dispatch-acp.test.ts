@@ -3,13 +3,23 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import type { MediaUnderstandingSkipError } from "../../../packages/media-understanding-common/src/errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+<<<<<<< HEAD
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import {
+=======
+import type { MediaUnderstandingSkipError } from "../../../packages/media-understanding-common/src/errors.js";
+import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import {
+  resolveAgentAttachments,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveAgentTurnAttachments,
   resolveInlineAgentImageAttachments,
 } from "./agent-turn-attachments.js";
@@ -761,6 +771,63 @@ describe("tryDispatchAcpReply", () => {
     }
   });
 
+<<<<<<< HEAD
+=======
+  it("forwards normalized image attachments into agent runtime turns", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const imagePath = path.join(tempDir, "inbound.png");
+    try {
+      await fs.writeFile(imagePath, "image-bytes");
+      const attachments = await resolveAgentAttachments({
+        cfg: createAcpTestConfig({
+          channels: {
+            imessage: {
+              attachmentRoots: [tempDir],
+            },
+          },
+        }),
+        ctx: buildTestCtx({
+          Provider: "imessage",
+          Surface: "imessage",
+          MediaPath: imagePath,
+          MediaType: "image/png",
+        }),
+        runtime: {
+          MediaAttachmentCache: class {
+            async getBuffer() {
+              return {
+                buffer: Buffer.from("image-bytes"),
+                mime: "image/png",
+                fileName: "inbound.png",
+                size: "image-bytes".length,
+              };
+            }
+          } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
+          isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
+            false,
+          normalizeAttachments: (ctx) => [
+            {
+              path: ctx.MediaPath,
+              mime: ctx.MediaType,
+              index: 0,
+            },
+          ],
+          resolveMediaAttachmentLocalRoots: () => [tempDir],
+        },
+      });
+
+      expect(attachments).toEqual([
+        {
+          mediaType: "image/png",
+          data: Buffer.from("image-bytes").toString("base64"),
+        },
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("selects bounded recent local history images", () => {
     const now = 1_700_000_000_000;
     const ctx = buildTestCtx({

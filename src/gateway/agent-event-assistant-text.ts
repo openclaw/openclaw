@@ -11,6 +11,7 @@ export function resolveAssistantStreamDeltaText(evt: AgentEventPayload): string 
   const text = evt.data.text;
   return typeof delta === "string" ? delta : typeof text === "string" ? text : "";
 }
+<<<<<<< HEAD
 
 export function isReplaceableAssistantStreamEvent(evt: AgentEventPayload): boolean {
   return evt.data.replaceable === true;
@@ -23,3 +24,5 @@ export function resolveAssistantStreamSnapshotText(evt: AgentEventPayload): stri
   }
   return resolveAssistantStreamDeltaText(evt);
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

@@ -209,6 +209,10 @@ const LANGUAGE_STOP_WORDS = {
     "할",
     "해",
     "했다",
+<<<<<<< HEAD
+=======
+    "했다",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ],
   pathNoise: [
     "cjs",
@@ -330,7 +334,11 @@ function isKanaOnlyToken(value: string): boolean {
   );
 }
 
+<<<<<<< HEAD
 function normalizeConceptToken(rawToken: string, fromGlossary = false): string | null {
+=======
+function normalizeConceptToken(rawToken: string): string | null {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const normalized = normalizeLowercaseStringOrEmpty(
     rawToken
       .normalize("NFKC")
@@ -348,9 +356,13 @@ function normalizeConceptToken(rawToken: string, fromGlossary = false): string |
     return null;
   }
   const script = classifyConceptTagScript(normalized);
+<<<<<<< HEAD
   // Glossary entries are an explicit allowlist of short technical terms (e.g. "kv", "s3"); they
   // bypass the per-script minimum length that would otherwise discard them.
   if (!fromGlossary && normalized.length < minimumTokenLengthForScript(script)) {
+=======
+  if (normalized.length < minimumTokenLengthForScript(script)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return null;
   }
   if (isKanaOnlyToken(normalized) && normalized.length < 3) {
@@ -362,6 +374,7 @@ function normalizeConceptToken(rawToken: string, fromGlossary = false): string |
   return normalized;
 }
 
+<<<<<<< HEAD
 // Only entries shorter than their script's minimum token length rely on the glossary bypass, and
 // only those need whole-word matching so they don't fire inside longer words ("kv" in "mkv"). Longer
 // entries keep substring containment (the shipped behavior, e.g. "backup" tagging inside "backups").
@@ -399,6 +412,16 @@ function collectGlossaryMatches(source: string): string[] {
     if (present) {
       matches.push(entry);
     }
+=======
+function collectGlossaryMatches(source: string): string[] {
+  const normalizedSource = normalizeLowercaseStringOrEmpty(source.normalize("NFKC"));
+  const matches: string[] = [];
+  for (const entry of PROTECTED_GLOSSARY) {
+    if (!normalizedSource.includes(entry)) {
+      continue;
+    }
+    matches.push(entry);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   return matches;
 }
@@ -416,6 +439,7 @@ function collectSegmentTokens(source: string): string[] {
   return source.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
 }
 
+<<<<<<< HEAD
 function pushNormalizedTag(
   tags: string[],
   rawToken: string,
@@ -423,6 +447,10 @@ function pushNormalizedTag(
   fromGlossary = false,
 ): void {
   const normalized = normalizeConceptToken(rawToken, fromGlossary);
+=======
+function pushNormalizedTag(tags: string[], rawToken: string, limit: number): void {
+  const normalized = normalizeConceptToken(rawToken);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!normalized || tags.includes(normalized)) {
     return;
   }
@@ -446,6 +474,7 @@ export function deriveConceptTags(params: {
   }
 
   const tags: string[] = [];
+<<<<<<< HEAD
   const tokenSources: Array<{ tokens: string[]; fromGlossary: boolean }> = [
     { tokens: collectGlossaryMatches(source), fromGlossary: true },
     { tokens: collectCompoundTokens(source), fromGlossary: false },
@@ -457,6 +486,16 @@ export function deriveConceptTags(params: {
       if (tags.length >= limit) {
         return tags;
       }
+=======
+  for (const rawToken of [
+    ...collectGlossaryMatches(source),
+    ...collectCompoundTokens(source),
+    ...collectSegmentTokens(source),
+  ]) {
+    pushNormalizedTag(tags, rawToken, limit);
+    if (tags.length >= limit) {
+      break;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   }
   return tags;

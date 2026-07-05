@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
+<<<<<<< HEAD
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type CallGatewayRequest = Parameters<typeof gatewayCall>[0];
 
@@ -19,7 +22,11 @@ function useLoggingConfig(name: string, logging: Record<string, unknown>): void 
   }
   const configPath = path.join(tempDir, name);
   fs.writeFileSync(configPath, `${JSON.stringify({ logging })}\n`, "utf8");
+<<<<<<< HEAD
   setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+=======
+  process.env.OPENCLAW_CONFIG_PATH = configPath;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function createHistoryToolWithMessage(content: string) {
@@ -51,9 +58,15 @@ describe("sessions_history redaction", () => {
 
   afterAll(() => {
     if (previousConfigPath === undefined) {
+<<<<<<< HEAD
       deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
     } else {
       setTestEnvValue("OPENCLAW_CONFIG_PATH", previousConfigPath);
+=======
+      delete process.env.OPENCLAW_CONFIG_PATH;
+    } else {
+      process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     if (tempDir) {
       fs.rmSync(tempDir, { recursive: true, force: true });

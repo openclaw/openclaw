@@ -25,8 +25,11 @@ import {
   resolveTimerTimeoutMs,
   clampTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+<<<<<<< HEAD
 import { createSseByteGuard } from "../../agents/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { getEnvApiKey } from "../env-api-keys.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
@@ -67,8 +70,11 @@ const RETRY_AFTER_HTTP_DATE_RE =
   /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
 const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;
+<<<<<<< HEAD
 const OPENAI_CHATGPT_RESPONSES_ERROR_BODY_MAX_BYTES = 16 * 1024;
 const OPENAI_CHATGPT_RESPONSES_SUCCESS_BODY_MAX_BYTES = 16 * 1024 * 1024;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const CODEX_RESPONSE_STATUSES = new Set<CodexResponseStatus>([
   "completed",
@@ -342,7 +348,11 @@ export const streamOpenAICodexResponses: StreamFunction<
             break;
           }
 
+<<<<<<< HEAD
           const errorText = await readChatGptResponsesErrorTextLimited(response);
+=======
+          const errorText = await response.text();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           if (attempt < MAX_RETRIES && isRetryableError(response.status, errorText)) {
             let delayMs = BASE_DELAY_MS * 2 ** attempt;
 
@@ -492,8 +502,12 @@ function buildRequestBody(
     model: model.id,
     store: false,
     stream: true,
+<<<<<<< HEAD
     instructions:
       stripSystemPromptCacheBoundary(context.systemPrompt ?? "") || "You are a helpful assistant.",
+=======
+    instructions: context.systemPrompt || "You are a helpful assistant.",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     input: messages,
     text: { verbosity: options?.textVerbosity || "low" },
     include: ["reasoning.encrypted_content"],
@@ -725,6 +739,7 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
   }
 
   const reader = response.body.getReader();
+<<<<<<< HEAD
   // Cap the streaming 200 success-body read at 16 MiB, mirroring the
   // non-streaming `readProviderJsonResponse` cap so a hostile or
   // malfunctioning ChatGPT Responses endpoint cannot exhaust memory by
@@ -736,12 +751,18 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
         `OpenAI ChatGPT Responses success body exceeded ${maxBytes} bytes (received ${size})`,
       ),
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const decoder = new TextDecoder();
   let buffer = "";
 
   try {
     while (true) {
+<<<<<<< HEAD
       const { done, value } = await guard.read();
+=======
+      const { done, value } = await reader.read();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (done) {
         break;
       }
@@ -774,7 +795,11 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
     }
   } finally {
     try {
+<<<<<<< HEAD
       await guard.cancel();
+=======
+      await reader.cancel();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } catch {}
     try {
       reader.releaseLock();
@@ -782,10 +807,13 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
   }
 }
 
+<<<<<<< HEAD
 // Test-only re-export of the bounded SSE parser. Mirrors
 // `parseAnthropicSseBodyForTest` / `iterateSseMessagesForTest` patterns.
 export const parseSSEForTest = parseSSE;
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // ============================================================================
 // WebSocket Parsing
 // ============================================================================
@@ -1539,6 +1567,7 @@ async function processWebSocketStream(
 // Error Handling
 // ============================================================================
 
+<<<<<<< HEAD
 async function readChatGptResponsesErrorTextLimited(response: Response): Promise<string> {
   const reader = response.body?.getReader();
   if (!reader) {
@@ -1590,6 +1619,12 @@ async function parseErrorResponse(
   response: Response,
 ): Promise<{ message: string; friendlyMessage?: string }> {
   const raw = await readChatGptResponsesErrorTextLimited(response);
+=======
+async function parseErrorResponse(
+  response: Response,
+): Promise<{ message: string; friendlyMessage?: string }> {
+  const raw = await response.text();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let message = raw || response.statusText || "Request failed";
   let friendlyMessage: string | undefined;
 

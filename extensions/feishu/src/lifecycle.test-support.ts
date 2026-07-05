@@ -144,6 +144,10 @@ vi.mock("./client.js", () => {
       start: vi.fn(),
     })),
     createEventDispatcher: createEventDispatcherMock,
+<<<<<<< HEAD
+=======
+    getFeishuClient: vi.fn(() => null),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     getFeishuUserAgent: vi.fn(() => "openclaw-feishu-test"),
     pluginVersion: "test",
     setFeishuClientRuntimeForTest: vi.fn(),

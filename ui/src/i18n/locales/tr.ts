@@ -63,6 +63,10 @@ export const tr: TranslationMap = {
     docs: "Dokümanlar",
     theme: "Tema",
     colorMode: "Renk modu",
+<<<<<<< HEAD
+=======
+    colorModeOption: "Renk modu: {mode}",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resources: "Kaynaklar",
     search: "Ara",
     save: "Kaydet",
@@ -202,7 +206,10 @@ export const tr: TranslationMap = {
     inherit: "devral",
     defaultOption: "Varsayılan ({value})",
     offExplicit: "kapalı (açıkça)",
+<<<<<<< HEAD
     auto: "auto",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     on: "açık",
     off: "kapalı",
     full: "tam",
@@ -1447,7 +1454,10 @@ export const tr: TranslationMap = {
     jaJP: "日本語 (Japonca)",
     ko: "한국어 (Korece)",
     fr: "Français (Fransızca)",
+<<<<<<< HEAD
     hi: "हिन्दी (Hintçe)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ar: "العربية (Arapça)",
     it: "Italiano (İtalyanca)",
     tr: "Türkçe (Türkçe)",
@@ -1458,7 +1468,10 @@ export const tr: TranslationMap = {
     vi: "Tiếng Việt (Vietnamca)",
     nl: "Nederlands (Felemenkçe)",
     fa: "فارسی (Farsça)",
+<<<<<<< HEAD
     ru: "Русский (Rusça)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   cron: {
     quickCreate: {
@@ -1628,7 +1641,10 @@ export const tr: TranslationMap = {
       nextHeartbeat: "Sonraki heartbeat",
       wakeModeHelp: "Şimdi hemen tetikler. Sonraki heartbeat, bir sonraki döngüyü bekler.",
       payloadKind: "Ne çalıştırılsın?",
+<<<<<<< HEAD
       command: "Command",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       systemEvent: "Ana zaman çizelgesine mesaj gönder",
       agentTurn: "Asistan görevini çalıştır (yalıtılmış)",
       systemEventHelp:

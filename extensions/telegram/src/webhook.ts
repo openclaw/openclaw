@@ -415,6 +415,16 @@ export async function startTelegramWebhook(opts: {
       return;
     }
     shutDown = true;
+<<<<<<< HEAD
+=======
+    void withTelegramApiErrorLogging({
+      operation: "deleteWebhook",
+      runtime,
+      fn: () => bot.api.deleteWebhook({ drop_pending_updates: false }),
+    }).catch(() => {
+      // withTelegramApiErrorLogging has already emitted the failure.
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     server.close();
     void bot.stop();
     status.noteWebhookStop();

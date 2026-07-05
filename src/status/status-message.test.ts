@@ -60,8 +60,12 @@ describe("buildStatusMessage context window", () => {
       modelAuth: "api-key",
     });
 
+<<<<<<< HEAD
     expect(text).toContain("Model: ollama-cloud/glm-5.1");
     expect(text).toContain("pinned session; config primary ollama-cloud/deepseek-v4-pro");
+=======
+    expect(text).toContain("Session selected: ollama-cloud/glm-5.1");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(text).toContain("Context: 128k/200k");
     expect(text).not.toContain("Context: 128k/1.0m");
   });

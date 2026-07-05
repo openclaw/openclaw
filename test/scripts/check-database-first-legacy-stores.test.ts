@@ -32,6 +32,7 @@ describe("check-database-first-legacy-stores", () => {
     }
   });
 
+<<<<<<< HEAD
   it("skips generated extension asset and dist bundles", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-db-first-guard-"));
     try {
@@ -42,11 +43,19 @@ describe("check-database-first-legacy-stores", () => {
       await fs.mkdir(path.join(root, "extensions", "diffs", "src"), { recursive: true });
       await fs.mkdir(path.join(root, "packages", "plugin-sdk", "dist"), { recursive: true });
       await fs.mkdir(path.join(root, "packages", "plugin-sdk", "src"), { recursive: true });
+=======
+  it("skips generated extension asset bundles", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-db-first-guard-"));
+    try {
+      await fs.mkdir(path.join(root, "extensions", "diffs", "assets"), { recursive: true });
+      await fs.mkdir(path.join(root, "extensions", "diffs", "src"), { recursive: true });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       await fs.writeFile(
         path.join(root, "extensions", "diffs", "assets", "viewer-runtime.js"),
         "export const bundled = true;\n",
       );
       await fs.writeFile(
+<<<<<<< HEAD
         path.join(root, "extensions", "diffs", "dist", "assets", "viewer-runtime.js"),
         "export const bundled = true;\n",
       );
@@ -66,15 +75,27 @@ describe("check-database-first-legacy-stores", () => {
       const files = await collectDatabaseFirstLegacyStoreSourceFiles([
         path.join(root, "extensions"),
         path.join(root, "packages"),
+=======
+        path.join(root, "extensions", "diffs", "src", "runtime.js"),
+        "export const runtime = true;\n",
+      );
+
+      const files = await collectDatabaseFirstLegacyStoreSourceFiles([
+        path.join(root, "extensions"),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ]);
       const relativeFiles = files
         .map((file) => path.relative(root, file).replaceAll(path.sep, "/"))
         .toSorted();
 
+<<<<<<< HEAD
       expect(relativeFiles).toEqual([
         "extensions/diffs/src/runtime.js",
         "packages/plugin-sdk/src/index.js",
       ]);
+=======
+      expect(relativeFiles).toEqual(["extensions/diffs/src/runtime.js"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } finally {
       await fs.rm(root, { force: true, recursive: true });
     }
@@ -8369,7 +8390,11 @@ describe("check-database-first-legacy-stores", () => {
         import fs from "node:fs";
         fs.writeFileSync("sessions.json", "{}\\n");
       `,
+<<<<<<< HEAD
       "extensions/memory-wiki/src/compile.ts",
+=======
+      "extensions/matrix/src/matrix/client/storage.ts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 3 }]);
@@ -8379,13 +8404,18 @@ describe("check-database-first-legacy-stores", () => {
     const content = `import fs from "node:fs";${"\n".repeat(667)}fs.writeFileSync("sessions.json", "{}\\n");`;
     const violations = collectDatabaseFirstLegacyStoreViolations(
       content,
+<<<<<<< HEAD
       "extensions/memory-wiki/src/compile.ts",
+=======
+      "extensions/matrix/src/matrix/client/storage.ts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 668 }]);
   });
 
   it("allows current legacy-debt writes after harmless line movement", () => {
+<<<<<<< HEAD
     const content = [
       `import { fsRoot } from "@openclaw/fs-safe/root";`,
       `const relativePath = ".openclaw-wiki/cache/claims.jsonl";`,
@@ -8396,12 +8426,36 @@ describe("check-database-first-legacy-stores", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       content,
       "extensions/memory-wiki/src/compile.ts",
+=======
+    const content = `
+      import path from "node:path";
+      import { writeJson } from "../infra/json-files.js";
+      const STORAGE_META_FILENAME = "storage-meta.json";
+      function writeStoredRootMetadata(filePath: string, metadata: unknown) {
+        return writeJson(filePath, metadata);
+      }
+      ${"\n".repeat(8)}
+      writeStoredRootMetadata(path.join(params.rootDir, STORAGE_META_FILENAME), {
+        homeserver: metadata.homeserver,
+        userId: metadata.userId,
+        accountId: metadata.accountId ?? DEFAULT_ACCOUNT_KEY,
+        accessTokenHash: metadata.accessTokenHash,
+        deviceId: metadata.deviceId ?? null,
+        currentTokenStateClaimed: true,
+        createdAt: metadata.createdAt ?? new Date().toISOString(),
+      });
+    `;
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      content,
+      "extensions/matrix/src/matrix/client/storage.ts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
 
     expect(violations).toEqual([]);
   });
 
   it("flags duplicate copies of current legacy-debt writes", () => {
+<<<<<<< HEAD
     const relativePath = "extensions/memory-wiki/src/compile.ts";
     const allowedWrite = `fs.writeFileSync("sessions.json", "{}\\n")`;
     const currentLegacyWriteAllowances = new Map([
@@ -8414,14 +8468,48 @@ describe("check-database-first-legacy-stores", () => {
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 3 }]);
+=======
+    const allowedWrite = `
+      writeStoredRootMetadata(path.join(params.rootDir, STORAGE_META_FILENAME), {
+        homeserver: metadata.homeserver,
+        userId: metadata.userId,
+        accountId: metadata.accountId ?? DEFAULT_ACCOUNT_KEY,
+        accessTokenHash: metadata.accessTokenHash,
+        deviceId: metadata.deviceId ?? null,
+        currentTokenStateClaimed: true,
+        createdAt: metadata.createdAt ?? new Date().toISOString(),
+      });
+    `;
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import path from "node:path";
+        import { writeJson } from "../infra/json-files.js";
+        const STORAGE_META_FILENAME = "storage-meta.json";
+        function writeStoredRootMetadata(filePath: string, metadata: unknown) {
+          return writeJson(filePath, metadata);
+        }
+        ${allowedWrite}
+        ${allowedWrite}
+      `,
+      "extensions/matrix/src/matrix/client/storage.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 20 }]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("flags stale current legacy-debt allowlist entries during full scans", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
+<<<<<<< HEAD
         export const CLAIMS_DIGEST_PATH = ".openclaw-wiki/cache/claims.jsonl";
       `,
       "extensions/memory-wiki/src/compile.ts",
+=======
+        export const STORAGE_META_FILENAME = "storage-meta.json";
+      `,
+      "extensions/matrix/src/matrix/client/storage.ts",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       { enforceCurrentLegacyAllowlist: true },
     );
 

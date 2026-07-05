@@ -80,6 +80,7 @@ function collectStringValues(value: unknown, output: Set<string>) {
   }
 }
 
+<<<<<<< HEAD
 function collectMediaUrlsFromRecord(
   record: Record<string, unknown>,
   output: Set<string>,
@@ -93,6 +94,9 @@ function collectMediaUrlsFromRecord(
     return;
   }
   seen.add(record);
+=======
+function collectMediaUrlsFromRecord(record: Record<string, unknown>, output: Set<string>) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   collectStringValues(record.mediaUrl, output);
   collectStringValues(record.mediaUrls, output);
   collectStringValues(record.path, output);
@@ -102,7 +106,11 @@ function collectMediaUrlsFromRecord(
   if (Array.isArray(attachments)) {
     for (const attachment of attachments) {
       if (attachment && typeof attachment === "object" && !Array.isArray(attachment)) {
+<<<<<<< HEAD
         collectMediaUrlsFromRecord(attachment as Record<string, unknown>, output, seen);
+=======
+        collectMediaUrlsFromRecord(attachment as Record<string, unknown>, output);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     }
   }

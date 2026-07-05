@@ -2,7 +2,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+<<<<<<< HEAD
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -78,15 +81,32 @@ const TASK_RUN_SELECT_COLUMNS = [
 
 let cachedDatabase: TaskRegistryDatabase | null = null;
 
+<<<<<<< HEAD
+=======
+function normalizeNumber(value: number | bigint | null): number | undefined {
+  if (typeof value === "bigint") {
+    return Number(value);
+  }
+  return typeof value === "number" ? value : undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function serializeJson(value: unknown): string | null {
   return value == null ? null : JSON.stringify(value);
 }
 
 function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
+<<<<<<< HEAD
   const startedAt = normalizeSqliteNumber(row.started_at);
   const endedAt = normalizeSqliteNumber(row.ended_at);
   const lastEventAt = normalizeSqliteNumber(row.last_event_at);
   const cleanupAfter = normalizeSqliteNumber(row.cleanup_after);
+=======
+  const startedAt = normalizeNumber(row.started_at);
+  const endedAt = normalizeNumber(row.ended_at);
+  const lastEventAt = normalizeNumber(row.last_event_at);
+  const cleanupAfter = normalizeNumber(row.cleanup_after);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const scopeKind = parseTaskScopeKind(row.scope_kind);
   const terminalOutcome = parseOptionalTaskTerminalOutcome(row.terminal_outcome);
   // System tasks intentionally have no requester session; ownerKey is the lookup anchor.
@@ -111,7 +131,11 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
     status: parseTaskStatus(row.status),
     deliveryStatus: parseTaskDeliveryStatus(row.delivery_status),
     notifyPolicy: parseTaskNotifyPolicy(row.notify_policy),
+<<<<<<< HEAD
     createdAt: normalizeSqliteNumber(row.created_at) ?? 0,
+=======
+    createdAt: normalizeNumber(row.created_at) ?? 0,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ...(startedAt != null ? { startedAt } : {}),
     ...(endedAt != null ? { endedAt } : {}),
     ...(lastEventAt != null ? { lastEventAt } : {}),
@@ -125,7 +149,11 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
 
 function rowToTaskDeliveryState(row: TaskDeliveryStateRow): TaskDeliveryState {
   const requesterOrigin = parseDeliveryContextJson(row.requester_origin_json);
+<<<<<<< HEAD
   const lastNotifiedEventAt = normalizeSqliteNumber(row.last_notified_event_at);
+=======
+  const lastNotifiedEventAt = normalizeNumber(row.last_notified_event_at);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return {
     taskId: row.task_id,
     ...(requesterOrigin ? { requesterOrigin } : {}),

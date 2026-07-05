@@ -10,7 +10,10 @@ import type {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { getTelegramRuntime } from "./runtime.js";
+<<<<<<< HEAD
 import { normalizeTelegramStateAccountId } from "./state-account-id.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const SPOOL_VERSION = 1;
 const TELEGRAM_INGRESS_SPOOL_PREFIX = "ingress-spool-";
@@ -38,9 +41,12 @@ export type TelegramSpooledUpdate = {
   path: string;
   update: unknown;
   receivedAt: number;
+<<<<<<< HEAD
   attempts?: number;
   lastAttemptAt?: number;
   lastError?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   claim?: TelegramSpooledUpdateClaimOwner;
 };
 
@@ -48,6 +54,17 @@ export type ClaimedTelegramSpooledUpdate = TelegramSpooledUpdate & {
   pendingPath: string;
 };
 
+<<<<<<< HEAD
+=======
+function normalizeAccountId(accountId?: string) {
+  const trimmed = accountId?.trim();
+  if (!trimmed) {
+    return "default";
+  }
+  return trimmed.replace(/[^a-z0-9._-]+/gi, "_");
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isValidUpdateId(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
@@ -60,7 +77,11 @@ export function resolveTelegramIngressSpoolDir(params: {
   return path.join(
     stateDir,
     "telegram",
+<<<<<<< HEAD
     `${TELEGRAM_INGRESS_SPOOL_PREFIX}${normalizeTelegramStateAccountId(params.accountId)}`,
+=======
+    `${TELEGRAM_INGRESS_SPOOL_PREFIX}${normalizeAccountId(params.accountId)}`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
 }
 
@@ -97,7 +118,11 @@ function resolveQueueParts(spoolDir: string): {
   stateDir: string;
 } {
   const basename = path.basename(spoolDir);
+<<<<<<< HEAD
   const accountId = normalizeTelegramStateAccountId(
+=======
+  const accountId = normalizeAccountId(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     basename.startsWith(TELEGRAM_INGRESS_SPOOL_PREFIX)
       ? basename.slice(TELEGRAM_INGRESS_SPOOL_PREFIX.length)
       : basename,
@@ -169,9 +194,12 @@ function parseQueueRecord(
     path: pendingPath(spoolDir, payload.updateId),
     update: payload.update,
     receivedAt: payload.receivedAt,
+<<<<<<< HEAD
     attempts: record.attempts,
     ...(record.lastAttemptAt === undefined ? {} : { lastAttemptAt: record.lastAttemptAt }),
     ...(record.lastError === undefined ? {} : { lastError: record.lastError }),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }
 
@@ -273,6 +301,7 @@ export async function claimTelegramSpooledUpdate(
 
 export async function releaseTelegramSpooledUpdateClaim(
   update: ClaimedTelegramSpooledUpdate,
+<<<<<<< HEAD
   options?: { lastError?: string; releasedAt?: number },
 ): Promise<void> {
   await createTelegramIngressQueue(path.dirname(update.pendingPath)).release(
@@ -295,6 +324,11 @@ export async function refreshTelegramSpooledUpdateClaim(
       { id: queueEventId(update.updateId), claim: { token: claimToken } },
       options,
     )) ?? false
+=======
+): Promise<void> {
+  await createTelegramIngressQueue(path.dirname(update.pendingPath)).release(
+    queueMutationTarget(update),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
 }
 

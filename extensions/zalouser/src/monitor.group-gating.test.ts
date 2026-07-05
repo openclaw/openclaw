@@ -2,7 +2,11 @@
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
+<<<<<<< HEAD
 import "./monitor.send.test-mocks.js";
+=======
+import "./monitor.send-mocks.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import "./zalo-js.test-mocks.js";
 import { resolveZalouserAccountSync } from "./accounts.js";
 import { testing, monitorZalouserProvider } from "./monitor.js";
@@ -11,7 +15,11 @@ import {
   sendMessageZalouserMock,
   sendSeenZalouserMock,
   sendTypingZalouserMock,
+<<<<<<< HEAD
 } from "./monitor.send.test-mocks.js";
+=======
+} from "./monitor.send-mocks.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { setZalouserRuntime } from "./runtime.js";
 import { createZalouserRuntimeEnv } from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";

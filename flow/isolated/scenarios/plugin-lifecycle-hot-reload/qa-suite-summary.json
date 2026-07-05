@@ -1,0 +1,73 @@
+{
+  "scenarios": [
+    {
+      "name": "Plugin lifecycle hot reload",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "disables and re-enables a runtime capability without stale state",
+          "status": "pass",
+          "details": "LIFECYCLE-HOT-RELOAD-OK"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 39061,
+    "gatewayProcessCpuMs": 5000,
+    "gatewayCpuCoreRatio": 0.128,
+    "gatewayProcessRssStartBytes": 876744704,
+    "gatewayProcessRssEndBytes": 819081216,
+    "gatewayProcessRssDeltaBytes": -57663488,
+    "gatewayProcessRssPeakBytes": 879091712,
+    "gatewayProcessRssPeakDeltaBytes": 2347008,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:14:11.241Z",
+        "gatewayProcessRssBytes": 876744704
+      },
+      {
+        "label": "scenario:plugin-lifecycle-hot-reload:start",
+        "at": "2026-07-03T13:14:11.268Z",
+        "gatewayProcessRssBytes": 879091712
+      },
+      {
+        "label": "scenario:plugin-lifecycle-hot-reload:finish",
+        "at": "2026-07-03T13:14:30.906Z",
+        "gatewayProcessRssBytes": 819081216
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:14:31.003Z",
+        "gatewayProcessRssBytes": 819081216
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:13:51.845Z",
+    "finishedAt": "2026-07-03T13:14:30.906Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "plugin-lifecycle-hot-reload"
+    ],
+    "runtimePair": null
+  }
+}

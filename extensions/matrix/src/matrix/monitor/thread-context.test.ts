@@ -23,6 +23,7 @@ describe("matrix thread context", () => {
     ).toBe("Thread starter body");
   });
 
+<<<<<<< HEAD
   it("truncates long thread starter bodies on code-point boundaries", () => {
     const summary = summarizeMatrixThreadStarterEvent({
       event_id: "$root",
@@ -40,6 +41,8 @@ describe("matrix thread context", () => {
     expect(summary && /[\uD800-\uDFFF]/.test(summary)).toBe(false);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("marks media-only thread starter events instead of returning bare filenames", () => {
     expect(
       summarizeMatrixThreadStarterEvent({

@@ -4,7 +4,10 @@ import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { isSafeExecutableValue } from "./exec-safety.js";
+<<<<<<< HEAD
 import { getWindowsSystem32ExePath } from "./windows-install-roots.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 // Binary detection accepts safe executable names or explicit paths and avoids
 // shell evaluation when probing PATH.
@@ -31,10 +34,14 @@ export async function detectBinary(name: string): Promise<boolean> {
     }
   }
 
+<<<<<<< HEAD
   const command =
     process.platform === "win32"
       ? [getWindowsSystem32ExePath("where.exe"), name]
       : ["/usr/bin/env", "which", name];
+=======
+  const command = process.platform === "win32" ? ["where", name] : ["/usr/bin/env", "which", name];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   try {
     const result = await runCommandWithTimeout(command, { timeoutMs: 2000 });
     return result.code === 0 && result.stdout.trim().length > 0;

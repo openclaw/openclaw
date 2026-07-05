@@ -140,6 +140,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("limits MiniMax Docker live-model coverage to the stable M2.7 pair", () => {
     const plan = createReleaseWorkflowMatrixPlan({
       includeLiveSuites: true,
@@ -156,6 +157,8 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("disables live model planning when focused recovery targets another live suite", () => {
     const plan = createReleaseWorkflowMatrixPlan({
       includeLiveSuites: true,
@@ -185,12 +188,15 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     expect(jobs.validate_live_models_docker.strategy.matrix).toBe(
       "${{ fromJson(needs.plan_release_workflow_matrices.outputs.live_models_matrix) }}",
     );
+<<<<<<< HEAD
     expect(jobs.validate_live_models_docker.env.OPENCLAW_LIVE_MODELS).toBe(
       "${{ matrix.models || 'modern' }}",
     );
     expect(jobs.validate_live_models_docker.env.OPENCLAW_LIVE_MAX_MODELS).toBe(
       "${{ matrix.max_models || '6' }}",
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("requires new release-profile matrices to use a planner or an explicit allowlist", () => {

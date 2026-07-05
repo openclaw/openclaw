@@ -50,10 +50,15 @@ function firstPublicSurfaceCall(): PublicSurfaceCall | undefined {
 describe("plugin-sdk qa-runner-runtime", () => {
   const tempDirs: string[] = [];
   const originalPrivateQaCli = process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+<<<<<<< HEAD
   const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
   beforeEach(() => {
     vi.resetModules();
+=======
+
+  beforeEach(() => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     loadPluginManifestRegistry.mockReset().mockReturnValue({
       plugins: [],
       diagnostics: [],
@@ -62,17 +67,23 @@ describe("plugin-sdk qa-runner-runtime", () => {
     tryLoadActivatedBundledPluginPublicSurfaceModuleSync.mockReset();
     resolveOpenClawPackageRootSync.mockReset().mockReturnValue(null);
     delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+<<<<<<< HEAD
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   afterEach(() => {
     cleanupTempDirs(tempDirs);
     restorePrivateQaCliEnv(originalPrivateQaCli);
+<<<<<<< HEAD
     if (originalBundledPluginsDir === undefined) {
       delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     } else {
       process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("stays cold until runner discovery is requested", async () => {

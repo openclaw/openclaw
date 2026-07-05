@@ -2,7 +2,10 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+<<<<<<< HEAD
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runTimedUpdateJob } from "../../scripts/e2e/parallels/update-job-timeout.ts";
 
@@ -30,6 +33,7 @@ describe("Parallels update job timeout", () => {
     expect(writeLog).toHaveBeenCalledTimes(1);
   });
 
+<<<<<<< HEAD
   it("clamps oversized update job timers before scheduling", async () => {
     const chunks: string[] = [];
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
@@ -52,6 +56,8 @@ describe("Parallels update job timeout", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("records update failures and writes the job log", async () => {
     const chunks: string[] = [];
     const writeLog = vi.fn(async () => undefined);

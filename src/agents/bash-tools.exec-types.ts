@@ -15,7 +15,10 @@ import type {
 } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
+<<<<<<< HEAD
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/types.js";
 import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
@@ -72,10 +75,14 @@ export type ExecToolDefaults = {
   messageProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
+<<<<<<< HEAD
   /** Channel-owned sender/chat metadata. Exec subprocesses receive only sender/chat IDs. */
   channelContext?: PluginHookChannelContext;
   accountId?: string;
   approvalReviewerDeviceId?: string;
+=======
+  accountId?: string;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;

@@ -404,8 +404,12 @@ export async function resolveRuntimeWebProviderSelection<
     let keylessFallbackProvider: TProvider | undefined;
 
     for (const provider of candidates) {
+<<<<<<< HEAD
       const isKeyless = provider.requiresCredential === false;
       if (isKeyless) {
+=======
+      if (provider.requiresCredential === false) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         if (!params.configuredProvider && !params.allowKeylessAutoSelect) {
           continue;
         }
@@ -413,6 +417,16 @@ export async function resolveRuntimeWebProviderSelection<
           keylessFallbackProvider ||= provider;
           continue;
         }
+<<<<<<< HEAD
+=======
+        selectedProvider = provider.id;
+        selectedResolution = {
+          source: "missing" as TSource,
+          secretRefConfigured: false,
+          fallbackUsedAfterRefFailure: false,
+        };
+        break;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
 
       const path = params.inactivePathsForProvider(provider)[0] ?? "";
@@ -501,6 +515,7 @@ export async function resolveRuntimeWebProviderSelection<
         });
       }
 
+<<<<<<< HEAD
       if (
         isKeyless &&
         selectedCandidateResolution.secretRefConfigured &&
@@ -513,6 +528,8 @@ export async function resolveRuntimeWebProviderSelection<
         continue;
       }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (params.configuredProvider) {
         selectedProvider = provider.id;
         selectedResolution = selectedCandidateResolution;
@@ -531,6 +548,7 @@ export async function resolveRuntimeWebProviderSelection<
         break;
       }
 
+<<<<<<< HEAD
       if (isKeyless) {
         selectedProvider = provider.id;
         selectedResolution = selectedCandidateResolution;
@@ -549,6 +567,8 @@ export async function resolveRuntimeWebProviderSelection<
         break;
       }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (selectedCandidateResolution.value) {
         selectedProvider = provider.id;
         selectedResolution = selectedCandidateResolution;

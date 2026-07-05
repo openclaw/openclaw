@@ -153,6 +153,7 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
     );
   });
 
+<<<<<<< HEAD
   it("uses distinct default report paths when invocations share a clock tick", async () => {
     const { runVitestJsonReport } = await import("../../scripts/test-report-utils.mjs");
     const reportPaths: string[] = [];
@@ -189,6 +190,8 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("fails when Vitest exits successfully without writing a JSON report", async () => {
     const { runVitestJsonReport } = await import("../../scripts/test-report-utils.mjs");
     spawnSyncMock.mockReturnValue({ status: 0 });

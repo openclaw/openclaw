@@ -15,7 +15,11 @@ import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+<<<<<<< HEAD
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+=======
+import { formatErrorMessage } from "../../infra/errors.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   resolveAgentDeliveryPlanWithSessionRoute,
   resolveAgentOutboundTarget,
@@ -702,7 +706,11 @@ export async function deliverAgentCommandResult(
   };
   if (strictPreDeliveryError) {
     emitJsonEnvelope(deliveryStatus);
+<<<<<<< HEAD
     throw toErrorObject(strictPreDeliveryError, "Non-Error thrown");
+=======
+    throw toLintErrorObject(strictPreDeliveryError, "Non-Error thrown");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   const deliveryPayloads = projectOutboundPayloadPlanForOutbound(outboundPayloadPlan);
@@ -802,3 +810,20 @@ export async function deliverAgentCommandResult(
     deliveryStatus,
   });
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

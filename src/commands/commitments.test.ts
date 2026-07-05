@@ -109,6 +109,7 @@ describe("commitments command", () => {
     );
   });
 
+<<<<<<< HEAD
   it("keeps fixed-width columns aligned when an id or scope is truncated", async () => {
     // An id longer than the 16-char ID column and a scope longer than the
     // 28-char Scope column, so truncate() fires for both cells.
@@ -204,6 +205,8 @@ describe("commitments command", () => {
     expect(row?.indexOf("pending")).toBe(header?.indexOf("Status"));
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("writes list JSON to runtime stdout instead of log output", async () => {
     const { runtime, logs, stdout } = createRuntime();
 

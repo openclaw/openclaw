@@ -30,6 +30,7 @@ const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
 
 type CheckpointFixture = Awaited<ReturnType<typeof createCheckpointFixture>>;
 
+<<<<<<< HEAD
 function buildSessionTranscriptLines(sessionId: string, totalLines: number): string[] {
   const header = JSON.stringify({
     type: "session",
@@ -50,6 +51,8 @@ function buildSessionTranscriptLines(sessionId: string, totalLines: number): str
   return [header, ...entries];
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function compactionCheckpointEntry(
   fixture: CheckpointFixture,
   options: {
@@ -626,6 +629,7 @@ test("sessions.compact treats Codex native compaction start as pending, not comp
   ws.close();
 });
 
+<<<<<<< HEAD
 test("sessions.compact maxLines truncates the transcript on disk and archives the original to .bak", async () => {
   const { dir } = await createSessionStoreDir();
   const transcriptPath = path.join(dir, "sess-main.jsonl");
@@ -792,6 +796,8 @@ test("sessions.compact maxLines aborts without truncating when an active run can
   ws.close();
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 test("sessions.patch preserves nested model ids under provider overrides", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-sessions-nested-"));
   const storePath = path.join(dir, "sessions.json");

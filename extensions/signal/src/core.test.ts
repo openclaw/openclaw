@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 import { buildExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // Signal tests cover core plugin behavior.
 import {
   createMessageReceiptFromOutboundResults,
@@ -7,10 +10,13 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import {
   clearSignalApprovalReactionTargetsForTest,
   resolveSignalApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { signalPlugin } from "./channel.js";
 import * as clientModule from "./client-adapter.js";
 import { classifySignalCliLogLine } from "./daemon.js";
@@ -23,7 +29,10 @@ import {
 import { probeSignal } from "./probe.js";
 import { clearSignalRuntime } from "./runtime.js";
 import {
+<<<<<<< HEAD
   createSignalCliPathTextInput,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   normalizeSignalAccountInput,
   parseSignalAllowFromEntries,
   signalDmPolicy,
@@ -215,6 +224,7 @@ describe("probeSignal", () => {
 
     expect(status.configured).toBe(true);
   });
+<<<<<<< HEAD
 
   it("does not show a second missing-binary note before the cliPath prompt", () => {
     const input = createSignalCliPathTextInput(async () => true);
@@ -222,6 +232,8 @@ describe("probeSignal", () => {
     expect(input.helpLines).toBeUndefined();
     expect(input.helpTitle).toBeUndefined();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("signal outbound", () => {
@@ -277,6 +289,7 @@ describe("signal outbound", () => {
     ).toBe(true);
   });
 
+<<<<<<< HEAD
   it("registers structured approval payloads for reactions after delivery", async () => {
     clearSignalApprovalReactionTargetsForTest();
     const cfg = {
@@ -414,6 +427,8 @@ describe("signal outbound", () => {
     ).toBeNull();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("declares message adapter durable text and media with receipt proofs", async () => {
     const send = vi.fn(async (_to: string, _text: string, opts: { mediaUrl?: string } = {}) => {
       const messageId = opts.mediaUrl ? "signal-media-1" : "signal-text-1";

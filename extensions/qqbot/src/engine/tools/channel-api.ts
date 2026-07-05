@@ -8,16 +8,20 @@
  * validation, fetch, and structured response formatting.
  */
 
+<<<<<<< HEAD
 import {
   readProviderTextResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
 
 const API_BASE = "https://api.sgroup.qq.com";
 const DEFAULT_TIMEOUT_MS = 30000;
+<<<<<<< HEAD
 const CHANNEL_API_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
 function resolveChannelApiSsrfPolicy(url: string): SsrFPolicy {
@@ -26,6 +30,8 @@ function resolveChannelApiSsrfPolicy(url: string): SsrFPolicy {
     allowRfc2544BenchmarkRange: true,
   };
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /**
  * Channel API call parameters.
@@ -187,6 +193,7 @@ export async function executeChannelApi(
     debugLog(`[qqbot-channel-api] >>> ${method} ${url} (timeout: ${DEFAULT_TIMEOUT_MS}ms)`);
 
     let res: Response;
+<<<<<<< HEAD
     let release: (() => Promise<void>) | undefined;
     try {
       const guarded = await fetchWithSsrFGuard({
@@ -197,6 +204,10 @@ export async function executeChannelApi(
       });
       res = guarded.response;
       release = guarded.release;
+=======
+    try {
+      res = await fetch(url, fetchOptions);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } catch (err) {
       clearTimeout(timeoutId);
       if (err instanceof Error && err.name === "AbortError") {
@@ -215,6 +226,7 @@ export async function executeChannelApi(
       clearTimeout(timeoutId);
     }
 
+<<<<<<< HEAD
     try {
       debugLog(`[qqbot-channel-api] <<< Status: ${res.status} ${res.statusText}`);
 
@@ -262,6 +274,49 @@ export async function executeChannelApi(
     } finally {
       await release?.();
     }
+=======
+    debugLog(`[qqbot-channel-api] <<< Status: ${res.status} ${res.statusText}`);
+
+    const rawBody = await res.text();
+    if (!rawBody || rawBody.trim() === "") {
+      if (res.ok) {
+        return json({ success: true, status: res.status, path: params.path });
+      }
+      return json({
+        error: `API returned ${res.status} ${res.statusText}`,
+        status: res.status,
+        path: params.path,
+      });
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawBody);
+    } catch {
+      parsed = rawBody;
+    }
+
+    if (!res.ok) {
+      const errMsg =
+        typeof parsed === "object" && parsed && "message" in parsed
+          ? String((parsed as { message?: unknown }).message)
+          : `${res.status} ${res.statusText}`;
+      debugError(`[qqbot-channel-api] Error [${method} ${params.path}]: ${errMsg}`);
+      return json({
+        error: errMsg,
+        status: res.status,
+        path: params.path,
+        details: parsed,
+      });
+    }
+
+    return json({
+      success: true,
+      status: res.status,
+      path: params.path,
+      data: parsed,
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } catch (err) {
     return json({
       error: formatErrorMessage(err),

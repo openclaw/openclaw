@@ -15,6 +15,12 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const tempDirs: string[] = [];
 const scriptPath = "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs";
+<<<<<<< HEAD
+=======
+const hasTimeoutCommand =
+  process.platform === "linux" &&
+  spawnSync("bash", ["-lc", "command -v timeout >/dev/null 2>&1"]).status === 0;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function makeTempDir(): string {
   const dir = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-lifecycle-measure-"));
@@ -250,6 +256,7 @@ describe("plugin lifecycle resource sampler", () => {
     },
   );
 
+<<<<<<< HEAD
   it.runIf(process.platform === "linux")("clamps oversized timer env values", () => {
     const dir = makeTempDir();
     const summary = path.join(dir, "summary.tsv");
@@ -285,6 +292,8 @@ describe("plugin lifecycle resource sampler", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.runIf(process.platform === "linux")(
     "kills stubborn descendants after the timeout grace period",
     () => {
@@ -314,8 +323,13 @@ describe("plugin lifecycle resource sampler", () => {
             encoding: "utf8",
             env: {
               ...process.env,
+<<<<<<< HEAD
               OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "1000",
               OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "200",
+=======
+              OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "150",
+              OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "100",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               PID_FILE: pidFile,
             },
             timeout: 5000,
@@ -337,6 +351,7 @@ describe("plugin lifecycle resource sampler", () => {
     },
   );
 
+<<<<<<< HEAD
   it.runIf(process.platform === "linux")(
     "forwards external termination to the measured process group",
     async () => {
@@ -382,6 +397,51 @@ describe("plugin lifecycle resource sampler", () => {
       }
     },
   );
+=======
+  it.runIf(hasTimeoutCommand)("forwards external termination to the measured process group", () => {
+    const dir = makeTempDir();
+    const summary = path.join(dir, "summary.tsv");
+    const pidFile = path.join(dir, "descendant.pid");
+    let descendantPid;
+
+    try {
+      const result = spawnSync(
+        "timeout",
+        [
+          "--kill-after=1s",
+          "0.2s",
+          "node",
+          scriptPath,
+          summary,
+          "external-stop",
+          "--",
+          "bash",
+          "-lc",
+          'bash -c \'trap "" TERM; printf "%s\\n" "$$" >"$PID_FILE"; while :; do sleep 1; done\' & wait',
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "5000",
+            OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "100",
+            PID_FILE: pidFile,
+          },
+          timeout: 5000,
+        },
+      );
+
+      descendantPid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
+      expect(result.status).toBe(124);
+      expect(waitForPidExit(descendantPid, 1000)).toBe(true);
+    } finally {
+      if (descendantPid > 0 && pidExists(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
+      }
+    }
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   it.runIf(process.platform === "linux")(
     "exits promptly when externally terminated phases stop during grace",

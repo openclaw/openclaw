@@ -141,6 +141,7 @@ export type MessagesConfig = {
   responsePrefix?: string;
   /** Custom `/usage full` footer template, inline or JSON file path. */
   usageTemplate?: string | Record<string, unknown>;
+<<<<<<< HEAD
   /**
    * Default per-reply usage footer mode (`responseUsage`) seeded into any session
    * that has not set its own via `/usage`. Precedence: session value → channel entry
@@ -158,6 +159,8 @@ export type MessagesConfig = {
         default?: "on" | "off" | "tokens" | "full";
         [channel: string]: "on" | "off" | "tokens" | "full" | undefined;
       };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   groupChat?: GroupChatConfig;
   queue?: QueueConfig;
   /** Debounce rapid inbound messages per sender (global + per-channel overrides). */

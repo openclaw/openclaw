@@ -4,12 +4,15 @@ import {
   resolveExpiresAtMsFromDurationMs,
   resolveNonNegativeIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
+<<<<<<< HEAD
 import {
   claimRecoveryEntry as claimSharedRecoveryEntry,
   computeBackoffMs,
   getErrnoCode,
   releaseRecoveryEntry as releaseSharedRecoveryEntry,
 } from "./delivery-recovery.shared.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatErrorMessage } from "./errors.js";
 import {
   ackSessionDelivery,
@@ -44,9 +47,22 @@ interface PendingSessionDeliveryDrainDecision {
 
 const MAX_SESSION_DELIVERY_RETRIES = 5;
 
+<<<<<<< HEAD
 const drainInProgress = new Map<string, boolean>();
 const entriesInProgress = new Set<string>();
 
+=======
+const BACKOFF_MS: readonly number[] = [5_000, 25_000, 120_000, 600_000];
+const drainInProgress = new Map<string, boolean>();
+const entriesInProgress = new Set<string>();
+
+function getErrnoCode(err: unknown): string | null {
+  return err && typeof err === "object" && "code" in err
+    ? String((err as { code?: unknown }).code)
+    : null;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function createEmptyRecoverySummary(): SessionDeliveryRecoverySummary {
   return {
     recovered: 0,
@@ -56,6 +72,28 @@ function createEmptyRecoverySummary(): SessionDeliveryRecoverySummary {
   };
 }
 
+<<<<<<< HEAD
+=======
+function claimRecoveryEntry(entryId: string): boolean {
+  if (entriesInProgress.has(entryId)) {
+    return false;
+  }
+  entriesInProgress.add(entryId);
+  return true;
+}
+
+function releaseRecoveryEntry(entryId: string): void {
+  entriesInProgress.delete(entryId);
+}
+
+function computeSessionDeliveryBackoffMs(retryCount: number): number {
+  if (retryCount <= 0) {
+    return 0;
+  }
+  return BACKOFF_MS[Math.min(retryCount - 1, BACKOFF_MS.length - 1)] ?? BACKOFF_MS.at(-1) ?? 0;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveSessionDeliveryMaxRetries(entry: QueuedSessionDelivery): number {
   return entry.maxRetries ?? MAX_SESSION_DELIVERY_RETRIES;
 }
@@ -72,7 +110,11 @@ export function isSessionDeliveryEligibleForRetry(
   entry: QueuedSessionDelivery,
   now: number,
 ): { eligible: true } | { eligible: false; remainingBackoffMs: number } {
+<<<<<<< HEAD
   const backoff = computeBackoffMs(entry.retryCount);
+=======
+  const backoff = computeSessionDeliveryBackoffMs(entry.retryCount);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (backoff <= 0) {
     return { eligible: true };
   }
@@ -140,7 +182,11 @@ export async function drainPendingSessionDeliveries(opts: {
       .toSorted((a, b) => a.enqueuedAt - b.enqueuedAt);
 
     for (const entry of matchingEntries) {
+<<<<<<< HEAD
       if (!claimSharedRecoveryEntry(entriesInProgress, entry.id)) {
+=======
+      if (!claimRecoveryEntry(entry.id)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         opts.log.info(`${opts.logLabel}: entry ${entry.id} is already being recovered`);
         continue;
       }
@@ -187,7 +233,11 @@ export async function drainPendingSessionDeliveries(opts: {
           },
         });
       } finally {
+<<<<<<< HEAD
         releaseSharedRecoveryEntry(entriesInProgress, entry.id);
+=======
+        releaseRecoveryEntry(entry.id);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     }
   } finally {
@@ -219,7 +269,11 @@ export async function recoverPendingSessionDeliveries(opts: {
       opts.log.warn("Session delivery recovery time budget exceeded — remaining entries deferred");
       break;
     }
+<<<<<<< HEAD
     if (!claimSharedRecoveryEntry(entriesInProgress, entry.id)) {
+=======
+    if (!claimRecoveryEntry(entry.id)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       continue;
     }
 
@@ -265,7 +319,11 @@ export async function recoverPendingSessionDeliveries(opts: {
         opts.log.info(`Recovered session delivery ${currentEntry.id}`);
       }
     } finally {
+<<<<<<< HEAD
       releaseSharedRecoveryEntry(entriesInProgress, entry.id);
+=======
+      releaseRecoveryEntry(entry.id);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   }
 

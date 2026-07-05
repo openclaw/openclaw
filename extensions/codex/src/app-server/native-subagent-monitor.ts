@@ -51,7 +51,10 @@ type ParentState = {
 type ChildState = {
   childThreadId: string;
   parentThreadId: string;
+<<<<<<< HEAD
   assistantMessagesByTurn: Map<string, ChildAssistantMessages>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   transcriptPath?: string;
   transcriptPollAttempt: number;
   transcriptPollTimer?: ReturnType<typeof setTimeout>;
@@ -64,6 +67,7 @@ type ChildState = {
   noFinalCompletionFallbackTimer?: ReturnType<typeof setTimeout>;
 };
 
+<<<<<<< HEAD
 type ChildAssistantMessages = {
   texts: Map<string, string>;
   order: string[];
@@ -71,6 +75,8 @@ type ChildAssistantMessages = {
   finalMessageIds: Set<string>;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type TranscriptCompletion = CodexNativeSubagentCompletion & {
   parentThreadId?: string;
   completedAt?: number;
@@ -91,9 +97,12 @@ const DEFAULT_COMPLETION_DELIVERY_RETRY_DELAYS_MS = [
 ];
 const DEFAULT_TASK_ROW_RECONCILE_INTERVAL_MS = 10_000;
 const RECENT_TERMINAL_TASK_RECONCILE_GRACE_MS = 60_000;
+<<<<<<< HEAD
 // Codex's recorder uses this filename contract; non-canonical names keep the
 // legacy substring fallback for older or test-created transcript files.
 const CODEX_ROLLOUT_FILENAME_RE = /^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)\.jsonl$/u;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const defaultRuntime: NativeSubagentMonitorRuntime = {
   createAgentHarnessTaskRuntime,
@@ -222,8 +231,11 @@ export class CodexNativeSubagentMonitor {
         });
       }
     }
+<<<<<<< HEAD
     this.captureChildAssistantMessage(notification);
     await this.handleChildTurnCompletion(notification);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await this.handleCompletionNotification(notification);
   }
 
@@ -305,11 +317,15 @@ export class CodexNativeSubagentMonitor {
         nativeCompletion.agentPath,
       );
       const childState = childThreadId ? this.childStates.get(childThreadId) : undefined;
+<<<<<<< HEAD
       if (
         !childState ||
         childState.parentThreadId !== state.parentThreadId ||
         childState.transcriptTerminal
       ) {
+=======
+      if (!childState || childState.parentThreadId !== state.parentThreadId) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         embeddedAgentLog.warn(
           "Ignoring Codex native subagent completion for unknown child thread",
           {
@@ -320,6 +336,7 @@ export class CodexNativeSubagentMonitor {
         continue;
       }
       const completion = toThreadCompletion(nativeCompletion, childState.childThreadId);
+<<<<<<< HEAD
       await this.processChildCompletion(state, childState, completion);
     }
   }
@@ -463,6 +480,21 @@ export class CodexNativeSubagentMonitor {
       return;
     }
     await this.processCompletion(state, completion);
+=======
+      if (shouldWaitForTranscriptCompletion(completion, this.codexHome)) {
+        // Codex can notify `completed: null` before the child transcript exposes
+        // its final assistant message; poll briefly before delivering the no-final fallback.
+        const eventAt = Date.now();
+        const reconciled = await this.reconcileChildTranscript(childState.childThreadId);
+        if (!reconciled) {
+          this.scheduleTranscriptPoll(childState);
+          this.scheduleNoFinalCompletionFallback(state, childState, completion, eventAt);
+        }
+        continue;
+      }
+      await this.processCompletion(state, completion);
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   async reconcileChildTranscript(
@@ -697,7 +729,10 @@ export class CodexNativeSubagentMonitor {
       childState = {
         childThreadId: normalizedChildThreadId,
         parentThreadId: normalizedParentThreadId,
+<<<<<<< HEAD
         assistantMessagesByTurn: new Map<string, ChildAssistantMessages>(),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         transcriptPollAttempt: 0,
         transcriptTerminal: false,
         completionDeliveryAttempt: 0,
@@ -1032,6 +1067,7 @@ function buildCompletionDedupeKey(
   return `${parentThreadId}:${completion.childThreadId}:${completion.status}:${hash}`;
 }
 
+<<<<<<< HEAD
 function toChildTurnCompletion(
   childState: ChildState,
   turn: JsonObject,
@@ -1088,6 +1124,8 @@ function readTurnErrorMessage(turn: JsonObject): string | undefined {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function buildParentAgentPathKey(parentThreadId: string, agentPath: string): string {
   return `${parentThreadId}\0${agentPath}`;
 }
@@ -1191,9 +1229,14 @@ async function findTranscriptPaths(params: {
 }): Promise<Map<string, string>> {
   const sessionsDir = path.join(params.codexHome, "sessions");
   const found = new Map<string, string>();
+<<<<<<< HEAD
   const remaining = new Set(params.childThreadIds);
   const stack = [sessionsDir];
   while (stack.length > 0 && remaining.size > 0) {
+=======
+  const stack = [sessionsDir];
+  while (stack.length > 0 && found.size < params.childThreadIds.size) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const dir = stack.pop()!;
     let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
     try {
@@ -1210,6 +1253,7 @@ async function findTranscriptPaths(params: {
       if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
         continue;
       }
+<<<<<<< HEAD
       const rolloutMatch = entry.name.match(CODEX_ROLLOUT_FILENAME_RE);
       if (rolloutMatch) {
         const childThreadId = rolloutMatch[1];
@@ -1224,6 +1268,12 @@ async function findTranscriptPaths(params: {
           remaining.delete(childThreadId);
           break;
         }
+=======
+      for (const childThreadId of params.childThreadIds) {
+        if (!found.has(childThreadId) && entry.name.includes(childThreadId)) {
+          found.set(childThreadId, entryPath);
+        }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     }
   }
@@ -1250,6 +1300,7 @@ async function findTranscriptPath(params: {
         stack.push(entryPath);
         continue;
       }
+<<<<<<< HEAD
       const rolloutMatch = entry.name.match(CODEX_ROLLOUT_FILENAME_RE);
       if (
         entry.isFile() &&
@@ -1257,6 +1308,12 @@ async function findTranscriptPath(params: {
         (rolloutMatch
           ? rolloutMatch[1] === params.childThreadId
           : entry.name.includes(params.childThreadId))
+=======
+      if (
+        entry.isFile() &&
+        entry.name.endsWith(".jsonl") &&
+        entry.name.includes(params.childThreadId)
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ) {
         return entryPath;
       }

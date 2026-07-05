@@ -6,7 +6,10 @@
  */
 
 import type { Server } from "node:http";
+<<<<<<< HEAD
 import { toErrorObject } from "../../../infra/errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   generateOAuthState,
   generatePKCE,
@@ -360,7 +363,11 @@ export async function loginAnthropic(options: {
       if (!code) {
         await withOAuthLoginAbort(manualPromise, options.signal, server.cancelWait);
         if (manualError) {
+<<<<<<< HEAD
           throw toErrorObject(manualError, "Non-Error thrown");
+=======
+          throw toLintErrorObject(manualError, "Non-Error thrown");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }
         if (manualInput) {
           const parsed = parseOAuthAuthorizationInput(manualInput);
@@ -463,3 +470,20 @@ export const anthropicOAuthProvider: OAuthProviderInterface = {
     return credentials.access;
   },
 };
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

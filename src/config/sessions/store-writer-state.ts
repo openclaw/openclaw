@@ -3,9 +3,18 @@ import {
   clearStoreWriterQueuesForTest,
   drainStoreWriterQueuesForTest,
   type StoreWriterQueue,
+<<<<<<< HEAD
 } from "../../shared/store-writer-queue.js";
 import { clearSessionStoreCaches } from "./store-cache.js";
 
+=======
+  type StoreWriterTask,
+} from "../../shared/store-writer-queue.js";
+import { clearSessionStoreCaches } from "./store-cache.js";
+
+/** Queued session store write task type. */
+export type SessionStoreWriterTask = StoreWriterTask;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type SessionStoreWriterQueue = StoreWriterQueue;
 
 export const WRITER_QUEUES = new Map<string, SessionStoreWriterQueue>();

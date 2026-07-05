@@ -4,7 +4,10 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { isRecord } from "../utils.js";
 import {
   buildUsageHttpErrorSnapshot,
+<<<<<<< HEAD
   discardUsageResponseBody,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   fetchJson,
   parseFiniteNumber,
 } from "./provider-usage.fetch.shared.js";
@@ -411,7 +414,10 @@ export async function fetchMinimaxUsage(
   );
 
   if (!res.ok) {
+<<<<<<< HEAD
     await discardUsageResponseBody(res);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return buildUsageHttpErrorSnapshot({
       provider: "minimax",
       status: res.status,

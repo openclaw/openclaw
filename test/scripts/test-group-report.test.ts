@@ -1,10 +1,18 @@
 // Test Group Report tests cover test group report script behavior.
+<<<<<<< HEAD
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+=======
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   buildGroupedTestComparison,
   buildGroupedTestReport,
@@ -12,7 +20,10 @@ import {
   resolveGroupKey,
   resolveTestArea,
 } from "../../scripts/lib/test-group-report.mjs";
+<<<<<<< HEAD
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   parseTestGroupReportArgs,
   resolveFullSuiteVitestEnv,
@@ -20,7 +31,10 @@ import {
   resolveReportRunSpecs,
   resolveRunPlanConcurrency,
   resolveRunPlans,
+<<<<<<< HEAD
   signalTestGroupReportChild,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   spawnText,
 } from "../../scripts/test-group-report.mjs";
 import { withEnv } from "../../src/test-utils/env.js";
@@ -29,6 +43,7 @@ function makeTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-"));
 }
 
+<<<<<<< HEAD
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -85,6 +100,8 @@ function waitForChildClose(
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function writeGroupedReport(filePath: string) {
   fs.writeFileSync(
     filePath,
@@ -592,7 +609,10 @@ describe("scripts/test-group-report arg parsing", () => {
       expect(() => parseTestGroupReportArgs([flag, "--limit", "5"])).toThrow(
         `${flag} requires a value`,
       );
+<<<<<<< HEAD
       expect(() => parseTestGroupReportArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     for (const flag of [
       "--limit",
@@ -614,6 +634,7 @@ describe("scripts/test-group-report arg parsing", () => {
       "--compare requires a value",
     );
   });
+<<<<<<< HEAD
 
   it("rejects duplicate single-value report controls", () => {
     for (const [flag, values] of [
@@ -713,6 +734,11 @@ describe("scripts/test-group-report child process guard", () => {
     expect(child.kill).not.toHaveBeenCalled();
   });
 
+=======
+});
+
+describe("scripts/test-group-report child process guard", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("times out a child that ignores SIGTERM", async () => {
     if (process.platform === "win32") {
       return;
@@ -790,6 +816,7 @@ describe("scripts/test-group-report child process guard", () => {
     }
   });
 
+<<<<<<< HEAD
   it("keeps the wrapper alive while timed process-group descendants await SIGKILL", () => {
     if (process.platform === "win32" || !fs.existsSync("/usr/bin/time")) {
       return;
@@ -960,6 +987,8 @@ describe("scripts/test-group-report child process guard", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("streams large child output to a log path without retaining it", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-log-"));
     const logPath = path.join(tempDir, "child.log");

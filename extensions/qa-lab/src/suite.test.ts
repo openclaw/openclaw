@@ -1,5 +1,9 @@
 // Qa Lab tests cover suite plugin behavior.
 import fs from "node:fs/promises";
+<<<<<<< HEAD
+=======
+import os from "node:os";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QA_EVIDENCE_FILENAME, QA_EVIDENCE_SUMMARY_KIND } from "./evidence-summary.js";
@@ -7,19 +11,30 @@ import type { QaLabServerHandle } from "./lab-server.types.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import { qaSuiteProgressTesting, runQaFlowSuite } from "./suite.js";
+<<<<<<< HEAD
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 const tempDirs = createTempDirHarness();
+=======
+
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
+<<<<<<< HEAD
 afterEach(async () => {
   fetchWithSsrFGuardMock.mockReset();
   vi.useRealTimers();
   await tempDirs.cleanup();
+=======
+afterEach(() => {
+  fetchWithSsrFGuardMock.mockReset();
+  vi.useRealTimers();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 function makeQaSuiteTestLabHandle(): QaLabServerHandle {
@@ -167,6 +182,7 @@ describe("qa suite", () => {
     expect(qaSuiteProgressTesting.sanitizeQaSuiteProgressValue("\u0000\u0001")).toBe("<empty>");
   });
 
+<<<<<<< HEAD
   it("includes effective channel driver in run start progress logs", () => {
     expect(
       qaSuiteProgressTesting.formatQaSuiteRunStartProgress({
@@ -193,6 +209,8 @@ describe("qa suite", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("records gateway RSS peak and trace samples", () => {
     expect(
       qaSuiteProgressTesting.buildQaSuiteRuntimeMetrics({
@@ -256,7 +274,11 @@ describe("qa suite", () => {
   });
 
   it("writes standalone evidence while keeping suite summary evidence-free", async () => {
+<<<<<<< HEAD
     const outputDir = await tempDirs.makeTempDir("qa-suite-artifacts-");
+=======
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-suite-artifacts-"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     try {
       const artifacts = await qaSuiteProgressTesting.writeQaSuiteArtifacts({
         outputDir,
@@ -300,6 +322,7 @@ describe("qa suite", () => {
     }
   });
 
+<<<<<<< HEAD
   it("can return evidence without writing duplicate child evidence files", async () => {
     const outputDir = await tempDirs.makeTempDir("qa-suite-artifacts-memory-evidence-");
     try {
@@ -404,6 +427,8 @@ describe("qa suite", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("arms gateway heap checkpoint env only when requested", () => {
     expect(
       qaSuiteProgressTesting.buildQaGatewayHeapCheckpointRuntimeEnvPatch({
@@ -489,7 +514,10 @@ describe("qa suite", () => {
           enabledPluginIds: ["acpx"],
           transportReadyTimeoutMs: 180_000,
           forcedRuntime: "codex",
+<<<<<<< HEAD
           writeEvidenceFile: false,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
       }),
     ).toMatchObject({
@@ -502,7 +530,10 @@ describe("qa suite", () => {
       enabledPluginIds: ["acpx"],
       transportReadyTimeoutMs: 180_000,
       forcedRuntime: "codex",
+<<<<<<< HEAD
       writeEvidenceFile: false,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   });
 

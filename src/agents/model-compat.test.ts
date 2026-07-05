@@ -22,6 +22,10 @@ import {
   isHighSignalLiveModelRef,
   isModernModelRef,
   isPrioritizedHighSignalLiveModelRef,
+<<<<<<< HEAD
+=======
+  isPrioritizedSmallLiveModelRef,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   isSmallLiveModelRef,
   listPrioritizedHighSignalLiveModelRefs,
   listPrioritizedSmallLiveModelRefs,
@@ -686,8 +690,16 @@ describe("isSmallLiveModelRef", () => {
   });
 });
 
+<<<<<<< HEAD
 describe("listPrioritizedSmallLiveModelRefs", () => {
   it("lists priority refs as provider/id pairs", () => {
+=======
+describe("isPrioritizedSmallLiveModelRef", () => {
+  it("lists priority refs as provider/id pairs", () => {
+    expect(isPrioritizedSmallLiveModelRef({ provider: "lmstudio", id: "qwen/qwen3.5-9b" })).toBe(
+      true,
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(listPrioritizedSmallLiveModelRefs()).toStrictEqual([
       { provider: "lmstudio", id: "qwen/qwen3.5-9b" },
       { provider: "vllm", id: "qwen/qwen3-8b" },

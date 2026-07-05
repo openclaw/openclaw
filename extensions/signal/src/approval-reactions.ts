@@ -8,12 +8,17 @@ import {
   type ApprovalReactionDecisionBinding,
   type ApprovalReactionTargetRecord,
 } from "openclaw/plugin-sdk/approval-reaction-runtime";
+<<<<<<< HEAD
 import {
   getExecApprovalReplyMetadata,
   type ExecApprovalReplyDecision,
 } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+=======
+import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -25,7 +30,11 @@ import { looksLikeUuid } from "./identity.js";
 import { normalizeSignalMessagingTarget } from "./normalize.js";
 import { getOptionalSignalRuntime } from "./runtime.js";
 
+<<<<<<< HEAD
 const PERSISTENT_NAMESPACE = "signal.approval-reactions.v2";
+=======
+const PERSISTENT_NAMESPACE = "signal.approval-reactions";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const PERSISTENT_MAX_ENTRIES = 1000;
 const DEFAULT_REACTION_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -62,6 +71,7 @@ type SignalApprovalReactionTarget = ApprovalReactionTargetRecord<SignalApprovalR
   route: SignalApprovalReactionRoute;
 };
 
+<<<<<<< HEAD
 type SignalApprovalDeliveryTarget = {
   channel: string;
   to: string;
@@ -75,6 +85,8 @@ type SignalApprovalDeliveryResult = {
   meta?: Record<string, unknown>;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 let resolverRuntimePromise: Promise<typeof import("./approval-resolver.js")> | undefined;
 
 const signalApprovalReactionTargets =
@@ -337,7 +349,11 @@ export function addSignalApprovalReactionHintToText(params: {
   text: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
 }): string {
+<<<<<<< HEAD
   if (hasSignalApprovalReactionHintText(params.text)) {
+=======
+  if (/(^|\n)React with:\s*(\n|$)/i.test(params.text)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return params.text;
   }
   const hint = buildSignalApprovalReactionHint(params.allowedDecisions);
@@ -346,8 +362,45 @@ export function addSignalApprovalReactionHintToText(params: {
     : params.text;
 }
 
+<<<<<<< HEAD
 function hasSignalApprovalReactionHintText(text?: string | null): boolean {
   return /(^|\n)React with:\s*(\n|$)/i.test(text ?? "");
+=======
+function normalizeApprovalDecision(value: string): ExecApprovalReplyDecision | null {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "always") {
+    return "allow-always";
+  }
+  if (normalized === "allow-once" || normalized === "allow-always" || normalized === "deny") {
+    return normalized;
+  }
+  return null;
+}
+
+export function extractSignalApprovalPromptBinding(text: string): {
+  approvalId: string;
+  allowedDecisions: ExecApprovalReplyDecision[];
+} | null {
+  const allowedDecisions: ExecApprovalReplyDecision[] = [];
+  let approvalId = "";
+  for (const line of text.split(/\r?\n/)) {
+    const match = line.match(/\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(.+)$/i);
+    if (!match) {
+      continue;
+    }
+    if (approvalId && match[1] !== approvalId) {
+      continue;
+    }
+    approvalId ||= match[1];
+    for (const decisionText of match[2].split(/[\s|,]+/)) {
+      const decision = normalizeApprovalDecision(decisionText);
+      if (decision && !allowedDecisions.includes(decision)) {
+        allowedDecisions.push(decision);
+      }
+    }
+  }
+  return approvalId && allowedDecisions.length > 0 ? { approvalId, allowedDecisions } : null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function buildTargetRoute(params: {
@@ -355,7 +408,10 @@ function buildTargetRoute(params: {
   accountId?: string | null;
   to: string;
   approvalId: string;
+<<<<<<< HEAD
   approvalKind?: ApprovalKind;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   agentId?: string | null;
   sessionKey?: string | null;
 }): Extract<SignalApprovalReactionRoute, { deliveryMode: "target" }> | null {
@@ -379,7 +435,11 @@ function buildTargetRoute(params: {
   return isSignalApprovalReactionRouteStillEnabled({
     cfg: params.cfg,
     target: {
+<<<<<<< HEAD
       approvalKind: params.approvalKind ?? resolveApprovalKindFromId(params.approvalId),
+=======
+      approvalKind: resolveApprovalKindFromId(params.approvalId),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       route,
     },
   })
@@ -387,6 +447,67 @@ function buildTargetRoute(params: {
     : null;
 }
 
+<<<<<<< HEAD
+=======
+export function shouldAppendSignalApprovalReactionHintForOutboundMessage(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  to: string;
+  text: string;
+  targetAuthor?: string | null;
+  targetAuthorUuid?: string | null;
+  agentId?: string | null;
+  sessionKey?: string | null;
+}): boolean {
+  const binding = extractSignalApprovalPromptBinding(params.text);
+  if (!binding) {
+    return false;
+  }
+  if (resolveSignalApprovalTargetAuthorKeys(params).length === 0) {
+    return false;
+  }
+  if (!hasSignalApprovalReactionApprovers({ cfg: params.cfg, accountId: params.accountId })) {
+    return false;
+  }
+  return Boolean(
+    buildTargetRoute({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      to: params.to,
+      approvalId: binding.approvalId,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+    }),
+  );
+}
+
+export function appendSignalApprovalReactionHintForOutboundMessage(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  to: string;
+  text: string;
+  targetAuthor?: string | null;
+  targetAuthorUuid?: string | null;
+  agentId?: string | null;
+  sessionKey?: string | null;
+}): string {
+  const binding = extractSignalApprovalPromptBinding(params.text);
+  if (
+    !binding ||
+    !shouldAppendSignalApprovalReactionHintForOutboundMessage({
+      ...params,
+      text: params.text,
+    })
+  ) {
+    return params.text;
+  }
+  return addSignalApprovalReactionHintToText({
+    text: params.text,
+    allowedDecisions: binding.allowedDecisions,
+  });
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function hasSignalApprovalReactionApprovers(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -399,7 +520,10 @@ export function registerSignalApprovalReactionTarget(params: {
   conversationKey: string;
   messageId: string;
   approvalId: string;
+<<<<<<< HEAD
   approvalKind?: ApprovalKind;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   targetAuthorKeys: readonly string[];
   route: SignalApprovalReactionRoute;
@@ -450,7 +574,11 @@ export function registerSignalApprovalReactionTarget(params: {
         } satisfies SignalApprovalReactionRoute);
   const target: SignalApprovalReactionTarget = {
     approvalId,
+<<<<<<< HEAD
     approvalKind: params.approvalKind ?? resolveApprovalKindFromId(approvalId),
+=======
+    approvalKind: resolveApprovalKindFromId(approvalId),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     allowedDecisions,
     targetAuthorKeys,
     route,
@@ -459,6 +587,7 @@ export function registerSignalApprovalReactionTarget(params: {
   return target;
 }
 
+<<<<<<< HEAD
 export function addSignalApprovalReactionHintToStructuredPayload(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -554,21 +683,49 @@ export function registerSignalApprovalReactionTargetForDeliveredPayload(params: 
     return false;
   }
   const conversationKey = resolveSignalApprovalConversationKey(params.target.to);
+=======
+export function registerSignalApprovalReactionTargetForOutboundMessage(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  to: string;
+  messageId: string;
+  text: string;
+  targetAuthor?: string | null;
+  targetAuthorUuid?: string | null;
+  agentId?: string | null;
+  sessionKey?: string | null;
+  ttlMs?: number;
+}): boolean {
+  const binding = extractSignalApprovalPromptBinding(params.text);
+  if (!binding) {
+    return false;
+  }
+  const conversationKey = resolveSignalApprovalConversationKey(params.to);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!conversationKey) {
     return false;
   }
   const route = buildTargetRoute({
     cfg: params.cfg,
+<<<<<<< HEAD
     accountId: params.target.accountId,
     to: params.target.to,
     approvalId: metadata.approvalId,
     approvalKind: metadata.approvalKind,
     agentId: metadata.agentId,
     sessionKey: metadata.sessionKey,
+=======
+    accountId: params.accountId,
+    to: params.to,
+    approvalId: binding.approvalId,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   if (!route) {
     return false;
   }
+<<<<<<< HEAD
   const targetAuthorKeys = resolveSignalApprovalTargetAuthorKeys(params);
   if (targetAuthorKeys.length === 0) {
     return false;
@@ -595,6 +752,21 @@ export function registerSignalApprovalReactionTargetForDeliveredPayload(params: 
       ) || registered;
   }
   return registered;
+=======
+  return Boolean(
+    registerSignalApprovalReactionTarget({
+      accountId: params.accountId,
+      conversationKey,
+      messageId: params.messageId,
+      approvalId: binding.approvalId,
+      allowedDecisions: binding.allowedDecisions,
+      targetAuthorKeys: resolveSignalApprovalTargetAuthorKeys(params),
+      route,
+      routeAllowed: true,
+      ttlMs: params.ttlMs,
+    }),
+  );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function unregisterSignalApprovalReactionTarget(params: {

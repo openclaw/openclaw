@@ -7,7 +7,11 @@ import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import type { PortConnections } from "../../infra/ports.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
+<<<<<<< HEAD
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+=======
+import { captureEnv } from "../../test-utils/env.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { VERSION } from "../../version.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
 import { gatherDaemonStatus } from "./status.gather.js";
@@ -252,12 +256,21 @@ describe("gatherDaemonStatus", () => {
       "DAEMON_GATEWAY_TOKEN",
       "DAEMON_GATEWAY_PASSWORD",
     ]);
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_STATE_DIR", "/tmp/openclaw-cli");
     setTestEnvValue("OPENCLAW_CONFIG_PATH", "/tmp/openclaw-cli/openclaw.json");
     deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
     deleteTestEnvValue("OPENCLAW_GATEWAY_PASSWORD");
     deleteTestEnvValue("DAEMON_GATEWAY_TOKEN");
     deleteTestEnvValue("DAEMON_GATEWAY_PASSWORD");
+=======
+    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-cli";
+    process.env.OPENCLAW_CONFIG_PATH = "/tmp/openclaw-cli/openclaw.json";
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.DAEMON_GATEWAY_TOKEN;
+    delete process.env.DAEMON_GATEWAY_PASSWORD;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     callGatewayStatusProbe.mockClear();
     resolveGatewayProbeAuthSafeWithSecretInputsCalls.mockClear();
     createConfigIOCalls.mockClear();
@@ -665,8 +678,13 @@ describe("gatherDaemonStatus", () => {
         },
       }),
     );
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_STATE_DIR", tmp);
     setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+=======
+    process.env.OPENCLAW_STATE_DIR = tmp;
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     serviceReadCommand.mockResolvedValueOnce({
       programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
       environment: {
@@ -707,8 +725,13 @@ describe("gatherDaemonStatus", () => {
         },
       }),
     );
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_STATE_DIR", tmp);
     setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+=======
+    process.env.OPENCLAW_STATE_DIR = tmp;
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     cliLoadedConfig = {
       gateway: {
         bind: "loopback",
@@ -756,7 +779,11 @@ describe("gatherDaemonStatus", () => {
         },
       },
     };
+<<<<<<< HEAD
     setTestEnvValue("DAEMON_GATEWAY_PASSWORD", "daemon-secretref-password"); // pragma: allowlist secret
+=======
+    process.env.DAEMON_GATEWAY_PASSWORD = "daemon-secretref-password"; // pragma: allowlist secret
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await gatherDaemonStatus({
       rpc: {},
@@ -785,7 +812,11 @@ describe("gatherDaemonStatus", () => {
         },
       },
     };
+<<<<<<< HEAD
     setTestEnvValue("DAEMON_GATEWAY_TOKEN", "daemon-secretref-token");
+=======
+    process.env.DAEMON_GATEWAY_TOKEN = "daemon-secretref-token";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await gatherDaemonStatus({
       rpc: {},
@@ -1009,8 +1040,13 @@ describe("gatherDaemonStatus", () => {
         },
       },
     };
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", "env-token");
     setTestEnvValue("OPENCLAW_GATEWAY_PASSWORD", "env-password"); // pragma: allowlist secret
+=======
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+    process.env.OPENCLAW_GATEWAY_PASSWORD = "env-password"; // pragma: allowlist secret
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await gatherDaemonStatus({
       rpc: {},

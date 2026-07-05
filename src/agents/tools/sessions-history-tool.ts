@@ -17,7 +17,10 @@ import {
   describeSessionsHistoryTool,
   SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
+<<<<<<< HEAD
 import { stripToolMessages } from "./chat-history-text.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readPositiveIntegerParam, readStringParam } from "./common.js";
 import {
@@ -27,6 +30,10 @@ import {
   resolveSessionReference,
   resolveSandboxedSessionToolContext,
   resolveVisibleSessionReference,
+<<<<<<< HEAD
+=======
+  stripToolMessages,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./sessions-helpers.js";
 
 const SessionsHistoryToolSchema = Type.Object({

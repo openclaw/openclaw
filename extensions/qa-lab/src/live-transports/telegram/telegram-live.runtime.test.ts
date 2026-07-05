@@ -156,6 +156,7 @@ describe("telegram live qa runtime", () => {
     expect(gateway.call).toHaveBeenCalledTimes(2);
   });
 
+<<<<<<< HEAD
   it("normalizes the Telegram QA transport ready timeout env", () => {
     expect(testing.resolveTelegramQaReadyTimeoutMs({})).toBe(45_000);
     expect(
@@ -204,6 +205,8 @@ describe("telegram live qa runtime", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("normalizes the Telegram QA canary timeout env", () => {
     expect(testing.resolveTelegramQaCanaryTimeoutMs({})).toBe(30_000);
     expect(
@@ -708,10 +711,13 @@ describe("telegram live qa runtime", () => {
     expect(repeatedSteps[2]?.expectReply).toBe(true);
     expect(repeatedSteps[3]?.input).toBe("/commands@sut_bot");
     expect(repeatedSteps[3]?.expectReply).toBe(true);
+<<<<<<< HEAD
     expect(repeatedSteps[3]?.expectedTextIncludes).toEqual(["Commands (1/", "/session", "/stop"]);
     const commandsStep = requireScenario(scenarios, "telegram-commands-command").buildRun("sut_bot")
       .steps[0];
     expect(commandsStep?.expectedTextIncludes).toEqual(["Commands (1/", "/session", "/stop"]);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const otherBotStep = requireScenario(scenarios, "telegram-other-bot-command-gating").buildRun(
       "sut_bot",
     ).steps[0];
@@ -1198,9 +1204,12 @@ describe("telegram live qa runtime", () => {
       id: 42,
     });
     expect(timeoutSpy).toHaveBeenCalledWith(25);
+<<<<<<< HEAD
     expect(fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0]).toMatchObject({
       capture: false,
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(signal).toBe(controller.signal);
     expect(signal?.aborted).toBe(false);
     controller.abort();

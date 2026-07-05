@@ -1,11 +1,15 @@
 // Lmstudio plugin module implements models.fetch behavior.
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+<<<<<<< HEAD
 import {
   readProviderJsonArrayFieldResponse,
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
+=======
+import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { SELF_HOSTED_DEFAULT_COST } from "openclaw/plugin-sdk/provider-setup";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -14,7 +18,10 @@ import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import {
   buildLmstudioModelName,
   mapLmstudioWireEntry,
+<<<<<<< HEAD
   resolveLmstudioCanonicalModelKey,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveLmstudioServerBase,
   resolveLoadedContextWindow,
   type LmstudioModelWire,
@@ -22,16 +29,22 @@ import {
 import { buildLmstudioAuthHeaders } from "./runtime.js";
 
 const log = createSubsystemLogger("extensions/lmstudio/models");
+<<<<<<< HEAD
 const LMSTUDIO_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type LmstudioLoadResponse = {
   status?: string;
 };
 
+<<<<<<< HEAD
 type LmstudioResolvedModelKeyError = {
   resolvedModelKey: string;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type FetchLmstudioModelsResult = {
   reachable: boolean;
   status?: number;
@@ -84,6 +97,7 @@ function asLmstudioModelWire(value: unknown): LmstudioModelWire {
   return value as LmstudioModelWire;
 }
 
+<<<<<<< HEAD
 function withResolvedLmstudioModelKey(
   error: unknown,
   resolvedModelKey: string,
@@ -97,6 +111,8 @@ function withResolvedLmstudioModelKey(
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Fetches /api/v1/models and reports transport reachability separately from HTTP status. */
 export async function fetchLmstudioModels(params: {
   baseUrl?: string;
@@ -217,7 +233,11 @@ export async function ensureLmstudioModelLoaded(params: {
   timeoutMs?: number;
   /** Injectable fetch implementation; defaults to the global fetch. */
   fetchImpl?: typeof fetch;
+<<<<<<< HEAD
 }): Promise<string> {
+=======
+}): Promise<void> {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const modelKey = params.modelKey.trim();
   if (!modelKey) {
     throw new Error("LM Studio model key is required");
@@ -239,11 +259,15 @@ export async function ensureLmstudioModelLoaded(params: {
   if (preflight.status !== undefined && preflight.status >= 400) {
     throw new Error(`LM Studio model discovery failed (${preflight.status})`);
   }
+<<<<<<< HEAD
   const canonicalModelKey = resolveLmstudioCanonicalModelKey({
     modelKey,
     models: preflight.models,
   });
   const matchingModel = preflight.models.find((entry) => entry.key?.trim() === canonicalModelKey);
+=======
+  const matchingModel = preflight.models.find((entry) => entry.key?.trim() === modelKey);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const loadedContextWindow = matchingModel ? resolveLoadedContextWindow(matchingModel) : null;
   const advertisedContextLimit = asPositiveSafeInteger(matchingModel?.max_context_length) ?? null;
   const requestedContextLength = asPositiveSafeInteger(params.requestedContextLength) ?? null;
@@ -255,6 +279,7 @@ export async function ensureLmstudioModelLoaded(params: {
           advertisedContextLimit,
         );
   if (loadedContextWindow !== null && loadedContextWindow >= contextLengthForLoad) {
+<<<<<<< HEAD
     return canonicalModelKey;
   }
 
@@ -303,4 +328,46 @@ export async function ensureLmstudioModelLoaded(params: {
     throw withResolvedLmstudioModelKey(error, canonicalModelKey);
   }
   return canonicalModelKey;
+=======
+    return;
+  }
+
+  const { response, release } = await fetchLmstudioEndpoint({
+    url: `${baseUrl}/api/v1/models/load`,
+    init: {
+      method: "POST",
+      headers: buildLmstudioAuthHeaders({
+        apiKey: params.apiKey,
+        headers: params.headers,
+        json: true,
+      }),
+      body: JSON.stringify({
+        model: modelKey,
+        // Ask LM Studio to load with our default target, capped to the model's own limit.
+        context_length: contextLengthForLoad,
+      }),
+    },
+    timeoutMs,
+    fetchImpl: params.fetchImpl,
+    ssrfPolicy: params.ssrfPolicy,
+    auditContext: "lmstudio-model-load",
+  });
+  try {
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`LM Studio model load failed (${response.status})${body ? `: ${body}` : ""}`);
+    }
+    let payload: LmstudioLoadResponse;
+    try {
+      payload = (await response.json()) as LmstudioLoadResponse;
+    } catch (cause) {
+      throw new Error("LM Studio model load returned malformed JSON", { cause });
+    }
+    if (typeof payload.status === "string" && payload.status.toLowerCase() !== "loaded") {
+      throw new Error(`LM Studio model load returned unexpected status: ${payload.status}`);
+    }
+  } finally {
+    await release();
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }

@@ -9,7 +9,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { delimiter, join } from "node:path";
+<<<<<<< HEAD
 import { afterEach, describe, expect, it, vi } from "vitest";
+=======
+import { afterEach, describe, expect, it } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   buildOpenClawReleaseClawHubPlan,
   buildOpenClawReleaseClawHubRuntimeState,
@@ -399,6 +403,7 @@ describe("collectPluginClawHubReleasePlan", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("cancels unused ClawHub package and version response bodies", async () => {
     const repoDir = createTempPluginRepo();
     const canceled: string[] = [];
@@ -612,6 +617,8 @@ describe("collectPluginClawHubReleasePlan", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("routes missing package rows to bootstrap candidates instead of normal candidates", async () => {
     const repoDir = createTempPluginRepo();
     const { fetchImpl } = createClawHubPlanFetch({
@@ -687,6 +694,7 @@ describe("collectPluginClawHubReleasePlan", () => {
     });
   });
 
+<<<<<<< HEAD
   it("keeps ClawHub trusted publisher timeouts active while reading response bodies", async () => {
     const repoDir = createTempPluginRepo();
     const fetchImpl: typeof fetch = async (input) => {
@@ -713,6 +721,8 @@ describe("collectPluginClawHubReleasePlan", () => {
     ).rejects.toThrow("ClawHub request timed out after 5ms");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("routes environment-pinned trusted publisher config out of normal candidates", async () => {
     const repoDir = createTempPluginRepo();
     const { fetchImpl } = createClawHubPlanFetch({
@@ -1147,6 +1157,7 @@ describe("buildOpenClawReleaseClawHubRuntimeState", () => {
 });
 
 describe("plugin-clawhub-publish.sh", () => {
+<<<<<<< HEAD
   it("prints help before package or ClawHub checks", () => {
     const output = execFileSync(
       "bash",
@@ -1190,6 +1201,8 @@ describe("plugin-clawhub-publish.sh", () => {
     ).toThrow("unexpected plugin ClawHub publish argument: extra");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("previews the publish command through the ClawHub CLI dry-run preflight", () => {
     const repoDir = createTempPluginRepo();
     const binDir = join(repoDir, "bin");

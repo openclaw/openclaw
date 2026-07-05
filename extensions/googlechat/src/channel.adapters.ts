@@ -23,7 +23,10 @@ import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OutboundMediaLoadOptions } from "openclaw/plugin-sdk/outbound-media";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+<<<<<<< HEAD
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { shouldSuppressGoogleChatManualExecApprovalFollowupPayload } from "./approval-card-actions.js";
 import { formatGoogleChatAllowFromEntry } from "./channel-base.js";
 import {
@@ -69,6 +72,11 @@ function createGoogleChatSendReceipt(params: {
   });
 }
 
+<<<<<<< HEAD
+=======
+export const formatAllowFromEntry = formatGoogleChatAllowFromEntry;
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const collectGoogleChatGroupPolicyWarnings =
   createAllowlistProviderOpenWarningCollector<ResolvedGoogleChatAccount>({
     providerConfigPresent: (cfg) => cfg.channels?.googlechat !== undefined,
@@ -120,7 +128,11 @@ export const googlechatSecurityAdapter = {
     resolvePolicy: (account: ResolvedGoogleChatAccount) => account.config.dm?.policy,
     resolveAllowFrom: (account: ResolvedGoogleChatAccount) => account.config.dm?.allowFrom,
     allowFromPathSuffix: "dm.",
+<<<<<<< HEAD
     normalizeEntry: (raw: string) => formatGoogleChatAllowFromEntry(raw),
+=======
+    normalizeEntry: (raw: string) => formatAllowFromEntry(raw),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   collectWarnings: collectGoogleChatSecurityWarnings,
 };
@@ -161,7 +173,11 @@ export const googlechatThreadingAdapter = {
 export const googlechatPairingTextAdapter = {
   idLabel: "googlechatUserId",
   message: PAIRING_APPROVED_MESSAGE,
+<<<<<<< HEAD
   normalizeAllowEntry: (entry: string) => formatGoogleChatAllowFromEntry(entry),
+=======
+  normalizeAllowEntry: (entry: string) => formatAllowFromEntry(entry),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   notify: async ({
     cfg,
     id,
@@ -195,11 +211,15 @@ export const googlechatOutboundAdapter = {
     chunker: chunkTextForOutbound,
     chunkerMode: "markdown" as const,
     textChunkLimit: 4000,
+<<<<<<< HEAD
     // Google Chat's plain-text pass does not remove assistant scaffolding.
     // Run the canonical delivery sanitizer first so internal tool traces are
     // dropped before channel formatting.
     sanitizeText: ({ text }: { text: string }) =>
       sanitizeForPlainText(sanitizeAssistantVisibleText(text)),
+=======
+    sanitizeText: ({ text }: { text: string }) => sanitizeForPlainText(text),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     normalizePayload: ({ payload }: { payload: ReplyPayload }) =>
       shouldSuppressGoogleChatManualExecApprovalFollowupPayload(payload) ? null : payload,
     resolveTarget: ({ to }: { to?: string }) => {

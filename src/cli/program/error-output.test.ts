@@ -13,6 +13,7 @@ describe("formatCliParseErrorOutput", () => {
     );
   });
 
+<<<<<<< HEAD
   it("suggests close known commands for unknown commands", () => {
     const output = formatCliParseErrorOutput("error: unknown command 'upate'\n", {
       argv: ["node", "openclaw", "upate"],
@@ -49,6 +50,8 @@ describe("formatCliParseErrorOutput", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("points unknown options at the active command help", () => {
     const output = formatCliParseErrorOutput("error: unknown option '--wat'\n", {
       argv: ["node", "openclaw", "channels", "status", "--wat"],

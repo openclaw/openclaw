@@ -28,10 +28,13 @@ function resolveRuntimeForTest(params: RuntimeOptionsParams = {}) {
   return resolveCodexAppServerRuntimeOptions({ env: {}, requirementsToml: null, ...params });
 }
 
+<<<<<<< HEAD
 function envRef(id: string) {
   return { source: "env" as const, provider: "default", id };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`Expected ${label}`);
@@ -417,6 +420,7 @@ describe("Codex app-server config", () => {
     });
   });
 
+<<<<<<< HEAD
   it("passes resolved app-server SecretInput strings through to auth token and headers", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: {
@@ -476,6 +480,8 @@ describe("Codex app-server config", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("treats IPv6 loopback websocket app-servers as local loopback", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: {
@@ -2377,6 +2383,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(second).not.toContain("sk-second");
   });
 
+<<<<<<< HEAD
   it("derives distinct shared-client keys for distinct headers without exposing them", () => {
     const first = codexAppServerStartOptionsKey({
       transport: "websocket",
@@ -2418,6 +2425,8 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(second).not.toContain("session-second");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps secret-derived shared-client keys stable across module reloads", async () => {
     const startOptions = {
       transport: "websocket" as const,

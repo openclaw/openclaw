@@ -13,6 +13,7 @@ type CallPluginToolParams = {
   arguments?: unknown;
 };
 
+<<<<<<< HEAD
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -46,6 +47,8 @@ function toMcpContentBlock(block: unknown): unknown {
   return { type: "text", text: coerceChatContentText(block) };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveJsonSchemaForTool(tool: AnyAgentTool): Record<string, unknown> {
   const params = tool.parameters;
   if (params && typeof params === "object" && "type" in params) {
@@ -92,7 +95,11 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
             : result;
         return {
           content: Array.isArray(rawContent)
+<<<<<<< HEAD
             ? rawContent.map(toMcpContentBlock)
+=======
+            ? rawContent
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             : [{ type: "text", text: coerceChatContentText(rawContent) }],
         };
       } catch (err) {

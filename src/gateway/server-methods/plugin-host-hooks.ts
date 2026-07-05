@@ -9,7 +9,10 @@ import {
   validatePluginsSessionActionParams,
   validatePluginsSessionActionResult,
   validatePluginsUiDescriptorsParams,
+<<<<<<< HEAD
   validatePluginsUiDescriptorsResult,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -55,6 +58,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+<<<<<<< HEAD
     const descriptors = (getActivePluginRegistry()?.controlUiDescriptors ?? []).map((entry) => {
       const descriptor: Record<string, unknown> = {
         id: entry.descriptor.id,
@@ -93,6 +97,15 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       return;
     }
     respond(true, result, undefined);
+=======
+    const descriptors = (getActivePluginRegistry()?.controlUiDescriptors ?? []).map((entry) =>
+      Object.assign({}, entry.descriptor, {
+        pluginId: entry.pluginId,
+        pluginName: entry.pluginName,
+      }),
+    );
+    respond(true, { ok: true, descriptors }, undefined);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   "plugins.sessionAction": async ({ params, client, respond }) => {
     if (!validatePluginsSessionActionParams(params)) {

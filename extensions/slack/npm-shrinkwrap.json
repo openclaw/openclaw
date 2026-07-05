@@ -1,22 +1,37 @@
 {
   "name": "@openclaw/slack",
+<<<<<<< HEAD
   "version": "2026.6.10",
+=======
+  "version": "2026.6.8",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/slack",
+<<<<<<< HEAD
       "version": "2026.6.10",
+=======
+      "version": "2026.6.8",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "dependencies": {
         "@slack/bolt": "4.7.3",
         "@slack/types": "2.21.1",
         "@slack/web-api": "7.16.0",
         "typebox": "1.1.39",
+<<<<<<< HEAD
         "ws": "8.21.0",
         "zod": "4.4.3"
       },
       "peerDependencies": {
         "openclaw": ">=2026.6.10"
+=======
+        "zod": "4.4.3"
+      },
+      "peerDependencies": {
+        "openclaw": ">=2026.6.8"
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
       "peerDependenciesMeta": {
         "openclaw": {

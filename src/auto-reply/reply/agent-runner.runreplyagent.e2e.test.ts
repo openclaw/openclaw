@@ -32,8 +32,11 @@ type AgentRunParams = {
   onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
+<<<<<<< HEAD
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
   silentExpected?: boolean;
 };
@@ -426,11 +429,14 @@ describe("runReplyAgent heartbeat followup guard", () => {
   });
 
   it("keeps typing alive when a followup is queued behind a live active run", async () => {
+<<<<<<< HEAD
     const active = createReplyOperation({
       sessionKey: "main",
       sessionId: "session",
       resetTriggered: false,
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const { run, typing } = createMinimalRun({
       opts: { isHeartbeat: false },
       isActive: true,
@@ -448,10 +454,16 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
     expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);
     expect(typing.cleanup).not.toHaveBeenCalled();
+<<<<<<< HEAD
     active.complete();
   });
 
   it("starts draining after enqueue when the reply lane owner is already gone", async () => {
+=======
+  });
+
+  it("starts draining immediately when the active snapshot is already stale", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const { run, typing } = createMinimalRun({
       opts: { isHeartbeat: false },
       isActive: true,
@@ -464,12 +476,16 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     expect(result).toBeUndefined();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+<<<<<<< HEAD
     expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[5]).toBe(false);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
+<<<<<<< HEAD
   it("keeps the drain dormant until the reply lane owner clears", async () => {
     const active = createReplyOperation({
       sessionKey: "main",
@@ -494,6 +510,8 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("drains followup queue when an unexpected exception escapes the run path", async () => {
     const accounting = await import("./session-run-accounting.js");
     const persistSpy = vi
@@ -1083,6 +1101,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
+<<<<<<< HEAD
   it("enables channel-owned tool summaries when default tool messages are suppressed", async () => {
     const onToolResult = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
@@ -1108,6 +1127,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves channelData on forwarded tool results", async () => {
     const onToolResult = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {

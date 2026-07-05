@@ -6,7 +6,11 @@ scenario:
   coverage:
     primary:
       - media.image-generation
+<<<<<<< HEAD
       - media.image-generation-delivery
+=======
+      - generated-image-persistence-and-delivery
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     secondary:
       - channels.qa-channel
   objective: Verify a generated image is saved as media, reattached on the next turn, and described correctly through the vision path.
@@ -25,7 +29,10 @@ scenario:
     kind: flow
     summary: Verify a generated image is saved as media, reattached on the next turn, and described correctly through the vision path.
     config:
+<<<<<<< HEAD
       requiredChannelDriver: qa-channel
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       generatePrompt: "Image generation check: generate a QA lighthouse image and summarize it in one short sentence."
       generatePromptSnippet: "Image generation check"
       inspectPrompt: "Roundtrip image inspection check: describe the generated lighthouse attachment in one short sentence."

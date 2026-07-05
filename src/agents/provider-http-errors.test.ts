@@ -1,5 +1,9 @@
 // Verifies provider HTTP error parsing, redaction, and response-size limits.
+<<<<<<< HEAD
 import { describe, expect, it, vi } from "vitest";
+=======
+import { describe, expect, it } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   assertOkOrThrowProviderError,
   assertOkOrThrowHttpError,
@@ -9,8 +13,11 @@ import {
   ProviderHttpError,
   readProviderBinaryResponse,
   readProviderJsonResponse,
+<<<<<<< HEAD
   readProviderTextResponse,
   readResponseTextLimited,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./provider-http-errors.js";
 
 function createStreamingBinaryResponse(params: {
@@ -39,6 +46,7 @@ function createStreamingBinaryResponse(params: {
   };
 }
 
+<<<<<<< HEAD
 function createStreamingJsonResponse(params: { chunkCount: number; chunkSize: number }): {
   response: Response;
   getReadCount: () => number;
@@ -90,6 +98,8 @@ function createStreamingTextResponse(params: { chunkCount: number; chunkSize: nu
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("provider error utils", () => {
   it("formats nested provider error details with request ids", async () => {
     const response = new Response(
@@ -161,6 +171,7 @@ describe("provider error utils", () => {
     } satisfies Partial<ProviderHttpError>);
   });
 
+<<<<<<< HEAD
   it("releases provider error body reader locks after bounded reads complete", async () => {
     const releaseLock = vi.fn();
     const cancel = vi.fn(async () => undefined);
@@ -201,6 +212,8 @@ describe("provider error utils", () => {
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("attaches structured provider error metadata", async () => {
     // API-key-like substrings must be redacted from stored error bodies.
     const response = new Response(
@@ -263,6 +276,7 @@ describe("provider error utils", () => {
     );
   });
 
+<<<<<<< HEAD
   it("parses well-formed JSON responses under the byte cap", async () => {
     const response = new Response(JSON.stringify({ models: ["a", "b"] }), {
       status: 200,
@@ -304,6 +318,8 @@ describe("provider error utils", () => {
     expect(streamed.getReadCount()).toBeLessThan(20);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("caps successful binary responses instead of buffering oversized bodies", async () => {
     const streamed = createStreamingBinaryResponse({
       chunkCount: 20,

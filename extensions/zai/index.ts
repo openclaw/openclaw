@@ -34,7 +34,11 @@ import { fetchZaiUsage } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
+<<<<<<< HEAD
 import { buildZaiModelDefinition, resolveZaiBaseUrl } from "./model-definitions.js";
+=======
+import { buildZaiModelDefinition } from "./model-definitions.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { applyZaiConfig, applyZaiProviderConfig, resolveZaiModelId } from "./onboard.js";
 
 const PROVIDER_ID = "zai";
@@ -104,8 +108,12 @@ function resolveGlm5ForwardCompatModel(
     ...template,
     id: def.id,
     name: def.name,
+<<<<<<< HEAD
     // Native models must never fall through to the OpenAI SDK's default host.
     baseUrl: ctx.providerConfig?.baseUrl ?? template?.baseUrl ?? resolveZaiBaseUrl(),
+=======
+    baseUrl: ctx.providerConfig?.baseUrl ?? template?.baseUrl,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     api: "openai-completions",
     provider: PROVIDER_ID,
     reasoning: def.reasoning,
@@ -128,6 +136,7 @@ function isDisabledThinkingLevel(thinkingLevel: ProviderWrapStreamFnContext["thi
   return thinkingLevel === "off";
 }
 
+<<<<<<< HEAD
 function isGlm52ModelId(modelId?: string | null): boolean {
   return normalizeLowercaseStringOrEmpty(modelId).startsWith("glm-5.2");
 }
@@ -157,6 +166,13 @@ function wrapZaiStreamFn(ctx: ProviderWrapStreamFnContext) {
     : undefined;
 
   if (!isDisabledThinkingLevel(ctx.thinkingLevel) && !preserveThinking && !reasoningEffort) {
+=======
+function wrapZaiStreamFn(ctx: ProviderWrapStreamFnContext) {
+  let streamFn = createToolStreamWrapper(ctx.streamFn, ctx.extraParams?.tool_stream !== false);
+  const preserveThinking = shouldPreserveZaiThinking(ctx.extraParams);
+
+  if (!isDisabledThinkingLevel(ctx.thinkingLevel) && !preserveThinking) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return streamFn;
   }
 
@@ -170,10 +186,13 @@ function wrapZaiStreamFn(ctx: ProviderWrapStreamFnContext) {
       return;
     }
 
+<<<<<<< HEAD
     if (reasoningEffort) {
       payload.reasoning_effort = reasoningEffort;
     }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (preserveThinking) {
       payload.thinking = { type: "enabled", clear_thinking: false };
     }
@@ -394,6 +413,7 @@ export default definePluginEntry({
       }),
       prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
       wrapStreamFn: (ctx) => wrapZaiStreamFn(ctx),
+<<<<<<< HEAD
       resolveThinkingProfile: (ctx) =>
         isGlm52ModelId(ctx.modelId)
           ? {
@@ -412,6 +432,15 @@ export default definePluginEntry({
               ],
               defaultLevel: "off",
             },
+=======
+      resolveThinkingProfile: () => ({
+        levels: [
+          { id: "off", label: "off" },
+          { id: "low", label: "on" },
+        ],
+        defaultLevel: "off",
+      }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       isModernModelRef: ({ modelId }) => {
         const lower = normalizeLowercaseStringOrEmpty(modelId);
         return (

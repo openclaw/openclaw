@@ -1,5 +1,8 @@
 // Ios Version tests cover ios version script behavior.
+<<<<<<< HEAD
 import { spawnSync } from "node:child_process";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -17,6 +20,7 @@ import { installIosFixtureCleanup, writeIosFixture } from "./ios-version.test-su
 installIosFixtureCleanup();
 
 describe("resolveIosVersion", () => {
+<<<<<<< HEAD
   it("rejects missing CLI option values before reading version files", () => {
     const result = spawnSync(
       process.execPath,
@@ -96,6 +100,8 @@ describe("resolveIosVersion", () => {
     expect(shortFlagResult.stderr).toBe("Missing value for --root.\n");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("parses pinned release versions and derives Apple marketing fields", () => {
     const rootDir = writeIosFixture({
       version: "2026.4.6",

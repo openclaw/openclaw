@@ -1,10 +1,14 @@
 /**
  * Gateway startup session migration tests.
  */
+<<<<<<< HEAD
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+=======
+import { describe, expect, it, vi } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { runStartupSessionMigration } from "./server-startup-session-migration.js";
 
 function makeLog() {
@@ -29,6 +33,7 @@ function firstLogMessage(log: ReturnType<typeof vi.fn>, label: string): string {
 }
 
 describe("runStartupSessionMigration", () => {
+<<<<<<< HEAD
   it("discovers plugin-owned agents during direct gateway startup", async () => {
     await withTempDir({ prefix: "openclaw-startup-migration-" }, async (tempDir) => {
       const storeTemplate = path.join(tempDir, "stores", "{agentId}", "sessions.json");
@@ -70,6 +75,8 @@ describe("runStartupSessionMigration", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("logs changes when orphaned keys are canonicalized", async () => {
     const log = makeLog();
     const migrate = vi.fn().mockResolvedValue({

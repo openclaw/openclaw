@@ -1,12 +1,16 @@
 // Covers npm spec parsing for plugin install inputs.
 import fs from "node:fs";
 import path from "node:path";
+<<<<<<< HEAD
 import { pathToFileURL } from "node:url";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectIntegrityDriftRejected,
   mockNpmViewMetadataResult,
 } from "../test-utils/npm-spec-install-test-helpers.js";
+<<<<<<< HEAD
 import {
   resolvePluginNpmGenerationProjectDir,
   resolvePluginNpmProjectDir,
@@ -15,6 +19,9 @@ import {
   hasRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
 } from "./managed-npm-retention.js";
+=======
+import { resolvePluginNpmProjectDir } from "./install-paths.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
 
 const runCommandWithTimeoutMock = vi.fn();
@@ -173,6 +180,7 @@ function resolveTestPluginPackageDir(npmRoot: string, packageName: string): stri
   );
 }
 
+<<<<<<< HEAD
 function resolveTestPluginGenerationProjectDir(params: {
   npmRoot: string;
   packageName: string;
@@ -207,23 +215,33 @@ function resolveTestPluginGenerationPackageDir(params: {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function writeInstalledNpmPlugin(params: {
   npmRoot: string;
   packageName: string;
   version: string;
   pluginId?: string;
   indexJs?: string;
+<<<<<<< HEAD
   extraDistFiles?: Record<string, string>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   dependency?: { name: string; version: string };
   hoistedDependency?: { name: string; version: string };
   peerDependencies?: Record<string, string>;
   openclaw?: Record<string, unknown>;
+<<<<<<< HEAD
   replaceExisting?: boolean;
 }) {
   const pluginDir = path.join(params.npmRoot, "node_modules", params.packageName);
   if (params.replaceExisting) {
     fs.rmSync(pluginDir, { recursive: true, force: true });
   }
+=======
+}) {
+  const pluginDir = path.join(params.npmRoot, "node_modules", params.packageName);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
   fs.writeFileSync(
     path.join(pluginDir, "package.json"),
@@ -252,11 +270,14 @@ function writeInstalledNpmPlugin(params: {
     params.indexJs ?? "export {};",
     "utf-8",
   );
+<<<<<<< HEAD
   for (const [relativePath, contents] of Object.entries(params.extraDistFiles ?? {})) {
     const targetPath = path.join(pluginDir, "dist", relativePath);
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
     fs.writeFileSync(targetPath, contents, "utf-8");
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (params.dependency) {
     const depDir = path.join(pluginDir, "node_modules", params.dependency.name);
     fs.mkdirSync(depDir, { recursive: true });
@@ -293,7 +314,10 @@ type MockNpmPackage = {
   integrity?: string;
   shasum?: string;
   indexJs?: string;
+<<<<<<< HEAD
   extraDistFiles?: Record<string, string>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   dependency?: { name: string; version: string };
   hoistedDependency?: { name: string; version: string };
   peerDependencies?: Record<string, string>;
@@ -306,7 +330,10 @@ type MockNpmPackage = {
   skipLockfileEntry?: boolean;
   packArchivePath?: string;
   packTarballName?: string;
+<<<<<<< HEAD
   replaceExisting?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 function writeNpmRootPackageLock(params: {
@@ -412,7 +439,30 @@ function prunePluginLocalOpenClawPeerLinks(npmRoot: string) {
   }
 }
 
+<<<<<<< HEAD
 function mockNpmViewAndInstall(params: MockNpmPackage & { spec: string }) {
+=======
+function mockNpmViewAndInstall(params: {
+  spec: string;
+  packageName: string;
+  version: string;
+  npmRoot: string;
+  pluginId?: string;
+  integrity?: string;
+  shasum?: string;
+  indexJs?: string;
+  dependency?: { name: string; version: string };
+  hoistedDependency?: { name: string; version: string };
+  peerDependencies?: Record<string, string>;
+  openclaw?: Record<string, unknown>;
+  expectedDependencySpec?: string;
+  versions?: string[];
+  installedVersion?: string;
+  installedIntegrity?: string;
+  materializesRootOpenClaw?: boolean;
+  skipLockfileEntry?: boolean;
+}) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   mockNpmViewAndInstallMany([params]);
 }
 
@@ -836,6 +886,7 @@ describe("installPluginFromNpmSpec", () => {
     if (!update.ok) {
       return;
     }
+<<<<<<< HEAD
     const updateGenerationRoot = resolvePluginNpmGenerationProjectDir({
       npmDir: npmRoot,
       packageName,
@@ -849,6 +900,9 @@ describe("installPluginFromNpmSpec", () => {
     });
     expect(readTextFileTree(npmProjectRoot)).toEqual(projectBefore);
     expect(readTextFileTree(updateGenerationRoot)).not.toEqual(projectBefore);
+=======
+    expect(readTextFileTree(npmProjectRoot)).not.toEqual(projectBefore);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("installs staged npm pack archives with dangerous-looking code", async () => {
@@ -908,6 +962,7 @@ describe("installPluginFromNpmSpec", () => {
     });
   });
 
+<<<<<<< HEAD
   it("keeps lazy imports from a loaded old npm generation available across updates", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const packageName = "@openclaw/codex";
@@ -1175,6 +1230,8 @@ describe("installPluginFromNpmSpec", () => {
     expect(hasRetainedManagedNpmInstallMarker(legacyPackageDir)).toBe(true);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("pins mutable npm specs to the verified resolved version", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     mockNpmViewAndInstall({
@@ -1633,9 +1690,13 @@ describe("installPluginFromNpmSpec", () => {
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('blocked dependencies "plain-crypto-js" as package name');
+<<<<<<< HEAD
       expect(result.error.replaceAll("\\", "/")).toContain(
         "node_modules/plain-crypto-js/package.json",
       );
+=======
+      expect(result.error).toContain("node_modules/plain-crypto-js/package.json");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
@@ -2820,6 +2881,7 @@ describe("installPluginFromNpmSpec", () => {
     if (!result.ok) {
       return;
     }
+<<<<<<< HEAD
     expectNpmInstallIntoRoot({
       calls: runCommandWithTimeoutMock.mock.calls,
       npmRoot: resolveTestPluginGenerationProjectDir({
@@ -2827,6 +2889,12 @@ describe("installPluginFromNpmSpec", () => {
         packageName: "dangerous-plugin",
         version: "2.0.0",
       }),
+=======
+    expectNpmInstallIntoProject({
+      calls: runCommandWithTimeoutMock.mock.calls,
+      npmRoot,
+      packageName: "dangerous-plugin",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     expect(fs.readFileSync(path.join(npmRoot, "package.json"), "utf8")).toBe(legacyManifestBefore);
     expect(fs.readFileSync(path.join(npmRoot, "package-lock.json"), "utf8")).toBe(
@@ -2998,6 +3066,7 @@ describe("installPluginFromNpmSpec", () => {
     if (!result.ok) {
       throw new Error(result.error);
     }
+<<<<<<< HEAD
     expect(result.targetDir).toBe(
       resolveTestPluginGenerationPackageDir({
         npmRoot,
@@ -3014,6 +3083,14 @@ describe("installPluginFromNpmSpec", () => {
         packageName: "@openclaw/voice-call",
         version: "0.0.2",
       }),
+=======
+    expect(result.targetDir).toBe(installRoot);
+    expect(result.npmResolution?.version).toBe("0.0.2");
+    expectNpmInstallIntoProject({
+      calls: runCommandWithTimeoutMock.mock.calls,
+      npmRoot,
+      packageName: "@openclaw/voice-call",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   });
 

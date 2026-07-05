@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import {
   findPreferredDmConversationByUserId,
   mergeStoredConversationReference,
@@ -16,6 +17,11 @@ import type {
   MSTeamsConversationStoreEntry,
   StoredConversationReference,
 } from "./conversation-store.js";
+=======
+import { createMSTeamsConversationStoreMemory } from "./conversation-store-memory.js";
+import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
+import type { MSTeamsConversationStore } from "./conversation-store.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
 
@@ -24,6 +30,7 @@ type StoreFactory = {
   createStore: () => Promise<MSTeamsConversationStore>;
 };
 
+<<<<<<< HEAD
 function createMemoryConversationStore(
   initial: MSTeamsConversationStoreEntry[] = [],
 ): MSTeamsConversationStore {
@@ -57,6 +64,8 @@ function createMemoryConversationStore(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const storeFactories: StoreFactory[] = [
   {
     name: "state",
@@ -70,7 +79,11 @@ const storeFactories: StoreFactory[] = [
   },
   {
     name: "memory",
+<<<<<<< HEAD
     createStore: async () => createMemoryConversationStore(),
+=======
+    createStore: async () => createMSTeamsConversationStoreMemory(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
 ];
 

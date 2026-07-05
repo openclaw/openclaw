@@ -359,6 +359,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     },
   );
 
+<<<<<<< HEAD
   it("suppressLiveStreamOutput skips per-chunk preview but still delivers final text", () => {
     const onAgentEvent = vi.fn();
     const { emit } = createSubscribedHarness({
@@ -382,6 +383,8 @@ describe("subscribeEmbeddedAgentSession", () => {
     expectSingleAgentEventText(onAgentEvent.mock.calls, "Hello world");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("blocks local MEDIA urls from case-variant tool names in verbose output", async () => {
     const onToolResult = vi.fn();
     const { emit } = createSubscribedHarness({

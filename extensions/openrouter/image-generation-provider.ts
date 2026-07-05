@@ -7,16 +7,24 @@ import type {
 import {
   generatedImageAssetFromBase64,
   generatedImageAssetFromDataUrl,
+<<<<<<< HEAD
   resolveInlineImageJsonResponseMaxBytes,
   toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
 import { MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
+=======
+  toImageDataUrl,
+} from "openclaw/plugin-sdk/image-generation";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
+<<<<<<< HEAD
   readProviderJsonResponse,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -25,7 +33,10 @@ import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
 const DEFAULT_MODEL = "google/gemini-3.1-flash-image-preview";
 const DEFAULT_TIMEOUT_MS = 180_000;
 const MAX_IMAGE_RESULTS = 4;
+<<<<<<< HEAD
 const MB = 1024 * 1024;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const SUPPORTED_MODELS = [
   DEFAULT_MODEL,
   "google/gemini-3-pro-image-preview",
@@ -217,6 +228,7 @@ function resolveImageCount(count: number | undefined): number {
   return Math.max(1, Math.min(MAX_IMAGE_RESULTS, Math.trunc(count)));
 }
 
+<<<<<<< HEAD
 function resolveGeneratedImageMaxBytes(req: {
   cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
 }): number {
@@ -227,6 +239,8 @@ function resolveGeneratedImageMaxBytes(req: {
   return MAX_IMAGE_BYTES;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isGeminiImageModel(model: string): boolean {
   return model.startsWith("google/gemini-");
 }
@@ -321,7 +335,10 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
           transport: "http",
         });
 
+<<<<<<< HEAD
       const count = resolveImageCount(req.count);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/chat/completions`,
         headers,
@@ -329,7 +346,11 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
           model,
           messages: [{ role: "user", content: buildMessageContent(req) }],
           modalities: ["image", "text"],
+<<<<<<< HEAD
           n: count,
+=======
+          n: resolveImageCount(req.count),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           ...(Object.keys(imageConfig).length > 0 ? { image_config: imageConfig } : {}),
         },
         timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -341,12 +362,16 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
 
       try {
         await assertOkOrThrowHttpError(response, "OpenRouter image generation failed");
+<<<<<<< HEAD
         const payload = await readProviderJsonResponse(response, "openrouter.image-generation", {
           maxBytes: resolveInlineImageJsonResponseMaxBytes(
             count,
             resolveGeneratedImageMaxBytes(req),
           ),
         });
+=======
+        const payload = await response.json();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const images = extractOpenRouterImagesFromResponse(payload, {
           malformedResponseError: OPENROUTER_IMAGE_MALFORMED_RESPONSE,
         });

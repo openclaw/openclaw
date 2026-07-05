@@ -78,17 +78,24 @@ export function resolveSelectedAndActiveModel(params: {
   selectedProvider: string;
   selectedModel: string;
   sessionEntry?: Pick<SessionEntry, "modelProvider" | "model">;
+<<<<<<< HEAD
   parseSelectedProvider?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }): {
   selected: ModelRef;
   active: ModelRef;
   activeDiffers: boolean;
 } {
+<<<<<<< HEAD
   const selected = normalizeModelRef(
     params.selectedModel,
     params.selectedProvider,
     params.parseSelectedProvider,
   );
+=======
+  const selected = normalizeModelRef(params.selectedModel, params.selectedProvider);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const runtimeModel = normalizeOptionalString(params.sessionEntry?.model);
   const runtimeProvider = normalizeOptionalString(params.sessionEntry?.modelProvider);
 

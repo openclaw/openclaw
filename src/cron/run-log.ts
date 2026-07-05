@@ -138,6 +138,7 @@ export async function appendCronRunLog(params: {
   entry: CronRunLogEntry;
   opts?: AppendCronRunLogOptions;
 }) {
+<<<<<<< HEAD
   // Normalize the jobId on write the same way reads do (assertSafeCronRunLogJobId
   // trims + validates). Otherwise a jobId with surrounding whitespace is stored
   // verbatim while reads trim before querying — the row is written but never read
@@ -150,18 +151,30 @@ export async function appendCronRunLog(params: {
       : { ...params.entry, jobId: normalizedJobId };
   const storeKey = cronStoreKey(params.storePath);
   const writeKey = cronRunLogWriteKey(params.storePath, entry.jobId);
+=======
+  const storeKey = cronStoreKey(params.storePath);
+  const writeKey = cronRunLogWriteKey(params.storePath, params.entry.jobId);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const prev = writesByTarget.get(writeKey) ?? Promise.resolve();
   // Keep writes for the same store/job ordered so prune-by-count cannot race a later insert.
   const next = prev
     .catch(() => undefined)
     .then(async () => {
       runOpenClawStateWriteTransaction(({ db }) => {
+<<<<<<< HEAD
         insertCronRunLogEntry(db, storeKey, entry);
+=======
+        insertCronRunLogEntry(db, storeKey, params.entry);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         if (params.opts?.keepLines !== false) {
           pruneCronRunLogRows(
             db,
             storeKey,
+<<<<<<< HEAD
             entry.jobId,
+=======
+            params.entry.jobId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             params.opts?.keepLines ?? DEFAULT_CRON_RUN_LOG_KEEP_LINES,
           );
         }
@@ -177,6 +190,28 @@ export async function appendCronRunLog(params: {
   }
 }
 
+<<<<<<< HEAD
+=======
+/** Reads recent run-log entries in chronological order after draining pending async writes. */
+export async function readCronRunLogEntries(params: {
+  storePath: string;
+  jobId?: string;
+  limit?: number;
+}): Promise<CronRunLogEntry[]> {
+  await drainPendingWrite(params.storePath, params.jobId);
+  const limit = Math.max(1, Math.min(5000, Math.floor(params.limit ?? 200)));
+  const page = await readCronRunLogEntriesPage({
+    storePath: params.storePath,
+    jobId: params.jobId,
+    limit,
+    offset: 0,
+    status: "all",
+    sortDir: "desc",
+  });
+  return page.entries.toReversed();
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Reads recent run-log entries synchronously for startup/task reconciliation paths. */
 export function readCronRunLogEntriesSync(params: {
   storePath: string;

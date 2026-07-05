@@ -19,12 +19,16 @@ import {
   resolveRequiredCompletionDeliveryFailureTerminalResult,
   type RequiredCompletionTerminalResult,
 } from "../../tasks/task-completion-contract.js";
+<<<<<<< HEAD
 import {
   deliveryContextFromSession,
   normalizeDeliveryContext,
   type DeliveryContext,
 } from "../../utils/delivery-context.js";
 import type { DeliveryContextSessionSource } from "../../utils/delivery-context.types.js";
+=======
+import { normalizeDeliveryContext, type DeliveryContext } from "../../utils/delivery-context.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -34,6 +38,7 @@ import {
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../internal-events.js";
+<<<<<<< HEAD
 import { MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS } from "../media-generation-task-status-shared.js";
 import {
   deliverSubagentAnnouncement,
@@ -41,6 +46,10 @@ import {
 } from "../subagent-announce-delivery.js";
 import type { SubagentAnnounceDeliveryFailureReason } from "../subagent-announce-dispatch.js";
 import { resolveAnnounceOrigin } from "../subagent-announce-origin.js";
+=======
+import { deliverSubagentAnnouncement } from "../subagent-announce-delivery.js";
+import type { SubagentAnnounceDeliveryFailureReason } from "../subagent-announce-dispatch.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-shared");
 const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;
@@ -65,6 +74,7 @@ export type MediaGenerateBackgroundScheduler = (work: () => Promise<void>) => vo
 /** Optional callback invoked when async media generation starts. */
 export type MediaGenerateAsyncStartCallback = (message: string) => Promise<void> | void;
 
+<<<<<<< HEAD
 function resolvePinnedMediaRequesterOrigin(params: {
   requesterOrigin?: DeliveryContext;
   sessionEntry?: DeliveryContextSessionSource;
@@ -80,6 +90,8 @@ function resolvePinnedMediaRequesterOrigin(params: {
     : resolveAnnounceOrigin(params.sessionEntry, requesterOrigin);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Returns whether a media generation request should detach for a session. */
 export function shouldDetachMediaGenerationTask(sessionKey: string | undefined): boolean {
   const normalizedSessionKey = sessionKey?.trim();
@@ -166,12 +178,15 @@ function createMediaGenerationTaskRun(params: {
   }
   const runId = `tool:${params.toolName}:${crypto.randomUUID()}`;
   try {
+<<<<<<< HEAD
     // Pin the complete requester route when detached work starts. Completion-time
     // session state can move to another peer while generation is still running.
     const requesterOrigin = resolvePinnedMediaRequesterOrigin({
       requesterOrigin: params.requesterOrigin,
       sessionEntry: loadRequesterSessionEntry(sessionKey).entry,
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const task = createRunningTaskRun({
       runtime: "cli",
       taskKind: params.taskKind,
@@ -179,7 +194,11 @@ function createMediaGenerationTaskRun(params: {
       requesterSessionKey: sessionKey,
       ownerKey: sessionKey,
       scopeKind: "session",
+<<<<<<< HEAD
       requesterOrigin,
+=======
+      requesterOrigin: params.requesterOrigin,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       childSessionKey: sessionKey,
       runId,
       label: params.label,
@@ -197,7 +216,11 @@ function createMediaGenerationTaskRun(params: {
       taskId: task.taskId,
       runId,
       requesterSessionKey: sessionKey,
+<<<<<<< HEAD
       requesterOrigin,
+=======
+      requesterOrigin: params.requesterOrigin,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       taskLabel: params.prompt,
     };
     touchMediaGenerationTaskRunContext(handle);
@@ -448,7 +471,11 @@ export function scheduleMediaGenerationTaskCompletion<
     try {
       params.lifecycle.recordTaskProgress({
         handle: params.handle,
+<<<<<<< HEAD
         progressSummary: MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS,
+=======
+        progressSummary: "Generated media; delivering completion",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
     } catch (error) {
       params.onWakeFailure(`${params.toolName} completion progress update failed`, {

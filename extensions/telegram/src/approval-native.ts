@@ -1,5 +1,12 @@
 // Telegram plugin module implements approval native behavior.
+<<<<<<< HEAD
 import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
+=======
+import {
+  createApproverRestrictedNativeApprovalCapability,
+  splitChannelApprovalCapability,
+} from "openclaw/plugin-sdk/approval-delivery-runtime";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
@@ -160,3 +167,10 @@ export const telegramApprovalCapability: ChannelApprovalCapability = {
   ...telegramNativeApprovalCapability,
   resolveApproveCommandBehavior: resolveTelegramApproveCommandBehavior,
 };
+<<<<<<< HEAD
+=======
+
+export const telegramNativeApprovalAdapter = splitChannelApprovalCapability(
+  telegramApprovalCapability,
+);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

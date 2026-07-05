@@ -13,3 +13,15 @@ export function createSingleChannelExtensionVitestConfig(
     setupFiles: ["test/setup.extensions.ts"],
   });
 }
+<<<<<<< HEAD
+=======
+
+export default function createSingleChannelExtensionHelperVitestConfig() {
+  return createScopedVitestConfig(["extensions/__single-channel-config-helper__/**/*.test.ts"], {
+    dir: "extensions",
+    name: "extension-channel-single-config",
+    passWithNoTests: true,
+    setupFiles: ["test/setup.extensions.ts"],
+  });
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

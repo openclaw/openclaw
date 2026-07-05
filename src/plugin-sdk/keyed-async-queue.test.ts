@@ -2,6 +2,7 @@
  * Tests keyed async queue serialization and cancellation behavior.
  */
 import { describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { createDeferred } from "../test-utils/deferred.js";
 import { enqueueKeyedTask, KeyedAsyncQueue } from "./keyed-async-queue.js";
 
@@ -9,6 +10,27 @@ describe("enqueueKeyedTask", () => {
   it("serializes tasks per key and keeps different keys independent", async () => {
     const tails = new Map<string, Promise<void>>();
     const gate = createDeferred();
+=======
+import { enqueueKeyedTask, KeyedAsyncQueue } from "./keyed-async-queue.js";
+
+function deferred<T>() {
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
+  return { promise, resolve, reject };
+}
+
+describe("enqueueKeyedTask", () => {
+  it("serializes tasks per key and keeps different keys independent", async () => {
+    const tails = new Map<string, Promise<void>>();
+    const gate = deferred<void>();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const order: string[] = [];
 
     const first = enqueueKeyedTask({
@@ -118,7 +140,11 @@ describe("enqueueKeyedTask", () => {
 describe("KeyedAsyncQueue", () => {
   it("exposes tail map for observability", async () => {
     const queue = new KeyedAsyncQueue();
+<<<<<<< HEAD
     const gate = createDeferred();
+=======
+    const gate = deferred<void>();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const run = queue.enqueue("actor", async () => {
       await gate.promise;
       return 1;

@@ -1,7 +1,10 @@
 /** Resolves plugin config contract metadata for scanners and secret/config policy checks. */
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+<<<<<<< HEAD
 import { findBundledPluginMetadataById } from "./bundled-plugin-metadata.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginManifestConfigContracts } from "./manifest.js";
@@ -61,6 +64,7 @@ export function resolvePluginConfigContractsById(params: {
     for (const plugin of registry.plugins) {
       bundledContractFallbacks.set(plugin.id, plugin.configContracts);
     }
+<<<<<<< HEAD
     if (bundledContractFallbacks.get(pluginId) === undefined) {
       const bundledMetadata = findBundledPluginMetadataById(pluginId, {
         includeChannelConfigs: false,
@@ -70,6 +74,8 @@ export function resolvePluginConfigContractsById(params: {
         bundledContractFallbacks.set(pluginId, bundledMetadata.manifest.configContracts);
       }
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!bundledContractFallbacks.has(pluginId)) {
       bundledContractFallbacks.set(pluginId, undefined);
     }

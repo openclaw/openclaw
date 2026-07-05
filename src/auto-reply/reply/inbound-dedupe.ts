@@ -3,6 +3,10 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+<<<<<<< HEAD
+=======
+import { logVerbose, shouldLogVerbose } from "../../globals.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveGlobalDedupeCache, type DedupeCache } from "../../infra/dedupe.js";
 import { channelRouteDedupeKey } from "../../plugin-sdk/channel-route.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -75,6 +79,25 @@ export function buildInboundDedupeKey(ctx: MsgContext): string | null {
   return JSON.stringify([sessionScope, routeKey, messageId]);
 }
 
+<<<<<<< HEAD
+=======
+export function shouldSkipDuplicateInbound(
+  ctx: MsgContext,
+  opts?: { cache?: DedupeCache; now?: number },
+): boolean {
+  const key = buildInboundDedupeKey(ctx);
+  if (!key) {
+    return false;
+  }
+  const cache = opts?.cache ?? inboundDedupeCache;
+  const skipped = cache.check(key, opts?.now);
+  if (skipped && shouldLogVerbose()) {
+    logVerbose(`inbound dedupe: skipped ${key}`);
+  }
+  return skipped;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function claimInboundDedupe(
   ctx: MsgContext,
   opts?: { cache?: DedupeCache; now?: number; inFlight?: Set<string> },

@@ -27,10 +27,14 @@ import { truncateUtf16Safe } from "../utils.js";
 /** Default truncation limit for user-facing tool progress output. */
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
 
+<<<<<<< HEAD
 export { FAST_MODE_AUTO_PROGRESS_KIND } from "../auto-reply/reply-payload.js";
 export { formatFastModeAutoProgressText, resolveFastModeForElapsed } from "../shared/fast-mode.js";
 export type { AgentMessage } from "../agents/runtime/index.js";
 export type { FastModeAutoProgressState } from "../shared/fast-mode.js";
+=======
+export type { AgentMessage } from "../agents/runtime/index.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type {
   AgentHarness,
   AgentHarnessAttemptParams,
@@ -46,12 +50,15 @@ export type {
   AgentHarnessSupportContext,
 } from "../agents/harness/types.js";
 export type {
+<<<<<<< HEAD
   AgentHarnessUserInputAnswers,
   AgentHarnessUserInputOption,
   AgentHarnessUserInputPromptOptions,
   AgentHarnessUserInputQuestion,
 } from "../agents/harness/user-input-bridge.js";
 export type {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../agents/embedded-agent-runner/run/types.js";
@@ -140,7 +147,10 @@ export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-a
 export {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
+<<<<<<< HEAD
   extractToolErrorMessage,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
   isToolResultError,
@@ -158,6 +168,7 @@ export { supportsModelTools } from "../agents/model-tool-support.js";
 export { isAgentToolReplaySafe } from "../agents/tool-replay-safety.js";
 export { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
 export {
+<<<<<<< HEAD
   buildAgentHarnessUserInputAnswers,
   deliverAgentHarnessUserInputPrompt,
   emptyAgentHarnessUserInputAnswers,
@@ -165,6 +176,8 @@ export {
   normalizeAgentHarnessUserInputAnswer,
 } from "../agents/harness/user-input-bridge.js";
 export {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   buildSkillWorkshopPromptSection,
   SKILL_WORKSHOP_TOOL_NAME,
 } from "../agents/skill-workshop-prompt.js";
@@ -177,10 +190,13 @@ export {
 } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 export { getPluginToolMeta } from "../plugins/tools.js";
 export {
+<<<<<<< HEAD
   attachModelProviderRequestTransport,
   getModelProviderRequestTransport,
 } from "../agents/provider-request-config.js";
 export {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   abortAndDrainEmbeddedAgentRun as abortAndDrainAgentHarnessRun,
   abortEmbeddedAgentRun as abortAgentHarnessRun,
   clearActiveEmbeddedRun,
@@ -347,10 +363,13 @@ export {
   runAgentHarnessBeforeMessageWriteHook,
 } from "../agents/harness/hook-helpers.js";
 export {
+<<<<<<< HEAD
   awaitAgentEndSideEffects,
   runAgentEndSideEffects,
 } from "../agents/harness/agent-end-side-effects.js";
 export {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   awaitAgentHarnessAgentEndHook,
   getAgentHarnessHookRunner,
   runAgentHarnessBeforeAgentFinalizeHook,

@@ -9,7 +9,10 @@ import fs from "node:fs/promises";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { AssistantMessage, Message, Tool } from "../llm/types.js";
+<<<<<<< HEAD
 import { extractAssistantText } from "./embedded-agent-utils.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   LIVE_CACHE_REGRESSION_BASELINE,
   type LiveCacheFloor,
@@ -19,6 +22,10 @@ import {
   buildStableCachePrefix,
   completeSimpleWithLiveTimeout,
   computeCacheHitRate,
+<<<<<<< HEAD
+=======
+  extractAssistantText,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   isLiveCachePrerequisiteSkip,
   type LiveResolvedModel,
   type LiveResolvedModelPool,

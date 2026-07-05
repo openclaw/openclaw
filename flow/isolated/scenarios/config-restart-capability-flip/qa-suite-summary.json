@@ -1,0 +1,73 @@
+{
+  "scenarios": [
+    {
+      "name": "Config restart capability flip",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "restores image_generate after restart and uses it in the same session",
+          "status": "pass",
+          "details": "QA-CAPABILITY-14f26844\nimage_generate=true\nMEDIA:/tmp/openclaw/openclaw-qa-suite-XUztbM/state/media/tool-image-generation/qa-lighthouse---e95dbf81-7d64-4d56-8324-28ee2736fc4b.png"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 73116,
+    "gatewayProcessCpuMs": 9000,
+    "gatewayCpuCoreRatio": 0.123,
+    "gatewayProcessRssStartBytes": 855605248,
+    "gatewayProcessRssEndBytes": 957480960,
+    "gatewayProcessRssDeltaBytes": 101875712,
+    "gatewayProcessRssPeakBytes": 957480960,
+    "gatewayProcessRssPeakDeltaBytes": 101875712,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:16:28.563Z",
+        "gatewayProcessRssBytes": 855605248
+      },
+      {
+        "label": "scenario:config-restart-capability-flip:start",
+        "at": "2026-07-03T13:16:28.585Z",
+        "gatewayProcessRssBytes": 856154112
+      },
+      {
+        "label": "scenario:config-restart-capability-flip:finish",
+        "at": "2026-07-03T13:16:58.944Z",
+        "gatewayProcessRssBytes": 957440000
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:16:59.009Z",
+        "gatewayProcessRssBytes": 957480960
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:15:45.828Z",
+    "finishedAt": "2026-07-03T13:16:58.944Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "config-restart-capability-flip"
+    ],
+    "runtimePair": null
+  }
+}

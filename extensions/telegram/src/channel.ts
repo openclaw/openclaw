@@ -92,7 +92,10 @@ import { withTelegramStartupProbeSlot } from "./startup-probe-limiter.js";
 import { detectTelegramLegacyStateMigrations } from "./state-migrations.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
 import { parseTelegramTarget } from "./targets.js";
+<<<<<<< HEAD
 import { loadTelegramSendModule } from "./send-runtime.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   createTelegramThreadBindingManager,
   setTelegramThreadBindingIdleTimeoutBySessionKey,
@@ -105,8 +108,19 @@ import { parseTelegramTopicConversation } from "./topic-conversation.js";
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
 type TelegramUpdateOffsetRuntime = typeof import("../update-offset-runtime-api.js");
 
+<<<<<<< HEAD
 let telegramUpdateOffsetRuntimePromise: Promise<TelegramUpdateOffsetRuntime> | undefined;
 
+=======
+let telegramSendModulePromise: Promise<typeof import("./send.js")> | undefined;
+let telegramUpdateOffsetRuntimePromise: Promise<TelegramUpdateOffsetRuntime> | undefined;
+
+async function loadTelegramSendModule() {
+  telegramSendModulePromise ??= import("./send.js");
+  return await telegramSendModulePromise;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function loadTelegramUpdateOffsetRuntime() {
   telegramUpdateOffsetRuntimePromise ??= import("../update-offset-runtime-api.js");
   return await telegramUpdateOffsetRuntimePromise;
@@ -833,7 +847,10 @@ export const telegramPlugin = createChatChannelPlugin({
       targetResolver: {
         looksLikeId: looksLikeTelegramTargetId,
         hint: "<chatId>",
+<<<<<<< HEAD
         reservedLiterals: ["current", "self", "this", "me"],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     },
     resolver: {

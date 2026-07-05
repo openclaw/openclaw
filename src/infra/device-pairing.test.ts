@@ -7,6 +7,10 @@ import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-
 import {
   approveBootstrapDevicePairing,
   approveDevicePairing,
+<<<<<<< HEAD
+=======
+  clearDevicePairing,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ensureDeviceToken,
   getPairedDevice,
   hasEffectivePairedDeviceRole,
@@ -1935,4 +1939,15 @@ describe("device pairing tokens", () => {
     await expect(readFile(pairedPath, "utf8")).resolves.toBe("{not-json}");
   });
 
+<<<<<<< HEAD
+=======
+  test("clears paired device state by device id", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+
+    await expect(clearDevicePairing("device-1", baseDir)).resolves.toBe(true);
+    await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
+    await expect(clearDevicePairing("device-1", baseDir)).resolves.toBe(false);
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

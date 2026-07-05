@@ -1,5 +1,8 @@
 // Covers MiniMax VLM auth/header normalization and provider-specific routing.
+<<<<<<< HEAD
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "./minimax-vlm.js";
@@ -158,6 +161,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     expect(timeoutSpy).toHaveBeenCalledWith(180_000);
   });
 
+<<<<<<< HEAD
   it("uses the default request timeout for non-positive caller timeouts", async () => {
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     const fetchSpy = vi.fn(async () => {
@@ -206,6 +210,8 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("bounds large provider error response bodies", async () => {
     // Provider error bodies can be large. Read enough for diagnostics, then
     // cancel the stream so failures stay bounded.

@@ -11,7 +11,10 @@ import type {
   SecretRef,
   SecretRefSource,
 } from "../config/types.secrets.js";
+<<<<<<< HEAD
 import { isValidEnvSecretRefId } from "../config/types.secrets.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError, readSecureFile } from "../infra/fs-safe.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -35,8 +38,11 @@ import {
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
+<<<<<<< HEAD
   isValidFileSecretRefId,
   isValidSecretProviderAlias,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   SINGLE_VALUE_FILE_REF_ID,
   resolveDefaultSecretProviderAlias,
   secretRefKey,
@@ -901,6 +907,7 @@ export async function resolveSecretRefValues(
     if (!id) {
       throw new Error("Secret reference id is empty.");
     }
+<<<<<<< HEAD
     if (!isValidSecretProviderAlias(ref.provider)) {
       throw new Error(
         `Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
@@ -916,6 +923,8 @@ export async function resolveSecretRefValues(
         `File secret reference id must be an absolute JSON pointer or "value" (ref: ${ref.source}:${ref.provider}:${id}).`,
       );
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (ref.source === "exec" && !isValidExecSecretRefId(id)) {
       throw new Error(
         `${formatExecSecretRefIdValidationMessage()} (ref: ${ref.source}:${ref.provider}:${id}).`,

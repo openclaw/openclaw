@@ -9,6 +9,7 @@ import {
   type SessionWriteLockAcquireTimeoutConfig,
 } from "../agents/session-write-lock.js";
 import { resolveStateDir } from "../config/paths.js";
+<<<<<<< HEAD
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -22,6 +23,10 @@ function isReportOnlyStaleLock(lock: SessionLockInspection): boolean {
   );
 }
 
+=======
+import { shortenHomePath } from "../utils.js";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function formatAge(ageMs: number | null): string {
   if (ageMs === null) {
     return "unknown";
@@ -51,6 +56,7 @@ function formatLockLine(lock: SessionLockInspection): string {
   return `- ${shortenHomePath(lock.lockPath)} ${pidStatus} ${ageStatus} ${staleStatus}${removedStatus}`;
 }
 
+<<<<<<< HEAD
 export async function detectStaleSessionLocks(params?: {
   config?: SessionWriteLockAcquireTimeoutConfig;
   env?: NodeJS.ProcessEnv;
@@ -102,6 +108,8 @@ export function sessionLockToRepairEffect(lock: SessionLockInspection): HealthRe
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Reports session write locks and removes stale locks when doctor repair is enabled. */
 export async function noteSessionLockHealth(params?: {
   shouldRepair?: boolean;

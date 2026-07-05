@@ -188,6 +188,7 @@ describe("xai provider plugin", () => {
       "grok-composer-2.5-fast",
       "grok-build",
     ]);
+<<<<<<< HEAD
     const composer = result.provider.models.find((model) => model.id === "grok-composer-2.5-fast");
     if (!composer) {
       throw new Error("expected OAuth Composer model");
@@ -215,6 +216,8 @@ describe("xai provider plugin", () => {
     void wrapped(normalizedComposer as never, { messages: [] } as never, {});
     expect(capture.getCapturedPayload()).not.toHaveProperty("reasoning");
     expect(capture.getCapturedPayload()?.include).toEqual(["reasoning.encrypted_content"]);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(providerAuthRuntimeMocks.resolveApiKeyForProvider).toHaveBeenCalledWith({
       provider: "xai",
       cfg: { models: {} },

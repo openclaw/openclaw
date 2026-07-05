@@ -75,6 +75,21 @@ export function listBootstrapChannelPluginIds(): readonly string[] {
 }
 
 /**
+<<<<<<< HEAD
+=======
+ * Iterates bundled bootstrap channel plugins that can be loaded successfully.
+ */
+export function* iterateBootstrapChannelPlugins(): IterableIterator<ChannelPlugin> {
+  for (const id of listBootstrapChannelPluginIds()) {
+    const plugin = getBootstrapChannelPlugin(id);
+    if (plugin) {
+      yield plugin;
+    }
+  }
+}
+
+/**
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
  * Loads a bundled channel plugin for bootstrap, merging runtime and setup artifacts.
  */
 export function getBootstrapChannelPlugin(id: ChannelId): ChannelPlugin | undefined {

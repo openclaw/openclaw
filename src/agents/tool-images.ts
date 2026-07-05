@@ -5,7 +5,10 @@
  */
 import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+<<<<<<< HEAD
 import { toErrorObject } from "../infra/errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -276,7 +279,11 @@ async function resizeImageBase64IfNeeded(params: {
   }
 
   if (processorUnavailableError) {
+<<<<<<< HEAD
     throw toErrorObject(processorUnavailableError, "Non-Error thrown");
+=======
+    throw toLintErrorObject(processorUnavailableError, "Non-Error thrown");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   const best = smallest?.buffer ?? buf;
@@ -398,3 +405,20 @@ export async function sanitizeToolResultImages(
   const next = await sanitizeContentBlocksImages(content, label, opts);
   return { ...result, content: next };
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

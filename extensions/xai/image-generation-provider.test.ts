@@ -52,6 +52,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderApiKeyConfigured: isProviderApiKeyConfiguredMock,
 }));
 
+<<<<<<< HEAD
 vi.mock("openclaw/plugin-sdk/provider-http", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-http")>(
     "openclaw/plugin-sdk/provider-http",
@@ -67,6 +68,17 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
     sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
   };
 });
+=======
+vi.mock("openclaw/plugin-sdk/provider-http", () => ({
+  assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+  createProviderOperationDeadline: createProviderOperationDeadlineMock,
+  postJsonRequest: postJsonRequestMock,
+  postMultipartRequest: postMultipartRequestMock,
+  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+  resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
+  sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
+}));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
   normalizeOptionalString: (v: unknown) => (typeof v === "string" ? v.trim() : undefined),
@@ -75,6 +87,7 @@ vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
   readStringValue: (v: unknown) => (typeof v === "string" ? v.trim() : undefined),
 }));
 
+<<<<<<< HEAD
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
     status: 200,
@@ -82,6 +95,8 @@ function jsonResponse(payload: unknown): Response {
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function requirePostJsonCall(index = 0): {
   url?: string;
   timeoutMs?: number;
@@ -146,9 +161,17 @@ describe("xai image generation provider", () => {
 
   it("uses main provider URL and resolves auth for generation", async () => {
     postJsonRequestMock.mockResolvedValue({
+<<<<<<< HEAD
       response: jsonResponse({
         data: [{ b64_json: Buffer.from("testpng").toString("base64") }],
       }),
+=======
+      response: {
+        json: async () => ({
+          data: [{ b64_json: Buffer.from("testpng").toString("base64") }],
+        }),
+      },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       release: vi.fn(async () => {}),
     });
 
@@ -201,6 +224,7 @@ describe("xai image generation provider", () => {
 
   it("supports edit with exact user-provided payload format including image object with type image_url", async () => {
     postJsonRequestMock.mockResolvedValue({
+<<<<<<< HEAD
       response: jsonResponse({
         data: [
           {
@@ -210,6 +234,19 @@ describe("xai image generation provider", () => {
           },
         ],
       }),
+=======
+      response: {
+        json: async () => ({
+          data: [
+            {
+              b64_json:
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYGD4z0ABAAEfAG0B0xMAAAAASUVORK5CYII=",
+              mime_type: "image/png",
+            },
+          ],
+        }),
+      },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       release: vi.fn(async () => {}),
     });
 
@@ -241,9 +278,17 @@ describe("xai image generation provider", () => {
   it("forwards xAI attribution User-Agent through the SDK image request", async () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     postJsonRequestMock.mockResolvedValue({
+<<<<<<< HEAD
       response: jsonResponse({
         data: [{ b64_json: Buffer.from("ua-png").toString("base64") }],
       }),
+=======
+      response: {
+        json: async () => ({
+          data: [{ b64_json: Buffer.from("ua-png").toString("base64") }],
+        }),
+      },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       release: vi.fn(async () => {}),
     });
 
@@ -264,6 +309,7 @@ describe("xai image generation provider", () => {
 
   it("uses the plural xAI images payload for multiple edit inputs", async () => {
     postJsonRequestMock.mockResolvedValue({
+<<<<<<< HEAD
       response: jsonResponse({
         data: [
           {
@@ -272,6 +318,18 @@ describe("xai image generation provider", () => {
           },
         ],
       }),
+=======
+      response: {
+        json: async () => ({
+          data: [
+            {
+              b64_json: Buffer.from("edited").toString("base64"),
+              mime_type: "image/png",
+            },
+          ],
+        }),
+      },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       release: vi.fn(async () => {}),
     });
 

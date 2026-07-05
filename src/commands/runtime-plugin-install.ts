@@ -160,7 +160,11 @@ export async function repairRuntimePluginInstallForModelSelection(params: {
   return {
     required: true,
     changes: result.changes,
+<<<<<<< HEAD
     warnings: [...result.warnings, ...(result.notices ?? [])],
+=======
+    warnings: result.warnings,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }
 

@@ -47,9 +47,12 @@ export function resolveTelegramInlineButtonsScopeFromCapabilities(
     return DEFAULT_INLINE_BUTTONS_SCOPE;
   }
   if (Array.isArray(capabilities)) {
+<<<<<<< HEAD
     if (capabilities.length === 0) {
       return DEFAULT_INLINE_BUTTONS_SCOPE;
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const enabled = capabilities.some(
       (entry) => normalizeLowercaseStringOrEmpty(String(entry)) === "inlinebuttons",
     );

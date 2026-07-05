@@ -3,13 +3,20 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+<<<<<<< HEAD
 import { createDeferred } from "../test-utils/deferred.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { GatewayModelChoice } from "./server-model-catalog.js";
 import {
   resetModelCatalogCacheForTest,
   loadGatewayModelCatalog,
   markGatewayModelCatalogStaleForReload,
 } from "./server-model-catalog.js";
+<<<<<<< HEAD
+=======
+import { createDeferred } from "./test-helpers.deferred.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type LoadModelCatalogForTest = NonNullable<
   NonNullable<Parameters<typeof loadGatewayModelCatalog>[0]>["loadModelCatalog"]

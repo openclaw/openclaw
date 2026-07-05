@@ -37,6 +37,7 @@ describe("stripHtmlFromTeamsMessage", () => {
     );
   });
 
+<<<<<<< HEAD
   it("does not double-decode escaped entities (decodes &amp; last)", () => {
     // Graph encodes literally-typed entity text by escaping its '&' to '&amp;'.
     // Decoding '&amp;' first would re-decode the now-bare '&lt;'/'&gt;' into
@@ -46,6 +47,8 @@ describe("stripHtmlFromTeamsMessage", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("normalizes multiple whitespace to single space", () => {
     expect(stripHtmlFromTeamsMessage("hello   world")).toBe("hello world");
   });

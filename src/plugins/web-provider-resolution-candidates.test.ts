@@ -116,6 +116,7 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
     ).toStrictEqual([]);
   });
 
+<<<<<<< HEAD
   it("limits sandboxed web fetch candidates to bundled and trusted official installs", () => {
     mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [
@@ -153,6 +154,8 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
     ).toEqual(["bundled-fetch", "firecrawl"]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("derives provider candidates from a single manifest-registry read", () => {
     expect(
       resolveManifestDeclaredWebProviderCandidatePluginIds({

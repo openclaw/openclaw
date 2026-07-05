@@ -42,7 +42,10 @@ import {
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+<<<<<<< HEAD
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -50,7 +53,10 @@ import {
 } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+<<<<<<< HEAD
 import { safeJsonStringify } from "../utils/safe-json.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { splitShellArgs } from "../utils/shell-argv.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { stripMalformedXmlArgValueSuffixFromKeys } from "./agent-tools.params.js";
@@ -63,28 +69,42 @@ import {
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PATH,
   DEFAULT_PENDING_MAX_OUTPUT,
+<<<<<<< HEAD
   type ExecProcessHandle,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type ExecProcessOutcome,
   applyPathPrepend,
   applyShellPath,
   normalizePathPrepend,
   resolveExecTarget,
   resolveApprovalRunningNoticeMs,
+<<<<<<< HEAD
   buildExecRuntimeErrorOutcome,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   runExecProcess,
   execSchema,
 } from "./bash-tools.exec-runtime.js";
 import type { ExecToolDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
 import {
+<<<<<<< HEAD
   type ExecWorkdirResolution,
   formatUnavailableWorkdirFailure,
   resolveExecWorkdir,
 } from "./bash-tools.exec-workdir.js";
 import {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   buildSandboxEnv,
   clampWithDefault,
   coerceEnv,
   readEnvInt,
+<<<<<<< HEAD
+=======
+  resolveSandboxWorkdir,
+  resolveWorkdir,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   truncateMiddle,
 } from "./bash-tools.shared.js";
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
@@ -113,6 +133,7 @@ type ExecToolArgs = Record<string, unknown> & {
   ask?: string;
   node?: string;
 };
+<<<<<<< HEAD
 
 const CHANNEL_CONTEXT_ENV_KEY = "OPENCLAW_CHANNEL_CONTEXT";
 
@@ -138,11 +159,14 @@ function buildChannelContextEnv(
   const serialized = safeJsonStringify(subprocessContext);
   return serialized ? { [CHANNEL_CONTEXT_ENV_KEY]: serialized } : undefined;
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type ResolvedExecEnvPreparedState = {
   host?: ExecHost;
   pluginEnv?: Record<string, string>;
 };
 const resolvedExecEnvPreparedStates = new WeakMap<ExecToolArgs, ResolvedExecEnvPreparedState>();
+<<<<<<< HEAD
 type DeferredResolveExecEnvPreparedState = {
   hookContext?: HookContext;
 };
@@ -159,6 +183,8 @@ const resolvedExecWorkdirPreparedStates = new WeakMap<
   ExecToolArgs,
   ResolvedExecWorkdirPreparedState
 >();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const XML_ARG_VALUE_EXEC_PARAM_KEYS = [
   "command",
@@ -169,10 +195,13 @@ const XML_ARG_VALUE_EXEC_PARAM_KEYS = [
   "node",
 ] as const;
 
+<<<<<<< HEAD
 function isExecToolArgsObject(value: unknown): value is ExecToolArgs {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function filterPluginExecEnv(rawEnv: Record<string, string>): Record<string, string> | undefined {
   const env: Record<string, string> = {};
   for (const [rawKey, value] of Object.entries(rawEnv)) {
@@ -212,6 +241,7 @@ function isResolveExecEnvPrepared(params: ExecToolArgs): boolean {
   return Boolean(getResolvedExecEnvPreparedState(params));
 }
 
+<<<<<<< HEAD
 function markDeferredResolveExecEnvPrepared<T extends ExecToolArgs>(
   params: T,
   state: DeferredResolveExecEnvPreparedState,
@@ -240,6 +270,8 @@ function getResolvedExecWorkdirPreparedState(
   return resolvedExecWorkdirPreparedStates.get(params);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function buildExecForegroundResult(params: {
   outcome: ExecProcessOutcome;
   cwd?: string;
@@ -1378,6 +1410,7 @@ export function createExecTool(
       sandboxAvailable: Boolean(defaults?.sandbox),
     }).effectiveHost;
   };
+<<<<<<< HEAD
   const buildUnavailableWorkdirResult = (params: {
     cwd: string;
     startedAt?: number;
@@ -1434,6 +1467,8 @@ export function createExecTool(
       return false;
     }
   };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const prepareParamsWithResolvedExecEnv = async (
     rawArgs: unknown,
     context?: { hookContext?: HookContext },
@@ -1472,7 +1507,10 @@ export function createExecTool(
         sessionKey: defaults?.sessionKey ?? context?.hookContext?.sessionKey,
         messageProvider: defaults?.messageProvider,
         channelId: defaults?.currentChannelId ?? context?.hookContext?.channelId,
+<<<<<<< HEAD
         ...(defaults?.channelContext ? { channelContext: defaults.channelContext } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     );
     const pluginEnv = filterPluginExecEnv(rawPluginEnv);
@@ -1494,6 +1532,7 @@ export function createExecTool(
       return describeExecTool({ agentId, hasCronTool: defaults?.hasCronTool === true });
     },
     parameters: execSchema,
+<<<<<<< HEAD
     prepareBeforeToolCallParams: async (args, context) => {
       const params = await prepareParamsWithResolvedExecWorkdir(args);
       const workdirState = getResolvedExecWorkdirPreparedState(params);
@@ -1563,16 +1602,51 @@ export function createExecTool(
       const resolveExecEnvPrepared = isResolveExecEnvPrepared(args as ExecToolArgs);
       const deferredResolveExecEnvState = getDeferredResolveExecEnvPreparedState(params);
       const preparedWorkdirState = getResolvedExecWorkdirPreparedState(params);
+=======
+    prepareBeforeToolCallParams: async (args, context) =>
+      prepareParamsWithResolvedExecEnv(args, {
+        hookContext: context.hookContext as HookContext | undefined,
+      }),
+    finalizeBeforeToolCallParams: (params, preparedParams) =>
+      (() => {
+        const state = getResolvedExecEnvPreparedState(preparedParams as ExecToolArgs);
+        if (!state) {
+          return params;
+        }
+        const execParams = params as ExecToolArgs;
+        if (state.host && execParams.command && resolveHostForParams(execParams) !== state.host) {
+          return { ...execParams };
+        }
+        return markResolveExecEnvPrepared(execParams, state);
+      })(),
+    execute: async (_toolCallId, args, signal, onUpdate) => {
+      const params = isResolveExecEnvPrepared(args as ExecToolArgs)
+        ? stripMalformedXmlArgValueSuffixFromKeys(
+            args as ExecToolArgs,
+            XML_ARG_VALUE_EXEC_PARAM_KEYS,
+          )
+        : await prepareParamsWithResolvedExecEnv(args);
+
+      if (!params.command) {
+        throw new Error("Provide a command to start.");
+      }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       const maxOutput = DEFAULT_MAX_OUTPUT;
       const pendingMaxOutput = DEFAULT_PENDING_MAX_OUTPUT;
       const warnings: string[] = [];
+<<<<<<< HEAD
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const approvalWarningText = normalizeOptionalString(defaults?.approvalWarningText);
       if (approvalWarningText) {
         warnings.push(approvalWarningText);
       }
+<<<<<<< HEAD
       const startedAt = Date.now();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       let execCommandOverride: string | undefined;
       const backgroundRequested = params.background === true;
       const yieldRequested = typeof params.yieldMs === "number";
@@ -1645,6 +1719,12 @@ export function createExecTool(
           );
         }
       }
+<<<<<<< HEAD
+=======
+      if (elevatedRequested) {
+        logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
+      }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const requestedTarget = requireValidExecTarget(params.host);
       const target = resolveExecTarget({
         configuredTarget: defaults?.host,
@@ -1717,6 +1797,7 @@ export function createExecTool(
           ].join("\n"),
         );
       }
+<<<<<<< HEAD
       if (!params.command) {
         throw new Error("Provide a command to start.");
       }
@@ -1982,6 +2063,238 @@ export function createExecTool(
         throw error;
       }
 
+=======
+      const explicitWorkdir = normalizeOptionalString(params.workdir);
+      const defaultWorkdir = normalizeOptionalString(defaults?.cwd);
+      let workdir: string | undefined;
+      let containerWorkdir = sandbox?.containerWorkdir;
+      if (sandbox) {
+        const sandboxWorkdir = explicitWorkdir ?? defaultWorkdir ?? process.cwd();
+        const resolved = await resolveSandboxWorkdir({
+          workdir: sandboxWorkdir,
+          sandbox,
+          warnings,
+        });
+        workdir = resolved.hostWorkdir;
+        containerWorkdir = resolved.containerWorkdir;
+      } else if (host === "node") {
+        // For remote node execution, only forward a cwd that was explicitly
+        // requested on the tool call. The gateway's workspace root is wired in as a
+        // local default, but it is not meaningful on the remote node and would
+        // recreate the cross-platform approval failure this path is fixing.
+        // When no explicit cwd was given, the gateway's own
+        // process.cwd() is meaningless on the remote node (especially cross-platform,
+        // e.g. Linux gateway + Windows node) and would cause
+        // "SYSTEM_RUN_DENIED: approval requires an existing canonical cwd".
+        // Passing undefined lets the node use its own default working directory.
+        workdir = explicitWorkdir;
+      } else {
+        const rawWorkdir = explicitWorkdir ?? defaultWorkdir ?? process.cwd();
+        workdir = resolveWorkdir(rawWorkdir, warnings);
+      }
+      await rejectUnsafeExecControlShellCommand(params.command);
+
+      const inheritedBaseEnv = coerceEnv(process.env);
+      const resolvedExecEnvState = getResolvedExecEnvPreparedState(params);
+      const requestedEnv = resolvedExecEnvState?.pluginEnv
+        ? { ...params.env, ...resolvedExecEnvState.pluginEnv }
+        : params.env;
+      const hostEnvResult =
+        host === "sandbox"
+          ? null
+          : sanitizeHostExecEnvWithDiagnostics({
+              baseEnv: inheritedBaseEnv,
+              overrides: requestedEnv,
+              blockPathOverrides: true,
+            });
+      if (
+        hostEnvResult &&
+        requestedEnv &&
+        (hostEnvResult.rejectedOverrideBlockedKeys.length > 0 ||
+          hostEnvResult.rejectedOverrideInvalidKeys.length > 0)
+      ) {
+        const blockedKeys = hostEnvResult.rejectedOverrideBlockedKeys;
+        const invalidKeys = hostEnvResult.rejectedOverrideInvalidKeys;
+        const pathBlocked = blockedKeys.includes("PATH");
+        if (pathBlocked && blockedKeys.length === 1 && invalidKeys.length === 0) {
+          throw new Error(
+            "Security Violation: Custom 'PATH' variable is forbidden during host execution.",
+          );
+        }
+        if (blockedKeys.length === 1 && invalidKeys.length === 0) {
+          throw new Error(
+            `Security Violation: Environment variable '${blockedKeys[0]}' is forbidden during host execution.`,
+          );
+        }
+        const details: string[] = [];
+        if (blockedKeys.length > 0) {
+          details.push(`blocked override keys: ${blockedKeys.join(", ")}`);
+        }
+        if (invalidKeys.length > 0) {
+          details.push(`invalid non-portable override keys: ${invalidKeys.join(", ")}`);
+        }
+        const suffix = details.join("; ");
+        if (pathBlocked) {
+          throw new Error(
+            `Security Violation: Custom 'PATH' variable is forbidden during host execution (${suffix}).`,
+          );
+        }
+        throw new Error(`Security Violation: ${suffix}.`);
+      }
+
+      const env =
+        sandbox && host === "sandbox"
+          ? buildSandboxEnv({
+              defaultPath: DEFAULT_PATH,
+              paramsEnv: requestedEnv,
+              sandboxEnv: sandbox.env,
+              containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
+            })
+          : (hostEnvResult?.env ?? inheritedBaseEnv);
+
+      if (!sandbox && host === "gateway" && !requestedEnv?.PATH) {
+        const shellPath = getShellPathFromLoginShell({
+          env: process.env,
+          timeoutMs: resolveShellEnvFallbackTimeoutMs(process.env),
+        });
+        applyShellPath(env, shellPath);
+      }
+
+      // `tools.exec.pathPrepend` is only meaningful when exec runs locally (gateway) or in the sandbox.
+      // Node hosts intentionally ignore request-scoped PATH overrides, so don't pretend this applies.
+      if (host === "node" && defaultPathPrepend.length > 0) {
+        warnings.push(
+          "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
+        );
+      } else {
+        applyPathPrepend(env, defaultPathPrepend);
+      }
+
+      if (host === "node") {
+        return executeNodeHostCommand({
+          command: params.command,
+          workdir,
+          env,
+          requestedEnv,
+          requestedNode: params.node?.trim(),
+          boundNode: defaults?.node?.trim(),
+          sessionKey: defaults?.sessionKey,
+          sessionId: defaults?.sessionId,
+          sessionStore: defaults?.sessionStore,
+          bashElevated: elevatedDefaults,
+          turnSourceChannel: defaults?.messageProvider,
+          turnSourceTo: defaults?.currentChannelId,
+          turnSourceAccountId: defaults?.accountId,
+          turnSourceThreadId: defaults?.currentThreadTs,
+          agentId,
+          security,
+          ask,
+          autoReview,
+          autoReviewer,
+          strictInlineEval: defaults?.strictInlineEval,
+          commandHighlighting: defaults?.commandHighlighting,
+          trigger: defaults?.trigger,
+          timeoutSec: params.timeout,
+          defaultTimeoutSec,
+          approvalRunningNoticeMs,
+          warnings,
+          notifySessionKey,
+          notifyOnExit,
+          trustedSafeBinDirs,
+        });
+      }
+
+      if (!workdir) {
+        throw new Error("exec internal error: local execution requires a resolved workdir");
+      }
+
+      if (host === "gateway" && !bypassApprovals) {
+        const gatewayResult = await processGatewayAllowlist({
+          command: params.command,
+          workdir,
+          env,
+          pathPrepend: defaultPathPrepend,
+          requestedEnv,
+          pty: params.pty === true && !sandbox,
+          timeoutSec: params.timeout,
+          defaultTimeoutSec,
+          security,
+          ask,
+          autoReview,
+          autoReviewer,
+          safeBins,
+          safeBinProfiles,
+          strictInlineEval: defaults?.strictInlineEval,
+          commandHighlighting: defaults?.commandHighlighting,
+          trigger: defaults?.trigger,
+          agentId,
+          sessionKey: defaults?.sessionKey,
+          sessionId: defaults?.sessionId,
+          sessionStore: defaults?.sessionStore,
+          bashElevated: elevatedDefaults,
+          turnSourceChannel: defaults?.messageProvider,
+          turnSourceTo: defaults?.currentChannelId,
+          turnSourceAccountId: defaults?.accountId,
+          turnSourceThreadId: defaults?.currentThreadTs,
+          scopeKey: defaults?.scopeKey,
+          approvalFollowupText: defaults?.approvalFollowupText,
+          approvalFollowup: defaults?.approvalFollowup,
+          approvalFollowupMode: defaults?.approvalFollowupMode,
+          warnings,
+          notifySessionKey,
+          approvalRunningNoticeMs,
+          maxOutput,
+          pendingMaxOutput,
+          trustedSafeBinDirs,
+        });
+        if (gatewayResult.pendingResult) {
+          return gatewayResult.pendingResult;
+        }
+        if (gatewayResult.deniedResult) {
+          return gatewayResult.deniedResult;
+        }
+        execCommandOverride = gatewayResult.execCommandOverride;
+        if (gatewayResult.allowWithoutEnforcedCommand) {
+          execCommandOverride = undefined;
+        }
+      }
+
+      const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;
+      const effectiveTimeout = explicitTimeoutSec ?? defaultTimeoutSec;
+      const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
+      const usePty = params.pty === true && !sandbox;
+
+      // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
+      // before we execute and burn tokens in cron loops.
+      if (!shouldSkipExecScriptPreflight({ host, security, ask })) {
+        await validateScriptFileForShellBleed({ command: params.command, workdir });
+      }
+
+      const run = await runExecProcess({
+        command: params.command,
+        execCommand: execCommandOverride,
+        workdir,
+        env,
+        pathPrepend: defaultPathPrepend,
+        sandbox,
+        containerWorkdir,
+        usePty,
+        warnings,
+        maxOutput,
+        pendingMaxOutput,
+        notifyOnExit,
+        notifyOnExitEmptySuccess,
+        scopeKey: defaults?.scopeKey,
+        sessionKey: notifySessionKey,
+        mainKey: defaults?.mainKey,
+        sessionScope: defaults?.sessionScope,
+        eventRouting: defaults?.eventRouting,
+        notifyDeliveryContext,
+        timeoutSec: effectiveTimeout,
+        onUpdate,
+      });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       let yielded = false;
       let yieldTimer: NodeJS.Timeout | null = null;
       let registeredAbortSignal: AbortSignal | null = null;

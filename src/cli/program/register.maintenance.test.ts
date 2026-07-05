@@ -112,7 +112,10 @@ describe("registerMaintenanceCommands doctor action", () => {
       "--json",
       "--severity-min",
       "error",
+<<<<<<< HEAD
       "--all",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "--skip",
       "a",
       "--only",
@@ -124,11 +127,17 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runDoctorLintCli).toHaveBeenCalledWith(runtime, {
       json: true,
       severityMin: "error",
+<<<<<<< HEAD
       includeAllChecks: true,
       skipIds: ["a"],
       onlyIds: ["b"],
       allowExec: true,
       deep: false,
+=======
+      skipIds: ["a"],
+      onlyIds: ["b"],
+      allowExec: true,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
@@ -143,6 +152,7 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
+<<<<<<< HEAD
   it("rejects --all outside doctor lint mode", async () => {
     await runMaintenanceCli(["doctor", "--all"]);
 
@@ -154,6 +164,8 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("exits with code 2 when doctor lint mode fails before findings are emitted", async () => {
     runDoctorLintCli.mockRejectedValue(new Error("lint failed"));
 

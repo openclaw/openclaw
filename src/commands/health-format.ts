@@ -1,5 +1,6 @@
 /** Formatting helpers for `openclaw health` failures and channel summaries. */
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+<<<<<<< HEAD
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatChannelStatusState } from "../channels/plugins/status-state.js";
@@ -13,6 +14,12 @@ export function formatGatewayClosedDiagnostic(err: unknown): string | undefined 
   return `Gateway connect failed: ${sanitizeTerminalText(err.message.split("\n", 1)[0] ?? "")}`;
 }
 
+=======
+import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { formatChannelStatusState } from "../channels/plugins/status-state.js";
+import type { ChannelAccountHealthSummary, HealthSummary } from "./health.types.js";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const formatKv = (line: string, rich: boolean) => {
   const idx = line.indexOf(": ");
   if (idx <= 0) {

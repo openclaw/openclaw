@@ -94,6 +94,7 @@ describe("qa tool coverage report", () => {
     );
   });
 
+<<<<<<< HEAD
   it("escapes freeform metadata in the markdown table", () => {
     const report = buildQaToolCoverageReport({
       scenarios: [
@@ -123,6 +124,8 @@ describe("qa tool coverage report", () => {
     expect(markdown).toContain("#80236 tracked \\| runtime drift");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses runtime parity summary rows and allows tracked known-broken drift", () => {
     const report = buildQaToolCoverageReport({
       scenarios: [

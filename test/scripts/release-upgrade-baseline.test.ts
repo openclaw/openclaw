@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   compareOpenClawVersions,
+<<<<<<< HEAD
   parseArgs,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveDefaultReleaseUpgradeBaseline,
 } from "../../scripts/lib/release-upgrade-baseline.mjs";
 
 describe("release upgrade baseline resolver", () => {
+<<<<<<< HEAD
   it("rejects short flag values before resolving baselines", () => {
     expect(() => parseArgs(["--candidate-version", "-h"])).toThrow(
       "missing value for --candidate-version",
@@ -13,6 +17,8 @@ describe("release upgrade baseline resolver", () => {
     expect(() => parseArgs(["--versions-json", "-h"])).toThrow("missing value for --versions-json");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("prefers the newest published baseline older than the candidate across channels", () => {
     expect(
       resolveDefaultReleaseUpgradeBaseline("2026.6.2", [

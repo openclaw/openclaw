@@ -21,12 +21,15 @@ export async function fetchJson(
   }
 }
 
+<<<<<<< HEAD
 export async function discardUsageResponseBody(response: Response): Promise<void> {
   if (!response.bodyUsed) {
     await response.body?.cancel().catch(() => undefined);
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function parseFiniteNumber(value: unknown): number | undefined {
   return parseFiniteNumberish(value);
 }

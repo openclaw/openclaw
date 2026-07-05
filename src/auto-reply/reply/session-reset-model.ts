@@ -18,7 +18,10 @@ import {
   type ModelAliasIndex,
   type ModelDirectiveSelection,
 } from "./model-selection-directive.js";
+<<<<<<< HEAD
 import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Result of applying a reset-message model override. */
 type ResetModelResult = {
@@ -110,14 +113,22 @@ function buildSelectionFromExplicit(params: {
 function applySelectionToSession(params: {
   selection: ModelDirectiveSelection;
   sessionEntry?: SessionEntry;
+<<<<<<< HEAD
   sessionEntryHandle?: ReplySessionEntryHandle;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
 }) {
+<<<<<<< HEAD
   const { selection, sessionEntryHandle, sessionStore, sessionKey, storePath } = params;
   const sessionEntry = sessionEntryHandle?.getCurrent() ?? params.sessionEntry;
   if (!sessionEntry || !sessionKey) {
+=======
+  const { selection, sessionEntry, sessionStore, sessionKey, storePath } = params;
+  if (!sessionEntry || !sessionStore || !sessionKey) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return;
   }
   const { updated } = applyModelOverrideToSessionEntry({
@@ -127,11 +138,15 @@ function applySelectionToSession(params: {
   if (!updated) {
     return;
   }
+<<<<<<< HEAD
   if (sessionEntryHandle) {
     sessionEntryHandle.replaceCurrent(sessionEntry);
   } else if (sessionStore) {
     sessionStore[sessionKey] = sessionEntry;
   }
+=======
+  sessionStore[sessionKey] = sessionEntry;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (storePath) {
     void import("../../config/sessions/session-accessor.js")
       .then(({ replaceSessionEntry }) =>
@@ -153,7 +168,10 @@ export async function applyResetModelOverride(params: {
   sessionCtx: TemplateContext;
   ctx: MsgContext;
   sessionEntry?: SessionEntry;
+<<<<<<< HEAD
   sessionEntryHandle?: ReplySessionEntryHandle;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
@@ -256,7 +274,10 @@ export async function applyResetModelOverride(params: {
   applySelectionToSession({
     selection,
     sessionEntry: params.sessionEntry,
+<<<<<<< HEAD
     sessionEntryHandle: params.sessionEntryHandle,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
     storePath: params.storePath,

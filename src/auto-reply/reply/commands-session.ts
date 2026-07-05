@@ -6,7 +6,11 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+<<<<<<< HEAD
 import { formatFastModeCurrentStatus, resolveFastModeState } from "../../agents/fast-mode.js";
+=======
+import { resolveFastModeState } from "../../agents/fast-mode.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   setChannelConversationBindingIdleTimeoutBySessionKey,
   setChannelConversationBindingMaxAgeBySessionKey,
@@ -21,8 +25,13 @@ import { getSessionBindingService } from "../../infra/outbound/session-binding-s
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import {
   buildRestartSuccessContinuation,
+<<<<<<< HEAD
   clearRestartSentinel,
   formatDoctorNonInteractiveHint,
+=======
+  formatDoctorNonInteractiveHint,
+  removeRestartSentinelFile,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
@@ -39,7 +48,11 @@ import {
   isSessionDefaultDirectiveValue,
   normalizeFastMode,
   normalizeUsageDisplay,
+<<<<<<< HEAD
   resolveEffectiveResponseUsage,
+=======
+  resolveResponseUsageMode,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "../thinking.js";
 import { resolveCommandSurfaceChannel } from "./channel-context.js";
 import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
@@ -352,16 +365,24 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     };
   }
 
+<<<<<<< HEAD
   const isReset = rawArgs ? isSessionDefaultDirectiveValue(rawArgs) : false;
 
   if (rawArgs && !requested && !isReset) {
     return {
       shouldContinue: false,
       reply: { text: "⚙️ Usage: /usage off|tokens|full|reset|cost" },
+=======
+  if (rawArgs && !requested) {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Usage: /usage off|tokens|full|cost" },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
   }
 
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+<<<<<<< HEAD
 
   if (isReset) {
     if (targetSessionEntry && params.sessionStore && params.sessionKey) {
@@ -386,6 +407,18 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
 
   if (targetSessionEntry && params.sessionStore && params.sessionKey) {
     targetSessionEntry.responseUsage = next;
+=======
+  const currentRaw = targetSessionEntry?.responseUsage;
+  const current = resolveResponseUsageMode(currentRaw);
+  const next = requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
+
+  if (targetSessionEntry && params.sessionStore && params.sessionKey) {
+    if (next === "off") {
+      delete targetSessionEntry.responseUsage;
+    } else {
+      targetSessionEntry.responseUsage = next;
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     params.sessionStore[params.sessionKey] = targetSessionEntry;
     await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
   }
@@ -427,6 +460,7 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
       agentId: sessionAgentId,
       sessionEntry: targetSessionEntry,
     });
+<<<<<<< HEAD
     return {
       shouldContinue: false,
       reply: {
@@ -437,6 +471,19 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
           label: "⚙️ Current fast mode",
         }),
       },
+=======
+    const suffix =
+      state.source === "agent"
+        ? " (agent)"
+        : state.source === "config"
+          ? " (config)"
+          : state.source === "default"
+            ? " (default)"
+            : "";
+    return {
+      shouldContinue: false,
+      reply: { text: `⚙️ Current fast mode: ${state.enabled ? "on" : "off"}${suffix}.` },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
   }
 
@@ -456,7 +503,11 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
     }
     return {
       shouldContinue: false,
+<<<<<<< HEAD
       reply: { text: "⚙️ Usage: /fast status|auto|on|off|default" },
+=======
+      reply: { text: "⚙️ Usage: /fast status|on|off|default" },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
   }
 
@@ -467,12 +518,16 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
 
   return {
     shouldContinue: false,
+<<<<<<< HEAD
     reply: {
       text:
         nextMode === "auto"
           ? "⚙️ Fast mode set to auto."
           : `⚙️ Fast mode ${nextMode ? "enabled" : "disabled"}.`,
     },
+=======
+    reply: { text: `⚙️ Fast mode ${nextMode ? "enabled" : "disabled"}.` },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 };
 
@@ -723,7 +778,11 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
   const sentinelPayload = buildRestartCommandSentinel(params);
   if (hasSigusr1Listener) {
+<<<<<<< HEAD
     let sentinelWritten = false;
+=======
+    let sentinelPath: string | null = null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     scheduleGatewaySigusr1Restart({
       reason: "/restart",
       // Sibling session-routing guard: /restart writes a session-scoped sentinel
@@ -733,6 +792,7 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       emitHooks: sentinelPayload
         ? {
             beforeEmit: async () => {
+<<<<<<< HEAD
               await writeRestartSentinel(sentinelPayload);
               sentinelWritten = true;
             },
@@ -740,6 +800,12 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
               if (sentinelWritten) {
                 await clearRestartSentinel();
               }
+=======
+              sentinelPath = await writeRestartSentinel(sentinelPayload);
+            },
+            afterEmitRejected: async () => {
+              await removeRestartSentinelFile(sentinelPath);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             },
           }
         : undefined,
@@ -751,11 +817,18 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
+<<<<<<< HEAD
   let sentinelWritten = false;
   try {
     if (sentinelPayload) {
       await writeRestartSentinel(sentinelPayload);
       sentinelWritten = true;
+=======
+  let sentinelPath: string | null = null;
+  try {
+    if (sentinelPayload) {
+      sentinelPath = await writeRestartSentinel(sentinelPayload);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   } catch (err) {
     logVerbose(`failed to write /restart sentinel: ${String(err)}`);
@@ -768,9 +841,13 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   }
   const restartMethod = triggerOpenClawRestart();
   if (!restartMethod.ok) {
+<<<<<<< HEAD
     if (sentinelWritten) {
       await clearRestartSentinel();
     }
+=======
+    await removeRestartSentinelFile(sentinelPath);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
     return {
       shouldContinue: false,

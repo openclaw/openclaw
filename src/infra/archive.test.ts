@@ -8,7 +8,15 @@ import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withRealpathSymlinkRebindRace } from "../test-utils/symlink-rebind-race.js";
 import { createZipCentralDirectoryArchive } from "../test-utils/zip-central-directory-fixture.js";
 import type { ArchiveSecurityError } from "./archive.js";
+<<<<<<< HEAD
 import { extractArchive, resolvePackedRootDir } from "./archive.js";
+=======
+import {
+  extractArchive,
+  readZipCentralDirectoryEntryCount,
+  resolvePackedRootDir,
+} from "./archive.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-archive-" });
 const directorySymlinkType = process.platform === "win32" ? "junction" : undefined;
@@ -379,6 +387,10 @@ describe("archive utils", () => {
       });
       await fs.writeFile(archivePath, archiveBytes);
 
+<<<<<<< HEAD
+=======
+      expect(readZipCentralDirectoryEntryCount(archiveBytes)).toBe(2);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       await expect(
         extractArchive({
           archivePath,

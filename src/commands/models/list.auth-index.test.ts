@@ -26,16 +26,30 @@ const pluginRegistryMocks = vi.hoisted(() => ({
 }));
 
 const envCandidateMocks = vi.hoisted(() => ({
+<<<<<<< HEAD
+=======
+  resolveProviderEnvApiKeyCandidates: vi.fn(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveProviderEnvAuthLookupMaps: vi.fn(),
 }));
 
 vi.mock("../../agents/model-auth-env-vars.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/model-auth-env-vars.js")>();
+<<<<<<< HEAD
+=======
+  envCandidateMocks.resolveProviderEnvApiKeyCandidates.mockImplementation(
+    actual.resolveProviderEnvApiKeyCandidates,
+  );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   envCandidateMocks.resolveProviderEnvAuthLookupMaps.mockImplementation(
     actual.resolveProviderEnvAuthLookupMaps,
   );
   return {
     ...actual,
+<<<<<<< HEAD
+=======
+    resolveProviderEnvApiKeyCandidates: envCandidateMocks.resolveProviderEnvApiKeyCandidates,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resolveProviderEnvAuthLookupMaps: envCandidateMocks.resolveProviderEnvAuthLookupMaps,
   };
 });
@@ -97,6 +111,10 @@ async function writeWorkspaceAuthEvidencePlugin(workspaceDir: string) {
 
 describe("createModelListAuthIndex", () => {
   beforeEach(() => {
+<<<<<<< HEAD
+=======
+    envCandidateMocks.resolveProviderEnvApiKeyCandidates.mockClear();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     envCandidateMocks.resolveProviderEnvAuthLookupMaps.mockClear();
     pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockClear();
   });

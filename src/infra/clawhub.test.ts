@@ -3,10 +3,15 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+<<<<<<< HEAD
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+=======
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   downloadClawHubPackageArchive,
   downloadClawHubSkillArchive,
@@ -16,6 +21,10 @@ import {
   fetchClawHubSkillCard,
   fetchClawHubSkillSecurityVerdicts,
   fetchClawHubPackageArtifact,
+<<<<<<< HEAD
+=======
+  fetchClawHubPackageReadiness,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   fetchClawHubPackageSecurity,
   fetchClawHubSkillVerification,
   normalizeClawHubSha256Integrity,
@@ -41,12 +50,16 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   expect((statError as { code?: unknown }).code).toBe("ENOENT");
 }
 
+<<<<<<< HEAD
 function createStalledBodyResponse(params: {
   headers: HeadersInit;
   firstChunk: Uint8Array;
   status?: number;
   statusText?: string;
 }): {
+=======
+function createStalledBodyResponse(params: { headers: HeadersInit; firstChunk: Uint8Array }): {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   response: Response;
   cancel: ReturnType<typeof vi.fn>;
 } {
@@ -61,8 +74,12 @@ function createStalledBodyResponse(params: {
   });
   return {
     response: new Response(body, {
+<<<<<<< HEAD
       status: params.status ?? 200,
       statusText: params.statusText,
+=======
+      status: 200,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       headers: params.headers,
     }),
     cancel,
@@ -70,7 +87,11 @@ function createStalledBodyResponse(params: {
 }
 
 describe("clawhub helpers", () => {
+<<<<<<< HEAD
   const originalEnv = captureEnv(["HOME", "XDG_CONFIG_HOME"]);
+=======
+  const originalHome = process.env.HOME;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   afterEach(() => {
     delete process.env.OPENCLAW_CLAWHUB_URL;
@@ -80,7 +101,16 @@ describe("clawhub helpers", () => {
     delete process.env.OPENCLAW_CLAWHUB_CONFIG_PATH;
     delete process.env.CLAWHUB_CONFIG_PATH;
     delete process.env.CLAWDHUB_CONFIG_PATH;
+<<<<<<< HEAD
     originalEnv.restore();
+=======
+    delete process.env.XDG_CONFIG_HOME;
+    if (originalHome == null) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("parses explicit ClawHub package specs", () => {
@@ -268,7 +298,11 @@ describe("clawhub helpers", () => {
         await withTempDir({ prefix: "openclaw-clawhub-xdg-" }, async (xdgRoot) => {
           const configPath = path.join(xdgRoot, "clawhub", "config.json");
           const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+<<<<<<< HEAD
           setTestEnvValue("XDG_CONFIG_HOME", xdgRoot);
+=======
+          process.env.XDG_CONFIG_HOME = xdgRoot;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           try {
             await fs.mkdir(path.dirname(configPath), { recursive: true });
             await fs.writeFile(configPath, JSON.stringify({ token: "xdg-token-123" }), "utf8");
@@ -578,6 +612,7 @@ describe("clawhub helpers", () => {
     expect(url.searchParams.has("version")).toBe(false);
   });
 
+<<<<<<< HEAD
   it("clamps oversized ClawHub request timeouts before scheduling", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
@@ -599,6 +634,8 @@ describe("clawhub helpers", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("fetches generated Skill Card markdown from an exact verified card URL", async () => {
     let requestedUrl = "";
 
@@ -648,6 +685,36 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow("ClawHub /api/v1/skills/agentreceipt/verify failed (404): not found");
   });
 
+<<<<<<< HEAD
+=======
+  it("fetches typed package readiness reports", async () => {
+    let requestedUrl = "";
+    await expect(
+      fetchClawHubPackageReadiness({
+        name: "@openclaw/diagnostics-otel",
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return new Response(
+            JSON.stringify({
+              package: { name: "@openclaw/diagnostics-otel", isOfficial: true },
+              phase: "legacy-zip-only",
+              blockers: [],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        },
+      }),
+    ).resolves.toEqual({
+      package: { name: "@openclaw/diagnostics-otel", isOfficial: true },
+      phase: "legacy-zip-only",
+      blockers: [],
+    });
+    expect(new URL(requestedUrl).pathname).toBe(
+      "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/readiness",
+    );
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("fetches typed package artifact resolver reports", async () => {
     let requestedUrl = "";
     await expect(
@@ -698,6 +765,7 @@ describe("clawhub helpers", () => {
           requestedUrl = input instanceof Request ? input.url : String(input);
           return new Response(
             JSON.stringify({
+<<<<<<< HEAD
               package: {
                 name: "@openclaw/diagnostics-otel",
                 displayName: "Diagnostics",
@@ -715,12 +783,21 @@ describe("clawhub helpers", () => {
                 pending: false,
                 stale: true,
               },
+=======
+              releaseId: "rel_demo",
+              state: "approved",
+              reasonCode: "clean",
+              createdAt: 1774256733107,
+              scanState: "clean",
+              moderationState: "approved",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             }),
             { status: 200, headers: { "content-type": "application/json" } },
           );
         },
       }),
     ).resolves.toEqual({
+<<<<<<< HEAD
       package: {
         name: "@openclaw/diagnostics-otel",
         displayName: "Diagnostics",
@@ -738,12 +815,21 @@ describe("clawhub helpers", () => {
         pending: false,
         stale: true,
       },
+=======
+      releaseId: "rel_demo",
+      state: "approved",
+      reasonCode: "clean",
+      createdAt: 1774256733107,
+      scanState: "clean",
+      moderationState: "approved",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     expect(new URL(requestedUrl).pathname).toBe(
       "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/versions/2026.3.22/security",
     );
   });
 
+<<<<<<< HEAD
   it("rejects malformed package security reports", async () => {
     await expect(
       fetchClawHubPackageSecurity({
@@ -767,6 +853,8 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow("expected reasons to be a string array");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("downloads package archives to sanitized temp paths and cleans them up", async () => {
     const archive = await downloadClawHubPackageArchive({
       name: "@hyf/zai-external-alpha",
@@ -887,6 +975,7 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow("ClawHub /api/v1/search returned malformed JSON");
   });
 
+<<<<<<< HEAD
   it("times out and cancels stalled successful ClawHub JSON bodies", async () => {
     const stalled = createStalledBodyResponse({
       firstChunk: new TextEncoder().encode('{"results":['),
@@ -1012,6 +1101,8 @@ describe("clawhub helpers", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("annotates 429 errors with the reset hint but no sign-in hint when authenticated", async () => {
     process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
     await expect(

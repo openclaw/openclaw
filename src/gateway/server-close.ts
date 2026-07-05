@@ -10,7 +10,11 @@ import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+<<<<<<< HEAD
 import { closePluginStateDatabase } from "../plugin-state/plugin-state-store.js";
+=======
+import { closePluginStateSqliteStore } from "../plugin-state/plugin-state-store.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { PluginServicesHandle } from "../plugins/services.js";
 import {
   abortTrackedChatRunById,
@@ -22,11 +26,15 @@ import {
   measureGatewayRestartTrace,
   recordGatewayRestartTrace,
 } from "./restart-trace.js";
+<<<<<<< HEAD
 import {
   createChatAbortMarker,
   type ChatRunEntry,
   type ChatRunState,
 } from "./server-chat-state.js";
+=======
+import type { ChatRunEntry, ChatRunState } from "./server-chat-state.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
@@ -410,7 +418,11 @@ function abortActiveRunsForRestart(params: RestartRunAbortParams): number {
       entry.abortStopReason = "restart";
       entry.controller.abort(createAgentRunRestartAbortError());
       params.chatAbortControllers.delete(runId);
+<<<<<<< HEAD
       params.chatRunState.abortedRuns.set(runId, createChatAbortMarker());
+=======
+      params.chatRunState.abortedRuns.set(runId, Date.now());
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       params.chatRunState.clearRun(runId);
       const removed = params.removeChatRun(runId, runId, entry.sessionKey);
       params.agentRunSeq.delete(runId);
@@ -826,7 +838,11 @@ export function createGatewayCloseHandler(
           }),
         ]);
       });
+<<<<<<< HEAD
       await shutdownStep("plugin-state-store", () => closePluginStateDatabase(), warnings);
+=======
+      await shutdownStep("plugin-state-store", () => closePluginStateSqliteStore(), warnings);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       await measureCloseStep("config-reloader", () =>
         shutdownStep("config-reloader", () => params.configReloader.stop(), warnings),
       );

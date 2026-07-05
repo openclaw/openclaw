@@ -18,11 +18,14 @@ export type SandboxBackendExecSpec = {
   finalizeToken?: unknown;
 };
 
+<<<<<<< HEAD
 export type SandboxBackendWorkdirValidation = "host" | "backend";
 
 export type SandboxBackendWorkdirValidator = (workdir: string) => Promise<string | null>;
 export type SandboxBackendPreparedWorkdirDiscarder = (workdir: string) => void;
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Parameters for backend-managed shell commands used by fs bridges and probes. */
 export type SandboxBackendCommandParams = {
   script: string;
@@ -64,6 +67,7 @@ export type SandboxBackendHandle = {
   env?: Record<string, string>;
   configLabel?: string;
   configLabelKind?: string;
+<<<<<<< HEAD
   /**
    * Remote backends own cwd existence checks because valid runtime paths may
    * not exist in the local workspace mirror. Backend validation must be paired
@@ -76,6 +80,8 @@ export type SandboxBackendHandle = {
   discardPreparedWorkdir?: SandboxBackendPreparedWorkdirDiscarder;
   /** Remote cwd roots managed by backend validation. Defaults to workdir. */
   workdirRoots?: readonly string[];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   capabilities?: {
     browser?: boolean;
   };

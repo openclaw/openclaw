@@ -26,10 +26,14 @@ import {
   streamSessionTranscriptLinesReverse,
 } from "./transcript-stream.js";
 import { isCanonicalSessionTranscriptEntry } from "./transcript-tree.js";
+<<<<<<< HEAD
 import {
   resolveOwnedSessionTranscriptWriteLockRunner,
   type OwnedSessionTranscriptPublishedEntry,
 } from "./transcript-write-context.js";
+=======
+import { resolveOwnedSessionTranscriptWriteLockRunner } from "./transcript-write-context.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { CURRENT_SESSION_VERSION } from "./version.js";
 
 const SESSION_MANAGER_APPEND_MAX_BYTES = 8 * 1024 * 1024;
@@ -223,7 +227,11 @@ async function resolveTranscriptLeafIdFromTrailingControls(
   return { appendMode: "active" };
 }
 
+<<<<<<< HEAD
 async function readTranscriptLeafInfoForward(transcriptPath: string): Promise<TranscriptLeafInfo> {
+=======
+async function readTranscriptLeafInfo(transcriptPath: string): Promise<TranscriptLeafInfo> {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let leafId: string | undefined;
   let hasParentLinkedEntries = false;
   let nonSessionEntryCount = 0;
@@ -266,6 +274,7 @@ async function readTranscriptLeafInfoForward(transcriptPath: string): Promise<Tr
   };
 }
 
+<<<<<<< HEAD
 async function readTranscriptLeafInfo(transcriptPath: string): Promise<TranscriptLeafInfo> {
   let latestEntryId: string | undefined;
   for await (const line of streamSessionTranscriptLinesReverse(transcriptPath)) {
@@ -317,6 +326,8 @@ async function readTranscriptLeafInfo(transcriptPath: string): Promise<Transcrip
   return await readTranscriptLeafInfoForward(transcriptPath);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function migrateLinearTranscriptToParentLinked(transcriptPath: string): Promise<{
   leafId?: string;
 }> {
@@ -439,6 +450,7 @@ export type AppendSessionTranscriptMessageResult<TMessage> = {
   appended: boolean;
 };
 
+<<<<<<< HEAD
 export type SessionTranscriptAppendTransactionContext = {
   appendEvent: (event: unknown) => Promise<void>;
   appendMessage: <TMessage>(
@@ -446,6 +458,8 @@ export type SessionTranscriptAppendTransactionContext = {
   ) => Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined>;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isTranscriptAgentMessage(value: unknown): value is AgentMessage {
   return (
     typeof value === "object" &&
@@ -525,6 +539,7 @@ export async function appendSessionTranscriptMessageWithOwnedWriteLock<TMessage>
   return await activeLockRunner(() => appendSessionTranscriptMessageLocked(params));
 }
 
+<<<<<<< HEAD
 /**
  * Runs a group of transcript appends through one append queue and write lock.
  */
@@ -576,6 +591,8 @@ export async function runSessionTranscriptAppendTransaction<T>(
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type AppendSessionTranscriptEventParams = {
   config?: OpenClawConfig;
   event: unknown;

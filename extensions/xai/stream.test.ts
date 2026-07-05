@@ -44,7 +44,11 @@ function buildEventStreamFn(events: unknown[]): StreamFn {
 
 function captureWrappedModelId(params: {
   modelId: string;
+<<<<<<< HEAD
   fastMode: boolean | (() => boolean | undefined);
+=======
+  fastMode: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   api?: XaiStreamApi;
 }): string {
   let capturedModelId = "";
@@ -158,6 +162,7 @@ describe("xai stream wrappers", () => {
     expect(captureWrappedModelId({ modelId: "grok-3", fastMode: false })).toBe("grok-3");
   });
 
+<<<<<<< HEAD
   it("resolves dynamic fast mode for each xai stream call", () => {
     const capturedModelIds: string[] = [];
     const baseStreamFn: StreamFn = (model) => {
@@ -182,6 +187,8 @@ describe("xai stream wrappers", () => {
     expect(capturedModelIds).toEqual(["grok-4-fast", "grok-4"]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("composes the xai provider stream chain from extra params", () => {
     const capture = createXaiPayloadCaptureStream();
 
@@ -285,6 +292,7 @@ describe("xai stream wrappers", () => {
     });
   });
 
+<<<<<<< HEAD
   it("resolves dynamic fast mode in the composed xai provider stream chain", () => {
     const capturedModelIds: string[] = [];
     const baseStreamFn: StreamFn = (model) => {
@@ -312,6 +320,8 @@ describe("xai stream wrappers", () => {
     expect(capturedModelIds).toEqual(["grok-4-fast", "grok-4"]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("strips unsupported strict and reasoning controls from tool payloads", () => {
     const payload = {
       reasoning: "high",
@@ -395,6 +405,7 @@ describe("xai stream wrappers", () => {
     expect(payload).not.toHaveProperty("reasoning_effort");
   });
 
+<<<<<<< HEAD
   it("still requests encrypted reasoning include when effort is unsupported", () => {
     const payload: Record<string, unknown> = {
       reasoning: { effort: "high" },
@@ -444,6 +455,8 @@ describe("xai stream wrappers", () => {
     expect(payload).not.toHaveProperty("include");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps native xAI Responses thinking efforts before the shared runtime dispatches payloads", async () => {
     const payload = await captureXaiResponsesPayloadWithThinking();
 

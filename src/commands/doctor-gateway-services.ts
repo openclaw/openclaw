@@ -33,7 +33,10 @@ import {
   uninstallLegacySystemdUnits,
   type SystemdUnitScope,
 } from "../daemon/systemd.js";
+<<<<<<< HEAD
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { RuntimeEnv } from "../runtime.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
@@ -52,7 +55,10 @@ const EXECSTART_REPAIR_CODES = new Set<string>([
   SERVICE_AUDIT_CODES.gatewayCommandMissing,
   SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
 ]);
+<<<<<<< HEAD
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDaemonRuntime {
   const first = programArguments?.[0];
@@ -233,6 +239,7 @@ async function filterInactiveExtraGatewayServices(
   return activeOrLegacy;
 }
 
+<<<<<<< HEAD
 export async function detectExtraGatewayServiceIssues(
   options: Pick<DoctorOptions, "deep"> = {},
 ): Promise<readonly ExtraGatewayService[]> {
@@ -272,6 +279,8 @@ export function extraGatewayServiceToRepairEffects(
   ];
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function cleanupLegacyLaunchdService(params: {
   label: string;
   plistPath: string;
@@ -681,7 +690,10 @@ export async function maybeRepairGatewayServiceConfig(
     await (updateRepairMode ? service.stage : service.install)({
       env: serviceInstallEnv,
       stdout: process.stdout,
+<<<<<<< HEAD
       warn: (message) => note(message, "Gateway"),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       programArguments: updatedPlan.programArguments,
       workingDirectory: updatedPlan.workingDirectory,
       environment: updatedPlan.environment,
@@ -700,7 +712,14 @@ export async function maybeScanExtraGatewayServices(
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
 ) {
+<<<<<<< HEAD
   const extraServices = await detectExtraGatewayServiceIssues(options);
+=======
+  const detectedExtraServices = await findExtraGatewayServices(process.env, {
+    deep: options.deep,
+  });
+  const extraServices = await filterInactiveExtraGatewayServices(detectedExtraServices);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (extraServices.length === 0) {
     return;
   }

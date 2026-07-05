@@ -10,7 +10,10 @@ vi.mock("./facade-runtime.js", () => ({
 
 describe("browser bridge facade", () => {
   beforeEach(() => {
+<<<<<<< HEAD
     vi.resetModules();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     loadActivatedBundledPluginPublicSurfaceModuleSync.mockReset();
   });
 

@@ -1,7 +1,11 @@
 // Tests migration cleanup for orphaned state keys.
 import fs from "node:fs";
 import path from "node:path";
+<<<<<<< HEAD
 import { describe, expect, it, vi } from "vitest";
+=======
+import { describe, expect, it } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { OpenClawConfig } from "../config/config.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
@@ -92,6 +96,7 @@ describe("migrateOrphanedSessionKeys", () => {
     expect(
       sessionStoreTextMayNeedCanonicalization({
         raw: JSON.stringify({
+<<<<<<< HEAD
           "agent:archive:main": { sessionId: "retired-main", updatedAt: 1 },
         }),
         storeAgentIds: ["main"],
@@ -101,6 +106,8 @@ describe("migrateOrphanedSessionKeys", () => {
     expect(
       sessionStoreTextMayNeedCanonicalization({
         raw: JSON.stringify({
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           main: { sessionId: "legacy-main", updatedAt: 1 },
         }),
         storeAgentIds: ["main"],
@@ -149,6 +156,7 @@ describe("migrateOrphanedSessionKeys", () => {
         mainKey: "work",
       }),
     ).toBe(true);
+<<<<<<< HEAD
     for (const malformedKey of ["agent::room", "agent:_bad:room"]) {
       expect(
         sessionStoreTextMayNeedCanonicalization({
@@ -160,6 +168,8 @@ describe("migrateOrphanedSessionKeys", () => {
         }),
       ).toBe(true);
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("renames orphaned raw key to canonical form", async () => {
@@ -178,6 +188,7 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
+<<<<<<< HEAD
   it("promotes legacy voice sessions before canonical runtime access", async () => {
     await withStateFixture(async ({ stateDir }) => {
       const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
@@ -569,6 +580,8 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("renames same-agent main aliases when mainKey changes", async () => {
     await withStateFixture(async ({ stateDir }) => {
       const storePath = opsSessionStorePath(stateDir);
@@ -601,6 +614,7 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
+<<<<<<< HEAD
   it("lowercases mixed-case session keys, keeping the freshest duplicate", async () => {
     await withStateFixture(async ({ stateDir }) => {
       const storePath = opsSessionStorePath(stateDir);
@@ -636,6 +650,8 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("skips stores that are already fully canonical", async () => {
     await withStateFixture(async ({ stateDir }) => {
       const storePath = opsSessionStorePath(stateDir);
@@ -676,7 +692,11 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
+<<<<<<< HEAD
   it("preserves legacy default-main aliases in shared stores", async () => {
+=======
+  it("preserves legitimate agent:main:* keys in shared stores with both main and non-main agents", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await withStateFixture(async ({ tmpDir, stateDir }) => {
       // When session.store lacks {agentId}, all agents resolve to the same file.
       // The "main" agent's keys must not be remapped into the "ops" namespace.
@@ -686,6 +706,7 @@ describe("migrateOrphanedSessionKeys", () => {
         "agent:ops:work": { sessionId: "ops-session", updatedAt: 1000 },
       });
 
+<<<<<<< HEAD
       const result = await migrateFixtureState(stateDir, sharedMainOpsConfig(sharedStorePath));
 
       const store = readStore(sharedStorePath);
@@ -790,6 +811,23 @@ describe("migrateOrphanedSessionKeys", () => {
   });
 
   it("preserves bare main aliases when a store has multiple possible owners", async () => {
+=======
+      await migrateFixtureState(stateDir, sharedMainOpsConfig(sharedStorePath));
+
+      const store = readStore(sharedStorePath);
+      // main agent's session is canonicalised to use configured mainKey ("work"),
+      // but stays in the "main" agent namespace — NOT remapped into "ops".
+      expect(requireStoreEntry(store, "agent:main:work").sessionId).toBe("main-session");
+      expect(requireStoreEntry(store, "agent:ops:work").sessionId).toBe("ops-session");
+      // The key must NOT have been merged into ops namespace
+      expect(
+        Object.keys(store).reduce((count, k) => count + (k.startsWith("agent:ops:") ? 1 : 0), 0),
+      ).toBe(1);
+    });
+  });
+
+  it("lets the main agent claim bare main aliases in shared stores", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await withStateFixture(async ({ tmpDir, stateDir }) => {
       const sharedStorePath = path.join(tmpDir, "shared-sessions.json");
       writeStore(sharedStorePath, {
@@ -797,6 +835,7 @@ describe("migrateOrphanedSessionKeys", () => {
         "agent:ops:work": { sessionId: "ops-session", updatedAt: 1000 },
       });
 
+<<<<<<< HEAD
       const result = await migrateFixtureState(stateDir, sharedMainOpsConfig(sharedStorePath));
 
       const store = readStore(sharedStorePath);
@@ -941,6 +980,14 @@ describe("migrateOrphanedSessionKeys", () => {
       expect(store["Agent:OPS:MAIN"]).toBeUndefined();
       expect(first.changes).toHaveLength(1);
       expect(second).toEqual({ changes: [], warnings: [] });
+=======
+      await migrateFixtureState(stateDir, sharedMainOpsConfig(sharedStorePath));
+
+      const store = readStore(sharedStorePath);
+      expect(requireStoreEntry(store, "agent:main:work").sessionId).toBe("main-session");
+      expect(store.main).toBeUndefined();
+      expect(requireStoreEntry(store, "agent:ops:work").sessionId).toBe("ops-session");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   });
 

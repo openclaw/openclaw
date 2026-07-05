@@ -2,7 +2,10 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+<<<<<<< HEAD
 import { MAX_TIMER_TIMEOUT_MS } from "../infra/parse-finite-number.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { withEnv } from "../test-utils/env.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
@@ -23,7 +26,11 @@ import {
   isTuiBusyActivityStatus,
   resolveLocalAuthCliInvocation,
   resolveLocalAuthSpawnCwd,
+<<<<<<< HEAD
   resolveLocalAuthSpawnInvocation,
+=======
+  resolveLocalAuthSpawnOptions,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveTuiCtrlCAction,
   resolveTuiFooterHostLabel,
   resolveTuiShutdownHardExitMs,
@@ -238,6 +245,7 @@ describe("resolveTuiShutdownHardExitMs", () => {
       expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(122000);
     });
   });
+<<<<<<< HEAD
 
   it("clamps oversized local run shutdown grace values", () => {
     withEnv({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: String(Number.MAX_SAFE_INTEGER) }, () => {
@@ -246,6 +254,8 @@ describe("resolveTuiShutdownHardExitMs", () => {
       );
     });
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("resolveTuiSessionKey", () => {
@@ -652,6 +662,7 @@ describe("resolveLocalAuthCliInvocation", () => {
   });
 });
 
+<<<<<<< HEAD
 describe("resolveLocalAuthSpawnInvocation", () => {
   it("wraps Windows cmd shims through cmd.exe", () => {
     expect(
@@ -679,10 +690,30 @@ describe("resolveLocalAuthSpawnInvocation", () => {
       args: ["/d", "/s", "/c", '""C:\\Program Files\\Codex\\codex.bat" login"'],
       options: { windowsHide: true, windowsVerbatimArguments: true },
     });
+=======
+describe("resolveLocalAuthSpawnOptions", () => {
+  it("enables shell mode for Windows cmd shims", () => {
+    expect(
+      resolveLocalAuthSpawnOptions({
+        command: "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd",
+        platform: "win32",
+      }),
+    ).toEqual({ shell: true });
+  });
+
+  it("enables shell mode for Windows bat shims", () => {
+    expect(
+      resolveLocalAuthSpawnOptions({
+        command: "C:\\tools\\codex.bat",
+        platform: "win32",
+      }),
+    ).toEqual({ shell: true });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("keeps direct execution for non-wrapper commands", () => {
     expect(
+<<<<<<< HEAD
       resolveLocalAuthSpawnInvocation({
         command: "/usr/local/bin/codex",
         args: ["login"],
@@ -696,6 +727,19 @@ describe("resolveLocalAuthSpawnInvocation", () => {
         platform: "win32",
       }),
     ).toStrictEqual({ command: "C:\\tools\\codex.exe", args: ["login"], options: {} });
+=======
+      resolveLocalAuthSpawnOptions({
+        command: "/usr/local/bin/codex",
+        platform: "linux",
+      }),
+    ).toStrictEqual({});
+    expect(
+      resolveLocalAuthSpawnOptions({
+        command: "C:\\tools\\codex.exe",
+        platform: "win32",
+      }),
+    ).toStrictEqual({});
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });
 

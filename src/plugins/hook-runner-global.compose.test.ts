@@ -5,7 +5,10 @@
  * loader.hook-runner-live-view.test.ts.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { getGlobalHookRunnerRegistry } from "./hook-runner-global-state.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   getGlobalHookRunner,
   initializeGlobalHookRunner,
@@ -18,7 +21,10 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "./runtime.js";
+<<<<<<< HEAD
 import { createPluginRecord } from "./status.test-helpers.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function runner() {
   const value = getGlobalHookRunner();
@@ -95,6 +101,7 @@ describe("global hook runner composition (#91918)", () => {
     expect(runner().hasHooks("message_sent")).toBe(true);
   });
 
+<<<<<<< HEAD
   it("keeps bundled trusted policies before installed policies across live registries", () => {
     const pinnedBundled = createMockPluginRegistry([
       { hookName: "before_tool_call", handler: vi.fn(), pluginId: "bundled-policy" },
@@ -144,6 +151,8 @@ describe("global hook runner composition (#91918)", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("lets an explicitly initialized registry win ownership over the active registry", () => {
     const activeRegistry = createMockPluginRegistry([
       { hookName: "message_received", handler: vi.fn(), pluginId: "foo" },

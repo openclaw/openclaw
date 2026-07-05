@@ -787,6 +787,7 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+<<<<<<< HEAD
   it("rewrites public asset hrefs in index.html when Control UI uses a configured base path (#94157)", async () => {
     const html =
       '<html><head><link rel="manifest" href="/manifest.webmanifest" /><link rel="icon" href="/favicon.svg" /></head><body></body></html>\n';
@@ -811,6 +812,8 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("serves bootstrap config JSON", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {

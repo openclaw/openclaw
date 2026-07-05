@@ -6,9 +6,15 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
+<<<<<<< HEAD
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+=======
+import { loadSessionStore } from "../config/sessions.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.js";
@@ -37,7 +43,11 @@ import {
 } from "./session-transcript-readers.js";
 import {
   resolveFreshestSessionEntryFromStoreKeys,
+<<<<<<< HEAD
   resolveGatewaySessionStoreTargetWithStore,
+=======
+  resolveGatewaySessionStoreTarget,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
 
@@ -128,8 +138,14 @@ export async function handleSessionHistoryHttpRequest(
   }
   const { cfg } = authResult;
 
+<<<<<<< HEAD
   const target = resolveGatewaySessionStoreTargetWithStore({ cfg, key: sessionKey });
   const entry = resolveFreshestSessionEntryFromStoreKeys(target.store, target.storeKeys);
+=======
+  const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey });
+  const store = loadSessionStore(target.storePath);
+  const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!entry?.sessionId) {
     sendJson(res, 404, {
       ok: false,
@@ -148,9 +164,14 @@ export async function handleSessionHistoryHttpRequest(
       ? await readRecentSessionMessagesWithStatsAsync(
           {
             agentId: target.agentId,
+<<<<<<< HEAD
             sessionEntry: entry,
             sessionId: entry.sessionId,
             sessionKey: target.canonicalKey,
+=======
+            sessionFile: entry.sessionFile,
+            sessionId: entry.sessionId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             storePath: target.storePath,
           },
           {
@@ -166,9 +187,14 @@ export async function handleSessionHistoryHttpRequest(
       ? await readSessionMessagesWithSourceAsync(
           {
             agentId: target.agentId,
+<<<<<<< HEAD
             sessionEntry: entry,
             sessionId: entry.sessionId,
             sessionKey: target.canonicalKey,
+=======
+            sessionFile: entry.sessionFile,
+            sessionId: entry.sessionId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             storePath: target.storePath,
           },
           {
@@ -214,10 +240,16 @@ export async function handleSessionHistoryHttpRequest(
   const sseState = SessionHistorySseState.fromRawSnapshot({
     target: {
       agentId: target.agentId,
+<<<<<<< HEAD
       sessionEntry: entry,
       sessionId: entry.sessionId,
       sessionKey: target.canonicalKey,
       storePath: target.storePath,
+=======
+      sessionId: entry.sessionId,
+      storePath: target.storePath,
+      sessionFile: entry.sessionFile,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
     rawMessages: rawSnapshot,
     rawTranscriptSeq: boundedSnapshot?.totalMessages,
@@ -307,20 +339,31 @@ export async function handleSessionHistoryHttpRequest(
     });
   }, 15_000);
 
+<<<<<<< HEAD
   const unsubscribe: (() => void) | undefined = onInternalSessionTranscriptUpdate((update) => {
     // Filter to candidate sessions synchronously before enqueueing any async
     // work. Transcript updates use a global fan-out listener, so every
+=======
+  const unsubscribe: (() => void) | undefined = onSessionTranscriptUpdate((update) => {
+    // Filter to candidate sessions synchronously before enqueueing any async
+    // work. `onSessionTranscriptUpdate` is a global fan-out listener, so every
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     // transcript write in the gateway would otherwise append a Promise-chain
     // entry capturing `update.message` to every open SSE stream's queue —
     // O(streams × updates) for busy deployments.
     if (!entry?.sessionId) {
       return;
     }
+<<<<<<< HEAD
     const updateMatchesIdentity =
       update.target?.sessionId === entry.sessionId &&
       normalizeAgentId(update.target.agentId) === normalizeAgentId(target.agentId);
     const updatePath = resolveTranscriptPathForComparison(update.sessionFile);
     if (!updateMatchesIdentity && (!updatePath || !transcriptCandidates.has(updatePath))) {
+=======
+    const updatePath = resolveTranscriptPathForComparison(update.sessionFile);
+    if (!updatePath || !transcriptCandidates.has(updatePath)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return;
     }
     queueStreamWork(async () => {

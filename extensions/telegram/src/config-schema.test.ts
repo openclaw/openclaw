@@ -166,6 +166,7 @@ describe("telegram custom commands schema", () => {
     }
   });
 
+<<<<<<< HEAD
   it("preserves rich message inheritance for account overrides", () => {
     const res = TelegramConfigSchema.safeParse({
       richMessages: true,
@@ -179,6 +180,8 @@ describe("telegram custom commands schema", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("normalizes custom commands", () => {
     const res = TelegramConfigSchema.safeParse({
       customCommands: [{ command: "/Backup", description: "  Git backup  " }],

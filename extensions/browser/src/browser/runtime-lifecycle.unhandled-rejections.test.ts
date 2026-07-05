@@ -19,6 +19,10 @@ const { getUnhandledRejectionHandlers, registerUnhandledRejectionHandlerMock, re
   });
 
 const {
+<<<<<<< HEAD
+=======
+  ensureExtensionRelayForProfilesMock,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   getPwAiModuleMock,
   isPwAiLoadedMock,
   startTrackedBrowserTabCleanupTimerMock,
@@ -27,6 +31,10 @@ const {
 } = vi.hoisted(() => {
   const trackedTabCleanupMockLocal = vi.fn();
   return {
+<<<<<<< HEAD
+=======
+    ensureExtensionRelayForProfilesMock: vi.fn(async () => {}),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     getPwAiModuleMock: vi.fn(),
     isPwAiLoadedMock: vi.fn(() => false),
     startTrackedBrowserTabCleanupTimerMock: vi.fn(() => trackedTabCleanupMockLocal),
@@ -40,6 +48,10 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 }));
 
 vi.mock("./server-lifecycle.js", () => ({
+<<<<<<< HEAD
+=======
+  ensureExtensionRelayForProfiles: ensureExtensionRelayForProfilesMock,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   stopKnownBrowserProfiles: stopKnownBrowserProfilesMock,
 }));
 
@@ -61,6 +73,10 @@ const { isPlaywrightDialogRaceUnhandledRejection } = await import("./unhandled-r
 beforeEach(() => {
   resetHandlers();
   registerUnhandledRejectionHandlerMock.mockClear();
+<<<<<<< HEAD
+=======
+  ensureExtensionRelayForProfilesMock.mockClear();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   getPwAiModuleMock.mockClear();
   isPwAiLoadedMock.mockReset().mockReturnValue(false);
   startTrackedBrowserTabCleanupTimerMock.mockClear();

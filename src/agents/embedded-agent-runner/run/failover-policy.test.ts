@@ -1,7 +1,10 @@
 // Failover policy tests cover the embedded run decision table for retry,
 // profile rotation, fallback model escalation, and user-visible errors.
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { classifyAssistantFailoverReason } from "../../embedded-agent-helpers.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./failover-policy.js";
 
 describe("resolveRunFailoverDecision", () => {
@@ -266,6 +269,7 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+<<<<<<< HEAD
   it("falls back for opencode-go provider-owned stalled stream errors after rotation is exhausted", () => {
     const assistantError = {
       role: "assistant" as const,
@@ -308,6 +312,8 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not fallback assistant tool-execution timeouts even after profile rotation exhausted (#52147)", () => {
     expect(
       resolveRunFailoverDecision({
@@ -581,6 +587,7 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+<<<<<<< HEAD
   it("falls back on fallback-safe harness-owned prompt timeouts", () => {
     expect(
       resolveRunFailoverDecision({
@@ -619,6 +626,8 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("surfaces error on LLM idle timeout when no fallback is configured and rotation is exhausted", () => {
     expect(
       resolveRunFailoverDecision({

@@ -35,7 +35,11 @@ vi.mock("./webhook/tailscale.js", () => ({
   getTailscaleDnsName: mocks.getTailscaleDnsName,
 }));
 
+<<<<<<< HEAD
 import { startNgrokTunnel, startTailscaleTunnel, startTunnel } from "./tunnel.js";
+=======
+import { isNgrokAvailable, startNgrokTunnel, startTailscaleTunnel, startTunnel } from "./tunnel.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function nextProcess(): FakeChildProcess {
   const proc = new FakeChildProcess();
@@ -53,6 +57,28 @@ describe("voice-call tunnels", () => {
     mocks.getTailscaleDnsName.mockReset();
   });
 
+<<<<<<< HEAD
+=======
+  it("checks ngrok availability from the version command exit code", async () => {
+    const proc = nextProcess();
+    const result = isNgrokAvailable();
+    proc.close(0);
+
+    await expect(result).resolves.toBe(true);
+    expect(mocks.spawn).toHaveBeenCalledWith("ngrok", ["version"], {
+      stdio: "ignore",
+    });
+  });
+
+  it("treats ngrok spawn failures as unavailable", async () => {
+    const proc = nextProcess();
+    const result = isNgrokAvailable();
+    proc.fail(new Error("spawn ngrok ENOENT"));
+
+    await expect(result).resolves.toBe(false);
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("starts ngrok and appends the webhook path to the public URL", async () => {
     const proc = nextProcess();
     const result = startNgrokTunnel({ port: 3334, path: "/voice/webhook" });

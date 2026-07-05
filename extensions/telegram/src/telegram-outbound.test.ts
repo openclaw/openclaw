@@ -29,6 +29,7 @@ describe("telegramPlugin outbound", () => {
     expect(telegramOutbound.presentationCapabilities?.limits?.text?.markdownDialect).toBe(
       "markdown",
     );
+<<<<<<< HEAD
     expect(telegramOutbound.pollMaxOptions).toBe(10);
   });
 
@@ -46,6 +47,12 @@ describe("telegramPlugin outbound", () => {
     expect(telegramOutbound.sanitizeText?.({ text, payload: { text } })).toBe(text);
   });
 
+=======
+    expect(telegramOutbound.sanitizeText).toBeUndefined();
+    expect(telegramOutbound.pollMaxOptions).toBe(10);
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves explicit HTML parse mode before chunking", () => {
     clearTelegramRuntime();
     const text = "<b>hi</b>";

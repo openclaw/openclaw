@@ -1,16 +1,23 @@
 // Child process adapter wraps spawned child processes for the supervisor.
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
+<<<<<<< HEAD
 import { toErrorObject } from "../../../infra/errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
+<<<<<<< HEAD
 import {
   buildWindowsCmdExeCommandLine,
   isWindowsBatchCommand,
   resolveTrustedWindowsCmdExe,
   resolveWindowsCommandShim,
 } from "../../windows-command.js";
+=======
+import { resolveWindowsCommandShim } from "../../windows-command.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
@@ -24,6 +31,7 @@ function resolveCommand(command: string): string {
   });
 }
 
+<<<<<<< HEAD
 function resolveChildInvocation(params: { argv: string[]; windowsVerbatimArguments?: boolean }): {
   args: string[];
   command: string;
@@ -45,6 +53,8 @@ function resolveChildInvocation(params: { argv: string[]; windowsVerbatimArgumen
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
 
 function isServiceManagedRuntime(): boolean {
@@ -59,12 +69,19 @@ export async function createChildAdapter(params: {
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
 }): Promise<ChildAdapter> {
+<<<<<<< HEAD
   const invocation = resolveChildInvocation({
     argv: params.argv,
     windowsVerbatimArguments: params.windowsVerbatimArguments,
   });
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
   const preparedSpawn = prepareOomScoreAdjustedSpawn(invocation.command, invocation.args, {
+=======
+  const resolvedArgv = [...params.argv];
+  resolvedArgv[0] = resolveCommand(resolvedArgv[0] ?? "");
+  const baseEnv = params.env ? toStringEnv(params.env) : undefined;
+  const preparedSpawn = prepareOomScoreAdjustedSpawn(resolvedArgv[0] ?? "", resolvedArgv.slice(1), {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     env: baseEnv,
   });
 
@@ -81,7 +98,11 @@ export async function createChildAdapter(params: {
     stdio: ["pipe", "pipe", "pipe"],
     detached: useDetached,
     windowsHide: true,
+<<<<<<< HEAD
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+=======
+    windowsVerbatimArguments: params.windowsVerbatimArguments,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
   if (stdinMode === "inherit") {
     options.stdio = ["inherit", "pipe", "pipe"];
@@ -355,7 +376,11 @@ export async function createChildAdapter(params: {
       return waitResult;
     }
     if (waitError !== undefined) {
+<<<<<<< HEAD
       throw toErrorObject(waitError, "Non-Error thrown");
+=======
+      throw toLintErrorObject(waitError, "Non-Error thrown");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     if (!waitPromise) {
       waitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
@@ -373,7 +398,11 @@ export async function createChildAdapter(params: {
             const error = waitError;
             resolveWait = null;
             rejectWait = null;
+<<<<<<< HEAD
             reject(toErrorObject(error, "Non-Error rejection"));
+=======
+            reject(toLintErrorObject(error, "Non-Error rejection"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           }
         },
       );
@@ -434,3 +463,20 @@ export async function createChildAdapter(params: {
     dispose,
   };
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

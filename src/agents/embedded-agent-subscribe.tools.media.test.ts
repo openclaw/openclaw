@@ -3,10 +3,15 @@
 import { describe, expect, it } from "vitest";
 import {
   extractToolResultMediaArtifact,
+<<<<<<< HEAD
+=======
+  extractToolResultMediaPaths,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   filterToolResultMediaUrls,
   isToolResultMediaTrusted,
 } from "./embedded-agent-subscribe.tools.js";
 
+<<<<<<< HEAD
 describe("extractToolResultMediaArtifact", () => {
   it("returns undefined for null/undefined", () => {
     expect(extractToolResultMediaArtifact(null)).toBeUndefined();
@@ -16,6 +21,17 @@ describe("extractToolResultMediaArtifact", () => {
   it("returns undefined for non-object", () => {
     expect(extractToolResultMediaArtifact("hello")).toBeUndefined();
     expect(extractToolResultMediaArtifact(42)).toBeUndefined();
+=======
+describe("extractToolResultMediaPaths", () => {
+  it("returns empty array for null/undefined", () => {
+    expect(extractToolResultMediaPaths(null)).toStrictEqual([]);
+    expect(extractToolResultMediaPaths(undefined)).toStrictEqual([]);
+  });
+
+  it("returns empty array for non-object", () => {
+    expect(extractToolResultMediaPaths("hello")).toStrictEqual([]);
+    expect(extractToolResultMediaPaths(42)).toStrictEqual([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("extracts structured details.media without content blocks", () => {
@@ -80,8 +96,13 @@ describe("extractToolResultMediaArtifact", () => {
     });
   });
 
+<<<<<<< HEAD
   it("returns undefined when content has no text or image blocks", () => {
     expect(extractToolResultMediaArtifact({ content: [{ type: "other" }] })).toBeUndefined();
+=======
+  it("returns empty array when content has no text or image blocks", () => {
+    expect(extractToolResultMediaPaths({ content: [{ type: "other" }] })).toStrictEqual([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("extracts structured media with audioAsVoice", () => {
@@ -124,9 +145,13 @@ describe("extractToolResultMediaArtifact", () => {
       ],
       details: { path: "/tmp/screenshot.png" },
     };
+<<<<<<< HEAD
     expect(extractToolResultMediaArtifact(result)).toEqual({
       mediaUrls: ["/tmp/screenshot.png"],
     });
+=======
+    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/screenshot.png"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("ignores media-looking text content without structured media or image fallback", () => {
@@ -136,7 +161,11 @@ describe("extractToolResultMediaArtifact", () => {
         { type: "text", text: "MEDIA:/tmp/page2.png" },
       ],
     };
+<<<<<<< HEAD
     expect(extractToolResultMediaArtifact(result)).toBeUndefined();
+=======
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("falls back to details.path when image content exists", () => {
@@ -151,12 +180,19 @@ describe("extractToolResultMediaArtifact", () => {
       ],
       details: { path: "/tmp/generated.png" },
     };
+<<<<<<< HEAD
     expect(extractToolResultMediaArtifact(result)).toEqual({
       mediaUrls: ["/tmp/generated.png"],
     });
   });
 
   it("returns undefined when image content exists but no details.path", () => {
+=======
+    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/generated.png"]);
+  });
+
+  it("returns empty array when image content exists but no details.path", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     // Embedded read tool: has image content but no path anywhere in the result.
     const result = {
       content: [
@@ -164,21 +200,33 @@ describe("extractToolResultMediaArtifact", () => {
         { type: "image", data: "base64data", mimeType: "image/png" },
       ],
     };
+<<<<<<< HEAD
     expect(extractToolResultMediaArtifact(result)).toBeUndefined();
+=======
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("ignores null/undefined items in content array", () => {
     const result = {
       content: [null, undefined, { type: "text", text: "MEDIA:/tmp/ok.png" }],
     };
+<<<<<<< HEAD
     expect(extractToolResultMediaArtifact(result)).toBeUndefined();
+=======
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("returns empty array for text-only results", () => {
     const result = {
       content: [{ type: "text", text: "Command executed successfully" }],
     };
+<<<<<<< HEAD
     expect(extractToolResultMediaArtifact(result)).toBeUndefined();
+=======
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("ignores details.path when no image content exists", () => {
@@ -189,7 +237,11 @@ describe("extractToolResultMediaArtifact", () => {
       content: [{ type: "text", text: "File saved" }],
       details: { path: "/tmp/data.json" },
     };
+<<<<<<< HEAD
     expect(extractToolResultMediaArtifact(result)).toBeUndefined();
+=======
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("handles details.path with whitespace", () => {
@@ -197,9 +249,13 @@ describe("extractToolResultMediaArtifact", () => {
       content: [{ type: "image", data: "base64", mimeType: "image/png" }],
       details: { path: "  /tmp/image.png  " },
     };
+<<<<<<< HEAD
     expect(extractToolResultMediaArtifact(result)).toEqual({
       mediaUrls: ["/tmp/image.png"],
     });
+=======
+    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/image.png"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("skips empty details.path", () => {
@@ -207,7 +263,11 @@ describe("extractToolResultMediaArtifact", () => {
       content: [{ type: "image", data: "base64", mimeType: "image/png" }],
       details: { path: "   " },
     };
+<<<<<<< HEAD
     expect(extractToolResultMediaArtifact(result)).toBeUndefined();
+=======
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("does not match <media:audio> placeholder as media", () => {
@@ -219,14 +279,22 @@ describe("extractToolResultMediaArtifact", () => {
         },
       ],
     };
+<<<<<<< HEAD
     expect(extractToolResultMediaArtifact(result)).toBeUndefined();
+=======
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("does not match <media:image> placeholder as media", () => {
     const result = {
       content: [{ type: "text", text: "<media:image> (2 images)" }],
     };
+<<<<<<< HEAD
     expect(extractToolResultMediaArtifact(result)).toBeUndefined();
+=======
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("does not match other media placeholder variants", () => {
@@ -239,7 +307,11 @@ describe("extractToolResultMediaArtifact", () => {
       const result = {
         content: [{ type: "text", text: `${tag} some context` }],
       };
+<<<<<<< HEAD
       expect(extractToolResultMediaArtifact(result)).toBeUndefined();
+=======
+      expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
@@ -252,7 +324,11 @@ describe("extractToolResultMediaArtifact", () => {
         },
       ],
     };
+<<<<<<< HEAD
     expect(extractToolResultMediaArtifact(result)).toBeUndefined();
+=======
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("does not treat malformed media-looking prose as a file path", () => {
@@ -264,7 +340,11 @@ describe("extractToolResultMediaArtifact", () => {
         },
       ],
     };
+<<<<<<< HEAD
     expect(extractToolResultMediaArtifact(result)).toBeUndefined();
+=======
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("trusts image_generate local media paths", () => {

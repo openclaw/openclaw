@@ -3,7 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 import { installTestEnv } from "./test-env.js";
 
@@ -15,14 +18,24 @@ const cleanupFns: Array<() => void> = [];
 function restoreProcessEnv(): void {
   for (const key of Object.keys(process.env)) {
     if (!(key in ORIGINAL_ENV)) {
+<<<<<<< HEAD
       deleteTestEnvValue(key);
+=======
+      delete process.env[key];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   }
   for (const [key, value] of Object.entries(ORIGINAL_ENV)) {
     if (value === undefined) {
+<<<<<<< HEAD
       deleteTestEnvValue(key);
     } else {
       setTestEnvValue(key, value);
+=======
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   }
 }
@@ -134,6 +147,7 @@ describe("installTestEnv", () => {
       "session\n",
     );
 
+<<<<<<< HEAD
     setTestEnvValue("HOME", realHome);
     setTestEnvValue("USERPROFILE", realHome);
     setTestEnvValue("OPENCLAW_LIVE_TEST", "1");
@@ -141,6 +155,15 @@ describe("installTestEnv", () => {
     setTestEnvValue("OPENCLAW_CONFIG_PATH", "~/custom-openclaw.json5");
     setTestEnvValue("OPENCLAW_TEST_HOME", priorIsolatedHome);
     setTestEnvValue("OPENCLAW_STATE_DIR", path.join(priorIsolatedHome, ".openclaw"));
+=======
+    process.env.HOME = realHome;
+    process.env.USERPROFILE = realHome;
+    process.env.OPENCLAW_LIVE_TEST = "1";
+    process.env.OPENCLAW_LIVE_TEST_QUIET = "1";
+    process.env.OPENCLAW_CONFIG_PATH = "~/custom-openclaw.json5";
+    process.env.OPENCLAW_TEST_HOME = priorIsolatedHome;
+    process.env.OPENCLAW_STATE_DIR = path.join(priorIsolatedHome, ".openclaw");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const testEnv = installTestEnv();
     cleanupFns.push(testEnv.cleanup);
@@ -220,11 +243,19 @@ describe("installTestEnv", () => {
     const realHome = createTempHome();
     writeFile(path.join(realHome, ".profile"), "export TEST_PROFILE_ONLY=from-profile\n");
 
+<<<<<<< HEAD
     setTestEnvValue("HOME", realHome);
     setTestEnvValue("USERPROFILE", realHome);
     setTestEnvValue("OPENCLAW_LIVE_TEST", "1");
     setTestEnvValue("OPENCLAW_LIVE_USE_REAL_HOME", "1");
     setTestEnvValue("OPENCLAW_LIVE_TEST_QUIET", "1");
+=======
+    process.env.HOME = realHome;
+    process.env.USERPROFILE = realHome;
+    process.env.OPENCLAW_LIVE_TEST = "1";
+    process.env.OPENCLAW_LIVE_USE_REAL_HOME = "1";
+    process.env.OPENCLAW_LIVE_TEST_QUIET = "1";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const testEnv = installTestEnv();
 
@@ -237,6 +268,7 @@ describe("installTestEnv", () => {
     const realHome = createTempHome();
     writeFile(path.join(realHome, ".profile"), "export TEST_PROFILE_ONLY=from-profile\n");
 
+<<<<<<< HEAD
     setTestEnvValue("HOME", realHome);
     setTestEnvValue("USERPROFILE", realHome);
     deleteTestEnvValue("LIVE");
@@ -244,6 +276,15 @@ describe("installTestEnv", () => {
     deleteTestEnvValue("OPENCLAW_LIVE_GATEWAY");
     deleteTestEnvValue("OPENCLAW_LIVE_USE_REAL_HOME");
     deleteTestEnvValue("OPENCLAW_LIVE_TEST_QUIET");
+=======
+    process.env.HOME = realHome;
+    process.env.USERPROFILE = realHome;
+    delete process.env.LIVE;
+    delete process.env.OPENCLAW_LIVE_TEST;
+    delete process.env.OPENCLAW_LIVE_GATEWAY;
+    delete process.env.OPENCLAW_LIVE_USE_REAL_HOME;
+    delete process.env.OPENCLAW_LIVE_TEST_QUIET;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const testEnv = installTestEnv();
     cleanupFns.push(testEnv.cleanup);
@@ -256,11 +297,19 @@ describe("installTestEnv", () => {
     const realHome = createTempHome();
     writeFile(path.join(realHome, ".profile"), "export TEST_PROFILE_ONLY=from-profile\n");
 
+<<<<<<< HEAD
     setTestEnvValue("HOME", realHome);
     setTestEnvValue("USERPROFILE", realHome);
     setTestEnvValue("OPENCLAW_LIVE_TEST", "1");
     setTestEnvValue("OPENCLAW_LIVE_USE_REAL_HOME", "1");
     setTestEnvValue("OPENCLAW_LIVE_TEST_QUIET", "1");
+=======
+    process.env.HOME = realHome;
+    process.env.USERPROFILE = realHome;
+    process.env.OPENCLAW_LIVE_TEST = "1";
+    process.env.OPENCLAW_LIVE_USE_REAL_HOME = "1";
+    process.env.OPENCLAW_LIVE_TEST_QUIET = "1";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     vi.doMock("node:child_process", () => ({
       execFileSync: () => {

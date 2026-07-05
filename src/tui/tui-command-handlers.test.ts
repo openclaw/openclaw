@@ -93,9 +93,13 @@ function createHarness(params?: {
   isRunObserved?: (runId: string) => boolean;
   flushPendingHistoryRefreshIfIdle?: FlushPendingHistoryRefreshMock;
 }) {
+<<<<<<< HEAD
   const sendChat =
     params?.sendChat ??
     vi.fn().mockImplementation(async (opts: { runId?: string }) => ({ runId: opts.runId ?? "r1" }));
+=======
+  const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const getGatewayStatus = params?.getGatewayStatus ?? vi.fn().mockResolvedValue({});
   const listSessions = params?.listSessions ?? vi.fn().mockResolvedValue({ sessions: [] });
   const listModels = params?.listModels ?? vi.fn().mockResolvedValue([]);
@@ -122,7 +126,10 @@ function createHarness(params?: {
   const applySessionMutationResult = params?.applySessionMutationResult ?? vi.fn();
   const setActivityStatus = params?.setActivityStatus ?? (vi.fn() as SetActivityStatusMock);
   const forgetLocalRunId = vi.fn();
+<<<<<<< HEAD
   const forgetLocalBtwRunId = vi.fn();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const openOverlay = vi.fn();
   const closeOverlay = vi.fn();
   const requestExit = vi.fn();
@@ -184,7 +191,11 @@ function createHarness(params?: {
     noteLocalRunId,
     noteLocalBtwRunId,
     forgetLocalRunId,
+<<<<<<< HEAD
     forgetLocalBtwRunId,
+=======
+    forgetLocalBtwRunId: vi.fn(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     consumeCompletedRunForPendingSend: params?.consumeCompletedRunForPendingSend,
     isRunObserved: params?.isRunObserved,
     flushPendingHistoryRefreshIfIdle: params?.flushPendingHistoryRefreshIfIdle,
@@ -223,7 +234,10 @@ function createHarness(params?: {
     noteLocalRunId,
     noteLocalBtwRunId,
     forgetLocalRunId,
+<<<<<<< HEAD
     forgetLocalBtwRunId,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     requestExit,
     abortActive,
     state,
@@ -648,6 +662,7 @@ describe("tui command handlers", () => {
     expect(noteLocalRunId).toHaveBeenCalledWith("run-accepted");
   });
 
+<<<<<<< HEAD
   it("clears optimistic state when chat send returns a terminal timeout ack", async () => {
     const sendChat = vi.fn().mockImplementation(async (opts: { runId: string }) => ({
       runId: opts.runId,
@@ -816,6 +831,8 @@ describe("tui command handlers", () => {
     expect(state.pendingOptimisticUserMessage).toBe(false);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not reintroduce a backend-accepted runId after an early terminal event", async () => {
     const sendChat = vi.fn().mockResolvedValue({ runId: "run-accepted" });
     const consumeCompletedRunForPendingSend = vi.fn((runId: string) => runId === "run-accepted");
@@ -1285,6 +1302,7 @@ describe("tui command handlers", () => {
     expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
   });
 
+<<<<<<< HEAD
   it("patches and reports auto fast mode", async () => {
     const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
     const applySessionInfoFromPatch = vi.fn();
@@ -1315,6 +1333,8 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("fast mode: auto");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses canonical model refs in the model selector", async () => {
     const listModels = vi.fn().mockResolvedValue([
       {
@@ -1442,6 +1462,7 @@ describe("tui command handlers", () => {
 
     expect(openOverlay).toHaveBeenCalledTimes(1);
   });
+<<<<<<< HEAD
 
   it("/usage reset clears the stale local responseUsage after the gateway patch", async () => {
     // Regression: after /usage reset sends responseUsage: null and the gateway deletes
@@ -1497,4 +1518,6 @@ describe("tui command handlers", () => {
     );
     expect(addSystem).toHaveBeenCalledWith("usage footer: full");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

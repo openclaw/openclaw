@@ -1,0 +1,73 @@
+{
+  "scenarios": [
+    {
+      "name": "Channel streaming message flow",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "streams a preview into one final reply",
+          "status": "pass",
+          "details": "sent -> edited: QA-CHANNEL-STREAMING-PREVIEW-FINAL-OK-1234567890"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 41952,
+    "gatewayProcessCpuMs": 2000,
+    "gatewayCpuCoreRatio": 0.048,
+    "gatewayProcessRssStartBytes": 882327552,
+    "gatewayProcessRssEndBytes": 1068765184,
+    "gatewayProcessRssDeltaBytes": 186437632,
+    "gatewayProcessRssPeakBytes": 1068765184,
+    "gatewayProcessRssPeakDeltaBytes": 186437632,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:14:27.001Z",
+        "gatewayProcessRssBytes": 882327552
+      },
+      {
+        "label": "scenario:channel-message-flows:start",
+        "at": "2026-07-03T13:14:27.056Z",
+        "gatewayProcessRssBytes": 885317632
+      },
+      {
+        "label": "scenario:channel-message-flows:finish",
+        "at": "2026-07-03T13:14:36.799Z",
+        "gatewayProcessRssBytes": 1068765184
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:14:36.874Z",
+        "gatewayProcessRssBytes": 1068765184
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:13:54.847Z",
+    "finishedAt": "2026-07-03T13:14:36.799Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "channel-message-flows"
+    ],
+    "runtimePair": null
+  }
+}

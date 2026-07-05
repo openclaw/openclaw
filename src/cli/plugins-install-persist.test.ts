@@ -1,10 +1,15 @@
 // Plugin install persist tests cover saving installed plugin records after install.
+<<<<<<< HEAD
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
+=======
+import { beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   applyExclusiveSlotSelection,
   buildPluginDiagnosticsReport,
@@ -295,6 +300,7 @@ describe("persistPluginInstall", () => {
     expect(applyPluginUninstallDirectoryRemoval).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("preserves replaced npm install directories across generation updates", async () => {
     const { persistPluginInstall } = await import("./plugins-install-persist.js");
     const baseConfig = {
@@ -397,6 +403,8 @@ describe("persistPluginInstall", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("warns when an installed npm plugin remains shadowed by a config-selected source", async () => {
     const { persistPluginInstall } = await import("./plugins-install-persist.js");
     const baseConfig = {

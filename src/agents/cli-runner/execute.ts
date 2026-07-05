@@ -677,7 +677,10 @@ export async function executePreparedCliRun(
           : buildCliMcpCaptureKey(context);
         const mcpCaptureAttempt = await prepareCliBundleMcpCaptureAttempt({
           mode: context.backendResolved.bundleMcpMode,
+<<<<<<< HEAD
           backend,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           env: context.preparedBackend.env,
           captureKey: initialGatewayCaptureKey,
         });

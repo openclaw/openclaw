@@ -3,14 +3,21 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+<<<<<<< HEAD
 import { describe, expect, it, vi } from "vitest";
+=======
+import { describe, expect, it } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   formatMatrixQaCliCommand,
   redactMatrixQaCliOutput,
   resolveMatrixQaOpenClawCliEntryPath,
   runMatrixQaOpenClawCli,
   startMatrixQaOpenClawCli,
+<<<<<<< HEAD
   testing,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./scenario-runtime-cli.js";
 
 function isProcessRunning(pid: number): boolean {
@@ -22,6 +29,7 @@ function isProcessRunning(pid: number): boolean {
   }
 }
 
+<<<<<<< HEAD
 async function waitForFile(pathToCheck: string, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -35,6 +43,8 @@ async function waitForFile(pathToCheck: string, timeoutMs: number): Promise<void
   throw new Error(`Timed out waiting for ${pathToCheck}`);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("Matrix QA CLI runtime", () => {
   it("redacts secret CLI arguments in diagnostic command text", () => {
     expect(
@@ -61,6 +71,7 @@ describe("Matrix QA CLI runtime", () => {
     ).toBe("GET /_matrix/client/v3/sync?access_token=abcdef…ghij");
   });
 
+<<<<<<< HEAD
   it("force-kills Windows CLI process trees when graceful taskkill fails", () => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
     const originalSystemRoot = process.env.SystemRoot;
@@ -108,6 +119,8 @@ describe("Matrix QA CLI runtime", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("prefers the ESM OpenClaw CLI entrypoint when present", async () => {
     const root = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "matrix-qa-cli-entry-"));
     try {
@@ -375,6 +388,7 @@ describe("Matrix QA CLI runtime", () => {
       await rm(root, { force: true, recursive: true });
     }
   });
+<<<<<<< HEAD
 
   it("kills ignored-stdio descendants after a timed-out CLI exits gracefully", async () => {
     if (process.platform === "win32") {
@@ -479,4 +493,6 @@ describe("Matrix QA CLI runtime", () => {
       await rm(root, { force: true, recursive: true });
     }
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

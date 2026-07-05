@@ -19,6 +19,10 @@ import { readSessionStoreSnapshot } from "./store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
+<<<<<<< HEAD
+=======
+export { parseSessionThreadInfo };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function hasRoutableDeliveryContext(context?: {
   channel?: string;

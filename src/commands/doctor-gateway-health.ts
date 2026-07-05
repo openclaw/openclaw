@@ -19,7 +19,11 @@ import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
   gatewayProbeResultSawGateway,
 } from "./gateway-health-auth-diagnostic.js";
+<<<<<<< HEAD
 import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
+=======
+import { formatHealthCheckFailure } from "./health-format.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { StatusSummary } from "./status.types.js";
 
 type GatewayMemoryProbe = {
@@ -129,12 +133,16 @@ export async function checkGatewayHealth(params: {
     const message = String(err);
     if (message.includes("gateway closed")) {
       const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
+<<<<<<< HEAD
       const closedDiagnostic = formatGatewayClosedDiagnostic(err);
       if (closedDiagnostic) {
         note(closedDiagnostic, "Gateway");
       } else {
         note("Gateway not running.", "Gateway");
       }
+=======
+      note("Gateway not running.", "Gateway");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       note(gatewayDetails.message, "Gateway connection");
     } else {
       params.runtime.error(formatHealthCheckFailure(err));

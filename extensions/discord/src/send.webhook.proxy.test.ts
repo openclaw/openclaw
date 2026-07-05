@@ -16,6 +16,7 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
   };
 });
 
+<<<<<<< HEAD
 function cancelTrackedResponse(
   text: string,
   init: ResponseInit,
@@ -38,6 +39,8 @@ function cancelTrackedResponse(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("sendWebhookMessageDiscord proxy support", () => {
   beforeEach(() => {
     makeProxyFetchMock.mockReset();
@@ -230,6 +233,7 @@ describe("sendWebhookMessageDiscord proxy support", () => {
     expect(error.rawBody).toEqual({ message: "upstream unavailable" });
     globalFetchMock.mockRestore();
   });
+<<<<<<< HEAD
 
   it("bounds webhook error bodies without using response.text()", async () => {
     const tracked = cancelTrackedResponse(`${"upstream unavailable ".repeat(1024)}tail`, {
@@ -265,4 +269,6 @@ describe("sendWebhookMessageDiscord proxy support", () => {
     expect(textSpy).not.toHaveBeenCalled();
     globalFetchMock.mockRestore();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

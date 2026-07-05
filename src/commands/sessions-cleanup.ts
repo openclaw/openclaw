@@ -59,9 +59,12 @@ function formatCleanupActionCell(
   if (action === "prune-missing") {
     return theme.error(label);
   }
+<<<<<<< HEAD
   if (action === "prune-model-run") {
     return theme.warn(label);
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (action === "prune-stale") {
     return theme.warn(label);
   }
@@ -77,7 +80,10 @@ function formatCleanupActionCell(
 function buildActionRows(params: {
   beforeStore: Parameters<typeof toSessionDisplayRows>[0];
   missingKeys: Set<string>;
+<<<<<<< HEAD
   modelRunPrunedKeys: Set<string>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   staleKeys: Set<string>;
   cappedKeys: Set<string>;
   budgetEvictedKeys: Set<string>;
@@ -91,7 +97,10 @@ function buildActionRows(params: {
       action: resolveSessionCleanupAction({
         key: row.key,
         missingKeys: params.missingKeys,
+<<<<<<< HEAD
         modelRunPrunedKeys: params.modelRunPrunedKeys,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         staleKeys: params.staleKeys,
         cappedKeys: params.cappedKeys,
         budgetEvictedKeys: params.budgetEvictedKeys,
@@ -159,7 +168,10 @@ function renderStoreDryRunPlan(params: {
   );
   params.runtime.log(`Would prune missing transcripts: ${params.summary.missing}`);
   params.runtime.log(`Would retire stale direct DM sessions: ${params.summary.dmScopeRetired}`);
+<<<<<<< HEAD
   params.runtime.log(`Would prune stale model-run probes: ${params.summary.modelRunPruned}`);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   params.runtime.log(`Would prune stale: ${params.summary.pruned}`);
   params.runtime.log(`Would cap overflow: ${params.summary.capped}`);
   if (params.summary.unreferencedArtifacts?.scannedFiles) {

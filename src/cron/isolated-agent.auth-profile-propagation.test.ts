@@ -2,10 +2,17 @@
 import { describe, expect, it } from "vitest";
 import type { AuthProfileFailurePolicy } from "../agents/embedded-agent-runner/run/auth-profile-failure-policy.types.js";
 import {
+<<<<<<< HEAD
   makeIsolatedAgentJobFixture,
   makeIsolatedAgentParamsFixture,
 } from "./isolated-agent/job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./isolated-agent/run.suite-helpers.js";
+=======
+  makeIsolatedAgentTurnJob,
+  makeIsolatedAgentTurnParams,
+  setupRunCronIsolatedAgentTurnSuite,
+} from "./isolated-agent/run.suite-helpers.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   loadRunCronIsolatedAgentTurn,
   mockRunCronFallbackPassthrough,
@@ -35,8 +42,13 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     mockRunCronFallbackPassthrough();
 
     await runCronIsolatedAgentTurn(
+<<<<<<< HEAD
       makeIsolatedAgentParamsFixture({
         job: makeIsolatedAgentJobFixture({
+=======
+      makeIsolatedAgentTurnParams({
+        job: makeIsolatedAgentTurnJob({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           delivery: { mode: "none" },
           payload: { kind: "agentTurn", message: "check status" },
         }),
@@ -61,7 +73,11 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     mockRunCronFallbackPassthrough();
 
     const result = await runCronIsolatedAgentTurn(
+<<<<<<< HEAD
       makeIsolatedAgentParamsFixture({
+=======
+      makeIsolatedAgentTurnParams({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg: {
           auth: {
             profiles: {
@@ -73,7 +89,11 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
             order: { openrouter: ["openrouter:default"] },
           },
         },
+<<<<<<< HEAD
         job: makeIsolatedAgentJobFixture({
+=======
+        job: makeIsolatedAgentTurnJob({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           delivery: { mode: "none" },
           payload: {
             kind: "agentTurn",

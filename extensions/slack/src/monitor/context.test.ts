@@ -5,6 +5,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it } from "vitest";
 import { createSlackMonitorContext } from "./context.js";
 
+<<<<<<< HEAD
 function createTestContext(params?: {
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
 }) {
@@ -12,6 +13,13 @@ function createTestContext(params?: {
     cfg: {
       channels: { slack: { enabled: true } },
       session: { dmScope: params?.dmScope ?? "main" },
+=======
+function createTestContext() {
+  return createSlackMonitorContext({
+    cfg: {
+      channels: { slack: { enabled: true } },
+      session: { dmScope: "main" },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } as OpenClawConfig,
     accountId: "default",
     botToken: "xoxb-test",
@@ -100,6 +108,7 @@ describe("createSlackMonitorContext resolveSlackSystemEventSessionKey", () => {
       }),
     ).toBe("agent:main:slack:channel:c_thread:thread:1712345678.123456");
   });
+<<<<<<< HEAD
 
   it("routes channel-less direct interactions to the sender session", () => {
     const ctx = createTestContext({ dmScope: "per-channel-peer" });
@@ -111,4 +120,6 @@ describe("createSlackMonitorContext resolveSlackSystemEventSessionKey", () => {
       }),
     ).toBe("agent:main:slack:direct:u_shortcut");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

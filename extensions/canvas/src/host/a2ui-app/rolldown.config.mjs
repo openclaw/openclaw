@@ -11,9 +11,13 @@ const repoRoot = path.resolve(here, "../../../../..");
 const require = createRequire(import.meta.url);
 const uiRoot = path.resolve(repoRoot, "ui");
 const fromHere = (p) => path.resolve(here, p);
+<<<<<<< HEAD
 const outputFile = process.env.OPENCLAW_A2UI_BUNDLE_OUT
   ? path.resolve(process.env.OPENCLAW_A2UI_BUNDLE_OUT)
   : path.resolve(here, "..", "a2ui", "a2ui.bundle.js");
+=======
+const outputFile = path.resolve(here, "..", "a2ui", "a2ui.bundle.js");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const a2uiLitIndex = require.resolve("@a2ui/lit");
 const a2uiLitUi = require.resolve("@a2ui/lit/ui");

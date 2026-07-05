@@ -1,20 +1,27 @@
 // Status scan shared tests cover gateway probe snapshots, Tailscale URLs, and shared scan helpers.
+<<<<<<< HEAD
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+=======
+import { beforeEach, describe, expect, it, vi } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   buildTailscaleHttpsUrl,
   resolveGatewayProbeSnapshot,
   resolveSharedMemoryStatusSnapshot,
 } from "./status.scan.shared.js";
 
+<<<<<<< HEAD
 const tempDirs: string[] = [];
 
 afterEach(() => {
   cleanupTempDirs(tempDirs);
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const mocks = vi.hoisted(() => ({
   buildGatewayConnectionDetailsWithResolvers: vi.fn(),
   resolveGatewayProbeTarget: vi.fn(),
@@ -477,9 +484,13 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     };
     const resolveMemoryConfig = vi.fn(() => null);
     const getMemorySearchManager = vi.fn(async () => ({ manager }));
+<<<<<<< HEAD
     const requireDefaultDatabasePath = vi.fn(
       () => `/tmp/openclaw-missing-memory-${process.pid}.sqlite`,
     );
+=======
+    const requireDefaultStore = vi.fn(() => `/tmp/openclaw-missing-memory-${process.pid}.sqlite`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const result = await resolveSharedMemoryStatusSnapshot({
       cfg: {
@@ -496,11 +507,19 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       memoryPlugin: { enabled: true, slot: "memory-lancedb-pro" },
       resolveMemoryConfig,
       getMemorySearchManager,
+<<<<<<< HEAD
       requireDefaultDatabasePath,
     });
 
     expect(resolveMemoryConfig).not.toHaveBeenCalled();
     expect(requireDefaultDatabasePath).not.toHaveBeenCalled();
+=======
+      requireDefaultStore,
+    });
+
+    expect(resolveMemoryConfig).not.toHaveBeenCalled();
+    expect(requireDefaultStore).not.toHaveBeenCalled();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(getMemorySearchManager).toHaveBeenCalledOnce();
     const managerCalls = getMemorySearchManager.mock.calls as unknown as Array<
       [MemorySearchManagerCall]
@@ -545,7 +564,11 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       memoryPlugin: { enabled: true, slot: "qmd" },
       resolveMemoryConfig: vi.fn(() => null),
       getMemorySearchManager,
+<<<<<<< HEAD
       requireDefaultDatabasePath: vi.fn(),
+=======
+      requireDefaultStore: vi.fn(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     expect(manager.probeVectorStoreAvailability).not.toHaveBeenCalled();
@@ -570,13 +593,18 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       memoryPlugin: { enabled: true, slot: "memory-core" },
       resolveMemoryConfig,
       getMemorySearchManager,
+<<<<<<< HEAD
       requireDefaultDatabasePath: () => `/tmp/openclaw-missing-memory-${process.pid}.sqlite`,
+=======
+      requireDefaultStore: () => `/tmp/openclaw-missing-memory-${process.pid}.sqlite`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     expect(result).toBeNull();
     expect(resolveMemoryConfig).not.toHaveBeenCalled();
     expect(getMemorySearchManager).not.toHaveBeenCalled();
   });
+<<<<<<< HEAD
 
   it("recognizes shipped memory tables before the manager migrates them", async () => {
     const tempDir = makeTempDir(tempDirs, "openclaw-status-memory-");
@@ -662,4 +690,6 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     expect(result).toBeNull();
     expect(getMemorySearchManager).not.toHaveBeenCalled();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

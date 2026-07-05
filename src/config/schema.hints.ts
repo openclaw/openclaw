@@ -261,21 +261,29 @@ function isUnwrappable(object: unknown): object is ZodDummy {
   );
 }
 
+<<<<<<< HEAD
 /**
  * Traverses the Zod schema tree and returns a copy of `hints` with every
  * sensitive path marked.
  */
+=======
+/** Walk a Zod schema and mark hints for fields registered with the sensitive schema marker. */
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function mapSensitivePaths(
   schema: z.ZodType,
   path: string,
   hints: ConfigUiHints,
 ): ConfigUiHints {
+<<<<<<< HEAD
   const next = { ...hints };
   mapSensitivePathsMut(schema, path, next);
   return next;
 }
 
 function mapSensitivePathsMut(schema: z.ZodType, path: string, hints: ConfigUiHints): void {
+=======
+  let next = { ...hints };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let currentSchema = schema;
   let isSensitive = sensitive.has(currentSchema);
 
@@ -285,8 +293,13 @@ function mapSensitivePathsMut(schema: z.ZodType, path: string, hints: ConfigUiHi
   }
 
   if (isSensitive) {
+<<<<<<< HEAD
     hints[path] = { ...hints[path], sensitive: true };
   } else if (isSensitiveConfigPath(path) && !hints[path]?.sensitive) {
+=======
+    next[path] = { ...next[path], sensitive: true };
+  } else if (isSensitiveConfigPath(path) && !next[path]?.sensitive) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     getLog().debug(`possibly sensitive key found: (${path})`);
   }
 
@@ -294,11 +307,16 @@ function mapSensitivePathsMut(schema: z.ZodType, path: string, hints: ConfigUiHi
     const shape = currentSchema.shape;
     for (const key in shape) {
       const nextPath = path ? `${path}.${key}` : key;
+<<<<<<< HEAD
       mapSensitivePathsMut(shape[key], nextPath, hints);
+=======
+      next = mapSensitivePaths(shape[key], nextPath, next);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     const catchallSchema = currentSchema["_def"].catchall as z.ZodType | undefined;
     if (catchallSchema && !(catchallSchema instanceof z.ZodNever)) {
       const nextPath = path ? `${path}.*` : "*";
+<<<<<<< HEAD
       mapSensitivePathsMut(catchallSchema, nextPath, hints);
     }
   } else if (currentSchema instanceof z.ZodArray) {
@@ -307,17 +325,38 @@ function mapSensitivePathsMut(schema: z.ZodType, path: string, hints: ConfigUiHi
   } else if (currentSchema instanceof z.ZodRecord) {
     const nextPath = path ? `${path}.*` : "*";
     mapSensitivePathsMut(currentSchema["_def"].valueType as z.ZodType, nextPath, hints);
+=======
+      next = mapSensitivePaths(catchallSchema, nextPath, next);
+    }
+  } else if (currentSchema instanceof z.ZodArray) {
+    const nextPath = path ? `${path}[]` : "[]";
+    next = mapSensitivePaths(currentSchema.element as z.ZodType, nextPath, next);
+  } else if (currentSchema instanceof z.ZodRecord) {
+    const nextPath = path ? `${path}.*` : "*";
+    next = mapSensitivePaths(currentSchema["_def"].valueType as z.ZodType, nextPath, next);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } else if (
     currentSchema instanceof z.ZodUnion ||
     currentSchema instanceof z.ZodDiscriminatedUnion
   ) {
     for (const option of currentSchema.options) {
+<<<<<<< HEAD
       mapSensitivePathsMut(option as z.ZodType, path, hints);
     }
   } else if (currentSchema instanceof z.ZodIntersection) {
     mapSensitivePathsMut(currentSchema["_def"].left as z.ZodType, path, hints);
     mapSensitivePathsMut(currentSchema["_def"].right as z.ZodType, path, hints);
   }
+=======
+      next = mapSensitivePaths(option as z.ZodType, path, next);
+    }
+  } else if (currentSchema instanceof z.ZodIntersection) {
+    next = mapSensitivePaths(currentSchema["_def"].left as z.ZodType, path, next);
+    next = mapSensitivePaths(currentSchema["_def"].right as z.ZodType, path, next);
+  }
+
+  return next;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /** @internal */

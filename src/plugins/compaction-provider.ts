@@ -101,6 +101,14 @@ export function getRegisteredCompactionProvider(
   return getCompactionProviderRegistryState().providers.get(id);
 }
 
+<<<<<<< HEAD
+=======
+/** List all registered compaction provider ids. */
+export function listCompactionProviderIds(): string[] {
+  return [...getCompactionProviderRegistryState().providers.keys()];
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** List all registered entries with owner metadata (for snapshot/restore). */
 export function listRegisteredCompactionProviders(): RegisteredCompactionProvider[] {
   return Array.from(getCompactionProviderRegistryState().providers.values());

@@ -69,7 +69,10 @@ export const resolveCronPayloadOutcomeMock = createMock();
 export const resolveCronDeliveryPlanMock = createMock();
 export const resolveDeliveryTargetMock = createMock();
 export const dispatchCronDeliveryMock = createMock();
+<<<<<<< HEAD
 export const queueCronMessageToolDeliveryAwarenessMock = createMock();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export const cleanupDirectCronSessionMock = createMock();
 export const preflightCronModelProviderMock = createMock();
 export const isHeartbeatOnlyResponseMock = createMock();
@@ -78,7 +81,10 @@ export const resolveSessionAuthProfileOverrideMock = createMock();
 export const resolveFastModeStateMock = createMock();
 export const getChannelPluginMock = createMock();
 export const retireSessionMcpRuntimeMock = createMock();
+<<<<<<< HEAD
 export const callGatewayMock = createMock();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export const ensureRuntimePluginsLoadedMock = createMock();
 
 const resolveBootstrapWarningSignaturesSeenMock = createMock();
@@ -296,10 +302,13 @@ vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntime: retireSessionMcpRuntimeMock,
 }));
 
+<<<<<<< HEAD
 vi.mock("../../gateway/call.runtime.js", () => ({
   callGateway: callGatewayMock,
 }));
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.mock("../../config/sessions/store.runtime.js", () => ({
   updateSessionStore: updateSessionStoreMock,
 }));
@@ -318,7 +327,10 @@ vi.mock("./run-delivery.runtime.js", async () => {
     cleanupDirectCronSession: cleanupDirectCronSessionMock,
     resolveDeliveryTarget: resolveDeliveryTargetMock,
     dispatchCronDelivery: dispatchCronDeliveryMock,
+<<<<<<< HEAD
     queueCronMessageToolDeliveryAwareness: queueCronMessageToolDeliveryAwarenessMock,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 });
 
@@ -632,15 +644,21 @@ function resetRunOutcomeMocks(): void {
           !sourceDeliveryOutcome?.satisfiesSourceDelivery &&
           resolvedDelivery.ok),
       ),
+<<<<<<< HEAD
       cronRunSessionCleanupAttempted: false,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       summary,
       outputText,
       synthesizedText,
       deliveryPayloads,
     }),
   );
+<<<<<<< HEAD
   queueCronMessageToolDeliveryAwarenessMock.mockReset();
   queueCronMessageToolDeliveryAwarenessMock.mockResolvedValue(undefined);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   cleanupDirectCronSessionMock.mockReset();
   cleanupDirectCronSessionMock.mockResolvedValue(undefined);
   preflightCronModelProviderMock.mockReset();
@@ -658,8 +676,11 @@ function resetRunSessionMocks(): void {
   updateSessionStoreMock.mockResolvedValue(undefined);
   resolveCronSessionMock.mockReset();
   resolveCronSessionMock.mockReturnValue(makeCronSession());
+<<<<<<< HEAD
   callGatewayMock.mockReset();
   callGatewayMock.mockResolvedValue({ ok: true, deleted: true });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   retireSessionMcpRuntimeMock.mockReset();
   retireSessionMcpRuntimeMock.mockResolvedValue(true);
 }

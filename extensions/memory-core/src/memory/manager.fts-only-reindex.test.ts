@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+<<<<<<< HEAD
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
@@ -18,6 +21,7 @@ const createEmbeddingProviderMock = vi.hoisted(() =>
     providerUnavailableReason: "No embeddings provider available.",
   })),
 );
+<<<<<<< HEAD
 const originalFtsOnlyStateDir = process.env.OPENCLAW_STATE_DIR;
 
 function setFtsOnlyStateDir(stateDir: string): void {
@@ -31,6 +35,8 @@ function restoreFtsOnlyStateDir(): void {
     Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalFtsOnlyStateDir);
   }
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: createEmbeddingProviderMock,
@@ -57,8 +63,12 @@ describe("memory manager FTS-only reindex", () => {
     workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Alpha topic\n\nKeep this note.");
+<<<<<<< HEAD
     setFtsOnlyStateDir(path.join(workspaceDir, "state"));
     indexPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+=======
+    indexPath = path.join(workspaceDir, "index.sqlite");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   afterEach(async () => {
@@ -67,7 +77,10 @@ describe("memory manager FTS-only reindex", () => {
       manager = null;
     }
     await closeAllMemorySearchManagers();
+<<<<<<< HEAD
     restoreFtsOnlyStateDir();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   afterAll(async () => {
@@ -82,8 +95,13 @@ describe("memory manager FTS-only reindex", () => {
   ): Promise<MemoryIndexManager> {
     const store =
       params.vectorEnabled === undefined
+<<<<<<< HEAD
         ? undefined
         : { vector: { enabled: params.vectorEnabled } };
+=======
+        ? { path: indexPath }
+        : { path: indexPath, vector: { enabled: params.vectorEnabled } };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const cfg = {
       memory: {
         backend: "builtin",
@@ -114,7 +132,11 @@ describe("memory manager FTS-only reindex", () => {
     const db = new DatabaseSync(indexPath);
     try {
       const row = db
+<<<<<<< HEAD
         .prepare(`SELECT COUNT(*) as c FROM memory_index_chunks WHERE text LIKE ?`)
+=======
+        .prepare(`SELECT COUNT(*) as c FROM chunks WHERE text LIKE ?`)
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         .get(`%${term}%`) as { c: number } | undefined;
       return row?.c ?? 0;
     } finally {

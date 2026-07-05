@@ -1,6 +1,10 @@
 // Extracts web content public artifacts from plugin manifests.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+<<<<<<< HEAD
 import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
+=======
+import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type {
   PluginWebContentExtractorEntry,
   WebContentExtractorPlugin,
@@ -22,6 +26,31 @@ function isWebContentExtractorPlugin(value: unknown): value is WebContentExtract
   );
 }
 
+<<<<<<< HEAD
+=======
+function tryLoadBundledPublicArtifactModule(params: {
+  dirName: string;
+}): Record<string, unknown> | null {
+  for (const artifactBasename of WEB_CONTENT_EXTRACTOR_ARTIFACT_CANDIDATES) {
+    try {
+      return loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
+        dirName: params.dirName,
+        artifactBasename,
+      });
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.startsWith("Unable to resolve bundled plugin public surface ")
+      ) {
+        continue;
+      }
+      throw error;
+    }
+  }
+  return null;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Collects zero-arg factory exports in deterministic order for prompt-cache stability. */
 function collectExtractorFactories(mod: Record<string, unknown>): WebContentExtractorPlugin[] {
   const extractors: WebContentExtractorPlugin[] = [];
@@ -49,10 +78,14 @@ export function loadBundledWebContentExtractorEntriesFromDir(params: {
   dirName: string;
   pluginId: string;
 }): PluginWebContentExtractorEntry[] | null {
+<<<<<<< HEAD
   const mod = loadBundledPluginPublicArtifactModuleFromCandidatesSync<Record<string, unknown>>({
     dirName: params.dirName,
     artifactCandidates: WEB_CONTENT_EXTRACTOR_ARTIFACT_CANDIDATES,
   });
+=======
+  const mod = tryLoadBundledPublicArtifactModule({ dirName: params.dirName });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!mod) {
     return null;
   }

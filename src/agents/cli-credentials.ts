@@ -2,7 +2,11 @@
  * Reads and refreshes credentials stored by external CLI runtimes such as
  * Claude Code, Codex, Gemini, and MiniMax.
  */
+<<<<<<< HEAD
 import { execSync } from "node:child_process";
+=======
+import { execFileSync, execSync } from "node:child_process";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -11,10 +15,18 @@ import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
+<<<<<<< HEAD
 import { loadJsonFile } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import type { OAuthProvider } from "./auth-profiles/types.js";
+=======
+import { formatErrorMessage } from "../infra/errors.js";
+import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveUserPath } from "../utils.js";
+import type { OAuthCredentials, OAuthProvider } from "./auth-profiles/types.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const log = createSubsystemLogger("agents/auth-profiles");
 
@@ -25,6 +37,11 @@ const GEMINI_CLI_CREDENTIALS_RELATIVE_PATH = ".gemini/oauth_creds.json";
 const CODEX_CLI_FALLBACK_EXPIRY_MS = 60 * 60 * 1000;
 
 const CLAUDE_CLI_KEYCHAIN_SERVICE = "Claude Code-credentials";
+<<<<<<< HEAD
+=======
+const CLAUDE_CLI_KEYCHAIN_ACCOUNT = "Claude Code";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type CachedValue<T> = {
   value: T | null;
   readAt: number;
@@ -92,7 +109,22 @@ export type GeminiCliCredential = {
   email?: string;
 };
 
+<<<<<<< HEAD
 type ExecSyncFn = typeof execSync;
+=======
+type ClaudeCliFileOptions = {
+  homeDir?: string;
+};
+
+type ClaudeCliWriteOptions = ClaudeCliFileOptions & {
+  platform?: NodeJS.Platform;
+  writeKeychain?: (credentials: OAuthCredentials) => boolean;
+  writeFile?: (credentials: OAuthCredentials, options?: ClaudeCliFileOptions) => boolean;
+};
+
+type ExecSyncFn = typeof execSync;
+type ExecFileSyncFn = typeof execFileSync;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function resolveClaudeCliCredentialsPath(homeDir?: string) {
   const baseDir = homeDir ?? resolveUserPath("~");
@@ -490,6 +522,130 @@ export function readClaudeCliCredentialsCached(options?: {
   });
 }
 
+<<<<<<< HEAD
+=======
+/** Writes refreshed Claude OAuth tokens back to the Claude CLI macOS Keychain item. */
+export function writeClaudeCliKeychainCredentials(
+  newCredentials: OAuthCredentials,
+  options?: { execFileSync?: ExecFileSyncFn },
+): boolean {
+  const execFileSyncImpl = options?.execFileSync ?? execFileSync;
+  try {
+    const existingResult = execFileSyncImpl(
+      "security",
+      ["find-generic-password", "-s", CLAUDE_CLI_KEYCHAIN_SERVICE, "-w"],
+      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
+    );
+
+    const existingData = JSON.parse(existingResult.trim());
+    const existingOauth = existingData?.claudeAiOauth;
+    if (!existingOauth || typeof existingOauth !== "object") {
+      return false;
+    }
+
+    existingData.claudeAiOauth = {
+      ...existingOauth,
+      accessToken: newCredentials.access,
+      refreshToken: newCredentials.refresh,
+      expiresAt: newCredentials.expires,
+    };
+
+    const newValue = JSON.stringify(existingData);
+
+    // Use execFileSync to avoid shell interpretation of user-controlled token values.
+    // This prevents command injection via $() or backtick expansion in OAuth tokens.
+    execFileSyncImpl(
+      "security",
+      [
+        "add-generic-password",
+        "-U",
+        "-s",
+        CLAUDE_CLI_KEYCHAIN_SERVICE,
+        "-a",
+        CLAUDE_CLI_KEYCHAIN_ACCOUNT,
+        "-w",
+        newValue,
+      ],
+      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
+    );
+
+    log.info("wrote refreshed credentials to claude cli keychain", {
+      expires: timestampMsToIsoString(newCredentials.expires),
+    });
+    return true;
+  } catch (error) {
+    log.warn("failed to write credentials to claude cli keychain", {
+      error: formatErrorMessage(error),
+    });
+    return false;
+  }
+}
+
+/** Writes refreshed Claude OAuth tokens back to the Claude CLI credential file. */
+export function writeClaudeCliFileCredentials(
+  newCredentials: OAuthCredentials,
+  options?: ClaudeCliFileOptions,
+): boolean {
+  const credPath = resolveClaudeCliCredentialsPath(options?.homeDir);
+
+  if (!fs.existsSync(credPath)) {
+    return false;
+  }
+
+  try {
+    const raw = loadJsonFile(credPath);
+    if (!raw || typeof raw !== "object") {
+      return false;
+    }
+
+    const data = raw as Record<string, unknown>;
+    const existingOauth = data.claudeAiOauth as Record<string, unknown> | undefined;
+    if (!existingOauth || typeof existingOauth !== "object") {
+      return false;
+    }
+
+    data.claudeAiOauth = {
+      ...existingOauth,
+      accessToken: newCredentials.access,
+      refreshToken: newCredentials.refresh,
+      expiresAt: newCredentials.expires,
+    };
+
+    saveJsonFile(credPath, data);
+    log.info("wrote refreshed credentials to claude cli file", {
+      expires: timestampMsToIsoString(newCredentials.expires),
+    });
+    return true;
+  } catch (error) {
+    log.warn("failed to write credentials to claude cli file", {
+      error: formatErrorMessage(error),
+    });
+    return false;
+  }
+}
+
+/** Writes refreshed Claude OAuth tokens to the preferred Claude CLI credential store. */
+export function writeClaudeCliCredentials(
+  newCredentials: OAuthCredentials,
+  options?: ClaudeCliWriteOptions,
+): boolean {
+  const platform = options?.platform ?? process.platform;
+  const writeKeychain = options?.writeKeychain ?? writeClaudeCliKeychainCredentials;
+  const writeFile =
+    options?.writeFile ??
+    ((credentials, fileOptions) => writeClaudeCliFileCredentials(credentials, fileOptions));
+
+  if (platform === "darwin") {
+    const didWriteKeychain = writeKeychain(newCredentials);
+    if (didWriteKeychain) {
+      return true;
+    }
+  }
+
+  return writeFile(newCredentials, { homeDir: options?.homeDir });
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Reads Codex CLI OAuth credentials from Keychain or CODEX_HOME auth.json. */
 export function readCodexCliCredentials(options?: {
   codexHome?: string;

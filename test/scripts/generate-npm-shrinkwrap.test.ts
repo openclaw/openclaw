@@ -16,7 +16,10 @@ import {
   pnpmLockOverrideVersionForVersions,
   parsePnpmPackageKey,
   parseLockPackagePath,
+<<<<<<< HEAD
   resolvePackageDirs,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   restoreCurrentPnpmLockedPackages,
   shouldUseLegacyPeerDepsForShrinkwrap,
   shrinkwrapPackageDirsForChangedPaths,
@@ -58,6 +61,7 @@ describe("generate-npm-shrinkwrap", () => {
     });
   });
 
+<<<<<<< HEAD
   it("rejects short flag package selectors before resolving shrinkwrap targets", () => {
     expect(() => resolvePackageDirs(["--package-dir", "-h"])).toThrow(
       "--package-dir requires a package directory.",
@@ -70,6 +74,8 @@ describe("generate-npm-shrinkwrap", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("accepts strict npm shrinkwrap command timeout and buffer overrides", () => {
     expect(
       createNpmShrinkwrapExecOptions({ command: "npm", args: ["install"] }, "/tmp/package", {

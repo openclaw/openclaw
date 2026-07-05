@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "source": "openclaw/crabline",
+  "channelDriver": "crabline",
+  "selectedChannel": "telegram",
+  "manifestPath": "crabline-fake-provider-server.json",
+  "smoke": {
+    "manifestPath": "crabline-fake-provider-server.json",
+    "result": {
+      "ok": true,
+      "probe": {
+        "ok": true,
+        "result": {
+          "can_join_groups": true,
+          "can_read_all_group_messages": true,
+          "first_name": "Crabline",
+          "has_topics_enabled": true,
+          "id": 424242,
+          "is_bot": true,
+          "supports_inline_queries": false,
+          "username": "crabline_bot"
+        }
+      },
+      "provider": "telegram",
+      "endpoints": {
+        "adminInboundUrl": "http://127.0.0.1:35435/crabline/telegram/inbound",
+        "apiRoot": "http://127.0.0.1:35435"
+      },
+      "recorderPath": "artifacts/crabline/telegram-fake-provider.jsonl"
+    }
+  }
+}

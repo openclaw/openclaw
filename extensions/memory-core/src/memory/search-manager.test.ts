@@ -326,6 +326,7 @@ describe("getMemorySearchManager caching", () => {
 
     expect(first.manager).toBe(second.manager);
     expect(createQmdManagerMock.mock.calls).toHaveLength(1);
+<<<<<<< HEAD
     expect(first.debug?.managerCacheState).toBe("cached-full-miss");
     expect(second.debug?.managerCacheState).toBe("cached-full-hit");
     expect(first.debug?.qmdIdentityHash).toMatch(/^[0-9a-f]{64}$/);
@@ -353,6 +354,8 @@ describe("getMemorySearchManager caching", () => {
     const second = await getMemorySearchManager({ cfg, agentId });
     expect(second.manager).toBe(first.manager);
     expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("evicts failed qmd wrapper so next call retries qmd", async () => {
@@ -810,10 +813,13 @@ describe("getMemorySearchManager caching", () => {
     const fullManager = requireManager(full);
     const cliManager = requireManager(cli);
 
+<<<<<<< HEAD
     expect(cli.debug?.managerCacheState).toBe("transient-cli");
     expect(full.debug?.managerCacheState).toBe("cached-full-miss");
     expect(full.debug?.qmdIdentityHash).toMatch(/^[0-9a-f]{64}$/);
     expect(cli.debug?.qmdIdentityHash).toBe(full.debug?.qmdIdentityHash);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(cliManager).toBe(cliPrimary);
     expect(cliManager).not.toBe(fullManager);
     const fullCreateParams = qmdCreateParams();

@@ -2,11 +2,15 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+<<<<<<< HEAD
 import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+=======
+import { afterEach, describe, expect, it, vi } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveMatrixAccountStorageRoot } from "../../storage-paths.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
 import { readMatrixIdbSnapshotJson, writeMatrixIdbSnapshotJson } from "../crypto-state-store.js";
@@ -14,7 +18,10 @@ import { SqliteBackedMatrixSyncStore } from "./file-sync-store.js";
 import {
   claimCurrentTokenStorageState,
   maybeMigrateLegacyStorage,
+<<<<<<< HEAD
   openMatrixStorageMetaStoreOptions,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   recordCurrentStorageMetaDeviceId,
   repairCurrentTokenStorageMetaDeviceId,
   resolveMatrixStateFilePath,
@@ -56,10 +63,13 @@ describe("matrix client storage paths", () => {
     accessToken: "secret-token",
   };
 
+<<<<<<< HEAD
   beforeEach(() => {
     resetPluginStateStoreForTests();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   afterEach(() => {
     createBackupArchiveMock.mockReset();
     createBackupArchiveMock.mockImplementation(async (_params: unknown) => ({
@@ -79,7 +89,10 @@ describe("matrix client storage paths", () => {
       markerPath: "/tmp/matrix-migration-snapshot.json",
     });
     vi.restoreAllMocks();
+<<<<<<< HEAD
     resetPluginStateStoreForTests();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -165,7 +178,11 @@ describe("matrix client storage paths", () => {
       accessToken: "secret-token-new",
     });
     fs.mkdirSync(canonicalPaths.rootDir, { recursive: true });
+<<<<<<< HEAD
     seedStorageMeta(canonicalPaths.rootDir, {
+=======
+    writeJson(canonicalPaths.rootDir, "storage-meta.json", {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       homeserver: defaultStorageAuth.homeserver,
       userId: defaultStorageAuth.userId,
       accountId: "default",
@@ -290,6 +307,7 @@ describe("matrix client storage paths", () => {
     fs.writeFileSync(path.join(rootDir, filename), JSON.stringify(value, null, 2));
   }
 
+<<<<<<< HEAD
   function readStorageMeta(rootDir: string): Record<string, unknown> | undefined {
     return createPluginStateSyncKeyedStoreForTests<Record<string, unknown>>(
       "matrix",
@@ -310,6 +328,9 @@ describe("matrix client storage paths", () => {
   }
 
   it("records a learned deviceId in SQLite storage metadata", () => {
+=======
+  it("records a learned deviceId in storage metadata without startup JSON", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const stateDir = setupStateDir();
     const storagePaths = resolveMatrixStoragePaths({
       ...defaultStorageAuth,
@@ -331,7 +352,14 @@ describe("matrix client storage paths", () => {
       }),
     ).toBe(true);
 
+<<<<<<< HEAD
     expect(readStorageMeta(storagePaths.rootDir)).toMatchObject({ deviceId: "DEVICE123" });
+=======
+    const meta = JSON.parse(fs.readFileSync(storagePaths.metaPath, "utf8")) as {
+      deviceId?: string | null;
+    };
+    expect(meta.deviceId).toBe("DEVICE123");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(fs.existsSync(path.join(storagePaths.rootDir, "startup-verification.json"))).toBe(false);
   });
 
@@ -349,7 +377,11 @@ describe("matrix client storage paths", () => {
     fs.mkdirSync(storagePaths.rootDir, { recursive: true });
     fs.writeFileSync(storagePaths.storagePath, params.storageBody ?? '{"legacy":true}');
     if (params.storageMeta) {
+<<<<<<< HEAD
       seedStorageMeta(storagePaths.rootDir, params.storageMeta);
+=======
+      writeJson(storagePaths.rootDir, "storage-meta.json", params.storageMeta);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     if (params.startupVerificationDeviceId) {
       writeJson(storagePaths.rootDir, "startup-verification.json", {
@@ -371,7 +403,11 @@ describe("matrix client storage paths", () => {
       accessToken: params.accessToken,
     });
     fs.mkdirSync(canonicalPaths.rootDir, { recursive: true });
+<<<<<<< HEAD
     seedStorageMeta(canonicalPaths.rootDir, params.storageMeta);
+=======
+    writeJson(canonicalPaths.rootDir, "storage-meta.json", params.storageMeta);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return canonicalPaths;
   }
 
@@ -420,6 +456,10 @@ describe("matrix client storage paths", () => {
     );
     expect(storagePaths.storagePath).toBe(path.join(storagePaths.rootDir, "bot-storage.json"));
     expect(storagePaths.cryptoPath).toBe(path.join(storagePaths.rootDir, "crypto"));
+<<<<<<< HEAD
+=======
+    expect(storagePaths.metaPath).toBe(path.join(storagePaths.rootDir, "storage-meta.json"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(storagePaths.recoveryKeyPath).toBe(path.join(storagePaths.rootDir, "recovery-key.json"));
     expect(storagePaths.idbSnapshotPath).toBe(
       path.join(storagePaths.rootDir, "crypto-idb-snapshot.json"),
@@ -685,6 +725,7 @@ describe("matrix client storage paths", () => {
     expect(rotatedStoragePaths.storagePath).toBe(oldStoragePaths.storagePath);
   });
 
+<<<<<<< HEAD
   it("reads legacy storage metadata until doctor migrates it to SQLite", () => {
     setupStateDir();
     const oldStoragePaths = resolveDefaultStoragePaths({
@@ -750,6 +791,8 @@ describe("matrix client storage paths", () => {
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("prefers claimed current-token state over an empty new-token metadata root", () => {
     const stateDir = setupStateDir();
     const oldStoragePaths = seedCanonicalStorageRoot({
@@ -841,7 +884,15 @@ describe("matrix client storage paths", () => {
       env: createMigrationEnv(stateDir),
     });
 
+<<<<<<< HEAD
     expect(readStorageMeta(canonicalPaths.rootDir)).toMatchObject({ deviceId: "DEVICE123" });
+=======
+    const repairedMeta = JSON.parse(
+      fs.readFileSync(path.join(canonicalPaths.rootDir, "storage-meta.json"), "utf8"),
+    ) as { deviceId?: string | null };
+
+    expect(repairedMeta.deviceId).toBe("DEVICE123");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const startupPaths = resolveDefaultStoragePaths({
       accessToken: "secret-token-new",
     });

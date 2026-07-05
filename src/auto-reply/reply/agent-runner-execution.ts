@@ -42,10 +42,15 @@ import {
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
 import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
+<<<<<<< HEAD
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { isFailoverError } from "../../agents/failover-error.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
+=======
+import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
+import { isFailoverError } from "../../agents/failover-error.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
@@ -125,7 +130,10 @@ import {
   buildEmbeddedRunExecutionParams,
   resolveQueuedReplyRuntimeConfig,
   resolveModelFallbackOptions,
+<<<<<<< HEAD
   resolveRunFastModeForFallbackCandidate,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./agent-runner-utils.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import {
@@ -1595,7 +1603,10 @@ export async function runAgentTurnWithFallback(params: {
   toolProgressDetail?: "explain" | "raw";
   replyMediaContext?: ReplyMediaContext;
   onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
+<<<<<<< HEAD
   isRestartRecoveryArmed?: () => boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
@@ -1732,6 +1743,7 @@ export async function runAgentTurnWithFallback(params: {
     didNotifyAgentRunStart = true;
     params.opts?.onAgentRunStart?.(runId);
   };
+<<<<<<< HEAD
   const signalExecutionPhaseForTyping = (
     info: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],
   ) => {
@@ -1751,6 +1763,8 @@ export async function runAgentTurnWithFallback(params: {
       logVerbose(`execution phase typing signal failed: ${String(err)}`);
     });
   };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const currentMessageId = params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
   const notifyUserAboutCompaction = shouldNotifyUserAboutCompaction(runtimeConfig);
   const deliverCompactionNoticePayload = async (noticePayload: ReplyPayload, label: string) => {
@@ -2100,9 +2114,13 @@ export async function runAgentTurnWithFallback(params: {
       const sourceRepliesAreToolOnly =
         params.followupRun.run.sourceReplyDeliveryMode === "message_tool_only";
       const shouldSuppressProgressAfterMessageToolDelivery = () =>
+<<<<<<< HEAD
         sourceRepliesAreToolOnly &&
         messageToolOnlyDeliveryCompleted &&
         params.opts?.allowProgressCallbacksWhenSourceDeliverySuppressed !== true;
+=======
+        sourceRepliesAreToolOnly && messageToolOnlyDeliveryCompleted;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const onToolResult = params.opts?.onToolResult;
       const outcomePlan = buildAgentRuntimeOutcomePlan();
       const runLane = CommandLane.Main;
@@ -2114,11 +2132,14 @@ export async function runAgentTurnWithFallback(params: {
       const notifyUserMessagePersisted = () => {
         queuedUserMessagePersistedAcrossFallback = true;
       };
+<<<<<<< HEAD
       const fastModeStartedAtMs = Date.now();
       const fastModeAutoProgressState: FastModeAutoProgressState = {
         offAnnounced: false,
         resetAnnounced: false,
       };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       // Profiler-only milestone: it separates fallback setup from the actual
       // model run without adding extra live logs/snapshots to normal turns.
       agentTurnTiming.logMilestoneIfSlow({
@@ -2185,6 +2206,7 @@ export async function runAgentTurnWithFallback(params: {
             const suppressAssistantErrorPersistenceForCandidate =
               assistantErrorPersistedAcrossFallback;
             const candidateRun = resolveRunForFallbackCandidate(provider, model);
+<<<<<<< HEAD
             const candidateFastMode = resolveRunFastModeForFallbackCandidate({
               run: candidateRun,
               config: runtimeConfig,
@@ -2192,6 +2214,8 @@ export async function runAgentTurnWithFallback(params: {
               model,
               sessionEntry: params.getActiveSessionEntry(),
             });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             const activeProbe = effectiveRun.autoFallbackPrimaryProbe;
             if (activeProbe && provider === activeProbe.provider && model === activeProbe.model) {
               markAutoFallbackPrimaryProbe({
@@ -2339,6 +2363,7 @@ export async function runAgentTurnWithFallback(params: {
                   },
                   onCommentaryText:
                     params.opts?.commentaryProgressEnabled === true && params.opts.onItemEvent
+<<<<<<< HEAD
                       ? async (payload) => {
                           await params.opts?.onItemEvent?.({
                             itemId: payload.itemId,
@@ -2350,6 +2375,16 @@ export async function runAgentTurnWithFallback(params: {
                   onFastModeAutoProgress: async (payload) => {
                     await params.opts?.onToolResult?.(payload);
                   },
+=======
+                      ? async ({ text, itemId }) => {
+                          await params.opts?.onItemEvent?.({
+                            kind: "preamble",
+                            progressText: text,
+                            itemId,
+                          });
+                        }
+                      : undefined,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                   onErrorBeforeLifecycle: async () => {
                     if (!rollbackFallbackCandidateSelection) {
                       return;
@@ -2398,11 +2433,14 @@ export async function runAgentTurnWithFallback(params: {
                     provider: cliExecutionProvider,
                     model,
                     thinkLevel: params.followupRun.run.thinkLevel,
+<<<<<<< HEAD
                     fastMode: candidateFastMode.fastMode,
                     fastModeStartedAtMs,
                     fastModeAutoOnSeconds: candidateFastMode.fastModeAutoOnSeconds,
                     fastModeAutoProgressState,
                     isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                     timeoutMs: params.followupRun.run.timeoutMs,
                     runTimeoutOverrideMs: params.followupRun.run.runTimeoutOverrideMs,
                     runId,
@@ -2431,20 +2469,31 @@ export async function runAgentTurnWithFallback(params: {
                       params.followupRun.originatingTo ??
                       params.sessionCtx.OriginatingTo ??
                       params.sessionCtx.To,
+<<<<<<< HEAD
                     senderId: params.followupRun.run.senderId,
                     chatId: params.followupRun.originatingChatId,
                     channelContext: params.followupRun.run.channelContext,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                     currentThreadTs:
                       cliCurrentThreadId != null ? String(cliCurrentThreadId) : undefined,
                     currentMessageId: cliCurrentMessageId,
                     currentInboundAudio: hasInboundAudio(params.sessionCtx),
                     agentAccountId: params.followupRun.run.agentAccountId,
+<<<<<<< HEAD
                     senderIsOwner: params.followupRun.run.senderIsOwner,
                     approvalReviewerDeviceId: params.followupRun.run.approvalReviewerDeviceId,
                     toolsAllow: params.opts?.toolsAllow,
                     disableTools: params.opts?.disableTools,
                     abortSignal: runAbortSignal,
                     onExecutionPhase: signalExecutionPhaseForTyping,
+=======
+                    senderId: params.followupRun.run.senderId,
+                    senderIsOwner: params.followupRun.run.senderIsOwner,
+                    toolsAllow: params.opts?.toolsAllow,
+                    disableTools: params.opts?.disableTools,
+                    abortSignal: runAbortSignal,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                     replyOperation: params.replyOperation,
                   },
                 }),
@@ -2465,7 +2514,11 @@ export async function runAgentTurnWithFallback(params: {
             }
             const { embeddedContext, senderContext, runBaseParams } =
               buildEmbeddedRunExecutionParams({
+<<<<<<< HEAD
                 run: { ...candidateRun, ...candidateFastMode },
+=======
+                run: candidateRun,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 replyRoute: params.followupRun,
                 sessionCtx: params.sessionCtx,
                 hasRepliedRef: params.opts?.hasRepliedRef,
@@ -2539,9 +2592,12 @@ export async function runAgentTurnWithFallback(params: {
                     provider: embeddedRunProvider,
                     agentHarnessId: embeddedRunHarnessOverride,
                     agentHarnessRuntimeOverride: embeddedRunHarnessOverride,
+<<<<<<< HEAD
                     fastModeStartedAtMs,
                     fastModeAutoProgressState,
                     isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                     sandboxSessionKey: params.runtimePolicySessionKey,
                     prompt: params.commandBody,
                     transcriptPrompt: params.transcriptCommandBody,
@@ -2592,7 +2648,10 @@ export async function runAgentTurnWithFallback(params: {
                         lifecycleGeneration = info.lifecycleGeneration;
                       }
                     },
+<<<<<<< HEAD
                     onExecutionPhase: signalExecutionPhaseForTyping,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                     blockReplyBreak: params.resolvedBlockStreamingBreak,
                     blockReplyChunking: params.blockReplyChunking,
                     onPartialReply: async (payload) => {
@@ -3134,6 +3193,7 @@ export async function runAgentTurnWithFallback(params: {
         !isBilling && !shouldSurfaceToControlUi ? classifyProviderRequestError(err) : undefined;
       const isTransientHttp = isTransientHttpError(message);
 
+<<<<<<< HEAD
       // Drain/restart aborts stay silent and defer to post-restart
       // main-session recovery, which resumes the interrupted turn (or emits its
       // own genuine non-resumable notice). A generic "try again" here is a
@@ -3155,6 +3215,15 @@ export async function runAgentTurnWithFallback(params: {
           payload: {
             text: SILENT_REPLY_TOKEN,
           },
+=======
+      if (isReplyOperationRestartAbort(params.replyOperation)) {
+        takePendingLifecycleTerminal()?.emit("end", err);
+        return {
+          kind: "final",
+          payload: markAgentRunFailureReplyPayload({
+            text: buildRestartLifecycleReplyText(),
+          }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         };
       }
 

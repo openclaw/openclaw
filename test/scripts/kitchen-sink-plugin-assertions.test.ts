@@ -14,7 +14,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs";
+<<<<<<< HEAD
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const SWEEP_SCRIPT = "scripts/e2e/lib/kitchen-sink-plugin/sweep.sh";
 const REQUIRED_FULL_DIAGNOSTIC_CANARIES = [
   "agent tool result middleware must be a function",
@@ -135,17 +138,26 @@ function runAssertInstalled({
 
 function runAssertClawhubInstalled({
   contextEngineIds = [],
+<<<<<<< HEAD
   installPathRelative,
 }: {
   contextEngineIds?: string[];
   installPathRelative?: string;
+=======
+}: {
+  contextEngineIds?: string[];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } = {}) {
   const label = `clawhub-context-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const pluginId = "openclaw-kitchen-sink-fixture";
   const home = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-home-"));
+<<<<<<< HEAD
   const installPath = installPathRelative
     ? `${home}${path.sep}${installPathRelative}`
     : path.join(home, ".openclaw", "extensions", pluginId);
+=======
+  const installPath = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-install-"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const scratchRoot = tmpdir();
   const pluginsJsonPath = path.join(scratchRoot, `kitchen-sink-${label}-plugins.json`);
   const inspectJsonPath = path.join(scratchRoot, `kitchen-sink-${label}-inspect.json`);
@@ -153,8 +165,11 @@ function runAssertClawhubInstalled({
   const installPathMarker = path.join(scratchRoot, `kitchen-sink-${label}-install-path.txt`);
   const installsPath = path.join(home, ".openclaw", "plugins", "installs.json");
   try {
+<<<<<<< HEAD
     mkdirSync(path.join(home, ".openclaw", "extensions"), { recursive: true });
     mkdirSync(installPath, { recursive: true });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const inspectPayload = fullSurfaceInspectPayload(pluginId);
     inspectPayload.plugin.contextEngineIds = contextEngineIds;
     writeJson(pluginsJsonPath, {
@@ -198,6 +213,10 @@ function runAssertClawhubInstalled({
     });
   } finally {
     rmSync(home, { force: true, recursive: true });
+<<<<<<< HEAD
+=======
+    rmSync(installPath, { force: true, recursive: true });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     rmSync(pluginsJsonPath, { force: true });
     rmSync(inspectJsonPath, { force: true });
     rmSync(inspectAllJsonPath, { force: true });
@@ -226,6 +245,7 @@ function runScanLogs({
 }
 
 function runSweepShell(script: string, env: NodeJS.ProcessEnv = {}) {
+<<<<<<< HEAD
   return spawnSync(BASH_BIN, ["-c", toBashScript(script)], {
     cwd: process.cwd(),
     encoding: "utf8",
@@ -262,6 +282,15 @@ function toGitBashPath(value: string) {
   return `/${match[1].toLowerCase()}/${match[2].replaceAll("\\", "/")}`;
 }
 
+=======
+  return spawnSync("/bin/bash", ["-c", script], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: { ...process.env, ...env },
+  });
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("kitchen-sink plugin assertions", () => {
   it("bounds expected-failure output before matching failure diagnostics", () => {
     const scratchRoot = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-failure-cap-"));
@@ -362,6 +391,7 @@ describe("kitchen-sink plugin assertions", () => {
     expect(result.status).toBe(0);
   });
 
+<<<<<<< HEAD
   it("rejects ClawHub kitchen-sink install paths that resolve outside managed extensions", () => {
     const result = runAssertClawhubInstalled({
       contextEngineIds: ["openclaw-kitchen-sink-fixture"],
@@ -372,6 +402,8 @@ describe("kitchen-sink plugin assertions", () => {
     expect(result.stderr).toContain("kitchen-sink ClawHub install path resolved outside");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps exhaustive diagnostic matching available for synchronized fixtures", () => {
     const result = runAssertInstalled({
       diagnostics: diagnosticErrors(REQUIRED_FULL_DIAGNOSTIC_CANARIES),
@@ -672,6 +704,7 @@ grep -q "prefix" "$SCRATCH_ROOT/install_noisy.log"
     }
   });
 
+<<<<<<< HEAD
   it("rejects invalid kitchen-sink log byte limits before CLI setup", () => {
     const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-log-invalid-"));
     const scratchRoot = path.join(parent, "scratch");
@@ -704,6 +737,8 @@ run_kitchen_sink_openclaw_logged "install/log" plugins install demo
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("includes expected-failure transcripts in the final kitchen-sink log scan", () => {
     const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-failure-log-"));
     const home = path.join(parent, "home");
@@ -794,6 +829,7 @@ test -d "$SCRATCH_ROOT"
     }
   });
 
+<<<<<<< HEAD
   it("rejects invalid ClawHub fixture wait attempts before starting the server", () => {
     const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-clawhub-attempts-"));
     const fakeBin = path.join(parent, "bin");
@@ -836,6 +872,8 @@ exit "$status"
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("bounds ClawHub fixture server logs on startup timeout", () => {
     const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-clawhub-log-"));
     const fakeBin = path.join(parent, "bin");
@@ -864,7 +902,11 @@ set -euo pipefail
 export PATH="$FAKE_BIN:$PATH"
 export KITCHEN_SINK_SWEEP_SOURCE_ONLY=1
 export KITCHEN_SINK_TMP_DIR="$SCRATCH_ROOT"
+<<<<<<< HEAD
 export OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS=25
+=======
+export OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS=5
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES=64
 source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
 set +e

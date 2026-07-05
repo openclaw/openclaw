@@ -1,8 +1,14 @@
+<<<<<<< HEAD
 import type { GroupToolPolicyConfig } from "openclaw/plugin-sdk/channel-policy";
 // Qqbot type declarations define plugin contracts.
 import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 import type { QQBotDmPolicy, QQBotGroupPolicy } from "./engine/access/index.js";
 import type { QQBotGroupCommandLevel } from "./engine/config/group.js";
+=======
+// Qqbot type declarations define plugin contracts.
+import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
+import type { QQBotDmPolicy, QQBotGroupPolicy } from "./engine/access/index.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type { QQBotDmPolicy, QQBotGroupPolicy };
 
@@ -37,6 +43,7 @@ export interface QQBotExecApprovalConfig {
   target?: "dm" | "channel" | "both";
 }
 
+<<<<<<< HEAD
 export interface QQBotGroupConfig {
   requireMention?: boolean;
   commandLevel?: QQBotGroupCommandLevel;
@@ -48,6 +55,8 @@ export interface QQBotGroupConfig {
   toolsBySender?: Record<string, GroupToolPolicyConfig>;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** QQ Bot account config from user settings. */
 export interface QQBotAccountConfig {
   enabled?: boolean;
@@ -130,7 +139,10 @@ export interface QQBotAccountConfig {
         /** @deprecated Prefer `streaming: true`. */
         c2cStreamApi?: boolean;
       };
+<<<<<<< HEAD
   groups?: Record<string, QQBotGroupConfig>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /** Audio format policy controlling which formats can skip transcoding. */

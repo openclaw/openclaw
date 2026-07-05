@@ -8,7 +8,11 @@ scenario:
       - telemetry.otel
     secondary:
       - harness.qa-lab
+<<<<<<< HEAD
       - telemetry.plugin-sdk-runtime-exports
+=======
+      - plugin-sdk-diagnostic-runtime-exports
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   objective: Exercise bounded local OTLP capture and OpenTelemetry smoke assertions through QA Lab evidence.
   successCriteria:
     - Package-manager forwarded QA OTEL smoke arguments parse correctly.

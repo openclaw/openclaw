@@ -1,4 +1,5 @@
 // Bench Cli Startup tests cover bench cli startup script behavior.
+<<<<<<< HEAD
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -14,10 +15,36 @@ function isProcessAlive(pid: number): boolean {
     return true;
   } catch {
     return false;
+=======
+import { describe, expect, it } from "vitest";
+import { testing } from "../../scripts/bench-cli-startup.ts";
+
+function withEnv<T>(env: Record<string, string | undefined>, callback: () => T): T {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(env)) {
+    previous.set(key, process.env[key]);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  try {
+    return callback();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 
 describe("bench-cli-startup", () => {
+<<<<<<< HEAD
   it("rejects unknown CLI options before running benchmarks", () => {
     expect(() => testing.validateCliArgs(["--wat"])).toThrow("Unknown argument: --wat");
 
@@ -248,6 +275,8 @@ describe("bench-cli-startup", () => {
     expect(testing.nodeImportSpecifierForPath(hookPath)).toBe(pathToFileURL(hookPath).href);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("fails reports with no measured samples", () => {
     expect(
       testing.collectFailedSamples({

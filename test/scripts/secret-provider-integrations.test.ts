@@ -1,26 +1,37 @@
 // Secret Provider Integrations tests cover secret provider integrations script behavior.
+<<<<<<< HEAD
 import { spawn, spawnSync } from "node:child_process";
+=======
+import { spawnSync } from "node:child_process";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const tempDirs: string[] = [];
 const harnessPath = path.resolve("test/scripts/fixtures/secret-provider-integrations-harness.mjs");
 const proofScriptPath = path.resolve("scripts/e2e/secret-provider-integrations.mjs");
 
+<<<<<<< HEAD
 function expectedTaskkillPath(): string {
   return resolveWindowsTaskkillPath();
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function makeTempDir(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-secret-provider-proof-"));
   tempDirs.push(root);
   return root;
 }
 
+<<<<<<< HEAD
 async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
@@ -57,6 +68,8 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function writeStallingOpenClaw(
   root: string,
   options: {
@@ -297,6 +310,7 @@ describe("secret provider integration proof harness", () => {
     }
   });
 
+<<<<<<< HEAD
   it("clamps oversized command timeout env values before scheduling timers", async () => {
     const previousTimeout = process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS;
     process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS = String(Number.MAX_SAFE_INTEGER);
@@ -335,6 +349,8 @@ describe("secret provider integration proof harness", () => {
     ).toEqual({ ok: true, nested: { value: "kept" } });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("records optional proof omissions as skips instead of passes", async () => {
     const proof = await import(`${pathToFileURL(proofScriptPath).href}?case=skip-${Date.now()}`);
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -434,6 +450,7 @@ describe("secret provider integration proof harness", () => {
   });
 
   it.runIf(process.platform !== "win32")(
+<<<<<<< HEAD
     "cleans PTY configure descendants before timeout failure",
     async () => {
       const root = makeTempDir();
@@ -502,6 +519,8 @@ describe("secret provider integration proof harness", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     "fails mandatory commands that exit by signal",
     async () => {
       const proof = await import(
@@ -600,6 +619,7 @@ describe("secret provider integration proof harness", () => {
     }
   });
 
+<<<<<<< HEAD
   it("signals Windows command process trees with graceful taskkill first", async () => {
     const proof = await import(
       `${pathToFileURL(proofScriptPath).href}?case=windows-command-${Date.now()}`
@@ -713,6 +733,8 @@ describe("secret provider integration proof harness", () => {
     expect(child.kill).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.runIf(process.platform !== "win32")("kills timed-out command process groups", async () => {
     const root = makeTempDir();
     const markerPath = path.join(root, "command-descendant-marker.txt");
@@ -752,6 +774,7 @@ describe("secret provider integration proof harness", () => {
     expect(sizeAfterWait).toBe(sizeAfterReturn);
   });
 
+<<<<<<< HEAD
   it.runIf(process.platform !== "win32")(
     "preserves timeout kill grace for descendants after the leader exits",
     async () => {
@@ -954,6 +977,8 @@ describe("secret provider integration proof harness", () => {
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("detects startup secret leaks after the retained output cap", () => {
     const root = makeTempDir();
     const fakeOpenClaw = writeLeakingStartupOpenClaw(root);

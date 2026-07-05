@@ -3,6 +3,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   compareNormalizedPaths,
+<<<<<<< HEAD
+=======
+  getBundleHashInputPaths,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   getBundleHashRepoInputPaths,
   getLocalRolldownCliCandidates,
   isBundleHashInputPath,
@@ -51,7 +55,11 @@ describe("scripts/bundle-a2ui.mjs", () => {
 
   it("keeps local node_modules state out of bundle hash inputs", () => {
     const repoRoot = process.cwd();
+<<<<<<< HEAD
     const inputPaths = getBundleHashRepoInputPaths(repoRoot);
+=======
+    const inputPaths = getBundleHashInputPaths(repoRoot);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(inputPaths).not.toContain(path.join(repoRoot, "node_modules", "lit", "package.json"));
     expect(inputPaths).not.toContain(

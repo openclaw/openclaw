@@ -248,6 +248,27 @@ export function resolveMessageActionDiscoveryForPlugin(params: {
 }
 
 /**
+<<<<<<< HEAD
+=======
+ * Lists message actions available across registered channel plugins.
+ */
+export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageActionName[] {
+  const actions = new Set<ChannelMessageActionName>(["send", "broadcast"]);
+  for (const plugin of listChannelPlugins()) {
+    for (const action of resolveMessageActionDiscoveryForPlugin({
+      pluginId: plugin.id,
+      actions: plugin.actions,
+      context: { cfg },
+      includeActions: true,
+    }).actions) {
+      actions.add(action);
+    }
+  }
+  return Array.from(actions);
+}
+
+/**
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
  * Lists actions whose schemas do not block cross-channel tool usage.
  */
 export function listCrossChannelSchemaSupportedMessageActions(

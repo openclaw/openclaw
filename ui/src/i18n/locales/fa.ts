@@ -63,6 +63,10 @@ export const fa: TranslationMap = {
     docs: "مستندات",
     theme: "پوسته",
     colorMode: "حالت رنگ",
+<<<<<<< HEAD
+=======
+    colorModeOption: "حالت رنگ: {mode}",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resources: "منابع",
     search: "جستجو",
     save: "ذخیره",
@@ -201,7 +205,10 @@ export const fa: TranslationMap = {
     inherit: "ارث‌بری",
     defaultOption: "پیش‌فرض ({value})",
     offExplicit: "خاموش (صریح)",
+<<<<<<< HEAD
     auto: "auto",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     on: "روشن",
     off: "خاموش",
     full: "کامل",
@@ -1443,7 +1450,10 @@ export const fa: TranslationMap = {
     jaJP: "日本語 (ژاپنی)",
     ko: "한국어 (کره‌ای)",
     fr: "Français (فرانسوی)",
+<<<<<<< HEAD
     hi: "हिन्दी (هندی)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ar: "العربية (عربی)",
     it: "Italiano (ایتالیایی)",
     tr: "Türkçe (ترکی)",
@@ -1454,7 +1464,10 @@ export const fa: TranslationMap = {
     vi: "Tiếng Việt (ویتنامی)",
     nl: "Nederlands (هلندی)",
     fa: "فارسی",
+<<<<<<< HEAD
     ru: "Русский (روسی)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   cron: {
     quickCreate: {
@@ -1622,7 +1635,10 @@ export const fa: TranslationMap = {
       nextHeartbeat: "ضربان بعدی",
       wakeModeHelp: "اکنون بلافاصله فعال می‌کند. ضربان بعدی تا چرخه بعدی منتظر می‌ماند.",
       payloadKind: "چه چیزی باید اجرا شود؟",
+<<<<<<< HEAD
       command: "Command",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       systemEvent: "ارسال پیام به خط زمانی اصلی",
       agentTurn: "اجرای وظیفه دستیار (ایزوله)",
       systemEventHelp:

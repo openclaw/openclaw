@@ -125,9 +125,12 @@ export async function buildCodexPluginThreadConfig(
     nowMs: params.nowMs,
     suppressAppInventoryRefresh: true,
   });
+<<<<<<< HEAD
   const appInventoryRefreshDeferredForActivation =
     inventory.records.some((record) => record.activationRequired) &&
     shouldRefreshMissingAppInventory(params, policy, inventory);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (shouldWaitForInitialAppInventory(params, policy, inventory)) {
     await refreshAppInventoryNow(params, appCache, {
       forceRefetch: true,
@@ -169,6 +172,7 @@ export async function buildCodexPluginThreadConfig(
       });
     }
   }
+<<<<<<< HEAD
   const postInstallRefreshRequired = activationResults.some(
     (activation) => activation.ok && activation.installAttempted,
   );
@@ -182,6 +186,12 @@ export async function buildCodexPluginThreadConfig(
     await refreshAppInventoryNow(params, appCache, {
       forceRefetch: true,
       reason: postInstallRefreshRequired ? "post_install" : "deferred_missing",
+=======
+  if (activationResults.some((activation) => activation.ok && activation.installAttempted)) {
+    await refreshAppInventoryNow(params, appCache, {
+      forceRefetch: true,
+      reason: "post_install",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       targetAppIds: collectInventoryOwnedAppIds(inventory),
     });
     inventory = await readCodexPluginInventory({
@@ -231,22 +241,40 @@ export async function buildCodexPluginThreadConfig(
   const policyApps: Record<string, PluginAppPolicyContextEntry> = {};
   const pluginAppIds: Record<string, string[]> = {};
   for (const record of inventory.records) {
+<<<<<<< HEAD
     const activation = activationResults.find(
       (item) => item.identity.configKey === record.policy.configKey,
     );
     if (activation?.ok === false || (record.activationRequired && !activation?.ok)) {
       continue;
+=======
+    if (record.activationRequired) {
+      const activation = activationResults.find(
+        (item) => item.identity.configKey === record.policy.configKey,
+      );
+      if (!activation?.ok) {
+        continue;
+      }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     if (record.appOwnership !== "proven") {
       continue;
     }
     pluginAppIds[record.policy.configKey] = [...record.ownedAppIds].toSorted();
     for (const app of resolveThreadConfigAppsForRecord({ record, inventory })) {
+<<<<<<< HEAD
       if (!isPluginAppReadyForThreadStart(app)) {
         diagnostics.push({
           code: "app_not_ready",
           plugin: record.policy,
           message: `${app.id} is not accessible for ${record.policy.pluginName}.`,
+=======
+      if (!app.accessible || !app.enabled) {
+        diagnostics.push({
+          code: "app_not_ready",
+          plugin: record.policy,
+          message: `${app.id} is not accessible or enabled for ${record.policy.pluginName}.`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         });
         continue;
       }
@@ -372,6 +400,7 @@ function shouldWaitForInitialAppInventory(
   policy: ResolvedCodexPluginsPolicy,
   inventory: CodexPluginInventory,
 ): boolean {
+<<<<<<< HEAD
   // Install/enable first so the initial app/list can observe newly activated plugin apps.
   if (inventory.records.some((record) => record.activationRequired)) {
     return false;
@@ -384,6 +413,11 @@ function shouldRefreshMissingAppInventory(
   policy: ResolvedCodexPluginsPolicy,
   inventory: CodexPluginInventory,
 ): boolean {
+=======
+  if (inventory.records.some((record) => record.activationRequired)) {
+    return false;
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return Boolean(
     params.appCacheKey &&
     policy.pluginPolicies.some((plugin) => plugin.enabled) &&
@@ -438,6 +472,7 @@ function resolveThreadConfigAppsForRecord(params: {
   return params.record.apps;
 }
 
+<<<<<<< HEAD
 function isPluginAppReadyForThreadStart(app: CodexPluginOwnedApp): boolean {
   // `app/list` is the source of truth for inventory and access posture, but
   // OpenClaw owns the per-thread enablement decision. A listed app that is
@@ -445,6 +480,8 @@ function isPluginAppReadyForThreadStart(app: CodexPluginOwnedApp): boolean {
   return app.accessible;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function shouldForceRefreshForNotReadyPluginApps(
   params: BuildCodexPluginThreadConfigParams,
   policy: ResolvedCodexPluginsPolicy,
@@ -460,7 +497,11 @@ function shouldForceRefreshForNotReadyPluginApps(
     (record) =>
       record.appOwnership === "proven" &&
       record.ownedAppIds.length > 0 &&
+<<<<<<< HEAD
       (record.apps.length === 0 || record.apps.some((app) => !app.accessible)),
+=======
+      (record.apps.length === 0 || record.apps.some((app) => !app.accessible || !app.enabled)),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
 }
 

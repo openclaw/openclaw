@@ -2716,10 +2716,14 @@ describe("executeNodeHostCommand", () => {
     expect(requireGatewayCommand("system.run.prepare").params?.params?.env).toEqual({
       FOO: "bar",
     });
+<<<<<<< HEAD
     expect(requireGatewayCommand("system.run.prepare").params?.params?.cwd).toBe("/tmp/work");
     const runParams = requireRunParams(requireGatewayCommand("system.run"));
     expect(runParams.env).toEqual({ FOO: "bar" });
     expect(runParams.cwd).toBe("/tmp/work");
+=======
+    expect(requireRunParams(requireGatewayCommand("system.run")).env).toEqual({ FOO: "bar" });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const evalEnvs = evaluateShellAllowlistMock.mock.calls.map(
       ([raw]) => (raw as ShellAllowlistMockParams).env,
     );
@@ -2748,13 +2752,17 @@ describe("executeNodeHostCommand", () => {
     const runParams = requireRunParams(call);
     expect(runParams.command).toEqual(["/bin/sh", "-lc", "bun ./script.ts"]);
     expect(runParams.rawCommand).toBe("bun ./script.ts");
+<<<<<<< HEAD
     expect(runParams.cwd).toBe("/tmp/work");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(typeof runParams.runId).toBe("string");
     expect(runParams.suppressNotifyOnExit).toBe(true);
     expect(runParams.timeoutMs).toBe(30_000);
     expect(Object.hasOwn(runParams, "systemRunPlan")).toBe(false);
   });
 
+<<<<<<< HEAD
   it("omits cwd from direct node system.run when workdir is undefined", async () => {
     await executeNodeHostCommand({
       command: "bun ./script.ts",
@@ -2773,6 +2781,8 @@ describe("executeNodeHostCommand", () => {
     expect(Object.hasOwn(runParams, "cwd")).toBe(false);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects disconnected node targets before invoking system.run", async () => {
     listNodesMock.mockResolvedValueOnce([
       {

@@ -38,7 +38,11 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
     fastMode: false,
     onModelChange: vi.fn(),
     onThinkingChange: vi.fn(),
+<<<<<<< HEAD
     onFastModeChange: vi.fn(),
+=======
+    onFastModeToggle: vi.fn(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     channels: [],
     onChannelConfigure: vi.fn(),
     automation: {
@@ -148,6 +152,7 @@ describe("renderQuickSettings", () => {
     );
   });
 
+<<<<<<< HEAD
   it("keeps auto as a first-class quick settings fast mode", () => {
     const onFastModeChange = vi.fn();
     const container = document.createElement("div");
@@ -171,6 +176,8 @@ describe("renderQuickSettings", () => {
     expect(onFastModeChange).toHaveBeenCalledWith(false);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("lets operators change browser and tool profile from Security quick settings", () => {
     const onBrowserEnabledToggle = vi.fn();
     const onToolProfileChange = vi.fn();

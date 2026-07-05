@@ -6,6 +6,10 @@ import {
   approveNodePairing,
   beginNodePairingConnect,
   finalizeNodePairingCleanupClaim,
+<<<<<<< HEAD
+=======
+  getPairedNode,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   listNodePairing,
   releaseNodePairingCleanupClaim,
   removePairedNode,
@@ -30,7 +34,11 @@ async function setupPairedNode(baseDir: string): Promise<string> {
     { callerScopes: ["operator.pairing", "operator.admin"] },
     baseDir,
   );
+<<<<<<< HEAD
   const paired = await findPairedNode("node-1", baseDir);
+=======
+  const paired = await getPairedNode("node-1", baseDir);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   expect(typeof paired?.token).toBe("string");
   expect(paired?.token.length).toBeGreaterThan(0);
   return paired!.token;
@@ -42,11 +50,14 @@ async function withNodePairingDir<T>(run: (baseDir: string) => Promise<T>): Prom
   return await run(await tempDirs.make("case"));
 }
 
+<<<<<<< HEAD
 async function findPairedNode(nodeId: string, baseDir: string) {
   const pairing = await listNodePairing(baseDir);
   return pairing.paired.find((node) => node.nodeId === nodeId) ?? null;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function requireRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Expected a non-array record");
@@ -329,7 +340,11 @@ describe("node pairing tokens", () => {
 
       await expect(removePairedNode("node-1", baseDir)).resolves.toEqual({ nodeId: "node-1" });
       await expect(removePairedNode("node-1", baseDir)).resolves.toBeNull();
+<<<<<<< HEAD
       await expect(findPairedNode("node-1", baseDir)).resolves.toBeNull();
+=======
+      await expect(getPairedNode("node-1", baseDir)).resolves.toBeNull();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const pairing = await listNodePairing(baseDir);
       expect(pairing.pending).toHaveLength(1);
       expect(pairing.pending[0]?.requestId).toBe(pending.request.requestId);
@@ -361,7 +376,11 @@ describe("node pairing tokens", () => {
       expect(pairing.pending).toEqual([]);
       expect(pairing.paired).toHaveLength(1);
       expect(pairing.paired[0]?.nodeId).toBe("node-1");
+<<<<<<< HEAD
       await expect(findPairedNode("node-1", baseDir)).resolves.toMatchObject({
+=======
+      await expect(getPairedNode("node-1", baseDir)).resolves.toMatchObject({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         commands: ["system.run"],
       });
     });
@@ -596,7 +615,11 @@ describe("node pairing tokens", () => {
         status: "forbidden",
         missingScope: "operator.admin",
       });
+<<<<<<< HEAD
       await expect(findPairedNode("node-1", baseDir)).resolves.toBeNull();
+=======
+      await expect(getPairedNode("node-1", baseDir)).resolves.toBeNull();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       const commandlessRequest = await requestNodePairing(
         {
@@ -662,7 +685,11 @@ describe("node pairing tokens", () => {
         false,
       );
 
+<<<<<<< HEAD
       const pairedNode = await findPairedNode("node-1", baseDir);
+=======
+      const pairedNode = await getPairedNode("node-1", baseDir);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(pairedNode?.lastSeenAtMs).toBe(1234);
       expect(pairedNode?.lastSeenReason).toBe("silent_push");
     });

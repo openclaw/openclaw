@@ -5,12 +5,18 @@
  */
 import * as os from "node:os";
 import { getCapabilities, getImageDimensions, imageFallback } from "@earendil-works/pi-tui";
+<<<<<<< HEAD
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import { sanitizeBinaryOutput } from "../../shell-utils.js";
 import { stripAnsi } from "../../utils/ansi.js";
 import type { ToolRenderResultOptions } from "../extensions/types.js";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult } from "./truncate.js";
+=======
+import type { Theme } from "../../modes/interactive/theme/theme.js";
+import { sanitizeBinaryOutput } from "../../shell-utils.js";
+import { stripAnsi } from "../../utils/ansi.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Shortens paths under the current home directory for display. */
 export function shortenPath(path: unknown): string {
@@ -82,6 +88,7 @@ export function getTextOutput(
   return output;
 }
 
+<<<<<<< HEAD
 /** Renders bounded text output with the shared TUI expansion hint. */
 export function formatSessionToolOutput(
   result: { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> },
@@ -129,6 +136,8 @@ export function appendSessionToolTruncationWarning(
   return `${text}\n${theme.fg("warning", `[Truncated: ${warnings.join(", ")}]`)}`;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Formats the invalid-argument marker with the active theme. */
 export function invalidArgText(theme: Pick<Theme, "fg">): string {
   return theme.fg("error", "[invalid arg]");

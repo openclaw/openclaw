@@ -11,16 +11,26 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   coerceSecretRef,
   DEFAULT_SECRET_PROVIDER_ALIAS,
+<<<<<<< HEAD
   parseEnvTemplateSecretRef,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type SecretInput,
   type SecretRef,
 } from "../config/types.secrets.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+<<<<<<< HEAD
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 
+=======
+import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import type { SecretInputMode } from "./provider-auth-types.js";
+
+const ENV_REF_PATTERN = /^\$\{([A-Z][A-Z0-9_]*)\}$/;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 
 const resolveAuthAgentDir = (agentDir?: string, config?: OpenClawConfig) =>
@@ -41,6 +51,17 @@ function buildEnvSecretRef(id: string): SecretRef {
   return { source: "env", provider: DEFAULT_SECRET_PROVIDER_ALIAS, id };
 }
 
+<<<<<<< HEAD
+=======
+function parseEnvSecretRef(value: string): SecretRef | null {
+  const match = ENV_REF_PATTERN.exec(value);
+  if (!match) {
+    return null;
+  }
+  return buildEnvSecretRef(match[1]);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveProviderDefaultEnvSecretRef(provider: string, config?: OpenClawConfig): SecretRef {
   const envVars = getProviderEnvVars(provider, {
     ...(config ? { config } : {}),
@@ -60,6 +81,7 @@ function resolveApiKeySecretInput(
   input: SecretInput,
   options?: ApiKeyStorageOptions,
 ): SecretInput {
+<<<<<<< HEAD
   if (input !== null && typeof input === "object") {
     const coercedRef = coerceSecretRef(input);
     if (!coercedRef || !isValidSecretRef(coercedRef)) {
@@ -67,11 +89,14 @@ function resolveApiKeySecretInput(
     }
     return coercedRef;
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (options?.secretInputMode === "plaintext") {
     return normalizeSecretInput(input);
   }
   const coercedRef = coerceSecretRef(input);
   if (coercedRef) {
+<<<<<<< HEAD
     if (!isValidSecretRef(coercedRef)) {
       throw new Error("API key SecretRef is invalid.");
     }
@@ -79,6 +104,12 @@ function resolveApiKeySecretInput(
   }
   const normalized = normalizeSecretInput(input);
   const inlineEnvRef = parseEnvTemplateSecretRef(normalized, DEFAULT_SECRET_PROVIDER_ALIAS);
+=======
+    return coercedRef;
+  }
+  const normalized = normalizeSecretInput(input);
+  const inlineEnvRef = parseEnvSecretRef(normalized);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (inlineEnvRef) {
     return inlineEnvRef;
   }

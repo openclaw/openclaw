@@ -131,6 +131,7 @@ function removeNthFromNonDuplicates(refs: RoleRefMap, tracker: RoleNameTracker) 
 
 function compactTree(tree: string) {
   const lines = tree.split("\n");
+<<<<<<< HEAD
   const entries: Array<{ line: string; keep: boolean; hasRef: boolean; indent: number }> = [];
   const stack: Array<{ entry: (typeof entries)[number]; indent: number }> = [];
 
@@ -167,6 +168,39 @@ function compactTree(tree: string) {
     .filter((entry) => entry.keep)
     .map((entry) => entry.line)
     .join("\n");
+=======
+  const result: string[] = [];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line.includes("[ref=")) {
+      result.push(line);
+      continue;
+    }
+    if (line.includes(":") && !line.trimEnd().endsWith(":")) {
+      result.push(line);
+      continue;
+    }
+
+    const currentIndent = getIndentLevel(line);
+    let hasRelevantChildren = false;
+    for (let j = i + 1; j < lines.length; j += 1) {
+      const childIndent = getIndentLevel(lines[j]);
+      if (childIndent <= currentIndent) {
+        break;
+      }
+      if (lines[j]?.includes("[ref=")) {
+        hasRelevantChildren = true;
+        break;
+      }
+    }
+    if (hasRelevantChildren) {
+      result.push(line);
+    }
+  }
+
+  return result.join("\n");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function processLine(

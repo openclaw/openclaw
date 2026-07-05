@@ -1,3 +1,7 @@
+<<<<<<< HEAD
+=======
+// Doctor heartbeat template repair tests cover migration and repair of heartbeat prompt templates.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -206,11 +210,23 @@ Add short tasks below the comments only when you want the agent to check somethi
       shouldRepair: true,
     });
 
+<<<<<<< HEAD
     const cleanTemplate = await fs.readFile(
       path.resolve("src", "agents", "templates", "HEARTBEAT.md"),
       "utf-8",
     );
     await expect(fs.readFile(heartbeatPath, "utf-8")).resolves.toBe(cleanTemplate);
+=======
+    await expect(fs.readFile(heartbeatPath, "utf-8")).resolves.toBe(
+      `${[
+        "<!-- Heartbeat template; comments-only content prevents scheduled heartbeat API calls. -->",
+        "",
+        "# Keep this file empty (or with only comments) to skip heartbeat API calls.",
+        "",
+        "# Add tasks below when you want the agent to check something periodically.",
+      ].join("\n")}\n`,
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining("clean heartbeat template"),
       "Doctor changes",

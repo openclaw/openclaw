@@ -6,7 +6,10 @@ import type {
   SessionsPatchParams,
   SessionsPatchResult,
 } from "../../packages/gateway-protocol/src/index.js";
+<<<<<<< HEAD
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
 
 // Transport-agnostic backend contract consumed by the TUI runtime.
@@ -22,11 +25,14 @@ export type ChatSendOptions = {
   runId?: string;
 };
 
+<<<<<<< HEAD
 export type TuiChatSendResult = {
   runId: string;
   status?: string;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Options for forwarding a goal command to a backend session. */
 export type TuiGoalCommandOptions = {
   sessionKey: string;
@@ -68,7 +74,10 @@ export type TuiSessionList = {
       | "inputTokens"
       | "outputTokens"
       | "totalTokens"
+<<<<<<< HEAD
       | "totalTokensFresh"
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       | "goal"
       | "modelProvider"
       | "displayName"
@@ -76,7 +85,11 @@ export type TuiSessionList = {
       key: string;
       sessionId?: string;
       updatedAt?: number | null;
+<<<<<<< HEAD
       fastMode?: FastMode;
+=======
+      fastMode?: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sendPolicy?: string;
       responseUsage?: ResponseUsageMode;
       label?: string;
@@ -148,7 +161,11 @@ export type TuiBackend = {
   start: () => void;
   stop: () => void | Promise<void>;
   subscribeSessionEvents?: () => Promise<unknown>;
+<<<<<<< HEAD
   sendChat: (opts: ChatSendOptions) => Promise<TuiChatSendResult>;
+=======
+  sendChat: (opts: ChatSendOptions) => Promise<{ runId: string }>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   abortChat: (opts: {
     sessionKey: string;
     agentId?: string;

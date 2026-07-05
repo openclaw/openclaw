@@ -412,6 +412,7 @@ function isCodeModeToolCallRepairCandidate(entry: unknown): entry is SessionMess
   );
 }
 
+<<<<<<< HEAD
 function normalizeTrimmedString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -484,6 +485,8 @@ function findNextSessionMessageEntry(
   return undefined;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function collectPersistedToolResultIds(entries: unknown[]): Set<string> {
   const ids = new Set<string>();
   for (const entry of entries) {
@@ -571,6 +574,7 @@ function insertMissingCodeModeToolResults(
   };
 }
 
+<<<<<<< HEAD
 function insertMissingMessageToolDeliveryMirrorResults(
   entries: unknown[],
   existingResultIds: ReadonlySet<string> = new Set(),
@@ -621,6 +625,8 @@ function insertMissingMessageToolDeliveryMirrorResults(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type RepairEntriesResult = {
   entries: unknown[];
   droppedLines: number;
@@ -754,6 +760,7 @@ async function tryIncrementalSessionRepair(params: {
   if (hasEntryRepairs(repairedEntries)) {
     return undefined;
   }
+<<<<<<< HEAD
   const codeModeToolResultRepair = insertMissingCodeModeToolResults(
     repairedEntries.entries,
     params.cached.toolResultIds,
@@ -766,12 +773,23 @@ async function tryIncrementalSessionRepair(params: {
     codeModeToolResultRepair.resultIds,
   );
   if (messageDeliveryToolResultRepair.insertedToolResults > 0) {
+=======
+  const repairedToolResults = insertMissingCodeModeToolResults(
+    repairedEntries.entries,
+    params.cached.toolResultIds,
+  );
+  if (repairedToolResults.insertedToolResults > 0) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return undefined;
   }
 
   rememberSessionRepair(params.sessionFile, {
     snapshot: afterReadSnapshot,
+<<<<<<< HEAD
     toolResultIds: messageDeliveryToolResultRepair.resultIds,
+=======
+    toolResultIds: repairedToolResults.resultIds,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     endsWithNewline: true,
   });
   return {
@@ -847,6 +865,7 @@ export async function repairSessionFileIfNeeded(params: {
     return { repaired: false, droppedLines, reason: "invalid session header" };
   }
 
+<<<<<<< HEAD
   const codeModeToolResultRepair = insertMissingCodeModeToolResults(entries);
   let insertedToolResults = codeModeToolResultRepair.insertedToolResults;
   if (codeModeToolResultRepair.insertedToolResults > 0) {
@@ -863,6 +882,10 @@ export async function repairSessionFileIfNeeded(params: {
   }
   const repairedToolResultIds = messageDeliveryToolResultRepair.resultIds;
 
+=======
+  const repairedToolResults = insertMissingCodeModeToolResults(entries);
+  const insertedToolResults = repairedToolResults.insertedToolResults;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!hasEntryRepairs(repairedEntries) && insertedToolResults === 0) {
     const afterReadSnapshot = await readSessionRepairSnapshot(sessionFile);
     const validatedSnapshot =
@@ -874,7 +897,11 @@ export async function repairSessionFileIfNeeded(params: {
     if (validatedSnapshot) {
       rememberSessionRepair(sessionFile, {
         snapshot: validatedSnapshot,
+<<<<<<< HEAD
         toolResultIds: repairedToolResultIds,
+=======
+        toolResultIds: repairedToolResults.resultIds,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         endsWithNewline: content.endsWith("\n"),
       });
     } else {
@@ -886,6 +913,12 @@ export async function repairSessionFileIfNeeded(params: {
       ...(validatedSnapshot ? { validatedSnapshot } : {}),
     };
   }
+<<<<<<< HEAD
+=======
+  if (insertedToolResults > 0) {
+    entries.splice(0, entries.length, ...repairedToolResults.entries);
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const cleaned = `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
   const backupPath = `${sessionFile}.bak-${process.pid}-${Date.now()}`;
@@ -942,7 +975,11 @@ export async function repairSessionFileIfNeeded(params: {
   if (repairedSnapshot) {
     rememberSessionRepair(sessionFile, {
       snapshot: repairedSnapshot,
+<<<<<<< HEAD
       toolResultIds: repairedToolResultIds,
+=======
+      toolResultIds: repairedToolResults.resultIds,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       endsWithNewline: true,
     });
   } else {

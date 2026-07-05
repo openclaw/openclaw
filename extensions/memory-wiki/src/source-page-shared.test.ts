@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { renderMarkdownFence, renderWikiMarkdown } from "./markdown.js";
 import { writeImportedSourcePage } from "./source-page-shared.js";
 
@@ -30,6 +31,10 @@ function buildSourcePage(raw: string, updatedAt: string): string {
   });
 }
 
+=======
+import { writeImportedSourcePage } from "./source-page-shared.js";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("writeImportedSourcePage", () => {
   let suiteRoot: string;
 
@@ -71,6 +76,7 @@ describe("writeImportedSourcePage", () => {
     expect(result).toEqual({ pagePath: "pages/source.md", changed: true, created: true });
     expect(state.entries["unsafe:source"]?.sourceUpdatedAtMs).toBe(8_700_000_000_000_000);
   });
+<<<<<<< HEAD
 
   it("preserves the human Notes block when an imported source page is updated", async () => {
     const sourcePath = path.join(suiteRoot, "imported.txt");
@@ -180,4 +186,6 @@ describe("writeImportedSourcePage", () => {
     expect(notesBlock).toContain(userNote);
     expect(notesBlock).not.toContain("OLD IMPORTED SOURCE MARKER PAYLOAD");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

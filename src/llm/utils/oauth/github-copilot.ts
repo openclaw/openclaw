@@ -405,10 +405,16 @@ async function enableGitHubCopilotModel(
 ): Promise<boolean> {
   const baseUrl = getGitHubCopilotBaseUrl(token, enterpriseDomain);
   const url = `${baseUrl}/models/${modelId}/policy`;
+<<<<<<< HEAD
   let response: Response | undefined;
 
   try {
     response = await fetchResponse(
+=======
+
+  try {
+    const response = await fetchResponse(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       url,
       {
         method: "POST",
@@ -427,8 +433,11 @@ async function enableGitHubCopilotModel(
     return response.ok;
   } catch {
     return false;
+<<<<<<< HEAD
   } finally {
     await response?.body?.cancel().catch(() => undefined);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 

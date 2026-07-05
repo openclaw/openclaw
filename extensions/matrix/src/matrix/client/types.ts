@@ -43,6 +43,10 @@ export type MatrixStoragePaths = {
   rootDir: string;
   storagePath: string;
   cryptoPath: string;
+<<<<<<< HEAD
+=======
+  metaPath: string;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   recoveryKeyPath: string;
   idbSnapshotPath: string;
   accountKey: string;

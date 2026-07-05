@@ -293,11 +293,18 @@ function consumeRootLogLevelToken(args: readonly string[], index: number): numbe
   return 0;
 }
 
+<<<<<<< HEAD
 function splitRootOptionPrefix(argv: string[]): {
   prefix: string[];
   rootPrefix: string[];
   remainingArgs: string[];
 } {
+=======
+export function normalizeRootNoColorArgv(
+  argv: string[],
+  options: NormalizeRootNoColorArgvOptions = {},
+): string[] {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const prefix = argv.slice(0, 2);
   const args = argv.slice(2);
   let rootPrefixEnd = 0;
@@ -313,6 +320,7 @@ function splitRootOptionPrefix(argv: string[]): {
     rootPrefixEnd = index + consumed;
     index += consumed - 1;
   }
+<<<<<<< HEAD
   return {
     prefix,
     rootPrefix: args.slice(0, rootPrefixEnd),
@@ -325,6 +333,11 @@ export function normalizeRootNoColorArgv(
   options: NormalizeRootNoColorArgvOptions = {},
 ): string[] {
   const { prefix, rootPrefix, remainingArgs } = splitRootOptionPrefix(argv);
+=======
+
+  const rootPrefix = args.slice(0, rootPrefixEnd);
+  const remainingArgs = args.slice(rootPrefixEnd);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const movedNoColorArgs: string[] = [];
   const nextArgs: string[] = [];
   for (let index = 0; index < remainingArgs.length; index += 1) {
@@ -359,7 +372,28 @@ export function normalizeRootLogLevelArgv(
   argv: string[],
   options: NormalizeRootLogLevelArgvOptions = {},
 ): string[] {
+<<<<<<< HEAD
   const { prefix, rootPrefix, remainingArgs } = splitRootOptionPrefix(argv);
+=======
+  const prefix = argv.slice(0, 2);
+  const args = argv.slice(2);
+  let rootPrefixEnd = 0;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      break;
+    }
+    const consumed = consumeRootOptionToken(args, index);
+    if (consumed <= 0) {
+      break;
+    }
+    rootPrefixEnd = index + consumed;
+    index += consumed - 1;
+  }
+
+  const rootPrefix = args.slice(0, rootPrefixEnd);
+  const remainingArgs = args.slice(rootPrefixEnd);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const movedLogLevelArgs: string[] = [];
   const nextArgs: string[] = [];
   for (let index = 0; index < remainingArgs.length; index += 1) {
@@ -396,7 +430,10 @@ export function normalizeRootLogLevelArgv(
 
 export function getFlagValue(argv: string[], name: string): string | null | undefined {
   const args = argv.slice(2);
+<<<<<<< HEAD
   let value: string | undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === FLAG_TERMINATOR) {
@@ -404,6 +441,7 @@ export function getFlagValue(argv: string[], name: string): string | null | unde
     }
     if (arg === name) {
       const next = args[i + 1];
+<<<<<<< HEAD
       if (!isValueToken(next)) {
         return null;
       }
@@ -420,6 +458,16 @@ export function getFlagValue(argv: string[], name: string): string | null | unde
     }
   }
   return value;
+=======
+      return isValueToken(next) ? next : null;
+    }
+    if (arg.startsWith(`${name}=`)) {
+      const value = arg.slice(name.length + 1);
+      return value ? value : null;
+    }
+  }
+  return undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function getVerboseFlag(argv: string[], options?: { includeDebug?: boolean }): boolean {
@@ -437,9 +485,17 @@ export function getPositiveIntFlagValue(argv: string[], name: string): number | 
   if (raw === null || raw === undefined) {
     return raw;
   }
+<<<<<<< HEAD
   // Keep absent distinct from present-but-invalid so route-first callers can
   // defer invalid input to Commander instead of silently applying defaults.
   return parsePositiveInt(raw) ?? null;
+=======
+  return parsePositiveInt(raw);
+}
+
+export function getCommandPath(argv: string[], depth = 2): string[] {
+  return getCommandPathInternal(argv, depth, { skipRootOptions: false });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function getCommandPathWithRootOptions(argv: string[], depth = 2): string[] {
@@ -612,3 +668,10 @@ export function shouldMigrateStateFromPath(path: string[]): boolean {
   }
   return true;
 }
+<<<<<<< HEAD
+=======
+
+export function shouldMigrateState(argv: string[]): boolean {
+  return shouldMigrateStateFromPath(getCommandPathWithRootOptions(argv, 2));
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

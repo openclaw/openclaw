@@ -36,8 +36,11 @@ type AgentTaskCompletionInternalEvent = {
   replyInstruction: string;
 };
 
+<<<<<<< HEAD
 type TaskCompletionPromptMode = "plain" | "protected";
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Internal event variants that can be rendered into agent prompt context. */
 export type AgentInternalEvent = AgentTaskCompletionInternalEvent;
 
@@ -88,10 +91,14 @@ function formatGeneratedMediaDirectiveLines(event: AgentTaskCompletionInternalEv
   return ["Generated media:", ...mediaUrls.map((mediaUrl) => `MEDIA:${mediaUrl}`)];
 }
 
+<<<<<<< HEAD
 function formatTaskCompletionEvent(
   event: AgentTaskCompletionInternalEvent,
   mode: TaskCompletionPromptMode,
 ): string {
+=======
+function formatTaskCompletionEvent(event: AgentTaskCompletionInternalEvent): string {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const sessionKey = sanitizeSingleLineField(event.childSessionKey, "unknown");
   const sessionId = sanitizeSingleLineField(event.childSessionId ?? "unknown", "unknown");
   const announceType = sanitizeSingleLineField(event.announceType, "unknown");
@@ -100,6 +107,7 @@ function formatTaskCompletionEvent(
   const result = formatChildResultDataBlock(event.result);
   const attachmentLines = formatGeneratedAttachmentLines(event.attachments);
   const mediaDirectiveLines = formatGeneratedMediaDirectiveLines(event);
+<<<<<<< HEAD
   const lines =
     mode === "protected"
       ? ["[Internal task completion event]"]
@@ -108,6 +116,10 @@ function formatTaskCompletionEvent(
           "",
         ];
   lines.push(
+=======
+  const lines = [
+    "[Internal task completion event]",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     `source: ${event.source}`,
     `session_key: ${sessionKey}`,
     `session_id: ${sessionId}`,
@@ -116,7 +128,11 @@ function formatTaskCompletionEvent(
     `status: ${statusLabel}`,
     "",
     result,
+<<<<<<< HEAD
   );
+=======
+  ];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (attachmentLines.length > 0) {
     lines.push("", ...attachmentLines);
   }
@@ -126,11 +142,49 @@ function formatTaskCompletionEvent(
   if (event.statsLine?.trim()) {
     lines.push("", sanitizeMultilineField(event.statsLine, ""));
   }
+<<<<<<< HEAD
   lines.push(
     "",
     mode === "protected" ? "Action:" : "Instruction:",
     sanitizeMultilineField(event.replyInstruction, ""),
   );
+=======
+  lines.push("", "Action:", sanitizeMultilineField(event.replyInstruction, ""));
+  return lines.join("\n");
+}
+
+function formatTaskCompletionEventForPlainPrompt(event: AgentTaskCompletionInternalEvent): string {
+  const sessionKey = sanitizeSingleLineField(event.childSessionKey, "unknown");
+  const sessionId = sanitizeSingleLineField(event.childSessionId ?? "unknown", "unknown");
+  const announceType = sanitizeSingleLineField(event.announceType, "unknown");
+  const taskLabel = sanitizeSingleLineField(event.taskLabel, "unnamed task");
+  const statusLabel = sanitizeSingleLineField(event.statusLabel, event.status);
+  const result = formatChildResultDataBlock(event.result);
+  const attachmentLines = formatGeneratedAttachmentLines(event.attachments);
+  const mediaDirectiveLines = formatGeneratedMediaDirectiveLines(event);
+  const lines = [
+    "A background task completed. Use this result to reply to the user in your normal assistant voice.",
+    "",
+    `source: ${event.source}`,
+    `session_key: ${sessionKey}`,
+    `session_id: ${sessionId}`,
+    `type: ${announceType}`,
+    `task: ${taskLabel}`,
+    `status: ${statusLabel}`,
+    "",
+    result,
+  ];
+  if (attachmentLines.length > 0) {
+    lines.push("", ...attachmentLines);
+  }
+  if (mediaDirectiveLines.length > 0) {
+    lines.push("", ...mediaDirectiveLines);
+  }
+  if (event.statsLine?.trim()) {
+    lines.push("", sanitizeMultilineField(event.statsLine, ""));
+  }
+  lines.push("", "Instruction:", sanitizeMultilineField(event.replyInstruction, ""));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return lines.join("\n");
 }
 
@@ -142,7 +196,11 @@ export function formatAgentInternalEventsForPrompt(events?: AgentInternalEvent[]
   const blocks = events
     .map((event) => {
       if (event.type === "task_completion") {
+<<<<<<< HEAD
         return formatTaskCompletionEvent(event, "protected");
+=======
+        return formatTaskCompletionEvent(event);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
       return "";
     })
@@ -168,7 +226,11 @@ export function formatAgentInternalEventsForPlainPrompt(events?: AgentInternalEv
   return events
     .map((event) => {
       if (event.type === "task_completion") {
+<<<<<<< HEAD
         return formatTaskCompletionEvent(event, "plain");
+=======
+        return formatTaskCompletionEventForPlainPrompt(event);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
       return "";
     })

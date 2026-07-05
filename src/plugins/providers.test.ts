@@ -37,7 +37,10 @@ const applyPluginAutoEnableMock = vi.fn<ApplyPluginAutoEnable>();
 let resolveOwningPluginIdsForProvider: typeof import("./providers.js").resolveOwningPluginIdsForProvider;
 let resolveOwningPluginIdsForProviderRef: typeof import("./providers.js").resolveOwningPluginIdsForProviderRef;
 let resolveOwningPluginIdsForModelRef: typeof import("./providers.js").resolveOwningPluginIdsForModelRef;
+<<<<<<< HEAD
 let resolveProviderRefOwnership: typeof import("./providers.js").resolveProviderRefOwnership;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 let resolveActivatableProviderOwnerPluginIds: typeof import("./providers.js").resolveActivatableProviderOwnerPluginIds;
 let resolveEnabledProviderPluginIds: typeof import("./providers.js").resolveEnabledProviderPluginIds;
 let resolveCatalogHookProviderPluginIds: typeof import("./providers.js").resolveCatalogHookProviderPluginIds;
@@ -521,7 +524,10 @@ describe("resolvePluginProviders", () => {
       resolveOwningPluginIdsForProvider,
       resolveOwningPluginIdsForProviderRef,
       resolveOwningPluginIdsForModelRef,
+<<<<<<< HEAD
       resolveProviderRefOwnership,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       resolveEnabledProviderPluginIds,
       resolveCatalogHookProviderPluginIds,
       resolveExternalAuthProfileCompatFallbackPluginIds,
@@ -559,6 +565,7 @@ describe("resolvePluginProviders", () => {
     setOwningProviderManifestPlugins();
 
     expect(resolveOwningPluginIdsForProviderRef({ provider: "claude-cli" })).toEqual(["anthropic"]);
+<<<<<<< HEAD
     expect(resolveProviderRefOwnership({ provider: "claude-cli" })).toEqual({
       status: "owned",
       pluginIds: ["anthropic"],
@@ -585,6 +592,8 @@ describe("resolvePluginProviders", () => {
       status: "ambiguous",
       pluginIds: ["first-owner", "second-owner"],
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("maps explicit cli-backend model refs to owning plugin ids", () => {

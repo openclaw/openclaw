@@ -1,12 +1,19 @@
 // Dev Tooling Safety tests cover dev tooling safety script behavior.
+<<<<<<< HEAD
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
+=======
+import { EventEmitter } from "node:events";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
+<<<<<<< HEAD
 import { pathToFileURL } from "node:url";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing as promptProbeTesting } from "../../scripts/anthropic-prompt-probe.ts";
 import { testing as claudeUsageTesting } from "../../scripts/debug-claude-usage.ts";
@@ -21,6 +28,7 @@ import {
   redactHomePath,
   redactJsonValueForDevToolLog,
 } from "../../scripts/lib/dev-tooling-safety.ts";
+<<<<<<< HEAD
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 
 const tempDirs: string[] = [];
@@ -91,6 +99,11 @@ async function waitForChildExit(
   ]);
 }
 
+=======
+
+const tempDirs: string[] = [];
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 afterEach(async () => {
   vi.useRealTimers();
   for (const dir of tempDirs.splice(0)) {
@@ -148,6 +161,7 @@ describe("script-specific dev tooling hardening", () => {
     expect(() => discordSmokeTesting.parseDriverMode("curl")).toThrow(/Invalid --driver/u);
   });
 
+<<<<<<< HEAD
   it("rejects unknown Discord smoke args before live Discord/OpenClaw work", () => {
     expect(() => discordSmokeTesting.parseArgs(["--wat"])).toThrow("Unknown argument: --wat");
 
@@ -197,6 +211,8 @@ describe("script-specific dev tooling hardening", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("redacts Discord webhook tokens from API paths", () => {
     const token = "webhook-secret-token-abcdef123456"; // pragma: allowlist secret
     const apiPath = `/webhooks/123/${token}?wait=true`;
@@ -324,6 +340,7 @@ describe("script-specific dev tooling hardening", () => {
     expect(calls).toBe(1);
   });
 
+<<<<<<< HEAD
   it("prints TUI PTY watch usage without launching the watcher", () => {
     const result = spawnSync(
       process.execPath,
@@ -371,6 +388,8 @@ describe("script-specific dev tooling hardening", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("escalates stalled TUI PTY watch children after interrupt cleanup", async () => {
     vi.useFakeTimers();
     const signals: NodeJS.Signals[] = [];
@@ -486,6 +505,7 @@ describe("script-specific dev tooling hardening", () => {
     },
   );
 
+<<<<<<< HEAD
   it("signals Windows TUI PTY watch process trees with taskkill", () => {
     const childKill = vi.fn(() => true);
     const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
@@ -539,6 +559,8 @@ describe("script-specific dev tooling hardening", () => {
     expect(childKill).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("aborts stalled OpenAI realtime smoke fetches at the request timeout", async () => {
     let signal: AbortSignal | undefined;
     const request = realtimeSmokeTesting.createOpenAIClientSecret("test-key", {
@@ -578,6 +600,7 @@ describe("script-specific dev tooling hardening", () => {
     );
   });
 
+<<<<<<< HEAD
   it("prints OpenAI realtime smoke help without launching live checks", () => {
     expect(realtimeSmokeTesting.parseRealtimeSmokeArgs(["--help"])).toEqual({ help: true });
 
@@ -616,6 +639,8 @@ describe("script-specific dev tooling hardening", () => {
     expect(result.stderr.trim()).toBe("Unknown argument: --wat");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("bounds OpenAI realtime smoke response body reads by content-length", async () => {
     const maxBytes = realtimeSmokeTesting.OPENAI_HTTP_RESPONSE_MAX_BYTES;
     const response = new Response("{}", {
@@ -627,6 +652,7 @@ describe("script-specific dev tooling hardening", () => {
     ).rejects.toThrow(`OpenAI Realtime test response body exceeded ${maxBytes} bytes`);
   });
 
+<<<<<<< HEAD
   it("rejects unsafe OpenAI realtime SDP answer content-length values before reading", async () => {
     const maxBytes = realtimeSmokeTesting.OPENAI_HTTP_RESPONSE_MAX_BYTES;
     const body = {
@@ -651,6 +677,8 @@ describe("script-specific dev tooling hardening", () => {
     expect(body.cancel).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("bounds OpenAI realtime smoke response body reads by streamed bytes", async () => {
     const maxBytes = realtimeSmokeTesting.OPENAI_HTTP_RESPONSE_MAX_BYTES;
     const response = new Response(
@@ -742,6 +770,7 @@ describe("script-specific dev tooling hardening", () => {
     await fs.rm(keepRoot, { force: true, recursive: true });
   });
 
+<<<<<<< HEAD
   it.runIf(process.platform !== "win32")(
     "cleans Anthropic direct prompt descendants after timeout",
     async () => {
@@ -830,6 +859,8 @@ describe("script-specific dev tooling hardening", () => {
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("waits for the Anthropic prompt gateway child after SIGKILL cleanup", async () => {
     const events = new EventEmitter();
     const signals: NodeJS.Signals[] = [];
@@ -897,6 +928,7 @@ describe("script-specific dev tooling hardening", () => {
     expect(closeCalls).toBe(1);
   });
 
+<<<<<<< HEAD
   it.runIf(process.platform !== "win32")(
     "cleans Anthropic prompt gateway descendants after leader exit",
     async () => {
@@ -1027,6 +1059,8 @@ describe("script-specific dev tooling hardening", () => {
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("waits for Anthropic prompt gateway log writes before closing the log file", async () => {
     let resolveWrite: (() => void) | undefined;
     const order: string[] = [];
@@ -1069,6 +1103,7 @@ describe("script-specific dev tooling hardening", () => {
     expect(claudeUsageTesting.CLAUDE_COOKIE_HOST_SQL).not.toContain("%claude.ai%");
   });
 
+<<<<<<< HEAD
   it("rejects malformed Claude usage args before reading auth or browser state", () => {
     expect(claudeUsageTesting.parseArgs(["--agent", "work", "--session-key=abc"])).toEqual({
       agentId: "work",
@@ -1123,6 +1158,8 @@ describe("script-specific dev tooling hardening", () => {
     expect(result.stderr).toContain("--agent requires a value");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("aborts stalled Claude usage fetches at the request timeout", async () => {
     let signal: AbortSignal | undefined;
     const request = claudeUsageTesting.fetchAnthropicOAuthUsage("test-token", {

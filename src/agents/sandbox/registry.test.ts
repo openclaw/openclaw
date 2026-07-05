@@ -17,7 +17,11 @@ const {
   const { tmpdir } = require("node:os");
   const baseDir = mkdtempSync(nodePath.join(tmpdir(), "openclaw-sandbox-registry-"));
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+<<<<<<< HEAD
   Reflect.set(process.env, "OPENCLAW_STATE_DIR", baseDir);
+=======
+  process.env.OPENCLAW_STATE_DIR = baseDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   return {
     TEST_STATE_DIR: baseDir,
@@ -38,7 +42,10 @@ vi.mock("./constants.js", () => ({
 }));
 
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+<<<<<<< HEAD
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { hashTextSha256 } from "./hash.js";
 import {
   migrateLegacySandboxRegistryFiles,
@@ -78,9 +85,15 @@ afterAll(async () => {
   closeOpenClawStateDatabaseForTest();
   await fs.rm(TEST_STATE_DIR, { recursive: true, force: true });
   if (PREVIOUS_OPENCLAW_STATE_DIR === undefined) {
+<<<<<<< HEAD
     deleteTestEnvValue("OPENCLAW_STATE_DIR");
   } else {
     setTestEnvValue("OPENCLAW_STATE_DIR", PREVIOUS_OPENCLAW_STATE_DIR);
+=======
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = PREVIOUS_OPENCLAW_STATE_DIR;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 });
 

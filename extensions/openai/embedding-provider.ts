@@ -36,6 +36,7 @@ function normalizeOpenAiModel(model: string): string {
   return trimmed.startsWith("openai/") ? trimmed.slice("openai/".length) : trimmed;
 }
 
+<<<<<<< HEAD
 /** Whether the embedding base URL points to the native OpenAI API endpoint. */
 function isNativeOpenAiBaseUrl(baseUrl: string): boolean {
   try {
@@ -45,6 +46,8 @@ function isNativeOpenAiBaseUrl(baseUrl: string): boolean {
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function createOpenAiEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: OpenAiEmbeddingClient }> {
@@ -88,8 +91,13 @@ export async function createOpenAiEmbeddingProvider(
     provider: {
       id: "openai",
       model: client.model,
+<<<<<<< HEAD
       ...(typeof OPENAI_MAX_INPUT_TOKENS[normalizeOpenAiModel(client.model)] === "number"
         ? { maxInputTokens: OPENAI_MAX_INPUT_TOKENS[normalizeOpenAiModel(client.model)] }
+=======
+      ...(typeof OPENAI_MAX_INPUT_TOKENS[client.model] === "number"
+        ? { maxInputTokens: OPENAI_MAX_INPUT_TOKENS[client.model] }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         : {}),
       embedQuery: async (text, optionsValue) => {
         const [vec] = await embed([text], "query", optionsValue?.signal);
@@ -105,19 +113,25 @@ export async function createOpenAiEmbeddingProvider(
 async function resolveOpenAiEmbeddingClient(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<OpenAiEmbeddingClient> {
+<<<<<<< HEAD
   const originalModel = options.model;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const client = await resolveRemoteEmbeddingClient({
     provider: options.provider ?? "openai",
     options,
     defaultBaseUrl: DEFAULT_OPENAI_BASE_URL,
     normalizeModel: normalizeOpenAiModel,
   });
+<<<<<<< HEAD
   // Non-native OpenAI routers (e.g. Requesty) expect the provider-qualified
   // model name ("openai/text-embedding-3-small") in embedding requests.
   // Strip the prefix only when talking to the native OpenAI API.
   if (!isNativeOpenAiBaseUrl(client.baseUrl) && originalModel.startsWith("openai/")) {
     client.model = `openai/${normalizeOpenAiModel(originalModel)}`;
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return {
     ...client,
     inputType: options.inputType,

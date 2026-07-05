@@ -467,6 +467,13 @@ function resolveLegacyWorkspaceStatePath(dir: string): string {
   return path.join(dir, LEGACY_WORKSPACE_STATE_DIRNAME, LEGACY_WORKSPACE_STATE_FILENAME);
 }
 
+<<<<<<< HEAD
+=======
+export function resolveWorkspaceAttestationPath(dir: string): string {
+  return resolveWorkspaceAttestationPathInStateDir(dir, resolveStateDir());
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveWorkspaceAttestationPathInStateDir(dir: string, stateDir: string): string {
   const key = createHash("sha256").update(path.resolve(dir)).digest("hex");
   return path.join(stateDir, WORKSPACE_ATTESTATION_DIRNAME, `${key}.attested`);
@@ -519,13 +526,24 @@ export async function hasRecentWorkspaceAttestation(
   }
 }
 
+<<<<<<< HEAD
+=======
+export async function isWorkspaceAttestationMarker(attestationPath: string): Promise<boolean> {
+  return (await readWorkspaceAttestationMarkerStatus(attestationPath)) === "marker";
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function shouldRemoveWorkspaceAttestation(
   attestationPath: string,
   opts?: { trustUnknown?: boolean },
 ): Promise<boolean> {
   try {
     return (
+<<<<<<< HEAD
       (await readWorkspaceAttestationMarkerStatus(attestationPath)) === "marker" ||
+=======
+      (await isWorkspaceAttestationMarker(attestationPath)) ||
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       (await hasRecentWorkspaceAttestation(attestationPath, opts))
     );
   } catch {
@@ -760,6 +778,26 @@ export async function isWorkspaceBootstrapPending(dir: string): Promise<boolean>
   return (await resolveWorkspaceBootstrapStatus(dir)) === "pending";
 }
 
+<<<<<<< HEAD
+=======
+export async function reconcileWorkspaceBootstrapCompletion(
+  dir: string,
+): Promise<WorkspaceBootstrapCompletionReconcileResult> {
+  const resolvedDir = resolveUserPath(dir);
+  const statePath = resolveWorkspaceStatePath(resolvedDir);
+  const bootstrapPath = path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME);
+  const state = await readWorkspaceSetupStateForDir(resolvedDir, {
+    persistLegacyMigration: true,
+  });
+  return await reconcileWorkspaceBootstrapCompletionState({
+    dir: resolvedDir,
+    bootstrapPath,
+    statePath,
+    state,
+  });
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function writeWorkspaceSetupState(
   statePath: string,
   state: WorkspaceSetupState,
@@ -1219,6 +1257,17 @@ async function resolveExtraBootstrapPatternPaths(
   return matches.length > 0 ? matches : [pattern];
 }
 
+<<<<<<< HEAD
+=======
+export async function loadExtraBootstrapFiles(
+  dir: string,
+  extraPatterns: string[],
+): Promise<WorkspaceBootstrapFile[]> {
+  const loaded = await loadExtraBootstrapFilesWithDiagnostics(dir, extraPatterns);
+  return loaded.files;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function loadExtraBootstrapFilesWithDiagnostics(
   dir: string,
   extraPatterns: string[],

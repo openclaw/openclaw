@@ -1,6 +1,9 @@
 // Mattermost plugin module implements client behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+<<<<<<< HEAD
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   fetchWithSsrFGuard,
@@ -12,9 +15,12 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 
+<<<<<<< HEAD
 const MATTERMOST_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 export type MattermostClient = {
@@ -86,6 +92,7 @@ function buildMattermostApiUrl(baseUrl: string, path: string): string {
 
 export async function readMattermostError(res: Response): Promise<string> {
   const contentType = res.headers.get("content-type") ?? "";
+<<<<<<< HEAD
   if (!res.body) {
     if (contentType.includes("application/json")) {
       const data = (await res.json()) as { message?: string } | undefined;
@@ -159,6 +166,16 @@ function responseWithRelease(response: Response, release: () => Promise<void>): 
     statusText: response.statusText,
     headers: response.headers,
   });
+=======
+  if (contentType.includes("application/json")) {
+    const data = (await res.json()) as { message?: string } | undefined;
+    if (data?.message) {
+      return data.message;
+    }
+    return JSON.stringify(data);
+  }
+  return await res.text();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function createMattermostClient(params: {
@@ -179,6 +196,14 @@ export function createMattermostClient(params: {
   // A custom fetchImpl is accepted for testing and special cases.
   const externalFetchImpl = params.fetchImpl;
 
+<<<<<<< HEAD
+=======
+  // Guarded fetch adapter: calls fetchWithSsrFGuard and returns a plain Response.
+  // Body is buffered before releasing the dispatcher so callers get a complete Response.
+  // Null-body status codes per Fetch spec — Response constructor rejects a body for these.
+  const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const guardedFetchImpl: MattermostFetch = async (input, init) => {
     const url =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -188,7 +213,18 @@ export function createMattermostClient(params: {
       auditContext: "mattermost-api",
       policy: ssrfPolicyFromPrivateNetworkOptIn(params.allowPrivateNetwork),
     });
+<<<<<<< HEAD
     return responseWithRelease(response, release);
+=======
+    try {
+      const bodyBytes = NULL_BODY_STATUSES.has(response.status)
+        ? null
+        : await response.arrayBuffer();
+      return new Response(bodyBytes, { status: response.status, headers: response.headers });
+    } finally {
+      await release();
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 
   const fetchImpl = externalFetchImpl ?? guardedFetchImpl;

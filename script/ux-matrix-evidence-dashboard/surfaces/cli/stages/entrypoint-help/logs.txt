@@ -1,0 +1,122 @@
+$ /opt/hostedtoolcache/node/24.13.0/x64/bin/node openclaw.mjs --help
+
+OpenClaw 2026.6.11 (e954c3f) — All your chats, one OpenClaw.
+
+Usage: openclaw [options] [command]
+
+Options:
+  --container <name>   Run the CLI inside a running Podman/Docker container
+                       named <name> (default: env OPENCLAW_CONTAINER)
+  --dev                Dev profile: isolate state under ~/.openclaw-dev, default
+                       gateway port 19001, and shift derived ports
+                       (browser/canvas)
+  -h, --help           Display help for command
+  --log-level <level>  Global log level override for file + console
+                       (silent|fatal|error|warn|info|debug|trace)
+  --no-color           Disable ANSI colors
+  --profile <name>     Use a named profile (isolates
+                       OPENCLAW_STATE_DIR/OPENCLAW_CONFIG_PATH under
+                       ~/.openclaw-<name>)
+  -V, --version        output the version number
+
+Commands:
+  Hint: commands suffixed with * have subcommands. Run <command> --help for details.
+  acp *                Run and manage ACP-backed coding agents
+  agent                Run one agent turn via the Gateway
+  agents *             Manage isolated agents (workspaces, auth, routing)
+  approvals *          Manage exec approvals (gateway or node host)
+  attach               Attach Claude Code to a gateway session with scoped MCP
+                       tools
+  backup *             Create and verify local backup archives for OpenClaw
+                       state
+  capability *         Run provider capability commands (fallback alias: infer)
+  channels *           Add, remove, login, and inspect messaging channels
+  chat                 Open a local terminal UI (alias for tui --local)
+  clawbot *            Legacy clawbot command aliases
+  commitments *        List and manage inferred follow-up commitments
+  completion           Generate shell completion script
+  config *             Non-interactive config helpers
+                       (get/set/unset/file/validate). Default: starts guided
+                       setup.
+  configure            Interactive configuration for credentials, channels,
+                       gateway, and agent defaults
+  crestodian           Open the interactive setup and repair assistant
+  cron *               Schedule and inspect Gateway background jobs
+  daemon *             Manage the Gateway service (legacy alias)
+  dashboard            Open the Control UI with your current token
+  devices *            Device pairing + token management
+  directory *          Lookup contact and group IDs (self, peers, groups) for
+                       supported chat channels
+  dns *                DNS helpers for wide-area discovery (Tailscale + CoreDNS)
+  docs                 Search the live OpenClaw docs
+  doctor               Diagnose and repair config, Gateway, plugin, and channel
+                       problems
+  exec-policy *        Show or synchronize requested exec policy with host
+                       approvals
+  gateway *            Run, inspect, and query the OpenClaw Gateway
+  health               Fetch detailed health from the running Gateway
+  help                 Display help for command
+  hooks *              Manage internal agent hooks
+  infer *              Run provider-backed model, media, search, and embedding
+                       commands
+  logs                 Tail Gateway logs locally or via RPC
+  mcp *                Manage OpenClaw MCP config and channel bridge
+  memory *             Search, inspect, and reindex memory files
+  message *            Send, read, and manage channel messages
+  migrate *            Import state from another agent system
+  models *             List, scan, and set model providers
+  node *               Run and manage the headless node host service
+  nodes *              Pair nodes and run node-host commands through the Gateway
+  onboard              Interactive onboarding for gateway, workspace, and skills
+  pairing *            Secure DM pairing (approve inbound requests)
+  plugins *            Install, enable, disable, and inspect plugins
+  proxy *              Run the OpenClaw debug proxy and inspect captured traffic
+  qa *                 Run QA scenarios and launch the private QA debugger UI
+  qr                   Generate mobile pairing QR/setup code
+  reset                Reset local config/state (keeps the CLI installed)
+  sandbox *            Manage sandbox containers for agent isolation
+  secrets *            Audit, apply, and reload SecretRef-backed credentials
+  security *           Security tools and local config audits
+  sessions *           List stored conversation sessions
+  setup                Initialize local config and an agent workspace
+  skills *             List, inspect, and install agent skills
+  status               Show Gateway, channel, model, and recent-session status
+  system *             System events, heartbeat, and presence
+  tasks *              Inspect durable background tasks and flows
+  terminal             Open a local terminal UI (alias for tui --local)
+  transcripts *        Inspect stored transcripts
+  tui                  Open a terminal UI connected to the Gateway
+  uninstall            Uninstall the gateway service + local data (CLI remains)
+  update *             Update OpenClaw and inspect update channel status
+  webhooks *           Webhook helpers and integrations
+
+Examples:
+  openclaw onboard
+    Run guided setup for a local Gateway, workspace, auth, and channels.
+  openclaw setup
+    Create the baseline config, workspace, and session folders.
+  openclaw configure
+    Change models, Gateway, channels, plugins, skills, and health checks.
+  openclaw status
+    Check Gateway, channel, model, and recent-session status.
+  openclaw doctor --fix
+    Repair common config, service, plugin, and channel problems.
+  openclaw channels add
+    Add or update a chat channel account with guided prompts.
+  openclaw channels status
+    See connected messaging accounts and login state.
+  openclaw --dev gateway
+    Run a dev Gateway (isolated state/config) on ws://127.0.0.1:19001.
+  openclaw gateway run --force
+    Start the Gateway and replace anything bound to its port.
+  openclaw models status
+    Show model/provider auth health before running agents.
+  openclaw plugins list
+    Inspect enabled, disabled, and installed plugins.
+  openclaw agent --to +15555550123 --message "Run summary" --deliver
+    Run one agent turn through the Gateway and optionally deliver the reply.
+  openclaw message send --channel telegram --target @mychat --message "Hi"
+    Send via your Telegram bot.
+
+Docs: https://docs.openclaw.ai/cli
+

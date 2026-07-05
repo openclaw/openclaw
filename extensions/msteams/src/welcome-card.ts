@@ -31,10 +31,15 @@ export function buildWelcomeCard(options?: WelcomeCardOptions): Record<string, u
       {
         type: "TextBlock",
         text: `Hi! I'm ${botName}.`,
+<<<<<<< HEAD
         // Adaptive Card TextWeight/TextSize enums are PascalCase ("Bolder"/"Medium"); lowercase
         // values fall back to Default, so the greeting rendered unstyled (matches polls/presentation).
         weight: "Bolder",
         size: "Medium",
+=======
+        weight: "bolder",
+        size: "medium",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
       {
         type: "TextBlock",

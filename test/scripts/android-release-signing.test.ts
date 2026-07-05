@@ -30,12 +30,18 @@ function runNode(args: string[], env: NodeJS.ProcessEnv = {}) {
     const e = error as { stdout?: unknown; stderr?: unknown };
     return {
       ok: false,
+<<<<<<< HEAD
       stdout: formatProcessOutput(e.stdout),
       stderr: formatProcessOutput(e.stderr),
+=======
+      stdout: Buffer.isBuffer(e.stdout) ? e.stdout.toString("utf8") : String(e.stdout ?? ""),
+      stderr: Buffer.isBuffer(e.stderr) ? e.stderr.toString("utf8") : String(e.stderr ?? ""),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
   }
 }
 
+<<<<<<< HEAD
 function formatProcessOutput(value: unknown): string {
   if (Buffer.isBuffer(value)) {
     return value.toString("utf8");
@@ -43,6 +49,8 @@ function formatProcessOutput(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function runGit(args: string[], cwd?: string, env: NodeJS.ProcessEnv = {}) {
   execFileSync("git", args, {
     cwd,
@@ -131,6 +139,7 @@ afterEach(() => {
 });
 
 describe("scripts/android-release-signing.mjs", () => {
+<<<<<<< HEAD
   it.each([
     ["--mode"],
     ["--mode", "--manifest"],
@@ -154,6 +163,8 @@ describe("scripts/android-release-signing.mjs", () => {
     expect(result.stdout).toBe("");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("documents the canonical Android release signing plan", () => {
     const result = runNode(["--mode", "plan"]);
 

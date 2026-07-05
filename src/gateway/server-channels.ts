@@ -24,7 +24,10 @@ import {
   normalizeOptionalAccountId,
 } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+<<<<<<< HEAD
 import { isAccountEnabled } from "../shared/account-enabled.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 export type { ChannelRuntimeSnapshot };
@@ -107,6 +110,17 @@ function createRuntimeStore(): ChannelRuntimeStore {
   };
 }
 
+<<<<<<< HEAD
+=======
+function isAccountEnabled(account: unknown): boolean {
+  if (!account || typeof account !== "object") {
+    return true;
+  }
+  const enabled = (account as { enabled?: boolean }).enabled;
+  return enabled !== false;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveDefaultRuntime(channelId: ChannelId): ChannelAccountSnapshot {
   const plugin = getChannelPlugin(channelId);
   return plugin?.status?.defaultRuntime ?? { accountId: DEFAULT_ACCOUNT_ID };
@@ -449,7 +463,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       tasks: accountIds.map((id) => async () => {
         const rKey = restartKey(channelId, id);
         if (store.tasks.has(id)) {
+<<<<<<< HEAD
           let clearedTimedOutRecoveryTask = false;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           if (recoveryStopTimedOut.has(rKey)) {
             if (!preserveManualStop) {
               manuallyStopped.delete(rKey);
@@ -457,6 +474,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             if (manuallyStopped.has(rKey)) {
               return;
             }
+<<<<<<< HEAD
             // When a previous stop timed out and the health monitor is
             // requesting recovery again, clean up the stuck task so the
             // channel can actually restart instead of staying in limbo.
@@ -481,6 +499,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           if (!clearedTimedOutRecoveryTask) {
             return;
           }
+=======
+            recoveryStartRequested.add(rKey);
+            setRuntime(channelId, id, { accountId: id, restartPending: true });
+          }
+          return;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }
         const existingStart = store.starting.get(id);
         if (existingStart) {
@@ -628,10 +652,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   abortSignal: abort.signal,
                   log,
                   getStatus: () => getRuntime(channelId, id),
+<<<<<<< HEAD
                   setStatus: (next) =>
                     isCurrentTask()
                       ? setRuntimeFromTaskStatus(channelId, id, next, abort.signal)
                       : getRuntime(channelId, id),
+=======
+                  setStatus: (next) => setRuntimeFromTaskStatus(channelId, id, next, abort.signal),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                   ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
                 });
               const routeRegistry = getPluginHttpRouteRegistry?.();
@@ -644,11 +672,17 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             }
             await startAccountTask;
           });
+<<<<<<< HEAD
           // Recovery can replace a timed-out task before the old promise settles.
           // Only the task that still owns the store slot may write lifecycle state.
           const trackedPromise = task
             .then(() => {
               if (abort.signal.aborted || manuallyStopped.has(rKey) || !isCurrentTask()) {
+=======
+          const trackedPromise = task
+            .then(() => {
+              if (abort.signal.aborted || manuallyStopped.has(rKey)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 return;
               }
               const message = "channel exited without an error";
@@ -656,26 +690,35 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               log.error?.(`[${id}] ${message}`);
             })
             .catch((err: unknown) => {
+<<<<<<< HEAD
               if (!isCurrentTask()) {
                 return;
               }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               const message = formatErrorMessage(err);
               setRuntime(channelId, id, { accountId: id, lastError: message });
               log.error?.(`[${id}] channel exited: ${message}`);
             })
             .then(async () => {
               await cleanupTaskScopedApprovalRuntime("channel cleanup failed");
+<<<<<<< HEAD
               if (!isCurrentTask()) {
                 return;
               }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               setStoppedRuntime(channelId, id, {
                 lastStopAt: Date.now(),
               });
             })
             .then(async () => {
+<<<<<<< HEAD
               if (!isCurrentTask()) {
                 return;
               }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               if (manuallyStopped.has(rKey)) {
                 recoveryStopTimedOut.delete(rKey);
                 recoveryStartRequested.delete(rKey);
@@ -766,9 +809,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 store.aborts.delete(id);
               }
             });
+<<<<<<< HEAD
           function isCurrentTask() {
             return store.tasks.get(id) === trackedPromise;
           }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           handedOffTask = true;
           store.tasks.set(id, trackedPromise);
         } catch (error) {

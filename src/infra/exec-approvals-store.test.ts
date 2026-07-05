@@ -2,7 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { makeTempDir } from "./exec-approvals-test-helpers.js";
 
 const requestJsonlSocketMock = vi.hoisted(() => vi.fn());
@@ -34,7 +37,12 @@ let resolveExecApprovalsTranscriptPath: ExecApprovalsModule["resolveExecApproval
 let saveExecApprovals: ExecApprovalsModule["saveExecApprovals"];
 
 const tempDirs: string[] = [];
+<<<<<<< HEAD
 const testEnvSnapshot = captureEnv(["OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
+=======
+const originalOpenClawHome = process.env.OPENCLAW_HOME;
+const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 beforeAll(async () => {
   ({
@@ -64,7 +72,20 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+<<<<<<< HEAD
   testEnvSnapshot.restore();
+=======
+  if (originalOpenClawHome === undefined) {
+    delete process.env.OPENCLAW_HOME;
+  } else {
+    process.env.OPENCLAW_HOME = originalOpenClawHome;
+  }
+  if (originalOpenClawStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -73,8 +94,13 @@ afterEach(() => {
 function createHomeDir(): string {
   const dir = makeTempDir();
   tempDirs.push(dir);
+<<<<<<< HEAD
   setTestEnvValue("OPENCLAW_HOME", dir);
   deleteTestEnvValue("OPENCLAW_STATE_DIR");
+=======
+  process.env.OPENCLAW_HOME = dir;
+  delete process.env.OPENCLAW_STATE_DIR;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return dir;
 }
 
@@ -135,7 +161,11 @@ describe("exec approvals store helpers", () => {
   it("uses OPENCLAW_STATE_DIR for default file and socket paths", () => {
     const dir = createHomeDir();
     const stateDir = path.join(dir, "custom-state");
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+=======
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(path.normalize(resolveExecApprovalsPath())).toBe(
       path.normalize(stateApprovalsFilePath(stateDir)),
@@ -173,7 +203,11 @@ describe("exec approvals store helpers", () => {
       })}\n`,
       "utf8",
     );
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+=======
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const resolved = resolveExecApprovals("main", {
       security: "full",
@@ -648,7 +682,11 @@ describe("exec approvals store helpers", () => {
     const linkedHome = `${realHome}-link`;
     tempDirs.push(realHome, linkedHome);
     fs.symlinkSync(realHome, linkedHome, "dir");
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_HOME", linkedHome);
+=======
+    process.env.OPENCLAW_HOME = linkedHome;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} });
 
@@ -665,7 +703,11 @@ describe("exec approvals store helpers", () => {
     fs.mkdirSync(linkedStateTarget, { recursive: true });
     fs.symlinkSync(realHome, linkedHome, "dir");
     fs.symlinkSync(linkedStateTarget, path.join(realHome, ".openclaw"), "dir");
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_HOME", linkedHome);
+=======
+    process.env.OPENCLAW_HOME = linkedHome;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(() =>
       saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),

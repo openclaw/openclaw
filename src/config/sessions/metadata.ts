@@ -7,6 +7,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+<<<<<<< HEAD
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalNonDeliveryChannel,
@@ -19,6 +20,12 @@ function isSystemEventProvider(provider?: string): boolean {
   return provider === "heartbeat" || provider === "cron-event" || provider === "exec-event";
 }
 
+=======
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
+import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // Origin updates merge sparse channel metadata without deleting previously known fields.
 const mergeOrigin = (
   existing: SessionOrigin | undefined,
@@ -28,6 +35,7 @@ const mergeOrigin = (
     return undefined;
   }
   const merged: SessionOrigin = existing ? { ...existing } : {};
+<<<<<<< HEAD
   // A provider/surface/account change is a fresh channel identity (e.g. a dmScope:"main" session
   // moving Slack -> Telegram, or between Slack accounts). Channel-keyed fields belong to the prior
   // channel; drop them so an inbound that omits them does not keep reactions, native threading, and
@@ -52,6 +60,8 @@ const mergeOrigin = (
     delete merged.accountId;
     delete merged.threadId;
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (next?.label) {
     merged.label = next.label;
   }
@@ -90,7 +100,13 @@ export function deriveSessionOrigin(
   ctx: MsgContext,
   opts?: { skipSystemEventOrigin?: boolean },
 ): SessionOrigin | undefined {
+<<<<<<< HEAD
   if (opts?.skipSystemEventOrigin && isSystemEventProvider(ctx.Provider)) {
+=======
+  const isSystemEventProvider =
+    ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event";
+  if (opts?.skipSystemEventOrigin && isSystemEventProvider) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return undefined;
   }
   const label = normalizeOptionalString(resolveConversationLabel(ctx));

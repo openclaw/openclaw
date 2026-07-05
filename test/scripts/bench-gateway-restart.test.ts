@@ -7,6 +7,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { beforeAll, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-restart.ts";
+<<<<<<< HEAD
 import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -32,6 +33,10 @@ function readRestartIntentRow(env: NodeJS.ProcessEnv) {
   );
 }
 
+=======
+import { registerStopChildBehaviorTests } from "./bench-gateway-child-test-support.js";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("gateway restart benchmark script", () => {
   let helpResult: ReturnType<typeof spawnSync>;
 
@@ -65,7 +70,10 @@ describe("gateway restart benchmark script", () => {
   });
 
   it("rejects ambiguous benchmark CLI values before spawning Node", () => {
+<<<<<<< HEAD
     expect(() => testing.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(testing.parsePositiveInt("5", 1, "--restarts")).toBe(5);
     expect(testing.parseNonNegativeInt("0", 1, "--warmup")).toBe(0);
     expect(
@@ -90,6 +98,7 @@ describe("gateway restart benchmark script", () => {
     expect(() => testing.parseOptions(["--output", "--case", "skipChannels"])).toThrow(
       "--output requires a value",
     );
+<<<<<<< HEAD
     expect(() =>
       testing.parseOptions(["--output", "first.json", "--output", "second.json"]),
     ).toThrow("--output was provided more than once");
@@ -97,12 +106,16 @@ describe("gateway restart benchmark script", () => {
     expect(() =>
       testing.parseOptions(["--case", "skipChannels", "--case", "skipChannels"]),
     ).toThrow('Duplicate --case "skipChannels"');
+=======
+    expect(() => testing.parseOptions(["--case"])).toThrow("--case requires a value");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(() => testing.parseOptions(["--restarts", "--runs", "1"])).toThrow(
       "--restarts requires a value",
     );
     expect(() => testing.resolveEntry("--inspect")).toThrow(/must be a file path/u);
   });
 
+<<<<<<< HEAD
   it("rejects unknown benchmark CLI args before checking platform or running cases", () => {
     const result = spawnSync(
       process.execPath,
@@ -151,6 +164,8 @@ describe("gateway restart benchmark script", () => {
     expect(result.stderr).not.toContain("\n    at ");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("guards the SIGUSR1 restart benchmark on Windows", () => {
     expect(() => testing.ensureSupportedRestartPlatform("linux")).not.toThrow();
     expect(() => testing.ensureSupportedRestartPlatform("darwin")).not.toThrow();
@@ -730,6 +745,7 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
       const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
 
       expect(testing.writeRestartIntent(env, 12345, "gateway-restart-bench")).toBe(true);
+<<<<<<< HEAD
       const row = readRestartIntentRow(env);
 
       expect(row).toMatchObject({
@@ -740,6 +756,19 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
       });
     } finally {
       closeOpenClawStateDatabaseForTest();
+=======
+      const raw = fs.readFileSync(path.join(root, "state", "gateway-restart-intent.json"), "utf8");
+      const parsed = JSON.parse(raw) as {
+        kind?: unknown;
+        pid?: unknown;
+        reason?: unknown;
+      };
+
+      expect(parsed.kind).toBe("gateway-restart");
+      expect(parsed.pid).toBe(12345);
+      expect(parsed.reason).toBe("gateway-restart-bench");
+    } finally {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       fs.rmSync(root, { force: true, recursive: true });
     }
   });

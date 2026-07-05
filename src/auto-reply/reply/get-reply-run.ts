@@ -2,7 +2,11 @@
 import crypto from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+<<<<<<< HEAD
 import { type FastMode, normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+=======
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   clearAutoFallbackPrimaryProbeSelection,
   hasLegacyAutoFallbackWithoutOrigin,
@@ -100,7 +104,10 @@ import {
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
+<<<<<<< HEAD
 import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
 import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
@@ -410,10 +417,13 @@ type RunPreparedReplyParams = {
   directives: InlineDirectives;
   defaultActivation: Parameters<typeof buildGroupIntro>[0]["defaultActivation"];
   resolvedThinkLevel: ThinkLevel | undefined;
+<<<<<<< HEAD
   resolvedFastMode?: FastMode;
   resolvedFastModeAutoOnSeconds?: number;
   resolvedFastModeOverride?: boolean;
   resolvedFastModeAutoOnSecondsOverride?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel: ElevatedLevel;
@@ -445,7 +455,10 @@ type RunPreparedReplyParams = {
   resetTriggered: boolean;
   systemSent: boolean;
   sessionEntry?: SessionEntry;
+<<<<<<< HEAD
   sessionEntryHandle?: ReplySessionEntryHandle;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;
   sessionId?: string;
@@ -493,7 +506,10 @@ export async function runPreparedReply(
     sessionId,
     storePath,
     workspaceDir,
+<<<<<<< HEAD
     sessionEntryHandle,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sessionStore,
   } = params;
   const runtimePolicySessionKey = resolveRuntimePolicySessionKey({
@@ -773,13 +789,19 @@ export async function runPreparedReply(
     baseBody: effectiveBaseBody,
     abortedLastRun,
     sessionEntry,
+<<<<<<< HEAD
     sessionEntryHandle,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sessionStore,
     sessionKey,
     storePath,
     abortKey: command.abortKey,
   });
+<<<<<<< HEAD
   sessionEntry = sessionEntryHandle?.getCurrent() ?? sessionEntry;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
   // Extract first-token think hint from the user body BEFORE prepending system events.
@@ -859,7 +881,10 @@ export async function runPreparedReply(
           const { ensureSkillSnapshot } = await loadSessionUpdatesRuntime();
           return await ensureSkillSnapshot({
             sessionEntry,
+<<<<<<< HEAD
             sessionEntryHandle,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             sessionStore,
             sessionKey,
             storePath,
@@ -871,9 +896,12 @@ export async function runPreparedReply(
           });
         });
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
+<<<<<<< HEAD
   if (sessionEntry) {
     sessionEntryHandle?.replaceCurrent(sessionEntry);
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const skillsSnapshot = skillResult.skillsSnapshot;
   let {
     prefixedCommandBody,
@@ -1312,9 +1340,12 @@ export async function runPreparedReply(
       replyRoute.accountId,
       replyRoute.chatType,
     ),
+<<<<<<< HEAD
     originatingChatId:
       normalizeOptionalString(sessionCtx.NativeChannelId) ??
       normalizeOptionalString(sessionCtx.ChatId),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     originatingChatType: replyRoute.chatType,
     run: {
       agentId,
@@ -1331,7 +1362,10 @@ export async function runPreparedReply(
         normalizeOptionalString(sessionCtx.GroupSubject),
       groupSpace: normalizeOptionalString(sessionCtx.GroupSpace),
       senderId: normalizeOptionalString(sessionCtx.SenderId),
+<<<<<<< HEAD
       channelContext: ctx.ChannelContext ?? sessionCtx.ChannelContext,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       senderName: normalizeOptionalString(sessionCtx.SenderName),
       senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
       senderE164: normalizeOptionalString(sessionCtx.SenderE164),
@@ -1340,7 +1374,10 @@ export async function runPreparedReply(
       senderIsOwner: command.senderIsOwner,
       traceAuthorized:
         command.senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
+<<<<<<< HEAD
       approvalReviewerDeviceId: normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
       cwd: normalizeOptionalString(sessionEntry?.spawnedCwd),
@@ -1355,6 +1392,7 @@ export async function runPreparedReply(
       authProfileId,
       authProfileIdSource,
       thinkLevel: resolvedThinkLevel,
+<<<<<<< HEAD
       ...(() => {
         if (useFastReplyRuntime) {
           return {
@@ -1380,6 +1418,17 @@ export async function runPreparedReply(
             : {}),
         };
       })(),
+=======
+      fastMode: useFastReplyRuntime
+        ? false
+        : resolveFastModeState({
+            cfg,
+            provider,
+            model,
+            agentId,
+            sessionEntry: preparedSessionState.sessionEntry,
+          }).enabled,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       verboseLevel: resolvedVerboseLevel,
       reasoningLevel: resolvedReasoningLevel,
       elevatedLevel: resolvedElevatedLevel,

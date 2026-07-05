@@ -202,6 +202,7 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
       }),
     ).rejects.toThrow(/not found/);
   });
+<<<<<<< HEAD
 
   test("normalizes completed agent.wait envelopes for plugin subagents", async () => {
     const serverPlugins = await loadServerPlugins();
@@ -244,4 +245,6 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
       status: "ok",
     });
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

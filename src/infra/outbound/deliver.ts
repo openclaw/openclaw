@@ -868,6 +868,7 @@ function hasDeliveryResultIdentity(result: OutboundDeliveryResult): boolean {
   );
 }
 
+<<<<<<< HEAD
 function pushIdentifiedDeliveryResult(
   results: OutboundDeliveryResult[],
   delivery: OutboundDeliveryResult,
@@ -885,6 +886,8 @@ function filterIdentifiedDeliveryResults(
   return results.filter((result) => hasDeliveryResultIdentity(result));
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function normalizeDeliveryPin(payload: ReplyPayload): ReplyPayloadDeliveryPin | undefined {
   const pin = payload.delivery?.pin;
   if (pin === true) {
@@ -1343,9 +1346,15 @@ async function deliverOutboundPayloadsWithQueueCleanup(
   };
   const queuePolicy = params.queuePolicy ?? "best_effort";
   let platformResultsReturned = false;
+<<<<<<< HEAD
   let platformSendStarted = false;
 
   try {
+=======
+
+  try {
+    let platformSendStarted = false;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const results = await deliverOutboundPayloadsCore({
       ...wrappedParams,
       ...(queueId
@@ -1407,6 +1416,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
       if (isDeliveryAbortError(err)) {
         await ackDelivery(queueId).catch(() => {});
       } else if (!platformResultsReturned) {
+<<<<<<< HEAD
         const sendEvidence =
           platformSendStarted && err instanceof OutboundDeliveryError && err.sentBeforeError;
         if (sendEvidence) {
@@ -1430,6 +1440,13 @@ async function deliverOutboundPayloadsWithQueueCleanup(
             );
           });
         }
+=======
+        await failDelivery(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {
+          log.warn(
+            `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
+          );
+        });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     }
     throw err;
@@ -1546,7 +1563,11 @@ async function deliverOutboundPayloadsCore(
         continue;
       }
       throwIfAborted(abortSignal);
+<<<<<<< HEAD
       pushIdentifiedDeliveryResult(results, await sendHandler.sendText(unit.text, unit.overrides));
+=======
+      results.push(await sendHandler.sendText(unit.text, unit.overrides));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   };
   const normalizedPayloads = normalizePayloadsForChannelDelivery(outboundPayloadPlan, handler);
@@ -1800,12 +1821,19 @@ async function deliverOutboundPayloadsCore(
         const beforeCount = results.length;
         if (deliveryHandler.sendFormattedText) {
           results.push(
+<<<<<<< HEAD
             ...filterIdentifiedDeliveryResults(
               await deliveryHandler.sendFormattedText(
                 payloadSummary.text,
                 applySendReplyToConsumption(sendOverrides),
               ),
             ),
+=======
+            ...(await deliveryHandler.sendFormattedText(
+              payloadSummary.text,
+              applySendReplyToConsumption(sendOverrides),
+            )),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           );
         } else {
           await sendTextChunks(deliveryHandler, payloadSummary.text, sendOverrides);
@@ -1826,7 +1854,11 @@ async function deliverOutboundPayloadsCore(
             }),
           );
         }
+<<<<<<< HEAD
         const messageId = deliveredResults.at(-1)?.messageId;
+=======
+        const messageId = results.at(-1)?.messageId;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const pinMessageId = deliveredResults.find((entry) => entry.messageId)?.messageId;
         await maybePinDeliveredMessage({
           handler: deliveryHandler,
@@ -1843,7 +1875,11 @@ async function deliverOutboundPayloadsCore(
         });
         completeDeliveryDiagnostics(deliveredResults.length);
         emitMessageSent({
+<<<<<<< HEAD
           success: deliveredResults.length > 0,
+=======
+          success: results.length > beforeCount,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           content: payloadSummary.hookContent ?? payloadSummary.text,
           messageId,
         });
@@ -1883,7 +1919,11 @@ async function deliverOutboundPayloadsCore(
             }),
           );
         }
+<<<<<<< HEAD
         const messageId = deliveredResults.at(-1)?.messageId;
+=======
+        const messageId = results.at(-1)?.messageId;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const pinMessageId = deliveredResults.find((entry) => entry.messageId)?.messageId;
         await maybePinDeliveredMessage({
           handler: deliveryHandler,
@@ -1900,7 +1940,11 @@ async function deliverOutboundPayloadsCore(
         });
         completeDeliveryDiagnostics(deliveredResults.length);
         emitMessageSent({
+<<<<<<< HEAD
           success: deliveredResults.length > 0,
+=======
+          success: results.length > beforeCount,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           content: payloadSummary.hookContent ?? payloadSummary.text,
           messageId,
         });
@@ -1928,10 +1972,16 @@ async function deliverOutboundPayloadsCore(
               unit.overrides,
             )
           : await deliveryHandler.sendMedia(unit.caption ?? "", unit.mediaUrl, unit.overrides);
+<<<<<<< HEAD
         if (pushIdentifiedDeliveryResult(results, delivery)) {
           firstMessageId ??= delivery.messageId;
           lastMessageId = delivery.messageId;
         }
+=======
+        results.push(delivery);
+        firstMessageId ??= delivery.messageId;
+        lastMessageId = delivery.messageId;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
       await maybePinDeliveredMessage({
         handler: deliveryHandler,
@@ -1964,7 +2014,11 @@ async function deliverOutboundPayloadsCore(
       }
       completeDeliveryDiagnostics(results.length - beforeCount);
       emitMessageSent({
+<<<<<<< HEAD
         success: results.length > beforeCount,
+=======
+        success: true,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         content: payloadSummary.hookContent ?? payloadSummary.text,
         messageId: lastMessageId,
       });

@@ -1,6 +1,9 @@
 // Plugin Sdk Surface Report tests cover plugin sdk surface report script behavior.
 import { spawnSync } from "node:child_process";
+<<<<<<< HEAD
 import { readFileSync } from "node:fs";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { describe, expect, it } from "vitest";
 
 function runSurfaceReport(env: Record<string, string>) {
@@ -14,6 +17,7 @@ function runSurfaceReport(env: Record<string, string>) {
   });
 }
 
+<<<<<<< HEAD
 type PublicSurfaceCounts = {
   callableExports: number;
   exports: number;
@@ -97,6 +101,9 @@ describe("plugin SDK surface report", () => {
     expect(result.stdout).not.toContain("all SDK entrypoints:");
   });
 
+=======
+describe("plugin SDK surface report", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects loose numeric budget env vars before collecting SDK stats", () => {
     const result = runSurfaceReport({
       OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS: "1e9",
@@ -132,6 +139,7 @@ describe("plugin SDK surface report", () => {
     expect(result.stderr).toBe("");
   });
 
+<<<<<<< HEAD
   it("keeps default public surface budgets pinned to current source counts", () => {
     expect(readDefaultPublicSurfaceBudgets()).toEqual(readCurrentPublicSurfaceCounts());
   });
@@ -146,6 +154,8 @@ describe("plugin SDK surface report", () => {
     expect(result.stderr).toContain(`public callable exports ${budget} > ${budget - 1}`);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects deprecated export growth by public entrypoint", () => {
     const result = runSurfaceReport({
       OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT: JSON.stringify({ core: 1 }),

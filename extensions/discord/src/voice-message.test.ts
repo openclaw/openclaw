@@ -52,6 +52,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
 let ensureOggOpus: typeof import("./voice-message.js").ensureOggOpus;
 let sendDiscordVoiceMessage: typeof import("./voice-message.js").sendDiscordVoiceMessage;
 
+<<<<<<< HEAD
 function cancelTrackedResponse(
   text: string,
   init: ResponseInit,
@@ -74,6 +75,8 @@ function cancelTrackedResponse(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("ensureOggOpus", () => {
   beforeAll(async () => {
     ({ ensureOggOpus, sendDiscordVoiceMessage } = await import("./voice-message.js"));
@@ -396,6 +399,7 @@ describe("sendDiscordVoiceMessage", () => {
       message: "cdn unavailable",
     });
   });
+<<<<<<< HEAD
 
   it("bounds voice upload error bodies without using response.text()", async () => {
     const rest = createRest();
@@ -449,4 +453,6 @@ describe("sendDiscordVoiceMessage", () => {
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

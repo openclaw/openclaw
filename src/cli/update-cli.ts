@@ -38,6 +38,7 @@ function inheritedUpdateTimeout(
   return inheritOptionFromParent<string>(command, "timeout");
 }
 
+<<<<<<< HEAD
 type CommanderUpdateOptions = Record<string, unknown> & {
   acknowledgeClawhubRisk?: boolean;
   acknowledgeClawHubRisk?: boolean;
@@ -61,6 +62,8 @@ function inheritedUpdateClawHubRisk(command?: Command): boolean {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function registerUpdateFinalizationCommand(update: Command, name: string, hidden: boolean) {
   const command = update.command(name, { hidden });
   command
@@ -69,11 +72,14 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
     .option("--channel <stable|beta|dev>", "Persist update channel before repair")
     .option("--timeout <seconds>", "Timeout for update repair steps in seconds (default: 1800)")
     .option("--yes", "Skip confirmation prompts (non-interactive)", false)
+<<<<<<< HEAD
     .option(
       "--acknowledge-clawhub-risk",
       "Acknowledge ClawHub release trust warnings during post-update plugin sync",
       false,
     )
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     .option("--no-restart", "Accepted for update command parity; repair never restarts")
     .addHelpText(
       "after",
@@ -96,8 +102,11 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
           timeout: inheritedUpdateTimeout(opts, actionCommand),
           yes: Boolean(opts.yes),
           restart: false,
+<<<<<<< HEAD
           acknowledgeClawHubRisk:
             normalizeCommanderClawHubRiskOption(opts) || inheritedUpdateClawHubRisk(actionCommand),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         });
       } catch (err) {
         defaultRuntime.error(String(err));
@@ -122,11 +131,14 @@ export function registerUpdateCli(program: Command) {
     )
     .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1800)")
     .option("--yes", "Skip confirmation prompts (non-interactive)", false)
+<<<<<<< HEAD
     .option(
       "--acknowledge-clawhub-risk",
       "Acknowledge ClawHub release trust warnings during post-update plugin sync",
       false,
     )
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     .addHelpText("after", () => {
       const examples = [
         ["openclaw update", "Update a source checkout (git)"],
@@ -139,7 +151,10 @@ export function registerUpdateCli(program: Command) {
         ["openclaw update --json", "Output result as JSON"],
         ["openclaw update --yes", "Non-interactive (accept downgrade prompts)"],
         ["openclaw update repair", "Repair stranded post-update plugin state"],
+<<<<<<< HEAD
         ["openclaw update --acknowledge-clawhub-risk", "Acknowledge ClawHub plugin trust warnings"],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         ["openclaw update wizard", "Interactive update wizard"],
         ["openclaw --update", "Shorthand for openclaw update"],
       ] as const;
@@ -159,7 +174,10 @@ ${theme.heading("Switch channels:")}
 
 ${theme.heading("Non-interactive:")}
   - Use --yes to accept downgrade prompts
+<<<<<<< HEAD
   - Use --acknowledge-clawhub-risk only after reviewing ClawHub plugin trust warnings
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   - Combine with --channel/--tag/--no-restart/--json/--timeout as needed
   - Use --dry-run to preview actions without writing config/installing/restarting
 
@@ -174,17 +192,28 @@ ${theme.heading("Notes:")}
 
 ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}`;
     })
+<<<<<<< HEAD
     .action(async (opts: CommanderUpdateOptions) => {
+=======
+    .action(async (opts) => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       try {
         await updateCommand({
           json: Boolean(opts.json),
           restart: Boolean(opts.restart),
           dryRun: Boolean(opts.dryRun),
+<<<<<<< HEAD
           channel: opts.channel,
           tag: opts.tag,
           timeout: opts.timeout,
           yes: Boolean(opts.yes),
           acknowledgeClawHubRisk: normalizeCommanderClawHubRiskOption(opts),
+=======
+          channel: opts.channel as string | undefined,
+          tag: opts.tag as string | undefined,
+          timeout: opts.timeout as string | undefined,
+          yes: Boolean(opts.yes),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         });
       } catch (err) {
         defaultRuntime.error(String(err));

@@ -1,10 +1,13 @@
 // Retry hint tests cover user-facing guidance for failed cron retry timing.
 import { describe, expect, it } from "vitest";
 import { resolveCronExecutionRetryHint } from "./retry-hint.js";
+<<<<<<< HEAD
 import {
   preExecutionTimeoutErrorMessage,
   setupTimeoutErrorMessage,
 } from "./service/execution-errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("resolveCronExecutionRetryHint", () => {
   it("matches classified transient errors", () => {
@@ -41,6 +44,7 @@ describe("resolveCronExecutionRetryHint", () => {
     });
   });
 
+<<<<<<< HEAD
   it("classifies cron pre-execution watchdog failures as timeout retries", () => {
     for (const message of [setupTimeoutErrorMessage(), preExecutionTimeoutErrorMessage()]) {
       expect(resolveCronExecutionRetryHint(message, ["timeout"])).toEqual({
@@ -50,6 +54,8 @@ describe("resolveCronExecutionRetryHint", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not classify bare 5xx-looking numbers as server_error", () => {
     for (const message of [
       "context limit 512 exceeded",

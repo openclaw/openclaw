@@ -179,6 +179,7 @@ describe("web fetch runtime", () => {
     });
   });
 
+<<<<<<< HEAD
   it("uses an explicitly configured keyless provider without an API key", () => {
     const provider = createFirecrawlProvider({
       requiresCredential: false,
@@ -209,6 +210,8 @@ describe("web fetch runtime", () => {
     expect(resolveWebFetchDefinition({ config: {} })).toBeNull();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("auto-detects providers from configured fallback credentials", () => {
     const provider = createFirecrawlProvider({
       getConfiguredCredentialFallback: (config) => {
@@ -304,7 +307,11 @@ describe("web fetch runtime", () => {
     expect(requireResolvedWebFetch(resolved).provider.id).toBe("firecrawl");
   });
 
+<<<<<<< HEAD
   it("keeps sandboxed web fetch on trusted providers even when runtime providers are preferred", () => {
+=======
+  it("keeps sandboxed web fetch on bundled providers even when runtime providers are preferred", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const bundled = createFirecrawlProvider({
       getConfiguredCredentialValue: () => "bundled-key",
     });
@@ -319,11 +326,14 @@ describe("web fetch runtime", () => {
     });
 
     expect(requireResolvedWebFetch(resolved).provider.id).toBe("firecrawl");
+<<<<<<< HEAD
     expect(resolvePluginWebFetchProvidersMock).toHaveBeenCalledWith({
       config: {},
       sandboxed: true,
     });
     expect(resolveRuntimeWebFetchProvidersMock).not.toHaveBeenCalled();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("uses runtime providers for non-sandboxed web fetch when runtime providers are preferred", () => {

@@ -3,7 +3,10 @@ import { repairMissingConfiguredPluginInstalls } from "../../commands/doctor/sha
 import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "../../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+<<<<<<< HEAD
 import type { ClawHubRiskAcknowledgementRequest } from "../../infra/clawhub-install-trust.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 import { resolveDefaultPluginNpmDir } from "../../plugins/install-paths.js";
 import { listManagedPluginNpmRoots } from "../../plugins/npm-project-roots.js";
@@ -28,7 +31,10 @@ export type PostCoreConvergenceWarning = {
 
 export type PostCoreConvergenceResult = {
   changes: string[];
+<<<<<<< HEAD
   notices?: PostCoreConvergenceWarning[];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   warnings: PostCoreConvergenceWarning[];
   errored: boolean;
   smokeFailures: PluginPayloadSmokeFailure[];
@@ -105,8 +111,11 @@ export async function runPostCorePluginConvergence(params: {
    * map is what gets persisted and returned via `installRecords`.
    */
   baselineInstallRecords?: Record<string, PluginInstallRecord>;
+<<<<<<< HEAD
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }): Promise<PostCoreConvergenceResult> {
   const env: NodeJS.ProcessEnv = {
     ...params.env,
@@ -124,8 +133,11 @@ export async function runPostCorePluginConvergence(params: {
     cfg: params.cfg,
     env,
     ...(prunedBaseline ? { baselineRecords: prunedBaseline.records } : {}),
+<<<<<<< HEAD
     ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
     ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   const warnings: PostCoreConvergenceWarning[] = repair.warnings.map((message) => ({
@@ -135,11 +147,14 @@ export async function runPostCorePluginConvergence(params: {
   }));
   const peerLinkRepair = await repairManagedNpmOpenClawPeerLinks({ env });
   warnings.push(...peerLinkRepair.warnings);
+<<<<<<< HEAD
   const notices: PostCoreConvergenceWarning[] = (repair.notices ?? []).map((message) => ({
     reason: message,
     message,
     guidance: [],
   }));
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const records: Record<string, PluginInstallRecord> = repair.records;
   // Filter the smoke-check input to active records ONLY: configured /
@@ -168,7 +183,10 @@ export async function runPostCorePluginConvergence(params: {
       ...repair.changes,
       ...peerLinkRepair.changes,
     ],
+<<<<<<< HEAD
     notices,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     warnings,
     errored: smoke.failures.length > 0,
     smokeFailures: smoke.failures,
@@ -242,7 +260,11 @@ export function convergenceWarningsToOutcomes(convergence: PostCoreConvergenceRe
     .filter((w): w is PostCoreConvergenceWarning & { pluginId: string } => Boolean(w.pluginId))
     .map((w) => ({ pluginId: w.pluginId, status: "error" as const, message: w.message }));
   return {
+<<<<<<< HEAD
     warnings: [...convergence.warnings, ...(convergence.notices ?? [])],
+=======
+    warnings: convergence.warnings,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     outcomes,
     errored: convergence.errored,
   };

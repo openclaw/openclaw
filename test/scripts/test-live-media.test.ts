@@ -1,5 +1,8 @@
 // Test Live Media tests cover test live media script behavior.
+<<<<<<< HEAD
 import { spawnSync } from "node:child_process";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { describe, expect, it } from "vitest";
 import {
   MEDIA_SUITES,
@@ -9,6 +12,7 @@ import {
 } from "../../scripts/test-live-media.ts";
 
 describe("scripts/test-live-media", () => {
+<<<<<<< HEAD
   it("prints help through the real node --import tsx entrypoint", () => {
     const result = spawnSync(
       process.execPath,
@@ -25,6 +29,8 @@ describe("scripts/test-live-media", () => {
     expect(result.stderr).toBe("");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects unknown global providers for the selected suites", () => {
     expect(() =>
       parseArgs(["image", "--providers", "definitely-not-a-provider", "--all-providers"]),
@@ -52,12 +58,15 @@ describe("scripts/test-live-media", () => {
     ).toEqual(new Set(["openrouter"]));
   });
 
+<<<<<<< HEAD
   it("rejects suite-specific provider filters for unselected suites", () => {
     expect(() => parseArgs(["image", "--music-providers", "fal", "--all-providers"])).toThrow(
       "Provider filter(s) target unselected media suite(s): music",
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("passes single-dash Vitest args after the option separator", () => {
     expect(
       parseArgs(["image", "--all-providers", "--project", "tooling", "--", "-t", "media-smoke"]),

@@ -18,7 +18,10 @@ const mocks = vi.hoisted(() => ({
   getDaemonStatusSummary: vi.fn(),
   getNodeDaemonStatusSummary: vi.fn(),
   resolveReadOnlyChannelPluginsForConfig: vi.fn(),
+<<<<<<< HEAD
   resolveModelAuthLabel: vi.fn(),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("../channels/plugins/read-only.js", () => ({
@@ -29,10 +32,13 @@ vi.mock("../infra/provider-usage.js", () => ({
   loadProviderUsageSummary: mocks.loadProviderUsageSummary,
 }));
 
+<<<<<<< HEAD
 vi.mock("../agents/model-auth-label.js", () => ({
   resolveModelAuthLabel: mocks.resolveModelAuthLabel,
 }));
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.mock("../security/audit.runtime.js", () => ({
   runSecurityAudit: mocks.runSecurityAudit,
 }));
@@ -50,8 +56,11 @@ function requireProviderUsageCall(): {
   timeoutMs?: number;
   config?: unknown;
   agentDir?: string;
+<<<<<<< HEAD
   providers?: string[];
   auth?: Array<Record<string, unknown>>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } {
   const call = mocks.loadProviderUsageSummary.mock.calls[0];
   if (!call) {
@@ -65,8 +74,11 @@ function requireProviderUsageCall(): {
     timeoutMs?: number;
     config?: unknown;
     agentDir?: string;
+<<<<<<< HEAD
     providers?: string[];
     auth?: Array<Record<string, unknown>>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }
 
@@ -78,7 +90,10 @@ describe("status-runtime-shared", () => {
     mocks.callGateway.mockResolvedValue({ ok: true });
     mocks.getDaemonStatusSummary.mockResolvedValue({ label: "LaunchAgent" });
     mocks.getNodeDaemonStatusSummary.mockResolvedValue({ label: "node" });
+<<<<<<< HEAD
     mocks.resolveModelAuthLabel.mockReturnValue(undefined);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({
       plugins: [{ id: "telegram" }],
       configuredChannelIds: ["telegram"],
@@ -144,6 +159,7 @@ describe("status-runtime-shared", () => {
     expect(usageCall.agentDir).toContain("main");
   });
 
+<<<<<<< HEAD
   it("adds Codex synthetic usage for configured OpenAI Codex runtime routes without profiles", async () => {
     mocks.loadProviderUsageSummary
       .mockResolvedValueOnce({
@@ -314,6 +330,8 @@ describe("status-runtime-shared", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("resolves usage summaries with explicit agent scope", async () => {
     await resolveStatusUsageSummary({
       timeoutMs: 2345,

@@ -11,7 +11,10 @@ import type { InteractiveReply, MessagePresentationAction } from "../../interact
 import { executePluginCommand, matchPluginCommand } from "../../plugins/commands.js";
 import type { PluginCommandDiagnosticsSession, PluginCommandResult } from "../../plugins/types.js";
 import type { ReplyPayload } from "../types.js";
+<<<<<<< HEAD
 import { rejectNonOwnerCommand } from "./command-gates.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   buildCurrentOpenClawCliCommand,
   buildCurrentOpenClawCliExecEnv,
@@ -96,10 +99,13 @@ async function handleDiagnosticsCommandWithDeps(
     );
     return { shouldContinue: false };
   }
+<<<<<<< HEAD
   const nonOwner = rejectNonOwnerCommand(params, DIAGNOSTICS_COMMAND);
   if (nonOwner) {
     return nonOwner;
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (isCodexDiagnosticsConfirmationAction(args)) {
     const codexResult = await executeCodexDiagnosticsAddon(params, args);
     const reply = codexResult

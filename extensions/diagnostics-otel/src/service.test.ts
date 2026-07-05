@@ -220,18 +220,22 @@ type OtelContextFlags = {
   traces?: boolean;
   metrics?: boolean;
   logs?: boolean;
+<<<<<<< HEAD
   protocol?: NonNullable<
     NonNullable<OpenClawPluginServiceContext["config"]["diagnostics"]>["otel"]
   >["protocol"];
   logsExporter?: NonNullable<
     NonNullable<OpenClawPluginServiceContext["config"]["diagnostics"]>["otel"]
   >["logsExporter"];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   captureContent?: NonNullable<
     NonNullable<OpenClawPluginServiceContext["config"]["diagnostics"]>["otel"]
   >["captureContent"];
 };
 function createOtelContext(
   endpoint: string,
+<<<<<<< HEAD
   {
     traces = false,
     metrics = false,
@@ -240,6 +244,9 @@ function createOtelContext(
     logsExporter,
     captureContent,
   }: OtelContextFlags = {},
+=======
+  { traces = false, metrics = false, logs = false, captureContent }: OtelContextFlags = {},
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ): OpenClawPluginServiceContext {
   return {
     config: {
@@ -248,11 +255,18 @@ function createOtelContext(
         otel: {
           enabled: true,
           endpoint,
+<<<<<<< HEAD
           protocol,
           traces,
           metrics,
           logs,
           ...(logsExporter !== undefined ? { logsExporter } : {}),
+=======
+          protocol: OTEL_TEST_PROTOCOL,
+          traces,
+          metrics,
+          logs,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           ...(captureContent !== undefined ? { captureContent } : {}),
         },
       },
@@ -376,6 +390,7 @@ function histogramCreateOptions(name: string) {
     | undefined;
 }
 
+<<<<<<< HEAD
 type StdoutDiagnosticLogLine = {
   ts?: string;
   signal?: string;
@@ -408,6 +423,8 @@ function parseSingleStdoutDiagnosticLogLine(writes: string[]): StdoutDiagnosticL
   return JSON.parse(line) as StdoutDiagnosticLogLine;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function emitAndCaptureLog(
   event: Omit<Extract<Parameters<typeof emitDiagnosticEvent>[0], { type: "log.record" }>, "type">,
   options: {
@@ -1113,6 +1130,7 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+<<<<<<< HEAD
   test("starts stdout-only logs when OTLP protocol is unsupported", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
@@ -1201,6 +1219,8 @@ describe("diagnostics-otel service", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   test("records liveness warning diagnostics", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
@@ -1576,6 +1596,7 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+<<<<<<< HEAD
   test("exports diagnostic logs as stdout JSONL without constructing the OTLP log exporter", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext("", {
@@ -1693,6 +1714,8 @@ describe("diagnostics-otel service", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   test("omits log message bodies from OTLP logs unless broad content capture is enabled", async () => {
     const emitCall = await emitAndCaptureLog({
       level: "INFO",
@@ -2120,7 +2143,11 @@ describe("diagnostics-otel service", () => {
       sessionKey: "session-key",
       sessionId: "session-id",
       provider: "anthropic",
+<<<<<<< HEAD
       model: "anthropic/claude-sonnet-4.6",
+=======
+      model: "claude-sonnet-4.6",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       usage: {
         input: 100,
         output: 40,
@@ -2136,9 +2163,13 @@ describe("diagnostics-otel service", () => {
     const modelUsageOptions = startedSpanOptions("openclaw.model.usage");
     expect(modelUsageOptions?.attributes?.["gen_ai.operation.name"]).toBe("chat");
     expect(modelUsageOptions?.attributes?.["gen_ai.system"]).toBe("anthropic");
+<<<<<<< HEAD
     expect(modelUsageOptions?.attributes?.["gen_ai.request.model"]).toBe(
       "anthropic/claude-sonnet-4.6",
     );
+=======
+    expect(modelUsageOptions?.attributes?.["gen_ai.request.model"]).toBe("claude-sonnet-4.6");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(modelUsageOptions?.attributes?.["gen_ai.usage.input_tokens"]).toBe(150);
     expect(modelUsageOptions?.attributes?.["gen_ai.usage.output_tokens"]).toBe(40);
     expect(modelUsageOptions?.attributes?.["gen_ai.usage.cache_read.input_tokens"]).toBe(30);
@@ -2165,8 +2196,13 @@ describe("diagnostics-otel service", () => {
       runId: "run-1",
       callId: "call-1",
       sessionKey: "session-key",
+<<<<<<< HEAD
       provider: "anthropic",
       model: "anthropic/claude-sonnet-4.6",
+=======
+      provider: "openai",
+      model: "gpt-5.4",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       api: "openai-completions",
       durationMs: 250,
     });
@@ -2195,8 +2231,13 @@ describe("diagnostics-otel service", () => {
     expect(genAiOperationDuration?.record).toHaveBeenCalledTimes(2);
     expect(genAiOperationDuration?.record).toHaveBeenCalledWith(0.25, {
       "gen_ai.operation.name": "text_completion",
+<<<<<<< HEAD
       "gen_ai.provider.name": "anthropic",
       "gen_ai.request.model": "unknown",
+=======
+      "gen_ai.provider.name": "openai",
+      "gen_ai.request.model": "gpt-5.4",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     expect(genAiOperationDuration?.record).toHaveBeenCalledWith(1.25, {
       "gen_ai.operation.name": "generate_content",

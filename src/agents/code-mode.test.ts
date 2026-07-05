@@ -779,6 +779,7 @@ describe("Code Mode", () => {
     expect(ticket.execute).toHaveBeenCalledTimes(1);
   });
 
+<<<<<<< HEAD
   it("uses tools recovery guidance for guessed tool ids", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const writeTool = pluginTool("write", "Write a file to the workspace");
@@ -844,6 +845,8 @@ describe("Code Mode", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("exposes MCP tools only through the MCP namespace", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const githubCreate = mcpTool({
@@ -947,10 +950,15 @@ describe("Code Mode", () => {
       },
       searchHits: [],
       allHasMcp: false,
+<<<<<<< HEAD
       directDescribe:
         "Unknown tool id: github__create_issue. Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
       directCall:
         "Unknown tool id: github__create_issue. Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
+=======
+      directDescribe: "Unknown tool id: github__create_issue",
+      directCall: "Unknown tool id: github__create_issue",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       hasMcp: true,
       apiSchemaTitle: "object",
       apiHeader: expect.stringContaining("function createIssue("),

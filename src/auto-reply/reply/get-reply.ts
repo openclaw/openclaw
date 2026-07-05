@@ -20,10 +20,14 @@ import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+<<<<<<< HEAD
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
 } from "../../plugins/hook-agent-context.js";
+=======
+import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
@@ -48,10 +52,14 @@ import {
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
 import { runPreparedReply } from "./get-reply-run.js";
+<<<<<<< HEAD
 import type {
   InternalGetReplyOptions as BaseInternalGetReplyOptions,
   ReplySessionBinding,
 } from "./get-reply.types.js";
+=======
+import type { ReplySessionBinding } from "./get-reply.types.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { finalizeInboundContext } from "./inbound-context.js";
 import { hasInboundMedia, hasInboundMediaForUnderstanding } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
@@ -67,7 +75,11 @@ import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
 
+<<<<<<< HEAD
 type RuntimeInternalGetReplyOptions = BaseInternalGetReplyOptions & {
+=======
+type InternalGetReplyOptions = GetReplyOptions & {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
 };
 
@@ -290,7 +302,11 @@ export async function getReplyFromConfig(
         agentId: resolveSessionAgentId({
           sessionKey: resolvedAgentSessionKey,
           config: cfg,
+<<<<<<< HEAD
           fallbackAgentId: finalized.AgentId,
+=======
+          agentId: finalized.AgentId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }),
       };
     },
@@ -331,7 +347,10 @@ export async function getReplyFromConfig(
   );
   const resolvedOpts =
     mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
+<<<<<<< HEAD
   const internalResolvedOpts = resolvedOpts as RuntimeInternalGetReplyOptions | undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const agentCfg = cfg.agents?.defaults;
   const sessionCfg = cfg.session;
   const { defaultProvider, defaultModel, aliasIndex } = resolverTiming.measureSync(
@@ -389,7 +408,10 @@ export async function getReplyFromConfig(
       onReplyStart: opts?.onReplyStart,
       onCleanup: opts?.onTypingCleanup,
       typingIntervalSeconds,
+<<<<<<< HEAD
       keepalive: opts?.typingKeepalive ?? true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       silentToken: SILENT_REPLY_TOKEN,
       log: defaultRuntime.log,
     });
@@ -488,14 +510,20 @@ export async function getReplyFromConfig(
           ctx: finalized,
           cfg,
           commandAuthorized,
+<<<<<<< HEAD
           requestedSessionId: internalResolvedOpts?.requestedSessionId,
           resumeRequestedSession: internalResolvedOpts?.resumeRequestedSession,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }),
       );
   const {
     sessionCtx,
     sessionEntry,
+<<<<<<< HEAD
     sessionEntryHandle,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     previousSessionEntry,
     sessionStore,
     sessionKey,
@@ -512,7 +540,11 @@ export async function getReplyFromConfig(
   } = sessionState;
   let { abortedLastRun } = sessionState;
   resolverTimingSessionKey = sessionKey ?? resolverTimingSessionKey;
+<<<<<<< HEAD
   internalResolvedOpts?.onSessionPrepared?.({
+=======
+  (resolvedOpts as InternalGetReplyOptions | undefined)?.onSessionPrepared?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sessionKey,
     sessionId,
     storePath,
@@ -536,7 +568,10 @@ export async function getReplyFromConfig(
         sessionEntry.pendingFinalDeliveryAttemptCount = undefined;
         sessionEntry.pendingFinalDeliveryLastError = undefined;
         sessionEntry.pendingFinalDeliveryContext = undefined;
+<<<<<<< HEAD
         sessionEntryHandle.replaceCurrent(sessionEntry);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         if (sessionKey && sessionStore) {
           sessionStore[sessionKey] = sessionEntry;
         }
@@ -573,7 +608,10 @@ export async function getReplyFromConfig(
       sessionCtx,
       ctx: finalized,
       sessionEntry,
+<<<<<<< HEAD
       sessionEntryHandle,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionStore,
       sessionKey,
       storePath,
@@ -600,6 +638,7 @@ export async function getReplyFromConfig(
           sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
         groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
         parentSessionKey: sessionCtx.ModelParentSessionKey ?? sessionCtx.ParentSessionKey,
+<<<<<<< HEAD
         directUserIds: [
           sessionEntry.origin?.nativeDirectUserId,
           sessionEntry.origin?.from,
@@ -608,6 +647,8 @@ export async function getReplyFromConfig(
           finalized.From,
           finalized.SenderId,
         ],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       })
     : null;
   const resolvedChannelModelOverride =
@@ -745,7 +786,10 @@ export async function getReplyFromConfig(
         resetTriggered,
         systemSent,
         sessionEntry,
+<<<<<<< HEAD
         sessionEntryHandle,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         sessionStore,
         sessionKey,
         sessionId,
@@ -804,10 +848,13 @@ export async function getReplyFromConfig(
     elevatedAllowed,
     elevatedFailures,
     defaultActivation,
+<<<<<<< HEAD
     resolvedFastMode,
     resolvedFastModeAutoOnSeconds,
     resolvedFastModeOverride,
     resolvedFastModeAutoOnSecondsOverride,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resolvedVerboseLevel,
     resolvedElevatedLevel,
     execOverrides,
@@ -967,10 +1014,13 @@ export async function getReplyFromConfig(
         originatingChannel: sessionCtx.OriginatingChannel,
         provider: sessionCtx.Provider,
       });
+<<<<<<< HEAD
       const hookChatId =
         normalizeOptionalString(sessionCtx.NativeChannelId) ??
         normalizeOptionalString(sessionCtx.ChatId);
       const hookTrigger = opts?.isHeartbeat ? "heartbeat" : "user";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const hookResult = await traceGetReplyPhase("reply.before_agent_reply_hooks", () =>
         hookRunner.runBeforeAgentReply(
           { cleanedBody },
@@ -979,7 +1029,11 @@ export async function getReplyFromConfig(
             sessionKey: agentSessionKey,
             sessionId,
             workspaceDir,
+<<<<<<< HEAD
             trigger: hookTrigger,
+=======
+            trigger: opts?.isHeartbeat ? "heartbeat" : "user",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             ...buildAgentHookContextChannelFields({
               sessionKey: agentSessionKey,
               messageProvider: hookMessageProvider,
@@ -987,12 +1041,15 @@ export async function getReplyFromConfig(
               messageTo: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
               senderId: sessionCtx.SenderId ?? ctx.SenderId,
             }),
+<<<<<<< HEAD
             ...buildAgentHookContextIdentityFields({
               trigger: hookTrigger,
               senderId: sessionCtx.SenderId,
               chatId: hookChatId,
               channelContext: sessionCtx.ChannelContext ?? ctx.ChannelContext,
             }),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           },
         ),
       );
@@ -1037,10 +1094,13 @@ export async function getReplyFromConfig(
       directives,
       defaultActivation,
       resolvedThinkLevel,
+<<<<<<< HEAD
       resolvedFastMode,
       resolvedFastModeAutoOnSeconds,
       resolvedFastModeOverride,
       resolvedFastModeAutoOnSecondsOverride,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       resolvedVerboseLevel,
       resolvedReasoningLevel,
       resolvedElevatedLevel,

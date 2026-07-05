@@ -497,6 +497,7 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
+<<<<<<< HEAD
   it("keeps text-transform runtime imports hashed after the stable alias export surface grew", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const distDir = path.join(rootDir, "dist");
@@ -531,6 +532,8 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rewrites gateway shutdown imports to stable runtime aliases", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const distDir = path.join(rootDir, "dist");
@@ -762,6 +765,7 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
+<<<<<<< HEAD
   it("writes compatibility aliases for previous text-transform runtime chunk names", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const distDir = path.join(rootDir, "dist");
@@ -782,6 +786,8 @@ describe("runtime postbuild static assets", () => {
     ).toBe('export * from "./text-transforms.runtime.js";\n');
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("writes compatibility aliases for previous gateway shutdown chunk names", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const distDir = path.join(rootDir, "dist");

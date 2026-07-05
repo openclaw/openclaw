@@ -1,5 +1,9 @@
 // Mattermost plugin module implements draft stream behavior.
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
+<<<<<<< HEAD
+=======
+import { formatChannelProgressDraftLineForEntry } from "openclaw/plugin-sdk/channel-outbound";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   createMattermostPost,
   deleteMattermostPost,
@@ -32,6 +36,30 @@ function normalizeMattermostDraftText(text: string, maxChars: number): string {
   return `${trimmed.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
 }
 
+<<<<<<< HEAD
+=======
+export function buildMattermostToolStatusText(params: {
+  name?: string;
+  phase?: string;
+  args?: Record<string, unknown>;
+  detailMode?: "explain" | "raw";
+  config?: Parameters<typeof formatChannelProgressDraftLineForEntry>[0];
+}): string {
+  return (
+    formatChannelProgressDraftLineForEntry(
+      params.config,
+      {
+        event: "tool",
+        name: params.name,
+        phase: params.phase,
+        args: params.args,
+      },
+      params.detailMode ? { detailMode: params.detailMode } : undefined,
+    ) ?? "Running tool..."
+  );
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function createMattermostDraftStream(params: {
   client: MattermostClient;
   channelId: string;

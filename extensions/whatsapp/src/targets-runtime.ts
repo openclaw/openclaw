@@ -75,6 +75,7 @@ export type JidToE164Options = {
   logMissing?: boolean;
 };
 
+<<<<<<< HEAD
 export type LidLookup = {
   getLIDForPN?: (jid: string) => Promise<string | null>;
   getPNForLID?: (jid: string) => Promise<string | null>;
@@ -158,6 +159,12 @@ export async function resolveEquivalentWhatsAppDirectChatJids(
   return candidates;
 }
 
+=======
+type LidLookup = {
+  getPNForLID?: (jid: string) => Promise<string | null>;
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveLidMappingDirs(params: { opts?: JidToE164Options }): string[] {
   const dirs = new Set<string>();
   const addDir = (dir?: string | null) => {

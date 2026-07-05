@@ -1,5 +1,8 @@
 // Qa Lab plugin module implements QA evidence summary behavior.
+<<<<<<< HEAD
 import { execFileSync } from "node:child_process";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { z } from "zod";
 import { splitQaModelRef } from "./model-selection.js";
 import { getQaProvider, type QaProviderMode } from "./providers/index.js";
@@ -117,18 +120,27 @@ const qaEvidenceScorecardCountSchema = z
   })
   .strict();
 
+<<<<<<< HEAD
 const qaEvidenceScorecardCoverageCountSchema = qaEvidenceScorecardCountSchema.extend({
   secondaryOnly: z.number().int().nonnegative(),
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const qaEvidenceScorecardCategorySchema = z
   .object({
     id: nonEmptyStringSchema,
     surfaceId: nonEmptyStringSchema,
     name: nonEmptyStringSchema,
     status: z.enum(["fulfilled", "partial", "missing"]),
+<<<<<<< HEAD
     features: qaEvidenceScorecardCountSchema,
     coverageIds: qaEvidenceScorecardCoverageCountSchema,
+=======
+    features: qaEvidenceScorecardCountSchema.extend({
+      secondaryOnly: z.number().int().nonnegative(),
+    }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     missingCoverageIds: z.array(nonEmptyStringSchema),
   })
   .strict();
@@ -148,7 +160,10 @@ const qaEvidenceScorecardSchema = z
       .strict(),
     categories: qaEvidenceScorecardCountSchema,
     features: qaEvidenceScorecardCountSchema,
+<<<<<<< HEAD
     coverageIds: qaEvidenceScorecardCountSchema,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     categoryReports: z.array(qaEvidenceScorecardCategorySchema),
   })
   .strict();
@@ -293,7 +308,10 @@ type QaEvidenceBuildBase = {
   channelDriver?: string;
   packageSource?: QaEvidencePackageSource;
   profile?: QaEvidenceProfile;
+<<<<<<< HEAD
   repoRoot?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   runner?: string;
 };
 
@@ -394,6 +412,7 @@ function resolveQaEvidenceChannelDriver(params: { env?: NodeJS.ProcessEnv; fallb
   return id ? { id } : undefined;
 }
 
+<<<<<<< HEAD
 function resolveQaEvidenceCheckoutRef(repoRoot?: string) {
   try {
     const ref = execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
@@ -419,6 +438,11 @@ export function resolveQaEvidenceEnvironment(params: {
       resolveQaEvidenceCheckoutRef(params.repoRoot) ||
       params.env?.GITHUB_SHA?.trim() ||
       null,
+=======
+function resolveQaEvidenceEnvironment(env: NodeJS.ProcessEnv | undefined) {
+  return {
+    ref: env?.OPENCLAW_QA_REF?.trim() || env?.GITHUB_SHA?.trim() || null,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     os: process.platform,
     nodeVersion: process.version,
   };
@@ -578,10 +602,14 @@ export function buildQaSuiteEvidenceSummary(
   },
 ): QaEvidenceSummaryJson {
   const provider = buildQaEvidenceProvider(params);
+<<<<<<< HEAD
   const environment = resolveQaEvidenceEnvironment({
     env: params.env,
     repoRoot: params.repoRoot,
   });
+=======
+  const environment = resolveQaEvidenceEnvironment(params.env);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const packageSource = resolveQaEvidenceBuildPackageSource(params);
   const runner = resolveQaEvidenceRunner({ env: params.env, fallback: params.runner });
   const profile = resolveQaEvidenceProfile({
@@ -653,10 +681,14 @@ function buildTestRunnerEvidenceSummary(
   },
 ): QaEvidenceSummaryJson {
   const provider = buildQaEvidenceProvider(params);
+<<<<<<< HEAD
   const environment = resolveQaEvidenceEnvironment({
     env: params.env,
     repoRoot: params.repoRoot,
   });
+=======
+  const environment = resolveQaEvidenceEnvironment(params.env);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const packageSource = resolveQaEvidenceBuildPackageSource(params);
   const runner = resolveQaEvidenceRunner({
     env: params.env,
@@ -760,10 +792,14 @@ export function buildLiveTransportEvidenceSummary(
   },
 ): QaEvidenceSummaryJson {
   const provider = buildQaEvidenceProvider(params);
+<<<<<<< HEAD
   const environment = resolveQaEvidenceEnvironment({
     env: params.env,
     repoRoot: params.repoRoot,
   });
+=======
+  const environment = resolveQaEvidenceEnvironment(params.env);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const packageSource = resolveQaEvidenceBuildPackageSource(params);
   const runner = resolveQaEvidenceRunner({ env: params.env, fallback: params.runner });
   const profile = resolveQaEvidenceProfile({

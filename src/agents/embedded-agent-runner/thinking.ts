@@ -534,6 +534,42 @@ export function assessLastAssistantMessage(message: AgentMessage): RecoveryAsses
   return "valid";
 }
 
+<<<<<<< HEAD
+=======
+export function sanitizeThinkingForRecovery(messages: AgentMessage[]): {
+  messages: AgentMessage[];
+  prefill: boolean;
+} {
+  if (messages.length === 0) {
+    return { messages, prefill: false };
+  }
+
+  let lastAssistantIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if ((messages[index] as { role?: unknown }).role === "assistant") {
+      lastAssistantIndex = index;
+      break;
+    }
+  }
+  if (lastAssistantIndex === -1) {
+    return { messages, prefill: false };
+  }
+
+  const assessment = assessLastAssistantMessage(messages[lastAssistantIndex]);
+  if (assessment === "valid") {
+    return { messages, prefill: false };
+  }
+  if (assessment === "incomplete-text") {
+    return { messages, prefill: true };
+  }
+
+  return {
+    messages: [...messages.slice(0, lastAssistantIndex), ...messages.slice(lastAssistantIndex + 1)],
+    prefill: false,
+  };
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function shouldRecoverAnthropicThinkingError(
   error: unknown,
   sessionMeta: RecoverySessionMeta,

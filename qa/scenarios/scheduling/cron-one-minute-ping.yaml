@@ -6,8 +6,13 @@ scenario:
   coverage:
     primary:
       - scheduling.cron
+<<<<<<< HEAD
       - scheduling.cron-rpcs
       - scheduling.chat-announce-delivery
+=======
+      - cron-rpcs
+      - chat-announce-delivery
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     secondary:
       - channels.qa-channel
   objective: Verify the agent can schedule a cron reminder one minute in the future and receive the follow-up in the QA channel.
@@ -25,7 +30,10 @@ scenario:
     kind: flow
     summary: Verify the agent can schedule a cron reminder one minute in the future and receive the follow-up in the QA channel.
     config:
+<<<<<<< HEAD
       requiredChannelDriver: qa-channel
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       channelId: qa-room
       channelTitle: QA Room
       reminderPromptTemplate: "A QA cron just fired. Send a one-line ping back to the room containing this exact marker: {{marker}}"

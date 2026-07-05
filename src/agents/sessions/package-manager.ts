@@ -6,11 +6,18 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
+<<<<<<< HEAD
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { globSync } from "glob";
 import ignore from "ignore";
 import { minimatch } from "minimatch";
 import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ignore-rules.js";
+=======
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { globSync } from "glob";
+import ignore from "ignore";
+import { minimatch } from "minimatch";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { CONFIG_DIR_NAME } from "../config.js";
 import { type GitSource, parseGitUrl } from "../utils/git.js";
 import { canonicalizePath, isLocalPath } from "../utils/paths.js";
@@ -120,10 +127,73 @@ const FILE_PATTERNS: Record<ResourceType, RegExp> = {
   themes: /\.json$/,
 };
 
+<<<<<<< HEAD
+=======
+const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
+
+type IgnoreMatcher = ReturnType<typeof ignore>;
+
+function toPosixPath(p: string): string {
+  return p.split(sep).join("/");
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function getHomeDir(): string {
   return process.env.HOME || homedir();
 }
 
+<<<<<<< HEAD
+=======
+function prefixIgnorePattern(line: string, prefix: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.startsWith("#") && !trimmed.startsWith("\\#")) {
+    return null;
+  }
+
+  let pattern = line;
+  let negated = false;
+
+  if (pattern.startsWith("!")) {
+    negated = true;
+    pattern = pattern.slice(1);
+  } else if (pattern.startsWith("\\!")) {
+    pattern = pattern.slice(1);
+  }
+
+  if (pattern.startsWith("/")) {
+    pattern = pattern.slice(1);
+  }
+
+  const prefixed = prefix ? `${prefix}${pattern}` : pattern;
+  return negated ? `!${prefixed}` : prefixed;
+}
+
+function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string): void {
+  const relativeDir = relative(rootDir, dir);
+  const prefix = relativeDir ? `${toPosixPath(relativeDir)}/` : "";
+
+  for (const filename of IGNORE_FILE_NAMES) {
+    const ignorePath = join(dir, filename);
+    if (!existsSync(ignorePath)) {
+      continue;
+    }
+    try {
+      const content = readFileSync(ignorePath, "utf-8");
+      const patterns = content
+        .split(/\r?\n/)
+        .map((line) => prefixIgnorePattern(line, prefix))
+        .filter((line): line is string => Boolean(line));
+      if (patterns.length > 0) {
+        ig.add(patterns);
+      }
+    } catch {}
+  }
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isPattern(s: string): boolean {
   return (
     s.startsWith("!") ||

@@ -5,12 +5,16 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { DebugProxySettings } from "./env.js";
 import { parseConnectTarget, startDebugProxyServer } from "./proxy-server.js";
 import { closeDebugProxyCaptureStore, getDebugProxyCaptureStore } from "./store.sqlite.js";
 
 let testRoot: string | undefined;
+<<<<<<< HEAD
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
 async function cleanupTestRoot(): Promise<void> {
@@ -21,6 +25,11 @@ async function cleanupTestRoot(): Promise<void> {
   } else {
     process.env.OPENCLAW_STATE_DIR = originalStateDir;
   }
+=======
+
+async function cleanupTestRoot(): Promise<void> {
+  closeDebugProxyCaptureStore();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!testRoot) {
     return;
   }
@@ -35,11 +44,18 @@ async function makeSettings(): Promise<DebugProxySettings> {
   await mkdir(certDir, { recursive: true });
   await writeFile(join(certDir, "root-ca.pem"), "test root cert\n", "utf8");
   await writeFile(join(certDir, "root-ca-key.pem"), "test root key\n", "utf8");
+<<<<<<< HEAD
   process.env.OPENCLAW_STATE_DIR = testRoot;
   return {
     enabled: true,
     required: false,
     dbPath: join(testRoot, "capture.sqlite"),
+=======
+  return {
+    enabled: true,
+    required: false,
+    dbPath: ":memory:",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     blobDir: join(testRoot, "blobs"),
     certDir,
     sessionId: "debug-proxy-server-test",
@@ -169,7 +185,14 @@ describe("startDebugProxyServer", () => {
 
       expect(origin.receivedRequestBody()).toBe(requestBody);
       expect(responseBody).toBe(origin.responseBody);
+<<<<<<< HEAD
       const events = getDebugProxyCaptureStore().getSessionEvents(settings.sessionId, 10);
+=======
+      const events = getDebugProxyCaptureStore(settings.dbPath, settings.blobDir).getSessionEvents(
+        settings.sessionId,
+        10,
+      );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const capturedRequest = events.find((event) => event.kind === "request");
       const capturedResponse = events.find((event) => event.kind === "response");
       expect(capturedRequest?.dataText).toBe("q".repeat(8192));

@@ -30,7 +30,10 @@ import { EmbeddedBlockChunker, type BlockReplyChunking } from "./embedded-agent-
 import { resolveModelWithRegistry } from "./embedded-agent-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
 import { resolveEmbeddedAgentStreamFn } from "./embedded-agent-runner/stream-resolution.js";
+<<<<<<< HEAD
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   resolveAvailableAgentHarnessPolicy,
   resolvePluginHarnessPolicyToolsAllow,
@@ -480,6 +483,7 @@ export async function runBtwSideQuestion(
     config: params.cfg,
   });
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
+<<<<<<< HEAD
   const preparedHarnesses = new Map<string, AgentHarness>();
   const prepareHarness = async (provider: string, modelId: string): Promise<AgentHarness> => {
     const key = `${provider}/${modelId}`;
@@ -506,6 +510,15 @@ export async function runBtwSideQuestion(
     return harness;
   };
   const harness = await prepareHarness(params.provider, params.model);
+=======
+  const harness = selectAgentHarness({
+    provider: params.provider,
+    modelId: params.model,
+    config: params.cfg,
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let runtimeSelection: Awaited<ReturnType<typeof resolveRuntimeModel>> | undefined;
   const resolveRuntimeSelection = async () => {
     if (!runtimeSelection) {
@@ -667,12 +680,22 @@ export async function runBtwSideQuestion(
   }
 
   const runtimeSelectionForHarness = await resolveRuntimeSelection();
+<<<<<<< HEAD
   // Model resolution can canonicalize a legacy provider alias, so reselect against the resolved
   // provider/model instead of reusing the raw route's selection.
   const runtimeHarness = await prepareHarness(
     runtimeSelectionForHarness.model.provider,
     runtimeSelectionForHarness.model.id,
   );
+=======
+  const runtimeHarness = selectAgentHarness({
+    provider: runtimeSelectionForHarness.model.provider,
+    modelId: runtimeSelectionForHarness.model.id,
+    config: params.cfg,
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (runtimeHarness.runSideQuestion) {
     return runHarnessSideQuestion(runtimeHarness, runtimeSelectionForHarness);
   }

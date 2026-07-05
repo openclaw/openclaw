@@ -1,9 +1,15 @@
+<<<<<<< HEAD
 // Persists restart sentinel state that coordinates deferred restarts.
 import { readFile, rm } from "node:fs/promises";
+=======
+// Persists restart sentinel files that coordinate deferred restarts.
+import fs from "node:fs/promises";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import path from "node:path";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
+<<<<<<< HEAD
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -15,6 +21,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+=======
+import { resolveRuntimeServiceVersion } from "../version.js";
+import { writeJson } from "./json-files.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type RestartSentinelLog = {
   stdoutTail?: string | null;
@@ -33,7 +43,10 @@ export type RestartSentinelStep = {
 export type RestartSentinelStats = {
   mode?: string;
   root?: string;
+<<<<<<< HEAD
   requiresRestart?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   handoffId?: string;
   before?: Record<string, unknown> | null;
   after?: Record<string, unknown> | null;
@@ -76,9 +89,13 @@ export type RestartSentinel = {
   payload: RestartSentinelPayload;
 };
 
+<<<<<<< HEAD
 const RESTART_SENTINEL_KEY = "current";
 const LEGACY_RESTART_SENTINEL_FILENAME = "restart-sentinel.json";
 type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
+=======
+const SENTINEL_FILENAME = "restart-sentinel.json";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export function formatDoctorNonInteractiveHint(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
@@ -89,6 +106,7 @@ export function formatDoctorNonInteractiveHint(
   )} in a terminal or approvals-capable OpenClaw surface.`;
 }
 
+<<<<<<< HEAD
 export async function writeRestartSentinel(
   payload: RestartSentinelPayload,
   env: NodeJS.ProcessEnv = process.env,
@@ -143,6 +161,20 @@ export async function writeRestartSentinel(
     { env },
   );
   await removeLegacyRestartSentinel(env);
+=======
+export function resolveRestartSentinelPath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveStateDir(env), SENTINEL_FILENAME);
+}
+
+export async function writeRestartSentinel(
+  payload: RestartSentinelPayload,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const filePath = resolveRestartSentinelPath(env);
+  const data: RestartSentinel = { version: 1, payload };
+  await writeJson(filePath, data, { trailingNewline: true, dirMode: 0o700 });
+  return filePath;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function cloneRestartSentinelPayload(payload: RestartSentinelPayload): RestartSentinelPayload {
@@ -210,6 +242,7 @@ export async function markUpdateRestartSentinelFailure(
   }, env);
 }
 
+<<<<<<< HEAD
 export async function clearRestartSentinel(env: NodeJS.ProcessEnv = process.env): Promise<void> {
   try {
     runOpenClawStateWriteTransaction(
@@ -256,6 +289,13 @@ async function importLegacyRestartSentinel(
   await writeRestartSentinel(payload, env);
   await removeLegacyRestartSentinel(env);
   return { version: 1, payload };
+=======
+export async function removeRestartSentinelFile(filePath: string | null | undefined) {
+  if (!filePath) {
+    return;
+  }
+  await fs.unlink(filePath).catch(() => {});
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function buildRestartSuccessContinuation(params: {
@@ -272,6 +312,7 @@ export function buildRestartSuccessContinuation(params: {
 export async function readRestartSentinel(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinel | null> {
+<<<<<<< HEAD
   try {
     const database = openOpenClawStateDatabase({ env });
     const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(database.db);
@@ -297,11 +338,29 @@ export async function readRestartSentinel(
       return null;
     }
     return { version: 1, payload };
+=======
+  const filePath = resolveRestartSentinelPath(env);
+  try {
+    const raw = await fs.readFile(filePath, "utf-8");
+    let parsed: RestartSentinel | undefined;
+    try {
+      parsed = JSON.parse(raw) as RestartSentinel | undefined;
+    } catch {
+      await fs.unlink(filePath).catch(() => {});
+      return null;
+    }
+    if (!parsed || parsed.version !== 1 || !parsed.payload) {
+      await fs.unlink(filePath).catch(() => {});
+      return null;
+    }
+    return parsed;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } catch {
     return null;
   }
 }
 
+<<<<<<< HEAD
 export async function hasRestartSentinel(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
   try {
     const database = openOpenClawStateDatabase({ env });
@@ -320,6 +379,18 @@ export async function hasRestartSentinel(env: NodeJS.ProcessEnv = process.env): 
   } catch {
     return false;
   }
+=======
+export async function consumeRestartSentinel(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<RestartSentinel | null> {
+  const filePath = resolveRestartSentinelPath(env);
+  const parsed = await readRestartSentinel(env);
+  if (!parsed) {
+    return null;
+  }
+  await removeRestartSentinelFile(filePath);
+  return parsed;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function formatRestartSentinelMessage(payload: RestartSentinelPayload): string {
@@ -341,6 +412,7 @@ export function formatRestartSentinelMessage(payload: RestartSentinelPayload): s
   return lines.join("\n");
 }
 
+<<<<<<< HEAD
 function isRestartRequiredConfigWriteSentinel(payload: RestartSentinelPayload): boolean {
   return (
     (payload.kind === "config-apply" || payload.kind === "config-patch") &&
@@ -349,14 +421,19 @@ function isRestartRequiredConfigWriteSentinel(payload: RestartSentinelPayload): 
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function summarizeRestartSentinel(payload: RestartSentinelPayload): string {
   if (payload.kind === "config-auto-recovery") {
     return "Gateway auto-recovery";
   }
+<<<<<<< HEAD
   if (isRestartRequiredConfigWriteSentinel(payload)) {
     const mode = payload.stats?.mode ? ` (${payload.stats.mode})` : "";
     return `Gateway restart required${mode}`.trim();
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const kind = payload.kind;
   const status = payload.status;
   const mode = payload.stats?.mode ? ` (${payload.stats.mode})` : "";

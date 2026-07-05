@@ -110,9 +110,14 @@ async function fetchPublicNpmPackageTargetStatus(params: {
   target: string;
   timeoutMs: number;
 }): Promise<NpmPackageTargetStatus> {
+<<<<<<< HEAD
   let res: Response | undefined;
   try {
     res = await fetchWithTimeout(
+=======
+  try {
+    const res = await fetchWithTimeout(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       `https://registry.npmjs.org/openclaw/${encodeURIComponent(params.target)}`,
       {},
       Math.max(250, params.timeoutMs),
@@ -136,10 +141,13 @@ async function fetchPublicNpmPackageTargetStatus(params: {
     };
   } catch (err) {
     return { target: params.target, version: null, nodeEngine: null, error: String(err) };
+<<<<<<< HEAD
   } finally {
     if (res?.bodyUsed !== true) {
       await res?.body?.cancel().catch(() => undefined);
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 

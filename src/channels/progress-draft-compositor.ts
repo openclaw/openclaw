@@ -81,7 +81,11 @@ export function createChannelProgressDraftCompositor(params: {
   };
 
   const render = async (options?: { flush?: boolean }): Promise<boolean> => {
+<<<<<<< HEAD
     if (!params.active || params.mode !== "progress" || finalReplyStarted || finalReplyDelivered) {
+=======
+    if (!params.active || params.mode !== "progress") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return false;
     }
     const text = formatDraftText();
@@ -171,12 +175,17 @@ export function createChannelProgressDraftCompositor(params: {
       return true;
     }
     if (options?.startImmediately || params.shouldStartNow?.(line)) {
+<<<<<<< HEAD
       const alreadyStarted = gate.hasStarted;
       await gate.startNow();
       if (!gate.hasStarted) {
         return false;
       }
       return alreadyStarted ? await render() : true;
+=======
+      await gate.startNow();
+      return gate.hasStarted ? await render() : false;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     const alreadyStarted = gate.hasStarted;
     const progressActive = await gate.noteWork();
@@ -201,11 +210,17 @@ export function createChannelProgressDraftCompositor(params: {
     },
     markFinalReplyStarted() {
       finalReplyStarted = true;
+<<<<<<< HEAD
       gate.cancel();
     },
     markFinalReplyDelivered() {
       finalReplyDelivered = true;
       gate.cancel();
+=======
+    },
+    markFinalReplyDelivered() {
+      finalReplyDelivered = true;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
     reset() {
       clearProgressState(false);
@@ -222,6 +237,7 @@ export function createChannelProgressDraftCompositor(params: {
     start() {
       return gate.startNow();
     },
+<<<<<<< HEAD
     async noteActivity(options?: { startImmediately?: boolean }) {
       if (
         !params.active ||
@@ -243,6 +259,8 @@ export function createChannelProgressDraftCompositor(params: {
       }
       return false;
     },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     pushToolProgress: noteProgress,
     async pushReasoningProgress(text?: string, options?: { snapshot?: boolean }) {
       if (

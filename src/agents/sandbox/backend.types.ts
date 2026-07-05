@@ -68,8 +68,11 @@ export type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxBackendExecSpec,
+<<<<<<< HEAD
   SandboxBackendPreparedWorkdirDiscarder,
   SandboxBackendWorkdirValidation,
   SandboxBackendWorkdirValidator,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   SandboxFsBridgeContext,
 } from "./backend-handle.types.js";

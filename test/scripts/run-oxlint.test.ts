@@ -1,6 +1,10 @@
 // Run Oxlint tests cover run oxlint script behavior.
 import { spawnSync } from "node:child_process";
+<<<<<<< HEAD
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+=======
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -22,6 +26,7 @@ import {
   filterSparseMissingOxlintTargets,
   shouldPrepareExtensionPackageBoundaryArtifacts,
 } from "../../scripts/run-oxlint.mjs";
+<<<<<<< HEAD
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -47,6 +52,8 @@ function isProcessAlive(pid: number): boolean {
     return false;
   }
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("run-oxlint", () => {
   it("prepares extension package boundary artifacts for normal lint runs", () => {
@@ -282,6 +289,7 @@ describe("run-oxlint", () => {
   });
 
   it.runIf(process.platform !== "win32")(
+<<<<<<< HEAD
     "kills timed-out shard process groups when the leader exits first",
     async () => {
       const tempDir = createTempDir("openclaw-oxlint-timeout-group-");
@@ -333,6 +341,8 @@ describe("run-oxlint", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     "forwards parent termination to detached oxlint shard processes",
     () => {
       const tempDir = mkdtempSync(join(tmpdir(), "openclaw-oxlint-signal-"));
@@ -482,6 +492,7 @@ describe("run-oxlint", () => {
     },
   );
 
+<<<<<<< HEAD
   it.runIf(process.platform !== "win32")(
     "kills parent-terminated shard process groups when the leader exits first",
     () => {
@@ -568,6 +579,8 @@ describe("run-oxlint", () => {
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("chunks extension oxlint shards on Windows", () => {
     const shards = createOxlintShards({
       cwd: "/repo",

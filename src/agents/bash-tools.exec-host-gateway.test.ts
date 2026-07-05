@@ -1495,6 +1495,7 @@ EOF`,
     expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it.each([
     ["telegram"],
     ["slack"],
@@ -1627,6 +1628,8 @@ EOF`,
     expect(requireBuildFollowupTargetInput(0).direct).toBe(false);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("returns webchat approval denials as the foreground tool result", async () => {
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("deny");
     createExecApprovalDecisionStateMock.mockReturnValue({

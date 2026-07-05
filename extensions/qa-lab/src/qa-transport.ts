@@ -172,7 +172,10 @@ export type QaTransportAdapter = {
   }) => Promise<void>;
   buildAgentDelivery: (params: { target: string }) => {
     channel: string;
+<<<<<<< HEAD
     to?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     replyChannel: string;
     replyTo: string;
   };
@@ -183,7 +186,10 @@ export type QaTransportAdapter = {
     accountId?: string | null;
   }) => Promise<unknown>;
   createReportNotes: (params: QaTransportReportParams) => string[];
+<<<<<<< HEAD
   cleanup?: () => Promise<void>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 export abstract class QaStateBackedTransportAdapter implements QaTransportAdapter {
@@ -232,7 +238,10 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
   }) => Promise<void>;
   abstract buildAgentDelivery: (params: { target: string }) => {
     channel: string;
+<<<<<<< HEAD
     to?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     replyChannel: string;
     replyTo: string;
   };

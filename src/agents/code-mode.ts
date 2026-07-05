@@ -305,14 +305,18 @@ class CodeModeLimitError extends ToolInputError {
   }
 }
 
+<<<<<<< HEAD
 function isRuntimeInterruptedError(error: unknown): boolean {
   return errorMessage(error) === "interrupted";
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function codeModeFailureCode(error: unknown): CodeModeFailureCode {
   if (error instanceof CodeModeLimitError) {
     return error.code;
   }
+<<<<<<< HEAD
   if (isRuntimeInterruptedError(error)) {
     return "timeout";
   }
@@ -323,6 +327,11 @@ function codeModeFailureMessage(error: unknown): string {
   return isRuntimeInterruptedError(error) ? "code mode timeout exceeded" : errorMessage(error);
 }
 
+=======
+  return error instanceof ToolInputError ? "invalid_input" : "internal_error";
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function enforceOutputLimit(output: unknown[], config: CodeModeConfig): void {
   if (jsonByteLength(output) > config.maxOutputBytes) {
     throw new CodeModeLimitError("output_limit_exceeded", "code mode output limit exceeded");
@@ -516,10 +525,14 @@ async function runBridgeRequest(params: {
         if (typeof id !== "string") {
           throw new ToolInputError("describe id must be a string.");
         }
+<<<<<<< HEAD
         value = await params.runtime.describe(id, {
           includeMcp: false,
           recoverySurface: "tools",
         });
+=======
+        value = await params.runtime.describe(id, { includeMcp: false });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         break;
       }
       case "call": {
@@ -527,10 +540,14 @@ async function runBridgeRequest(params: {
         if (typeof id !== "string") {
           throw new ToolInputError("call id must be a string.");
         }
+<<<<<<< HEAD
         const described = await params.runtime.describe(id, {
           includeMcp: false,
           recoverySurface: "tools",
         });
+=======
+        const described = await params.runtime.describe(id, { includeMcp: false });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         value = await params.runtime.callExactId(described.id, values[1] ?? {}, {
           parentToolCallId: params.parentToolCallId,
           signal: params.signal,
@@ -623,6 +640,7 @@ function failedCodeModeWorkerResult(
   };
 }
 
+<<<<<<< HEAD
 function normalizeCodeModeTimeoutResult<
   T extends { status: string; code?: unknown; error?: unknown },
 >(result: T): T {
@@ -630,19 +648,37 @@ function normalizeCodeModeTimeoutResult<
     result.status === "failed" &&
     result.code === "timeout" &&
     !String(result.error).includes("timeout exceeded")
+=======
+function isQuickJsInterruptedWorkerError(error: unknown): boolean {
+  return String(error) === "interrupted";
+}
+
+function normalizeCodeModeWorkerResult(result: CodeModeWorkerResult): CodeModeWorkerResult {
+  if (
+    result.status === "failed" &&
+    result.code === "timeout" &&
+    isQuickJsInterruptedWorkerError(result.error)
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ) {
     return {
       ...result,
       error: "code mode timeout exceeded",
+<<<<<<< HEAD
     } as T;
+=======
+    };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   return result;
 }
 
+<<<<<<< HEAD
 function normalizeCodeModeWorkerResult(result: CodeModeWorkerResult): CodeModeWorkerResult {
   return normalizeCodeModeTimeoutResult(result);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function runCodeModeWorker(
   workerData: unknown,
   timeoutMs: number,
@@ -874,7 +910,11 @@ async function runExec(params: {
   } catch (error) {
     return {
       status: "failed" as const,
+<<<<<<< HEAD
       error: codeModeFailureMessage(error),
+=======
+      error: errorMessage(error),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       code: codeModeFailureCode(error),
       output: [],
       telemetry: telemetry(runtime),
@@ -908,7 +948,11 @@ async function runExec(params: {
   } catch (error) {
     return {
       status: "failed" as const,
+<<<<<<< HEAD
       error: codeModeFailureMessage(error),
+=======
+      error: errorMessage(error),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       code: codeModeFailureCode(error),
       output: [],
       telemetry: telemetry(runtime),
@@ -1113,7 +1157,11 @@ async function runWait(params: {
   } catch (error) {
     return {
       status: "failed" as const,
+<<<<<<< HEAD
       error: codeModeFailureMessage(error),
+=======
+      error: errorMessage(error),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       code: codeModeFailureCode(error),
       output: state.output,
       telemetry: telemetry(state.runtime),
@@ -1154,6 +1202,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     ) => {
       const input = readCode(args);
       return jsonResult(
+<<<<<<< HEAD
         normalizeCodeModeTimeoutResult(
           await runExec({
             toolCallId,
@@ -1164,6 +1213,16 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
             onUpdate,
           }),
         ),
+=======
+        await runExec({
+          toolCallId,
+          ctx,
+          code: input.code,
+          language: input.language,
+          signal,
+          onUpdate,
+        }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       );
     },
   } as AnyAgentTool);
@@ -1181,6 +1240,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       onUpdate?: AgentToolUpdateCallback,
     ) =>
       jsonResult(
+<<<<<<< HEAD
         normalizeCodeModeTimeoutResult(
           await runWait({
             toolCallId,
@@ -1190,6 +1250,15 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
             onUpdate,
           }),
         ),
+=======
+        await runWait({
+          toolCallId,
+          ctx,
+          runId: readRunId(args),
+          signal,
+          onUpdate,
+        }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ),
   } as AnyAgentTool);
   return [execTool, waitTool];

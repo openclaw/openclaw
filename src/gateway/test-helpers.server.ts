@@ -95,9 +95,12 @@ let lastSyncedSessionStorePath: string | undefined;
 let lastSyncedSessionConfigJson: string | undefined;
 let activeSuiteGatewayServerCount = 0;
 let activeSuiteHookScopeCount = 0;
+<<<<<<< HEAD
 // Gateway tests exercise RPC/server behavior, not production bind auto-detection by default.
 // Keep suite fixtures loopback-stable inside containers; bind-specific tests opt in explicitly.
 const DEFAULT_GATEWAY_TEST_BIND = "loopback" as const;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function resolveGatewayTestMainSessionKeys(): string[] {
   const resolved = resolveMainSessionKeyFromConfig();
@@ -319,7 +322,11 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   sessionStoreSaveDelayMs.value = 0;
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
+<<<<<<< HEAD
   testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;
+=======
+  testState.gatewayBind = undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   testState.gatewayAuth = { mode: "token", token: "test-gateway-token-1234567890" };
   testState.gatewayControlUi = undefined;
   testState.hooksConfig = undefined;
@@ -410,7 +417,11 @@ async function resetGatewayTestRuntimeOnly() {
   sessionStoreSaveDelayMs.value = 0;
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
+<<<<<<< HEAD
   testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;
+=======
+  testState.gatewayBind = undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   testState.gatewayAuth = { mode: "token", token: "test-gateway-token-1234567890" };
   testState.gatewayControlUi = undefined;
   testState.hooksConfig = undefined;

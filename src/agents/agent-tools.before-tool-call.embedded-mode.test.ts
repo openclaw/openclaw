@@ -5,6 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
+<<<<<<< HEAD
 import {
   getGlobalHookRunner,
   initializeGlobalHookRunner,
@@ -17,6 +18,12 @@ import {
   releasePinnedPluginChannelRegistry,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+=======
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { HookRunner } from "../plugins/hooks.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { PluginApprovalResolutions } from "../plugins/types.js";
 import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -77,7 +84,10 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
   let runBeforeToolCallMock: ReturnType<typeof vi.fn<HookRunner["runBeforeToolCall"]>>;
 
   beforeEach(() => {
+<<<<<<< HEAD
     resetGlobalHookRunner();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     runBeforeToolCallMock = vi.fn<HookRunner["runBeforeToolCall"]>();
     hookRunner = {
       hasHooks: vi.fn<HookRunner["hasHooks"]>().mockReturnValue(true),
@@ -91,7 +101,10 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
   afterEach(() => {
     setEmbeddedMode(false);
     setActivePluginRegistry(createEmptyPluginRegistry());
+<<<<<<< HEAD
     resetGlobalHookRunner();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("blocks approval-required tools in embedded mode when no gateway approval route exists", async () => {
@@ -455,6 +468,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(runBeforeToolCallMock).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("runs trusted policies from the global hook registry after the active registry changes", async () => {
     const evaluatePolicy = vi.fn(() => ({
       block: true,
@@ -543,6 +557,8 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not require skill_workshop lifecycle approval in auto mode", async () => {
     (hookRunner.hasHooks as ReturnType<typeof vi.fn>).mockReturnValue(false);
 

@@ -11,7 +11,11 @@ import {
   CodexNativeSubagentMonitor,
   registerCodexNativeSubagentMonitor,
 } from "./native-subagent-monitor.js";
+<<<<<<< HEAD
 import type { CodexServerNotification, JsonValue } from "./protocol.js";
+=======
+import type { CodexServerNotification } from "./protocol.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function createClient() {
   const handlers = new Set<(notification: CodexServerNotification) => Promise<void> | void>();
@@ -158,6 +162,7 @@ function nativeCompletionNotification(params: {
   };
 }
 
+<<<<<<< HEAD
 function childTurnCompletedNotification(params: {
   status: "completed" | "failed" | "interrupted";
   error?: string;
@@ -179,6 +184,8 @@ function childTurnCompletedNotification(params: {
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("CodexNativeSubagentMonitor", () => {
   it("keeps native subagent task mirroring alive on the shared client", async () => {
     const client = createClient();
@@ -335,6 +342,7 @@ describe("CodexNativeSubagentMonitor", () => {
     );
   });
 
+<<<<<<< HEAD
   it("delivers a completed child turn with its final agent message", async () => {
     const client = createClient();
     const runtime = createRuntime();
@@ -661,6 +669,8 @@ describe("CodexNativeSubagentMonitor", () => {
     client.close();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps late idle lifecycle updates from overwriting native completion results", async () => {
     const client = createClient();
     const runtime = createRuntime();

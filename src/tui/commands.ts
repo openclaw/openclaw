@@ -8,11 +8,19 @@ import type { OpenClawConfig } from "../config/types.js";
 
 const VERBOSE_LEVELS = ["on", "off"];
 const TRACE_LEVELS = ["on", "off"];
+<<<<<<< HEAD
 const FAST_LEVELS = ["status", "auto", "on", "off"];
 const REASONING_LEVELS = ["on", "off"];
 const ELEVATED_LEVELS = ["on", "off", "ask", "full"];
 const ACTIVATION_LEVELS = ["mention", "always"];
 const USAGE_FOOTER_LEVELS = ["off", "tokens", "full", "reset", "inherit", "clear", "default"];
+=======
+const FAST_LEVELS = ["status", "on", "off"];
+const REASONING_LEVELS = ["on", "off"];
+const ELEVATED_LEVELS = ["on", "off", "ask", "full"];
+const ACTIVATION_LEVELS = ["mention", "always"];
+const USAGE_FOOTER_LEVELS = ["off", "tokens", "full"];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type ParsedCommand = {
   name: string;
@@ -112,7 +120,11 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     },
     {
       name: "fast",
+<<<<<<< HEAD
       description: "Set fast mode auto/on/off",
+=======
+      description: "Set fast mode on/off",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       getArgumentCompletions: fastCompletions,
     },
     {
@@ -192,11 +204,19 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/session <key> (or /sessions)",
     "/model <provider/model> (or /models)",
     `/think <${thinkLevels}>`,
+<<<<<<< HEAD
     "/fast <status|auto|on|off>",
     "/verbose <on|off>",
     "/trace <on|off>",
     "/reasoning <on|off>",
     "/usage <off|tokens|full|reset|inherit|clear|default>",
+=======
+    "/fast <status|on|off>",
+    "/verbose <on|off>",
+    "/trace <on|off>",
+    "/reasoning <on|off>",
+    "/usage <off|tokens|full>",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     "/elevated <on|off|ask|full>",
     "/elev <on|off|ask|full>",
     "/activation <mention|always>",

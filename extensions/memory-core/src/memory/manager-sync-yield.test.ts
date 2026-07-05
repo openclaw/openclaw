@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const { buildSessionEntryMock } = vi.hoisted(() => ({
   buildSessionEntryMock: vi.fn(),
 }));
+<<<<<<< HEAD
 const originalSyncYieldStateDir = process.env.OPENCLAW_STATE_DIR;
 
 function setSyncYieldStateDir(): void {
@@ -30,6 +31,8 @@ function restoreSyncYieldStateDir(): void {
     Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalSyncYieldStateDir);
   }
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 vi.mock("undici", async () => {
   const actual = await vi.importActual<typeof import("undici")>("undici");
@@ -51,6 +54,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => {
     isSessionArchiveArtifactName: (fileName: string) => /\.jsonl\.(reset|deleted)\./.test(fileName),
     isUsageCountedSessionTranscriptFileName: (fileName: string) => fileName.endsWith(".jsonl"),
     listSessionFilesForAgent: vi.fn(async () => []),
+<<<<<<< HEAD
     listSessionTranscriptCorpusEntriesForAgent: vi.fn(async () => []),
     parseCanonicalSessionSyncTargetFromPath: (filePath: string) => ({
       agentId: "main",
@@ -61,6 +65,8 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => {
       sessionFile: `/tmp/${target.sessionId}.jsonl`,
       sessionId: target.sessionId,
     }),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sessionPathForFile: (filePath: string) => `sessions/${basename(filePath)}`,
   };
 });
@@ -179,7 +185,11 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
 
 describe("session sync responsiveness", () => {
   beforeEach(() => {
+<<<<<<< HEAD
     setSyncYieldStateDir();
+=======
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(os.tmpdir(), "openclaw-session-sync-yield"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     buildSessionEntryMock.mockImplementation(async (absPath: string) => {
       const name = path.basename(absPath);
       return {
@@ -194,7 +204,11 @@ describe("session sync responsiveness", () => {
   });
 
   afterEach(() => {
+<<<<<<< HEAD
     restoreSyncYieldStateDir();
+=======
+    vi.unstubAllEnvs();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     vi.clearAllMocks();
   });
 

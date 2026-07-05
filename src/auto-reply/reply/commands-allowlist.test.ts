@@ -17,7 +17,10 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+<<<<<<< HEAD
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { handleAllowlistCommand } from "./commands-allowlist.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import type { ConfigSnapshotMock } from "./commands.test-harness.js";
@@ -257,15 +260,25 @@ async function withTempConfigPath<T>(
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-allowlist-config-"));
   const configPath = path.join(dir, "openclaw.json");
   const previous = process.env.OPENCLAW_CONFIG_PATH;
+<<<<<<< HEAD
   setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+=======
+  process.env.OPENCLAW_CONFIG_PATH = configPath;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   await fs.writeFile(configPath, JSON.stringify(initialConfig, null, 2), "utf-8");
   try {
     return await run(configPath);
   } finally {
     if (previous === undefined) {
+<<<<<<< HEAD
       deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
     } else {
       setTestEnvValue("OPENCLAW_CONFIG_PATH", previous);
+=======
+      delete process.env.OPENCLAW_CONFIG_PATH;
+    } else {
+      process.env.OPENCLAW_CONFIG_PATH = previous;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }

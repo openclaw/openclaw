@@ -1,6 +1,7 @@
 // Background media generation tests cover detached task completion, requester
 // wake delivery, and direct media fallback behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import type { SessionEntry } from "../../config/sessions/types.js";
 
 const subagentAnnounceDeliveryMocks = vi.hoisted(() => ({
@@ -14,13 +15,21 @@ const detachedTaskRuntimeMocks = vi.hoisted(() => ({
   createRunningTaskRun: vi.fn(() => ({ taskId: "task-pinned-route" })),
   failTaskRunByRunId: vi.fn(),
   recordTaskRunProgressByRunId: vi.fn(),
+=======
+
+const subagentAnnounceDeliveryMocks = vi.hoisted(() => ({
+  deliverSubagentAnnouncement: vi.fn(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 const taskRegistryDeliveryRuntimeMocks = vi.hoisted(() => ({
   sendMessage: vi.fn(),
 }));
 
 vi.mock("../subagent-announce-delivery.js", () => subagentAnnounceDeliveryMocks);
+<<<<<<< HEAD
 vi.mock("../../tasks/detached-task-runtime.js", () => detachedTaskRuntimeMocks);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskRegistryDeliveryRuntimeMocks);
 
 import {
@@ -31,6 +40,7 @@ import {
 
 beforeEach(() => {
   subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockReset();
+<<<<<<< HEAD
   subagentAnnounceDeliveryMocks.loadRequesterSessionEntry.mockReset();
   subagentAnnounceDeliveryMocks.loadRequesterSessionEntry.mockReturnValue({ entry: undefined });
   detachedTaskRuntimeMocks.createRunningTaskRun.mockClear();
@@ -51,6 +61,11 @@ function createImageMediaLifecycle() {
   });
 }
 
+=======
+  taskRegistryDeliveryRuntimeMocks.sendMessage.mockReset();
+});
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("shouldDetachMediaGenerationTask", () => {
   it("detaches session-backed media generation", () => {
     expect(shouldDetachMediaGenerationTask("agent:main:discord:direct:123")).toBe(true);
@@ -406,6 +421,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
 });
 
 describe("createMediaGenerationTaskLifecycle", () => {
+<<<<<<< HEAD
   it("pins a missing requester target from session state when the task starts", async () => {
     subagentAnnounceDeliveryMocks.loadRequesterSessionEntry.mockReturnValue({
       entry: {
@@ -534,11 +550,27 @@ describe("createMediaGenerationTaskLifecycle", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("returns the completion wake delivery result", async () => {
     subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
       delivered: true,
     });
+<<<<<<< HEAD
     const lifecycle = createImageMediaLifecycle();
+=======
+    const lifecycle = createMediaGenerationTaskLifecycle({
+      toolName: "image_generate",
+      taskKind: "image_generation",
+      label: "Image generation",
+      queuedProgressSummary: "Queued image generation",
+      generatedLabel: "image",
+      failureProgressSummary: "Image generation failed",
+      eventSource: "image_generation",
+      announceType: "image generation task",
+      completionLabel: "image",
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await expect(
       lifecycle.wakeTaskCompletion({
@@ -566,7 +598,21 @@ describe("createMediaGenerationTaskLifecycle", () => {
       terminal: true,
       error: "generated media direct delivery failed after partial upload",
     });
+<<<<<<< HEAD
     const lifecycle = createImageMediaLifecycle();
+=======
+    const lifecycle = createMediaGenerationTaskLifecycle({
+      toolName: "image_generate",
+      taskKind: "image_generation",
+      label: "Image generation",
+      queuedProgressSummary: "Queued image generation",
+      generatedLabel: "image",
+      failureProgressSummary: "Image generation failed",
+      eventSource: "image_generation",
+      announceType: "image generation task",
+      completionLabel: "image",
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await expect(
       lifecycle.wakeTaskCompletion({
@@ -594,7 +640,21 @@ describe("createMediaGenerationTaskLifecycle", () => {
       error: "completion agent did not deliver generated media",
     });
     taskRegistryDeliveryRuntimeMocks.sendMessage.mockResolvedValueOnce({});
+<<<<<<< HEAD
     const lifecycle = createImageMediaLifecycle();
+=======
+    const lifecycle = createMediaGenerationTaskLifecycle({
+      toolName: "image_generate",
+      taskKind: "image_generation",
+      label: "Image generation",
+      queuedProgressSummary: "Queued image generation",
+      generatedLabel: "image",
+      failureProgressSummary: "Image generation failed",
+      eventSource: "image_generation",
+      announceType: "image generation task",
+      completionLabel: "image",
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await expect(
       lifecycle.wakeTaskCompletion({
@@ -708,7 +768,21 @@ describe("createMediaGenerationTaskLifecycle", () => {
       reason: "requester_abandoned",
       error: "requester session abandoned after timeout",
     });
+<<<<<<< HEAD
     const lifecycle = createImageMediaLifecycle();
+=======
+    const lifecycle = createMediaGenerationTaskLifecycle({
+      toolName: "image_generate",
+      taskKind: "image_generation",
+      label: "Image generation",
+      queuedProgressSummary: "Queued image generation",
+      generatedLabel: "image",
+      failureProgressSummary: "Image generation failed",
+      eventSource: "image_generation",
+      announceType: "image generation task",
+      completionLabel: "image",
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await expect(
       lifecycle.wakeTaskCompletion({
@@ -738,7 +812,21 @@ describe("createMediaGenerationTaskLifecycle", () => {
       path: "direct",
       error: "gateway request timeout for agent",
     });
+<<<<<<< HEAD
     const lifecycle = createImageMediaLifecycle();
+=======
+    const lifecycle = createMediaGenerationTaskLifecycle({
+      toolName: "image_generate",
+      taskKind: "image_generation",
+      label: "Image generation",
+      queuedProgressSummary: "Queued image generation",
+      generatedLabel: "image",
+      failureProgressSummary: "Image generation failed",
+      eventSource: "image_generation",
+      announceType: "image generation task",
+      completionLabel: "image",
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await expect(
       lifecycle.wakeTaskCompletion({

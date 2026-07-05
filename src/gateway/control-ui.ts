@@ -154,6 +154,7 @@ const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
   "sw.js",
 ]);
 
+<<<<<<< HEAD
 /** Rewrites root-absolute Control UI public asset hrefs for configured base paths. */
 export function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath: string): string {
   const normalized = normalizeControlUiBasePath(basePath);
@@ -169,6 +170,8 @@ export function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath
   return next;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type ControlUiAvatarResolution =
   | { kind: "none"; reason: string; source?: string | null }
   | { kind: "local"; filePath: string; source?: string | null }
@@ -758,9 +761,14 @@ function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) 
   res.end(body);
 }
 
+<<<<<<< HEAD
 function serveResolvedIndexHtml(res: ServerResponse, body: string, basePath?: string) {
   const prepared = rewriteControlUiIndexHtmlPublicAssetHrefs(body, basePath ?? "");
   const hashes = computeInlineScriptHashes(prepared);
+=======
+function serveResolvedIndexHtml(res: ServerResponse, body: string) {
+  const hashes = computeInlineScriptHashes(body);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (hashes.length > 0) {
     res.setHeader(
       "Content-Security-Policy",
@@ -769,7 +777,11 @@ function serveResolvedIndexHtml(res: ServerResponse, body: string, basePath?: st
   }
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
+<<<<<<< HEAD
   res.end(prepared);
+=======
+  res.end(body);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function readOpenedFile(fd: number): Promise<Buffer> {
@@ -1085,7 +1097,11 @@ export async function handleControlUiHttpRequest(
         return true;
       }
       if (path.basename(safeFile.path) === "index.html") {
+<<<<<<< HEAD
         serveResolvedIndexHtml(res, await readOpenedFileText(safeFile.fd), basePath);
+=======
+        serveResolvedIndexHtml(res, await readOpenedFileText(safeFile.fd));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         return true;
       }
       serveResolvedFile(res, safeFile.path, await readOpenedFile(safeFile.fd));
@@ -1113,7 +1129,11 @@ export async function handleControlUiHttpRequest(
       if (respondHeadForFile(req, res, safeIndex.path)) {
         return true;
       }
+<<<<<<< HEAD
       serveResolvedIndexHtml(res, await readOpenedFileText(safeIndex.fd), basePath);
+=======
+      serveResolvedIndexHtml(res, await readOpenedFileText(safeIndex.fd));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return true;
     } finally {
       fs.closeSync(safeIndex.fd);

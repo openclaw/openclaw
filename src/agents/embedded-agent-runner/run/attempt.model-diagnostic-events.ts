@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Emits diagnostic model-call events around embedded-agent stream functions.
  */
@@ -36,6 +39,11 @@ import type {
 } from "../../../plugins/hook-types.js";
 import type { StreamFn } from "../../runtime/index.js";
 
+<<<<<<< HEAD
+=======
+export { diagnosticErrorCategory };
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type ModelCallDiagnosticContext = {
   runId: string;
   sessionKey?: string;
@@ -108,6 +116,13 @@ function assignRequestPayloadBytes(state: ModelCallObservationState, payload: un
   }
 }
 
+<<<<<<< HEAD
+=======
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function utf8StringByteLength(value: string): number {
   return Buffer.byteLength(value, "utf8");
 }

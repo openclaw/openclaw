@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type EndpointCall = {
   url: string;
@@ -38,6 +41,7 @@ function readMockedBody(call: EndpointCall | undefined): unknown {
   return JSON.parse(call.init.body);
 }
 
+<<<<<<< HEAD
 function cancelTrackedResponse(
   text: string,
   init: ResponseInit,
@@ -60,6 +64,8 @@ function cancelTrackedResponse(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { testing } from "../test-api.js";
 import { createParallelWebSearchProvider as createContractParallelWebSearchProvider } from "../web-search-contract-api.js";
 import { createParallelWebSearchProvider } from "./parallel-web-search-provider.js";
@@ -552,6 +558,7 @@ describe("parallel web search provider", () => {
     expect(body.advanced_settings?.max_results).toBe(5);
   });
 
+<<<<<<< HEAD
   it("bounds Parallel API error bodies without using response.text()", async () => {
     const tracked = cancelTrackedResponse(`${"parallel upstream unavailable ".repeat(1024)}tail`, {
       status: 503,
@@ -648,6 +655,8 @@ describe("parallel web search provider", () => {
     expect(result).toMatchObject({ provider: "parallel", searchId: "ok", count: 1 });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not surface a Parallel-generated sessionId on a cache hit", async () => {
     // Unique objective so this test does not collide with the SDK's
     // module-level web-search cache across other cases.

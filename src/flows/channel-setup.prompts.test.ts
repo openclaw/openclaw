@@ -1,6 +1,10 @@
 // Channel setup prompt tests cover prompt choices and validation.
 import { describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import type { ChannelSetupDmPolicy } from "../channels/plugins/setup-wizard-types.js";
+=======
+import type { ChannelSetupDmPolicy } from "../commands/channel-setup/types.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { WizardPrompter } from "../wizard/prompts.js";

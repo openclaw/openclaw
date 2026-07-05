@@ -7,8 +7,11 @@ import {
   assertRequiredParams,
   REQUIRED_PARAM_GROUPS,
   getToolParamsRecord,
+<<<<<<< HEAD
   normalizeFileToolPathParam,
   normalizeHallucinatedOfficePathExtension,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   stripMalformedXmlArgValueSuffix,
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
@@ -28,6 +31,7 @@ describe("assertRequiredParams", () => {
     );
   });
 
+<<<<<<< HEAD
   it("normalizes known hallucinated Office/codex path extensions", () => {
     expect(normalizeHallucinatedOfficePathExtension("reports/final.docodex")).toBe(
       "reports/final.docx",
@@ -52,6 +56,8 @@ describe("assertRequiredParams", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("strips malformed path suffixes without touching payload text", async () => {
     const execute = vi.fn(async (_id, args) => args);
     const tool = wrapToolParamValidation(
@@ -81,6 +87,7 @@ describe("assertRequiredParams", () => {
     );
   });
 
+<<<<<<< HEAD
   it("normalizes Office/codex path extensions without touching payload text", async () => {
     const execute = vi.fn(async (_id, args) => args);
     const tool = wrapToolParamValidation(
@@ -110,6 +117,8 @@ describe("assertRequiredParams", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects paths that become empty after malformed XML arg-value suffix stripping", async () => {
     const execute = vi.fn();
     const tool = wrapToolParamValidation(
@@ -148,9 +157,15 @@ describe("assertRequiredParams", () => {
         newText: "literal new</arg_value>>",
       },
     ];
+<<<<<<< HEAD
     await tool.execute("id", { path: "notes.docxodex</arg_value>>>", edits });
 
     expect(execute).toHaveBeenCalledWith("id", { path: "notes.docx", edits }, undefined, undefined);
+=======
+    await tool.execute("id", { path: "notes.txt</arg_value>>>", edits });
+
+    expect(execute).toHaveBeenCalledWith("id", { path: "notes.txt", edits }, undefined, undefined);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("includes received keys in error when some params are present but content is missing", () => {

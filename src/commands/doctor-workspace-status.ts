@@ -3,10 +3,14 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+<<<<<<< HEAD
 import {
   resolvePluginVersionDriftUpdateCommand,
   type PluginVersionDriftReport,
 } from "../plugins/plugin-version-drift.js";
+=======
+import type { PluginVersionDriftReport } from "../plugins/plugin-version-drift.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   buildPluginCompatibilityWarnings,
   buildPluginRegistrySnapshotReport,
@@ -14,6 +18,10 @@ import {
 import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
+<<<<<<< HEAD
+=======
+import { detectLegacyWorkspaceDirs, formatLegacyWorkspaceWarning } from "./doctor-workspace.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type NoteWorkspaceStatusOptions = {
   pluginVersionDrift?: PluginVersionDriftReport;
@@ -65,9 +73,12 @@ function notePluginVersionDrift(drift: PluginVersionDriftReport | undefined) {
     return;
   }
   const singleDrift = drift.drifts.length === 1 ? drift.drifts[0] : undefined;
+<<<<<<< HEAD
   const updateCommands = drift.drifts.map((entry) =>
     formatCliCommand(resolvePluginVersionDriftUpdateCommand(entry)),
   );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const lines = [
     `${drift.drifts.length} active official plugin${
       drift.drifts.length === 1 ? "" : "s"
@@ -77,12 +88,21 @@ function notePluginVersionDrift(drift: PluginVersionDriftReport | undefined) {
       return `- ${entry.pluginId}: ${entry.installedVersion} (${sourceLabel}) -> expected ${drift.gatewayVersion}`;
     }),
     singleDrift
+<<<<<<< HEAD
       ? `Fix: ${updateCommands[0]} && ${formatCliCommand("openclaw gateway restart")}.`
       : [
           "Fix each drifted plugin:",
           ...updateCommands.map((command) => `- ${command}`),
           `Then run ${formatCliCommand("openclaw gateway restart")}.`,
         ].join("\n"),
+=======
+      ? `Fix: ${formatCliCommand(
+          `openclaw plugins update ${singleDrift.pluginId}`,
+        )} && ${formatCliCommand("openclaw gateway restart")}.`
+      : `Fix: ${formatCliCommand(
+          "openclaw plugins update <plugin-id>",
+        )} for each drifted plugin, then ${formatCliCommand("openclaw gateway restart")}.`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ];
   note(lines.join("\n"), "Plugin version drift");
 }
@@ -90,6 +110,14 @@ function notePluginVersionDrift(drift: PluginVersionDriftReport | undefined) {
 /** Emits workspace, skills, plugin, and TaskFlow recovery status notes for doctor. */
 export function noteWorkspaceStatus(cfg: OpenClawConfig, options: NoteWorkspaceStatusOptions = {}) {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+<<<<<<< HEAD
+=======
+  const legacyWorkspace = detectLegacyWorkspaceDirs({ workspaceDir });
+  if (legacyWorkspace.legacyDirs.length > 0) {
+    note(formatLegacyWorkspaceWarning(legacyWorkspace), "Extra workspace");
+  }
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const skillsReport = buildWorkspaceSkillStatus(workspaceDir, { config: cfg });
   const platformIncompatibleCount = skillsReport.skills.filter(
     (s) => s.platformIncompatible && !s.disabled && !s.blockedByAllowlist,

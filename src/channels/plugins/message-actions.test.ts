@@ -13,6 +13,10 @@ import {
   channelSupportsMessageCapability,
   channelSupportsMessageCapabilityForChannel,
   listCrossChannelSchemaSupportedMessageActions,
+<<<<<<< HEAD
+=======
+  listChannelMessageActions,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   listChannelMessageCapabilities,
   listChannelMessageCapabilitiesForChannel,
   resolveChannelMessageToolMediaSourceParamKeys,
@@ -183,6 +187,10 @@ describe("message action capability checks", () => {
       createTestRegistry([{ pluginId: "demo-unified", source: "test", plugin: unifiedPlugin }]),
     );
 
+<<<<<<< HEAD
+=======
+    expect(listChannelMessageActions({} as OpenClawConfig)).toEqual(["send", "broadcast", "react"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(listChannelMessageCapabilities({} as OpenClawConfig)).toEqual(["presentation"]);
     expect(
       resolveChannelMessageToolSchemaProperties({
@@ -441,9 +449,17 @@ describe("message action capability checks", () => {
       createTestRegistry([{ pluginId: "demo-crashing", source: "test", plugin: crashingPlugin }]),
     );
 
+<<<<<<< HEAD
     expect(listChannelMessageCapabilities({} as OpenClawConfig)).toStrictEqual([]);
     expect(errorSpy).toHaveBeenCalledTimes(1);
 
+=======
+    expect(listChannelMessageActions({} as OpenClawConfig)).toEqual(["send", "broadcast"]);
+    expect(listChannelMessageCapabilities({} as OpenClawConfig)).toStrictEqual([]);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+
+    expect(listChannelMessageActions({} as OpenClawConfig)).toEqual(["send", "broadcast"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(listChannelMessageCapabilities({} as OpenClawConfig)).toStrictEqual([]);
     expect(errorSpy).toHaveBeenCalledTimes(1);
   });

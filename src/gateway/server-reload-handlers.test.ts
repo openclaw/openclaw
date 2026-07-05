@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConfigWriteNotification } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { consumeGatewaySigusr1RestartIntent } from "../infra/restart.js";
+<<<<<<< HEAD
 import {
   pinActivePluginChannelRegistry,
   releasePinnedPluginChannelRegistry,
@@ -12,6 +13,10 @@ import {
 import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path.js";
 import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+=======
+import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path.js";
+import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { diffConfigPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
@@ -57,7 +62,10 @@ const hoisted = vi.hoisted(() => ({
   markRestartAbortedMainSessions: vi.fn(async (_params: unknown) => ({ marked: 1, skipped: 0 })),
   runtimeConfig: { value: { session: { store: "/tmp/active-sessions.json" } } as OpenClawConfig },
   reloadEvents: [] as string[],
+<<<<<<< HEAD
   loadModelCatalog: vi.fn(async (_params: { config: OpenClawConfig }) => []),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resetModelCatalogCache: vi.fn(() => {}),
   refreshContextWindowCache: vi.fn(async (_cfg: OpenClawConfig) => {}),
   clearCurrentProviderAuthState: vi.fn(() => {}),
@@ -119,10 +127,13 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../agents/model-catalog.js", () => ({
+<<<<<<< HEAD
   loadModelCatalog: (params: { config: OpenClawConfig }) => {
     hoisted.reloadEvents.push("load-model-catalog");
     return hoisted.loadModelCatalog(params);
   },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resetModelCatalogCache: () => {
     hoisted.reloadEvents.push("reset-model-catalog");
     hoisted.resetModelCatalogCache();
@@ -151,6 +162,7 @@ vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
   disposeAllSessionMcpRuntimes: hoisted.disposeAllSessionMcpRuntimes,
 }));
 
+<<<<<<< HEAD
 function createReloadHandlersForTest(
   logReload = { info: vi.fn(), warn: vi.fn() },
   channels?: {
@@ -158,6 +170,9 @@ function createReloadHandlersForTest(
     stop: (channel: ChannelKind) => Promise<void>;
   },
 ) {
+=======
+function createReloadHandlersForTest(logReload = { info: vi.fn(), warn: vi.fn() }) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
   const heartbeatRunner = {
     stop: vi.fn(),
@@ -174,8 +189,13 @@ function createReloadHandlersForTest(
       channelHealthMonitor: null,
     }),
     setState: vi.fn(),
+<<<<<<< HEAD
     startChannel: channels?.start ?? vi.fn(async () => {}),
     stopChannel: channels?.stop ?? vi.fn(async () => {}),
+=======
+    startChannel: vi.fn(async () => {}),
+    stopChannel: vi.fn(async () => {}),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     stopPostReadySidecars: vi.fn(),
     reloadPlugins: vi.fn(
       async (): Promise<GatewayPluginReloadResult> => ({
@@ -203,7 +223,10 @@ afterEach(() => {
   hoisted.markRestartAbortedMainSessions.mockClear();
   hoisted.runtimeConfig.value = { session: { store: "/tmp/active-sessions.json" } };
   hoisted.reloadEvents.length = 0;
+<<<<<<< HEAD
   hoisted.loadModelCatalog.mockClear();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   hoisted.resetModelCatalogCache.mockClear();
   hoisted.refreshContextWindowCache.mockClear();
   hoisted.clearCurrentProviderAuthState.mockClear();
@@ -277,11 +300,17 @@ describe("gateway hot reload model state", () => {
       "reset-model-catalog",
       "clear-provider-auth",
       "refresh-context-window",
+<<<<<<< HEAD
       "load-model-catalog",
       "warm-provider-auth",
     ]);
     expect(hoisted.refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
     expect(hoisted.loadModelCatalog).toHaveBeenCalledWith({ config: nextConfig });
+=======
+      "warm-provider-auth",
+    ]);
+    expect(hoisted.refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig);
   });
 
@@ -908,6 +937,7 @@ describe("gateway channel hot reload handlers", () => {
     }
   }
 
+<<<<<<< HEAD
   it("restarts WhatsApp when the planner receives a selfChatMode change", async () => {
     const whatsappPlugin = {
       ...createChannelTestPluginBase({ id: "whatsapp" }),
@@ -944,6 +974,8 @@ describe("gateway channel hot reload handlers", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("continues restarting later channels after a hot-reload stop failure", async () => {
     const events: string[] = [];
     const setState = vi.fn();

@@ -1,7 +1,10 @@
 /**
  * Steers active embedded sessions and waits for transcript commits when needed.
  */
+<<<<<<< HEAD
 import { toErrorObject } from "../../../infra/errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { log } from "../logger.js";
 
 /**
@@ -143,7 +146,11 @@ export async function steerAndWaitForTranscriptCommit(
       }
       unsubscribe?.();
       if (err) {
+<<<<<<< HEAD
         reject(toErrorObject(err, "Non-Error rejection"));
+=======
+        reject(toLintErrorObject(err, "Non-Error rejection"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         return;
       }
       resolve();
@@ -231,3 +238,20 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS,
   );
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

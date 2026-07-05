@@ -118,6 +118,7 @@ function normalizeApprovalIdentity(value: string | null | undefined): string | n
   return normalizeOptionalString(value) ?? null;
 }
 
+<<<<<<< HEAD
 function normalizeApprovalIdentities(values: readonly string[] | null | undefined): string[] {
   const normalized = new Set<string>();
   for (const value of values ?? []) {
@@ -129,6 +130,8 @@ function normalizeApprovalIdentities(values: readonly string[] | null | undefine
   return [...normalized];
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Checks whether a client can observe or resolve an approval record. */
 export function isApprovalRecordVisibleToClient<TPayload>(params: {
   record: ExecApprovalRecord<TPayload>;
@@ -146,6 +149,7 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
     return true;
   }
 
+<<<<<<< HEAD
   const approvalReviewerDeviceIds = normalizeApprovalIdentities(
     params.record.approvalReviewerDeviceIds,
   );
@@ -154,6 +158,8 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
     return true;
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   // Device identity is the strongest requester binding; fall back to the
   // live connection only for older callers that have not attached a device.
   if (requestedByDeviceId) {
@@ -206,6 +212,7 @@ export function bindApprovalRequesterMetadata<TPayload>(params: {
   params.record.requestedByDeviceTokenAuth = params.client?.isDeviceTokenAuth === true;
 }
 
+<<<<<<< HEAD
 export function bindApprovalReviewerDeviceIds<TPayload>(params: {
   record: ExecApprovalRecord<TPayload>;
   deviceIds?: readonly string[] | null;
@@ -216,6 +223,8 @@ export function bindApprovalReviewerDeviceIds<TPayload>(params: {
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Registers an approval record and converts manager registration errors to gateway errors. */
 export function registerPendingApprovalRecord<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;

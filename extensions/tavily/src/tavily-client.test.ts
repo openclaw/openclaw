@@ -1,6 +1,9 @@
 // Tavily tests cover tavily client plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 // Capture every call to postTrustedWebToolsJson so we can assert on extraHeaders.
 const postTrustedWebToolsJson = vi.fn();
@@ -62,6 +65,7 @@ describe("tavily client X-Client-Source header", () => {
     );
   });
 
+<<<<<<< HEAD
   it("bounds successful Tavily JSON bodies before parsing", async () => {
     const streamed = createStreamingResponse({
       chunkCount: 32,
@@ -85,6 +89,8 @@ describe("tavily client X-Client-Source header", () => {
     expect(jsonSpy).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("runTavilyExtract sends X-Client-Source: openclaw", async () => {
     await runTavilyExtract({ urls: ["https://example.com"] });
 

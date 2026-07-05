@@ -63,6 +63,10 @@ export const ko: TranslationMap = {
     docs: "문서",
     theme: "테마",
     colorMode: "색상 모드",
+<<<<<<< HEAD
+=======
+    colorModeOption: "색상 모드: {mode}",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resources: "리소스",
     search: "검색",
     save: "저장",
@@ -199,7 +203,10 @@ export const ko: TranslationMap = {
     inherit: "상속",
     defaultOption: "기본값({value})",
     offExplicit: "꺼짐(명시적)",
+<<<<<<< HEAD
     auto: "auto",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     on: "켜짐",
     off: "꺼짐",
     full: "전체",
@@ -1431,7 +1438,10 @@ export const ko: TranslationMap = {
     jaJP: "日本語 (일본어)",
     ko: "한국어 (한국어)",
     fr: "Français (프랑스어)",
+<<<<<<< HEAD
     hi: "हिन्दी (Hindi)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ar: "العربية (아랍어)",
     it: "Italiano (이탈리아어)",
     tr: "Türkçe (터키어)",
@@ -1442,7 +1452,10 @@ export const ko: TranslationMap = {
     vi: "Tiếng Việt (베트남어)",
     nl: "Nederlands (네덜란드어)",
     fa: "فارسی (페르시아어)",
+<<<<<<< HEAD
     ru: "Русский (Russian)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   cron: {
     quickCreate: {
@@ -1610,7 +1623,10 @@ export const ko: TranslationMap = {
       nextHeartbeat: "다음 하트비트",
       wakeModeHelp: "Now는 즉시 트리거됩니다. Next heartbeat는 다음 주기를 기다립니다.",
       payloadKind: "무엇을 실행할까요?",
+<<<<<<< HEAD
       command: "Command",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       systemEvent: "메인 타임라인에 메시지 게시",
       agentTurn: "어시스턴트 작업 실행(격리됨)",
       systemEventHelp: "텍스트를 gateway 메인 타임라인으로 보냅니다(알림/트리거에 적합).",

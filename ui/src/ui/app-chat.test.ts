@@ -1452,6 +1452,7 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("keep this draft");
   });
 
+<<<<<<< HEAD
   it("does not seed refreshSessionsAfterChat for a terminal timeout ack on a refreshing send", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
@@ -1517,6 +1518,8 @@ describe("handleSendChat", () => {
     expect(host.chatRunId).toBeNull();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("records visible send timing phases for a normal chat send", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
@@ -2828,6 +2831,7 @@ describe("handleSendChat", () => {
     expect(host.lastError).toBe("network down");
   });
 
+<<<<<<< HEAD
   it("restores the BTW draft when detached send returns a terminal timeout ACK", async () => {
     const host = makeHost({
       client: {
@@ -2852,6 +2856,8 @@ describe("handleSendChat", () => {
     expect(host.lastError).toBe("The active run ended before the detached message was accepted.");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("clears BTW side results when /clear resets chat history", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.reset") {
@@ -2992,6 +2998,7 @@ describe("handleSendChat", () => {
     expect(host.chatQueue[0]?.pendingRunId).toBe("run-1");
   });
 
+<<<<<<< HEAD
   it("removes queued steer indicators when chat.send returns terminal ok", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
@@ -3040,6 +3047,8 @@ describe("handleSendChat", () => {
     expect(setLastActiveSessionKeyMock).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("removes pending steer indicators when the run finishes", () => {
     const host = makeHost({
       chatQueue: [

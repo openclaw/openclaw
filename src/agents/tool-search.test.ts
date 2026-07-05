@@ -1288,6 +1288,7 @@ describe("Tool Search", () => {
     ).rejects.toThrow();
   });
 
+<<<<<<< HEAD
   it("suggests recoverable Tool Search steps for guessed tool ids", async () => {
     const callTool = fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call");
     const searchTool = fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search");
@@ -1401,6 +1402,8 @@ describe("Tool Search", () => {
     expect(writeTool.execute).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves code-mode bridge errors from the child process", async () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     applyToolSearchCatalog({
@@ -1420,9 +1423,13 @@ describe("Tool Search", () => {
       runtimeCodeTool.execute("call-missing-tool", {
         code: `return await openclaw.tools.call("missing_tool", {});`,
       }),
+<<<<<<< HEAD
     ).rejects.toThrow(
       "Unknown tool id: missing_tool. Use openclaw.tools.search to find a tool, openclaw.tools.describe to inspect it, then openclaw.tools.call with the exact id or name.",
     );
+=======
+    ).rejects.toThrow("Unknown tool id: missing_tool");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("does not expose host-realm bridge result objects to model-authored code", async () => {

@@ -1,5 +1,12 @@
 // Signal plugin module implements approval native behavior.
+<<<<<<< HEAD
 import { createChannelApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
+=======
+import {
+  createChannelApprovalCapability,
+  splitChannelApprovalCapability,
+} from "openclaw/plugin-sdk/approval-delivery-runtime";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
@@ -321,3 +328,8 @@ export const signalApprovalCapability: ChannelApprovalCapability = createChannel
         .signalApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
   }),
 });
+<<<<<<< HEAD
+=======
+
+export const signalNativeApprovalAdapter = splitChannelApprovalCapability(signalApprovalCapability);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

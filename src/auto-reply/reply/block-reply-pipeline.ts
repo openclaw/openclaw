@@ -1,5 +1,8 @@
 // Buffers streaming reply blocks before coalesced final delivery.
+<<<<<<< HEAD
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -96,10 +99,13 @@ const withTimeout = async <T>(
   }
 };
 
+<<<<<<< HEAD
 function resolveBlockReplyTimeoutMs(timeoutMs: number): number {
   return clampPositiveTimerTimeoutMs(timeoutMs) ?? 0;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Creates the ordered block reply delivery pipeline for streamed payloads. */
 export function createBlockReplyPipeline(params: {
   onBlockReply: (
@@ -110,8 +116,12 @@ export function createBlockReplyPipeline(params: {
   coalescing?: BlockStreamingCoalescing;
   buffer?: BlockReplyBuffer;
 }): BlockReplyPipeline {
+<<<<<<< HEAD
   const { onBlockReply, coalescing, buffer } = params;
   const timeoutMs = resolveBlockReplyTimeoutMs(params.timeoutMs);
+=======
+  const { onBlockReply, timeoutMs, coalescing, buffer } = params;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const sentKeys = new Set<string>();
   const sentContentKeys = new Set<string>();
   const sentMediaUrls = new Set<string>();
@@ -120,7 +130,11 @@ export function createBlockReplyPipeline(params: {
   const bufferedKeys = new Set<string>();
   const bufferedPayloadKeys = new Set<string>();
   const bufferedPayloads: ReplyPayload[] = [];
+<<<<<<< HEAD
   const streamedTextFragmentsByMessage = new Map<number | undefined, string[]>();
+=======
+  const streamedTextFragments: string[] = [];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let bufferedAssistantMessageIndex: number | undefined;
   let sendChain: Promise<void> = Promise.resolve();
   let aborted = false;
@@ -186,10 +200,14 @@ export function createBlockReplyPipeline(params: {
           sentMediaUrls.add(mediaUrl);
         }
         if (!isStatusNotice && reply.trimmedText) {
+<<<<<<< HEAD
           const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
           const fragments = streamedTextFragmentsByMessage.get(assistantMessageIndex) ?? [];
           fragments.push(reply.trimmedText);
           streamedTextFragmentsByMessage.set(assistantMessageIndex, fragments);
+=======
+          streamedTextFragments.push(reply.trimmedText);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }
         if (!isStatusNotice) {
           didStream = true;
@@ -331,7 +349,11 @@ export function createBlockReplyPipeline(params: {
       if (sentContentKeys.has(payloadKey)) {
         return true;
       }
+<<<<<<< HEAD
       if (!didStream) {
+=======
+      if (!didStream || streamedTextFragments.length === 0) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         return false;
       }
       const reply = resolveSendableOutboundReplyParts(payload);
@@ -339,6 +361,7 @@ export function createBlockReplyPipeline(params: {
         return false;
       }
       const normalize = (text: string) => text.replace(/\s+/g, "");
+<<<<<<< HEAD
       const target = normalize(reply.trimmedText);
       for (const fragments of streamedTextFragmentsByMessage.values()) {
         if (fragments.length > 0 && normalize(fragments.join("")) === target) {
@@ -346,6 +369,9 @@ export function createBlockReplyPipeline(params: {
         }
       }
       return false;
+=======
+      return normalize(streamedTextFragments.join("")) === normalize(reply.trimmedText);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
     getSentMediaUrls: () => Array.from(sentMediaUrls),
   };

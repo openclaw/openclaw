@@ -7,7 +7,10 @@ import type {
   ContentChunk,
   FunctionTool,
 } from "@mistralai/mistralai/models/components";
+<<<<<<< HEAD
 import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { getEnvApiKey } from "../env-api-keys.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
@@ -310,7 +313,11 @@ function buildChatPayload(
   if (context.systemPrompt) {
     payload.messages.unshift({
       role: "system",
+<<<<<<< HEAD
       content: sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt)),
+=======
+      content: sanitizeSurrogates(context.systemPrompt),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   }
 

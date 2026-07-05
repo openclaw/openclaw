@@ -58,8 +58,12 @@ import { resolveProviderThinkingProfile } from "../plugins/provider-runtime.js";
 import type { ProviderThinkingModelCompat } from "../plugins/provider-thinking.types.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
+<<<<<<< HEAD
 import { findFinalTagMatches, stripFinalTags } from "../shared/text/final-tags.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+=======
+import { containsFinalTag, stripFinalTags } from "../shared/text/final-tags.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import {
@@ -68,7 +72,11 @@ import {
   isLikelyToolNonceRefusal,
   shouldRetryExecReadProbe,
   shouldRetryToolReadProbe,
+<<<<<<< HEAD
 } from "./live-tool-probe.test-helpers.js";
+=======
+} from "./live-tool-probe-utils.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { startGatewayServer } from "./server.impl.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -345,11 +353,15 @@ function isGatewayLiveProbeTimeout(error: string): boolean {
 }
 
 function isGatewayLiveModelTimeout(error: string): boolean {
+<<<<<<< HEAD
   return (
     /model timeout after \d+ms/i.test(error) ||
     (/\bagent\.wait timeout for runId=/i.test(error) &&
       /\btimeoutPhase=(?:preflight|provider|post_turn)\b/i.test(error))
   );
+=======
+  return /model timeout after \d+ms/i.test(error);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function assertGatewayLiveDidNotSkipAllDueToTimeout(params: {
@@ -571,9 +583,15 @@ function restoreProductionEnvForLiveRun(previous: {
 
 function restoreOptionalEnv(key: string, value: string | undefined): void {
   if (value === undefined) {
+<<<<<<< HEAD
     deleteTestEnvValue(key);
   } else {
     setTestEnvValue(key, value);
+=======
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 
@@ -603,7 +621,11 @@ function assertNoReasoningTags(params: {
   if (!params.text) {
     return;
   }
+<<<<<<< HEAD
   if (THINKING_TAG_RE.test(params.text) || findFinalTagMatches(params.text).length > 0) {
+=======
+  if (THINKING_TAG_RE.test(params.text) || containsFinalTag(params.text)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const snippet = params.text.length > 200 ? `${params.text.slice(0, 200)}…` : params.text;
     throw new Error(
       `[${params.label}] reasoning tag leak (${params.model} / ${params.phase}): ${snippet}`,
@@ -897,6 +919,7 @@ describe("resolveGatewayLiveProviderTimeoutSeconds", () => {
   });
 });
 
+<<<<<<< HEAD
 describe("isGatewayLiveModelTimeout", () => {
   it("matches provider-attributed agent wait timeouts", () => {
     expect(
@@ -915,6 +938,8 @@ describe("isGatewayLiveModelTimeout", () => {
   });
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("formatGatewayLiveAgentWaitFailure", () => {
   it("includes terminal attribution fields without requiring transcript text", () => {
     expect(
@@ -1084,9 +1109,15 @@ describe("resolveGatewayLiveMaxModels", () => {
   const originalSharedMax = process.env.OPENCLAW_LIVE_MAX_MODELS;
   function restoreEnvValue(name: string, value: string | undefined): void {
     if (value === undefined) {
+<<<<<<< HEAD
       deleteTestEnvValue(name);
     } else {
       setTestEnvValue(name, value);
+=======
+      delete process.env[name];
+    } else {
+      process.env[name] = value;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   }
 
@@ -2150,9 +2181,14 @@ async function readSessionAssistantTexts(sessionKey: string, modelKey?: string):
   }
   const messages = await readSessionMessagesAsync(
     {
+<<<<<<< HEAD
       sessionEntry: entry,
       sessionId: entry.sessionId,
       sessionKey,
+=======
+      sessionFile: entry.sessionFile,
+      sessionId: entry.sessionId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       storePath,
     },
     {
@@ -2879,8 +2915,15 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     lastGood: hostStore.lastGood ? { ...hostStore.lastGood } : undefined,
     usageStats: hostStore.usageStats ? { ...hostStore.usageStats } : undefined,
   });
+<<<<<<< HEAD
   const tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-state-"));
   setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+=======
+  const tempStateDir: string | undefined = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-live-state-"),
+  );
+  process.env.OPENCLAW_STATE_DIR = tempStateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const tempAgentDir: string | undefined = path.join(
     tempStateDir,
     "agents",
@@ -2892,7 +2935,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   if (tempSessionAgentDir !== tempAgentDir) {
     saveAuthProfileStore(sanitizedStore, tempSessionAgentDir);
   }
+<<<<<<< HEAD
   setTestEnvValue("OPENCLAW_AGENT_DIR", tempAgentDir);
+=======
+  process.env.OPENCLAW_AGENT_DIR = tempAgentDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
   await fs.mkdir(workspaceDir, { recursive: true });
@@ -2927,7 +2974,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-"));
   const tempConfigPath = path.join(tempDir, "openclaw.json");
   await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
+<<<<<<< HEAD
   setTestEnvValue("OPENCLAW_CONFIG_PATH", tempConfigPath);
+=======
+  process.env.OPENCLAW_CONFIG_PATH = tempConfigPath;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const liveProviders = nextCfg.models?.providers;
   if (liveProviders && Object.keys(liveProviders).length > 0) {

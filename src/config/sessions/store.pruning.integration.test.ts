@@ -22,6 +22,10 @@ import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintena
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
+<<<<<<< HEAD
+=======
+  runQuotaSuspensionMaintenance,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   saveSessionStore,
   updateSessionStore,
 } from "./store.js";
@@ -33,7 +37,10 @@ const ENFORCED_MAINTENANCE_OVERRIDE = {
   mode: "enforce" as const,
   pruneAfterMs: 7 * DAY_MS,
   maxEntries: 500,
+<<<<<<< HEAD
   modelRunPruneAfterMs: DAY_MS,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resetArchiveRetentionMs: 7 * DAY_MS,
   maxDiskBytes: null,
   highWaterBytes: null,
@@ -134,6 +141,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     }
   });
 
+<<<<<<< HEAD
   it("saveSessionStore prunes stale model-run probes before capping real sessions", async () => {
     const now = Date.now();
     const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
@@ -254,6 +262,8 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded).toHaveProperty(recentModelRun);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("saveSessionStore prunes stale entries on write", async () => {
     applyEnforcedMaintenanceConfig(mockLoadConfig);
 
@@ -597,10 +607,13 @@ describe("Integration: saveSessionStore with pruning", () => {
             lastChannel: "telegram",
             lastTo: "6101296751",
           },
+<<<<<<< HEAD
           "agent:main:telegram::direct:malformed": {
             sessionId: "malformed-session",
             updatedAt: now,
           },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         } satisfies Record<string, SessionEntry>,
         null,
         2,
@@ -618,9 +631,14 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const preview = dryRun.previewResults[0];
     expect(preview?.summary.dmScopeRetired).toBe(1);
+<<<<<<< HEAD
     expect(preview?.summary.afterCount).toBe(2);
     expect(preview?.dmScopeRetiredKeys.has("agent:main:telegram:direct:6101296751")).toBe(true);
     expect(preview?.dmScopeRetiredKeys.has("agent:main:telegram::direct:malformed")).toBe(false);
+=======
+    expect(preview?.summary.afterCount).toBe(1);
+    expect(preview?.dmScopeRetiredKeys.has("agent:main:telegram:direct:6101296751")).toBe(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(preview?.summary.unreferencedArtifacts.removedFiles).toBe(0);
     await expectPathExists(directTranscript);
   });
@@ -630,7 +648,10 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const now = Date.now();
     const directTranscript = path.join(testDir, "direct-session.jsonl");
+<<<<<<< HEAD
     const nestedTranscript = path.join(testDir, "nested-agent-session.jsonl");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await fs.writeFile(
       storePath,
       JSON.stringify(
@@ -646,11 +667,14 @@ describe("Integration: saveSessionStore with pruning", () => {
             lastChannel: "telegram",
             lastTo: "6101296751",
           },
+<<<<<<< HEAD
           "agent:main:agent:direct:customer": {
             sessionId: "nested-agent-session",
             updatedAt: now,
             sessionFile: nestedTranscript,
           },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         } satisfies Record<string, SessionEntry>,
         null,
         2,
@@ -659,7 +683,10 @@ describe("Integration: saveSessionStore with pruning", () => {
     );
     await fs.writeFile(path.join(testDir, "main-session.jsonl"), "main", "utf-8");
     await fs.writeFile(directTranscript, "direct", "utf-8");
+<<<<<<< HEAD
     await fs.writeFile(nestedTranscript, "nested", "utf-8");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const applied = await runSessionsCleanup({
       cfg: { session: { dmScope: "main" } },
@@ -670,10 +697,15 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(applied.appliedSummaries[0]?.dmScopeRetired).toBe(1);
     const persisted = loadSessionStore(storePath, { skipCache: true });
     expect(persisted).toHaveProperty("agent:main:main");
+<<<<<<< HEAD
     expect(persisted).toHaveProperty("agent:main:agent:direct:customer");
     expect(persisted["agent:main:telegram:direct:6101296751"]).toBeUndefined();
     await expectPathMissing(directTranscript);
     await expectPathExists(nestedTranscript);
+=======
+    expect(persisted["agent:main:telegram:direct:6101296751"]).toBeUndefined();
+    await expectPathMissing(directTranscript);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const files = await fs.readdir(testDir);
     const archivedDirectTranscripts = files.filter((name) =>
       name.startsWith("direct-session.jsonl.deleted."),
@@ -1026,6 +1058,60 @@ describe("Integration: saveSessionStore with pruning", () => {
     }
   });
 
+<<<<<<< HEAD
+=======
+  it("persists quota suspension TTL transitions through writer maintenance", async () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      suspended: {
+        ...makeEntry(now),
+        quotaSuspension: {
+          schemaVersion: 1,
+          suspendedAt: now - 30_000,
+          expectedResumeBy: now - 1,
+          state: "suspended",
+          reason: "quota_exhausted",
+          failedProvider: "anthropic",
+          failedModel: "claude-opus-4-6",
+          laneId: "main",
+        },
+      },
+      active: {
+        ...makeEntry(now),
+        quotaSuspension: {
+          schemaVersion: 1,
+          suspendedAt: now - 61_000,
+          expectedResumeBy: now - 31_000,
+          state: "active",
+          reason: "circuit_open",
+          failedProvider: "anthropic",
+          failedModel: "claude-opus-4-6",
+          laneId: "main",
+        },
+      },
+    };
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const result = await runQuotaSuspensionMaintenance({
+      storePath,
+      now,
+      ttlMs: 30_000,
+      log: false,
+    });
+
+    expect(result).toEqual({ resumed: [{ sessionKey: "suspended", laneId: "main" }], cleared: 1 });
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+    expect(loaded.suspended?.quotaSuspension?.state).toBe("resuming");
+    expect(loaded.active?.quotaSuspension).toBeUndefined();
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted.suspended?.quotaSuspension?.state).toBe("resuming");
+    expect(persisted.active?.quotaSuspension).toBeUndefined();
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("updateSessionStore batches cap-hit maintenance instead of pruning every new session", async () => {
     const now = Date.now();
     const store = Object.fromEntries(

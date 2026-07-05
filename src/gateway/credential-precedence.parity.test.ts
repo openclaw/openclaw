@@ -1,9 +1,14 @@
 // Credential precedence parity tests keep call, probe, status, and auth surfaces
 // aligned on local/remote gateway token and password resolution.
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { resolveGatewayProbeAuthResolution } from "../commands/status.gateway-probe.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnv } from "../test-utils/env.js";
+=======
+import { resolveGatewayProbeAuth as resolveStatusGatewayProbeAuth } from "../commands/status.gateway-probe.js";
+import type { OpenClawConfig } from "../config/config.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveGatewayAuth } from "./auth.js";
 import { resolveGatewayCredentialsFromConfig } from "./credentials.js";
 import { resolveGatewayProbeAuth } from "./probe-auth.js";
@@ -41,6 +46,7 @@ function makeRemoteGatewayConfig(remote: { token?: string; password?: string }):
 }
 
 function withGatewayAuthEnv<T>(env: NodeJS.ProcessEnv, fn: () => T): T {
+<<<<<<< HEAD
   return withEnv(
     {
       OPENCLAW_GATEWAY_TOKEN: env.OPENCLAW_GATEWAY_TOKEN,
@@ -49,6 +55,35 @@ function withGatewayAuthEnv<T>(env: NodeJS.ProcessEnv, fn: () => T): T {
     },
     fn,
   );
+=======
+  const keys = [
+    "OPENCLAW_GATEWAY_TOKEN",
+    "OPENCLAW_GATEWAY_PASSWORD",
+    "OPENCLAW_SERVICE_KIND",
+  ] as const;
+  const previous = new Map<string, string | undefined>();
+  for (const key of keys) {
+    previous.set(key, process.env[key]);
+    const nextValue = env[key];
+    if (typeof nextValue === "string") {
+      process.env[key] = nextValue;
+    } else {
+      delete process.env[key];
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    for (const key of keys) {
+      const value = previous.get(key);
+      if (typeof value === "string") {
+        process.env[key] = value;
+      } else {
+        delete process.env[key];
+      }
+    }
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 describe("gateway credential precedence coverage", () => {
@@ -138,8 +173,12 @@ describe("gateway credential precedence coverage", () => {
       mode,
       env,
     });
+<<<<<<< HEAD
     const status = (await withGatewayAuthEnv(env, () => resolveGatewayProbeAuthResolution(cfg)))
       .auth;
+=======
+    const status = await withGatewayAuthEnv(env, () => resolveStatusGatewayProbeAuth(cfg));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const auth = resolveGatewayAuth({
       authConfig: cfg.gateway?.auth,
       env,

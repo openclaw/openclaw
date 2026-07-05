@@ -513,6 +513,7 @@ describe("chunkByNewline", () => {
   it.each(["", "   \n\n   "] as const)("returns empty array for input %j", (text) => {
     expect(chunkByNewline(text, 100)).toStrictEqual([]);
   });
+<<<<<<< HEAD
 
   it("does not split surrogate pairs when hard-splitting an over-long line", () => {
     // An emoji-dense line with no break point forces the raw head cut at an odd code-unit offset;
@@ -526,6 +527,8 @@ describe("chunkByNewline", () => {
     expect(chunks.every((chunk) => !/[\uD800-\uDBFF]$/u.test(chunk))).toBe(true);
     expect(chunks.every((chunk) => !/^[\uDC00-\uDFFF]/u.test(chunk))).toBe(true);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("chunkTextWithMode", () => {

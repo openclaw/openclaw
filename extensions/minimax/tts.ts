@@ -1,9 +1,13 @@
 // Minimax plugin module implements tts behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+<<<<<<< HEAD
 import {
   assertOkOrThrowProviderError,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
+=======
+import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
@@ -86,8 +90,11 @@ export async function minimaxTTS(params: {
         body: JSON.stringify({
           model,
           text,
+<<<<<<< HEAD
           stream: false,
           output_format: "hex",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           voice_setting: {
             voice_id: voiceId,
             speed,
@@ -108,10 +115,17 @@ export async function minimaxTTS(params: {
     try {
       await assertOkOrThrowProviderError(response, "MiniMax TTS API error");
 
+<<<<<<< HEAD
       const body = await readProviderJsonResponse<{
         data?: { audio?: string };
         base_resp?: { status_code?: number; status_msg?: string };
       }>(response, "minimax.tts");
+=======
+      const body = (await response.json()) as {
+        data?: { audio?: string };
+        base_resp?: { status_code?: number; status_msg?: string };
+      };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       // Check base_resp for envelope errors (HTTP 200 with non-zero status_code).
       // Other MiniMax providers (image, video, music, web-search) already check this.
@@ -122,7 +136,13 @@ export async function minimaxTTS(params: {
         body.base_resp.status_code !== 0
       ) {
         const msg = body.base_resp.status_msg ?? "unknown error";
+<<<<<<< HEAD
         throw new Error(`MiniMax TTS API error (${body.base_resp.status_code}): ${msg}`);
+=======
+        throw new Error(
+          `MiniMax TTS API error (${body.base_resp.status_code}): ${msg}`,
+        );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
 
       const hexAudio = body?.data?.audio;

@@ -3,7 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OnboardOptions } from "../../onboard-types.js";
 import { inferAuthChoiceFromFlags } from "./auth-choice-inference.js";
 
+<<<<<<< HEAD
 const resolveProviderOnboardAuthFlags = vi.hoisted(() =>
+=======
+const resolveManifestProviderOnboardAuthFlags = vi.hoisted(() =>
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   vi.fn<
     () => ReadonlyArray<{
       optionKey: string;
@@ -14,17 +18,30 @@ const resolveProviderOnboardAuthFlags = vi.hoisted(() =>
 );
 
 vi.mock("../../../plugins/provider-auth-choices.js", () => ({
+<<<<<<< HEAD
   resolveProviderOnboardAuthFlags,
+=======
+  resolveManifestProviderOnboardAuthFlags,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 describe("inferAuthChoiceFromFlags", () => {
   beforeEach(() => {
+<<<<<<< HEAD
     resolveProviderOnboardAuthFlags.mockReset();
     resolveProviderOnboardAuthFlags.mockReturnValue([]);
   });
 
   it("infers plugin-owned auth choices from manifest option keys", () => {
     resolveProviderOnboardAuthFlags.mockReturnValue([
+=======
+    resolveManifestProviderOnboardAuthFlags.mockReset();
+    resolveManifestProviderOnboardAuthFlags.mockReturnValue([]);
+  });
+
+  it("infers plugin-owned auth choices from manifest option keys", () => {
+    resolveManifestProviderOnboardAuthFlags.mockReturnValue([
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       {
         optionKey: "pluginOwnedApiKey",
         authChoice: "plugin-api-key",

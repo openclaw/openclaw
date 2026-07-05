@@ -34,8 +34,11 @@ const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS = new Set([
   "@openclaw/google-meet:dangerous-exec:src/node-host.ts",
   "@openclaw/google-meet:dangerous-exec:src/realtime.ts",
   "@openclaw/matrix:dangerous-exec:src/matrix/deps.ts",
+<<<<<<< HEAD
   "@openclaw/raft:dangerous-exec:src/gateway.ts",
   "@openclaw/signal:dangerous-exec:src/daemon.ts",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "@openclaw/voice-call:dangerous-exec:src/tunnel.ts",
   "@openclaw/voice-call:dangerous-exec:src/webhook/tailscale.ts",
 ]);

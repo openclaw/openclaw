@@ -1,11 +1,17 @@
 {
   "name": "@openclaw/qwen-provider",
+<<<<<<< HEAD
   "version": "2026.6.10",
   "description": "OpenClaw Qwen Cloud provider plugin.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
   },
+=======
+  "version": "2026.6.8",
+  "private": true,
+  "description": "OpenClaw Qwen Cloud provider plugin",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "type": "module",
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -13,6 +19,7 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
+<<<<<<< HEAD
     ],
     "install": {
       "clawhubSpec": "clawhub:@openclaw/qwen-provider",
@@ -31,5 +38,8 @@
       "publishToClawHub": true,
       "publishToNpm": true
     }
+=======
+    ]
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }

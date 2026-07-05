@@ -17,7 +17,10 @@ type ManifestKey = typeof MANIFEST_KEY;
 export type OfficialExternalProviderAuthChoice = {
   method?: string;
   choiceId?: string;
+<<<<<<< HEAD
   deprecatedChoiceIds?: readonly string[];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   choiceLabel?: string;
   choiceHint?: string;
   assistantPriority?: number;
@@ -38,7 +41,10 @@ export type OfficialExternalProviderCatalogProvider = {
   name?: string;
   docs?: string;
   categories?: readonly string[];
+<<<<<<< HEAD
   envVars?: readonly string[];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   authChoices?: readonly OfficialExternalProviderAuthChoice[];
 };
 
@@ -66,7 +72,10 @@ export type OfficialExternalPluginCatalogManifest = {
   channel?: {
     id?: string;
     label?: string;
+<<<<<<< HEAD
     envVars?: readonly string[];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
   providers?: readonly OfficialExternalProviderCatalogProvider[];
   webSearchProviders?: readonly OfficialExternalWebSearchProvider[];
@@ -84,6 +93,7 @@ export type OfficialExternalPluginCatalogEntry = {
   kind?: string;
 } & Partial<Record<ManifestKey, OfficialExternalPluginCatalogManifest>>;
 
+<<<<<<< HEAD
 type OfficialExternalProviderContract =
   | "embeddingProviders"
   | "mediaUnderstandingProviders"
@@ -91,6 +101,8 @@ type OfficialExternalProviderContract =
   | "speechProviders"
   | "webFetchProviders";
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const OFFICIAL_CATALOG_SOURCES = [
   officialExternalChannelCatalog,
   officialExternalProviderCatalog,
@@ -138,6 +150,7 @@ function resolveOfficialExternalPluginLookupIds(
   entry: OfficialExternalPluginCatalogEntry,
 ): string[] {
   const manifest = getOfficialExternalPluginCatalogManifest(entry);
+<<<<<<< HEAD
   const lookupIds = [
     normalizeOptionalString(manifest?.plugin?.id),
     normalizeOptionalString(manifest?.channel?.id),
@@ -149,6 +162,15 @@ function resolveOfficialExternalPluginLookupIds(
     }
   }
   return uniqueStrings(lookupIds.filter((value): value is string => Boolean(value)));
+=======
+  return uniqueStrings(
+    [
+      normalizeOptionalString(manifest?.plugin?.id),
+      normalizeOptionalString(manifest?.channel?.id),
+      normalizeOptionalString(manifest?.providers?.[0]?.id),
+    ].filter((value): value is string => Boolean(value)),
+  );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function resolveOfficialExternalPluginLabel(
@@ -203,6 +225,7 @@ export function listOfficialExternalPluginCatalogEntries(): OfficialExternalPlug
   return [...resolved.values()];
 }
 
+<<<<<<< HEAD
 /** Resolves official external plugin owners for configured capability provider ids. */
 export function resolveOfficialExternalProviderContractPluginIds(params: {
   contract: OfficialExternalProviderContract;
@@ -315,12 +338,15 @@ export function resolveOfficialExternalProviderPluginIdsForEnv(env: NodeJS.Proce
   return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function listOfficialExternalChannelCatalogEntries(): OfficialExternalPluginCatalogEntry[] {
   return listOfficialExternalPluginCatalogEntries().filter((entry) =>
     Boolean(getOfficialExternalPluginCatalogManifest(entry)?.channel),
   );
 }
 
+<<<<<<< HEAD
 export function listOfficialExternalChannelEnvVars(): Array<{
   channelId: string;
   envVars: readonly string[];
@@ -337,6 +363,8 @@ export function listOfficialExternalChannelEnvVars(): Array<{
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function listOfficialExternalProviderCatalogEntries(): OfficialExternalPluginCatalogEntry[] {
   return listOfficialExternalPluginCatalogEntries().filter(
     (entry) => (getOfficialExternalPluginCatalogManifest(entry)?.providers?.length ?? 0) > 0,

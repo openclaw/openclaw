@@ -35,11 +35,15 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
+<<<<<<< HEAD
 import {
   isReplaceableAssistantStreamEvent,
   resolveAssistantStreamDeltaText,
   resolveAssistantStreamSnapshotText,
 } from "./agent-event-assistant-text.js";
+=======
+import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   buildAgentMessageFromConversationEntries,
   type ConversationEntry,
@@ -1184,7 +1188,10 @@ export async function handleOpenAiHttpRequest(
   let wroteStopChunk = false;
   let sawAssistantDelta = false;
   let bufferedAssistantContent = "";
+<<<<<<< HEAD
   let bufferedReplaceableAssistantContent = "";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let finalUsage: OpenAiChatCompletionsUsage | undefined;
   let finalizeRequested = false;
   let finalizeFinishReason: "stop" | "tool_calls" = "stop";
@@ -1231,6 +1238,7 @@ export async function handleOpenAiHttpRequest(
     }
 
     if (evt.stream === "assistant") {
+<<<<<<< HEAD
       const text = evt.data?.text;
       const replace = evt.data?.replace === true;
       if (replace && typeof text === "string") {
@@ -1245,6 +1253,8 @@ export async function handleOpenAiHttpRequest(
         return;
       }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const content = resolveAssistantStreamDeltaText(evt) ?? "";
       if (!content) {
         return;
@@ -1332,10 +1342,14 @@ export async function handleOpenAiHttpRequest(
           writeAssistantRoleChunk(res, { runId, model });
         }
         if (!sawAssistantDelta) {
+<<<<<<< HEAD
           const commentary =
             bufferedAssistantContent ||
             resolveAgentResponseCommentary(result) ||
             bufferedReplaceableAssistantContent;
+=======
+          const commentary = bufferedAssistantContent || resolveAgentResponseCommentary(result);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           if (commentary) {
             sawAssistantDelta = true;
             writeAssistantContentChunk(res, {
@@ -1361,11 +1375,15 @@ export async function handleOpenAiHttpRequest(
           writeAssistantRoleChunk(res, { runId, model });
         }
 
+<<<<<<< HEAD
         const content =
           resolveAgentResponseCommentary(result) ||
           bufferedReplaceableAssistantContent ||
           resolveAgentResponseText(result) ||
           "No response from OpenClaw.";
+=======
+        const content = resolveAgentResponseText(result);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
         sawAssistantDelta = true;
         writeAssistantContentChunk(res, {

@@ -17,6 +17,11 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GoogleMeetConfig, GoogleMeetToolPolicy } from "./config.js";
 
+<<<<<<< HEAD
+=======
+export const GOOGLE_MEET_AGENT_CONSULT_TOOL_NAME = REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME;
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const GOOGLE_MEET_CONSULT_SYSTEM_PROMPT = [
   "You are a behind-the-scenes consultant for a live meeting voice agent.",
   "Prioritize a fast, speakable answer over exhaustive investigation.",
@@ -106,7 +111,11 @@ export function handleGoogleMeetRealtimeConsultToolCall(params: {
     });
     return;
   }
+<<<<<<< HEAD
   if (params.event.name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
+=======
+  if (params.event.name !== GOOGLE_MEET_AGENT_CONSULT_TOOL_NAME) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     params.onTalkEvent?.({
       type: "tool.error",
       callId,

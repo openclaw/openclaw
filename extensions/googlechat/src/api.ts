@@ -2,10 +2,13 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
+<<<<<<< HEAD
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
@@ -17,7 +20,15 @@ const CHAT_API_BASE = "https://chat.googleapis.com/v1";
 const CHAT_UPLOAD_BASE = "https://chat.googleapis.com/upload/v1";
 
 async function readGoogleChatJsonResponse<T>(response: Response, label: string): Promise<T> {
+<<<<<<< HEAD
   return readProviderJsonResponse<T>(response, label);
+=======
+  try {
+    return (await response.json()) as T;
+  } catch (cause) {
+    throw new Error(`${label}: malformed JSON response`, { cause });
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 const headersToObject = (headers?: HeadersInit): Record<string, string> =>
@@ -57,7 +68,11 @@ async function withGoogleChatResponse<T>(params: {
   });
   try {
     if (!response.ok) {
+<<<<<<< HEAD
       const text = await readResponseTextLimited(response).catch(() => "");
+=======
+      const text = await response.text().catch(() => "");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       throw new Error(`${errorPrefix} ${response.status}: ${text || response.statusText}`);
     }
     return await handleResponse(response);

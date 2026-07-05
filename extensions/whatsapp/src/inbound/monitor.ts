@@ -5,7 +5,10 @@ import type {
   proto,
   GroupMetadata,
   WAMessage,
+<<<<<<< HEAD
   WAMessageKey,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   WASocket,
 } from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
@@ -38,7 +41,11 @@ import {
   type WhatsAppSocketOperationAdapter,
   type WhatsAppSocketTimingOptions,
 } from "../socket-timing.js";
+<<<<<<< HEAD
 import { resolveEquivalentWhatsAppDirectChatJids, resolveJidToE164 } from "../text-runtime.js";
+=======
+import { resolveJidToE164 } from "../text-runtime.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   checkInboundAccessControl,
   type AcceptedInboundAccessControlResult,
@@ -98,8 +105,12 @@ import type {
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress";
+<<<<<<< HEAD
 const GROUP_META_TTL_MS = 5 * 60 * 1000;
 const BAILEYS_MESSAGE_TTL_MS = 10 * 60 * 1000;
+=======
+const GROUP_META_TTL_MS = 5 * 60 * 1000; // 5 minutes
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const INBOUND_CLOSE_DRAIN_TIMEOUT_MS = 5_000;
 export const WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
 
@@ -108,6 +119,7 @@ type WhatsAppGroupMetadataCacheEntry = {
   expires: number;
 };
 export type WhatsAppGroupMetadataCache = Map<string, WhatsAppGroupMetadataCacheEntry>;
+<<<<<<< HEAD
 export type WhatsAppBaileysCacheEntry<T> = {
   expiresAt: number;
   value: T;
@@ -117,6 +129,8 @@ export type WhatsAppBaileysGroupMetadataCache = Map<
   string,
   WhatsAppBaileysCacheEntry<GroupMetadata>
 >;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type LocalGroupMetadataCacheEntry = WhatsAppGroupMetadataCacheEntry & {
   participants?: string[];
   mentionParticipants?: WhatsAppOutboundMentionParticipant[];
@@ -182,6 +196,7 @@ function readGroupMetadataCacheEntry<T extends WhatsAppGroupMetadataCacheEntry>(
   return entry;
 }
 
+<<<<<<< HEAD
 function rememberWhatsAppBaileysCacheEntry<T>(
   cache: Map<string, WhatsAppBaileysCacheEntry<T>> | undefined,
   key: string,
@@ -224,6 +239,8 @@ export function readWhatsAppBaileysCacheEntry<T>(
   return entry.value;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
   if (!enabled) {
     return;
@@ -295,8 +312,11 @@ type MonitorWebInboxOptions = {
   disconnectRetryAbortSignal?: AbortSignal;
   /** Shared group metadata cache used only for inbound metadata fallback after fetch failures. */
   groupMetadataCache?: WhatsAppGroupMetadataCache;
+<<<<<<< HEAD
   recentMessageKeys?: WhatsAppBaileysMessageCache;
   baileysGroupMetaCache?: WhatsAppBaileysGroupMetadataCache;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 type AttachWebInboxToSocketOptions = Omit<
@@ -550,6 +570,7 @@ export async function attachWebInboxToSocket(
   const groupMetadataCache = options.groupMetadataCache ?? new Map();
   const groupMetaCache = new Map<string, LocalGroupMetadataCacheEntry>();
   const lidLookup = sock.signalRepository?.lidMapping;
+<<<<<<< HEAD
   const publishedGroupMetadataJids = new Set<string>();
   const invalidatedGroupMetadataJids = new Set<string>();
   let groupMetadataCacheClosed = false;
@@ -574,6 +595,11 @@ export async function attachWebInboxToSocket(
       BAILEYS_MESSAGE_TTL_MS,
     );
   };
+=======
+
+  const resolveInboundJid = async (jid: string | null | undefined): Promise<string | null> =>
+    resolveJidToE164(jid, { authDir: options.authDir, lidLookup });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const rememberOutboundMessage = (remoteJid: string, result: unknown) => {
     const messageId =
@@ -588,11 +614,14 @@ export async function attachWebInboxToSocket(
       remoteJid,
       messageId,
     });
+<<<<<<< HEAD
     const message =
       typeof result === "object" && result && "message" in result
         ? (result as { message?: proto.IMessage }).message
         : undefined;
     rememberBaileysMessage(remoteJid, messageId, message);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
   const trackLateAcceptedSend = (jid: string, promise: Promise<WAMessage | undefined>) => {
     // The local send has failed terminally, but Baileys may still deliver it.
@@ -710,6 +739,7 @@ export async function attachWebInboxToSocket(
     }
     try {
       const meta = await (getCurrentSock() ?? sock).groupMetadata(jid);
+<<<<<<< HEAD
       rememberWhatsAppBaileysCacheEntry(
         options.baileysGroupMetaCache,
         jid,
@@ -717,6 +747,8 @@ export async function attachWebInboxToSocket(
         GROUP_META_TTL_MS,
       );
       publishedGroupMetadataJids.add(jid);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const entry = await summarizeGroupMeta(meta);
       rememberGroupMetadataCacheEntry(groupMetadataCache, jid, {
         subject: entry.subject,
@@ -1348,8 +1380,11 @@ export async function attachWebInboxToSocket(
       return;
     }
     for (const msg of upsert.messages ?? []) {
+<<<<<<< HEAD
       rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const receiveOrder = nextReceiveOrder++;
       if (
         await maybeResolveWhatsAppApprovalReaction({
@@ -1359,7 +1394,10 @@ export async function attachWebInboxToSocket(
           selfJid: self.jid,
           selfLid: self.lid,
           resolveInboundJid,
+<<<<<<< HEAD
           resolveReactionTargetJids,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           logVerboseMessage: (message) => logWhatsAppVerbose(options.verbose, message),
         })
       ) {
@@ -1400,7 +1438,10 @@ export async function attachWebInboxToSocket(
     }
   };
   const drainInboundBeforeSocketClose = async () => {
+<<<<<<< HEAD
     groupMetadataCacheClosed = true;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await waitForPendingMessageHandlers();
     await drainDebouncedInboundMessages();
   };
@@ -1444,6 +1485,7 @@ export async function attachWebInboxToSocket(
       resolveClose({ status: undefined, isLoggedOut: false, error: err });
     }
   };
+<<<<<<< HEAD
   const attachSockListener = (event: string, listener: (...args: unknown[]) => void) =>
     attachEmitterListener(
       sock.ev as unknown as {
@@ -1459,10 +1501,28 @@ export async function attachWebInboxToSocket(
     handleMessagesUpsertEvent as unknown as (...args: unknown[]) => void,
   );
   const detachConnectionUpdate = attachSockListener(
+=======
+  const detachMessagesUpsert = attachEmitterListener(
+    sock.ev as unknown as {
+      on: (event: string, listener: (...args: unknown[]) => void) => void;
+      off?: (event: string, listener: (...args: unknown[]) => void) => void;
+      removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
+    },
+    "messages.upsert",
+    handleMessagesUpsertEvent as unknown as (...args: unknown[]) => void,
+  );
+  const detachConnectionUpdate = attachEmitterListener(
+    sock.ev as unknown as {
+      on: (event: string, listener: (...args: unknown[]) => void) => void;
+      off?: (event: string, listener: (...args: unknown[]) => void) => void;
+      removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
+    },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     "connection.update",
     handleConnectionUpdate as unknown as (...args: unknown[]) => void,
   );
 
+<<<<<<< HEAD
   const isFullGroupMetadataUpdate = (update: Partial<GroupMetadata>): update is GroupMetadata =>
     typeof update.id === "string" &&
     typeof update.subject === "string" &&
@@ -1520,6 +1580,8 @@ export async function attachWebInboxToSocket(
     forgetFullGroupMetadata(update.id);
   }) as unknown as (...args: unknown[]) => void);
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const replayTask = replayPendingDurableInboundMessages().catch((err: unknown) => {
     inboundLogger.error({ error: String(err) }, "failed replaying durable WhatsApp inbound");
     inboundConsoleLog.error(`Failed replaying durable WhatsApp inbound: ${String(err)}`);
@@ -1529,6 +1591,7 @@ export async function attachWebInboxToSocket(
     pendingMessageHandlers.delete(replayTask);
   });
 
+<<<<<<< HEAD
   const groupHydrationTask = (async () => {
     try {
       const groups = await sock.groupFetchAllParticipating();
@@ -1541,11 +1604,19 @@ export async function attachWebInboxToSocket(
           !publishedGroupMetadataJids.has(jid) &&
           !invalidatedGroupMetadataJids.has(jid)
         ) {
+=======
+  void (async () => {
+    try {
+      const groups = await sock.groupFetchAllParticipating();
+      for (const [jid, meta] of Object.entries(groups ?? {})) {
+        if (meta) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           rememberGroupMetadataCacheEntry(
             groupMetadataCache,
             jid,
             summarizeGroupMetaForReconnectCache(meta),
           );
+<<<<<<< HEAD
           rememberWhatsAppBaileysCacheEntry(
             options.baileysGroupMetaCache,
             jid,
@@ -1553,6 +1624,8 @@ export async function attachWebInboxToSocket(
             GROUP_META_TTL_MS,
           );
           publishedGroupMetadataJids.add(jid);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }
       }
       logWhatsAppVerbose(
@@ -1569,7 +1642,10 @@ export async function attachWebInboxToSocket(
       );
     }
   })();
+<<<<<<< HEAD
   void groupHydrationTask;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const sendApi = createWebSendApi({
     sock: sendApiSocketOperations,
@@ -1583,9 +1659,12 @@ export async function attachWebInboxToSocket(
       try {
         detachMessagesUpsert();
         detachConnectionUpdate();
+<<<<<<< HEAD
         detachGroupsUpsert();
         detachGroupsUpdate();
         detachGroupParticipantsUpdate();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         await drainInboundBeforeSocketCloseWithTimeout();
       } catch (err) {
         logWhatsAppVerbose(options.verbose, `Inbound close drain failed: ${String(err)}`);
@@ -1609,6 +1688,7 @@ export async function attachWebInboxToSocket(
 
 export async function monitorWebInbox(options: MonitorWebInboxOptions) {
   const socketTiming = options.socketTiming ?? resolveWhatsAppSocketTiming(options.cfg);
+<<<<<<< HEAD
   const recentMessageKeys: WhatsAppBaileysMessageCache = options.recentMessageKeys ?? new Map();
   const baileysGroupMetaCache: WhatsAppBaileysGroupMetadataCache =
     options.baileysGroupMetaCache ?? new Map();
@@ -1624,6 +1704,11 @@ export async function monitorWebInbox(options: MonitorWebInboxOptions) {
       const meta = readWhatsAppBaileysCacheEntry(baileysGroupMetaCache, jid);
       return meta?.participants?.length ? meta : undefined;
     },
+=======
+  const sock = await createWaSocket(false, options.verbose, {
+    authDir: options.authDir,
+    ...socketTiming,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   try {
     await waitForWaConnection(sock, { timeoutMs: socketTiming.connectTimeoutMs });
@@ -1648,7 +1733,10 @@ export async function monitorWebInbox(options: MonitorWebInboxOptions) {
       : undefined,
     socketTiming,
     sock,
+<<<<<<< HEAD
     recentMessageKeys,
     baileysGroupMetaCache,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 }

@@ -58,7 +58,13 @@ const musicGenerateBackgroundMocks = vi.hoisted(() => ({
     failTaskRun: (
       params: Parameters<typeof musicGenerateBackground.failMusicGenerationTaskRun>[0],
     ) => musicGenerateBackgroundMocks.failMusicGenerationTaskRun(params),
+<<<<<<< HEAD
     wakeTaskCompletion: vi.fn(),
+=======
+    wakeTaskCompletion: (
+      params: Parameters<typeof musicGenerateBackground.wakeMusicGenerationTaskCompletion>[0],
+    ) => musicGenerateBackgroundMocks.wakeMusicGenerationTaskCompletion(params),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   completeMusicGenerationTaskRun: vi.fn((params) => {
     if (!params.handle) {
@@ -117,6 +123,10 @@ const musicGenerateBackgroundMocks = vi.hoisted(() => ({
       eventSummary: params.eventSummary,
     });
   }),
+<<<<<<< HEAD
+=======
+  wakeMusicGenerationTaskCompletion: vi.fn(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("../../config/config.js", () => configMocks);
@@ -176,10 +186,15 @@ function resetMusicGenerateMocks() {
   taskExecutorMocks.completeTaskRunByRunId.mockReset();
   taskExecutorMocks.failTaskRunByRunId.mockReset();
   taskExecutorMocks.recordTaskRunProgressByRunId.mockReset();
+<<<<<<< HEAD
   musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion.mockReset();
   musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion.mockResolvedValue(
     true,
   );
+=======
+  musicGenerateBackgroundMocks.wakeMusicGenerationTaskCompletion.mockReset();
+  musicGenerateBackgroundMocks.wakeMusicGenerationTaskCompletion.mockResolvedValue(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function detailsOf(result: { details?: unknown }): Record<string, unknown> {
@@ -217,9 +232,13 @@ function taskCompleteCall(callIndex = 0): Record<string, unknown> {
 
 function wakeCompletionCall(callIndex = 0): Record<string, unknown> {
   const call =
+<<<<<<< HEAD
     musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion.mock.calls[
       callIndex
     ]?.[0];
+=======
+    musicGenerateBackgroundMocks.wakeMusicGenerationTaskCompletion.mock.calls[callIndex]?.[0];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!call || typeof call !== "object") {
     throw new Error(`expected wake completion call ${callIndex}`);
   }
@@ -559,7 +578,11 @@ describe("createMusicGenerateTool", () => {
       createdAt: Date.now(),
     });
     const wakeSpy = vi
+<<<<<<< HEAD
       .spyOn(musicGenerateBackground.musicGenerationTaskLifecycle, "wakeTaskCompletion")
+=======
+      .spyOn(musicGenerateBackground, "wakeMusicGenerationTaskCompletion")
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       .mockResolvedValue(true);
     vi.spyOn(musicGenerationRuntime, "generateMusic").mockResolvedValue({
       provider: "google",

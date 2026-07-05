@@ -8,9 +8,16 @@ scenario:
       - memory.tools
     secondary:
       - channels.group-messages
+<<<<<<< HEAD
   objective: Verify the agent uses memory tools in a shared channel when the answer lives only in memory files, not the live transcript.
   successCriteria:
     - Agent uses memory_search before answering.
+=======
+  objective: Verify the agent uses memory_search and memory_get in a shared channel when the answer lives only in memory files, not the live transcript.
+  successCriteria:
+    - Agent uses memory_search before answering.
+    - Agent narrows with memory_get before answering.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     - Final reply returns the memory-only fact correctly in-channel.
   docsRefs:
     - docs/concepts/memory.md
@@ -20,7 +27,11 @@ scenario:
     - extensions/qa-lab/src/suite.ts
   execution:
     kind: flow
+<<<<<<< HEAD
     summary: Verify the agent uses memory tools in a shared channel when the answer lives only in memory files, not the live transcript.
+=======
+    summary: Verify the agent uses memory_search and memory_get in a shared channel when the answer lives only in memory files, not the live transcript.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     config:
       channelId: qa-memory-room
       channelTitle: QA Memory Room
@@ -32,7 +43,11 @@ scenario:
 
 flow:
   steps:
+<<<<<<< HEAD
     - name: uses memory_search before answering in-channel
+=======
+    - name: uses memory_search plus memory_get before answering in-channel
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       actions:
         - call: reset
         - call: fs.writeFile
@@ -79,4 +94,10 @@ flow:
         - assert:
             expr: "!env.mock || (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet)).some((request) => request.plannedToolName === 'memory_search')"
             message: expected memory_search in mock request plan
+<<<<<<< HEAD
+=======
+        - assert:
+            expr: "!env.mock || (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).some((request) => request.plannedToolName === 'memory_get')"
+            message: expected memory_get in mock request plan
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       detailsExpr: outbound.text

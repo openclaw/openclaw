@@ -1,11 +1,17 @@
 {
   "name": "@openclaw/firecrawl-plugin",
+<<<<<<< HEAD
   "version": "2026.6.10",
   "description": "OpenClaw Firecrawl plugin.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
   },
+=======
+  "version": "2026.6.8",
+  "private": true,
+  "description": "OpenClaw Firecrawl plugin",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "type": "module",
   "dependencies": {
     "typebox": "1.1.39"
@@ -16,6 +22,7 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
+<<<<<<< HEAD
     ],
     "install": {
       "clawhubSpec": "clawhub:@openclaw/firecrawl-plugin",
@@ -34,5 +41,8 @@
       "publishToClawHub": true,
       "publishToNpm": true
     }
+=======
+    ]
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }

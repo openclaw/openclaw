@@ -5,11 +5,16 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
+<<<<<<< HEAD
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { clearConfigCache } from "../config/config.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+=======
+import { clearConfigCache } from "../config/config.js";
+import type { AgentModelConfig } from "../config/types.agents-shared.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
@@ -56,6 +61,22 @@ const sendReq = (
   );
 };
 
+<<<<<<< HEAD
+=======
+function createDeferred<T>() {
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
+  return { promise, resolve, reject };
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function withGatewayChatHarness(
   run: (ctx: { ws: GatewaySocket; createSessionDir: () => Promise<string> }) => Promise<void>,
   options?: { headers?: Record<string, string> },
@@ -770,7 +791,11 @@ describe("gateway server chat", () => {
 
   test("chat.send returns in_flight when duplicate attachment send wins parsing race", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+<<<<<<< HEAD
     const dispatchRelease = createDeferred();
+=======
+    const dispatchRelease = createDeferred<void>();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     try {
       testState.sessionStorePath = path.join(sessionDir, "sessions.json");
       await writeSessionStore({
@@ -1252,7 +1277,11 @@ describe("gateway server chat", () => {
 
   test("chat.send reuses only active WebChat text sends with the same system context", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+<<<<<<< HEAD
     const dispatchRelease = createDeferred();
+=======
+    const dispatchRelease = createDeferred<void>();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     try {
       testState.sessionStorePath = path.join(sessionDir, "sessions.json");
       await writeSessionStore({
@@ -1993,7 +2022,11 @@ describe("gateway server chat", () => {
       await connectOk(ws);
       const sessionDir = await createSessionDir();
       const sessionId = "sess-claude-cli-backfill";
+<<<<<<< HEAD
       const homeEnvSnapshot = captureEnv(["HOME"]);
+=======
+      const originalHome = process.env.HOME;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const homeDir = path.join(sessionDir, "home");
       const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
       const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "workspace");
@@ -2031,7 +2064,11 @@ describe("gateway server chat", () => {
         ].join("\n"),
         "utf-8",
       );
+<<<<<<< HEAD
       setTestEnvValue("HOME", homeDir);
+=======
+      process.env.HOME = homeDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       try {
         await writeSessionStore({
           entries: {
@@ -2059,7 +2096,15 @@ describe("gateway server chat", () => {
         expect(assistantMessage.role).toBe("assistant");
         expect(assistantMessage.provider).toBe("claude-cli");
       } finally {
+<<<<<<< HEAD
         homeEnvSnapshot.restore();
+=======
+        if (originalHome === undefined) {
+          delete process.env.HOME;
+        } else {
+          process.env.HOME = originalHome;
+        }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     });
   });
@@ -2414,6 +2459,7 @@ describe("gateway server chat", () => {
     );
   });
 
+<<<<<<< HEAD
   test("chat.send rejects Control UI reconnect resume marker from public WebChat clients", async () => {
     await withGatewayChatHarness(
       async ({ ws }) => {
@@ -2484,6 +2530,8 @@ describe("gateway server chat", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   test("chat.history hard-caps single oversized nested payloads", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;

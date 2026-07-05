@@ -63,6 +63,10 @@ export const uk: TranslationMap = {
     docs: "Документація",
     theme: "Тема",
     colorMode: "Колірний режим",
+<<<<<<< HEAD
+=======
+    colorModeOption: "Колірний режим: {mode}",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resources: "Ресурси",
     search: "Пошук",
     save: "Зберегти",
@@ -201,7 +205,10 @@ export const uk: TranslationMap = {
     inherit: "успадковувати",
     defaultOption: "За замовчуванням ({value})",
     offExplicit: "вимкнено (явно)",
+<<<<<<< HEAD
     auto: "auto",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     on: "увімкнено",
     off: "вимкнено",
     full: "повний",
@@ -1444,7 +1451,10 @@ export const uk: TranslationMap = {
     jaJP: "日本語 (японська)",
     ko: "한국어 (корейська)",
     fr: "Français (французька)",
+<<<<<<< HEAD
     hi: "हिन्दी (гінді)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ar: "العربية (арабська)",
     it: "Italiano (італійська)",
     tr: "Türkçe (турецька)",
@@ -1455,7 +1465,10 @@ export const uk: TranslationMap = {
     vi: "Tiếng Việt (вʼєтнамська)",
     nl: "Nederlands (нідерландська)",
     fa: "فارسی (перська)",
+<<<<<<< HEAD
     ru: "Русский (російська)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   cron: {
     quickCreate: {
@@ -1625,7 +1638,10 @@ export const uk: TranslationMap = {
       nextHeartbeat: "Наступний heartbeat",
       wakeModeHelp: "Зараз спрацьовує негайно. Наступний heartbeat чекає наступного циклу.",
       payloadKind: "Що слід запустити?",
+<<<<<<< HEAD
       command: "Command",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       systemEvent: "Опублікувати повідомлення в основній часовій шкалі",
       agentTurn: "Запустити завдання асистента (ізольовано)",
       systemEventHelp:

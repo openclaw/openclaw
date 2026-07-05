@@ -24,10 +24,14 @@ import { copyReplyPayloadMetadata } from "./reply-payload.js";
 import type { CommandSessionMetadataChange } from "./reply/command-session-metadata.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.types.js";
+<<<<<<< HEAD
 import type {
   InternalGetReplyFromConfig,
   InternalGetReplyOptions,
 } from "./reply/get-reply.types.js";
+=======
+import type { GetReplyFromConfig } from "./reply/get-reply.types.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
   createReplyDispatcher,
@@ -40,9 +44,13 @@ import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
 import { runReplyPayloadSendingHook } from "./reply/reply-payload-sending-hook.js";
 import { consumeReplyUsageState } from "./reply/reply-usage-state.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
+<<<<<<< HEAD
 import type { ReplyPayload } from "./types.js";
 
 type InternalDispatchReplyOptions = Omit<InternalGetReplyOptions, "onBlockReply">;
+=======
+import type { GetReplyOptions, ReplyPayload } from "./types.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type ForegroundReplyFenceState = {
   generation: number;
@@ -65,9 +73,15 @@ const foregroundReplyFenceByKey = new Map<string, ForegroundReplyFenceState>();
 const replyPayloadSendingDispatchers = new WeakSet<ReplyDispatcher>();
 
 function applyRuntimeToolsAllow(
+<<<<<<< HEAD
   replyOptions: InternalDispatchReplyOptions | undefined,
   toolsAllow: string[] | undefined,
 ): InternalDispatchReplyOptions | undefined {
+=======
+  replyOptions: Omit<GetReplyOptions, "onBlockReply"> | undefined,
+  toolsAllow: string[] | undefined,
+): Omit<GetReplyOptions, "onBlockReply"> | undefined {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (toolsAllow === undefined) {
     return replyOptions;
   }
@@ -382,9 +396,15 @@ function buildReplyPayloadSendingBeforeDeliver(
 }
 
 function bindReplyPayloadRunState(
+<<<<<<< HEAD
   replyOptions: InternalDispatchReplyOptions | undefined,
   runState: ReplyPayloadRunState,
 ): InternalDispatchReplyOptions {
+=======
+  replyOptions: Omit<GetReplyOptions, "onBlockReply"> | undefined,
+  runState: ReplyPayloadRunState,
+): Omit<GetReplyOptions, "onBlockReply"> {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const onAgentRunStart = replyOptions?.onAgentRunStart;
   return {
     ...replyOptions,
@@ -504,8 +524,13 @@ export async function dispatchInboundMessage(params: {
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
   toolsAllow?: string[];
+<<<<<<< HEAD
   replyOptions?: InternalDispatchReplyOptions;
   replyResolver?: InternalGetReplyFromConfig;
+=======
+  replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
+  replyResolver?: GetReplyFromConfig;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   replyPayloadRunState?: ReplyPayloadRunState;
 }): Promise<DispatchInboundResult> {
@@ -563,8 +588,13 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   cfg: OpenClawConfig;
   dispatcherOptions: ReplyDispatcherWithTypingOptions;
   toolsAllow?: string[];
+<<<<<<< HEAD
   replyOptions?: InternalDispatchReplyOptions;
   replyResolver?: InternalGetReplyFromConfig;
+=======
+  replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
+  replyResolver?: GetReplyFromConfig;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
 }): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(params.ctx);
@@ -665,8 +695,13 @@ export async function dispatchInboundMessageWithDispatcher(params: {
   cfg: OpenClawConfig;
   dispatcherOptions: ReplyDispatcherOptions;
   toolsAllow?: string[];
+<<<<<<< HEAD
   replyOptions?: InternalDispatchReplyOptions;
   replyResolver?: InternalGetReplyFromConfig;
+=======
+  replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
+  replyResolver?: GetReplyFromConfig;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }): Promise<DispatchInboundResult> {
   const silentReplyContext = resolveDispatcherSilentReplyContext(params.ctx, params.cfg);
   const replyPayloadRunState = {

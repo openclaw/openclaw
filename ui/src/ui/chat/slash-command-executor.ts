@@ -4,16 +4,22 @@
  */
 
 import {
+<<<<<<< HEAD
   formatFastModeCommandOptions,
   formatFastModeCurrentStatus,
 } from "../../../../src/shared/fast-mode.js";
 import {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   createChatModelOverride,
   resolvePreferredServerChatModelValue,
 } from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { DEFAULT_AGENT_ID, DEFAULT_MAIN_KEY, parseAgentSessionKey } from "../session-key.ts";
+<<<<<<< HEAD
 import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -28,14 +34,20 @@ import type {
   ChatModelOverride,
   GatewaySessionRow,
   GatewayThinkingLevelOption,
+<<<<<<< HEAD
   FastMode,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ModelCatalogEntry,
   SessionsListResult,
   SessionsPatchResult,
 } from "../types.ts";
 import { generateUUID } from "../uuid.ts";
 import { SLASH_COMMANDS } from "./slash-commands.ts";
+<<<<<<< HEAD
 import { formatCompactTokenCount } from "./token-format.ts";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
@@ -356,6 +368,7 @@ async function executeVerbose(
   }
 }
 
+<<<<<<< HEAD
 function normalizeFastMode(raw: string): FastMode | undefined {
   if (raw === "auto") {
     return "auto";
@@ -369,6 +382,8 @@ function normalizeFastMode(raw: string): FastMode | undefined {
   return undefined;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function executeFast(
   client: GatewayBrowserClient,
   sessionKey: string,
@@ -382,10 +397,15 @@ async function executeFast(
       const session = await loadCurrentSession(client, sessionKey);
       return {
         content: formatDirectiveOptions(
+<<<<<<< HEAD
           resolveCurrentFastModeStatus(session),
           formatFastModeCommandOptions({
             fastAutoOnSeconds: session?.fastAutoOnSeconds,
           }),
+=======
+          `Current fast mode: ${resolveCurrentFastMode(session)}.`,
+          "status, on, off, default",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         ),
       };
     } catch (err) {
@@ -409,10 +429,16 @@ async function executeFast(
     }
   }
 
+<<<<<<< HEAD
   const nextMode = normalizeFastMode(rawMode);
   if (nextMode === undefined) {
     return {
       content: `Unrecognized fast mode "${args.trim()}". Valid levels: on, off, auto, default, status.`,
+=======
+  if (rawMode !== "on" && rawMode !== "off") {
+    return {
+      content: `Unrecognized fast mode "${args.trim()}". Valid levels: status, on, off, default.`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
   }
 
@@ -420,6 +446,7 @@ async function executeFast(
     await client.request("sessions.patch", {
       key: sessionKey,
       ...selectedGlobalScope(sessionKey, context),
+<<<<<<< HEAD
       fastMode: nextMode,
     });
     return {
@@ -427,6 +454,12 @@ async function executeFast(
         nextMode === "auto"
           ? "Fast mode set to auto."
           : `Fast mode ${nextMode ? "enabled" : "disabled"}.`,
+=======
+      fastMode: rawMode === "on",
+    });
+    return {
+      content: `Fast mode ${rawMode === "on" ? "enabled" : "disabled"}.`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       action: "refresh",
     };
   } catch (err) {
@@ -461,6 +494,7 @@ async function executeUsage(
     const totalDisplay =
       cumulativeTotal === null
         ? "n/a"
+<<<<<<< HEAD
         : `${totalTokensFresh ? "" : "~"}${formatCompactTokenCount(cumulativeTotal)}`;
 
     const lines = [
@@ -471,6 +505,18 @@ async function executeUsage(
     ];
     if (pct !== null) {
       lines.push(`Context: **${pct}%** of ${formatCompactTokenCount(ctx)}`);
+=======
+        : `${totalTokensFresh ? "" : "~"}${fmtTokens(cumulativeTotal)}`;
+
+    const lines = [
+      "**Session Usage**",
+      `Input: **${fmtTokens(input)}** tokens`,
+      `Output: **${fmtTokens(output)}** tokens`,
+      `Total: **${totalDisplay}** tokens`,
+    ];
+    if (pct !== null) {
+      lines.push(`Context: **${pct}%** of ${fmtTokens(ctx)}`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     if (session.model) {
       lines.push(`Model: \`${session.model}\``);
@@ -620,6 +666,19 @@ function resolveThinkingLevelOptionsForSession(
   }));
 }
 
+<<<<<<< HEAD
+=======
+function sessionModelMatchesDefaults(
+  session: GatewaySessionRow | undefined,
+  defaults: SessionsListResult["defaults"] | undefined,
+): boolean {
+  return (
+    (!session?.modelProvider || session.modelProvider === defaults?.modelProvider) &&
+    (!session?.model || session.model === defaults?.model)
+  );
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function loadCurrentSession(
   client: GatewayBrowserClient,
   sessionKey: string,
@@ -718,6 +777,7 @@ function resolveCurrentThinkingLevel(
   });
 }
 
+<<<<<<< HEAD
 function resolveCurrentFastModeStatus(session: GatewaySessionRow | undefined): string {
   const mode = session?.effectiveFastMode ?? session?.fastMode;
   return formatFastModeCurrentStatus({
@@ -725,6 +785,10 @@ function resolveCurrentFastModeStatus(session: GatewaySessionRow | undefined): s
     source: session?.effectiveFastModeSource,
     fastAutoOnSeconds: session?.fastAutoOnSeconds,
   });
+=======
+function resolveCurrentFastMode(session: GatewaySessionRow | undefined): "on" | "off" {
+  return session?.fastMode === true ? "on" : "off";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function resolveSteerTarget(
@@ -745,6 +809,7 @@ function isActiveSteerSession(session: GatewaySessionRow | undefined): boolean {
   return session?.status === "running" && session.endedAt == null;
 }
 
+<<<<<<< HEAD
 type SteerChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
 
 function normalizeSteerChatSendAckStatus(payload: unknown): SteerChatSendAckStatus {
@@ -777,6 +842,8 @@ function formatTerminalRedirectAckContent(status: SteerChatSendAckStatus): strin
   return undefined;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Soft inject — queues a message into the active run via chat.send (deliver: false). */
 async function executeSteer(
   client: GatewayBrowserClient,
@@ -803,6 +870,7 @@ async function executeSteer(
         content: "No active run. Use the chat input or `/redirect` instead.",
       };
     }
+<<<<<<< HEAD
     const ackStatus = normalizeSteerChatSendAckStatus(
       await client.request("chat.send", {
         sessionKey: resolved.key,
@@ -821,6 +889,19 @@ async function executeSteer(
       result.pendingCurrentRun = resolved.key === sessionKey;
     }
     return result;
+=======
+    await client.request("chat.send", {
+      sessionKey: resolved.key,
+      ...selectedGlobalScope(resolved.key, context),
+      message: resolved.message,
+      deliver: false,
+      idempotencyKey: generateUUID(),
+    });
+    return {
+      content: "Steered.",
+      pendingCurrentRun: resolved.key === sessionKey,
+    };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } catch (err) {
     return { content: `Failed to steer: ${String(err)}` };
   }
@@ -840,11 +921,16 @@ async function executeRedirect(
         content: resolved.error === "empty" ? "Usage: `/redirect <message>`" : resolved.error,
       };
     }
+<<<<<<< HEAD
     const resp = await client.request<{ runId?: string; status?: unknown }>("sessions.steer", {
+=======
+    const resp = await client.request<{ runId?: string }>("sessions.steer", {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       key: resolved.key,
       ...selectedGlobalScope(resolved.key, context),
       message: resolved.message,
     });
+<<<<<<< HEAD
     const ackStatus = normalizeSteerChatSendAckStatus(resp);
     const terminalAckContent = formatTerminalRedirectAckContent(ackStatus);
     if (terminalAckContent) {
@@ -854,8 +940,27 @@ async function executeRedirect(
     return {
       content: "Redirected.",
       ...(ackStatus === "started" || ackStatus === "in_flight" ? { trackRunId: runId } : {}),
+=======
+    const runId = typeof resp?.runId === "string" ? resp.runId : undefined;
+    return {
+      content: "Redirected.",
+      trackRunId: runId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
   } catch (err) {
     return { content: `Failed to redirect: ${String(err)}` };
   }
 }
+<<<<<<< HEAD
+=======
+
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) {
+    return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  }
+  if (n >= 1_000) {
+    return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+  }
+  return String(n);
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

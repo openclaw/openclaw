@@ -25,6 +25,7 @@ describe("stripEnvelopeFromMessage", () => {
     expect(result.content?.[0]?.text).toBe("hi");
   });
 
+<<<<<<< HEAD
   test("strips role-appropriate Responses text blocks", () => {
     const user = stripEnvelopeFromMessage({
       role: "user",
@@ -58,6 +59,8 @@ describe("stripEnvelopeFromMessage", () => {
     expect(assistant.content?.[0]?.text).toBe("Assistant body");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   test("does not strip inline message_id text that is part of a line", () => {
     const input = {
       role: "user",

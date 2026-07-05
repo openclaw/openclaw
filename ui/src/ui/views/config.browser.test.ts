@@ -473,6 +473,7 @@ describe("config view", () => {
     expect(content.scrollLeft).toBe(0);
   });
 
+<<<<<<< HEAD
   it("resets config content scroll when switching from form to raw mode", async () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -503,6 +504,8 @@ describe("config view", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("can hide the root tab for scoped settings surfaces", () => {
     const { container } = renderConfigView({
       activeSection: "channels",

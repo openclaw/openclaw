@@ -16,7 +16,11 @@ const BASE_AVAILABLE_COMMANDS: AvailableCommand[] = [
   { name: "subagents", description: "List or manage sub-agents." },
   { name: "config", description: "Read or write config (owner-only)." },
   { name: "debug", description: "Set runtime-only overrides (owner-only)." },
+<<<<<<< HEAD
   { name: "usage", description: "Toggle usage footer (off|tokens|full|reset). 'reset'/'inherit'/'clear'/'default' clears the session override to re-inherit the configured default." },
+=======
+  { name: "usage", description: "Toggle usage footer (off|tokens|full)." },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   { name: "stop", description: "Stop the current run." },
   { name: "restart", description: "Restart the gateway (if enabled)." },
   { name: "activation", description: "Set group activation (mention|always)." },

@@ -10,9 +10,12 @@
  * Zero external dependencies.
  */
 
+<<<<<<< HEAD
 import type { QQBotGroupCommandLevel } from "../config/group.js";
 import { PRIVATE_CHAT_ONLY_TEXT } from "./command-visibility.js";
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // ============ Types ============
 
 /** Slash command context (message metadata plus runtime state). */
@@ -45,8 +48,11 @@ export interface SlashCommandContext {
   accountConfig?: Record<string, unknown>;
   /** Whether the sender is authorized per the allowFrom config. */
   commandAuthorized: boolean;
+<<<<<<< HEAD
   /** Effective per-group command level for group invocations. */
   groupCommandLevel?: QQBotGroupCommandLevel;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /** Queue snapshot for the current sender. */
   queueSnapshot: QueueSnapshot;
 }
@@ -137,6 +143,14 @@ export class SlashCommandRegistry {
     }));
   }
 
+<<<<<<< HEAD
+=======
+  /** Return all pre-dispatch commands. */
+  getPreDispatchCommands(): Map<string, SlashCommand> {
+    return this.commands;
+  }
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /** Return all registered commands (both maps) for help listing. */
   getAllCommands(): Map<string, SlashCommand> {
     const all = new Map<string, SlashCommand>();
@@ -173,6 +187,7 @@ export class SlashCommandRegistry {
       return null;
     }
 
+<<<<<<< HEAD
     const isGroup = ctx.type === "group" || ctx.type === "guild";
     const groupCommandLevel = ctx.groupCommandLevel ?? "all";
     if (isGroup && groupCommandLevel === "strict") {
@@ -182,6 +197,11 @@ export class SlashCommandRegistry {
     // Reject c2cOnly commands when invoked outside private chat.
     if (cmd.c2cOnly && ctx.type !== "c2c") {
       return PRIVATE_CHAT_ONLY_TEXT;
+=======
+    // Reject c2cOnly commands when invoked outside private chat.
+    if (cmd.c2cOnly && ctx.type !== "c2c") {
+      return `💡 请在私聊中使用此指令`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
 
     // Gate sensitive commands behind the allowFrom authorization check.
@@ -189,6 +209,10 @@ export class SlashCommandRegistry {
       log?.info?.(
         `[qqbot] Slash command /${cmd.name} rejected: sender ${ctx.senderId} is not authorized`,
       );
+<<<<<<< HEAD
+=======
+      const isGroup = ctx.type === "group" || ctx.type === "guild";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const configHint = isGroup ? "groupAllowFrom" : "allowFrom";
       return `⛔ 权限不足：请先在 channels.qqbot.${configHint} 中配置明确的发送者列表后再使用 /${cmd.name}。`;
     }

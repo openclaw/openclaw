@@ -1155,6 +1155,7 @@ function isEligibleInteractiveSession(ctx: {
   if (ctx.trigger !== "user") {
     return false;
   }
+<<<<<<< HEAD
   // Exclude only canonical dreaming-narrative session keys (bare or agent-prefixed).
   // Canonical forms: "dreaming-narrative-<phase>-<hash>" or
   // "agent:<agentId>:dreaming-narrative-<phase>-<hash>".
@@ -1168,6 +1169,8 @@ function isEligibleInteractiveSession(ctx: {
   ) {
     return false;
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!ctx.sessionKey && !ctx.sessionId) {
     return false;
   }
@@ -3630,12 +3633,16 @@ export default definePluginEntry({
               });
               return undefined;
             }
+<<<<<<< HEAD
             if (
               !isEligibleInteractiveSession({
                 ...ctx,
                 sessionKey: resolvedSessionKey ?? ctx.sessionKey,
               })
             ) {
+=======
+            if (!isEligibleInteractiveSession(ctx)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               await persistPluginStatusLines({
                 api,
                 agentId: effectiveAgentId,

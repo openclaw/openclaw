@@ -173,7 +173,10 @@ describe("web-provider-runtime-shared", () => {
         env: { BRAVE_API_KEY: "key" },
         onlyPluginIds: ["brave", "firecrawl"],
         origin: "bundled",
+<<<<<<< HEAD
         sandboxed: true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         workspaceDir: "/workspace",
       },
       {
@@ -194,7 +197,10 @@ describe("web-provider-runtime-shared", () => {
       env: { BRAVE_API_KEY: "key" },
       onlyPluginIds: ["brave", "firecrawl"],
       origin: "bundled",
+<<<<<<< HEAD
       sandboxed: true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     expect(mapRegistryProviders).toHaveBeenCalledWith({
       registry: activeRegistry,

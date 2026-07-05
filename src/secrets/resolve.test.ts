@@ -505,6 +505,7 @@ describe("secret ref resolver", () => {
     }
   });
 
+<<<<<<< HEAD
   it("rejects invalid env, file, and provider refs before provider resolution", async () => {
     await expect(
       resolveSecretRefValue(
@@ -534,6 +535,8 @@ describe("secret ref resolver", () => {
     ).rejects.toThrow("Secret reference provider must match");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("strips UTF-8 BOM from file provider payload before JSON parse", async () => {
     const dir = await createCaseDir("bom-file");
     const filePath = path.join(dir, "secrets-with-bom.json");

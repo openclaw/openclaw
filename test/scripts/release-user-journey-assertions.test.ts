@@ -6,7 +6,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runReleaseUserJourneyAssertion } from "../../scripts/e2e/lib/release-user-journey/assertions.mjs";
+<<<<<<< HEAD
 import { withEnvAsync } from "../../src/test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/release-user-journey/assertions.mjs";
 const DISABLE_EXPERIMENTAL_WARNING = "--disable-warning=ExperimentalWarning";
@@ -41,6 +44,7 @@ function runAssertion(
   });
 }
 
+<<<<<<< HEAD
 async function waitUntil(matches: () => boolean, label: string): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < 1000) {
@@ -50,6 +54,25 @@ async function waitUntil(matches: () => boolean, label: string): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error(`timed out waiting for ${label}`);
+=======
+async function withEnv<T>(env: Record<string, string>, callback: () => Promise<T>): Promise<T> {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(env)) {
+    previous.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+  try {
+    return await callback();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function startTcpFixtureServer(handler: (socket: Socket) => void): Promise<{
@@ -283,7 +306,11 @@ describe("release user journey assertions", () => {
 
     try {
       await expect(
+<<<<<<< HEAD
         withEnvAsync({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "1000" }, () =>
+=======
+        withEnv({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "1000" }, () =>
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           runReleaseUserJourneyAssertion("wait-clickclack-socket", [
             `http://127.0.0.1:${server.port}`,
             "1",
@@ -296,6 +323,7 @@ describe("release user journey assertions", () => {
     }
   });
 
+<<<<<<< HEAD
   it("cancels successful ClickClack inbound response bodies", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
     const home = path.join(root, "home");
@@ -323,6 +351,8 @@ describe("release user journey assertions", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("bounds stalled ClickClack fixture HTTP probes", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
     const home = path.join(root, "home");
@@ -333,7 +363,11 @@ describe("release user journey assertions", () => {
     try {
       const startedAt = Date.now();
       await expect(
+<<<<<<< HEAD
         withEnvAsync({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "100" }, () =>
+=======
+        withEnv({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "100" }, () =>
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           runReleaseUserJourneyAssertion("wait-clickclack-socket", [
             `http://127.0.0.1:${server.port}`,
             "1",
@@ -356,7 +390,11 @@ describe("release user journey assertions", () => {
 
     try {
       await expect(
+<<<<<<< HEAD
         withEnvAsync({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "100ms" }, () =>
+=======
+        withEnv({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "100ms" }, () =>
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           runReleaseUserJourneyAssertion("wait-clickclack-socket", [
             `http://127.0.0.1:${server.port}`,
             "1",
@@ -378,14 +416,22 @@ describe("release user journey assertions", () => {
 
     try {
       await expect(
+<<<<<<< HEAD
         withEnvAsync({ HOME: home }, () =>
+=======
+        withEnv({ HOME: home }, () =>
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           runReleaseUserJourneyAssertion("wait-clickclack-socket", ["http://127.0.0.1:9", "1e3"]),
         ),
       ).rejects.toThrow(
         'ClickClack websocket timeout seconds must be a positive integer. Got: "1e3"',
       );
       await expect(
+<<<<<<< HEAD
         withEnvAsync({ HOME: home }, () =>
+=======
+        withEnv({ HOME: home }, () =>
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           runReleaseUserJourneyAssertion("wait-clickclack-reply", [
             statePath,
             "OPENCLAW_E2E_OK",
@@ -410,7 +456,11 @@ describe("release user journey assertions", () => {
 
     try {
       await expect(
+<<<<<<< HEAD
         withEnvAsync(
+=======
+        withEnv(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           {
             HOME: home,
             OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES: "16",
@@ -429,6 +479,7 @@ describe("release user journey assertions", () => {
     }
   });
 
+<<<<<<< HEAD
   it("keeps the ClickClack HTTP timeout active while reading error bodies", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
     const home = path.join(root, "home");
@@ -456,6 +507,8 @@ describe("release user journey assertions", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects loose body byte env values instead of parsing prefixes", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
     const home = path.join(root, "home");
@@ -468,7 +521,11 @@ describe("release user journey assertions", () => {
 
     try {
       await expect(
+<<<<<<< HEAD
         withEnvAsync(
+=======
+        withEnv(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           {
             HOME: home,
             OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES: "16bytes",

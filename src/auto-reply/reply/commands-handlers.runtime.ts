@@ -22,7 +22,10 @@ import {
 } from "./commands-info.js";
 import { handleMcpCommand } from "./commands-mcp.js";
 import { handleModelsCommand } from "./commands-models.js";
+<<<<<<< HEAD
 import { handleNameCommand } from "./commands-name.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { handlePluginCommand } from "./commands-plugin.js";
 import { handlePluginsCommand } from "./commands-plugins.js";
 import {
@@ -63,7 +66,10 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleToolsCommand,
     handleStatusCommand,
     handleGoalCommand,
+<<<<<<< HEAD
     handleNameCommand,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     handleDiagnosticsCommand,
     handleTasksCommand,
     handleSteerCommand,

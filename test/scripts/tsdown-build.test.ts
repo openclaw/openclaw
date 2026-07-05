@@ -1,4 +1,5 @@
 // Tsdown Build tests cover tsdown build script behavior.
+<<<<<<< HEAD
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
@@ -6,6 +7,13 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
+=======
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import fsPromises from "node:fs/promises";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   cleanTsdownOutputRoots,
   createTsdownOutputScanner,
@@ -16,7 +24,10 @@ import {
   pruneUntrackedGeneratedSourceDeclarations,
   resolveTsdownBuildInvocation,
   runTsdownBuildInvocation,
+<<<<<<< HEAD
   signalTsdownBuildProcessTree,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "../../scripts/tsdown-build.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -26,10 +37,13 @@ const NO_MEMORY_LIMIT = {
   procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
 };
 
+<<<<<<< HEAD
 function expectedTaskkillPath(): string {
   return resolveWindowsTaskkillPath();
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function expectPathMissing(targetPath: string) {
   let statError: unknown;
   try {
@@ -54,9 +68,13 @@ function isProcessAlive(pid: number): boolean {
 }
 
 async function sleep(ms: number): Promise<void> {
+<<<<<<< HEAD
   await new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+=======
+  await new Promise((resolve) => setTimeout(resolve, ms));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
@@ -81,6 +99,7 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
   throw new Error(`timed out waiting for pid ${pid} to exit`);
 }
 
+<<<<<<< HEAD
 function waitForChildClose(
   child: ReturnType<typeof spawn>,
   timeoutMs = 5_000,
@@ -96,6 +115,8 @@ function waitForChildClose(
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("resolveTsdownBuildInvocation", () => {
   it("parses wrapper help before any tsdown work", () => {
     expect(parseTsdownBuildArgs(["--help"])).toEqual({ forwardedArgs: [], help: true });
@@ -249,6 +270,7 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=6400");
   });
 
+<<<<<<< HEAD
   it("honors OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB over platform and memory defaults", () => {
     const result = resolveTsdownBuildInvocation({
       nodeExecPath: "/usr/bin/node",
@@ -299,6 +321,8 @@ describe("resolveTsdownBuildInvocation", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("falls back to proc meminfo when the cgroup memory limit is unbounded", () => {
     const fsMock = {
       readFileSync: vi.fn((filePath: string) => {
@@ -720,6 +744,7 @@ describe("runTsdownBuildInvocation", () => {
     expect(output.chunks.join("")).toContain("timeout after 50ms");
   });
 
+<<<<<<< HEAD
   it("signals Windows tsdown process trees with taskkill", () => {
     const childKill = vi.fn(() => true);
     const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
@@ -773,13 +798,19 @@ describe("runTsdownBuildInvocation", () => {
     expect(childKill).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.skipIf(process.platform === "win32")(
     "kills timed-out tsdown process groups when the wrapper exits first",
     async () => {
       const rootDir = createTempDir("openclaw-tsdown-timeout-");
       const childPidPath = path.join(rootDir, "child.pid");
+<<<<<<< HEAD
       const timeoutMs = 1_000;
       let childPid: number | undefined;
+=======
+      let childPid = 0;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
       const parentScript = [
         "const { spawn } = require('node:child_process');",
@@ -808,11 +839,16 @@ describe("runTsdownBuildInvocation", () => {
             env: {
               ...process.env,
               OPENCLAW_TSDOWN_HEARTBEAT_MS: "0",
+<<<<<<< HEAD
               OPENCLAW_TSDOWN_TIMEOUT_MS: String(timeoutMs),
+=======
+              OPENCLAW_TSDOWN_TIMEOUT_MS: "50",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             },
           },
         );
 
+<<<<<<< HEAD
         await waitForFile(childPidPath, timeoutMs);
         childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
         expect(isProcessAlive(childPid)).toBe(true);
@@ -948,6 +984,16 @@ describe("runTsdownBuildInvocation", () => {
         if (runner?.pid && isProcessAlive(runner.pid)) {
           runner.kill("SIGKILL");
         }
+=======
+        await waitForFile(childPidPath, 2_000);
+        childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+        expect(isProcessAlive(childPid)).toBe(true);
+        const result = await runPromise;
+
+        expect(result.timedOut).toBe(true);
+        await waitForDead(childPid, 2_000);
+      } finally {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         if (childPid && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
         }

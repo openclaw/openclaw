@@ -3,12 +3,15 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+<<<<<<< HEAD
 const sessionStore = vi.hoisted(() => ({
   "agent:main:subagent:child-1": { sessionId: "sess-child-1", updatedAt: 1 },
   "agent:main:subagent:expired-child": { sessionId: "sess-expired", updatedAt: 1 },
   "agent:main:subagent:retry-budget": { sessionId: "sess-retry", updatedAt: 1 },
 }));
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({
     session: { store: "/tmp/test-store", mainKey: "main" },
@@ -31,7 +34,15 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => ({
+<<<<<<< HEAD
   loadSessionStore: () => sessionStore,
+=======
+  loadSessionStore: () => ({
+    "agent:main:subagent:child-1": { sessionId: "sess-child-1", updatedAt: 1 },
+    "agent:main:subagent:expired-child": { sessionId: "sess-expired", updatedAt: 1 },
+    "agent:main:subagent:retry-budget": { sessionId: "sess-retry", updatedAt: 1 },
+  }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveAgentIdFromSessionKey: (key: string) => {
     const match = key.match(/^agent:([^:]+)/);
     return match?.[1] ?? "main";
@@ -41,12 +52,15 @@ vi.mock("../config/sessions.js", () => ({
   updateSessionStore: mocks.updateSessionStore,
 }));
 
+<<<<<<< HEAD
 vi.mock("../config/sessions/session-accessor.js", () => ({
   loadSessionEntry: (scope: { sessionKey: keyof typeof sessionStore }) =>
     sessionStore[scope.sessionKey],
   patchSessionEntry: async () => null,
 }));
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
 }));

@@ -12,7 +12,10 @@ import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plug
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
+<<<<<<< HEAD
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { loadDotEnv, loadWorkspaceDotEnvFile } from "./dotenv.js";
 
 const loggerMocks = vi.hoisted(() => ({
@@ -81,7 +84,11 @@ async function writeEnvFile(filePath: string, contents: string) {
 
 function clearEnv(keys: readonly string[]) {
   for (const key of keys) {
+<<<<<<< HEAD
     deleteTestEnvValue(key);
+=======
+    delete process.env[key];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 
@@ -92,12 +99,31 @@ function expectEnvUndefined(keys: readonly string[]) {
 }
 
 async function withIsolatedEnvAndCwd(run: () => Promise<void>) {
+<<<<<<< HEAD
   const envSnapshot = captureFullEnv();
+=======
+  const prevEnv = { ...process.env };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   try {
     await run();
   } finally {
     vi.restoreAllMocks();
+<<<<<<< HEAD
     envSnapshot.restore();
+=======
+    for (const key of Object.keys(process.env)) {
+      if (!(key in prevEnv)) {
+        delete process.env[key];
+      }
+    }
+    for (const [key, value] of Object.entries(prevEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 
@@ -159,7 +185,11 @@ async function withDotEnvFixture(run: (fixture: DotEnvFixture) => Promise<void>)
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-test-"));
   const cwdDir = path.join(base, "cwd");
   const stateDir = path.join(base, "state");
+<<<<<<< HEAD
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+=======
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   await fs.mkdir(cwdDir, { recursive: true });
   await fs.mkdir(stateDir, { recursive: true });
   await run({ base, cwdDir, stateDir });
@@ -218,9 +248,15 @@ describe("loadDotEnv", () => {
   it("loads the Ubuntu gateway.env compatibility fallback after ~/.openclaw/.env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ base, cwdDir }) => {
+<<<<<<< HEAD
         setTestEnvValue("HOME", base);
         const defaultStateDir = path.join(base, ".openclaw");
         setTestEnvValue("OPENCLAW_STATE_DIR", defaultStateDir);
+=======
+        process.env.HOME = base;
+        const defaultStateDir = path.join(base, ".openclaw");
+        process.env.OPENCLAW_STATE_DIR = defaultStateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         await writeEnvFile(path.join(defaultStateDir, ".env"), "FOO=from-global\n");
         await writeEnvFile(
           path.join(base, ".config", "openclaw", "gateway.env"),
@@ -249,7 +285,11 @@ describe("loadDotEnv", () => {
   it("does not warn about dotenv conflicts when the key is already set", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ base, cwdDir, stateDir }) => {
+<<<<<<< HEAD
         setTestEnvValue("HOME", base);
+=======
+        process.env.HOME = base;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         process.env.FOO = "from-shell";
         await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
         await writeEnvFile(
@@ -304,7 +344,11 @@ describe("loadDotEnv", () => {
         delete process.env.NODE_REPL_EXTERNAL_MODULE;
         delete process.env.NODE_REPL_HISTORY;
         delete process.env.NODE_V8_COVERAGE;
+<<<<<<< HEAD
         deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
+=======
+        delete process.env.OPENCLAW_CONFIG_PATH;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         delete process.env.ANTHROPIC_BASE_URL;
         delete process.env.CLOUDSDK_PYTHON;
         delete process.env.EXAMPLE_API_HOST;
@@ -386,9 +430,15 @@ describe("loadDotEnv", () => {
           ].join("\n"),
         );
 
+<<<<<<< HEAD
         deleteTestEnvValue("OPENCLAW_STATE_DIR");
         delete process.env.STATE_DIRECTORY;
         deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
+=======
+        delete process.env.OPENCLAW_STATE_DIR;
+        delete process.env.STATE_DIRECTORY;
+        delete process.env.OPENCLAW_CONFIG_PATH;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
@@ -443,7 +493,11 @@ describe("loadDotEnv", () => {
           ].join("\n"),
         );
 
+<<<<<<< HEAD
         deleteTestEnvValue("OPENCLAW_AGENT_DIR");
+=======
+        delete process.env.OPENCLAW_AGENT_DIR;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
         delete process.env.OPENCLAW_OAUTH_DIR;
         delete process.env.PI_CODING_AGENT_DIR;
@@ -538,7 +592,11 @@ describe("loadDotEnv", () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
         await writeEnvFile(path.join(cwdDir, ".env"), `${key}=./evil/npm-cli.js\n`);
 
+<<<<<<< HEAD
         deleteTestEnvValue(key);
+=======
+        delete process.env[key];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
@@ -646,7 +704,11 @@ describe("loadCliDotEnv", () => {
 
         // Delete the fixture-provided value so the blocking must come from
         // the workspace blocklist, not the "already set" skip.
+<<<<<<< HEAD
         deleteTestEnvValue("OPENCLAW_STATE_DIR");
+=======
+        delete process.env.OPENCLAW_STATE_DIR;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
 
         loadCliDotEnv({ quiet: true });
@@ -659,9 +721,15 @@ describe("loadCliDotEnv", () => {
   it("loads the gateway.env compatibility fallback during CLI startup", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ base, cwdDir }) => {
+<<<<<<< HEAD
         setTestEnvValue("HOME", base);
         const defaultStateDir = path.join(base, ".openclaw");
         setTestEnvValue("OPENCLAW_STATE_DIR", defaultStateDir);
+=======
+        process.env.HOME = base;
+        const defaultStateDir = path.join(base, ".openclaw");
+        process.env.OPENCLAW_STATE_DIR = defaultStateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         await writeEnvFile(path.join(defaultStateDir, ".env"), "FOO=from-global\n");
         await writeEnvFile(
           path.join(base, ".config", "openclaw", "gateway.env"),
@@ -683,9 +751,15 @@ describe("loadCliDotEnv", () => {
   it("can defer global dotenv while loading only workspace env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ base, cwdDir }) => {
+<<<<<<< HEAD
         setTestEnvValue("HOME", base);
         const defaultStateDir = path.join(base, ".openclaw");
         setTestEnvValue("OPENCLAW_STATE_DIR", defaultStateDir);
+=======
+        process.env.HOME = base;
+        const defaultStateDir = path.join(base, ".openclaw");
+        process.env.OPENCLAW_STATE_DIR = defaultStateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         await writeEnvFile(path.join(cwdDir, ".env"), "BAZ=from-workspace\n");
         await writeEnvFile(path.join(defaultStateDir, ".env"), "FOO=from-global\n");
         await writeEnvFile(
@@ -711,8 +785,13 @@ describe("loadCliDotEnv", () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ base, cwdDir }) => {
         const customStateDir = path.join(base, "custom-state");
+<<<<<<< HEAD
         setTestEnvValue("HOME", base);
         setTestEnvValue("OPENCLAW_STATE_DIR", customStateDir);
+=======
+        process.env.HOME = base;
+        process.env.OPENCLAW_STATE_DIR = customStateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         await writeEnvFile(
           path.join(base, ".config", "openclaw", "gateway.env"),
           "FOO=from-gateway\n",
@@ -735,8 +814,13 @@ describe("loadCliDotEnv", () => {
       const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-legacy-"));
       const cwdDir = path.join(base, "cwd");
       const legacyStateDir = path.join(base, ".clawdbot");
+<<<<<<< HEAD
       setTestEnvValue("HOME", base);
       deleteTestEnvValue("OPENCLAW_STATE_DIR");
+=======
+      process.env.HOME = base;
+      delete process.env.OPENCLAW_STATE_DIR;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       delete process.env.OPENCLAW_TEST_FAST;
       await fs.mkdir(cwdDir, { recursive: true });
       await writeEnvFile(path.join(legacyStateDir, ".env"), "LEGACY_ONLY=from-legacy\n");
@@ -790,7 +874,11 @@ describe("loadCliDotEnv", () => {
 
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
         delete process.env.SAFE_KEY;
+<<<<<<< HEAD
         deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
+=======
+        delete process.env.OPENCLAW_CONFIG_PATH;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
         delete process.env.NODE_OPTIONS;
         delete process.env.NODE_REDIRECT_WARNINGS;
@@ -960,7 +1048,11 @@ describe("workspace .env blocklist completeness", () => {
         );
 
         for (const key of runtimeControlKeys) {
+<<<<<<< HEAD
           deleteTestEnvValue(key);
+=======
+          delete process.env[key];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });

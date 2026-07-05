@@ -1,20 +1,33 @@
 // Proxy capture SQLite store persists capture metadata and replayable exchanges.
+<<<<<<< HEAD
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { gunzipSync, gzipSync } from "node:zlib";
+=======
+import fs from "node:fs";
+import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeNullableString as normalizeObservedValue } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+<<<<<<< HEAD
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   configureSqliteConnectionPragmas,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
+<<<<<<< HEAD
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+=======
+import { readCaptureBlobText, writeCaptureBlob } from "./blob-store.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type {
   CaptureBlobRecord,
   CaptureEventRecord,
@@ -24,6 +37,7 @@ import type {
   CaptureSessionCoverageSummary,
   CaptureSessionRecord,
   CaptureSessionSummary,
+<<<<<<< HEAD
   SharedCaptureBlobRecord,
 } from "./types.js";
 
@@ -37,6 +51,12 @@ type PathBasedDebugProxyCaptureStore = {
   walMaintenance: SqliteWalMaintenance;
 };
 
+=======
+} from "./types.js";
+
+// SQLite-backed debug proxy store. Metadata stays in SQLite; large payloads are
+// compressed into the blob directory and referenced by hash.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const DEBUG_PROXY_CAPTURE_DIR_MODE = 0o700;
 const DEBUG_PROXY_CAPTURE_FILE_MODE = 0o600;
 
@@ -65,7 +85,15 @@ function isInMemoryDatabasePath(dbPath: string): boolean {
   );
 }
 
+<<<<<<< HEAD
 function hardenLegacyDatabaseFiles(dbPath: string): void {
+=======
+function ensureParentDir(filePath: string) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: DEBUG_PROXY_CAPTURE_DIR_MODE });
+}
+
+function hardenDatabaseFiles(dbPath: string): void {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   for (const candidate of resolveSqliteDatabaseFilePaths(dbPath)) {
     if (fs.existsSync(candidate)) {
       applyPrivateModeSync(candidate, DEBUG_PROXY_CAPTURE_FILE_MODE);
@@ -73,6 +101,7 @@ function hardenLegacyDatabaseFiles(dbPath: string): void {
   }
 }
 
+<<<<<<< HEAD
 function openPathBasedDebugProxyCaptureStore(
   dbPath: string,
   blobDir: string,
@@ -83,6 +112,17 @@ function openPathBasedDebugProxyCaptureStore(
       recursive: true,
       mode: DEBUG_PROXY_CAPTURE_DIR_MODE,
     });
+=======
+type OpenedDatabase = {
+  db: DatabaseSync;
+  walMaintenance: SqliteWalMaintenance;
+};
+
+function openDatabase(dbPath: string): OpenedDatabase {
+  const fileBackedPath = isInMemoryDatabasePath(dbPath) ? undefined : dbPath;
+  if (fileBackedPath) {
+    ensureParentDir(fileBackedPath);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!fs.existsSync(fileBackedPath)) {
       fs.closeSync(fs.openSync(fileBackedPath, "a", DEBUG_PROXY_CAPTURE_FILE_MODE));
     }
@@ -96,9 +136,14 @@ function openPathBasedDebugProxyCaptureStore(
     }
     walMaintenance = configureSqliteConnectionPragmas(db, {
       busyTimeoutMs: 5000,
+<<<<<<< HEAD
       databaseLabel: "debug-proxy-capture-sdk",
       ...(fileBackedPath ? { databasePath: fileBackedPath } : {}),
       foreignKeys: true,
+=======
+      databaseLabel: "debug-proxy-capture",
+      ...(fileBackedPath ? { databasePath: fileBackedPath } : {}),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     db.exec(`
       CREATE TABLE IF NOT EXISTS capture_sessions (
@@ -139,6 +184,7 @@ function openPathBasedDebugProxyCaptureStore(
       CREATE INDEX IF NOT EXISTS capture_events_flow_idx ON capture_events(flow_id, ts);
     `);
     if (fileBackedPath) {
+<<<<<<< HEAD
       hardenLegacyDatabaseFiles(fileBackedPath);
     }
     return {
@@ -148,6 +194,11 @@ function openPathBasedDebugProxyCaptureStore(
         walMaintenance,
       },
     };
+=======
+      hardenDatabaseFiles(fileBackedPath);
+    }
+    return { db, walMaintenance };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } catch (err) {
     walMaintenance?.close();
     db.close();
@@ -179,6 +230,7 @@ function sortObservedCounts(counts: Map<string, number>): CaptureObservedDimensi
     .toSorted((left, right) => right.count - left.count || left.value.localeCompare(right.value));
 }
 
+<<<<<<< HEAD
 class DebugProxyCaptureStoreImpl {
   readonly db: DatabaseSync;
   readonly dbPath: string;
@@ -206,16 +258,35 @@ class DebugProxyCaptureStoreImpl {
     this.dbPath = database.path;
     // Retain the shipped public property while shared-state blobs live in this DB.
     this.blobDir = database.path;
+=======
+export class DebugProxyCaptureStore {
+  readonly db: DatabaseSync;
+  private readonly walMaintenance: SqliteWalMaintenance;
+  private closed = false;
+
+  constructor(
+    readonly dbPath: string,
+    readonly blobDir: string,
+  ) {
+    const opened = openDatabase(dbPath);
+    this.db = opened.db;
+    this.walMaintenance = opened.walMaintenance;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   close(): void {
     if (this.closed) {
       return;
     }
+<<<<<<< HEAD
     if (this.pathBased) {
       this.pathBased.walMaintenance.close();
       this.db.close();
     }
+=======
+    this.walMaintenance.close();
+    this.db.close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     this.closed = true;
   }
 
@@ -224,6 +295,7 @@ class DebugProxyCaptureStoreImpl {
   }
 
   upsertSession(session: CaptureSessionRecord): void {
+<<<<<<< HEAD
     if (this.pathBased) {
       this.db
         .prepare(
@@ -260,6 +332,15 @@ class DebugProxyCaptureStoreImpl {
             WHEN capture_sessions.mode = 'implicit' THEN excluded.mode
             ELSE capture_sessions.mode
           END,
+=======
+    this.db
+      .prepare(
+        `INSERT INTO capture_sessions (
+          id, started_at, ended_at, mode, source_scope, source_process, proxy_url, db_path, blob_dir
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          ended_at=excluded.ended_at,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           proxy_url=excluded.proxy_url,
           source_process=excluded.source_process`,
       )
@@ -271,6 +352,11 @@ class DebugProxyCaptureStoreImpl {
         session.sourceScope,
         session.sourceProcess,
         session.proxyUrl ?? null,
+<<<<<<< HEAD
+=======
+        session.dbPath,
+        session.blobDir,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       );
   }
 
@@ -280,6 +366,7 @@ class DebugProxyCaptureStoreImpl {
       .run(endedAt, sessionId);
   }
 
+<<<<<<< HEAD
   persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord | SharedCaptureBlobRecord {
     const sha256 = createHash("sha256").update(data).digest("hex");
     const blobId = sha256.slice(0, 24);
@@ -356,6 +443,13 @@ class DebugProxyCaptureStoreImpl {
   }
 
   private insertEvent(event: CaptureEventRecord, dataBlobId: string | null): void {
+=======
+  persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord {
+    return writeCaptureBlob({ blobDir: this.blobDir, data, contentType });
+  }
+
+  recordEvent(event: CaptureEventRecord): void {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     this.db
       .prepare(
         `INSERT INTO capture_events (
@@ -381,7 +475,11 @@ class DebugProxyCaptureStoreImpl {
         event.contentType ?? null,
         event.headersJson ?? null,
         event.dataText ?? null,
+<<<<<<< HEAD
         dataBlobId,
+=======
+        event.dataBlobId ?? null,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         event.dataSha256 ?? null,
         event.errorText ?? null,
         event.metaJson ?? null,
@@ -482,6 +580,7 @@ class DebugProxyCaptureStoreImpl {
   }
 
   readBlob(blobId: string): string | null {
+<<<<<<< HEAD
     if (this.pathBased) {
       const legacyRow = this.db
         .prepare(`SELECT data_blob_id AS blobId FROM capture_events WHERE data_blob_id = ? LIMIT 1`)
@@ -502,6 +601,16 @@ class DebugProxyCaptureStoreImpl {
       return (row.encoding === "gzip" ? gunzipSync(data) : data).toString("utf8");
     }
     return null;
+=======
+    const row = this.db
+      .prepare(`SELECT data_blob_id AS blobId FROM capture_events WHERE data_blob_id = ? LIMIT 1`)
+      .get(blobId) as { blobId?: string } | undefined;
+    if (!row?.blobId) {
+      return null;
+    }
+    const blobPath = path.join(this.blobDir, `${row.blobId}.bin.gz`);
+    return fs.existsSync(blobPath) ? readCaptureBlobText(blobPath) : null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   queryPreset(preset: CaptureQueryPreset, sessionId?: string): CaptureQueryRow[] {
@@ -585,6 +694,7 @@ class DebugProxyCaptureStoreImpl {
   }
 
   purgeAll(): { sessions: number; events: number; blobs: number } {
+<<<<<<< HEAD
     if (this.pathBased) {
       const sessionCount =
         (
@@ -623,6 +733,23 @@ class DebugProxyCaptureStoreImpl {
       );
       return { sessions: sessionCount, events: eventCount, blobs: blobCount };
     });
+=======
+    const sessionCount =
+      (this.db.prepare(`SELECT COUNT(*) AS count FROM capture_sessions`).get() as { count: number })
+        .count ?? 0;
+    const eventCount =
+      (this.db.prepare(`SELECT COUNT(*) AS count FROM capture_events`).get() as { count: number })
+        .count ?? 0;
+    this.db.exec(`DELETE FROM capture_events; DELETE FROM capture_sessions;`);
+    let blobs = 0;
+    if (fs.existsSync(this.blobDir)) {
+      for (const entry of fs.readdirSync(this.blobDir)) {
+        fs.rmSync(path.join(this.blobDir, entry), { force: true });
+        blobs += 1;
+      }
+    }
+    return { sessions: sessionCount, events: eventCount, blobs };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   deleteSessions(sessionIds: string[]): { sessions: number; events: number; blobs: number } {
@@ -630,6 +757,7 @@ class DebugProxyCaptureStoreImpl {
     if (uniqueSessionIds.length === 0) {
       return { sessions: 0, events: 0, blobs: 0 };
     }
+<<<<<<< HEAD
     if (this.pathBased) {
       return this.deletePathBasedSessions(uniqueSessionIds);
     }
@@ -715,6 +843,9 @@ class DebugProxyCaptureStoreImpl {
       throw new Error("path-based debug proxy capture store is unavailable");
     }
     const placeholders = sessionIds.map(() => "?").join(", ");
+=======
+    const placeholders = uniqueSessionIds.map(() => "?").join(", ");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const blobRows = this.db
       .prepare(
         `SELECT DISTINCT data_blob_id AS blobId
@@ -722,7 +853,11 @@ class DebugProxyCaptureStoreImpl {
          WHERE session_id IN (${placeholders})
            AND data_blob_id IS NOT NULL`,
       )
+<<<<<<< HEAD
       .all(...sessionIds) as Array<{ blobId?: string | null }>;
+=======
+      .all(...uniqueSessionIds) as Array<{ blobId?: string | null }>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const eventCount =
       (
         this.db
@@ -731,7 +866,11 @@ class DebugProxyCaptureStoreImpl {
              FROM capture_events
              WHERE session_id IN (${placeholders})`,
           )
+<<<<<<< HEAD
           .get(...sessionIds) as { count: number }
+=======
+          .get(...uniqueSessionIds) as { count: number }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ).count ?? 0;
     const sessionCount =
       (
@@ -741,16 +880,31 @@ class DebugProxyCaptureStoreImpl {
              FROM capture_sessions
              WHERE id IN (${placeholders})`,
           )
+<<<<<<< HEAD
           .get(...sessionIds) as { count: number }
       ).count ?? 0;
     this.db.prepare(`DELETE FROM capture_events WHERE session_id IN (${placeholders})`).run(
       ...sessionIds,
     );
     this.db.prepare(`DELETE FROM capture_sessions WHERE id IN (${placeholders})`).run(...sessionIds);
+=======
+          .get(...uniqueSessionIds) as { count: number }
+      ).count ?? 0;
+    this.db
+      .prepare(`DELETE FROM capture_events WHERE session_id IN (${placeholders})`)
+      .run(...uniqueSessionIds);
+    this.db
+      .prepare(`DELETE FROM capture_sessions WHERE id IN (${placeholders})`)
+      .run(...uniqueSessionIds);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const candidateBlobIds = blobRows
       .map((row) => row.blobId?.trim())
       .filter((blobId): blobId is string => Boolean(blobId));
     const remainingBlobRefs =
+<<<<<<< HEAD
+=======
+      // Shared blobs are deleted only when no surviving event references them.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       candidateBlobIds.length > 0
         ? new Set(
             (
@@ -768,11 +922,20 @@ class DebugProxyCaptureStoreImpl {
           )
         : new Set<string>();
     let blobs = 0;
+<<<<<<< HEAD
     for (const blobId of candidateBlobIds) {
       if (remainingBlobRefs.has(blobId)) {
         continue;
       }
       const blobPath = path.join(pathBased.blobDir, `${blobId}.bin.gz`);
+=======
+    for (const row of blobRows) {
+      const blobId = row.blobId?.trim();
+      if (!blobId || remainingBlobRefs.has(blobId)) {
+        continue;
+      }
+      const blobPath = path.join(this.blobDir, `${blobId}.bin.gz`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (fs.existsSync(blobPath)) {
         fs.rmSync(blobPath, { force: true });
         blobs += 1;
@@ -782,6 +945,7 @@ class DebugProxyCaptureStoreImpl {
   }
 }
 
+<<<<<<< HEAD
 export type DebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
   persistPayload(
     data: Buffer,
@@ -809,11 +973,16 @@ export const DebugProxyCaptureStore =
 
 type CachedStoreEntry = {
   store: DebugProxyCaptureStoreImpl;
+=======
+type CachedStoreEntry = {
+  store: DebugProxyCaptureStore;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   leases: number;
 };
 
 const cachedStores = new Map<string, CachedStoreEntry>();
 
+<<<<<<< HEAD
 function resolveDebugProxyCaptureStoreKey(
   optionsOrDbPath: DebugProxyCaptureStoreOptions | string,
   legacyBlobDir?: string,
@@ -828,15 +997,24 @@ function getDebugProxyCaptureStoreImpl(
   legacyBlobDir?: string,
 ): DebugProxyCaptureStoreImpl {
   const key = resolveDebugProxyCaptureStoreKey(optionsOrDbPath, legacyBlobDir);
+=======
+export function getDebugProxyCaptureStore(dbPath: string, blobDir: string): DebugProxyCaptureStore {
+  const key = `${dbPath}:${blobDir}`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const cached = cachedStores.get(key);
   if (cached && !cached.store.isClosed) {
     return cached.store;
   }
+<<<<<<< HEAD
   const store = new DebugProxyCaptureStoreImpl(optionsOrDbPath, legacyBlobDir);
+=======
+  const store = new DebugProxyCaptureStore(dbPath, blobDir);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   cachedStores.set(key, { store, leases: 0 });
   return store;
 }
 
+<<<<<<< HEAD
 export function getDebugProxyCaptureStore(
   dbPath: string,
   blobDir: string,
@@ -851,6 +1029,8 @@ export function getDebugProxyCaptureStore(
   return getDebugProxyCaptureStoreImpl(optionsOrDbPath, legacyBlobDir);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function closeDebugProxyCaptureStore(): void {
   for (const cached of cachedStores.values()) {
     cached.store.close();
@@ -858,6 +1038,7 @@ export function closeDebugProxyCaptureStore(): void {
   cachedStores.clear();
 }
 
+<<<<<<< HEAD
 // Lease API keeps one cached capture-store wrapper alive across related
 // operations, then releases it without closing the shared state database.
 export function acquireDebugProxyCaptureStore(dbPath: string, blobDir: string): {
@@ -877,6 +1058,16 @@ export function acquireDebugProxyCaptureStore(
 } {
   const key = resolveDebugProxyCaptureStoreKey(optionsOrDbPath, legacyBlobDir);
   const store = getDebugProxyCaptureStoreImpl(optionsOrDbPath, legacyBlobDir);
+=======
+// Lease API keeps one cached synchronous SQLite connection alive across related
+// capture operations, then closes it when the last owner releases.
+export function acquireDebugProxyCaptureStore(
+  dbPath: string,
+  blobDir: string,
+): { store: DebugProxyCaptureStore; release: () => void } {
+  const key = `${dbPath}:${blobDir}`;
+  const store = getDebugProxyCaptureStore(dbPath, blobDir);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const cached = cachedStores.get(key);
   if (!cached || cached.store !== store) {
     throw new Error("debug proxy capture store cache changed while acquiring a lease");
@@ -904,12 +1095,16 @@ export function acquireDebugProxyCaptureStore(
 }
 
 export function persistEventPayload(
+<<<<<<< HEAD
   store: {
     persistPayload(
       data: Buffer,
       contentType?: string,
     ): CaptureBlobRecord | SharedCaptureBlobRecord;
   },
+=======
+  store: DebugProxyCaptureStore,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   params: { data?: Buffer | string | null; contentType?: string; previewLimit?: number },
 ): { dataText?: string; dataBlobId?: string; dataSha256?: string } {
   if (params.data == null) {

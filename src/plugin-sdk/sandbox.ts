@@ -14,12 +14,18 @@ export type {
   SandboxBackendHandle,
   SandboxBackendId,
   SandboxBackendManager,
+<<<<<<< HEAD
   SandboxBackendPreparedWorkdirDiscarder,
   SandboxBackendRegistration,
   SandboxBackendRuntimeInfo,
   SandboxBackendWorkdirValidation,
   SandboxBackendWorkdirResolver,
   SandboxBackendWorkdirValidator,
+=======
+  SandboxBackendRegistration,
+  SandboxBackendRuntimeInfo,
+  SandboxBackendWorkdirResolver,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   SandboxContext,
   SandboxResolvedPath,
   SandboxSshConfig,
@@ -30,7 +36,10 @@ export type { OpenClawConfig } from "../config/config.js";
 
 export {
   buildExecRemoteCommand,
+<<<<<<< HEAD
   buildRemoteWorkdirValidationCommand,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   buildRemoteCommand,
   buildSshSandboxArgv,
   buildValidatedExecRemoteCommand,

@@ -9,7 +9,11 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+<<<<<<< HEAD
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+=======
+import { captureEnv } from "../../test-utils/env.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   OAUTH_AGENT_ENV_KEYS,
   createExpiredOauthStore,
@@ -169,8 +173,13 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     const caseRoot = path.join(tempRoot, `case-${++caseIndex}`);
     agentDir = path.join(caseRoot, "agents", "main", "agent");
     await fs.mkdir(agentDir, { recursive: true });
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_STATE_DIR", caseRoot);
     setTestEnvValue("OPENCLAW_AGENT_DIR", agentDir);
+=======
+    process.env.OPENCLAW_STATE_DIR = caseRoot;
+    process.env.OPENCLAW_AGENT_DIR = agentDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   afterEach(async () => {

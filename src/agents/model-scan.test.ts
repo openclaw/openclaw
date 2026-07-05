@@ -103,6 +103,7 @@ describe("scanOpenRouterModels", () => {
     expect(result?.createdAtMs).toBeNull();
   });
 
+<<<<<<< HEAD
   it("cancels catalog error response bodies", async () => {
     const response = new Response("unavailable", { status: 503 });
     const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
@@ -164,6 +165,8 @@ describe("scanOpenRouterModels", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("requires an API key when probing", async () => {
     const fetchImpl = createFetchFixture({ data: [] });
     await withEnvAsync({ OPENROUTER_API_KEY: undefined }, async () => {

@@ -8,11 +8,15 @@ import {
   parseArgs,
   parseRunIdFromDispatchOutput,
   resolveArtifactName,
+<<<<<<< HEAD
   requireRunIdFromDispatchOutput,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   validateFullManifest,
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mjs";
 
+<<<<<<< HEAD
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), init);
 }
@@ -31,6 +35,8 @@ async function withGithubApiTimeoutEnv<T>(value: string, fn: () => Promise<T>): 
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("release candidate checklist", () => {
   it("infers validation profiles from candidate tags", () => {
     expect(parseArgs(["--tag", "v2026.5.14-beta.3"]).releaseProfile).toBe("beta");
@@ -79,6 +85,7 @@ describe("release candidate checklist", () => {
     );
   });
 
+<<<<<<< HEAD
   it("rejects duplicate release candidate CLI options", () => {
     const requiredArgs = ["--tag", "v2026.5.14-beta.3"];
     const duplicateOption = (
@@ -114,6 +121,8 @@ describe("release candidate checklist", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("requires stable validation evidence to include soak and blocking performance", () => {
     const stableManifest = {
       workflowName: "Full Release Validation",
@@ -255,15 +264,26 @@ describe("release candidate checklist", () => {
         digest: `sha256:${"b".repeat(64)}`,
       },
     ];
+<<<<<<< HEAD
     const fetchImpl = vi.fn(async () => {
       return jsonResponse({
+=======
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         tag_name: "v0.6.3",
         draft: false,
         prerelease: false,
         html_url: "https://github.com/openclaw/openclaw-windows-node/releases/tag/v0.6.3",
         assets,
+<<<<<<< HEAD
       });
     });
+=======
+      }),
+    }));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await expect(
       validateWindowsSourceRelease("v0.6.3", {
@@ -315,8 +335,14 @@ describe("release candidate checklist", () => {
       "asset OpenClawCompanion-Setup-x64.exe is missing its SHA-256 digest",
     ],
   ])("rejects an invalid stable Windows source release", async (override, message) => {
+<<<<<<< HEAD
     const fetchImpl = vi.fn(async () => {
       return jsonResponse({
+=======
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         tag_name: "v0.6.3",
         draft: false,
         prerelease: false,
@@ -332,8 +358,13 @@ describe("release candidate checklist", () => {
           },
         ],
         ...override,
+<<<<<<< HEAD
       });
     });
+=======
+      }),
+    }));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await expect(
       validateWindowsSourceRelease("v0.6.3", {
@@ -391,6 +422,7 @@ describe("release candidate checklist", () => {
     ).toBe("25922042055");
   });
 
+<<<<<<< HEAD
   it("fails closed when gh dispatch output does not include the run url", () => {
     expect(() =>
       requireRunIdFromDispatchOutput(
@@ -400,6 +432,8 @@ describe("release candidate checklist", () => {
     ).toThrow("refusing to guess from recent workflow_dispatch runs");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("falls back to a single compatible artifact from the same run", () => {
     expect(
       resolveArtifactName(
@@ -418,7 +452,14 @@ describe("release candidate checklist", () => {
         Authorization: "Bearer test-token",
         "X-GitHub-Api-Version": "2022-11-28",
       });
+<<<<<<< HEAD
       return jsonResponse({ workflow_runs: [] });
+=======
+      return {
+        ok: true,
+        json: async () => ({ workflow_runs: [] }),
+      };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     await expect(
@@ -436,6 +477,7 @@ describe("release candidate checklist", () => {
     );
   });
 
+<<<<<<< HEAD
   it("uses a positive integer GitHub API timeout env", async () => {
     const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
       expect(init?.signal).toBeInstanceOf(AbortSignal);
@@ -508,6 +550,8 @@ describe("release candidate checklist", () => {
     ).rejects.toThrow("GitHub API repos/openclaw/openclaw/actions/runs timed out after 25ms");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("includes the GitHub API path when a request times out", async () => {
     const fetchImpl = vi.fn(async () => {
       throw new DOMException("request timed out", "TimeoutError");

@@ -10,13 +10,31 @@ export {
   DEFAULT_MAX_ENTRIES,
   DEFAULT_MAX_EXTRACTED_BYTES,
   DEFAULT_MAX_ENTRY_BYTES,
+<<<<<<< HEAD
+=======
+  createArchiveSymlinkTraversalError,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   createTarEntryPreflightChecker,
   extractArchive,
   loadZipArchiveWithPreflight,
   mergeExtractedTreeIntoDestination,
   prepareArchiveDestinationDir,
+<<<<<<< HEAD
   resolveArchiveKind,
   resolvePackedRootDir,
   withStagedArchiveDestination,
   type ArchiveLogger,
+=======
+  prepareArchiveOutputPath,
+  readZipCentralDirectoryEntryCount,
+  resolveArchiveKind,
+  resolvePackedRootDir,
+  withStagedArchiveDestination,
+  type ArchiveExtractLimits,
+  type ArchiveKind,
+  type ArchiveLimitErrorCode,
+  type ArchiveLogger,
+  type ArchiveSecurityErrorCode,
+  type TarEntryInfo,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "@openclaw/fs-safe/archive";

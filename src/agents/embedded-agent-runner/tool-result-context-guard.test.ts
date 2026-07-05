@@ -5,12 +5,19 @@ import { describe, expect, it, vi } from "vitest";
 import type { ContextEngine, ContextEngineRuntimeSettings } from "../../context-engine/types.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
+<<<<<<< HEAD
 import {
   CONTEXT_LIMIT_TRUNCATION_NOTICE,
   formatContextLimitTruncationNotice,
 } from "./context-truncation-notice.js";
 import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
 import {
+=======
+import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
+import {
+  CONTEXT_LIMIT_TRUNCATION_NOTICE,
+  formatContextLimitTruncationNotice,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   installContextEngineLoopHook,
   installToolResultContextGuard,
   markTranscriptPromptText,

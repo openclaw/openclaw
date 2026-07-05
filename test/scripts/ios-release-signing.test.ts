@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "ios-release-signing.mjs");
 
+<<<<<<< HEAD
 function runSigningResult(args: string[]): { ok: boolean; stdout: string; stderr: string } {
   try {
     const stdout = execFileSync(process.execPath, [SCRIPT, ...args], {
@@ -29,6 +30,8 @@ function formatProcessOutput(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function runSigning(mode: string): string {
   return execFileSync(process.execPath, [SCRIPT, "--mode", mode], {
     encoding: "utf8",
@@ -37,6 +40,7 @@ function runSigning(mode: string): string {
 }
 
 describe("scripts/ios-release-signing.mjs", () => {
+<<<<<<< HEAD
   it.each([
     ["--mode"],
     ["--mode", "--manifest"],
@@ -52,12 +56,17 @@ describe("scripts/ios-release-signing.mjs", () => {
     expect(result.stdout).toBe("");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("emits manual App Store profile settings for every signed target", () => {
     const output = runSigning("xcconfig");
 
     expect(output).toContain("OPENCLAW_CODE_SIGN_STYLE = Manual");
     expect(output).toContain("OPENCLAW_CODE_SIGN_IDENTITY = Apple Distribution");
+<<<<<<< HEAD
     expect(output).toContain("OPENCLAW_APP_GROUP_ID = group.ai.openclawfoundation.app.shared");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(output).toContain("OPENCLAW_APP_PROFILE = OpenClaw App Store ai.openclawfoundation.app");
     expect(output).toContain(
       "OPENCLAW_SHARE_PROFILE = OpenClaw App Store ai.openclawfoundation.app.share",
@@ -68,7 +77,13 @@ describe("scripts/ios-release-signing.mjs", () => {
     expect(output).toContain(
       "OPENCLAW_WATCH_APP_PROFILE = OpenClaw App Store ai.openclawfoundation.app.watchkitapp",
     );
+<<<<<<< HEAD
     expect(output).not.toContain("OPENCLAW_WATCH_EXTENSION_PROFILE");
+=======
+    expect(output).toContain(
+      "OPENCLAW_WATCH_EXTENSION_PROFILE = OpenClaw App Store ai.openclawfoundation.app.watchkitapp.extension",
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("documents the canonical release signing plan", () => {
@@ -78,8 +93,15 @@ describe("scripts/ios-release-signing.mjs", () => {
     expect(output).toContain("Signing repo: git@github.com:openclaw/apps-signing.git");
     expect(output).toContain("Signing branch: main");
     expect(output).toContain("Signing setup and sync: Fastlane match");
+<<<<<<< HEAD
     expect(output).not.toContain("OpenClawWatchExtension");
     expect(output).toContain("capabilities: PUSH_NOTIFICATIONS, APP_GROUPS, APP_ATTEST");
     expect(output).toContain("app groups: group.ai.openclawfoundation.app.shared");
+=======
+    expect(output).toContain(
+      "OpenClawWatchExtension: ai.openclawfoundation.app.watchkitapp.extension",
+    );
+    expect(output).toContain("capabilities: PUSH_NOTIFICATIONS");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

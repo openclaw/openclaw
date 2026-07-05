@@ -781,7 +781,11 @@ function installFastLocalImageProviderStubs(...providers: MediaUnderstandingProv
     loadImageWebMediaRuntime: async () => ({
       loadWebMedia: async (mediaUrl, options) => {
         const inboundRoots =
+<<<<<<< HEAD
           options && typeof options !== "number" && "inboundRoots" in options
+=======
+          options && typeof options === "object" && "inboundRoots" in options
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             ? options.inboundRoots
             : [];
         if (

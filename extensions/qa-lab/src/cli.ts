@@ -40,7 +40,10 @@ type QaRunCliOptions = QaLabSelfCheckCommandOptions &
     qaProfile?: QaProfileCommandOptions["profile"];
     surface?: QaProfileCommandOptions["surface"];
     category?: QaProfileCommandOptions["category"];
+<<<<<<< HEAD
     scenario?: QaProfileCommandOptions["scenarioIds"];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     evidenceMode?: QaProfileCommandOptions["evidenceMode"];
     excludeTestExecutionEvidence?: boolean;
   };
@@ -49,7 +52,10 @@ const QA_RUN_PROFILE_ONLY_OPTIONS = [
   { optionName: "outputDir", flag: "--output-dir" },
   { optionName: "surface", flag: "--surface" },
   { optionName: "category", flag: "--category" },
+<<<<<<< HEAD
   { optionName: "scenario", flag: "--scenario" },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   { optionName: "evidenceMode", flag: "--evidence-mode" },
   { optionName: "excludeTestExecutionEvidence", flag: "--exclude-test-execution-evidence" },
   { optionName: "transport", flag: "--transport" },
@@ -62,11 +68,16 @@ const QA_RUN_PROFILE_ONLY_OPTIONS = [
 ] as const;
 
 const QA_RUN_SELF_CHECK_ONLY_OPTIONS = [{ optionName: "output", flag: "--output" }] as const;
+<<<<<<< HEAD
 const MAX_QA_CLI_TCP_PORT = 65_535;
 
 type QaSuiteCliOptions = QaScenarioRunCliOptions & {
   channelDriver?: QaSuiteCommandOptions["channelDriver"];
   channel?: QaSuiteCommandOptions["channel"];
+=======
+
+type QaSuiteCliOptions = QaScenarioRunCliOptions & {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   runner?: QaSuiteCommandOptions["runner"];
   thinking?: QaSuiteCommandOptions["thinking"];
   cliAuthMode?: QaSuiteCommandOptions["cliAuthMode"];
@@ -106,6 +117,7 @@ function parseQaCliPositiveIntegerOption(value: string, flag: string): number {
   return parsed;
 }
 
+<<<<<<< HEAD
 function parseQaCliTcpPortOption(value: string, flag: string): number {
   const parsed = parseQaCliPositiveIntegerOption(value, flag);
   if (parsed > MAX_QA_CLI_TCP_PORT) {
@@ -114,6 +126,8 @@ function parseQaCliTcpPortOption(value: string, flag: string): number {
   return parsed;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function parseQaEvidenceModeOption(value: string): QaProfileCommandOptions["evidenceMode"] {
   const evidenceMode = value.trim();
   if (evidenceMode === "full" || evidenceMode === "slim") {
@@ -410,12 +424,15 @@ export function registerQaLabCli(program: Command) {
     .option("--surface <id>", "Limit --qa-profile to a taxonomy surface id")
     .option("--category <id>", "Limit --qa-profile to a taxonomy category id")
     .option(
+<<<<<<< HEAD
       "--scenario <id>",
       "Limit --qa-profile to a scenario id (repeatable)",
       collectString,
       [],
     )
     .option(
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "--evidence-mode <mode>",
       "Set profile qa-evidence.json mode: full or slim",
       parseQaEvidenceModeOption,
@@ -449,7 +466,10 @@ export function registerQaLabCli(program: Command) {
         profile: opts.qaProfile,
         surface: opts.surface,
         category: opts.category,
+<<<<<<< HEAD
         scenarioIds: opts.scenario,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         evidenceMode: resolveQaEvidenceModeOptions(opts),
         transportId: opts.transport,
         providerMode: opts.providerMode,
@@ -473,11 +493,14 @@ export function registerQaLabCli(program: Command) {
     .option("--output-dir <path>", "Suite artifact directory")
     .option("--runner <kind>", "Execution runner: host or multipass", "host")
     .option("--transport <id>", "QA transport id", "qa-channel")
+<<<<<<< HEAD
     .option("--channel-driver <id>", "QA channel driver: qa-channel, crabline, or live")
     .option(
       "--channel <id>",
       "Internal host QA channel override for --channel-driver; defaults to scenario/default",
     )
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     .option("--provider-mode <mode>", formatQaProviderModeHelp())
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
@@ -529,8 +552,11 @@ export function registerQaLabCli(program: Command) {
         repoRoot: opts.repoRoot,
         outputDir: opts.outputDir,
         transportId: opts.transport,
+<<<<<<< HEAD
         channelDriver: opts.channelDriver,
         channel: opts.channel,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         runner: opts.runner,
         providerMode: opts.providerMode,
         primaryModel: opts.model,
@@ -876,11 +902,19 @@ export function registerQaLabCli(program: Command) {
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--host <host>", "Bind host", "127.0.0.1")
     .option("--port <port>", "Bind port", (value: string) =>
+<<<<<<< HEAD
       parseQaCliTcpPortOption(value, "--port"),
     )
     .option("--advertise-host <host>", "Optional public host to advertise in bootstrap payloads")
     .option("--advertise-port <port>", "Optional public port to advertise", (value: string) =>
       parseQaCliTcpPortOption(value, "--advertise-port"),
+=======
+      parseQaCliPositiveIntegerOption(value, "--port"),
+    )
+    .option("--advertise-host <host>", "Optional public host to advertise in bootstrap payloads")
+    .option("--advertise-port <port>", "Optional public port to advertise", (value: string) =>
+      parseQaCliPositiveIntegerOption(value, "--advertise-port"),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     )
     .option("--control-ui-url <url>", "Optional Control UI URL to embed beside the QA panel")
     .option(
@@ -918,10 +952,17 @@ export function registerQaLabCli(program: Command) {
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .requiredOption("--output-dir <path>", "Output directory for docker-compose + state files")
     .option("--gateway-port <port>", "Gateway host port", (value: string) =>
+<<<<<<< HEAD
       parseQaCliTcpPortOption(value, "--gateway-port"),
     )
     .option("--qa-lab-port <port>", "QA lab host port", (value: string) =>
       parseQaCliTcpPortOption(value, "--qa-lab-port"),
+=======
+      parseQaCliPositiveIntegerOption(value, "--gateway-port"),
+    )
+    .option("--qa-lab-port <port>", "QA lab host port", (value: string) =>
+      parseQaCliPositiveIntegerOption(value, "--qa-lab-port"),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     )
     .option("--provider-base-url <url>", "Provider base URL for the QA gateway")
     .option("--image <name>", "Prebaked image name", "openclaw:qa-local-prebaked")
@@ -959,10 +1000,17 @@ export function registerQaLabCli(program: Command) {
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--output-dir <path>", "Output directory for docker-compose + state files")
     .option("--gateway-port <port>", "Gateway host port", (value: string) =>
+<<<<<<< HEAD
       parseQaCliTcpPortOption(value, "--gateway-port"),
     )
     .option("--qa-lab-port <port>", "QA lab host port", (value: string) =>
       parseQaCliTcpPortOption(value, "--qa-lab-port"),
+=======
+      parseQaCliPositiveIntegerOption(value, "--gateway-port"),
+    )
+    .option("--qa-lab-port <port>", "QA lab host port", (value: string) =>
+      parseQaCliPositiveIntegerOption(value, "--qa-lab-port"),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     )
     .option("--provider-base-url <url>", "Provider base URL for the QA gateway")
     .option("--image <name>", "Image tag", "openclaw:qa-local-prebaked")
@@ -994,7 +1042,11 @@ export function registerQaLabCli(program: Command) {
       .description(providerCommand.description)
       .option("--host <host>", "Bind host", "127.0.0.1")
       .option("--port <port>", "Bind port", (value: string) =>
+<<<<<<< HEAD
         parseQaCliTcpPortOption(value, "--port"),
+=======
+        parseQaCliPositiveIntegerOption(value, "--port"),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       )
       .action(async (opts: { host?: string; port?: number }) => {
         await runQaProviderServer(providerCommand.providerMode, opts);

@@ -9,6 +9,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import {
   CORE_HEALTH_CHECKS,
   createCoreHealthChecks,
+<<<<<<< HEAD
   resetCoreHealthChecksForTest,
   type CoreHealthCheckDeps,
 } from "./doctor-core-checks.js";
@@ -26,18 +27,37 @@ const mocks = vi.hoisted(() => ({
     }),
   ),
   extraGatewayServiceToRepairEffects: vi.fn((): readonly HealthRepairEffect[] => []),
+=======
+  type CoreHealthCheckDeps,
+  registerCoreHealthChecks,
+  resetCoreHealthChecksForTest,
+} from "./doctor-core-checks.js";
+import { doctorHealthConversionRules } from "./doctor-health-conversion-plan.js";
+import {
+  clearHealthChecksForTest,
+  listHealthChecks,
+  registerHealthCheck,
+} from "./health-check-registry.js";
+import type { HealthCheck, HealthFinding } from "./health-checks.js";
+
+const mocks = vi.hoisted(() => ({
+  loadModelCatalog: vi.fn(async () => []),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: mocks.loadModelCatalog,
 }));
 
+<<<<<<< HEAD
 vi.mock("../commands/doctor-gateway-services.js", () => ({
   detectExtraGatewayServiceIssues: mocks.detectExtraGatewayServiceIssues,
   extraGatewayServiceToHealthFinding: mocks.extraGatewayServiceToHealthFinding,
   extraGatewayServiceToRepairEffects: mocks.extraGatewayServiceToRepairEffects,
 }));
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const runtime = { log() {}, error() {}, exit() {} };
 
 function createSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatusEntry {
@@ -107,7 +127,11 @@ function getCheck(checks: readonly HealthCheck[], id: string): HealthCheck {
   return check;
 }
 
+<<<<<<< HEAD
 describe("CORE_HEALTH_CHECKS", () => {
+=======
+describe("registerCoreHealthChecks", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let tmp: string | undefined;
   let hooksModelCatalogCase: {
     calls: unknown[][];
@@ -128,7 +152,11 @@ describe("CORE_HEALTH_CHECKS", () => {
     const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/hooks-model");
 
     await check.detect({
+<<<<<<< HEAD
       mode: "lint" as const,
+=======
+      mode: "lint",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       runtime,
       cfg,
     });
@@ -141,12 +169,19 @@ describe("CORE_HEALTH_CHECKS", () => {
   });
 
   beforeEach(() => {
+<<<<<<< HEAD
     mocks.loadModelCatalog.mockClear();
     mocks.loadModelCatalog.mockResolvedValue([]);
     mocks.detectExtraGatewayServiceIssues.mockClear();
     mocks.detectExtraGatewayServiceIssues.mockResolvedValue([]);
     mocks.extraGatewayServiceToHealthFinding.mockClear();
     mocks.extraGatewayServiceToRepairEffects.mockClear();
+=======
+    clearHealthChecksForTest();
+    resetCoreHealthChecksForTest();
+    mocks.loadModelCatalog.mockClear();
+    mocks.loadModelCatalog.mockResolvedValue([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     tmp = undefined;
   });
 
@@ -156,7 +191,61 @@ describe("CORE_HEALTH_CHECKS", () => {
     }
   });
 
+<<<<<<< HEAD
   it("does not include placeholder health registry entries", () => {
+=======
+  it("registers the built-in health checks once", () => {
+    registerCoreHealthChecks();
+    registerCoreHealthChecks();
+
+    expect(listHealthChecks().map((check) => check.id)).toEqual(
+      CORE_HEALTH_CHECKS.map((check) => check.id),
+    );
+  });
+
+  it("can retry after a duplicate registration failure is cleared", () => {
+    registerHealthCheck({
+      id: "core/doctor/gateway-config",
+      kind: "core",
+      description: "duplicate",
+      async detect() {
+        return [];
+      },
+    });
+
+    expect(() => registerCoreHealthChecks()).toThrow("health check already registered");
+
+    clearHealthChecksForTest();
+    registerCoreHealthChecks();
+
+    expect(listHealthChecks()).toHaveLength(CORE_HEALTH_CHECKS.length);
+  });
+
+  it("registers only implemented core health targets from the doctor conversion inventory", () => {
+    registerCoreHealthChecks();
+
+    const registeredIds = new Set(listHealthChecks().map((check) => check.id));
+    const coreTargets = new Set<string>(
+      doctorHealthConversionRules.flatMap((rule) =>
+        rule.target.filter((target) => target.startsWith("core/doctor/")),
+      ),
+    );
+    const plannedOnlyTargets = [
+      "core/doctor/auth-profiles/keychain",
+      "core/doctor/session-locks",
+      "core/doctor/gateway-daemon",
+    ];
+
+    for (const id of CORE_HEALTH_CHECKS.map((check) => check.id)) {
+      if (id === "core/doctor/browser-clawd-profile-residue") {
+        continue;
+      }
+      expect(coreTargets.has(id)).toBe(true);
+    }
+    for (const id of plannedOnlyTargets) {
+      expect(registeredIds.has(id)).toBe(false);
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(
       CORE_HEALTH_CHECKS.some((check) =>
         check.description.endsWith("represented in the health registry."),
@@ -164,6 +253,7 @@ describe("CORE_HEALTH_CHECKS", () => {
     ).toBe(false);
   });
 
+<<<<<<< HEAD
   it("threads deep mode into structured extra gateway service detection", async () => {
     const check = getCheck(
       createCoreHealthChecks(createDeps()),
@@ -231,6 +321,8 @@ describe("CORE_HEALTH_CHECKS", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("converts unavailable skills into repair-capable health findings", async () => {
     const unavailableSkill = createSkill();
     const cfg: OpenClawConfig = {
@@ -748,6 +840,7 @@ describe("CORE_HEALTH_CHECKS", () => {
       }),
     );
   });
+<<<<<<< HEAD
 
   it("registers stale session locks as a legacy-owned structured check", async () => {
     const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/session-locks");
@@ -772,4 +865,6 @@ describe("CORE_HEALTH_CHECKS", () => {
       }),
     );
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

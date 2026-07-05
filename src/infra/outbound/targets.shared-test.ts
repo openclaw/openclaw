@@ -100,6 +100,7 @@ export function runResolveOutboundTargetCoreTests(): void {
       }
     });
 
+<<<<<<< HEAD
     it.each(["current", "telegram:current", "tg:self"])(
       "rejects plugin-reserved literal target %s before direct outbound fallback",
       (to) => {
@@ -167,6 +168,8 @@ export function runResolveOutboundTargetCoreTests(): void {
       expect(res).toEqual({ ok: true, to: "telegram:@current" });
     });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     it("uses the plugin hint when a channel has outbound support but no target resolver", () => {
       setActivePluginRegistry(
         createTargetsTestRegistry([

@@ -30,8 +30,11 @@ import {
 } from "./legacy-store-migration.js";
 import {
   formatLegacyIssuePreview,
+<<<<<<< HEAD
   formatUnresolvedCommandPromptAdvisory,
   formatUnresolvedShellPromptAdvisory,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   mergeLegacyCronJobs,
   mergeRuntimeEntryIntoConfigJob,
   needsSqliteProjectionBackfill,
@@ -338,6 +341,7 @@ export async function maybeRepairLegacyCronStore(params: {
   const normalized = normalizeStoredCronJobs(rawJobs);
   const notifyCount = rawJobs.filter((job) => job.notify === true).length;
   const dreamingStaleCount = countStaleDreamingJobs(rawJobs);
+<<<<<<< HEAD
   // Unresolved agentTurn command prompts are not auto-fixable; keep them out of the
   // --fix preview so the repair note does not promise a fix that never lands (#94655).
   const commandPromptAdvisory = formatUnresolvedCommandPromptAdvisory(
@@ -353,6 +357,11 @@ export async function maybeRepairLegacyCronStore(params: {
     note(shellPromptAdvisory, "Cron");
   }
   const previewLines = formatLegacyIssuePreview(normalized.issues);
+=======
+  const previewLines = formatLegacyIssuePreview(normalized.issues, {
+    unresolvedAgentTurnShellToolPrompt: normalized.unresolvedAgentTurnShellToolPromptJobs,
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (legacyStoreDetected) {
     previewLines.unshift(
       legacyImportCount > 0

@@ -20,12 +20,16 @@ import type { NodeRegistry } from "../node-registry.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
+<<<<<<< HEAD
 import type {
   BufferedAgentEvent,
   ChatAbortMarker,
   ChatRunEntry,
   ChatRunRegistration,
 } from "../server-chat-state.js";
+=======
+import type { BufferedAgentEvent } from "../server-chat-state.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 
@@ -101,7 +105,11 @@ export type GatewayRequestContext = {
   nodeRegistry: NodeRegistry;
   agentRunSeq: Map<string, number>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+<<<<<<< HEAD
   chatAbortedRuns: Map<string, ChatAbortMarker>;
+=======
+  chatAbortedRuns: Map<string, number>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastLen: Map<string, number>;
@@ -109,12 +117,23 @@ export type GatewayRequestContext = {
   agentDeltaSentAt: Map<string, number>;
   bufferedAgentEvents: Map<string, BufferedAgentEvent>;
   clearChatRunState: (runId: string) => void;
+<<<<<<< HEAD
   addChatRun: (sessionId: string, entry: ChatRunRegistration) => void;
+=======
+  addChatRun: (
+    sessionId: string,
+    entry: { sessionKey: string; agentId?: string; clientRunId: string },
+  ) => void;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
     sessionKey?: string,
+<<<<<<< HEAD
   ) => ChatRunEntry | undefined;
+=======
+  ) => { sessionKey: string; agentId?: string; clientRunId: string } | undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   subscribeSessionEvents: (connId: string) => void;
   unsubscribeSessionEvents: (connId: string) => void;
   subscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;

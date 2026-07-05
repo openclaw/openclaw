@@ -1,7 +1,10 @@
 // Spawn utilities configure child processes and normalize spawned process handles.
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { spawn } from "node:child_process";
+<<<<<<< HEAD
 import { toErrorObject } from "../infra/errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type SpawnFallback = {
   label: string;
@@ -66,7 +69,11 @@ async function spawnAndWaitForSpawn(
       }
       settled = true;
       cleanup();
+<<<<<<< HEAD
       reject(toErrorObject(err, "Non-Error rejection"));
+=======
+      reject(toLintErrorObject(err, "Non-Error rejection"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
     const onSpawn = () => {
       finishResolve();
@@ -119,3 +126,20 @@ export async function spawnWithFallback(
 
   throw lastError;
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

@@ -1,6 +1,9 @@
 // OpenAI stream wrapper normalizes OpenAI-compatible streamed tool and text events.
 import {
+<<<<<<< HEAD
   normalizeFastMode,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
@@ -37,7 +40,10 @@ import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 const log = createSubsystemLogger("llm/providers/stream-wrappers");
 
 type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
+<<<<<<< HEAD
 type DynamicFastMode = boolean | (() => boolean | undefined);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type OpenClawSimpleStreamOptions = SimpleStreamOptions & {
   openclawCodeModeToolSurface?: boolean;
 };
@@ -354,6 +360,7 @@ export function resolveOpenAIServiceTier(
 }
 
 function normalizeOpenAIFastMode(value: unknown): boolean | undefined {
+<<<<<<< HEAD
   if (typeof value === "function") {
     return normalizeOpenAIFastMode((value as () => unknown)());
   }
@@ -367,6 +374,11 @@ function normalizeOpenAIFastMode(value: unknown): boolean | undefined {
   if (typeof fastMode === "boolean") {
     return fastMode;
   }
+=======
+  if (typeof value === "boolean") {
+    return value;
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
     return undefined;
@@ -398,12 +410,16 @@ export function resolveOpenAIFastMode(
 ): boolean | undefined {
   const raw = extraParams?.fastMode ?? extraParams?.fast_mode;
   const normalized = normalizeOpenAIFastMode(raw);
+<<<<<<< HEAD
   if (
     raw !== undefined &&
     normalized === undefined &&
     typeof raw !== "function" &&
     normalizeFastMode(raw) !== "auto"
   ) {
+=======
+  if (raw !== undefined && normalized === undefined) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const rawSummary = typeof raw === "string" ? raw : typeof raw;
     log.warn(`ignoring invalid OpenAI fast mode param: ${rawSummary}`);
   }
@@ -579,6 +595,7 @@ export function createOpenAIThinkingLevelWrapper(
 }
 
 /** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
+<<<<<<< HEAD
 export function createOpenAIFastModeWrapper(
   baseStreamFn: StreamFn | undefined,
   enabled: DynamicFastMode = true,
@@ -587,6 +604,12 @@ export function createOpenAIFastModeWrapper(
   return (model, context, options) => {
     if (
       normalizeOpenAIFastMode(enabled) !== true ||
+=======
+export function createOpenAIFastModeWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       (model.api !== "openai-responses" &&
         model.api !== "openai-chatgpt-responses" &&
         model.api !== "azure-openai-responses") ||

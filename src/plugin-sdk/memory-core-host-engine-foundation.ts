@@ -1,8 +1,11 @@
 /**
  * Public SDK foundation surface for memory host engine config, paths, and shared helpers.
  */
+<<<<<<< HEAD
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export * from "../../packages/memory-host-sdk/src/engine-foundation.js";
 export {
   resolveAgentContextLimits,
@@ -44,6 +47,7 @@ export { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export { resolveGlobalSingleton } from "../shared/global-singleton.js";
 export { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 export { splitShellArgs } from "../utils/shell-argv.js";
+<<<<<<< HEAD
 
 const MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY = Symbol.for(
   "openclaw.memoryCore.sessionTranscriptUpdateSubscriber",
@@ -54,6 +58,8 @@ const MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY = Symbol.for(
 (globalThis as Record<symbol, unknown>)[MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY] ??=
   onInternalSessionTranscriptUpdate;
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export {
   resolveUserPath,
   shortenHomeInString,

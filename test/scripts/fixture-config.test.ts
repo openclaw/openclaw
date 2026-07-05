@@ -44,6 +44,7 @@ describe("scripts/e2e/lib/fixture.mjs config commands", () => {
     }
   });
 
+<<<<<<< HEAD
   it("rejects out-of-range gateway port env values", () => {
     const root = makeTempRoot();
     try {
@@ -56,6 +57,8 @@ describe("scripts/e2e/lib/fixture.mjs config commands", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("writes strict positive browser CDP ports into generated config", () => {
     const root = makeTempRoot();
     try {
@@ -82,6 +85,7 @@ describe("scripts/e2e/lib/fixture.mjs config commands", () => {
     }
   });
 
+<<<<<<< HEAD
   it("rejects out-of-range browser CDP port env values", () => {
     const root = makeTempRoot();
     try {
@@ -94,6 +98,8 @@ describe("scripts/e2e/lib/fixture.mjs config commands", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects loose Open WebUI provider timeout values", () => {
     const root = makeTempRoot();
     try {
@@ -126,6 +132,7 @@ describe("scripts/e2e/lib/fixture.mjs config commands", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+<<<<<<< HEAD
 
   it("writes OpenAI web-search minimal config for the package scenario", () => {
     const root = makeTempRoot();
@@ -147,4 +154,6 @@ describe("scripts/e2e/lib/fixture.mjs config commands", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

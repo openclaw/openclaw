@@ -1,7 +1,10 @@
 // Ollama tests cover web search provider plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createOllamaWebSearchProvider as createContractOllamaWebSearchProvider } from "../web-search-contract-api.js";
 import {
   testing,
@@ -404,6 +407,7 @@ describe("ollama web search provider", () => {
         config: createOllamaConfig(),
         query: "openclaw",
       }),
+<<<<<<< HEAD
     ).rejects.toThrow("Ollama web search: malformed JSON response");
   });
 
@@ -430,6 +434,9 @@ describe("ollama web search provider", () => {
     expect(streamed.getReadCount()).toBeLessThan(32);
     expect(streamed.wasCanceled()).toBe(true);
     expect(jsonSpy).not.toHaveBeenCalled();
+=======
+    ).rejects.toThrow("Ollama web search returned malformed JSON");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("warns when Ollama is not reachable during setup without cancelling", async () => {

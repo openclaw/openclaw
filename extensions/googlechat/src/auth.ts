@@ -1,5 +1,8 @@
 // Googlechat plugin module implements auth behavior.
+<<<<<<< HEAD
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
@@ -18,10 +21,18 @@ const CHAT_CERTS_URL =
   "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com";
 
 async function readGoogleChatCertsResponse(response: Response): Promise<Record<string, string>> {
+<<<<<<< HEAD
   return readProviderJsonResponse<Record<string, string>>(
     response,
     "Google Chat cert fetch failed",
   );
+=======
+  try {
+    return (await response.json()) as Record<string, string>;
+  } catch (cause) {
+    throw new Error("Google Chat cert fetch failed: malformed JSON response", { cause });
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 // Size-capped to prevent unbounded growth in long-running deployments (#4948)

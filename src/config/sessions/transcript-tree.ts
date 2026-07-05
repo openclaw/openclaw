@@ -344,6 +344,24 @@ export function mergeSessionTranscriptVisiblePathWithOpaqueAppendPath<T>(params:
   };
 }
 
+<<<<<<< HEAD
+=======
+/** Return the leaf update represented by one transcript row, if any. */
+export function readSessionTranscriptLeafUpdate(record: unknown): string | null | undefined {
+  return parseSessionTranscriptTreeEntry(record)?.leafId;
+}
+
+/** Resolve the active leaf after applying transcript rows in file order. */
+export function resolveSessionTranscriptLeafId(entries: readonly unknown[]): string | null {
+  return scanSessionTranscriptTree(entries).leafId;
+}
+
+/** Resolve the raw parent for the next append after applying rows in file order. */
+export function resolveSessionTranscriptAppendParentId(entries: readonly unknown[]): string | null {
+  return scanSessionTranscriptTree(entries).appendParentId;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Select the effective branch only when the transcript contains leaf controls.
  *

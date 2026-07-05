@@ -6,13 +6,20 @@ import type { collectChannelStatusIssues as collectChannelStatusIssuesFn } from 
 import { resolveOsSummary } from "../infra/os-summary.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
+<<<<<<< HEAD
 import type { pickGatewaySelfPresence } from "./gateway-presence.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { buildChannelsTable as buildChannelsTableFn } from "./status-all/channels.js";
 import type { getAgentLocalStatuses as getAgentLocalStatusesFn } from "./status.agent-local.js";
 import type {
   GatewayProbeSnapshot,
   MemoryPluginStatus,
   MemoryStatusSnapshot,
+<<<<<<< HEAD
+=======
+  pickGatewaySelfPresence,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./status.scan.shared.js";
 import type { getStatusSummary as getStatusSummaryFn } from "./status.summary.js";
 

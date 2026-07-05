@@ -73,6 +73,7 @@ describe("QQBot framework slash commands", () => {
     expect(getFrameworkCommands().map((command) => command.name)).toContain("bot-streaming");
   });
 
+<<<<<<< HEAD
   it("rejects private-only plugin commands in groups with the shared private-chat message", async () => {
     const result = await matchSlashCommand(
       createStreamingContext({
@@ -135,6 +136,8 @@ describe("QQBot framework slash commands", () => {
     expect(result).toContain("权限不足");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not write streaming config when the sender is not command-authorized", async () => {
     const writes: OpenClawConfig[] = [];
     installCommandRuntime(

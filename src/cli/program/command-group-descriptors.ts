@@ -15,6 +15,16 @@ export type CommandGroupDescriptorSpec<TRegister> = {
   register: TRegister;
 };
 
+<<<<<<< HEAD
+=======
+/** Import-backed command group definition. */
+export type ImportedCommandGroupDefinition<TRegisterArgs, TModule> = {
+  commandNames: readonly string[];
+  loadModule: () => Promise<TModule>;
+  register: (module: TModule, args: TRegisterArgs) => Promise<void> | void;
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Resolved group entry after descriptor lookup. */
 export type ResolvedCommandGroupEntry<TDescriptor extends NamedCommandDescriptor, TRegister> = {
   placeholders: TDescriptor[];
@@ -77,12 +87,55 @@ export function defineImportedCommandGroupSpec<TRegisterArgs, TModule>(
   };
 }
 
+<<<<<<< HEAD
+=======
+/** Map multiple import-backed command group definitions to lazy specs. */
+export function defineImportedCommandGroupSpecs<TRegisterArgs, TModule>(
+  definitions: readonly ImportedCommandGroupDefinition<TRegisterArgs, TModule>[],
+): CommandGroupDescriptorSpec<(args: TRegisterArgs) => Promise<void>>[] {
+  return definitions.map((definition) =>
+    defineImportedCommandGroupSpec(
+      definition.commandNames,
+      definition.loadModule,
+      definition.register,
+    ),
+  );
+}
+
+type ProgramCommandRegistrar = (program: Command) => Promise<void> | void;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type AnyImportedProgramCommandGroupDefinition = {
   commandNames: readonly string[];
   loadModule: () => Promise<Record<string, unknown>>;
   exportName: string;
 };
 
+<<<<<<< HEAD
+=======
+export type ImportedProgramCommandGroupDefinition<
+  TModule extends Record<TKey, ProgramCommandRegistrar>,
+  TKey extends keyof TModule & string,
+> = {
+  commandNames: readonly string[];
+  loadModule: () => Promise<TModule>;
+  exportName: TKey;
+};
+
+/** Define a program-level command group from a module export name. */
+export function defineImportedProgramCommandGroupSpec<
+  TModule extends Record<TKey, ProgramCommandRegistrar>,
+  TKey extends keyof TModule & string,
+>(
+  definition: ImportedProgramCommandGroupDefinition<TModule, TKey>,
+): CommandGroupDescriptorSpec<(program: Command) => Promise<void>> {
+  return defineImportedCommandGroupSpec(
+    definition.commandNames,
+    definition.loadModule,
+    (module, program: Command) => module[definition.exportName](program),
+  );
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Map program-level imported command definitions to lazy specs with export validation. */
 export function defineImportedProgramCommandGroupSpecs(
   definitions: readonly AnyImportedProgramCommandGroupDefinition[],

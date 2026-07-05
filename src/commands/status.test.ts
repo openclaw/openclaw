@@ -3,7 +3,11 @@ import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { createCompatibilityNotice } from "../plugins/status.test-helpers.js";
+<<<<<<< HEAD
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+=======
+import { captureEnv } from "../test-utils/env.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -211,7 +215,10 @@ async function createStatusServiceSummary(
     loadedText: service.loadedText,
     runtime,
     runtimeShort: runtime?.pid ? `pid ${runtime.pid}` : null,
+<<<<<<< HEAD
     wrapperPath: command?.environment?.OPENCLAW_WRAPPER?.trim() || undefined,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }
 
@@ -394,6 +401,7 @@ async function createMockStatusScanResult(params: { includePluginCompatibility?:
 }
 
 async function withEnvVar<T>(key: string, value: string, run: () => Promise<T>): Promise<T> {
+<<<<<<< HEAD
   return await withOptionalEnvVar(key, value, run);
 }
 
@@ -408,18 +416,32 @@ async function withOptionalEnvVar<T>(
   } else {
     setTestEnvValue(key, value);
   }
+=======
+  const prevValue = process.env[key];
+  process.env[key] = value;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   try {
     return await run();
   } finally {
     if (prevValue === undefined) {
+<<<<<<< HEAD
       deleteTestEnvValue(key);
     } else {
       setTestEnvValue(key, prevValue);
+=======
+      delete process.env[key];
+    } else {
+      process.env[key] = prevValue;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   }
 }
 
 const mocks = vi.hoisted(() => ({
+<<<<<<< HEAD
+=======
+  hasPotentialConfiguredChannels: vi.fn(() => true),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   loadConfig: vi.fn().mockReturnValue({ session: {} }),
   loadSessionStore: vi.fn().mockReturnValue({
     "+1000": createDefaultSessionStoreEntry(),
@@ -513,6 +535,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../channels/config-presence.js", () => ({
+<<<<<<< HEAD
+=======
+  hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   hasMeaningfulChannelConfig: (entry: unknown) =>
     Boolean(
       entry && typeof entry === "object" && Object.keys(entry as Record<string, unknown>).length,
@@ -863,6 +889,10 @@ vi.mock("../channels/chat-meta.js", () => {
   return {
     CHAT_CHANNEL_ALIASES: {},
     listChatChannels: () => entries,
+<<<<<<< HEAD
+=======
+    listChatChannelAliases: () => [],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     getChatChannelMeta: (id: (typeof mockChatChannels)[number]) => byId[id],
     normalizeChatChannelId: (raw?: string | null) => {
       const value = raw?.trim().toLowerCase();
@@ -907,6 +937,11 @@ vi.mock("./status.daemon.js", () => ({
 
 describe("statusCommand", () => {
   afterEach(() => {
+<<<<<<< HEAD
+=======
+    mocks.hasPotentialConfiguredChannels.mockReset();
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mocks.loadConfig.mockReset();
     mocks.loadConfig.mockReturnValue({ session: {} });
     mocks.loadSessionStore.mockReset();
@@ -1011,6 +1046,10 @@ describe("statusCommand", () => {
   });
 
   it("prints JSON and includes security audit only when all is requested", async () => {
+<<<<<<< HEAD
+=======
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(false);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mocks.buildPluginCompatibilityNotices.mockReturnValue([
       createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
     ]);
@@ -1334,6 +1373,7 @@ describe("statusCommand", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("notes when secret diagnostics may come from a CLI process outside the service wrapper context", async () => {
     const wrapperPath = "/usr/local/bin/openclaw-doppler";
     const service = mocks.resolveGatewayService();
@@ -1375,6 +1415,8 @@ describe("statusCommand", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("surfaces channel runtime errors from the gateway", async () => {
     mocks.loadConfig.mockReturnValue({
       session: {},

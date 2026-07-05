@@ -1,0 +1,41 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>UX Matrix producer artifact fixture</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #f6f7f9; color: #121417; }
+  main { max-width: 980px; margin: 0 auto; padding: 28px; }
+  h1 { font-size: 30px; margin: 0 0 8px; }
+  .panel { background: white; border: 1px solid #d9dee7; border-radius: 8px; padding: 18px; margin-top: 18px; }
+  .toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+  button { border: 1px solid #8c98aa; background: #fff; border-radius: 6px; padding: 8px 12px; font: inherit; cursor: pointer; }
+  button:focus { outline: 3px solid #91c5ff; }
+  img { max-width: 100%; border: 1px solid #ccd3dd; border-radius: 6px; background: #fff; }
+  pre { white-space: pre-wrap; background: #111827; color: #f9fafb; padding: 14px; border-radius: 6px; overflow: auto; }
+  .meta { color: #526070; }
+</style>
+<main>
+  <h1>UX Matrix Producer Artifact Fixture</h1>
+  <p class="meta">Script-produced qa-evidence.json for ux-matrix-evidence-dashboard; this fixture is not the QA Lab Evidence Archive UI.</p>
+  <section class="panel">
+    <h2>UX Matrix entries</h2>
+    <ul><li><strong>ux-matrix.qa-lab.producer-artifact-fixture</strong> - pass - qa.artifact-safety, tools.evidence, workspace.artifacts</li><li><strong>ux-matrix.control-ui.screenshot-artifact</strong> - pass - ui.control, gateway.control-ui-hosting</li><li><strong>ux-matrix.cli.entrypoint-help</strong> - pass - cli.entrypoint, cli.status-snapshots</li></ul>
+  </section>
+  <section class="panel">
+    <h2>Artifact preview</h2>
+    <p class="meta">surfaces/control-ui/stages/screenshot-artifact/logs.txt - surfaces/control-ui/stages/screenshot-artifact/screenshot.png</p>
+    <div class="toolbar">
+      <button id="preview-screenshot" type="button">Preview screenshot artifact</button>
+      <button id="preview-log" type="button">Preview log artifact</button>
+    </div>
+    <div id="preview" class="panel" aria-live="polite">Choose an artifact to preview.</div>
+  </section>
+</main>
+<script>
+  const preview = document.querySelector("#preview");
+  document.querySelector("#preview-screenshot").addEventListener("click", () => {
+    preview.innerHTML = "<img alt=\"UX Matrix screenshot artifact\" src=\"../../../control-ui/stages/screenshot-artifact/screenshot.png\">";
+  });
+  document.querySelector("#preview-log").addEventListener("click", () => {
+    preview.innerHTML = "<pre>Captured surfaces/control-ui/stages/screenshot-artifact/screenshot.png\n</pre>";
+  });
+</script>

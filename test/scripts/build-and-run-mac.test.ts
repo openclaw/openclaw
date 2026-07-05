@@ -108,6 +108,7 @@ afterEach(() => {
 });
 
 describe("scripts/build-and-run-mac.sh", () => {
+<<<<<<< HEAD
   it("prints help before build or launch side effects", () => {
     const result = spawnSync("bash", [scriptPath, "--help"], {
       cwd: process.cwd(),
@@ -135,6 +136,11 @@ describe("scripts/build-and-run-mac.sh", () => {
     const script = readFileSync(scriptPath, "utf8");
 
     expect(script).toContain('cd "$APP_DIR"');
+=======
+  it("keeps launch logs isolated unless an explicit log path is provided", () => {
+    const script = readFileSync(scriptPath, "utf8");
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(script).toContain(
       'LOG_PATH="${OPENCLAW_MAC_RUN_LOG:-$(mktemp "${TMPDIR:-/tmp}/openclaw-${PRODUCT}.XXXXXX.log")}"',
     );

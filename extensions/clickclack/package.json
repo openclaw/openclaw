@@ -1,5 +1,6 @@
 {
   "name": "@openclaw/clickclack",
+<<<<<<< HEAD
   "version": "2026.6.10",
   "description": "OpenClaw ClickClack channel plugin",
   "type": "module",
@@ -7,6 +8,16 @@
     ".": "./dist/index.js",
     "./api.js": "./dist/api.js",
     "./runtime-api.js": "./dist/runtime-api.js"
+=======
+  "version": "2026.6.8",
+  "private": true,
+  "description": "OpenClaw ClickClack channel plugin",
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./api.js": "./api.ts",
+    "./runtime-api.js": "./runtime-api.ts"
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   "dependencies": {
     "ws": "8.21.0",
@@ -17,7 +28,11 @@
     "openclaw": "2026.5.28"
   },
   "peerDependencies": {
+<<<<<<< HEAD
     "openclaw": ">=2026.6.10"
+=======
+    "openclaw": ">=2026.6.8"
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -44,6 +59,7 @@
         "nativeCommandsAutoEnabled": false,
         "nativeSkillsAutoEnabled": false
       }
+<<<<<<< HEAD
     },
     "install": {
       "clawhubSpec": "clawhub:@openclaw/clickclack",
@@ -67,5 +83,8 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
+=======
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }

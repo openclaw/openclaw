@@ -16,7 +16,10 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
+<<<<<<< HEAD
   providerMatchesFilter,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveRuntimePluginDiscoveryProviders,
   runProviderCatalog,
 } from "../plugins/provider-discovery.js";
@@ -26,6 +29,20 @@ import type { ProviderPlugin } from "../plugins/types.js";
 const log = createSubsystemLogger("model-picker-provider-catalog");
 const DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
 
+<<<<<<< HEAD
+=======
+function providerMatchesFilter(params: {
+  provider: Pick<ProviderPlugin, "id" | "aliases" | "hookAliases">;
+  providerFilter: string;
+}): boolean {
+  return [
+    params.provider.id,
+    ...(params.provider.aliases ?? []),
+    ...(params.provider.hookAliases ?? []),
+  ].some((providerId) => normalizeProviderId(providerId) === params.providerFilter);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function positiveNumber(value: number | undefined): number | undefined {
   return typeof value === "number" && value > 0 ? value : undefined;
 }

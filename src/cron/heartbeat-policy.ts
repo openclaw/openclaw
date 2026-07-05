@@ -35,3 +35,26 @@ export function shouldSkipHeartbeatOnlyDelivery(
     return result.shouldSkip;
   });
 }
+<<<<<<< HEAD
+=======
+
+/** Returns whether an undelivered cron main-summary system event should be queued. */
+export function shouldEnqueueCronMainSummary(params: {
+  summaryText: string | undefined;
+  deliveryRequested: boolean;
+  delivered: boolean | undefined;
+  deliveryAttempted: boolean | undefined;
+  suppressMainSummary: boolean;
+  isCronSystemEvent: (text: string) => boolean;
+}): boolean {
+  const summaryText = params.summaryText?.trim();
+  return Boolean(
+    summaryText &&
+    params.isCronSystemEvent(summaryText) &&
+    params.deliveryRequested &&
+    !params.delivered &&
+    params.deliveryAttempted !== true &&
+    !params.suppressMainSummary,
+  );
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

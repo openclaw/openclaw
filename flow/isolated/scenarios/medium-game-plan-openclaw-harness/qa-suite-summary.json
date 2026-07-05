@@ -1,0 +1,78 @@
+{
+  "scenarios": [
+    {
+      "name": "Medium game plan OpenClaw harness",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "confirms GPT-5.5 OpenClaw harness target",
+          "status": "pass",
+          "details": "mock mode: parsed medium-game-plan-openclaw-harness"
+        },
+        {
+          "name": "builds the medium game artifact",
+          "status": "pass",
+          "details": "mock mode: skipped live medium-game build"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 30465,
+    "gatewayProcessCpuMs": 0,
+    "gatewayCpuCoreRatio": 0,
+    "gatewayProcessRssStartBytes": 795209728,
+    "gatewayProcessRssEndBytes": 795209728,
+    "gatewayProcessRssDeltaBytes": 0,
+    "gatewayProcessRssPeakBytes": 795209728,
+    "gatewayProcessRssPeakDeltaBytes": 0,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:17:08.786Z",
+        "gatewayProcessRssBytes": 795209728
+      },
+      {
+        "label": "scenario:medium-game-plan-openclaw-harness:start",
+        "at": "2026-07-03T13:17:08.811Z",
+        "gatewayProcessRssBytes": 795209728
+      },
+      {
+        "label": "scenario:medium-game-plan-openclaw-harness:finish",
+        "at": "2026-07-03T13:17:08.829Z",
+        "gatewayProcessRssBytes": 795209728
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:17:08.848Z",
+        "gatewayProcessRssBytes": 795209728
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:16:38.364Z",
+    "finishedAt": "2026-07-03T13:17:08.829Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "medium-game-plan-openclaw-harness"
+    ],
+    "runtimePair": null
+  }
+}

@@ -2,7 +2,10 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+<<<<<<< HEAD
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatHelpExamples } from "../help-format.js";
 import { withConsoleLogsRoutedToStderrForJson } from "../json-output-mode.js";
 import { registerNodesCameraCommands } from "./register.camera.js";
@@ -43,6 +46,7 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
   registerNodesScreenCommands(nodes);
   registerNodesLocationCommands(nodes);
 
+<<<<<<< HEAD
   // Built-in `nodes` subcommands (status/list/pairing/invoke/...) must stay on the lightweight
   // path: loading plugin CLI/runtime to resolve them only adds startup cost. Plugin-provided node
   // subcommands (e.g. `nodes canvas`) are not registered above, so only pay the plugin load when
@@ -50,6 +54,8 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
   if (!shouldRegisterNodesPluginCommands(nodes, argv)) {
     return;
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
   await withConsoleLogsRoutedToStderrForJson(
     argv,
@@ -60,6 +66,7 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
       }),
   );
 }
+<<<<<<< HEAD
 
 /** Plugin node subcommands are only resolved when the invocation is not a built-in nodes command. */
 function shouldRegisterNodesPluginCommands(nodes: Command, argv: readonly string[]): boolean {
@@ -76,3 +83,5 @@ function shouldRegisterNodesPluginCommands(nodes: Command, argv: readonly string
   const builtInSubcommands = new Set(nodes.commands.map((command) => command.name()));
   return !builtInSubcommands.has(requestedSubcommand);
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

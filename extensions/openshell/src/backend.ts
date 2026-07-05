@@ -22,7 +22,10 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import type { OpenShellSandboxBackend } from "./backend.types.js";
 import {
   buildValidatedExecRemoteCommand,
+<<<<<<< HEAD
   buildRemoteWorkdirValidationCommand,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   buildRemoteCommand,
   createOpenShellSshSession,
   runOpenShellCli,
@@ -46,6 +49,7 @@ type PendingExec = {
 };
 
 const MATERIALIZED_SKILLS_REMOTE_PARTS = [".openclaw", "sandbox-skills"] as const;
+<<<<<<< HEAD
 export function buildOpenShellDirectoryUploadArgs(params: {
   sandboxName: string;
   localPath: string;
@@ -61,6 +65,8 @@ export function buildOpenShellDirectoryUploadArgs(params: {
   ];
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export const PINNED_REMOTE_PATH_MUTATION_SCRIPT = [
   "set -eu",
   'die() { echo "$1" >&2; exit 1; }',
@@ -281,6 +287,7 @@ async function createOpenShellSandboxBackend(params: {
     mode: params.pluginConfig.mode,
     configLabel: params.pluginConfig.from,
     configLabelKind: "Source",
+<<<<<<< HEAD
     workdirValidation: "backend",
     validateWorkdir: async (workdir) => await impl.validateWorkdir(workdir),
     discardPreparedWorkdir: (workdir) => impl.discardPreparedWorkdir(workdir),
@@ -288,6 +295,8 @@ async function createOpenShellSandboxBackend(params: {
       params.pluginConfig.remoteWorkspaceDir,
       params.pluginConfig.remoteAgentWorkspaceDir,
     ],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     buildExecSpec: async ({ command, workdir, env, usePty }) => {
       const pending = await impl.prepareExec({ command, workdir, env, usePty });
       return {
@@ -326,10 +335,13 @@ async function createOpenShellSandboxBackend(params: {
 
 class OpenShellSandboxBackendImpl {
   private ensurePromise: Promise<void> | null = null;
+<<<<<<< HEAD
   private preparedRemoteWorkspaceForNextExec: {
     workdir: string;
     promise: Promise<void>;
   } | null = null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   private remoteSeedPending = false;
 
   constructor(
@@ -351,10 +363,13 @@ class OpenShellSandboxBackendImpl {
       mode: this.params.execContext.config.mode,
       configLabel: this.params.execContext.config.from,
       configLabelKind: "Source",
+<<<<<<< HEAD
       workdirValidation: "backend",
       validateWorkdir: async (workdir) => await this.validateWorkdir(workdir),
       discardPreparedWorkdir: (workdir) => this.discardPreparedWorkdir(workdir),
       workdirRoots: [this.params.remoteWorkspaceDir, this.params.remoteAgentWorkspaceDir],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       remoteWorkspaceDir: this.params.remoteWorkspaceDir,
       remoteAgentWorkspaceDir: this.params.remoteAgentWorkspaceDir,
       buildExecSpec: async ({ command, workdir, env, usePty }) => {
@@ -398,6 +413,7 @@ class OpenShellSandboxBackendImpl {
     env: Record<string, string>;
     usePty: boolean;
   }): Promise<{ argv: string[]; token: PendingExec }> {
+<<<<<<< HEAD
     const remoteWorkdir = params.workdir ?? this.params.remoteWorkspaceDir;
     const preparedWorkspace = this.consumePreparedRemoteWorkspaceForNextExec(remoteWorkdir);
     const remoteCommand = buildValidatedExecRemoteCommand({
@@ -406,6 +422,22 @@ class OpenShellSandboxBackendImpl {
       env: params.env,
     });
     await (preparedWorkspace ?? this.prepareRemoteWorkspaceForExec());
+=======
+    const remoteCommand = buildValidatedExecRemoteCommand({
+      command: params.command,
+      workdir: params.workdir ?? this.params.remoteWorkspaceDir,
+      env: params.env,
+    });
+    await this.ensureSandboxExists();
+    if (this.params.execContext.config.mode === "mirror") {
+      await this.syncWorkspaceToRemote();
+    } else {
+      const seeded = await this.maybeSeedRemoteWorkspace();
+      if (!seeded) {
+        await this.syncSkillsWorkspaceToRemote();
+      }
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const sshSession = await createOpenShellSshSession({
       context: this.params.execContext,
     });
@@ -424,6 +456,7 @@ class OpenShellSandboxBackendImpl {
     };
   }
 
+<<<<<<< HEAD
   async validateWorkdir(workdir: string): Promise<string | null> {
     const preparedWorkspace = this.prepareRemoteWorkspaceForExec();
     const reusablePreparation = { workdir, promise: preparedWorkspace };
@@ -503,6 +536,8 @@ class OpenShellSandboxBackendImpl {
     }
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   async finalizeExec(token?: PendingExec): Promise<void> {
     try {
       if (this.params.execContext.config.mode === "mirror") {
@@ -842,6 +877,7 @@ class OpenShellSandboxBackendImpl {
       async ({ dir: tmpDir }) => {
         // Stage a symlink-free snapshot so upload never dereferences host paths
         // outside the mirrored workspace tree.
+<<<<<<< HEAD
         const remoteRootName = path.posix.basename(normalizeRemotePath(remotePath));
         const stagedRoot = path.join(tmpDir, remoteRootName);
         await stageDirectoryContents({
@@ -862,6 +898,26 @@ class OpenShellSandboxBackendImpl {
           if (result.code !== 0) {
             throw new Error(result.stderr.trim() || "openshell sandbox upload failed");
           }
+=======
+        await stageDirectoryContents({
+          sourceDir: localPath,
+          targetDir: tmpDir,
+        });
+        const result = await runOpenShellCli({
+          context: this.params.execContext,
+          args: [
+            "sandbox",
+            "upload",
+            "--no-git-ignore",
+            this.params.execContext.sandboxName,
+            tmpDir,
+            remotePath,
+          ],
+          cwd: this.params.createParams.workspaceDir,
+        });
+        if (result.code !== 0) {
+          throw new Error(result.stderr.trim() || "openshell sandbox upload failed");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }
       },
     );

@@ -158,6 +158,7 @@ describe("qa multipass runtime", () => {
     expect(plan.qaCommand).toEqual(expect.arrayContaining(["--runtime-pair", "openclaw,codex"]));
   });
 
+<<<<<<< HEAD
   it("forwards channel-driver suite selection into the guest qa suite command", () => {
     const plan = createQaMultipassPlan({
       repoRoot: process.cwd(),
@@ -189,6 +190,8 @@ describe("qa multipass runtime", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("redacts forwarded live secrets in the persisted artifact script", () => {
     vi.stubEnv("OPENAI_API_KEY", "test-openai-key");
     const plan = createQaMultipassPlan({

@@ -5,8 +5,11 @@ import {
   captureEnv,
   captureFullEnv,
   createPathResolutionEnv,
+<<<<<<< HEAD
   deleteTestEnvValue,
   setTestEnvValue,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   withEnv,
   withEnvAsync,
   withPathResolutionEnv,
@@ -14,9 +17,15 @@ import {
 
 function restoreEnvKey(key: string, previous: string | undefined): void {
   if (previous === undefined) {
+<<<<<<< HEAD
     deleteTestEnvValue(key);
   } else {
     setTestEnvValue(key, previous);
+=======
+    delete process.env[key];
+  } else {
+    process.env[key] = previous;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 
@@ -27,8 +36,13 @@ describe("env test utils", () => {
     const snapshot = captureEnv([keyA, keyB]);
     const prevA = process.env[keyA];
     const prevB = process.env[keyB];
+<<<<<<< HEAD
     setTestEnvValue(keyA, "mutated");
     deleteTestEnvValue(keyB);
+=======
+    process.env[keyA] = "mutated";
+    delete process.env[keyB];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     snapshot.restore();
 
@@ -40,8 +54,13 @@ describe("env test utils", () => {
     const key = "OPENCLAW_ENV_TEST_ADDED";
     const prevHome = process.env.HOME;
     const snapshot = captureFullEnv();
+<<<<<<< HEAD
     setTestEnvValue(key, "1");
     deleteTestEnvValue("HOME");
+=======
+    process.env[key] = "1";
+    delete process.env.HOME;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     snapshot.restore();
 
@@ -76,7 +95,11 @@ describe("env test utils", () => {
   it("withEnv can delete a key only inside callback", () => {
     const key = "OPENCLAW_ENV_TEST_SYNC_DELETE";
     const prev = process.env[key];
+<<<<<<< HEAD
     setTestEnvValue(key, "outer");
+=======
+    process.env[key] = "outer";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const seen = withEnv({ [key]: undefined }, () => process.env[key]);
 
@@ -112,7 +135,11 @@ describe("env test utils", () => {
   it("withEnvAsync can delete a key only inside callback", async () => {
     const key = "OPENCLAW_ENV_TEST_ASYNC_DELETE";
     const prev = process.env[key];
+<<<<<<< HEAD
     setTestEnvValue(key, "outer");
+=======
+    process.env[key] = "outer";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const seen = await withEnvAsync({ [key]: undefined }, async () => process.env[key]);
 
@@ -127,9 +154,15 @@ describe("env test utils", () => {
     const previousOpenClawHome = process.env.OPENCLAW_HOME;
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const previousBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_HOME", "/srv/openclaw-home");
     setTestEnvValue("OPENCLAW_STATE_DIR", "/srv/openclaw-state");
     setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", "/srv/openclaw-bundled");
+=======
+    process.env.OPENCLAW_HOME = "/srv/openclaw-home";
+    process.env.OPENCLAW_STATE_DIR = "/srv/openclaw-state";
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/srv/openclaw-bundled";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     try {
       const env = createPathResolutionEnv(homeDir, {
@@ -151,7 +184,11 @@ describe("env test utils", () => {
     const homeDir = path.join(path.sep, "tmp", "openclaw-home");
     const resolvedHomeDir = path.resolve(homeDir);
     const previousOpenClawHome = process.env.OPENCLAW_HOME;
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_HOME", "/srv/openclaw-home");
+=======
+    process.env.OPENCLAW_HOME = "/srv/openclaw-home";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     try {
       const seen = withPathResolutionEnv(

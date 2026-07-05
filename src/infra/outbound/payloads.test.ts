@@ -268,6 +268,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     expect(twice).toEqual(once);
   });
 
+<<<<<<< HEAD
   it("parses Telegram reaction directives into channel data without visible text", () => {
     expect(
       normalizeReplyPayloadsForDelivery([
@@ -295,6 +296,8 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("captures a tricky payload matrix snapshot", () => {
     const input: ReplyPayload[] = [
       { text: "NO_REPLY" },

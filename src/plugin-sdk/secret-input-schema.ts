@@ -30,6 +30,7 @@ const secretInputSchema = z
   .union([
     z.string(),
     z.discriminatedUnion("source", [
+<<<<<<< HEAD
       z
         .object({
           source: z.literal("env"),
@@ -61,6 +62,33 @@ const secretInputSchema = z
           id: z.string().refine(isValidExecSecretRefId, formatExecSecretRefIdValidationMessage()),
         })
         .strict(),
+=======
+      z.object({
+        source: z.literal("env"),
+        provider: providerSchema,
+        id: z
+          .string()
+          .regex(
+            ENV_SECRET_REF_ID_RE,
+            'Env secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (example: "OPENAI_API_KEY").',
+          ),
+      }),
+      z.object({
+        source: z.literal("file"),
+        provider: providerSchema,
+        id: z
+          .string()
+          .refine(
+            isValidFileSecretRefId,
+            'File secret reference id must be an absolute JSON pointer (example: "/providers/openai/apiKey"), or "value" for singleValue mode.',
+          ),
+      }),
+      z.object({
+        source: z.literal("exec"),
+        provider: providerSchema,
+        id: z.string().refine(isValidExecSecretRefId, formatExecSecretRefIdValidationMessage()),
+      }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ]),
   ])
   .register(sensitive);

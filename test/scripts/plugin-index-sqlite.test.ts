@@ -5,15 +5,34 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { withEnvAsync } from "../../src/test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const MODULE_URL = pathToFileURL(path.resolve("scripts/e2e/lib/plugin-index-sqlite.mjs")).href;
 let importCounter = 0;
 
 async function loadPluginIndex(env: Record<string, string> = {}) {
+<<<<<<< HEAD
   return await withEnvAsync(env, async () => {
     return await import(`${MODULE_URL}?case=${importCounter++}`);
   });
+=======
+  const previous = new Map(Object.keys(env).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, env);
+  try {
+    return await import(`${MODULE_URL}?case=${importCounter++}`);
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function writeLegacyIndex(root: string, text: string) {

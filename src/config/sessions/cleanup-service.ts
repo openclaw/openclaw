@@ -28,9 +28,13 @@ import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-prese
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
+<<<<<<< HEAD
   pruneStaleModelRunEntries,
   pruneStaleEntries,
   shouldRunModelRunPrune,
+=======
+  pruneStaleEntries,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
 import { loadSessionStore } from "./store.js";
@@ -53,7 +57,10 @@ export type SessionsCleanupOptions = SessionStoreSelectionOptions & {
 export type SessionCleanupAction =
   | "keep"
   | "prune-missing"
+<<<<<<< HEAD
   | "prune-model-run"
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   | "prune-stale"
   | "cap-overflow"
   | "evict-budget"
@@ -68,7 +75,10 @@ export type SessionCleanupSummary = {
   afterCount: number;
   missing: number;
   dmScopeRetired: number;
+<<<<<<< HEAD
   modelRunPruned: number;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   pruned: number;
   capped: number;
   unreferencedArtifacts: SessionUnreferencedArtifactSweepResult;
@@ -93,7 +103,10 @@ export type SessionsCleanupRunResult = {
     summary: SessionCleanupSummary;
     beforeStore: Record<string, SessionEntry>;
     missingKeys: Set<string>;
+<<<<<<< HEAD
     modelRunPrunedKeys: Set<string>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     staleKeys: Set<string>;
     cappedKeys: Set<string>;
     budgetEvictedKeys: Set<string>;
@@ -174,7 +187,10 @@ function transcriptHasNoMessageRecords(transcriptPath: string): boolean {
 export function resolveSessionCleanupAction(params: {
   key: string;
   missingKeys: Set<string>;
+<<<<<<< HEAD
   modelRunPrunedKeys: Set<string>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   staleKeys: Set<string>;
   cappedKeys: Set<string>;
   budgetEvictedKeys: Set<string>;
@@ -186,9 +202,12 @@ export function resolveSessionCleanupAction(params: {
   if (params.missingKeys.has(params.key)) {
     return "prune-missing";
   }
+<<<<<<< HEAD
   if (params.modelRunPrunedKeys.has(params.key)) {
     return "prune-model-run";
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (params.staleKeys.has(params.key)) {
     return "prune-stale";
   }
@@ -217,6 +236,7 @@ function isMainScopeStaleDirectSessionKey(params: {
   if (!parsed || normalizeAgentId(parsed.agentId) !== normalizeAgentId(params.targetAgentId)) {
     return false;
   }
+<<<<<<< HEAD
   const parts = parsed.rest.split(":");
   // A nested agent wrapper is opaque plugin identity, never a stale DM route.
   if (parts[0] === "agent") {
@@ -230,6 +250,13 @@ function isMainScopeStaleDirectSessionKey(params: {
       Boolean(parts[1]) &&
       parts[2] === "direct" &&
       Boolean(parts[3]))
+=======
+  const parts = parsed.rest.split(":").filter(Boolean);
+  return (
+    (parts.length === 2 && parts[0] === "direct") ||
+    (parts.length === 3 && parts[1] === "direct") ||
+    (parts.length === 4 && parts[2] === "direct")
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
 }
 
@@ -350,7 +377,10 @@ async function previewStoreCleanup(params: {
   const staleKeys = new Set<string>();
   const cappedKeys = new Set<string>();
   const missingKeys = new Set<string>();
+<<<<<<< HEAD
   const modelRunPrunedKeys = new Set<string>();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const dmScopeRetiredKeys = new Set<string>();
   const missing =
     params.fixMissing === true
@@ -375,6 +405,7 @@ async function previewStoreCleanup(params: {
         })
       : 0;
   const preserveSessionKeys = collectSessionMaintenancePreserveKeys([params.activeKey]);
+<<<<<<< HEAD
   const modelRunPruned = shouldRunModelRunPrune({
     maintenance: params.maintenance,
     entryCount: Object.keys(previewStore).length,
@@ -391,6 +422,8 @@ async function previewStoreCleanup(params: {
         },
       })
     : 0;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const pruned = pruneStaleEntries(previewStore, params.maintenance.pruneAfterMs, {
     log: false,
     preserveKeys: preserveSessionKeys,
@@ -410,12 +443,15 @@ async function previewStoreCleanup(params: {
     paths: entryCleanupArtifactPaths,
     store: beforeStore,
     storePath: params.target.storePath,
+<<<<<<< HEAD
     keys: modelRunPrunedKeys,
   });
   addEntryArtifactPathsToSet({
     paths: entryCleanupArtifactPaths,
     store: beforeStore,
     storePath: params.target.storePath,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     keys: staleKeys,
   });
   addEntryArtifactPathsToSet({
@@ -462,7 +498,10 @@ async function previewStoreCleanup(params: {
   const wouldMutate =
     missing > 0 ||
     dmScopeRetired > 0 ||
+<<<<<<< HEAD
     modelRunPruned > 0 ||
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     pruned > 0 ||
     capped > 0 ||
     unreferencedArtifacts.removedFiles > 0 ||
@@ -478,7 +517,10 @@ async function previewStoreCleanup(params: {
     afterCount: afterPreviewCount,
     missing,
     dmScopeRetired,
+<<<<<<< HEAD
     modelRunPruned,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     pruned,
     capped,
     unreferencedArtifacts,
@@ -490,7 +532,10 @@ async function previewStoreCleanup(params: {
     summary,
     beforeStore,
     missingKeys,
+<<<<<<< HEAD
     modelRunPrunedKeys,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     staleKeys,
     cappedKeys,
     budgetEvictedKeys,
@@ -620,7 +665,10 @@ export async function runSessionsCleanup(params: {
                 afterCount: 0,
                 missing: 0,
                 dmScopeRetired: 0,
+<<<<<<< HEAD
                 modelRunPruned: 0,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 pruned: 0,
                 capped: 0,
                 unreferencedArtifacts,
@@ -643,7 +691,10 @@ export async function runSessionsCleanup(params: {
               afterCount: appliedReport.afterCount,
               missing: missingApplied,
               dmScopeRetired: dmScopeRetiredApplied,
+<<<<<<< HEAD
               modelRunPruned: appliedReport.modelRunPruned,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               pruned: appliedReport.pruned,
               capped: appliedReport.capped,
               unreferencedArtifacts,
@@ -651,7 +702,10 @@ export async function runSessionsCleanup(params: {
               wouldMutate:
                 missingApplied > 0 ||
                 dmScopeRetiredApplied > 0 ||
+<<<<<<< HEAD
                 appliedReport.modelRunPruned > 0 ||
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 appliedReport.pruned > 0 ||
                 appliedReport.capped > 0 ||
                 unreferencedArtifacts.removedFiles > 0 ||

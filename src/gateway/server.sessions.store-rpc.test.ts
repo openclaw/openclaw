@@ -10,7 +10,10 @@ import {
   setupGatewaySessionsTestHarness,
   getGatewayConfigModule,
   getSessionsHandlers,
+<<<<<<< HEAD
   createLinearSessionTranscript,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
@@ -44,15 +47,25 @@ test("lists and patches session store via sessions.* RPC", async () => {
 
   await fs.writeFile(
     path.join(dir, "sess-main.jsonl"),
+<<<<<<< HEAD
     createLinearSessionTranscript(
       "sess-main",
       Array.from({ length: 10 }, (_, index) => `line ${index}`),
     ),
+=======
+    `${Array.from({ length: 10 })
+      .map((_, idx) => JSON.stringify({ role: "user", content: `line ${idx}` }))
+      .join("\n")}\n`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     "utf-8",
   );
   await fs.writeFile(
     path.join(dir, "sess-group.jsonl"),
+<<<<<<< HEAD
     createLinearSessionTranscript("sess-group", ["group line 0"]),
+=======
+    `${JSON.stringify({ role: "user", content: "group line 0" })}\n`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     "utf-8",
   );
 

@@ -6,7 +6,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fsSafe from "../infra/fs-safe.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+<<<<<<< HEAD
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
@@ -28,10 +31,21 @@ describe("media understanding scope", () => {
 });
 
 const originalFetch = globalThis.fetch;
+<<<<<<< HEAD
 const stateDirEnvSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 
 function restoreProcessState() {
   stateDirEnvSnapshot.restore();
+=======
+const originalStateDirEnv = process.env.OPENCLAW_STATE_DIR;
+
+function restoreProcessState() {
+  if (originalStateDirEnv === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalStateDirEnv;
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function withLocalAttachmentCache(
@@ -171,7 +185,11 @@ describe("media understanding attachments SSRF", () => {
       await fs.mkdir(path.dirname(attachmentPath), { recursive: true });
       await fs.mkdir(cwd, { recursive: true });
       await fs.writeFile(attachmentPath, "state-media");
+<<<<<<< HEAD
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+=======
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       vi.spyOn(process, "cwd").mockReturnValue(cwd);
 
       const cache = new MediaAttachmentCache([{ index: 0, path: relativePath }], {
@@ -193,7 +211,11 @@ describe("media understanding attachments SSRF", () => {
       await fs.mkdir(stateDir, { recursive: true });
       await fs.mkdir(path.dirname(attachmentPath), { recursive: true });
       await fs.writeFile(attachmentPath, "cwd-media");
+<<<<<<< HEAD
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+=======
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       vi.spyOn(process, "cwd").mockReturnValue(cwd);
 
       const cache = new MediaAttachmentCache([{ index: 0, path: relativePath }], {
@@ -217,7 +239,11 @@ describe("media understanding attachments SSRF", () => {
       await fs.mkdir(path.dirname(statePath), { recursive: true });
       await fs.writeFile(cwdPath, "cwd-media");
       await fs.writeFile(statePath, "state-media");
+<<<<<<< HEAD
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+=======
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       vi.spyOn(process, "cwd").mockReturnValue(cwd);
 
       const cache = new MediaAttachmentCache([{ index: 0, path: relativePath }], {
@@ -240,7 +266,11 @@ describe("media understanding attachments SSRF", () => {
       await fs.mkdir(path.dirname(statePath), { recursive: true });
       await fs.writeFile(cwdPath, "blocked-cwd-media");
       await fs.writeFile(statePath, "state-media");
+<<<<<<< HEAD
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+=======
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       vi.spyOn(process, "cwd").mockReturnValue(cwd);
 
       const cache = new MediaAttachmentCache([{ index: 0, path: relativePath }], {

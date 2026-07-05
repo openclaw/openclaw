@@ -1,10 +1,17 @@
 // Plugin Gateway Gauntlet tests cover plugin gateway gauntlet script behavior.
+<<<<<<< HEAD
 import { spawn, spawnSync } from "node:child_process";
+=======
+import { spawnSync } from "node:child_process";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+<<<<<<< HEAD
 import { pathToFileURL } from "node:url";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildObservationGuardFailures,
@@ -93,6 +100,7 @@ describe("plugin gateway gauntlet helpers", () => {
     throw new Error("condition was not met before timeout");
   }
 
+<<<<<<< HEAD
   async function waitForClose(child: ReturnType<typeof spawn>, timeoutMs = 5_000) {
     return await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
       (resolve, reject) => {
@@ -107,6 +115,8 @@ describe("plugin gateway gauntlet helpers", () => {
     );
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("stops parsing options after the argument terminator", () => {
     expect(parseArgs(["--plugin", "telegram", "--", "--plugin", "discord"])).toMatchObject({
       pluginIds: ["telegram"],
@@ -131,6 +141,7 @@ describe("plugin gateway gauntlet helpers", () => {
     });
   });
 
+<<<<<<< HEAD
   it("rejects duplicate repeatable selectors", () => {
     expect(() => parseArgs(["--plugin", "telegram", "--plugin", "telegram"])).toThrow(
       "Duplicate --plugin value: telegram",
@@ -186,6 +197,8 @@ describe("plugin gateway gauntlet helpers", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("discovers bundled plugin manifests into lifecycle matrix rows", async () => {
     await writeManifest(
       "alpha",
@@ -609,6 +622,7 @@ describe("plugin gateway gauntlet helpers", () => {
     await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("[spawn error] ENOENT");
   });
 
+<<<<<<< HEAD
   it("clamps oversized measured command timers before scheduling", async () => {
     const logDir = path.join(repoRoot, "logs");
     const row = await runMeasuredCommandLive({
@@ -629,6 +643,8 @@ describe("plugin gateway gauntlet helpers", () => {
     await expect(fs.readFile(row.logPath, "utf8")).resolves.not.toContain("ETIMEDOUT");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.runIf(process.platform !== "win32")(
     "kills timed-out measured command process groups when the leader exits first",
     async () => {
@@ -689,6 +705,7 @@ setInterval(() => {}, 1000);
     },
   );
 
+<<<<<<< HEAD
   it.runIf(process.platform !== "win32")(
     "lets timed-out measured command descendants drain during kill grace",
     async () => {
@@ -749,6 +766,8 @@ setInterval(() => {}, 1000);
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("captures output from live measured commands", async () => {
     const logDir = path.join(repoRoot, "logs");
     const row = await runMeasuredCommandLive({
@@ -810,6 +829,7 @@ setInterval(() => {}, 1000);
     expect(process.listenerCount("SIGTERM")).toBe(before);
   });
 
+<<<<<<< HEAD
   it.runIf(process.platform !== "win32")(
     "cleans parent-terminated measured process groups when the leader exits first",
     async () => {
@@ -1000,6 +1020,8 @@ process.exit(7);
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("bounds captured output from live measured commands", async () => {
     const logDir = path.join(repoRoot, "logs");
     const row = await runMeasuredCommandLive({
@@ -1176,6 +1198,7 @@ process.exit(7);
     }
   });
 
+<<<<<<< HEAD
   it("fails once when skip-prebuild leaves plugin lifecycle probes without a built entry", async () => {
     const outputDir = path.join(repoRoot, "artifacts");
     await writeManifest("acpx", "openclaw.plugin.json", JSON.stringify({ id: "acpx" }));
@@ -1253,6 +1276,8 @@ process.exit(7);
     expect(summary.guardFailures).toEqual([]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("parses observation failure mode from CLI and env", () => {
     expect(parseArgs(["--fail-on-observation", "--allow-empty"])).toMatchObject({
       allowEmpty: true,

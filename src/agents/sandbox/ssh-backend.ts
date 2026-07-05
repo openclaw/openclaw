@@ -23,7 +23,10 @@ import {
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 import {
   buildRemoteCommand,
+<<<<<<< HEAD
   buildRemoteWorkdirValidationCommand,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   buildSshSandboxArgv,
   buildValidatedExecRemoteCommand,
   createSshSandboxSessionFromSettings,
@@ -133,7 +136,10 @@ export async function createSshSandboxBackend(
 
 class SshSandboxBackendImpl {
   private ensurePromise: Promise<void> | null = null;
+<<<<<<< HEAD
   private refreshedSkillsForNextExecWorkdir: string | null = null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   constructor(
     private readonly params: {
@@ -152,6 +158,7 @@ class SshSandboxBackendImpl {
       env: this.params.createParams.cfg.docker.env,
       configLabel: this.params.target,
       configLabelKind: "Target",
+<<<<<<< HEAD
       workdirValidation: "backend",
       validateWorkdir: async (workdir) => await this.validateWorkdir(workdir),
       discardPreparedWorkdir: (workdir) => this.discardPreparedWorkdir(workdir),
@@ -166,14 +173,26 @@ class SshSandboxBackendImpl {
         const remoteCommand = buildValidatedExecRemoteCommand({
           command,
           workdir: remoteWorkdir,
+=======
+      remoteWorkspaceDir: this.params.runtimePaths.remoteWorkspaceDir,
+      remoteAgentWorkspaceDir: this.params.runtimePaths.remoteAgentWorkspaceDir,
+      buildExecSpec: async ({ command, workdir, env, usePty }) => {
+        const remoteCommand = buildValidatedExecRemoteCommand({
+          command,
+          workdir: workdir ?? this.params.runtimePaths.remoteWorkspaceDir,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           env,
         });
         await this.ensureRuntime();
         const sshSession = await this.createSession();
         try {
+<<<<<<< HEAD
           if (!this.consumeRefreshedSkillsForNextExec(remoteWorkdir)) {
             await this.refreshRemoteSkillsWorkspace(sshSession);
           }
+=======
+          await this.refreshRemoteSkillsWorkspace(sshSession);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           return {
             argv: buildSshSandboxArgv({
               session: sshSession,
@@ -264,6 +283,7 @@ class SshSandboxBackendImpl {
     }
   }
 
+<<<<<<< HEAD
   private async validateWorkdir(workdir: string): Promise<string | null> {
     await this.ensureRuntime();
     const session = await this.createSession();
@@ -326,6 +346,8 @@ class SshSandboxBackendImpl {
     );
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   private async refreshRemoteSkillsWorkspace(session: SshSandboxSession): Promise<void> {
     if (
       this.params.createParams.cfg.workspaceAccess !== "rw" ||
@@ -407,6 +429,7 @@ async function isExistingDirectory(dir: string): Promise<boolean> {
   }
 }
 
+<<<<<<< HEAD
 function normalizeRemotePath(input: string): string {
   const normalized = path.posix.normalize(input.replace(/\\/g, "/"));
   return normalized === "/" ? normalized : normalized.replace(/\/+$/g, "");
@@ -423,6 +446,8 @@ function isRemotePathInsideRoot(root: string, candidate: string): boolean {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function resolveSshRuntimePaths(
   workspaceRoot: string,
   scopeKey: string,

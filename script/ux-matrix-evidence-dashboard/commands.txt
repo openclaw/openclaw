@@ -1,0 +1,2 @@
+pnpm openclaw qa suite --scenario ux-matrix-evidence-dashboard --output-dir .artifacts/qa-e2e/smoke-ci-profile/script/ux-matrix-evidence-dashboard
+node --import tsx scripts/qa/ux-matrix-evidence-producer.ts --artifact-base .artifacts/qa-e2e/smoke-ci-profile/script/ux-matrix-evidence-dashboard

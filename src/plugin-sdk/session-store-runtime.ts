@@ -1,5 +1,6 @@
 // Narrow session-store helpers for channel hot paths.
 
+<<<<<<< HEAD
 import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
 import {
   cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,
@@ -207,11 +208,37 @@ export {
   readRecentUserAssistantTextForSession,
   type SessionRecentConversationText,
 } from "../config/sessions/transcript.js";
+=======
+import {
+  listSessionEntries,
+  loadSessionEntry as getSessionEntry,
+  readSessionUpdatedAt,
+} from "../config/sessions/session-accessor.js";
+import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/store-load.js";
+
+/**
+ * @deprecated Use getSessionEntry/listSessionEntries for reads and
+ * patchSessionEntry/upsertSessionEntry for writes. loadSessionStore keeps the
+ * legacy mutable whole-store shape and will remain a compatibility escape hatch.
+ */
+export const loadSessionStore = loadSessionStoreImpl;
+export { getSessionEntry, listSessionEntries, readSessionUpdatedAt };
+
+export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
+export {
+  resolveSessionFilePath,
+  resolveSessionTranscriptPathInDir,
+  resolveStorePath,
+} from "../config/sessions/paths.js";
+export { resolveAndPersistSessionFile } from "../config/sessions/session-file.js";
+export { readLatestAssistantTextFromSessionTranscript } from "../config/sessions/transcript.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
 export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 export {
   clearSessionStoreCacheForTest,
+<<<<<<< HEAD
   recordSessionMetaFromInbound,
   updateLastRoute,
 } from "../config/sessions/store.js";
@@ -224,6 +251,16 @@ export { saveSessionStore, updateSessionStore } from "../config/sessions/store.j
 // Maintainer note: keep saveSessionStore/updateSessionStore grouped as one
 // compatibility operation. A SQLite bridge must diff before/after store shapes,
 // apply changed/deleted rows in one write transaction, and publish after commit.
+=======
+  patchSessionEntry,
+  recordSessionMetaFromInbound,
+  saveSessionStore,
+  updateLastRoute,
+  updateSessionStore,
+  updateSessionStoreEntry,
+  upsertSessionEntry,
+} from "../config/sessions/store.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export {
   evaluateSessionFreshness,
   resolveChannelResetConfig,

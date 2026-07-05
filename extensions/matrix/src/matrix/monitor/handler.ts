@@ -40,7 +40,14 @@ import {
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+<<<<<<< HEAD
 import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+=======
+import {
+  loadSessionStore,
+  resolveSessionStoreEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   CoreConfig,
@@ -344,11 +351,20 @@ function resolveMatrixSharedDmContextNotice(params: {
   }
 
   try {
+<<<<<<< HEAD
     const currentSession = resolveMatrixStoredSessionMeta(
       getSessionEntry({
         storePath: params.storePath,
         sessionKey: params.sessionKey,
       }),
+=======
+    const store = loadSessionStore(params.storePath);
+    const currentSession = resolveMatrixStoredSessionMeta(
+      resolveSessionStoreEntry({
+        store,
+        sessionKey: params.sessionKey,
+      }).existing,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
     if (!currentSession) {
       return null;

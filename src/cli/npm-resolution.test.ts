@@ -4,6 +4,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildNpmInstallRecordFields,
   logPinnedNpmSpecMessages,
+<<<<<<< HEAD
+=======
+  mapNpmResolutionMetadata,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolvePinnedNpmInstallRecord,
   resolvePinnedNpmInstallRecordForCli,
   resolvePinnedNpmSpec,
@@ -57,6 +61,29 @@ describe("npm-resolution helpers", () => {
     });
   });
 
+<<<<<<< HEAD
+=======
+  it("maps npm resolution metadata to install fields", () => {
+    expect(
+      mapNpmResolutionMetadata({
+        name: "@openclaw/plugin-alpha",
+        version: "1.2.3",
+        resolvedSpec: "@openclaw/plugin-alpha@1.2.3",
+        integrity: "sha512-abc",
+        shasum: "deadbeef",
+        resolvedAt: "2026-02-21T00:00:00.000Z",
+      }),
+    ).toEqual({
+      resolvedName: "@openclaw/plugin-alpha",
+      resolvedVersion: "1.2.3",
+      resolvedSpec: "@openclaw/plugin-alpha@1.2.3",
+      integrity: "sha512-abc",
+      shasum: "deadbeef",
+      resolvedAt: "2026-02-21T00:00:00.000Z",
+    });
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("builds common npm install record fields", () => {
     expect(
       buildNpmInstallRecordFields({

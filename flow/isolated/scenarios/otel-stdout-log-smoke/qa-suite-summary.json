@@ -1,0 +1,73 @@
+{
+  "scenarios": [
+    {
+      "name": "OTEL stdout log smoke",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "emits a traced qa-channel turn with stdout logs",
+          "status": "pass",
+          "details": "stdout diagnostic log records=50"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 32510,
+    "gatewayProcessCpuMs": 2000,
+    "gatewayCpuCoreRatio": 0.062,
+    "gatewayProcessRssStartBytes": 853827584,
+    "gatewayProcessRssEndBytes": 1142366208,
+    "gatewayProcessRssDeltaBytes": 288538624,
+    "gatewayProcessRssPeakBytes": 1142366208,
+    "gatewayProcessRssPeakDeltaBytes": 288538624,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:17:10.969Z",
+        "gatewayProcessRssBytes": 853827584
+      },
+      {
+        "label": "scenario:otel-stdout-log-smoke:start",
+        "at": "2026-07-03T13:17:10.980Z",
+        "gatewayProcessRssBytes": 853827584
+      },
+      {
+        "label": "scenario:otel-stdout-log-smoke:finish",
+        "at": "2026-07-03T13:17:15.732Z",
+        "gatewayProcessRssBytes": 1142366208
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:17:15.750Z",
+        "gatewayProcessRssBytes": 1142366208
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:16:43.222Z",
+    "finishedAt": "2026-07-03T13:17:15.732Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "otel-stdout-log-smoke"
+    ],
+    "runtimePair": null
+  }
+}

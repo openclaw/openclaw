@@ -22,6 +22,7 @@ self.addEventListener("install", (event) => {
 });
 
 self.addEventListener("activate", (event) => {
+<<<<<<< HEAD
   event.waitUntil(
     (async () => {
       const [cacheKeys, windowClients] = await Promise.all([
@@ -48,6 +49,24 @@ self.addEventListener("activate", (event) => {
         client.postMessage({ type: "sw-updated", version: CACHE_VERSION });
       }
     })(),
+=======
+  // Keep a small prior-build window so open tabs can still load old hashed chunks after updates.
+  event.waitUntil(
+    Promise.all([
+      self.clients.claim(),
+      caches.keys().then((keys) => {
+        const controlKeys = keys.filter((key) => key.startsWith(CACHE_PREFIX));
+        const priorCacheLimit = Math.max(0, CONTROL_CACHE_LIMIT - 1);
+        const retained = new Set([
+          ...controlKeys.filter((key) => key !== CACHE_NAME).slice(-priorCacheLimit),
+          CACHE_NAME,
+        ]);
+        return Promise.all(
+          controlKeys.filter((key) => !retained.has(key)).map((key) => caches.delete(key)),
+        );
+      }),
+    ]),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
 });
 

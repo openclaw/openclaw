@@ -1905,12 +1905,15 @@ describe("runCliAgent reliability", () => {
           messageProvider: "acp",
           messageChannel: "telegram",
           trigger: "user",
+<<<<<<< HEAD
           senderId: "sender-1",
           chatId: "chat-1",
           channelContext: {
             sender: { id: "sender-1" },
             chat: { id: "chat-1" },
           },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
       });
 
@@ -1944,6 +1947,7 @@ describe("runCliAgent reliability", () => {
       expect(llmInputContext.workspaceDir).toBe(dir);
       expect(llmInputContext.messageProvider).toBe("acp");
       expect(llmInputContext.trigger).toBe("user");
+<<<<<<< HEAD
       expect(llmInputContext.channel).toBe("telegram");
       expect(llmInputContext.channelId).toBe("telegram");
       expect(llmInputContext.senderId).toBe("sender-1");
@@ -1952,6 +1956,9 @@ describe("runCliAgent reliability", () => {
         sender: { id: "sender-1" },
         chat: { id: "chat-1" },
       });
+=======
+      expect(llmInputContext.channelId).toBe("telegram");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       const llmOutputEvent = requireRecord(
         callArg(hookRunner.runLlmOutput, 0, 0, "llm_output event"),
@@ -1989,6 +1996,7 @@ describe("runCliAgent reliability", () => {
       const assistantMessage = requireRecord(messages[1], "assistant message");
       expect(assistantMessage.role).toBe("assistant");
       expect(assistantMessage.content).toEqual([{ type: "text", text: "hello from cli" }]);
+<<<<<<< HEAD
       const agentEndContext = requireRecord(
         callArg(hookRunner.runAgentEnd, 0, 1, "agent_end context"),
         "agent_end context",
@@ -1999,6 +2007,9 @@ describe("runCliAgent reliability", () => {
         sender: { id: "sender-1" },
         chat: { id: "chat-1" },
       });
+=======
+      expect(callArg(hookRunner.runAgentEnd, 0, 1, "agent_end context")).toBeTypeOf("object");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -2834,7 +2845,11 @@ describe("runCliAgent reliability", () => {
         callArg(hookRunner.runBeforeAgentRun, 0, 1, "before_agent_run context"),
         "before_agent_run context",
       );
+<<<<<<< HEAD
       expect(beforeRunContext.messageProvider).toBe("telegram");
+=======
+      expect(beforeRunContext.channel).toBe("telegram");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(beforeRunContext.chatId).toBe("chat-1");
       expect(beforeRunContext.channelId).toBe("chat-1");
       expect(beforeRunContext.senderId).toBe("user-42");

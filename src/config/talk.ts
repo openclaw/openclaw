@@ -195,7 +195,11 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
     typeof rawConsultFastMode === "boolean" || typeof rawConsultFastMode === "string"
       ? normalizeFastMode(rawConsultFastMode)
       : undefined;
+<<<<<<< HEAD
   if (typeof consultFastMode === "boolean") {
+=======
+  if (consultFastMode !== undefined) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     normalized.consultFastMode = consultFastMode;
   }
   const silenceTimeoutMs = normalizeSilenceTimeoutMs(source.silenceTimeoutMs);

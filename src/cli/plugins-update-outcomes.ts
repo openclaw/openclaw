@@ -1,6 +1,9 @@
 // User-facing logging for plugin and hook-pack update outcomes.
 import { theme } from "../../packages/terminal-core/src/theme.js";
+<<<<<<< HEAD
 import { isClawHubTrustSkippedOutcome } from "../plugins/update.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type PluginUpdateCliOutcome = {
   status: string;
@@ -8,7 +11,10 @@ type PluginUpdateCliOutcome = {
   channelFallback?: {
     message: string;
   };
+<<<<<<< HEAD
   code?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 /** Log update outcomes with severity styling and report whether any errors occurred. */
@@ -27,9 +33,12 @@ export function logPluginUpdateOutcomes(params: {
       continue;
     }
     if (outcome.status === "skipped") {
+<<<<<<< HEAD
       if (isClawHubTrustSkippedOutcome(outcome)) {
         hasErrors = true;
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       params.log(theme.warn(outcome.message));
       if (outcome.channelFallback) {
         params.log(theme.warn(outcome.channelFallback.message));

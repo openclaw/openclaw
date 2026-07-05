@@ -47,13 +47,21 @@ describe("status.scan-memory", () => {
   it("forwards the shared memory snapshot dependencies", async () => {
     const { resolveStatusMemoryStatusSnapshot } = await import("./status.scan-memory.ts");
 
+<<<<<<< HEAD
     const requireDefaultDatabasePath = vi.fn((agentId: string) => `/tmp/${agentId}.sqlite`);
+=======
+    const requireDefaultStore = vi.fn((agentId: string) => `/tmp/${agentId}.sqlite`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const agentStatus = createMainAgentStatus();
     await resolveStatusMemoryStatusSnapshot({
       cfg: { agents: {} },
       agentStatus,
       memoryPlugin: { enabled: true, slot: "memory-core" },
+<<<<<<< HEAD
       requireDefaultDatabasePath,
+=======
+      requireDefaultStore,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     expect(mocks.resolveSharedMemoryStatusSnapshot).toHaveBeenCalledWith({
@@ -62,7 +70,11 @@ describe("status.scan-memory", () => {
       memoryPlugin: { enabled: true, slot: "memory-core" },
       resolveMemoryConfig: mocks.resolveMemorySearchConfig,
       getMemorySearchManager: mocks.getMemorySearchManager,
+<<<<<<< HEAD
       requireDefaultDatabasePath,
+=======
+      requireDefaultStore,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   });
 });

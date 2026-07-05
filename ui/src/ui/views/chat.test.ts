@@ -1973,6 +1973,7 @@ describe("chat slash menu accessibility", () => {
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("");
   });
 
+<<<<<<< HEAD
   it("ignores a stale native InputEvent replay after send clears the host draft", () => {
     let draft = "";
     const container = document.createElement("div");
@@ -2179,6 +2180,8 @@ describe("chat slash menu accessibility", () => {
     expect(onDraftChange).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("commits local draft input before Enter sends", () => {
     const onDraftChange = vi.fn();
     const onSend = vi.fn();
@@ -3209,6 +3212,7 @@ describe("chat session controls", () => {
     });
   });
 
+<<<<<<< HEAD
   it("skips hidden subagent pages when loading more chat picker sessions", async () => {
     const { state, request } = createChatHeaderState();
     state.sessionsIncludeGlobal = false;
@@ -3392,6 +3396,8 @@ describe("chat session controls", () => {
     expect(container.querySelector('button[data-chat-session-load-more="true"]')).toBeNull();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("loads unsearched picker pages from a scoped first page", async () => {
     const { state } = createChatHeaderState();
     state.sessionsIncludeGlobal = false;
@@ -3782,6 +3788,7 @@ describe("chat session controls", () => {
     expect(state.setTab).toHaveBeenCalledWith("usage");
   });
 
+<<<<<<< HEAD
   it("shows provider quota in the sidebar session switcher (regression #93041)", () => {
     const { state } = createChatHeaderState();
     state.modelAuthStatusResult = {
@@ -3846,6 +3853,8 @@ describe("chat session controls", () => {
     expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("falls back to the selected agent's main session when no sessions exist yet", () => {
     const { state } = createChatHeaderState();
     const onSwitchSession = vi.fn();
@@ -4016,6 +4025,7 @@ describe("chat session controls", () => {
     });
   });
 
+<<<<<<< HEAD
   it("sets composer speed to auto", async () => {
     const { state, request } = createChatHeaderState();
     const container = document.createElement("div");
@@ -4035,6 +4045,8 @@ describe("chat session controls", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("scopes composer model changes for a selected global-session agent", async () => {
     const { state, request } = createChatHeaderState();
     state.sessionKey = "global";
@@ -4111,7 +4123,11 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
+<<<<<<< HEAD
     expect(container.querySelectorAll("[data-chat-speed-option]").length).toBe(4);
+=======
+    expect(container.querySelectorAll("[data-chat-speed-option]").length).toBe(3);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     clickChatSpeedOption(container, "");
 

@@ -3,7 +3,10 @@
  */
 import fs from "node:fs/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { openAuthenticatedGatewayWs, waitForGatewayWsClose } from "./shared-auth.test-helpers.js";
 import {
   getFreePort,
@@ -44,7 +47,11 @@ beforeAll(async () => {
   }
   port = await getFreePort();
   testState.gatewayAuth = undefined;
+<<<<<<< HEAD
   setTestEnvValue(SECRET_REF_TOKEN_ID, OLD_TOKEN);
+=======
+  process.env[SECRET_REF_TOKEN_ID] = OLD_TOKEN;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   await fs.writeFile(
     configPath,
     `${JSON.stringify(buildSharedTokenReloadConfig(), null, 2)}\n`,
@@ -54,11 +61,19 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+<<<<<<< HEAD
   setTestEnvValue(SECRET_REF_TOKEN_ID, OLD_TOKEN);
 });
 
 afterAll(async () => {
   deleteTestEnvValue(SECRET_REF_TOKEN_ID);
+=======
+  process.env[SECRET_REF_TOKEN_ID] = OLD_TOKEN;
+});
+
+afterAll(async () => {
+  delete process.env[SECRET_REF_TOKEN_ID];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   testState.gatewayAuth = ORIGINAL_GATEWAY_AUTH;
   await server.close();
 });
@@ -68,7 +83,11 @@ describe("gateway shared token hot reload rotation", () => {
     const ws = await openAuthenticatedGatewayWs(port, OLD_TOKEN);
     try {
       const closed = waitForGatewayWsClose(ws);
+<<<<<<< HEAD
       setTestEnvValue(SECRET_REF_TOKEN_ID, NEW_TOKEN);
+=======
+      process.env[SECRET_REF_TOKEN_ID] = NEW_TOKEN;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const reload = await rpcReq<{ warningCount?: number }>(ws, "secrets.reload", {}).catch(
         (err: unknown) => (err instanceof Error ? err : new Error(String(err))),
       );

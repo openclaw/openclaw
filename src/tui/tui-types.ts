@@ -1,6 +1,9 @@
 // Defines shared TUI state, backend, and event types.
 import type { SessionGoal } from "../config/sessions/types.js";
+<<<<<<< HEAD
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type TuiOptions = {
   local?: boolean;
@@ -74,7 +77,11 @@ export type ResponseUsageMode = "on" | "off" | "tokens" | "full";
 export type SessionInfo = {
   thinkingLevel?: string;
   thinkingLevels?: Array<{ id: string; label: string }>;
+<<<<<<< HEAD
   fastMode?: FastMode;
+=======
+  fastMode?: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   verboseLevel?: string;
   traceLevel?: string;
   reasoningLevel?: string;
@@ -84,6 +91,7 @@ export type SessionInfo = {
   inputTokens?: number | null;
   outputTokens?: number | null;
   totalTokens?: number | null;
+<<<<<<< HEAD
   /**
    * True when `totalTokens` is a known-fresh value (e.g. 0 on a brand-new
    * session) rather than an unknown/stale total. Lets the footer render `0`
@@ -94,6 +102,10 @@ export type SessionInfo = {
   responseUsage?: ResponseUsageMode;
   /** Resolved effective usage mode (session override → channel config → default → off). Set by the gateway; the TUI uses this for no-arg toggle cycles so the cycle starts from the effective visible mode rather than the raw session value. */
   effectiveResponseUsage?: ResponseUsageMode;
+=======
+  goal?: SessionGoal;
+  responseUsage?: ResponseUsageMode;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   updatedAt?: number | null;
   displayName?: string;
 };

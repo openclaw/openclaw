@@ -129,6 +129,7 @@ describe("sendMessageSignal receipts", () => {
     expect(result.messageId).toBe("unknown");
     expect(result.receipt.platformMessageIds).toStrictEqual([]);
   });
+<<<<<<< HEAD
 
   it("does not add approval reactions to ordinary outbound approval-looking text", async () => {
     signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567892 });
@@ -198,4 +199,6 @@ describe("sendMessageSignal receipts", () => {
       expect.any(Object),
     );
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

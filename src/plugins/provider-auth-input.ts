@@ -6,7 +6,10 @@ import {
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SecretInput } from "../config/types.secrets.js";
+<<<<<<< HEAD
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { resolveSecretInputModeForEnvSelection } from "./provider-auth-mode.js";
 import {
@@ -36,6 +39,7 @@ export function normalizeApiKeyInput(raw: string): string {
     return "";
   }
 
+<<<<<<< HEAD
   const normalizedPaste = normalizeSecretInput(trimmed);
   const assignmentMatch = normalizedPaste.match(
     /^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.+)$/,
@@ -52,6 +56,22 @@ export function normalizeApiKeyInput(raw: string): string {
       : withoutSemicolon;
 
   return normalizeSecretInput(unquoted);
+=======
+  const assignmentMatch = trimmed.match(/^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.+)$/);
+  const valuePart = assignmentMatch ? assignmentMatch[1].trim() : trimmed;
+
+  const unquoted =
+    valuePart.length >= 2 &&
+    ((valuePart.startsWith('"') && valuePart.endsWith('"')) ||
+      (valuePart.startsWith("'") && valuePart.endsWith("'")) ||
+      (valuePart.startsWith("`") && valuePart.endsWith("`")))
+      ? valuePart.slice(1, -1)
+      : valuePart;
+
+  const withoutSemicolon = unquoted.endsWith(";") ? unquoted.slice(0, -1) : unquoted;
+
+  return withoutSemicolon.trim();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /** Validates required API-key input for setup prompts. */

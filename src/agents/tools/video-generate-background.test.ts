@@ -22,7 +22,11 @@ const {
   createVideoGenerationTaskRun,
   failVideoGenerationTaskRun,
   recordVideoGenerationTaskProgress,
+<<<<<<< HEAD
   videoGenerationTaskLifecycle,
+=======
+  wakeVideoGenerationTaskCompletion,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } = await import("./video-generate-background.js");
 const { withMediaGenerationTaskKeepalive } = await import("./media-generate-background-shared.js");
 
@@ -165,7 +169,11 @@ describe("video generate background helpers", () => {
       path: "direct",
     });
 
+<<<<<<< HEAD
     await videoGenerationTaskLifecycle.wakeTaskCompletion({
+=======
+    await wakeVideoGenerationTaskCompletion({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ...createMediaCompletionFixture({
         runId: "tool:video_generate:abc",
         taskLabel: "friendly lobster surfing",
@@ -184,7 +192,11 @@ describe("video generate background helpers", () => {
       path: "direct",
     });
 
+<<<<<<< HEAD
     await videoGenerationTaskLifecycle.wakeTaskCompletion({
+=======
+    await wakeVideoGenerationTaskCompletion({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ...createMediaCompletionFixture({
         directSend: true,
         runId: "tool:video_generate:abc",
@@ -215,7 +227,11 @@ describe("video generate background helpers", () => {
       error: "completion agent did not deliver generated media",
     });
 
+<<<<<<< HEAD
     await videoGenerationTaskLifecycle.wakeTaskCompletion({
+=======
+    await wakeVideoGenerationTaskCompletion({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ...createMediaCompletionFixture({
         runId: "tool:video_generate:abc",
         taskLabel: "friendly lobster surfing",
@@ -249,7 +265,11 @@ describe("video generate background helpers", () => {
       path: "steered",
     });
 
+<<<<<<< HEAD
     await videoGenerationTaskLifecycle.wakeTaskCompletion({
+=======
+    await wakeVideoGenerationTaskCompletion({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ...createMediaCompletionFixture({
         runId: "tool:video_generate:abc",
         taskLabel: "friendly lobster surfing",

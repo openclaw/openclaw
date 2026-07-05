@@ -222,6 +222,7 @@ describe("resolveChannelModelOverride", () => {
     expect(resolved?.model).toBe("demo-provider/demo-parent-model");
     expect(resolved?.matchKey).toBe("-100123");
   });
+<<<<<<< HEAD
 
   it("matches direct-user-specific model override via directUserId", () => {
     const resolved = resolveChannelModelOverride({
@@ -466,4 +467,6 @@ describe("resolveChannelModelOverride", () => {
 
     expect(resolved).toBeNull();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

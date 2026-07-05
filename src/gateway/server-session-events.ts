@@ -6,7 +6,11 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+<<<<<<< HEAD
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+=======
+import type { SessionTranscriptUpdate } from "../sessions/transcript-events.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
@@ -15,7 +19,10 @@ import type {
   SessionMessageSubscriberRegistry,
 } from "./server-chat.js";
 import { hasTrackedActiveSessionRun } from "./server-methods/session-active-runs.js";
+<<<<<<< HEAD
 import { buildGatewaySessionEventFields } from "./session-event-payload.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveSessionKeyForTranscriptFile } from "./session-transcript-key.js";
 import {
   attachOpenClawTranscriptMeta,
@@ -60,10 +67,18 @@ function buildGatewaySessionSnapshot(params: {
   if (!sessionRow) {
     return {};
   }
+<<<<<<< HEAD
   const session = params.includeSession ? { ...sessionRow } : undefined;
   if (session && sessionRow.key === "global" && !params.agentId) {
     // The unscoped global row hides goal state to avoid presenting one agent's
     // scoped goal as the global/default session goal.
+=======
+  const omitUnscopedGlobalGoal = sessionRow.key === "global" && !params.agentId;
+  // The unscoped global row hides goal state to avoid presenting one agent's
+  // scoped goal as the global/default session goal.
+  const session = params.includeSession ? { ...sessionRow } : undefined;
+  if (session && omitUnscopedGlobalGoal) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     delete session.goal;
   }
   if (session && params.hasActiveRun !== undefined) {
@@ -71,6 +86,7 @@ function buildGatewaySessionSnapshot(params: {
   }
   return {
     ...(session ? { session } : {}),
+<<<<<<< HEAD
     ...buildGatewaySessionEventFields({
       sessionRow,
       agentId: params.agentId,
@@ -81,6 +97,60 @@ function buildGatewaySessionSnapshot(params: {
     }),
     subagentRunState: sessionRow.subagentRunState,
     hasActiveSubagentRun: sessionRow.hasActiveSubagentRun,
+=======
+    updatedAt: sessionRow.updatedAt ?? undefined,
+    sessionId: sessionRow.sessionId,
+    kind: sessionRow.kind,
+    channel: sessionRow.channel,
+    subject: sessionRow.subject,
+    groupChannel: sessionRow.groupChannel,
+    space: sessionRow.space,
+    chatType: sessionRow.chatType,
+    origin: sessionRow.origin,
+    spawnedBy: sessionRow.spawnedBy,
+    spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
+    spawnedCwd: sessionRow.spawnedCwd,
+    forkedFromParent: sessionRow.forkedFromParent,
+    spawnDepth: sessionRow.spawnDepth,
+    subagentRole: sessionRow.subagentRole,
+    subagentControlScope: sessionRow.subagentControlScope,
+    label: params.label ?? sessionRow.label,
+    displayName: params.displayName ?? sessionRow.displayName,
+    deliveryContext: sessionRow.deliveryContext,
+    parentSessionKey: params.parentSessionKey ?? sessionRow.parentSessionKey,
+    childSessions: sessionRow.childSessions,
+    thinkingLevel: sessionRow.thinkingLevel,
+    fastMode: sessionRow.fastMode,
+    verboseLevel: sessionRow.verboseLevel,
+    reasoningLevel: sessionRow.reasoningLevel,
+    elevatedLevel: sessionRow.elevatedLevel,
+    sendPolicy: sessionRow.sendPolicy,
+    systemSent: sessionRow.systemSent,
+    abortedLastRun: sessionRow.abortedLastRun,
+    inputTokens: sessionRow.inputTokens,
+    outputTokens: sessionRow.outputTokens,
+    lastChannel: sessionRow.lastChannel,
+    lastTo: sessionRow.lastTo,
+    lastAccountId: sessionRow.lastAccountId,
+    lastThreadId: sessionRow.lastThreadId,
+    totalTokens: sessionRow.totalTokens,
+    totalTokensFresh: sessionRow.totalTokensFresh,
+    ...(omitUnscopedGlobalGoal ? {} : { goal: sessionRow.goal ?? null }),
+    contextTokens: sessionRow.contextTokens,
+    estimatedCostUsd: sessionRow.estimatedCostUsd,
+    responseUsage: sessionRow.responseUsage,
+    modelProvider: sessionRow.modelProvider,
+    model: sessionRow.model,
+    status: sessionRow.status,
+    ...(params.hasActiveRun === undefined ? {} : { hasActiveRun: params.hasActiveRun }),
+    subagentRunState: sessionRow.subagentRunState,
+    hasActiveSubagentRun: sessionRow.hasActiveSubagentRun,
+    startedAt: sessionRow.startedAt,
+    endedAt: sessionRow.endedAt,
+    runtimeMs: sessionRow.runtimeMs,
+    compactionCheckpointCount: sessionRow.compactionCheckpointCount,
+    latestCompactionCheckpoint: sessionRow.latestCompactionCheckpoint,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }
 
@@ -92,7 +162,11 @@ export function createTranscriptUpdateBroadcastHandler(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
 }) {
   let broadcastQueue = Promise.resolve();
+<<<<<<< HEAD
   return (update: InternalSessionTranscriptUpdate): void => {
+=======
+  return (update: SessionTranscriptUpdate): void => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     // Preserve transcript update order even when counting messages requires an
     // async read from the session file.
     broadcastQueue = broadcastQueue
@@ -108,6 +182,7 @@ async function handleTranscriptUpdateBroadcast(
     sessionMessageSubscribers: SessionMessageSubscribers;
     chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   },
+<<<<<<< HEAD
   update: InternalSessionTranscriptUpdate,
 ): Promise<void> {
   const sessionKey =
@@ -118,12 +193,25 @@ async function handleTranscriptUpdateBroadcast(
     return;
   }
   const effectiveAgentId = update.target?.agentId ?? update.agentId;
+=======
+  update: SessionTranscriptUpdate,
+): Promise<void> {
+  const sessionKey = update.sessionKey ?? resolveSessionKeyForTranscriptFile(update.sessionFile);
+  if (!sessionKey || update.message === undefined) {
+    return;
+  }
+  const effectiveAgentId = update.agentId;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const defaultGlobalAgentId =
     sessionKey === "global"
       ? normalizeAgentId(resolveDefaultAgentId(getRuntimeConfig()))
       : undefined;
   const visibleAgentId =
+<<<<<<< HEAD
     effectiveAgentId ??
+=======
+    update.agentId ??
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     (effectiveAgentId && effectiveAgentId !== defaultGlobalAgentId ? effectiveAgentId : undefined);
   const connIds = new Set<string>();
   for (const connId of params.sessionEventSubscribers.getAll()) {
@@ -146,9 +234,14 @@ async function handleTranscriptUpdateBroadcast(
       ? asPositiveSafeInteger(
           await readSessionMessageCountAsync({
             agentId: visibleAgentId,
+<<<<<<< HEAD
             sessionEntry: entry,
             sessionId: entry.sessionId,
             sessionKey,
+=======
+            sessionFile: entry.sessionFile,
+            sessionId: entry.sessionId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             storePath,
           }),
         )

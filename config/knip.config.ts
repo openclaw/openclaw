@@ -128,9 +128,24 @@ const config = {
     "**/*.test-utils.ts",
     "test/helpers/live-image-probe.ts",
     "src/secrets/credential-matrix.ts",
+<<<<<<< HEAD
     "src/shared/text/assistant-visible-text.ts",
     bundledPluginFile("telegram", "src/bot/reply-threading.ts"),
     bundledPluginFile("telegram", "src/draft-chunking.ts"),
+=======
+    "src/agents/claude-cli-runner.ts",
+    "src/agents/agent-auth-json.ts",
+    "src/agents/tool-policy.conformance.ts",
+    "src/auto-reply/reply/audio-tags.ts",
+    "src/gateway/live-tool-probe-utils.ts",
+    "src/gateway/server.auth.shared.ts",
+    "src/shared/text/assistant-visible-text.ts",
+    bundledPluginFile("telegram", "src/bot/reply-threading.ts"),
+    bundledPluginFile("telegram", "src/draft-chunking.ts"),
+    bundledPluginFile("msteams", "src/conversation-store-memory.ts"),
+    bundledPluginFile("msteams", "src/polls-store-memory.ts"),
+    bundledPluginFile("voice-call", "src/providers/index.ts"),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ],
   ignore: ["packages/*/dist/**"],
   workspaces: {
@@ -138,7 +153,10 @@ const config = {
       entry: rootEntries,
       ignoreDependencies: [
         "@openclaw/*",
+<<<<<<< HEAD
         "cross-spawn",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         "file-type",
         "playwright-core",
         "sqlite-vec",

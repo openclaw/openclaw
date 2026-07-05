@@ -63,6 +63,10 @@ export const zh_TW: TranslationMap = {
     docs: "文檔",
     theme: "主題",
     colorMode: "色彩模式",
+<<<<<<< HEAD
+=======
+    colorModeOption: "色彩模式：{mode}",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resources: "資源",
     search: "搜尋",
     save: "儲存",
@@ -198,7 +202,10 @@ export const zh_TW: TranslationMap = {
     inherit: "繼承",
     defaultOption: "預設（{value}）",
     offExplicit: "關閉（明確）",
+<<<<<<< HEAD
     auto: "auto",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     on: "開啟",
     off: "關閉",
     full: "完整",
@@ -1405,7 +1412,10 @@ export const zh_TW: TranslationMap = {
     jaJP: "日本語（Japanese）",
     ko: "한국어（Korean）",
     fr: "Français（French）",
+<<<<<<< HEAD
     hi: "हिन्दी (Hindi)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ar: "العربية（阿拉伯文）",
     it: "Italiano（義大利文）",
     tr: "Türkçe（Turkish）",
@@ -1416,7 +1426,10 @@ export const zh_TW: TranslationMap = {
     vi: "Tiếng Việt（越南文）",
     nl: "Nederlands（荷蘭文）",
     fa: "فارسی（波斯文）",
+<<<<<<< HEAD
     ru: "Русский (Russian)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   cron: {
     quickCreate: {
@@ -1584,7 +1597,10 @@ export const zh_TW: TranslationMap = {
       nextHeartbeat: "下一次心跳",
       wakeModeHelp: "現在會立即觸發。下一次心跳會等待到下一個週期。",
       payloadKind: "要執行什麼？",
+<<<<<<< HEAD
       command: "Command",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       systemEvent: "將訊息發佈到主要時間軸",
       agentTurn: "執行助理任務（獨立）",
       systemEventHelp: "將你的文字傳送到 Gateway 主要時間軸（適合提醒／觸發器）。",

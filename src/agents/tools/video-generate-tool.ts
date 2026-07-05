@@ -1005,7 +1005,10 @@ export function createVideoGenerateTool(options?: {
 
       const activeDuplicateGuardResult = createVideoGenerateDuplicateGuardResult(
         options?.agentSessionKey,
+<<<<<<< HEAD
         { prompt },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       );
       if (activeDuplicateGuardResult) {
         return activeDuplicateGuardResult;
@@ -1114,7 +1117,11 @@ export function createVideoGenerateTool(options?: {
       });
       const duplicateGuardResult = createVideoGenerateDuplicateGuardResult(
         options?.agentSessionKey,
+<<<<<<< HEAD
         { prompt, requestKey },
+=======
+        { requestKey },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       );
       if (duplicateGuardResult) {
         return duplicateGuardResult;

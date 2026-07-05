@@ -5,7 +5,10 @@ import { QaSuiteArtifactError } from "./errors.js";
 import type { QaEvidenceSummaryJson } from "./evidence-summary.js";
 import type { QaProviderMode } from "./model-selection.js";
 import type { RuntimeId, RuntimeParityResult } from "./runtime-parity.js";
+<<<<<<< HEAD
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type QaSuiteSummaryScenario = {
   name: string;
@@ -56,10 +59,13 @@ export type QaSuiteSummaryJson = {
     alternateModelName: string | null;
     fastMode: boolean;
     concurrency: number;
+<<<<<<< HEAD
     channelDriver: QaScorecardChannelDriver | null;
     channel: string | null;
     channelCapabilityMatrixPath: string | null;
     channelDriverSmokePath: string | null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     scenarioIds: string[] | null;
     runtimePair?: [RuntimeId, RuntimeId] | null;
   };
@@ -72,6 +78,7 @@ type QaEvidenceEntryStatus = {
   };
 };
 
+<<<<<<< HEAD
 async function readQaSuiteSummaryFile(summaryPath: string): Promise<unknown> {
   let summaryText: string;
   try {
@@ -94,6 +101,8 @@ async function readQaSuiteSummaryFile(summaryPath: string): Promise<unknown> {
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function readNonNegativeCount(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.max(0, Math.floor(value))
@@ -203,7 +212,30 @@ export function readQaSuiteFailedOrSkippedScenarioCountFromSummary(
 }
 
 export async function readQaSuiteFailedScenarioCountFromFile(summaryPath: string): Promise<number> {
+<<<<<<< HEAD
   const payload = await readQaSuiteSummaryFile(summaryPath);
+=======
+  let summaryText: string;
+  try {
+    summaryText = await fs.readFile(summaryPath, "utf8");
+  } catch (error) {
+    throw new QaSuiteArtifactError(
+      "summary_read_failed",
+      `Could not read QA summary JSON at ${summaryPath}: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(summaryText) as unknown;
+  } catch (error) {
+    throw new QaSuiteArtifactError(
+      "summary_parse_failed",
+      `Could not parse QA summary JSON at ${summaryPath}: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const failedScenarioCount = readQaSuiteFailedScenarioCountFromSummary(payload);
   if (failedScenarioCount !== null) {
     return failedScenarioCount;
@@ -217,7 +249,30 @@ export async function readQaSuiteFailedScenarioCountFromFile(summaryPath: string
 export async function readQaSuiteFailedOrSkippedScenarioCountFromFile(
   summaryPath: string,
 ): Promise<number> {
+<<<<<<< HEAD
   const payload = await readQaSuiteSummaryFile(summaryPath);
+=======
+  let summaryText: string;
+  try {
+    summaryText = await fs.readFile(summaryPath, "utf8");
+  } catch (error) {
+    throw new QaSuiteArtifactError(
+      "summary_read_failed",
+      `Could not read QA summary JSON at ${summaryPath}: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(summaryText) as unknown;
+  } catch (error) {
+    throw new QaSuiteArtifactError(
+      "summary_parse_failed",
+      `Could not parse QA summary JSON at ${summaryPath}: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const blockingScenarioCount = readQaSuiteFailedOrSkippedScenarioCountFromSummary(payload);
   if (blockingScenarioCount !== null) {
     return blockingScenarioCount;

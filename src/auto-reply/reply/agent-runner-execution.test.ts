@@ -28,9 +28,13 @@ import {
 } from "./agent-runner-execution.js";
 import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
 import {
+<<<<<<< HEAD
   PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,
   PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
   PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
+=======
+  PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE,
 } from "./provider-request-error-classifier.js";
 import type { FollowupRun } from "./queue.js";
@@ -200,6 +204,7 @@ vi.mock("../../infra/agent-events.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/agent-events.js")>(
     "../../infra/agent-events.js",
   );
+<<<<<<< HEAD
   const emitAgentEvent = vi.fn((...args: Parameters<typeof actual.emitAgentEvent>) =>
     actual.emitAgentEvent(...args),
   );
@@ -207,6 +212,12 @@ vi.mock("../../infra/agent-events.js", async () => {
     ...actual,
     clearAgentRunContext: vi.fn(),
     emitAgentEvent,
+=======
+  return {
+    ...actual,
+    clearAgentRunContext: vi.fn(),
+    emitAgentEvent: vi.fn(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     registerAgentRunContext: vi.fn(),
   };
 });
@@ -282,12 +293,15 @@ vi.mock("./agent-runner-utils.js", () => ({
       agentDir: run.agentDir,
     }),
   ),
+<<<<<<< HEAD
   resolveRunFastModeForFallbackCandidate: (params: {
     run: { fastMode?: unknown; fastModeAutoOnSeconds?: unknown };
   }) => ({
     fastMode: params.run.fastMode,
     fastModeAutoOnSeconds: params.run.fastModeAutoOnSeconds,
   }),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("./reply-delivery.js", () => ({
@@ -328,6 +342,7 @@ type FallbackRunnerParams = {
 type EmbeddedAgentParams = {
   lifecycleGeneration?: string;
   onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
+<<<<<<< HEAD
   onExecutionPhase?: (info: {
     phase:
       | "runner_entered"
@@ -353,6 +368,8 @@ type EmbeddedAgentParams = {
     itemId?: string;
     firstModelCallStarted?: boolean;
   }) => void;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onItemEvent?: (payload: {
@@ -387,7 +404,10 @@ function createMockTypingSignaler(): TypingSignaler {
     signalTextDelta: vi.fn(async () => {}),
     signalReasoningDelta: vi.fn(async () => {}),
     signalToolStart: vi.fn(async () => {}),
+<<<<<<< HEAD
     signalExecutionActivity: vi.fn(async () => {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }
 
@@ -542,7 +562,10 @@ function createMinimalRunAgentTurnParams(overrides?: {
   opts?: GetReplyOptions;
   replyOperation?: ReplyOperation;
   sessionCtx?: TemplateContext;
+<<<<<<< HEAD
   typingSignals?: TypingSignaler;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }) {
   return {
     commandBody: "fix it",
@@ -555,7 +578,11 @@ function createMinimalRunAgentTurnParams(overrides?: {
       } as unknown as TemplateContext),
     opts: overrides?.opts ?? ({} satisfies GetReplyOptions),
     replyOperation: overrides?.replyOperation,
+<<<<<<< HEAD
     typingSignals: overrides?.typingSignals ?? createMockTypingSignaler(),
+=======
+    typingSignals: createMockTypingSignaler(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     blockReplyPipeline: null,
     blockStreamingEnabled: false,
     resolvedBlockStreamingBreak: "message_end" as const,
@@ -1355,6 +1382,7 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
+<<<<<<< HEAD
   it("signals typing from embedded harness execution phases before assistant text", async () => {
     const typingSignals = createMockTypingSignaler();
     const onAgentRunStart = vi.fn();
@@ -1422,6 +1450,8 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("registers run ownership before asynchronous image preflight", async () => {
     const agentEvents = await import("../../infra/agent-events.js");
     const registerAgentRunContext = vi.mocked(agentEvents.registerAgentRunContext);
@@ -2985,9 +3015,17 @@ describe("runAgentTurnWithFallback", () => {
     state.runCliAgentMock.mockImplementationOnce(
       async (params: { runId: string; emitCommentaryText?: boolean }) => {
         expect(params.emitCommentaryText).toBe(true);
+<<<<<<< HEAD
         const agentEvents = await import("../../infra/agent-events.js");
         // Inter-tool commentary surfaces as a stream:"item", kind:"preamble" agent event.
         agentEvents.emitAgentEvent({
+=======
+        const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+          "../../infra/agent-events.js",
+        );
+        // Inter-tool commentary surfaces as a stream:"item", kind:"preamble" agent event.
+        realAgentEvents.emitAgentEvent({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           runId: params.runId,
           stream: "item",
           data: {
@@ -5079,6 +5117,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(onCommandOutput).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("keeps opted-in progress callbacks active after message-tool-only delivery completes", async () => {
     const onToolStart = vi.fn();
     const onCommandOutput = vi.fn();
@@ -5181,6 +5220,8 @@ describe("runAgentTurnWithFallback", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps progress callbacks active after message-tool-only reads", async () => {
     const onItemEvent = vi.fn();
     const onCommandOutput = vi.fn();
@@ -5985,7 +6026,11 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+<<<<<<< HEAD
   it("surfaces restart text when fallback exhaustion wraps a drain error, keeping fail bookkeeping", async () => {
+=======
+  it("surfaces gateway restart text when fallback exhaustion wraps a drain error", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const { replyOperation, failMock } = createMockReplyOperation();
     state.runWithModelFallbackMock.mockRejectedValueOnce(
       Object.assign(new Error("fallback exhausted"), {
@@ -6038,7 +6083,11 @@ describe("runAgentTurnWithFallback", () => {
     expect(failCall[1]).toBeInstanceOf(GatewayDrainingError);
   });
 
+<<<<<<< HEAD
   it("surfaces restart text when fallback exhaustion wraps a cleared lane error, keeping fail bookkeeping", async () => {
+=======
+  it("surfaces gateway restart text when fallback exhaustion wraps a cleared lane error", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const { replyOperation, failMock } = createMockReplyOperation();
     state.runWithModelFallbackMock.mockRejectedValueOnce(
       Object.assign(new Error("fallback exhausted"), {
@@ -6091,7 +6140,11 @@ describe("runAgentTurnWithFallback", () => {
     expect(failCall[1]).toBeInstanceOf(CommandLaneClearedError);
   });
 
+<<<<<<< HEAD
   it("stays silent (NO_REPLY) when the reply operation was aborted for restart", async () => {
+=======
+  it("surfaces gateway restart text when the reply operation was aborted for restart", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const agentEvents = await import("../../infra/agent-events.js");
     const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
     const { replyOperation, failMock } = createMockReplyOperation();
@@ -6126,12 +6179,21 @@ describe("runAgentTurnWithFallback", () => {
       sessionKey: "main",
       getActiveSessionEntry: () => undefined,
       resolvedVerboseLevel: "off",
+<<<<<<< HEAD
       isRestartRecoveryArmed: () => true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
+<<<<<<< HEAD
       expect(result.payload.text).toBe(SILENT_REPLY_TOKEN);
+=======
+      expect(result.payload.text).toBe(
+        "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+      );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     expect(failMock).not.toHaveBeenCalled();
     expect(
@@ -6181,13 +6243,20 @@ describe("runAgentTurnWithFallback", () => {
       sessionKey: "main",
       getActiveSessionEntry: () => undefined,
       resolvedVerboseLevel: "off",
+<<<<<<< HEAD
       isRestartRecoveryArmed: () => true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     expect(result).toEqual({
       kind: "final",
       payload: expect.objectContaining({
+<<<<<<< HEAD
         text: SILENT_REPLY_TOKEN,
+=======
+        text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }),
     });
     expect(
@@ -6536,6 +6605,7 @@ describe("runAgentTurnWithFallback", () => {
   );
 
   it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
+<<<<<<< HEAD
     "surfaces provider authentication failures in $label chats",
     async (testCase) => {
       const rawError =
@@ -6568,6 +6638,8 @@ describe("runAgentTurnWithFallback", () => {
   );
 
   it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     "surfaces rate-limit fallback copy in $label chats",
     async (testCase) => {
       state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("429 rate limit exceeded"));
@@ -6718,6 +6790,7 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+<<<<<<< HEAD
   it("surfaces provider internal errors without session reset guidance before reply", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new FailoverError(
@@ -6751,6 +6824,8 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("surfaces billing guidance for Volcengine Coding Plan subscription failures before reply", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error(
@@ -7127,6 +7202,7 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+<<<<<<< HEAD
   it("does not suggest re-authentication for typed format failures", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new FailoverError("Format failover exhausted for provider openai", {
@@ -7149,6 +7225,8 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("points stale openai missing-key failures at doctor repair with re-auth fallback", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error('No API key found for provider "openai".'),

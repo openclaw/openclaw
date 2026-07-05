@@ -371,6 +371,7 @@ const buildMissingEntryErrorMessage = async () => {
 const isBareRootHelpInvocation = (argv) =>
   argv.length === 3 && (argv[2] === "--help" || argv[2] === "-h");
 
+<<<<<<< HEAD
 const LAUNCHER_HELP_FLAGS = new Set(["-h", "--help"]);
 const LAUNCHER_ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
 const LAUNCHER_ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level", "--container"]);
@@ -483,6 +484,22 @@ const resolvePrecomputedCommandHelp = (argv) => {
   }
 
   return commandHelp && sawHelp ? commandHelp : null;
+=======
+const resolvePrecomputedCommandHelp = (argv) => {
+  if (argv.length !== 4 || (argv[3] !== "--help" && argv[3] !== "-h")) {
+    return null;
+  }
+  if (argv[2] === "browser") {
+    return { command: "browser", metadataKey: "browserHelpText" };
+  }
+  if (argv[2] === "secrets") {
+    return { command: "secrets", metadataKey: "secretsHelpText" };
+  }
+  if (argv[2] === "nodes") {
+    return { command: "nodes", metadataKey: "nodesHelpText" };
+  }
+  return null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 const isHelpFastPathDisabled = () =>
@@ -554,11 +571,19 @@ const shouldDeferRootHelpToRuntimeEntry = () => {
   return false;
 };
 
+<<<<<<< HEAD
 const loadPrecomputedHelpText = (key, subkey) => {
   try {
     const raw = readFileSync(new URL("./dist/cli-startup-metadata.json", import.meta.url), "utf8");
     const parsed = JSON.parse(raw);
     const value = subkey ? parsed?.[key]?.[subkey] : parsed?.[key];
+=======
+const loadPrecomputedHelpText = (key) => {
+  try {
+    const raw = readFileSync(new URL("./dist/cli-startup-metadata.json", import.meta.url), "utf8");
+    const parsed = JSON.parse(raw);
+    const value = parsed?.[key];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return typeof value === "string" && value.length > 0 ? value : null;
   } catch {
     return null;
@@ -748,6 +773,7 @@ const tryOutputPrecomputedCommandHelp = () => {
   if (!commandHelp) {
     return false;
   }
+<<<<<<< HEAD
   if (hasLauncherContainerTarget(process.argv)) {
     return false;
   }
@@ -755,6 +781,12 @@ const tryOutputPrecomputedCommandHelp = () => {
     return false;
   }
   const precomputed = loadPrecomputedHelpText(commandHelp.metadataKey, commandHelp.subcommandKey);
+=======
+  if (commandHelp.command === "nodes" && shouldDeferRootHelpToRuntimeEntry()) {
+    return false;
+  }
+  const precomputed = loadPrecomputedHelpText(commandHelp.metadataKey);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!precomputed) {
     return false;
   }

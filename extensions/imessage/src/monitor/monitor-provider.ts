@@ -70,8 +70,11 @@ import { advanceIMessageCatchupCursor, resolveCatchupConfig } from "./catchup.js
 import {
   combineIMessagePayloads,
   hasIMessageBalloonMetadata,
+<<<<<<< HEAD
   hasIMessageUrlBalloonBundleID,
   isStandaloneIMessageUrlPreviewPayload,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   shouldCombineIMessagePayloadBucket,
 } from "./coalesce.js";
 import { repairIMessageConversationAnchor } from "./conversation-repair.js";
@@ -94,7 +97,10 @@ import {
   releaseIMessageInboundReplay,
 } from "./inbound-dedupe.js";
 import {
+<<<<<<< HEAD
   buildDirectIMessageReplyTarget,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   buildIMessageInboundContext,
   rememberIMessageSkippedFromMeForSelfChatDedupe,
   resolveIMessageReactionContext,
@@ -116,13 +122,17 @@ const APPROVAL_REACTION_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_REACTION_DISCOVERY_INTERVAL_MS = 60_000;
 const IMESSAGE_TYPING_KEEPALIVE_INTERVAL_MS = 8_000;
 const IMESSAGE_TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
+<<<<<<< HEAD
 const IMESSAGE_SPLIT_SEND_COMPAT_DEBOUNCE_MS = 7_000;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type IMessageTypingController = Parameters<NonNullable<GetReplyOptions["onTypingController"]>>[0];
 
 function resolveConfiguredIMessageTypingMode(cfg: OpenClawConfig) {
   return cfg.session?.typingMode ?? cfg.agents?.defaults?.typingMode;
 }
 
+<<<<<<< HEAD
 function resolveIMessageSplitSendCompatDebounceMs(
   cfg: OpenClawConfig,
   coalesceSameSenderDms: boolean,
@@ -141,6 +151,8 @@ function resolveIMessageSplitSendCompatDebounceMs(
   return IMESSAGE_SPLIT_SEND_COMPAT_DEBOUNCE_MS;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isIMessagePluginPayloadAttachment(attachment: {
   original_path?: string | null;
   transfer_name?: string | null;
@@ -479,11 +491,31 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         : recoveryCursorRowid
       : recoveryBoundaryRowid;
 
+<<<<<<< HEAD
   const coalesceSameSenderDms = imessageCfg.coalesceSameSenderDms === true;
   const debounceMsOverride = resolveIMessageSplitSendCompatDebounceMs(cfg, coalesceSameSenderDms);
   // Session capability latch: flips true once any inbound row from this imsg
   // build carries balloon metadata. The coalesce flush gate needs a build-level
   // signal because imsg omits `balloon_bundle_id` for plain rows.
+=======
+  // When `coalesceSameSenderDms` is enabled and the user has not set an
+  // explicit inbound debounce for this channel, widen the window to 2500 ms.
+  // Apple's split-send for `<command> <URL>` arrives ~0.8-2.0 s apart on most
+  // setups, so the legacy 0 ms default would flush the command alone before
+  // the URL row reaches the debouncer.
+  const coalesceSameSenderDms = imessageCfg.coalesceSameSenderDms === true;
+  const inboundCfg = cfg.messages?.inbound;
+  const hasExplicitInboundDebounce =
+    typeof inboundCfg?.debounceMs === "number" ||
+    typeof inboundCfg?.byChannel?.imessage === "number";
+  const debounceMsOverride =
+    coalesceSameSenderDms && !hasExplicitInboundDebounce ? 2500 : undefined;
+
+  // Session capability latch: flips true once any inbound row from this imsg
+  // build carries balloon metadata. The coalesce flush gate needs a build-level
+  // (not per-bucket) signal because imsg omits `balloon_bundle_id` for plain
+  // rows, so a bucket of plain text looks identical on old and new builds.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let imsgEmitsBalloonMetadata = false;
   let recoveryCursorHoldBeforeRowid: number | null = null;
   let latestAdvancedRecoveryCursorRowid = recoveryCursorRowid ?? -1;
@@ -595,8 +627,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     message: IMessagePayload;
     // Exact replay-guard key claimed for this row at ingestion (GUID or, for a
     // GUID-less row, the composite fallback). Carried through so flush commits
+<<<<<<< HEAD
     // or releases the same key it claimed, even after a debounce merge rewrites
     // the payload identity. null when the row had no derivable key (fail open).
+=======
+    // or releases the same key it claimed, even after coalescing rewrites the
+    // payload identity. null when the row had no derivable key (fail open).
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     replayKey: string | null;
   }>({
     cfg,
@@ -613,6 +650,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           ? `chat:${msg.chat_id}`
           : (msg.chat_guid ?? msg.chat_identifier ?? "unknown");
 
+<<<<<<< HEAD
+=======
+      // With coalesceSameSenderDms enabled, DMs key on chat:sender so Apple's
+      // split text row and URL-balloon row land in the same bucket. The flush
+      // path still requires imsg's structural balloon metadata before merging.
+      // Group chats keep the legacy key to preserve multi-user turn structure.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (coalesceSameSenderDms && msg.is_group !== true) {
         return `imessage:${accountInfo.accountId}:dm:${conversationId}:${sender}`;
       }
@@ -629,14 +673,25 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         return false;
       }
 
+<<<<<<< HEAD
       // Opt-in DM coalescing holds rows long enough for Apple's command+URL
       // split-send to arrive. Group chats keep instant per-message dispatch.
+=======
+      // Hold opt-in DMs long enough for a following URL-balloon row to arrive.
+      // The flush gate (shouldCombineIMessagePayloadBucket) decides merge vs.
+      // separate: it merges precisely on imsg's balloon marker, and falls back
+      // to a legacy merge only when the build emits no balloon metadata at all.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (coalesceSameSenderDms) {
         return msg.is_group !== true;
       }
 
+<<<<<<< HEAD
       // General same-sender inbound debounce: text-only, no control commands,
       // no media. Off by default unless messages.inbound is configured.
+=======
+      // Legacy gate: text-only, no control commands, no media.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return shouldDebounceTextInbound({
         text: msg.text,
         cfg,
@@ -649,7 +704,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       if (entries.length === 0) {
         return;
       }
+<<<<<<< HEAD
       // Dispatch one unit (a single row or a merged bucket), then commit the
+=======
+      // Dispatch one unit (a single row or a coalesced bucket), then commit the
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       // exact replay keys that were claimed at ingestion, or release them if
       // dispatch throws so a transient failure can retry on a later re-emit. Per
       // unit so a failure in one bucket entry cannot strand another's claim.
@@ -692,6 +751,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         }
         return;
       }
+<<<<<<< HEAD
       // The bucket-level gate only says this window contains URL-balloon work.
       // Standalone URL preview rows merge with the immediately preceding row;
       // already-complete URL messages flush any pending ordinary row first.
@@ -725,14 +785,21 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         }
         return;
       }
+=======
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const combined = combineIMessagePayloads(messages);
       if (shouldLogVerbose()) {
         const text = combined.text ?? "";
         const preview = text.slice(0, 50);
         const ellipsis = text.length > 50 ? "..." : "";
+<<<<<<< HEAD
         logVerbose(
           `[imessage] merged ${entries.length} debounced messages: "${preview}${ellipsis}"`,
         );
+=======
+        logVerbose(`[imessage] coalesced ${entries.length} messages: "${preview}${ellipsis}"`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
       await dispatchUnit(entries, combined);
     },
@@ -1040,6 +1107,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const storePath = resolveStorePath(cfg.session?.store, {
       agentId: decision.route.agentId,
     });
+<<<<<<< HEAD
     const privateApiStatus = getCachedIMessagePrivateApiStatus(cliPath);
     const supportsTyping = imessageRpcSupportsMethod(privateApiStatus, "typing");
     const supportsRead = imessageRpcSupportsMethod(privateApiStatus, "read");
@@ -1121,6 +1189,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           });
       };
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const stagedAttachments = remoteHost
       ? []
       : await stageIMessageAttachments(validAttachments, {
@@ -1189,10 +1259,26 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       );
     }
 
+<<<<<<< HEAD
+=======
+    const privateApiStatus = getCachedIMessagePrivateApiStatus(cliPath);
+    const supportsTyping = imessageRpcSupportsMethod(privateApiStatus, "typing");
+    const supportsRead = imessageRpcSupportsMethod(privateApiStatus, "read");
+    if (privateApiStatus?.available === true) {
+      // Surface a single warning per restart when the bridge is up but we
+      // had to gate off typing/read because the imsg build pre-dates the
+      // capability list. Otherwise the user sees no typing bubble / no
+      // "Read" receipt with no visible reason.
+      if (!supportsTyping || !supportsRead) {
+        warnIfImsgUpgradeNeeded.fireOnce(privateApiStatus.rpcMethods, runtime);
+      }
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const sendReadReceipts = imessageCfg.sendReadReceipts !== false;
     const typingTarget = ctxPayload.To;
 
     if (supportsRead && sendReadReceipts && typingTarget) {
+<<<<<<< HEAD
       // Read receipts are best-effort channel UI. Do not put them on the
       // critical path before model dispatch; slow private-API reads otherwise
       // make accepted iMessage turns feel stuck before the agent starts. Use
@@ -1203,6 +1289,17 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       }).catch((err: unknown) => {
         runtime.error?.(`imessage: mark read failed: ${String(err)}`);
       });
+=======
+      try {
+        await markIMessageChatRead(typingTarget, {
+          cfg,
+          accountId: accountInfo.accountId,
+          client: getActiveClient(),
+        });
+      } catch (err) {
+        runtime.error?.(`imessage: mark read failed: ${String(err)}`);
+      }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
 
     const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
@@ -1305,20 +1402,42 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
     });
     let directTypingController: IMessageTypingController | undefined;
+<<<<<<< HEAD
     const directToolTypingOptions = shouldUseDirectToolTypingOptions
+=======
+    const configuredTypingMode = resolveConfiguredIMessageTypingMode(cfg);
+    const sendPolicy = resolveSendPolicy({
+      cfg,
+      entry: getSessionEntry({ storePath, sessionKey: decision.route.sessionKey }),
+      sessionKey: decision.route.sessionKey,
+      channel: "imessage",
+      chatType: decision.isGroup ? "group" : "direct",
+    });
+    const shouldStartToolTyping =
+      !decision.isGroup &&
+      sendPolicy !== "deny" &&
+      (configuredTypingMode === undefined || configuredTypingMode === "instant");
+    const directToolTypingOptions = shouldStartToolTyping
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ? ({
           // iMessage's native typing bubble is channel-owned UI, not a
           // visible tool-progress message. The suppress flag is what lets
           // dispatch forward this callback even when verbose progress is off;
           // allowProgress covers message_tool_only source delivery. Keep this on
+<<<<<<< HEAD
           // the direct instant/default path even when older imsg builds do not
           // report native typing support.
+=======
+          // the direct instant/default path so configured typingMode values still
+          // decide when typing can begin.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           suppressDefaultToolProgressMessages: true,
           allowProgressCallbacksWhenSourceDeliverySuppressed: true,
           onTypingController: (typing: IMessageTypingController) => {
             directTypingController = typing;
             typingReplyOptions.onTypingController?.(typing);
           },
+<<<<<<< HEAD
           ...(supportsTyping
             ? {
                 onToolStart: async () => {
@@ -1326,6 +1445,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
                 },
               }
             : {}),
+=======
+          onToolStart: async () => {
+            await directTypingController?.startTypingLoop();
+          },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         } as const)
       : {};
     const configuredBlockStreaming = resolveChannelStreamingBlockEnabled(accountInfo.config);
@@ -1388,6 +1512,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             historyMap: groupHistories,
             limit: historyLimit,
           },
+<<<<<<< HEAD
           onPreDispatchFailure: () => {
             stopEarlyDirectTyping?.();
             void settleReplyDispatcher({
@@ -1395,6 +1520,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
               onSettled: () => markDispatchIdle(),
             });
           },
+=======
+          onPreDispatchFailure: () =>
+            settleReplyDispatcher({
+              dispatcher,
+              onSettled: () => markDispatchIdle(),
+            }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           runDispatch: async () => {
             try {
               return await dispatchInboundMessage({
@@ -1413,7 +1545,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
               });
             } finally {
               markDispatchIdle();
+<<<<<<< HEAD
               stopEarlyDirectTyping?.();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             }
           },
         }),
@@ -1436,6 +1571,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       runtime.error?.(`imessage: dropping malformed RPC message payload (keys=${shape})`);
       return;
     }
+<<<<<<< HEAD
+=======
+    // Latch build capability from any row that carries balloon metadata so the
+    // coalesce flush gate can trust a missing URL marker on later plain buckets.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!imsgEmitsBalloonMetadata && hasIMessageBalloonMetadata(message)) {
       imsgEmitsBalloonMetadata = true;
     }

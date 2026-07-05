@@ -1,9 +1,12 @@
 // Probes local ports and reports listener availability.
 import net from "node:net";
+<<<<<<< HEAD
 import { isErrno } from "./errors.js";
 import type { PortUsageStatus } from "./ports-types.js";
 
 const PORT_PROBE_HOSTS = ["127.0.0.1", "0.0.0.0", "::1", "::"];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Opens and closes a temporary listener to verify that a port can be bound. */
 export async function tryListenOnPort(params: {
@@ -32,6 +35,7 @@ export async function tryListenOnPort(params: {
       .listen(listenOptions);
   });
 }
+<<<<<<< HEAD
 
 async function probePortOnHost(port: number, host: string): Promise<PortUsageStatus | "skip"> {
   try {
@@ -62,3 +66,5 @@ export async function probePortUsage(port: number): Promise<PortUsageStatus> {
   }
   return sawUnknown ? "unknown" : "free";
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

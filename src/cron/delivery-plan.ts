@@ -36,11 +36,14 @@ function normalizeChannel(value: unknown): CronMessageChannel | undefined {
   return trimmed as CronMessageChannel;
 }
 
+<<<<<<< HEAD
 function normalizeThreadIdentity(value: unknown): string | undefined {
   const normalized = normalizeOptionalThreadValue(value);
   return normalized == null ? undefined : String(normalized);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveAnnounceChannel(params: {
   channel?: CronMessageChannel;
   to?: string;
@@ -236,7 +239,10 @@ function isSameDeliveryTarget(
 
   const primaryTo = normalizeOptionalString(delivery.to);
   const primaryAccountId = normalizeOptionalString(delivery.accountId);
+<<<<<<< HEAD
   const primaryThreadId = normalizeThreadIdentity(delivery.threadId);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   if (failurePlan.mode === "webhook") {
     return primaryMode === "webhook" && primaryTo === failurePlan.to;
@@ -251,7 +257,11 @@ function isSameDeliveryTarget(
   return (
     failureChannelNormalized === primaryChannelNormalized &&
     failurePlan.to === primaryTo &&
+<<<<<<< HEAD
     failurePlan.accountId === primaryAccountId &&
     primaryThreadId === undefined
+=======
+    failurePlan.accountId === primaryAccountId
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
 }

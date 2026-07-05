@@ -1,6 +1,9 @@
 /** Timeout wrapper for node-host operations using AbortSignal cancellation. */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+<<<<<<< HEAD
 import { toErrorObject } from "../infra/errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /**
  * AbortSignal-based timeout wrapper for node-host operations.
@@ -26,10 +29,19 @@ export async function withTimeout<T>(
 
   let abortListener: (() => void) | undefined;
   const abortPromise: Promise<never> = abortCtrl.signal.aborted
+<<<<<<< HEAD
     ? Promise.reject(toErrorObject(abortCtrl.signal.reason ?? timeoutError, "Non-Error rejection"))
     : new Promise((_, reject) => {
         abortListener = () =>
           reject(toErrorObject(abortCtrl.signal.reason ?? timeoutError, "Non-Error rejection"));
+=======
+    ? Promise.reject(
+        toLintErrorObject(abortCtrl.signal.reason ?? timeoutError, "Non-Error rejection"),
+      )
+    : new Promise((_, reject) => {
+        abortListener = () =>
+          reject(toLintErrorObject(abortCtrl.signal.reason ?? timeoutError, "Non-Error rejection"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         abortCtrl.signal.addEventListener("abort", abortListener, { once: true });
       });
 
@@ -43,3 +55,20 @@ export async function withTimeout<T>(
     }
   }
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

@@ -97,6 +97,7 @@ describe("nostr bus state store", () => {
       expect(stateB?.lastProcessedAt).toBe(2000);
     });
   });
+<<<<<<< HEAD
 
   it("preserves legacy account key bytes for state lookup", async () => {
     await withTempStateDir(async () => {
@@ -112,6 +113,8 @@ describe("nostr bus state store", () => {
       await expect(readNostrBusState({ accountId: "team-a" })).resolves.toBeNull();
     });
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("nostr profile state store", () => {

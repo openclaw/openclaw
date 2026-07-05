@@ -1,6 +1,10 @@
 // Direct delivery tests cover isolated agent delivery through core channel targets.
 import "./isolated-agent.mocks.js";
+<<<<<<< HEAD
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+=======
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type { ChannelOutboundAdapter, ChannelOutboundContext } from "../channels/plugins/types.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -455,6 +459,7 @@ describe("runCronIsolatedAgentTurn telegram forum-topic direct delivery", () => 
     });
   });
 
+<<<<<<< HEAD
   it("does not report delivered when telegram announce produces no platform result", async () => {
     await withTempCronHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
@@ -504,6 +509,8 @@ describe("runCronIsolatedAgentTurn telegram forum-topic direct delivery", () => 
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("delivers only the final assistant-visible text to forum-topic telegram targets", async () => {
     await expectTelegramAnnounceDelivery({
       to: "123:topic:42",

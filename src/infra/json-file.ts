@@ -4,6 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { tryReadJsonSync, writeJsonSync } from "@openclaw/fs-safe/json";
 
+<<<<<<< HEAD
+=======
+export { tryReadJsonSync, writeJsonSync };
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveJsonSymlinkTarget(pathname: string): string | undefined {
   let stat: fs.Stats;
   try {

@@ -13,7 +13,10 @@ import {
 import type { VoiceCallConfig } from "./config.js";
 import {
   resolveVoiceCallEffectiveConfig,
+<<<<<<< HEAD
   resolveVoiceCallNumberRouteKeyForCall,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveVoiceCallSessionKey,
   resolveTwilioAuthToken,
   resolveVoiceCallConfig,
@@ -112,19 +115,33 @@ function loadRealtimeHandler(): Promise<RealtimeHandlerModule> {
 
 function resolveVoiceCallConsultSessionKey(call: {
   config: VoiceCallConfig;
+<<<<<<< HEAD
   coreSession?: OpenClawConfig["session"];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sessionKey?: string;
   from?: string;
   to?: string;
   direction?: "inbound" | "outbound";
   callId: string;
 }): string {
+<<<<<<< HEAD
   return resolveVoiceCallSessionKey({
     config: call.config,
     callId: call.callId,
     phone: call.direction === "outbound" ? call.to : call.from,
     explicitSessionKey: call.sessionKey,
     coreSession: call.coreSession,
+=======
+  if (call.sessionKey) {
+    return call.sessionKey;
+  }
+  const phone = call.direction === "outbound" ? call.to : call.from;
+  return resolveVoiceCallSessionKey({
+    config: call.config,
+    callId: call.callId,
+    phone,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 }
 
@@ -309,7 +326,11 @@ export async function createVoiceCallRuntime(params: {
   if (stateRuntime) {
     setVoiceCallStateRuntime({ state: stateRuntime });
   }
+<<<<<<< HEAD
   const manager = new CallManager(config, undefined, cfg.session);
+=======
+  const manager = new CallManager(config);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const realtimeProvider = config.realtime.enabled
     ? await resolveRealtimeProvider({
         config,
@@ -358,13 +379,23 @@ export async function createVoiceCallRuntime(params: {
           if (!call) {
             return { error: `Call "${callId}" not found` };
           }
+<<<<<<< HEAD
           const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
+=======
+          const numberRouteKey =
+            typeof call.metadata?.numberRouteKey === "string"
+              ? call.metadata.numberRouteKey
+              : call.to;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           const effectiveConfig = resolveVoiceCallEffectiveConfig(config, numberRouteKey).config;
           const agentId = effectiveConfig.agentId ?? "main";
           const sessionKey = resolveVoiceCallConsultSessionKey({
             ...call,
             config: effectiveConfig,
+<<<<<<< HEAD
             coreSession: cfg.session,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           });
           const requesterSessionKey =
             typeof call.metadata?.requesterSessionKey === "string"

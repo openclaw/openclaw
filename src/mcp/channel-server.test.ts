@@ -218,6 +218,7 @@ describe("openclaw channel mcp server", () => {
         ).toBe(true);
       });
 
+<<<<<<< HEAD
       test("clamps direct bridge session limits to the public MCP windows", async () => {
         const sessionKey = "agent:main:main";
         const gatewayRequest = vi.fn(async (method: string) => {
@@ -249,6 +250,8 @@ describe("openclaw channel mcp server", () => {
         });
       });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       test("serializes conversation and message payloads into MCP primary content", async () => {
         const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
         try {

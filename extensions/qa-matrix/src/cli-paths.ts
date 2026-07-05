@@ -1,6 +1,9 @@
 // Qa Matrix plugin module implements cli paths behavior.
 import path from "node:path";
+<<<<<<< HEAD
 import { assertNoSymlinkParents, pathScope } from "openclaw/plugin-sdk/security-runtime";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export function resolveRepoRelativeOutputDir(repoRoot: string, outputDir?: string) {
   if (!outputDir) {
@@ -16,6 +19,7 @@ export function resolveRepoRelativeOutputDir(repoRoot: string, outputDir?: strin
   }
   return resolved;
 }
+<<<<<<< HEAD
 
 function assertRepoRelativePath(repoRoot: string, targetPath: string, label: string) {
   const relative = path.relative(repoRoot, targetPath);
@@ -46,3 +50,5 @@ export async function ensureRepoBoundDirectory(repoRoot: string, targetDir: stri
   }
   return result.path;
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

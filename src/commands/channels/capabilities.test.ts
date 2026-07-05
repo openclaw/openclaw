@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   listReadOnlyChannelPluginsForConfig: vi.fn(),
 }));
 
+<<<<<<< HEAD
 vi.mock("./shared.js", async () => {
   const actual = await vi.importActual<typeof import("./shared.js")>("./shared.js");
   return {
@@ -28,6 +29,14 @@ vi.mock("./shared.js", async () => {
     ),
   };
 });
+=======
+vi.mock("./shared.js", () => ({
+  requireValidConfig: vi.fn(async () => ({ channels: {} })),
+  formatChannelAccountLabel: vi.fn(
+    ({ channel, accountId }: { channel: string; accountId: string }) => `${channel}:${accountId}`,
+  ),
+}));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 vi.mock("../../channels/plugins/index.js", () => ({
   listChannelPlugins: vi.fn(),
@@ -222,6 +231,7 @@ describe("channelsCapabilitiesCommand", () => {
     expect(probeAccount).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("caps oversized timeouts before invoking capability probes", async () => {
     const probeAccount = vi.fn(async () => ({ ok: true }));
     const buildCapabilitiesDiagnostics = vi.fn(async () => ({
@@ -358,6 +368,8 @@ describe("channelsCapabilitiesCommand", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("prints Teams Graph permission hints when present", async () => {
     const plugin = buildPlugin({
       id: "msteams",

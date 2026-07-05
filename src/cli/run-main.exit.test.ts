@@ -4,10 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { CommanderError } from "commander";
+<<<<<<< HEAD
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { loggingState } from "../logging/state.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+=======
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loggingState } from "../logging/state.js";
+import { withEnvAsync } from "../test-utils/env.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
 import { runCli, shouldStartProxyForCli } from "./run-main.js";
@@ -40,7 +46,11 @@ const ensurePathMock = vi.hoisted(() => vi.fn());
 const assertRuntimeMock = vi.hoisted(() => vi.fn());
 const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
 const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));
+<<<<<<< HEAD
 const listRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn((): unknown[] => []));
+=======
+const listAgentHarnessIdsMock = vi.hoisted(() => vi.fn((): string[] => []));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const disposeRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn(async () => {}));
 const ensureTaskRegistryReadyMock = vi.hoisted(() => vi.fn());
 const startTaskRegistryMaintenanceMock = vi.hoisted(() => vi.fn());
@@ -108,11 +118,14 @@ const maybeRunCliInContainerMock = vi.hoisted(() =>
     (argv: string[]) => { handled: true; exitCode: number } | { handled: false; argv: string[] }
   >((argv: string[]) => ({ handled: false, argv })),
 );
+<<<<<<< HEAD
 const serviceEnvSnapshot = captureEnv([
   "OPENCLAW_SERVICE_MARKER",
   "OPENCLAW_SERVICE_KIND",
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
 ]);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function requireRunCrestodianOptions(index = 0): { onReady?: unknown } {
   const call = runCrestodianMock.mock.calls[index];
@@ -222,7 +235,11 @@ vi.mock("../plugins/memory-state.js", () => ({
 }));
 
 vi.mock("../agents/harness/registry.js", () => ({
+<<<<<<< HEAD
   listRegisteredAgentHarnesses: listRegisteredAgentHarnessesMock,
+=======
+  listAgentHarnessIds: listAgentHarnessIdsMock,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   disposeRegisteredAgentHarnesses: disposeRegisteredAgentHarnessesMock,
 }));
 
@@ -352,6 +369,7 @@ async function withInteractiveTty(fn: () => Promise<void>): Promise<void> {
 }
 
 describe("runCli exit behavior", () => {
+<<<<<<< HEAD
   afterAll(() => {
     serviceEnvSnapshot.restore();
   });
@@ -360,6 +378,9 @@ describe("runCli exit behavior", () => {
     delete process.env.OPENCLAW_SERVICE_MARKER;
     delete process.env.OPENCLAW_SERVICE_KIND;
     delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
+=======
+  beforeEach(() => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     vi.clearAllMocks();
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
@@ -367,7 +388,11 @@ describe("runCli exit behavior", () => {
       sourceConfig: { gateway: { mode: "local" } },
     });
     hasMemoryRuntimeMock.mockReturnValue(false);
+<<<<<<< HEAD
     listRegisteredAgentHarnessesMock.mockReturnValue([]);
+=======
+    listAgentHarnessIdsMock.mockReturnValue([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     outputPrecomputedBrowserHelpTextMock.mockReturnValue(false);
     outputPrecomputedNodesHelpTextMock.mockReturnValue(false);
     outputPrecomputedRootHelpTextMock.mockReturnValue(false);
@@ -411,7 +436,11 @@ describe("runCli exit behavior", () => {
   });
 
   it("disposes registered harnesses after full CLI command completion", async () => {
+<<<<<<< HEAD
     listRegisteredAgentHarnessesMock.mockReturnValueOnce([{ harness: { id: "codex" } }]);
+=======
+    listAgentHarnessIdsMock.mockReturnValueOnce(["codex"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     tryRouteCliMock.mockResolvedValueOnce(false);
     const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
     buildProgramMock.mockReturnValueOnce({
@@ -2161,6 +2190,7 @@ describe("runCli exit behavior", () => {
     expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("suggests close known commands for unowned command roots before proxy startup", async () => {
     await expect(runCli(["node", "openclaw", "upate"])).rejects.toThrow(
       "Did you mean this?\n  openclaw update",
@@ -2196,6 +2226,8 @@ describe("runCli exit behavior", () => {
     expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects unowned command roots even when --help is appended (regression for #81077)", async () => {
     await expect(runCli(["node", "openclaw", "foo", "--help"])).rejects.toThrow(
       'No built-in command or plugin CLI metadata owns "foo"',

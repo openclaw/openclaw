@@ -3,10 +3,13 @@ export type GoogleChatSpace = {
   name?: string;
   displayName?: string;
   type?: string;
+<<<<<<< HEAD
   /** Current Google Chat field that replaces the deprecated `type` field. */
   spaceType?: string;
   /** True when the space is a 1:1 DM between a user and the Chat app. */
   singleUserBotDm?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 export type GoogleChatUser = {

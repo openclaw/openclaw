@@ -17,14 +17,20 @@ import {
 } from "../agents/sandbox/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+<<<<<<< HEAD
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
+<<<<<<< HEAD
 const SANDBOX_REGISTRY_FILES_CHECK_ID = "core/doctor/sandbox/registry-files";
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type SandboxScriptInfo = {
   scriptPath: string;
   cwd: string;
@@ -361,6 +367,7 @@ export async function maybeRepairSandboxImages(
 
 function formatLegacyRegistryInspectionLine(file: LegacySandboxRegistryInspection): string {
   const status = file.valid ? `${file.entries} entr${file.entries === 1 ? "y" : "ies"}` : "invalid";
+<<<<<<< HEAD
   const sourcePath = legacySandboxRegistryInspectionSourcePath(file);
   return `- ${file.kind} ${file.source}: ${shortenHomePath(sourcePath)} (${status})`;
 }
@@ -369,6 +376,12 @@ function legacySandboxRegistryInspectionSourcePath(file: LegacySandboxRegistryIn
   return file.source === "sharded" ? file.shardedDir : file.registryPath;
 }
 
+=======
+  const sourcePath = file.source === "sharded" ? file.shardedDir : file.registryPath;
+  return `- ${file.kind} ${file.source}: ${shortenHomePath(sourcePath)} (${status})`;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function formatLegacyRegistryMigrationLine(result: LegacySandboxRegistryMigrationResult): string {
   if (result.status === "migrated") {
     return `- Migrated ${result.kind} registry into ${result.entries} SQLite row${result.entries === 1 ? "" : "s"}.`;
@@ -385,6 +398,7 @@ function formatLegacyRegistryMigrationLine(result: LegacySandboxRegistryMigratio
   return "";
 }
 
+<<<<<<< HEAD
 export async function detectLegacySandboxRegistryFileIssues(): Promise<
   readonly LegacySandboxRegistryInspection[]
 > {
@@ -423,6 +437,11 @@ export function legacySandboxRegistryInspectionToRepairEffect(
 /** Migrates legacy sandbox registry files and directories. */
 export async function maybeRepairSandboxRegistryFiles(prompter: DoctorPrompter): Promise<void> {
   const legacyFiles = await detectLegacySandboxRegistryFileIssues();
+=======
+/** Migrates legacy sandbox registry files and directories into SQLite. */
+export async function maybeRepairSandboxRegistryFiles(prompter: DoctorPrompter): Promise<void> {
+  const legacyFiles = (await inspectLegacySandboxRegistryFiles()).filter((file) => file.exists);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (legacyFiles.length === 0) {
     return;
   }

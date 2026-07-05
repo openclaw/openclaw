@@ -13,7 +13,10 @@ import { resolveOpenAIReasoningEffortMap } from "../agents/openai-reasoning-comp
 import { resolveOpenAIReasoningEffortForModel } from "../agents/openai-reasoning-effort.js";
 import type { StreamFn } from "../agents/runtime/index.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
+<<<<<<< HEAD
 import { mapThinkingLevelToReasoningEffort } from "../llm/providers/stream-wrappers/reasoning-effort-utils.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
@@ -412,6 +415,7 @@ export function isOpenAICompatibleThinkingEnabled(params: {
   return normalized !== "off" && normalized !== "none";
 }
 
+<<<<<<< HEAD
 /** Applies the shared reasoning payload policy used by OpenAI-compatible proxy providers. */
 export function normalizeOpenAICompatibleReasoningPayload(
   payload: Record<string, unknown>,
@@ -462,6 +466,8 @@ export function setQwenChatTemplateThinking(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */
 export type DeepSeekV4ThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
 /** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */

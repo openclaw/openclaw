@@ -5,7 +5,10 @@
  */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { getRuntimeConfig } from "../config/config.js";
+<<<<<<< HEAD
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   loadSessionStore,
   resolveAgentIdFromSessionKey,
@@ -20,6 +23,7 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
+<<<<<<< HEAD
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 
@@ -28,6 +32,10 @@ export type SubagentRunOrphanReason =
   | "missing-session-entry"
   | "missing-session-id"
   | "stale-unended-run";
+=======
+
+export type SubagentSessionStoreCache = Map<string, Record<string, SessionEntry>>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Completion inferred from the child session store. */
 export type SubagentSessionCompletion = {
@@ -102,6 +110,7 @@ export function loadSubagentSessionEntry(params: {
   return findSessionEntryByKey(store, key);
 }
 
+<<<<<<< HEAD
 /** Resolve a child session entry without depending on the file-backed store shape. */
 function loadSubagentSessionEntryForAccessor(params: {
   childSessionKey: string;
@@ -157,6 +166,8 @@ export function resolveSubagentRunOrphanReason(params: {
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Convert persisted session status into a subagent completion outcome. */
 export function resolveCompletionFromSessionEntry(
   sessionEntry: SessionEntry | undefined,

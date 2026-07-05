@@ -39,6 +39,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
   };
 });
 
+<<<<<<< HEAD
 function sseResponse(lines: string[], options?: { releaseLock?: () => void }): Response {
   const encoder = new TextEncoder();
   if (!options?.releaseLock) {
@@ -102,6 +103,21 @@ function sseResponseLines(params: {
     lines.push("data: [DONE]\n");
   }
   return lines;
+=======
+function sseResponse(lines: string[]): Response {
+  const encoder = new TextEncoder();
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        for (const line of lines) {
+          controller.enqueue(encoder.encode(line));
+        }
+        controller.close();
+      },
+    }),
+    { status: 200, headers: { "content-type": "text/event-stream" } },
+  );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function stalledSseResponse(line: string): Response {
@@ -200,6 +216,7 @@ describe("openrouter music generation provider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+<<<<<<< HEAD
   it("releases OpenRouter audio stream readers after completion", async () => {
     const releaseLock = vi.fn();
     postJsonRequestMock.mockResolvedValue({
@@ -226,6 +243,8 @@ describe("openrouter music generation provider", () => {
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("decodes independently padded OpenRouter audio chunks", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: sseResponse([

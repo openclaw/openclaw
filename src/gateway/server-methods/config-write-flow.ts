@@ -132,6 +132,7 @@ function queueSharedGatewayAuthGenerationRefresh(
   });
 }
 
+<<<<<<< HEAD
 function isNoopConfigReloadPlan(plan: ReturnType<typeof buildGatewayReloadPlan>): boolean {
   return (
     !plan.restartGateway &&
@@ -166,6 +167,23 @@ function resolveConfigRestartRequirement(params: {
     return { requiresRestart: true, scheduleDirectRestart: reloadSettings.mode === "hot" };
   }
   return { requiresRestart: false, scheduleDirectRestart: false };
+=======
+function shouldScheduleDirectConfigRestart(params: {
+  changedPaths: string[];
+  nextConfig: OpenClawConfig;
+}): boolean {
+  const reloadSettings = resolveGatewayReloadSettings(params.nextConfig);
+  if (reloadSettings.mode === "off") {
+    return true;
+  }
+  // Hybrid mode lets hot-reload own non-gateway restarts; only paths the reload
+  // plan marks as gateway-owned get a direct process restart here.
+  const plan = buildGatewayReloadPlan(params.changedPaths);
+  if (reloadSettings.mode === "hot" && plan.restartGateway) {
+    return true;
+  }
+  return false;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function resolveConfigRestartRequest(params: unknown): {
@@ -201,7 +219,10 @@ function buildConfigRestartSentinelPayload(params: {
   kind: RestartSentinelPayload["kind"];
   mode: string;
   configPath: string;
+<<<<<<< HEAD
   requiresRestart: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sessionKey: string | undefined;
   deliveryContext: ReturnType<typeof extractDeliveryInfo>["deliveryContext"];
   threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
@@ -219,17 +240,30 @@ function buildConfigRestartSentinelPayload(params: {
     stats: {
       mode: params.mode,
       root: params.configPath,
+<<<<<<< HEAD
       requiresRestart: params.requiresRestart,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
   };
 }
 
+<<<<<<< HEAD
 async function tryWriteRestartSentinelPayload(payload: RestartSentinelPayload): Promise<boolean> {
   try {
     await writeRestartSentinel(payload);
     return true;
   } catch {
     return false;
+=======
+async function tryWriteRestartSentinelPayload(
+  payload: RestartSentinelPayload,
+): Promise<string | null> {
+  try {
+    return await writeRestartSentinel(payload);
+  } catch {
+    return null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 
@@ -276,27 +310,45 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
   context?: GatewayRequestContext;
 }): Promise<{
   payload: RestartSentinelPayload;
+<<<<<<< HEAD
   sentinelPersisted: boolean;
+=======
+  sentinelPath: string | null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   restart: ReturnType<typeof scheduleGatewaySigusr1Restart> | undefined;
 }> {
   const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
     resolveConfigRestartRequest(params.requestParams);
+<<<<<<< HEAD
   const restartRequirement = resolveConfigRestartRequirement({
     changedPaths: params.changedPaths,
     nextConfig: params.nextConfig,
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const payload = buildConfigRestartSentinelPayload({
     kind: params.kind,
     mode: params.mode,
     configPath: params.configPath,
+<<<<<<< HEAD
     requiresRestart: restartRequirement.requiresRestart,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sessionKey,
     deliveryContext,
     threadId,
     note,
   });
+<<<<<<< HEAD
   const sentinelPersisted = await tryWriteRestartSentinelPayload(payload);
   const restart = restartRequirement.scheduleDirectRestart
+=======
+  const sentinelPath = await tryWriteRestartSentinelPayload(payload);
+  const restart = shouldScheduleDirectConfigRestart({
+    changedPaths: params.changedPaths,
+    nextConfig: params.nextConfig,
+  })
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ? scheduleGatewaySigusr1Restart({
         delayMs: restartDelayMs,
         reason: params.mode,
@@ -313,5 +365,9 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
       `${params.mode} restart coalesced ${formatControlPlaneActor(params.actor)} delayMs=${restart.delayMs}`,
     );
   }
+<<<<<<< HEAD
   return { payload, sentinelPersisted, restart };
+=======
+  return { payload, sentinelPath, restart };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }

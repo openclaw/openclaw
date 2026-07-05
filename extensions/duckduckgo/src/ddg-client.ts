@@ -1,6 +1,9 @@
 // Duckduckgo plugin module implements ddg client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+<<<<<<< HEAD
 import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_SEARCH_COUNT,
@@ -37,6 +40,7 @@ type DuckDuckGoResult = {
 };
 
 function decodeHtmlEntities(text: string): string {
+<<<<<<< HEAD
   return text.replace(
     /&(?:lt|gt|quot|apos|#39|#x27|#x2F|nbsp|ndash|mdash|hellip|amp|#\d+|#x[0-9a-f]+);/gi,
     (entity) => {
@@ -80,6 +84,23 @@ function decodeHtmlEntities(text: string): string {
       return entity;
     },
   );
+=======
+  return text
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/g, "'")
+    .replace(/&#x2F;/g, "/")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&ndash;/g, "-")
+    .replace(/&mdash;/g, "--")
+    .replace(/&hellip;/g, "...")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(Number.parseInt(code, 16)));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function stripHtml(html: string): string {
@@ -114,10 +135,13 @@ function isBotChallenge(html: string): boolean {
   return /g-recaptcha|are you a human|id="challenge-form"|name="challenge"/i.test(html);
 }
 
+<<<<<<< HEAD
 async function readDuckDuckGoHtmlResponse(response: Response): Promise<string> {
   return await readProviderTextResponse(response, "DuckDuckGo search");
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function parseDuckDuckGoHtml(html: string): DuckDuckGoResult[] {
   const results: DuckDuckGoResult[] = [];
   const resultRegex = /<a\b(?=[^>]*\bclass="[^"]*\bresult__a\b[^"]*")([^>]*)>([\s\S]*?)<\/a>/gi;
@@ -207,7 +231,11 @@ export async function runDuckDuckGoSearch(params: {
         );
       }
 
+<<<<<<< HEAD
       const html = await readDuckDuckGoHtmlResponse(response);
+=======
+      const html = await response.text();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (isBotChallenge(html)) {
         throw new Error("DuckDuckGo returned a bot-detection challenge.");
       }
@@ -243,6 +271,9 @@ export const testing = {
   decodeHtmlEntities,
   isBotChallenge,
   parseDuckDuckGoHtml,
+<<<<<<< HEAD
   readDuckDuckGoHtmlResponse,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 export { testing as __testing };

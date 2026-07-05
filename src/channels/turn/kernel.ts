@@ -25,6 +25,10 @@ export {
 export type { BuildChannelInboundEventContextParams } from "../inbound-event/context.js";
 export {
   clearChannelBotPairLoopGuardForTests,
+<<<<<<< HEAD
+=======
+  listTrackedChannelBotPairsForTests,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   recordChannelBotPairLoopAndCheckSuppression,
 } from "./bot-loop-protection.js";
 export { createChannelHistoryWindow } from "./history-window.js";

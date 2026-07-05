@@ -13,7 +13,10 @@ import { appendAssistantMessageToSessionTranscript } from "../../config/sessions
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
+<<<<<<< HEAD
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
@@ -22,6 +25,10 @@ import { collectActionMediaSourceHints } from "./message-action-params.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
+<<<<<<< HEAD
+=======
+import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Gateway connection settings forwarded to outbound send helpers. */
 export type OutboundGatewayContext = {
@@ -152,6 +159,7 @@ async function tryHandleWithPluginAction(params: {
     mediaAccess: params.ctx.mediaAccess,
     mediaReadFile: params.ctx.mediaReadFile,
   });
+<<<<<<< HEAD
   const handled = await dispatchChannelMessageAction(
     createChannelActionContext({
       ctx: params.ctx,
@@ -159,6 +167,27 @@ async function tryHandleWithPluginAction(params: {
       mediaAccess,
     }),
   );
+=======
+  const handled = await dispatchChannelMessageAction({
+    channel: params.ctx.channel,
+    action: params.action,
+    cfg: params.ctx.cfg,
+    params: params.ctx.params,
+    mediaAccess,
+    mediaLocalRoots: mediaAccess.localRoots,
+    mediaReadFile: mediaAccess.readFile,
+    accountId: params.ctx.accountId ?? undefined,
+    requesterSenderId: params.ctx.requesterSenderId,
+    senderIsOwner: params.ctx.senderIsOwner,
+    sessionKey: params.ctx.sessionKey,
+    sessionId: params.ctx.sessionId,
+    inboundEventKind: params.ctx.inboundEventKind,
+    agentId: params.ctx.agentId,
+    gateway: params.ctx.gateway,
+    toolContext: params.ctx.toolContext,
+    dryRun: params.ctx.dryRun,
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!handled) {
     return null;
   }
@@ -185,7 +214,10 @@ function createChannelActionContext(params: {
     mediaLocalRoots: mediaAccess?.localRoots ?? params.ctx.mediaAccess?.localRoots,
     mediaReadFile: mediaAccess?.readFile ?? params.ctx.mediaReadFile,
     accountId: params.ctx.accountId ?? undefined,
+<<<<<<< HEAD
     requesterAccountId: params.ctx.requesterAccountId,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     requesterSenderId: params.ctx.requesterSenderId,
     senderIsOwner: params.ctx.senderIsOwner,
     sessionKey: params.ctx.sessionKey,

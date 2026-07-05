@@ -580,7 +580,11 @@ function extractAssistantTextForSilentCheck(message: unknown): string | undefine
       return undefined;
     }
     const typed = block as { type?: unknown; text?: unknown };
+<<<<<<< HEAD
     if (!isAssistantTextContentType(typed.type) || typeof typed.text !== "string") {
+=======
+    if (typed.type !== "text" || typeof typed.text !== "string") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return undefined;
     }
     texts.push(typed.text);
@@ -588,10 +592,13 @@ function extractAssistantTextForSilentCheck(message: unknown): string | undefine
   return texts.length > 0 ? texts.join("\n") : undefined;
 }
 
+<<<<<<< HEAD
 function isAssistantTextContentType(type: unknown): boolean {
   return type === "text" || type === "input_text" || type === "output_text";
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function hasAssistantNonTextContent(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
@@ -601,10 +608,14 @@ function hasAssistantNonTextContent(message: unknown): boolean {
     return false;
   }
   return content.some(
+<<<<<<< HEAD
     (block) =>
       block &&
       typeof block === "object" &&
       !isAssistantTextContentType((block as { type?: unknown }).type),
+=======
+    (block) => block && typeof block === "object" && (block as { type?: unknown }).type !== "text",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
 }
 
@@ -626,11 +637,15 @@ function hasAssistantMixedToolVisibleText(message: unknown): boolean {
     if (isToolHistoryBlockType(entry.type)) {
       hasToolHistoryBlock = true;
     }
+<<<<<<< HEAD
     if (
       isAssistantTextContentType(entry.type) &&
       typeof entry.text === "string" &&
       entry.text.trim()
     ) {
+=======
+    if (entry.type === "text" && typeof entry.text === "string" && entry.text.trim()) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       hasText = true;
     }
   }
@@ -1655,7 +1670,11 @@ function projectEmptyAssistantErrorMessages(
         }
         const type = (block as { type?: unknown }).type;
         return (
+<<<<<<< HEAD
           !isAssistantTextContentType(type) &&
+=======
+          type !== "text" &&
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           type !== "thinking" &&
           type !== "reasoning" &&
           type !== "redacted_thinking"
@@ -1676,7 +1695,11 @@ function projectEmptyAssistantErrorMessages(
           continue;
         }
         const entry = block as { type?: unknown; text?: unknown };
+<<<<<<< HEAD
         if (isAssistantTextContentType(entry.type) && typeof entry.text === "string") {
+=======
+        if (entry.type === "text" && typeof entry.text === "string") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           visibleTexts.push(entry.text);
         }
       }

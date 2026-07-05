@@ -1,5 +1,9 @@
 /** Command helpers for listing saved model auth profiles. */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+<<<<<<< HEAD
+=======
+import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   ensureAuthProfileStore,
   externalCliDiscoveryForProviderAuth,
@@ -13,7 +17,11 @@ import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js"
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import { loadModelsConfig } from "./load-config.js";
+<<<<<<< HEAD
 import { resolveModelsTargetAgent } from "./shared.js";
+=======
+import { resolveKnownAgentId } from "./shared.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type AuthProfileSummary = {
   id: string;
@@ -47,6 +55,21 @@ function resolveProviderFilter(rawProvider: string | undefined): {
   };
 }
 
+<<<<<<< HEAD
+=======
+function resolveTargetAgent(
+  cfg: Awaited<ReturnType<typeof loadModelsConfig>>,
+  raw?: string,
+): {
+  agentId: string;
+  agentDir: string;
+} {
+  const agentId = resolveKnownAgentId({ cfg, rawAgentId: raw }) ?? resolveDefaultAgentId(cfg);
+  const agentDir = resolveAgentDir(cfg, agentId);
+  return { agentId, agentDir };
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function formatTimestamp(value: number | undefined): string | undefined {
   return timestampMsToIsoString(value);
 }
@@ -102,7 +125,11 @@ export async function modelsAuthListCommand(
   runtime: RuntimeEnv,
 ) {
   const cfg = await loadModelsConfig({ commandName: "models auth list", runtime });
+<<<<<<< HEAD
   const { agentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent);
+=======
+  const { agentId, agentDir } = resolveTargetAgent(cfg, opts.agent);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const providerFilter = resolveProviderFilter(opts.provider);
   const store = ensureAuthProfileStore(
     agentDir,

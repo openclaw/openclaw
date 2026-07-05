@@ -35,16 +35,26 @@ export function stripHtmlFromTeamsMessage(html: string): string {
   let text = html.replace(/<at[^>]*>(.*?)<\/at>/gi, "@$1");
   // Strip remaining HTML tags.
   text = text.replace(/<[^>]*>/g, " ");
+<<<<<<< HEAD
   // Decode common HTML entities. &amp; must be decoded LAST to prevent
   // double-decoding (e.g. &amp;lt; → &lt; not <), matching decodeHtmlEntities
   // in inbound.ts.
   text = text
+=======
+  // Decode common HTML entities.
+  text = text
+    .replace(/&amp;/g, "&")
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
+<<<<<<< HEAD
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&");
+=======
+    .replace(/&nbsp;/g, " ");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   // Normalize whitespace.
   return text.replace(/\s+/g, " ").trim();
 }

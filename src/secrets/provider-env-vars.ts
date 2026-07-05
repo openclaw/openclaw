@@ -17,7 +17,10 @@ import {
 } from "../plugins/plugin-metadata-snapshot.js";
 import { listSetupProviderIds } from "../plugins/setup-descriptors.js";
 import { hasKind } from "../plugins/slots.js";
+<<<<<<< HEAD
 import { appendUniqueEnvVarCandidates } from "../shared/env-var-candidates.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
@@ -97,6 +100,30 @@ function shouldUsePluginProviderAuthEvidence(
   return isWorkspacePluginTrustedForProviderEnvVars(plugin, params?.config);
 }
 
+<<<<<<< HEAD
+=======
+function appendUniqueEnvVarCandidates(
+  target: Record<string, string[]>,
+  providerId: string,
+  keys: readonly string[],
+) {
+  const normalizedProviderId = providerId.trim();
+  if (!normalizedProviderId || keys.length === 0) {
+    return;
+  }
+  const bucket = (target[normalizedProviderId] ??= []);
+  const seen = new Set(bucket);
+  for (const key of keys) {
+    const normalizedKey = key.trim();
+    if (!normalizedKey || seen.has(normalizedKey)) {
+      continue;
+    }
+    seen.add(normalizedKey);
+    bucket.push(normalizedKey);
+  }
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function appendUniqueAuthEvidence(
   target: Record<string, ProviderAuthEvidence[]>,
   providerId: string,

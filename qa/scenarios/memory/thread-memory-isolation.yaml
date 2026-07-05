@@ -25,7 +25,10 @@ scenario:
     kind: flow
     summary: Verify a memory-backed answer requested inside a thread stays in-thread and does not leak into the root channel.
     config:
+<<<<<<< HEAD
       requiredChannelDriver: qa-channel
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       memoryFact: "Thread-hidden codename: ORBIT-22."
       memoryQuery: "hidden thread codename ORBIT-22"
       expectedNeedle: "ORBIT-22"

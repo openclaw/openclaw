@@ -86,7 +86,14 @@ function resolveSkillWorkshopStateDir(options: SkillWorkshopStoreOptions = {}): 
   return path.resolve(options.stateDir ?? resolveStateDir(options.env));
 }
 
+<<<<<<< HEAD
 function resolveProposalDir(proposalId: string, options: SkillWorkshopStoreOptions = {}): string {
+=======
+function resolveProposalDir(
+  proposalId: string,
+  options: SkillWorkshopStoreOptions = {},
+): string {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   assertProposalId(proposalId);
   return path.join(resolveSkillWorkshopStateDir(options), proposalRelativeDir(proposalId));
 }
@@ -98,6 +105,16 @@ function resolveProposalRecordPath(
   return path.join(resolveProposalDir(proposalId, options), PROPOSAL_RECORD_FILE);
 }
 
+<<<<<<< HEAD
+=======
+export function resolveProposalDraftPath(
+  proposalId: string,
+  options: SkillWorkshopStoreOptions = {},
+): string {
+  return path.join(resolveProposalDir(proposalId, options), PROPOSAL_DRAFT_FILE);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function prepareSkillProposalSupportFiles(
   input: readonly SkillProposalSupportFileInput[] | undefined,
 ): PreparedSkillProposalSupportFile[] {

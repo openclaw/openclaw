@@ -152,7 +152,11 @@ async function setRuntimeApiKeyForCompletion(params: {
   profileId?: string;
 }): Promise<CompletionRuntimeCredential> {
   if (params.model.provider === "github-copilot") {
+<<<<<<< HEAD
     const { resolveCopilotApiToken } = await import("../plugin-sdk/provider-auth.js");
+=======
+    const { resolveCopilotApiToken } = await import("./github-copilot-token.js");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const copilotToken = await resolveCopilotApiToken({
       githubToken: params.apiKey,
     });

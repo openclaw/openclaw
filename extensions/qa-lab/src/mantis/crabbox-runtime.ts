@@ -2,7 +2,10 @@
 import { spawn, type SpawnOptions } from "node:child_process";
 import path from "node:path";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+<<<<<<< HEAD
 import { trimToValue } from "../mantis-options.runtime.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type CommandResult = {
   stderr: string;
@@ -27,6 +30,14 @@ export type CrabboxInspect = {
   state?: string;
 };
 
+<<<<<<< HEAD
+=======
+function trimToValue(value: string | undefined) {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function defaultCommandRunner(
   command: string,
   args: readonly string[],

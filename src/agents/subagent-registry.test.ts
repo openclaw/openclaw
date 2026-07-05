@@ -4,12 +4,15 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import type { SessionEntry } from "../config/sessions.js";
 import type {
   SessionAccessScope,
   SessionEntryPatchContext,
   SessionEntryPatchOptions,
 } from "../config/sessions/session-accessor.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const noop = () => {};
 const waitForFast = <T>(callback: () => T | Promise<T>) =>
@@ -86,6 +89,7 @@ const mocks = vi.hoisted(() => ({
     agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
     session: { mainKey: "main", scope: "per-sender" as const },
   })),
+<<<<<<< HEAD
   loadSessionEntry: vi.fn((scope: SessionAccessScope) => {
     const store = mocks.loadSessionStore(scope.storePath, { clone: false }) as Record<
       string,
@@ -128,6 +132,9 @@ const mocks = vi.hoisted(() => ({
       return updatedEntry;
     },
   ),
+=======
+  loadSessionStore: vi.fn(() => ({})),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveAgentIdFromSessionKey: vi.fn((sessionKey: string) => {
     return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
   }),
@@ -176,11 +183,14 @@ vi.mock("../config/sessions.js", () => ({
   updateSessionStore: mocks.updateSessionStore,
 }));
 
+<<<<<<< HEAD
 vi.mock("../config/sessions/session-accessor.js", () => ({
   loadSessionEntry: mocks.loadSessionEntry,
   patchSessionEntry: mocks.patchSessionEntry,
 }));
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.mock("../sessions/session-lifecycle-events.js", () => ({
   emitSessionLifecycleEvent: mocks.emitSessionLifecycleEvent,
 }));
@@ -3373,6 +3383,7 @@ describe("subagent registry seam flow", () => {
     });
   });
 
+<<<<<<< HEAD
   it("wakes a sessions_yield-paused parent when pending descendants settle", async () => {
     mocks.loadSessionStore.mockReturnValue({
       "agent:main:subagent:parent": {
@@ -3428,6 +3439,8 @@ describe("subagent registry seam flow", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("loads runtime plugins before emitting killed subagent ended hooks", async () => {
     const endedHookRunner = {
       hasHooks: (hookName: string) => hookName === "subagent_ended",

@@ -1,4 +1,5 @@
 // Gateway benchmark child test support simulates child process behavior for script tests.
+<<<<<<< HEAD
 import type { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { expect, it, vi } from "vitest";
@@ -7,6 +8,10 @@ import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.m
 function expectedTaskkillPath(): string {
   return resolveWindowsTaskkillPath();
 }
+=======
+import { EventEmitter } from "node:events";
+import { expect, it, vi } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type StopChildResult = {
   exitedBeforeTeardown: boolean;
@@ -16,12 +21,16 @@ type StopChildResult = {
 
 type StopChild<TChild> = (
   child: TChild,
+<<<<<<< HEAD
   options?: {
     killGraceMs?: number;
     platform?: NodeJS.Platform;
     runTaskkill?: typeof spawnSync;
     teardownGraceMs?: number;
   },
+=======
+  options?: { killGraceMs?: number; teardownGraceMs?: number },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ) => Promise<StopChildResult>;
 
 export function registerStopChildBehaviorTests<TChild>(params: {
@@ -112,6 +121,7 @@ export function registerStopChildBehaviorTests<TChild>(params: {
     expect(child.unref).toHaveBeenCalledOnce();
   });
 
+<<<<<<< HEAD
   it("signals Windows child process trees with taskkill", async () => {
     const child = new EventEmitter() as EventEmitter & {
       exitCode: number | null;
@@ -222,6 +232,8 @@ export function registerStopChildBehaviorTests<TChild>(params: {
     expect(child.kill).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.skipIf(process.platform === "win32")(
     "preserves pre-teardown wrapper exits while cleaning the process group",
     async () => {
@@ -265,7 +277,13 @@ export function registerStopChildBehaviorTests<TChild>(params: {
           child.exitCode = 0;
           child.emit("exit", 0, null);
         });
+<<<<<<< HEAD
         await expect(stopped).resolves.toEqual({
+=======
+        await expect(
+          stopped,
+        ).resolves.toEqual({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           exitedBeforeTeardown: true,
           exitCode: 0,
           signal: null,

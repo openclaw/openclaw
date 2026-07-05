@@ -1,6 +1,10 @@
 // Git hook tests validate pre-commit hook behavior and scripts.
 import { execFileSync } from "node:child_process";
+<<<<<<< HEAD
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+=======
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempRepoRoot } from "./helpers/temp-repo.js";
@@ -20,6 +24,7 @@ const run = (cwd: string, cmd: string, args: string[] = [], env?: NodeJS.Process
   }).trim();
 };
 
+<<<<<<< HEAD
 type FailedCommand = {
   status: number;
   stderr: string;
@@ -49,6 +54,8 @@ const runFailure = (
   throw new Error("expected command to fail");
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function writeExecutable(dir: string, name: string, contents: string): void {
   writeFileSync(path.join(dir, name), contents, {
     encoding: "utf8",
@@ -83,6 +90,7 @@ function installPreCommitFixture(dir: string): string {
   return fakeBinDir;
 }
 
+<<<<<<< HEAD
 function installFormattingRecorder(dir: string): string {
   const logPath = path.join(dir, "hook-tool.log");
   writeFileSync(
@@ -119,6 +127,8 @@ function installRunNodeToolFixture(dir: string): void {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function splitNonEmptyLines(output: string): string[] {
   const lines: string[] = [];
   for (const line of output.split("\n")) {
@@ -129,6 +139,7 @@ function splitNonEmptyLines(output: string): string[] {
   return lines;
 }
 
+<<<<<<< HEAD
 function readFormatterLog(logPath: string): string[] {
   if (!existsSync(logPath)) {
     return [];
@@ -136,6 +147,8 @@ function readFormatterLog(logPath: string): string[] {
   return splitNonEmptyLines(readFileSync(logPath, "utf8"));
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 afterEach(() => {
   cleanupTempDirs(tempDirs);
 });
@@ -163,6 +176,7 @@ describe("git-hooks/pre-commit (integration)", () => {
     expect(staged).toEqual(["--all"]);
   });
 
+<<<<<<< HEAD
   it("skips formatting staged files while a merge commit is in progress", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-merge-");
     run(dir, "git", ["init", "-q", "--initial-branch=main"]);
@@ -257,6 +271,8 @@ describe("git-hooks/pre-commit (integration)", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not run the changed-scope check for non-doc staged changes", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-no-check-changed-");
     run(dir, "git", ["init", "-q", "--initial-branch=main"]);
@@ -329,6 +345,7 @@ describe("git-hooks/pre-commit (integration)", () => {
     expect(run(dir, "git", ["diff", "--cached", "--name-only"])).toBe("tracked.txt");
   });
 });
+<<<<<<< HEAD
 
 describe("scripts/pre-commit/run-node-tool.sh", () => {
   it("runs the installed local tool without invoking pnpm", () => {
@@ -382,3 +399,5 @@ describe("scripts/pre-commit/run-node-tool.sh", () => {
     expect(existsSync(markerPath)).toBe(false);
   });
 });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

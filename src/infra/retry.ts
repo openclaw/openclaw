@@ -2,7 +2,10 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { sleep } from "../utils.js";
+<<<<<<< HEAD
 import { toErrorObject } from "./errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { generateSecureFraction } from "./secure-random.js";
 
 /** Retry timing knobs shared by generic retry runners and channel retry policies. */
@@ -124,7 +127,11 @@ export async function retryAsync<T>(
         await sleep(delay);
       }
     }
+<<<<<<< HEAD
     throw toErrorObject(lastErr ?? new Error("Retry failed"), "Non-Error thrown");
+=======
+    throw toLintErrorObject(lastErr ?? new Error("Retry failed"), "Non-Error thrown");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   const options = attemptsOrOptions;
@@ -198,5 +205,23 @@ export async function retryAsync<T>(
     }
   }
 
+<<<<<<< HEAD
   throw toErrorObject(lastErr ?? new Error("Retry failed"), "Non-Error thrown");
+=======
+  throw toLintErrorObject(lastErr ?? new Error("Retry failed"), "Non-Error thrown");
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }

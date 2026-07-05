@@ -14,7 +14,10 @@ import {
 } from "@openclaw/media-core/file-name";
 import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+<<<<<<< HEAD
 import { toErrorObject } from "../infra/errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { fileStore } from "../infra/file-store.js";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { isPathInside } from "../infra/fs-safe.js";
@@ -306,7 +309,11 @@ async function downloadToFile(
             })
             .catch(async (err: unknown) => {
               await fs.rm(dest, { force: true }).catch(() => {});
+<<<<<<< HEAD
               reject(toErrorObject(err, "Non-Error rejection"));
+=======
+              reject(toLintErrorObject(err, "Non-Error rejection"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             });
         });
         req.on("error", reject);
@@ -753,3 +760,20 @@ export async function deleteMediaBuffer(id: string, subdir = "inbound"): Promise
   const relativePath = resolveMediaRelativePath(id, subdir, "deleteMediaBuffer");
   await openMediaStore().remove(relativePath);
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

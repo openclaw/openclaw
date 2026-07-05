@@ -4,6 +4,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { exportTrajectoryCommand } from "./export-trajectory.js";
 
 const mocks = vi.hoisted(() => ({
+<<<<<<< HEAD
   getRuntimeConfig: vi.fn(),
   loadSessionEntry: vi.fn(),
   resolveStorePath: vi.fn(),
@@ -11,6 +12,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
+=======
+  loadSessionEntry: vi.fn(),
+  resolveDefaultSessionStorePath: vi.fn(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
@@ -21,7 +26,11 @@ vi.mock("../config/sessions/paths.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/paths.js")>();
   return {
     ...actual,
+<<<<<<< HEAD
     resolveStorePath: mocks.resolveStorePath,
+=======
+    resolveDefaultSessionStorePath: mocks.resolveDefaultSessionStorePath,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 });
 
@@ -36,8 +45,12 @@ function createRuntime(): RuntimeEnv {
 describe("exportTrajectoryCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+<<<<<<< HEAD
     mocks.getRuntimeConfig.mockReturnValue({});
     mocks.resolveStorePath.mockReturnValue("/tmp/openclaw/sessions.json");
+=======
+    mocks.resolveDefaultSessionStorePath.mockReturnValue("/tmp/openclaw/sessions.json");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mocks.loadSessionEntry.mockReturnValue(undefined);
   });
 
@@ -70,7 +83,10 @@ describe("exportTrajectoryCommand", () => {
       JSON.stringify({ output: "/tmp/export.json" }),
       "utf8",
     ).toString("base64url");
+<<<<<<< HEAD
     mocks.resolveStorePath.mockReturnValue("/tmp/direct-store.json");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await exportTrajectoryCommand(
       {
@@ -81,10 +97,14 @@ describe("exportTrajectoryCommand", () => {
       runtime,
     );
 
+<<<<<<< HEAD
     expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
     expect(mocks.resolveStorePath).toHaveBeenCalledWith("/tmp/direct-store.json", {
       agentId: "main",
     });
+=======
+    expect(mocks.resolveDefaultSessionStorePath).not.toHaveBeenCalled();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(mocks.loadSessionEntry).toHaveBeenCalledWith({
       agentId: "main",
       sessionKey: "agent:main:telegram:direct:123",
@@ -96,6 +116,7 @@ describe("exportTrajectoryCommand", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
+<<<<<<< HEAD
   it.each([
     ["home-prefixed", "~/x/sessions.json", "/home/demo/x/sessions.json"],
     [
@@ -153,10 +174,14 @@ describe("exportTrajectoryCommand", () => {
   });
 
   it("falls back through resolveStorePath when no session.store is configured", async () => {
+=======
+  it("points missing session users at the sessions command", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const runtime = createRuntime();
 
     await exportTrajectoryCommand({ sessionKey: "agent:main:telegram:direct:123" }, runtime);
 
+<<<<<<< HEAD
     expect(mocks.resolveStorePath).toHaveBeenCalledWith(undefined, { agentId: "main" });
     expect(mocks.loadSessionEntry).toHaveBeenCalledWith({
       agentId: "main",
@@ -181,6 +206,8 @@ describe("exportTrajectoryCommand", () => {
       sessionKey: "agent:main:telegram:direct:123",
       storePath: "/tmp/openclaw/sessions.json",
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(runtime.error).toHaveBeenCalledWith(
       "Session not found: agent:main:telegram:direct:123. Run openclaw sessions to see available sessions.",
     );

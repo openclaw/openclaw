@@ -3,11 +3,18 @@
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
+<<<<<<< HEAD
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   __resetContainerCacheForTest,
   defaultGatewayBindMode,
   isContainerEnvironment,
+<<<<<<< HEAD
+=======
+  isLocalInterfaceAddress,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   isLocalishHost,
   isLoopbackHost,
   isPrivateOrLoopbackAddress,
@@ -25,12 +32,31 @@ import {
 const flyMachineEnvKeys = ["FLY_MACHINE_ID", "FLY_APP_NAME"] as const;
 
 function clearFlyMachineEnvForTest(): () => void {
+<<<<<<< HEAD
   const envSnapshot = captureEnv([...flyMachineEnvKeys]);
   for (const key of flyMachineEnvKeys) {
     deleteTestEnvValue(key);
   }
 
   return () => envSnapshot.restore();
+=======
+  const previousEnv = new Map<(typeof flyMachineEnvKeys)[number], string | undefined>();
+  for (const key of flyMachineEnvKeys) {
+    previousEnv.set(key, process.env[key]);
+    delete process.env[key];
+  }
+
+  return () => {
+    for (const key of flyMachineEnvKeys) {
+      const value = previousEnv.get(key);
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function useClearedFlyMachineEnv() {
@@ -232,7 +258,11 @@ describe("isTrustedProxyAddress", () => {
   });
 });
 
+<<<<<<< HEAD
 describe("resolveLocalInterfaceAddressMatch", () => {
+=======
+describe("isLocalInterfaceAddress", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const snapshot = makeNetworkInterfacesSnapshot({
     lo: [
       { address: "127.0.0.1", family: "IPv4", internal: true },
@@ -250,7 +280,15 @@ describe("resolveLocalInterfaceAddressMatch", () => {
     { input: "10.42.0.60", expected: false },
     { input: undefined, expected: false },
   ] as const)("returns $expected for $input", ({ input, expected }) => {
+<<<<<<< HEAD
     expect(resolveLocalInterfaceAddressMatch(input, snapshot)).toBe(expected);
+=======
+    expect(isLocalInterfaceAddress(input, snapshot)).toBe(expected);
+  });
+
+  it("returns false when interface discovery is unavailable", () => {
+    expect(isLocalInterfaceAddress("10.42.0.59", undefined)).toBe(false);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("reports an indeterminate match when interface discovery is unavailable", () => {
@@ -578,8 +616,13 @@ describe("isContainerEnvironment", () => {
     });
     vi.spyOn(fs, "readFileSync").mockReturnValue("10:cpuset:/\n9:perf_event:/\n8:memory:/\n0::/\n");
 
+<<<<<<< HEAD
     setTestEnvValue("FLY_MACHINE_ID", "3d8d5459a03038");
     setTestEnvValue("FLY_APP_NAME", "openclaw-test");
+=======
+    process.env.FLY_MACHINE_ID = "3d8d5459a03038";
+    process.env.FLY_APP_NAME = "openclaw-test";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(isContainerEnvironment()).toBe(true);
   });
 

@@ -76,6 +76,7 @@ import { resolveMemoryBackendConfig } from "openclaw/plugin-sdk/memory-core-host
 import { QmdMemoryManager } from "./qmd-manager.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
+<<<<<<< HEAD
 const originalQmdStateDir = process.env.OPENCLAW_STATE_DIR;
 
 function setQmdStateDir(stateDir: string): void {
@@ -89,6 +90,8 @@ function restoreQmdStateDir(): void {
     Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalQmdStateDir);
   }
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("QmdMemoryManager slugified path resolution", () => {
   let tmpRoot: string;
@@ -185,7 +188,11 @@ describe("QmdMemoryManager slugified path resolution", () => {
     workspaceDir = path.join(tmpRoot, "workspace");
     stateDir = path.join(tmpRoot, "state");
     await fs.mkdir(workspaceDir, { recursive: true });
+<<<<<<< HEAD
     setQmdStateDir(stateDir);
+=======
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     cfg = {
       agents: {
@@ -210,7 +217,11 @@ describe("QmdMemoryManager slugified path resolution", () => {
     );
     openManagers.clear();
     await fs.rm(tmpRoot, { recursive: true, force: true });
+<<<<<<< HEAD
     restoreQmdStateDir();
+=======
+    delete process.env.OPENCLAW_STATE_DIR;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("maps slugified workspace qmd URIs back to the indexed filesystem path", async () => {

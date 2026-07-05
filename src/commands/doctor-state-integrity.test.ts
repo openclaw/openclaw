@@ -10,7 +10,10 @@ import {
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+<<<<<<< HEAD
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   clearTuiLastSessionPointers,
   moveHeartbeatMainSessionEntry,
@@ -30,6 +33,38 @@ vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
 
 const noteMock = vi.fn();
 
+<<<<<<< HEAD
+=======
+type EnvSnapshot = {
+  HOME?: string;
+  OPENCLAW_HOME?: string;
+  OPENCLAW_STATE_DIR?: string;
+  OPENCLAW_OAUTH_DIR?: string;
+  OPENCLAW_AGENT_DIR?: string;
+};
+
+function captureEnv(): EnvSnapshot {
+  return {
+    HOME: process.env.HOME,
+    OPENCLAW_HOME: process.env.OPENCLAW_HOME,
+    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+    OPENCLAW_OAUTH_DIR: process.env.OPENCLAW_OAUTH_DIR,
+    OPENCLAW_AGENT_DIR: process.env.OPENCLAW_AGENT_DIR,
+  };
+}
+
+function restoreEnv(snapshot: EnvSnapshot) {
+  for (const key of Object.keys(snapshot) as Array<keyof EnvSnapshot>) {
+    const value = snapshot[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function setupSessionState(cfg: OpenClawConfig, env: NodeJS.ProcessEnv, homeDir: string) {
   const agentId = "main";
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, () => homeDir);
@@ -121,6 +156,7 @@ async function runOrphanTranscriptCheckWithQmdSessions(enabled: boolean, homeDir
 }
 
 describe("doctor state integrity oauth dir checks", () => {
+<<<<<<< HEAD
   let envSnapshot: ReturnType<typeof captureEnv>;
   let tempHome = "";
 
@@ -140,11 +176,29 @@ describe("doctor state integrity oauth dir checks", () => {
     deleteTestEnvValue("OPENCLAW_OAUTH_DIR");
     deleteTestEnvValue("OPENCLAW_AGENT_DIR");
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+=======
+  let envSnapshot: EnvSnapshot;
+  let tempHome = "";
+
+  beforeEach(() => {
+    envSnapshot = captureEnv();
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-state-integrity-"));
+    process.env.HOME = tempHome;
+    process.env.OPENCLAW_HOME = tempHome;
+    process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
+    delete process.env.OPENCLAW_OAUTH_DIR;
+    delete process.env.OPENCLAW_AGENT_DIR;
+    fs.mkdirSync(process.env.OPENCLAW_STATE_DIR, { recursive: true, mode: 0o700 });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     noteMock.mockClear();
   });
 
   afterEach(() => {
+<<<<<<< HEAD
     envSnapshot.restore();
+=======
+    restoreEnv(envSnapshot);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
 
@@ -253,7 +307,11 @@ describe("doctor state integrity oauth dir checks", () => {
       "legacy",
       "agent",
     );
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_AGENT_DIR", legacyAgentDir);
+=======
+    process.env.OPENCLAW_AGENT_DIR = legacyAgentDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const text = await runStateIntegrityText({
       agents: {
@@ -446,10 +504,16 @@ describe("doctor state integrity oauth dir checks", () => {
       );
       fs.symlinkSync(originalHome, symlinkHome, "dir");
       try {
+<<<<<<< HEAD
         const symlinkStateDir = path.join(symlinkHome, ".openclaw");
         setTestEnvValue("HOME", symlinkHome);
         setTestEnvValue("OPENCLAW_HOME", symlinkHome);
         setTestEnvValue("OPENCLAW_STATE_DIR", symlinkStateDir);
+=======
+        process.env.HOME = symlinkHome;
+        process.env.OPENCLAW_HOME = symlinkHome;
+        process.env.OPENCLAW_STATE_DIR = path.join(symlinkHome, ".openclaw");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
         setupSessionState(cfg, process.env, symlinkHome);
         const sessionsDir = resolveSessionTranscriptsDirForAgent(

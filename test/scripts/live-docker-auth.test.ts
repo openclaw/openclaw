@@ -55,6 +55,7 @@ afterEach(() => {
 });
 
 describe("scripts/lib/live-docker-auth.sh", () => {
+<<<<<<< HEAD
   it("reads positive integer env values before live Docker setup", () => {
     const result = spawnSync(
       "/bin/bash",
@@ -87,6 +88,8 @@ describe("scripts/lib/live-docker-auth.sh", () => {
     expect(invalid.stderr).toContain("invalid OPENCLAW_LIVE_SAMPLE_SECONDS: 30s");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("adds a kill-after grace period when timeout supports it", () => {
     const binDir = makeTempBin("openclaw-live-docker-auth-gnu-");
     writeExecutable(
@@ -264,6 +267,7 @@ describe("scripts/lib/live-docker-auth.sh", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("normalizes live Docker pids limits", () => {
     const binDir = makeTempBin("openclaw-live-docker-auth-pids-");
     writeExecutable(
@@ -349,6 +353,8 @@ describe("scripts/lib/live-docker-auth.sh", () => {
     expect(result.stdout).toBe("");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("fails fast when no timeout wrapper is available", () => {
     const binDir = makeTempBin("openclaw-live-docker-auth-no-timeout-");
 

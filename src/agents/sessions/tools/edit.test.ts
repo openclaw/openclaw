@@ -37,10 +37,14 @@ describe("edit tool", () => {
     await expect(
       tool.execute(
         "call-1",
+<<<<<<< HEAD
         {
           path: filePath,
           edits: [{ oldText: "missing", newText: "replacement" }],
         },
+=======
+        { path: filePath, edits: [{ oldText: "missing", newText: "replacement" }] },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         undefined,
       ),
     ).rejects.toThrow(/Current file contents:\nactual current content/);
@@ -177,6 +181,7 @@ describe("edit tool", () => {
       "remote changed",
     );
   });
+<<<<<<< HEAD
 
   it("filters fuzzy no-op edits from mixed previews", async () => {
     const readFile = vi.fn(async () => Buffer.from("foo\u00a0bar\n"));
@@ -519,4 +524,6 @@ describe("edit tool", () => {
     expect("text" in tc1 ? tc1.text : "").toContain("Successfully replaced");
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("new content\n");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

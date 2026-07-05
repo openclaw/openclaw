@@ -1,6 +1,10 @@
 {
   "name": "@openclaw/discord",
+<<<<<<< HEAD
   "version": "2026.6.10",
+=======
+  "version": "2026.6.8",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "description": "OpenClaw Discord channel plugin for channels, DMs, commands, and app events.",
   "repository": {
     "type": "git",
@@ -12,7 +16,11 @@
     "discord-api-types": "0.38.48",
     "libopus-wasm": "0.2.0",
     "typebox": "1.1.39",
+<<<<<<< HEAD
     "undici": "8.5.0",
+=======
+    "undici": "8.3.0",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     "ws": "8.21.0"
   },
   "devDependencies": {
@@ -20,7 +28,11 @@
     "openclaw": "2026.5.28"
   },
   "peerDependencies": {
+<<<<<<< HEAD
     "openclaw": ">=2026.6.10"
+=======
+    "openclaw": ">=2026.6.8"
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -67,10 +79,17 @@
       "allowInvalidConfigRecovery": true
     },
     "compat": {
+<<<<<<< HEAD
       "pluginApi": ">=2026.6.10"
     },
     "build": {
       "openclawVersion": "2026.6.10"
+=======
+      "pluginApi": ">=2026.6.8"
+    },
+    "build": {
+      "openclawVersion": "2026.6.8"
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
     "release": {
       "publishToClawHub": true,

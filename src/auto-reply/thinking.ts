@@ -9,14 +9,23 @@ import {
 } from "./thinking.shared.js";
 import type { ThinkLevel, ThinkingCatalogEntry } from "./thinking.shared.js";
 export {
+<<<<<<< HEAD
   isSessionDefaultDirectiveValue,
   normalizeElevatedLevel,
   normalizeFastMode,
+=======
+  formatXHighModelHint,
+  isSessionDefaultDirectiveValue,
+  normalizeElevatedLevel,
+  normalizeFastMode,
+  normalizeNoticeLevel,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   normalizeReasoningLevel,
   normalizeTraceLevel,
   normalizeThinkLevel,
   normalizeUsageDisplay,
   normalizeVerboseLevel,
+<<<<<<< HEAD
   resolveEffectiveResponseUsage,
   resolveMessagesResponseUsageDefault,
   resolveResponseUsageMode,
@@ -31,6 +40,20 @@ export type {
   TraceLevel,
   ThinkLevel,
   ThinkingCatalogEntry,
+=======
+  resolveResponseUsageMode,
+  resolveElevatedMode,
+} from "./thinking.shared.js";
+export type {
+  ElevatedLevel,
+  ElevatedMode,
+  NoticeLevel,
+  ReasoningLevel,
+  TraceLevel,
+  ThinkLevel,
+  ThinkingCatalogEntry,
+  UsageDisplayLevel,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   VerboseLevel,
 } from "./thinking.shared.js";
 import {
@@ -268,6 +291,14 @@ function supportsThinkingLevel(
   );
 }
 
+<<<<<<< HEAD
+=======
+/** Return whether provider/model supports the xhigh thinking level. */
+export function supportsXHighThinking(provider?: string | null, model?: string | null): boolean {
+  return supportsThinkingLevel(provider, model, "xhigh");
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** List thinking level ids supported by provider/model. */
 export function listThinkingLevels(
   provider?: string | null,

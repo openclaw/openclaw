@@ -6,10 +6,16 @@ import { writeRuntimeJson } from "../runtime.js";
 import { listTaskRecords } from "../tasks/runtime-internal.js";
 import { listTaskFlowAuditFindings } from "../tasks/task-flow-registry.audit.js";
 import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
+<<<<<<< HEAD
 import { listTaskAuditFindings } from "../tasks/task-registry.audit.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
   buildTaskSystemAuditJsonPayload,
+=======
+import { listTaskAuditFindings, summarizeTaskAuditFindings } from "../tasks/task-registry.audit.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
+import {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   buildTaskSystemAuditFindings,
   type TaskSystemAuditCode,
   type TaskSystemAuditSeverity,
@@ -74,6 +80,7 @@ function buildTasksListJsonPayload(opts: TasksListJsonArgs) {
 function buildTasksAuditJsonPayload(opts: TasksAuditJsonArgs) {
   const severityFilter = opts.severity?.trim() as TaskSystemAuditSeverity | undefined;
   const codeFilter = opts.code?.trim() as TaskSystemAuditCode | undefined;
+<<<<<<< HEAD
   const result = toSystemAuditFindings({
     severityFilter,
     codeFilter,
@@ -83,6 +90,36 @@ function buildTasksAuditJsonPayload(opts: TasksAuditJsonArgs) {
     codeFilter,
     limit: opts.limit,
   });
+=======
+  const { allFindings, filteredFindings, taskFindings, summary } = toSystemAuditFindings({
+    severityFilter,
+    codeFilter,
+  });
+  const limit = typeof opts.limit === "number" && opts.limit > 0 ? opts.limit : undefined;
+  const displayed = limit ? filteredFindings.slice(0, limit) : filteredFindings;
+  // Preserve the legacy task-only summary while adding combined task-flow counts.
+  const legacySummary = summarizeTaskAuditFindings(taskFindings);
+  return {
+    count: allFindings.length,
+    filteredCount: filteredFindings.length,
+    displayed: displayed.length,
+    filters: {
+      severity: severityFilter ?? null,
+      code: codeFilter ?? null,
+      limit: limit ?? null,
+    },
+    summary: {
+      ...legacySummary,
+      taskFlows: summary.taskFlows,
+      combined: {
+        total: summary.total,
+        errors: summary.errors,
+        warnings: summary.warnings,
+      },
+    },
+    findings: displayed,
+  };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /** Writes task list JSON without triggering task maintenance. */

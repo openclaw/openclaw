@@ -35,16 +35,26 @@ import {
   deriveSessionChatTypeFromKey,
   type SessionKeyChatType,
 } from "../sessions/session-chat-type-shared.js";
+<<<<<<< HEAD
 import { CODEX_NATIVE_SUBAGENT_STALE_ERROR } from "./codex-native-subagent-task.js";
+=======
+import {
+  CODEX_NATIVE_SUBAGENT_STALE_ERROR,
+  isChildlessCodexNativeSubagentTask,
+} from "./codex-native-subagent-task.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   getDetachedTaskLifecycleRuntime,
   tryRecoverTaskBeforeMarkLost,
 } from "./detached-task-runtime.js";
 import {
+<<<<<<< HEAD
   isChildlessNativeSubagentTask,
   resolveChildlessNativeSubagentTaskDefinition,
 } from "./native-subagent-task.js";
 import {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   deleteTaskRecordById,
   ensureTaskRegistryReady,
   getTaskById,
@@ -72,7 +82,11 @@ import {
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
+<<<<<<< HEAD
 const CHILDLESS_NATIVE_SUBAGENT_RECONCILE_GRACE_MS = 30 * 60_000;
+=======
+const CHILDLESS_CODEX_NATIVE_RECONCILE_GRACE_MS = 30 * 60_000;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const TASK_STALE_RUNNING_MS = 30 * 60_000;
 const TASK_SWEEP_INTERVAL_MS = 60_000;
 
@@ -327,8 +341,13 @@ function isTerminalTask(task: TaskRecord): boolean {
 
 function hasLostGraceExpired(task: TaskRecord, now: number): boolean {
   const referenceAt = task.lastEventAt ?? task.startedAt ?? task.createdAt;
+<<<<<<< HEAD
   const graceMs = isChildlessNativeSubagentTask(task)
     ? CHILDLESS_NATIVE_SUBAGENT_RECONCILE_GRACE_MS
+=======
+  const graceMs = isChildlessCodexNativeSubagentTask(task)
+    ? CHILDLESS_CODEX_NATIVE_RECONCILE_GRACE_MS
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     : TASK_RECONCILE_GRACE_MS;
   return now - referenceAt >= graceMs;
 }
@@ -499,7 +518,11 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
 
   const childSessionKey = task.childSessionKey?.trim();
   if (!childSessionKey) {
+<<<<<<< HEAD
     return !isChildlessNativeSubagentTask(task);
+=======
+    return !isChildlessCodexNativeSubagentTask(task);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   if (task.runtime === "acp") {
     // The live-turn map is process-local; only the gateway owns it. A standalone CLI
@@ -528,11 +551,16 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
 }
 
 function resolveTaskLostError(task: TaskRecord, context?: BackingSessionLookupContext): string {
+<<<<<<< HEAD
   const nativeDefinition = resolveChildlessNativeSubagentTaskDefinition(task);
   if (nativeDefinition) {
     return nativeDefinition.taskKind === "codex-native"
       ? CODEX_NATIVE_SUBAGENT_STALE_ERROR
       : "Native subagent stopped reporting progress";
+=======
+  if (isChildlessCodexNativeSubagentTask(task)) {
+    return CODEX_NATIVE_SUBAGENT_STALE_ERROR;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   if (task.runtime === "subagent") {
     const entry = findTaskSessionEntry(task, context);
@@ -1234,6 +1262,11 @@ export function stopTaskRegistryMaintenance() {
   sweepInProgress = false;
 }
 
+<<<<<<< HEAD
+=======
+export const stopTaskRegistryMaintenanceForTests = stopTaskRegistryMaintenance;
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function setTaskRegistryMaintenanceRuntimeForTests(
   runtime: TaskRegistryMaintenanceRuntime,
 ): void {

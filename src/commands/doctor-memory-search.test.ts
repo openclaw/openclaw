@@ -1,3 +1,7 @@
+<<<<<<< HEAD
+=======
+import path from "node:path";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { checkQmdBinaryAvailability as checkQmdBinaryAvailabilityFn } from "../memory-host-sdk/engine-qmd.js";
@@ -96,7 +100,11 @@ vi.mock("./doctor-workspace.js", async (importOriginal) => {
 
 import { noteMemorySearchHealth } from "./doctor-memory-search.js";
 import { maybeRepairMemoryRecallHealth, noteMemoryRecallHealth } from "./doctor-memory-search.js";
+<<<<<<< HEAD
 import { formatRootMemoryFilesWarning } from "./doctor-workspace.js";
+=======
+import { detectLegacyWorkspaceDirs, formatRootMemoryFilesWarning } from "./doctor-workspace.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function resetMemoryRecallMocks() {
   auditShortTermPromotionArtifacts.mockReset();
@@ -237,6 +245,7 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("does not warn when local provider readiness probe was intentionally skipped", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
@@ -278,6 +287,8 @@ describe("noteMemorySearchHealth", () => {
     expect(firstNoteMessage()).toContain('Memory search provider is set to "local"');
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("warns when local provider readiness probe is inconclusive", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
@@ -1153,6 +1164,18 @@ describe("memory recall doctor integration", () => {
   });
 });
 
+<<<<<<< HEAD
+=======
+describe("detectLegacyWorkspaceDirs", () => {
+  it("returns active workspace and no legacy dirs", () => {
+    const workspaceDir = "/home/user/openclaw";
+    const detection = detectLegacyWorkspaceDirs({ workspaceDir });
+    expect(detection.activeWorkspace).toBe(path.resolve(workspaceDir));
+    expect(detection.legacyDirs).toStrictEqual([]);
+  });
+});
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("formatRootMemoryFilesWarning", () => {
   it("explains split-brain when both root memory files exist", () => {
     const message = formatRootMemoryFilesWarning({

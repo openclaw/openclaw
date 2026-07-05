@@ -328,6 +328,7 @@ describe("resolvePnpmRunner", () => {
     });
   });
 
+<<<<<<< HEAD
   it("ignores ambient ComSpec when defaulting the Windows cmd shim launcher", () => {
     expect(
       resolvePnpmRunner({
@@ -348,6 +349,8 @@ describe("resolvePnpmRunner", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses Corepack on Windows when no pnpm shim is available", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "pnpm-runner-corepack-"));
     const corepackPath = path.join(tempDir, "corepack.cmd");

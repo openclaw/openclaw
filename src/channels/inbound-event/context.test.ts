@@ -137,7 +137,10 @@ describe("buildChannelInboundEventContext", () => {
       From: "test:user:u1",
       To: "test:room:room-1",
       SessionKey: "agent:main:test:group:room-1",
+<<<<<<< HEAD
       AgentId: "main",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       AccountId: "acct",
       ParentSessionKey: "agent:main:test:group",
       ModelParentSessionKey: "agent:main:test:model",
@@ -153,7 +156,10 @@ describe("buildChannelInboundEventContext", () => {
       MediaTypes: ["image/png", "audio/mpeg"],
       MediaTranscribedIndexes: [1],
       ChatType: "group",
+<<<<<<< HEAD
       ChatId: "room-1",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ConversationLabel: "Room One",
       GroupSubject: "Room One",
       GroupSpace: "workspace",
@@ -194,6 +200,7 @@ describe("buildChannelInboundEventContext", () => {
     }
   });
 
+<<<<<<< HEAD
   it("preserves channel-owned hook context without rendering it as prompt text", () => {
     const ctx = buildChannelInboundEventContext(
       createBaseContextParams({
@@ -212,6 +219,8 @@ describe("buildChannelInboundEventContext", () => {
     expect(ctx.BodyForAgent).not.toContain("customSenderField");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses resolved command authorization instead of recomputing authorizers", async () => {
     const ctx = buildChannelInboundEventContext(
       createBaseContextParams({
@@ -231,6 +240,7 @@ describe("buildChannelInboundEventContext", () => {
     expect(ctx.CommandAuthorized).toBe(false);
   });
 
+<<<<<<< HEAD
   it("carries the routed agent for unscoped session keys", async () => {
     const ctx = buildChannelInboundEventContext(
       createBaseContextParams({
@@ -245,6 +255,8 @@ describe("buildChannelInboundEventContext", () => {
     expect(ctx.SessionKey).toBe("feishu:direct:ou_user1");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("carries room event semantics into the finalized context", async () => {
     const ctx = buildChannelInboundEventContext(
       createBaseContextParams({

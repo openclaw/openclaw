@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { writeClaudeBundleManifest } from "../../plugins/bundle-mcp.test-support.js";
+<<<<<<< HEAD
 import { prepareCliBundleMcpCaptureAttempt, prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+=======
+import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   cliBundleMcpHarness,
   prepareBundleProbeCliConfig,
@@ -116,6 +120,7 @@ describe("prepareCliBundleMcpConfig", () => {
   });
 
   it("merges loopback overlay config with bundle MCP servers", async () => {
+<<<<<<< HEAD
     const additionalConfig = {
       mcpServers: {
         openclaw: {
@@ -141,6 +146,20 @@ describe("prepareCliBundleMcpConfig", () => {
         OPENCLAW_MCP_TOKEN: "other-loopback-token",
         OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
       },
+=======
+    const prepared = await prepareBundleProbeCliConfig({
+      additionalConfig: {
+        mcpServers: {
+          openclaw: {
+            type: "http",
+            url: "http://127.0.0.1:23119/mcp",
+            headers: {
+              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+            },
+          },
+        },
+      },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
@@ -149,6 +168,7 @@ describe("prepareCliBundleMcpConfig", () => {
     };
     expect(Object.keys(raw.mcpServers ?? {}).toSorted()).toEqual(["bundleProbe", "openclaw"]);
     expect(raw.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
+<<<<<<< HEAD
     expect(raw.mcpServers?.openclaw?.headers?.Authorization).toBe("Bearer loopback-token-123");
     expect(raw.mcpServers?.openclaw?.headers?.["x-openclaw-cli-capture-key"]).toBe("");
     await prepareCliBundleMcpCaptureAttempt({
@@ -171,6 +191,11 @@ describe("prepareCliBundleMcpConfig", () => {
 
     await prepared.cleanup?.();
     await otherEnvPrepared.cleanup?.();
+=======
+    expect(raw.mcpServers?.openclaw?.headers?.Authorization).toBe("Bearer ${OPENCLAW_MCP_TOKEN}");
+
+    await prepared.cleanup?.();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("preserves extra env values alongside generated MCP config", async () => {

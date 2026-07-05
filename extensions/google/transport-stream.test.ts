@@ -547,6 +547,7 @@ describe("google transport stream", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("keeps duplicate tool-call ids distinct while retaining the first signature", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       buildSseResponse([
@@ -603,6 +604,8 @@ describe("google transport stream", () => {
     expect(toolCalls[1]?.id).not.toBe("call_1");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps explicit thinking signatures after tool-call SSE parts", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       buildSseResponse([

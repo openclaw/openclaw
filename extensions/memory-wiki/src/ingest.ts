@@ -5,12 +5,16 @@ import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
+<<<<<<< HEAD
 import {
   preserveHumanNotesBlock,
   renderMarkdownFence,
   renderWikiMarkdown,
   slugifyWikiSegment,
 } from "./markdown.js";
+=======
+import { renderMarkdownFence, renderWikiMarkdown, slugifyWikiSegment } from "./markdown.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveMemoryWikiTimestamp } from "./time.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
@@ -87,12 +91,16 @@ export async function ingestMemoryWikiSource(params: {
     ].join("\n"),
   });
 
+<<<<<<< HEAD
   const existing = created ? "" : await fs.readFile(pagePath, "utf8").catch(() => "");
   await fs.writeFile(
     pagePath,
     existing ? preserveHumanNotesBlock(markdown, existing) : markdown,
     "utf8",
   );
+=======
+  await fs.writeFile(pagePath, markdown, "utf8");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   await appendMemoryWikiLog(params.config.vault.path, {
     type: "ingest",
     timestamp,

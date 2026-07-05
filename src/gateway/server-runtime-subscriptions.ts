@@ -2,7 +2,11 @@
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+<<<<<<< HEAD
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+=======
+import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ChatAbortControllerEntry, RestartRecoveryCandidate } from "./chat-abort.js";
 import type {
   ChatRunState,
@@ -226,7 +230,11 @@ export function startGatewayEventSubscriptions(params: {
     params.broadcast("heartbeat", evt, { dropIfSlow: true });
   });
 
+<<<<<<< HEAD
   const transcriptUnsub = onInternalSessionTranscriptUpdate((evt) => {
+=======
+  const transcriptUnsub = onSessionTranscriptUpdate((evt) => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     void getTranscriptUpdateHandler().then((handler) => handler(evt));
   });
 

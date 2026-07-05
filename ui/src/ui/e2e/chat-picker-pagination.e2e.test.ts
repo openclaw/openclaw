@@ -1,6 +1,9 @@
 // Control UI tests cover chat picker pagination behavior.
+<<<<<<< HEAD
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -21,12 +24,16 @@ const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? descri
 let browser: Browser;
 let server: ControlUiE2eServer;
 
+<<<<<<< HEAD
 function sessionRow(
   key: string,
   label: string,
   updatedAt: number,
   options: { spawnedBy?: string } = {},
 ) {
+=======
+function sessionRow(key: string, label: string, updatedAt: number) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return {
     contextTokens: null,
     displayName: label,
@@ -39,7 +46,10 @@ function sessionRow(
     status: "done",
     totalTokens: 0,
     updatedAt,
+<<<<<<< HEAD
     ...(options.spawnedBy ? { spawnedBy: options.spawnedBy } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }
 
@@ -228,6 +238,7 @@ describeControlUiE2e("Control UI chat picker mocked Gateway E2E", () => {
       await context.close();
     }
   });
+<<<<<<< HEAD
 
   it("skips hidden subagent-only pages when loading more chat sessions through the GUI", async () => {
     const baseTime = Date.parse("2026-06-04T12:00:00.000Z");
@@ -339,4 +350,6 @@ describeControlUiE2e("Control UI chat picker mocked Gateway E2E", () => {
       await context.close();
     }
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

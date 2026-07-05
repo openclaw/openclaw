@@ -152,10 +152,13 @@ function readNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+<<<<<<< HEAD
 function readCount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function readBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
@@ -375,6 +378,7 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
     };
   }
   const counts = isRecord(payload.counts) ? payload.counts : undefined;
+<<<<<<< HEAD
   for (const key of ["total", "passed", "failed", "skipped"] as const) {
     if (counts && Object.hasOwn(counts, key) && readCount(counts[key]) === undefined) {
       return {
@@ -413,6 +417,11 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
       };
     }
   }
+=======
+  const totalCount = readNumber(counts?.total);
+  const passedCount = readNumber(counts?.passed);
+  const failedCount = readNumber(counts?.failed);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const scenarios = Array.isArray(payload.scenarios) ? payload.scenarios : undefined;
   const failedScenarios = scenarios?.filter(
     (scenario) => isRecord(scenario) && scenario.status === "fail",
@@ -485,6 +494,10 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
         details: `qa-suite-summary has ${unknownBlockingScenarioCount} scenario row(s) with unsupported non-pass status`,
       };
     }
+<<<<<<< HEAD
+=======
+    const explicitSkippedCount = readNumber(counts?.skipped);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const inferredSkippedCount =
       totalCount === undefined || passedCount === undefined
         ? undefined

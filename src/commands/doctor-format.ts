@@ -55,7 +55,11 @@ export function buildGatewayRuntimeHints(
   if (platform === "linux" && isSystemdUnavailableDetail(runtime.detail)) {
     hints.push(
       ...renderSystemdUnavailableHints({
+<<<<<<< HEAD
         wsl: isWSLEnv(env),
+=======
+        wsl: isWSLEnv(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         kind: classifySystemdUnavailableDetail(runtime.detail),
         container,
       }),

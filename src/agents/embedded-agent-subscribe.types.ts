@@ -72,7 +72,10 @@ export type SubscribeEmbeddedAgentSessionParams = {
     data: Record<string, unknown>;
     sessionKey?: string;
   }) => void | Promise<void>;
+<<<<<<< HEAD
   onToolStreamBoundary?: () => void | Promise<void>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   onHeartbeatToolResponse?: (response: HeartbeatToolResponse) => void | Promise<void>;
   /** "finishing" defers both success and error terminal ownership to the caller. */
   terminalLifecyclePhase?: "end" | "finishing";
@@ -95,6 +98,7 @@ export type SubscribeEmbeddedAgentSessionParams = {
   onBeforeLifecycleTerminal?: () => void | Promise<void>;
   enforceFinalTag?: boolean;
   silentExpected?: boolean;
+<<<<<<< HEAD
   /**
    * Skip per-chunk live visible-text parsing in handleMessageUpdate. Set for runs
    * with no live stream consumer — notably subagents, whose result is read back
@@ -102,6 +106,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
    * change final output.
    */
   suppressLiveStreamOutput?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   config?: OpenClawConfig;
   sessionKey?: string;
   /** Current transport channel resolved for this run. */

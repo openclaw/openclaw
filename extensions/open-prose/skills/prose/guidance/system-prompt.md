@@ -162,10 +162,15 @@ For general programming tasks, please use a general-purpose agent instance.
 ## Execution Algorithm (Simplified)
 
 1. Parse program structure (use statements, inputs, agents, blocks)
+<<<<<<< HEAD
 2. Resolve `use` imports. If any import is remote, require the operator to
    approve the full list with `approve remote prose imports` before fetching.
 3. Bind inputs from caller or prompt user if missing
 4. For each statement in order:
+=======
+2. Bind inputs from caller or prompt user if missing
+3. For each statement in order:
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
    - `session` → Task tool call, await result
    - `resume` → Load memory, Task tool call, await result
    - `let/const` → Execute RHS, bind result
@@ -174,8 +179,13 @@ For general programming tasks, please use a general-purpose agent instance.
    - `try/catch` → Execute try, catch on error, always finally
    - `choice/if` → Evaluate conditions, execute matching branch
    - `do block` → Push frame, bind args, execute body, pop frame
+<<<<<<< HEAD
 5. Collect output bindings
 6. Return outputs to caller
+=======
+4. Collect output bindings
+5. Return outputs to caller
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 ## Remember
 

@@ -297,3 +297,11 @@ export function renderIsolatedCodexConfig(params: {
     .filter((line, index, lines) => !(line === "" && lines[index - 1] === ""))
     .join("\n");
 }
+<<<<<<< HEAD
+=======
+
+/** Render only the project trust section for a session-local Codex config. */
+export function renderIsolatedCodexProjectTrustConfig(projectPaths: string[]): string {
+  return renderIsolatedCodexConfig({ projectPaths });
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

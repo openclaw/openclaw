@@ -97,6 +97,7 @@ Welcome to the lobster tank! 🦞
 4. **Test/CI-only PRs for known `main` failures** → Don't open a PR. The Maintainer team is already tracking those failures, and PRs that only tweak tests or CI to chase them will be closed unless they are required to validate a new fix.
 5. **Questions** → Discord [#help](https://discord.com/channels/1456350064065904867/1459642797895319552) / [#users-helping-users](https://discord.com/channels/1456350064065904867/1459007081603403828)
 
+<<<<<<< HEAD
 ## Issue, PR, and Contact Routing
 
 Start from this routing map before creating GitHub items:
@@ -114,6 +115,8 @@ For agent-authored or otherwise non-trivial work, create or reuse the issue firs
 
 Do not guess who to tag. Let issue forms, labels/automation, `.github/CODEOWNERS`, and the maintainer areas above route the work. Mention a maintainer only when their listed area or owned path is directly relevant and you need a decision; otherwise rely on normal review. For coordinated change sets, ask in **#clawtributors** before opening more than the PR limit.
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ## PR Limits
 
 We cap at **20 open PRs per author**. If you exceed this, the `r: too-many-prs` label is added and your PR is auto-closed. This is a hard limit.
@@ -123,8 +126,12 @@ For coordinated change sets that genuinely need more than 20 PRs, join the **#cl
 ## Before You PR
 
 - Test locally with your OpenClaw instance
+<<<<<<< HEAD
 - External PRs must describe the user, product, or operational problem in **What Problem This Solves** and include useful validation in **Evidence**. Focused tests, CI results, screenshots, recordings, terminal output, live observations, redacted logs, and artifact links all count. Reviewers will inspect the code, tests, and CI; use the PR body to explain intent and make validation easy to understand.
 - When ClawSweeper, Codex, Barnacle, or a maintainer asks for more context or evidence, edit the PR description instead of only replying in a new comment. Keep **What Problem This Solves**, **Why This Change Was Made**, **User Impact**, and **Evidence** current; a short comment can point reviewers to the update, but the PR body should remain the durable explanation for maintainers and bots.
+=======
+- External PRs must include a filled **Real behavior proof** section in the PR body. Show the real setup you tested, the exact command or steps you ran after the patch, after-fix evidence, the observed result, and anything you did not test. Screenshots, recordings, terminal screenshots, console output, copied live output, linked artifacts, and redacted runtime logs all count. Unit tests, mocks, snapshots, lint, typechecks, and CI are useful but do not satisfy this requirement by themselves. Maintainers may apply `proof: override` only when the proof gate should not apply.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 - Keep PRs takeover-ready: open them from a branch maintainers can push to. For fork PRs, leave GitHub's **Allow edits by maintainers** option enabled so maintainers can finish urgent fixes, changelog entries, or merge prep when needed. If GitHub shows **Allow edits and access to secrets by maintainers**, enable it only when that workflow/secrets access is acceptable and say so in the PR.
 - Do not edit `CHANGELOG.md` in contributor PRs. Maintainers or ClawSweeper add the changelog entry when landing user-facing changes.
 - Run tests: `pnpm build && pnpm check && pnpm test`
@@ -187,7 +194,11 @@ Built with Codex, Claude, or other AI tools? **Awesome - just mark it!**
 Please include in your PR:
 
 - [ ] Mark as AI-assisted in the PR title or description
+<<<<<<< HEAD
 - [ ] Include a concise **Evidence** section with the most useful validation. Reviewers will inspect the code, tests, and CI rather than relying on the PR body alone.
+=======
+- [ ] Include human-run real behavior proof from your own setup. AI-generated tests, mocks, lint, typechecks, and CI output are supplemental only; they do not prove the fix works for users.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 - [ ] Include prompts or session logs if possible (super helpful!)
 - [ ] Confirm you understand what the code does
 - [ ] If you have access to Codex, run `codex review --base origin/main` locally and address the findings before asking for review

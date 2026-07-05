@@ -40,3 +40,15 @@ export function getUrbitContext(url: string, ship?: string): UrbitContext {
     ship: normalizeUrbitShip(ship, validated.hostname),
   };
 }
+<<<<<<< HEAD
+=======
+
+/**
+ * Get the default SSRF policy for image uploads.
+ * Uses a restrictive policy that blocks private networks by default.
+ */
+export function getDefaultSsrFPolicy(): undefined {
+  // Default: block private networks for image uploads (safer default)
+  return undefined;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

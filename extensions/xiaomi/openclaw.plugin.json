@@ -1,6 +1,9 @@
 {
   "id": "xiaomi",
+<<<<<<< HEAD
   "icon": "https://cdn.simpleicons.org/xiaomi",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "activation": {
     "onStartup": false
   },
@@ -78,7 +81,11 @@
             "input": ["text"],
             "reasoning": true,
             "contextWindow": 1048576,
+<<<<<<< HEAD
             "maxTokens": 131072,
+=======
+            "maxTokens": 32000,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             "cost": {
               "input": 1,
               "output": 3,
@@ -96,7 +103,11 @@
             "input": ["text", "image"],
             "reasoning": true,
             "contextWindow": 1048576,
+<<<<<<< HEAD
             "maxTokens": 131072,
+=======
+            "maxTokens": 32000,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             "cost": {
               "input": 0.4,
               "output": 2,

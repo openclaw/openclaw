@@ -11,7 +11,11 @@ import {
   resolveCodexAppServerAuthProfileStore,
   resolveCodexAppServerFallbackApiKeyCacheKey,
 } from "./auth-bridge.js";
+<<<<<<< HEAD
 import { CodexAppServerClient, isUnsupportedCodexAppServerVersionError } from "./client.js";
+=======
+import { CodexAppServerClient } from "./client.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   codexAppServerStartOptionsKey,
   resolveCodexAppServerRuntimeOptions,
@@ -242,6 +246,7 @@ async function acquireSharedCodexAppServerClient(
   const sharedPromise =
     entry.promise ??
     (entry.promise = (async () => {
+<<<<<<< HEAD
       const client = await startInitializedCodexAppServerClient({
         startOptions,
         agentDir,
@@ -259,6 +264,29 @@ async function acquireSharedCodexAppServerClient(
       client.setActiveSharedLeaseCountProviderForUnscopedNotifications(() => entry.activeLeases);
       client.addCloseHandler((closedClient) => clearSharedClientEntryIfCurrent(key, closedClient));
       return client;
+=======
+      const client = CodexAppServerClient.start(startOptions);
+      entry.client = client;
+      options?.onStartedClient?.(client);
+      client.setActiveSharedLeaseCountProviderForUnscopedNotifications(() => entry.activeLeases);
+      client.addCloseHandler((closedClient) => clearSharedClientEntryIfCurrent(key, closedClient));
+      try {
+        await client.initialize();
+        await applyCodexAppServerAuthProfile({
+          client,
+          agentDir,
+          authProfileId: usesNativeAuth ? null : authProfileId,
+          startOptions,
+          config: options?.config,
+        });
+        return client;
+      } catch (error) {
+        // Startup failures happen before callers own the shared client, so close
+        // the child here instead of leaving a rejected daemon attached to stdio.
+        client.close();
+        throw error;
+      }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     })());
   try {
     const client = await withTimeout(
@@ -287,6 +315,7 @@ export async function createIsolatedCodexAppServerClient(
 ): Promise<CodexAppServerClient> {
   const { agentDir, usesNativeAuth, authProfileId, authProfileStore, startOptions } =
     await resolveCodexAppServerClientStartContext(options);
+<<<<<<< HEAD
   return await startInitializedCodexAppServerClient({
     startOptions,
     agentDir,
@@ -391,6 +420,41 @@ function shouldTryManagedFallbackStartOption(
     index < startOptionsCandidates.length - 1 &&
     isUnsupportedCodexAppServerVersionError(error)
   );
+=======
+  const client = CodexAppServerClient.start(startOptions);
+  if (authProfileId) {
+    // Profile-backed Codex auth is ephemeral. Keep the host refresh callback
+    // available whether the profile came from a scoped store or persisted state.
+    client.addRequestHandler(async (request) => {
+      if (request.method !== "account/chatgptAuthTokens/refresh") {
+        return undefined;
+      }
+      return await refreshCodexAppServerAuthTokens({
+        agentDir,
+        authProfileId,
+        ...(authProfileStore ? { authProfileStore } : {}),
+        config: options?.config,
+      });
+    });
+  }
+  const initialize = client.initialize();
+  try {
+    await withTimeout(initialize, options?.timeoutMs ?? 0, "codex app-server initialize timed out");
+    await applyCodexAppServerAuthProfile({
+      client,
+      agentDir,
+      authProfileId: usesNativeAuth ? null : authProfileId,
+      startOptions,
+      config: options?.config,
+      ...(authProfileStore ? { authProfileStore } : {}),
+    });
+    return client;
+  } catch (error) {
+    client.close();
+    void initialize.catch(() => undefined);
+    throw error;
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /** Clears and closes all shared clients for deterministic tests. */

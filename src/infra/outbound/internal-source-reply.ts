@@ -6,7 +6,11 @@ import {
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChannelThreadingToolContext } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+<<<<<<< HEAD
 import { parseSessionDeliveryRoute } from "../../routing/session-key.js";
+=======
+import { parseAgentSessionKey, parseThreadSessionSuffix } from "../../routing/session-key.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { isConfiguredChannel, listConfiguredMessageChannels } from "./channel-selection.js";
@@ -19,6 +23,7 @@ type InternalSourceReplySinkInput = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
 
+<<<<<<< HEAD
 function hasExternalSessionDeliveryRoute(sessionKey: string | undefined): boolean {
   const route = parseSessionDeliveryRoute(sessionKey);
   if (!route) {
@@ -26,6 +31,31 @@ function hasExternalSessionDeliveryRoute(sessionKey: string | undefined): boolea
   }
   const channel = normalizeMessageChannel(route.channel);
   return Boolean(channel && channel !== INTERNAL_MESSAGE_CHANNEL);
+=======
+const SESSION_DELIVERY_PEER_KINDS = new Set(["channel", "direct", "dm", "group"]);
+
+function hasExternalSessionDeliveryRoute(sessionKey: string | undefined): boolean {
+  const parsedThread = parseThreadSessionSuffix(sessionKey);
+  const baseSessionKey = parsedThread.baseSessionKey ?? sessionKey;
+  const parsed = parseAgentSessionKey(baseSessionKey);
+  if (!parsed) {
+    return false;
+  }
+  const parts = parsed.rest.split(":").filter(Boolean);
+  if (parts.length < 3) {
+    return false;
+  }
+  const channel = normalizeMessageChannel(parts[0]);
+  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
+    return false;
+  }
+  if (parts.length >= 4 && (parts[2] === "direct" || parts[2] === "dm")) {
+    return Boolean(parts.slice(3).join(":").trim());
+  }
+  return (
+    SESSION_DELIVERY_PEER_KINDS.has(parts[1] ?? "") && Boolean(parts.slice(2).join(":").trim())
+  );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function hasExplicitRouteParam(params: Record<string, unknown>): boolean {

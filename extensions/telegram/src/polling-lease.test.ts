@@ -28,6 +28,7 @@ describe("Telegram polling lease", () => {
     first.release();
   });
 
+<<<<<<< HEAD
   it("refuses an old active duplicate poller for the same bot token", async () => {
     vi.useFakeTimers();
     try {
@@ -53,6 +54,8 @@ describe("Telegram polling lease", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("allows concurrent pollers for different bot tokens", async () => {
     const first = await acquireTelegramPollingLease({
       token: "123:abc",

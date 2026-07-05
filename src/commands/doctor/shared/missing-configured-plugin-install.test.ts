@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveRegistryUpdateChannel } from "../../../infra/update-channels.js";
+<<<<<<< HEAD
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../../../plugins/clawhub-error-codes.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
@@ -52,7 +55,10 @@ const mocks = vi.hoisted(() => ({
   installPluginFromClawHub: vi.fn(),
   installPluginFromNpmSpec: vi.fn(),
   listChannelPluginCatalogEntries: vi.fn(),
+<<<<<<< HEAD
   listOfficialExternalChannelEnvVars: vi.fn(() => []),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   listOfficialExternalPluginCatalogEntries: vi.fn(),
   loadInstalledPluginIndex: vi.fn(),
   loadInstalledPluginIndexInstallRecords: vi.fn(),
@@ -67,10 +73,13 @@ const mocks = vi.hoisted(() => ({
   resolveOfficialExternalPluginLabel: vi.fn(
     (entry: { label?: string; id?: string }) => entry.label ?? entry.id ?? "plugin",
   ),
+<<<<<<< HEAD
   resolveOfficialExternalProviderContractPluginIds: vi.fn(),
   resolveOfficialExternalProviderPluginIds: vi.fn(),
   resolveOfficialExternalProviderPluginIdsForEnv: vi.fn(),
   resolveOfficialExternalWebProviderContractPluginIdsForEnv: vi.fn(),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveDefaultPluginExtensionsDir: vi.fn(() => "/tmp/openclaw-plugins"),
   resolveDefaultPluginNpmDir: vi.fn(() => "/tmp/openclaw-npm"),
   resolvePluginNpmPackageDir: vi.fn(
@@ -151,8 +160,11 @@ vi.mock("../../../plugins/clawhub.js", () => ({
     VERSION_NOT_FOUND: "version_not_found",
     ARTIFACT_UNAVAILABLE: "artifact_unavailable",
     ARTIFACT_DOWNLOAD_UNAVAILABLE: "artifact_download_unavailable",
+<<<<<<< HEAD
     CLAWHUB_DOWNLOAD_BLOCKED: "clawhub_download_blocked",
     CLAWHUB_SECURITY_UNAVAILABLE: "clawhub_security_unavailable",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   installPluginFromClawHub: mocks.installPluginFromClawHub,
 }));
@@ -164,11 +176,15 @@ vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
 
 vi.mock("../../../plugins/official-external-plugin-catalog.js", () => ({
   getOfficialExternalPluginCatalogManifest: mocks.getOfficialExternalPluginCatalogManifest,
+<<<<<<< HEAD
   listOfficialExternalChannelEnvVars: mocks.listOfficialExternalChannelEnvVars,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   listOfficialExternalPluginCatalogEntries: mocks.listOfficialExternalPluginCatalogEntries,
   resolveOfficialExternalPluginId: mocks.resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall: mocks.resolveOfficialExternalPluginInstall,
   resolveOfficialExternalPluginLabel: mocks.resolveOfficialExternalPluginLabel,
+<<<<<<< HEAD
   resolveOfficialExternalProviderContractPluginIds:
     mocks.resolveOfficialExternalProviderContractPluginIds,
   resolveOfficialExternalProviderPluginIds: mocks.resolveOfficialExternalProviderPluginIds,
@@ -176,12 +192,15 @@ vi.mock("../../../plugins/official-external-plugin-catalog.js", () => ({
     mocks.resolveOfficialExternalProviderPluginIdsForEnv,
   resolveOfficialExternalWebProviderContractPluginIdsForEnv:
     mocks.resolveOfficialExternalWebProviderContractPluginIdsForEnv,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("../../../plugins/provider-install-catalog.js", () => ({
   resolveProviderInstallCatalogEntries: mocks.resolveProviderInstallCatalogEntries,
 }));
 
+<<<<<<< HEAD
 vi.mock("../../../plugins/update.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../plugins/update.js")>();
   return {
@@ -189,6 +208,11 @@ vi.mock("../../../plugins/update.js", async (importOriginal) => {
     updateNpmInstalledPlugins: mocks.updateNpmInstalledPlugins,
   };
 });
+=======
+vi.mock("../../../plugins/update.js", () => ({
+  updateNpmInstalledPlugins: mocks.updateNpmInstalledPlugins,
+}));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("repairMissingConfiguredPluginInstalls", () => {
   beforeEach(() => {
@@ -208,6 +232,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     mocks.resolveDefaultPluginExtensionsDir.mockReturnValue("/tmp/openclaw-plugins");
     mocks.resolveDefaultPluginNpmDir.mockReturnValue("/tmp/openclaw-npm");
     mocks.resolveProviderInstallCatalogEntries.mockReturnValue([]);
+<<<<<<< HEAD
     mocks.resolveOfficialExternalProviderPluginIdsForEnv.mockReturnValue([]);
     mocks.resolveOfficialExternalWebProviderContractPluginIdsForEnv.mockReturnValue([]);
     mocks.resolveOfficialExternalProviderContractPluginIds.mockImplementation(
@@ -279,6 +304,8 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         });
       },
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mocks.installPluginFromClawHub.mockResolvedValue({
       ok: true,
       pluginId: "matrix",
@@ -370,6 +397,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   });
 
   it("uses an explicit ClawHub install spec before npm", async () => {
+<<<<<<< HEAD
     const reviewNotice =
       "╭─ REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check ─╮\n" +
       "│ • Status:            security scan is pending                         │\n" +
@@ -400,6 +428,8 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         };
       },
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
       {
         id: "matrix",
@@ -424,15 +454,23 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       env: {},
     });
 
+<<<<<<< HEAD
     const clawHubCall = expectRecordFields(mockCallArg(mocks.installPluginFromClawHub), {
       spec: "clawhub:@openclaw/plugin-matrix@stable",
       expectedPluginId: "matrix",
     });
     expect(clawHubCall.logger).toEqual(expect.objectContaining({ terminalLinks: false }));
+=======
+    expectRecordFields(mockCallArg(mocks.installPluginFromClawHub), {
+      spec: "clawhub:@openclaw/plugin-matrix@stable",
+      expectedPluginId: "matrix",
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
     expect(result.changes).toEqual([
       'Installed missing configured plugin "matrix" from clawhub:@openclaw/plugin-matrix@stable.',
     ]);
+<<<<<<< HEAD
     expect(result.notices).toContain(reviewNotice);
     expect(result.notices?.[0]).not.toContain("\u001b");
     expect(result.warnings).toStrictEqual([]);
@@ -564,6 +602,11 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(warning).not.toContain("plugin-matrix\n");
   });
 
+=======
+    expect(result.warnings).toStrictEqual([]);
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("installs a missing channel plugin selected by environment config from npm", async () => {
     mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
       ok: true,
@@ -2840,6 +2883,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.changes).toEqual(['Repaired missing configured plugin "demo".']);
   });
 
+<<<<<<< HEAD
   it("forwards ClawHub risk acknowledgement to persisted-record repair", async () => {
     const records = {
       demo: {
@@ -3102,6 +3146,8 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("repairs a broken managed package entry from its attributed registry diagnostic", async () => {
     const records = {
       demo: {
@@ -3432,7 +3478,10 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result).toEqual({
       changes: ['Repaired missing configured plugin "discord".'],
       warnings: [],
+<<<<<<< HEAD
       repairedPluginIds: ["discord"],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       records: {
         discord: {
           source: "npm",
@@ -3629,7 +3678,10 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         `Installed missing configured plugin "brave" from ${expectedNpmInstallSpec("@openclaw/brave-plugin")}.`,
       ],
       warnings: [],
+<<<<<<< HEAD
       repairedPluginIds: ["brave"],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       records: persistedRecords,
     });
   });
@@ -4031,6 +4083,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("installs configured external speech and web-fetch plugins from selected providers", async () => {
     const packages = [
       ["firecrawl", "@openclaw/firecrawl-plugin"],
@@ -4371,6 +4424,8 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("installs configured external web search plugins from beta on the beta channel", async () => {
     mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
       {
@@ -4519,6 +4574,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.warnings).toStrictEqual([]);
   });
 
+<<<<<<< HEAD
   it("installs Firecrawl for env-only web fetch when search is disabled", async () => {
     mocks.resolveOfficialExternalWebProviderContractPluginIdsForEnv.mockReturnValue(["firecrawl"]);
     mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
@@ -4576,6 +4632,8 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not install a configured external web search plugin when search is disabled", async () => {
     mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
       {
@@ -4631,9 +4689,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
           },
         },
       },
+<<<<<<< HEAD
       env: {
         BRAVE_API_KEY: "brave-key",
       },
+=======
+      env: {},
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();

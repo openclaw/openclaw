@@ -213,6 +213,7 @@ describe("gateway-cli coverage", () => {
     });
   });
 
+<<<<<<< HEAD
   it("scopes usage-cost to a specific agent via --agent", async () => {
     callGateway.mockClear();
 
@@ -262,6 +263,8 @@ describe("gateway-cli coverage", () => {
     expect(runtimeErrors.join("\n")).toContain("Use --agent or --all-agents, not both");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("writes JSON for gateway health transport failures in JSON mode", async () => {
     const error = new Error("gateway closed (1006)");
     const payload = {

@@ -21,8 +21,11 @@ import {
   uploadBatchJsonlFile,
   withRemoteHttpResponse,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+<<<<<<< HEAD
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { VoyageEmbeddingClient } from "./embedding-provider.js";
 
@@ -43,10 +46,13 @@ type VoyageBatchOutputLine = ProviderBatchOutputLine;
 const VOYAGE_BATCH_ENDPOINT = EMBEDDING_BATCH_ENDPOINT;
 const VOYAGE_BATCH_COMPLETION_WINDOW = "12h";
 const VOYAGE_BATCH_MAX_REQUESTS = 50000;
+<<<<<<< HEAD
 // Voyage batch status/error responses are untrusted external bodies. Cap them
 // the same way other bundled providers do (16 MiB) so a misbehaving or hostile
 // endpoint cannot stream an unbounded body into memory before we parse it.
 const VOYAGE_BATCH_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type VoyageBatchDeps = {
   now: () => number;
@@ -71,6 +77,7 @@ function resolveVoyageBatchDeps(overrides: Partial<VoyageBatchDeps> | undefined)
   };
 }
 
+<<<<<<< HEAD
 async function assertVoyageResponseOk(
   res: Response,
   context: string,
@@ -88,6 +95,11 @@ async function assertVoyageResponseOk(
         new Error(`${context}: ${res.status} (error body exceeds ${maxBytesLocal} bytes)`),
     });
     const text = new TextDecoder().decode(bytes);
+=======
+async function assertVoyageResponseOk(res: Response, context: string): Promise<void> {
+  if (!res.ok) {
+    const text = await res.text();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     throw new Error(`${context}: ${res.status} ${text}`);
   }
 }
@@ -147,18 +159,27 @@ async function fetchVoyageBatchStatus(params: {
   client: VoyageEmbeddingClient;
   batchId: string;
   deps: VoyageBatchDeps;
+<<<<<<< HEAD
   maxResponseBytes?: number;
 }): Promise<VoyageBatchStatus> {
   const maxBytes = params.maxResponseBytes ?? VOYAGE_BATCH_RESPONSE_MAX_BYTES;
+=======
+}): Promise<VoyageBatchStatus> {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return await params.deps.withRemoteHttpResponse(
     buildVoyageBatchRequest({
       client: params.client,
       path: `batches/${params.batchId}`,
       onResponse: async (res) => {
+<<<<<<< HEAD
         await assertVoyageResponseOk(res, "voyage batch status failed", maxBytes);
         return await readProviderJsonResponse<VoyageBatchStatus>(res, "voyage-batch-status", {
           maxBytes,
         });
+=======
+        await assertVoyageResponseOk(res, "voyage batch status failed");
+        return (await res.json()) as VoyageBatchStatus;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     }),
   );
@@ -168,21 +189,30 @@ async function readVoyageBatchError(params: {
   client: VoyageEmbeddingClient;
   errorFileId: string;
   deps: VoyageBatchDeps;
+<<<<<<< HEAD
   maxResponseBytes?: number;
 }): Promise<string | undefined> {
   const maxBytes = params.maxResponseBytes ?? VOYAGE_BATCH_RESPONSE_MAX_BYTES;
+=======
+}): Promise<string | undefined> {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   try {
     return await params.deps.withRemoteHttpResponse(
       buildVoyageBatchRequest({
         client: params.client,
         path: `files/${params.errorFileId}/content`,
         onResponse: async (res) => {
+<<<<<<< HEAD
           await assertVoyageResponseOk(res, "voyage batch error file content failed", maxBytes);
           const bytes = await readResponseWithLimit(res, maxBytes, {
             onOverflow: ({ maxBytes: maxBytesLocal }) =>
               new Error(`voyage batch error file content exceeds ${maxBytesLocal} bytes`),
           });
           const text = new TextDecoder().decode(bytes);
+=======
+          await assertVoyageResponseOk(res, "voyage batch error file content failed");
+          const text = await res.text();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           if (!text.trim()) {
             return undefined;
           }
@@ -310,9 +340,16 @@ export async function runVoyageEmbeddingBatches(
           headers: buildBatchHeaders(params.client, { json: true }),
         },
         onResponse: async (contentRes) => {
+<<<<<<< HEAD
           // Same bounded non-OK diagnostic read as the status/error-file paths:
           // the failure body is untrusted, so cap it instead of `await text()`.
           await assertVoyageResponseOk(contentRes, "voyage batch file content failed");
+=======
+          if (!contentRes.ok) {
+            const text = await contentRes.text();
+            throw new Error(`voyage batch file content failed: ${contentRes.status} ${text}`);
+          }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
           if (!contentRes.body) {
             return;
@@ -345,9 +382,12 @@ export async function runVoyageEmbeddingBatches(
     },
   });
 }
+<<<<<<< HEAD
 
 export const testing = {
   fetchVoyageBatchStatus,
   readVoyageBatchError,
   VOYAGE_BATCH_RESPONSE_MAX_BYTES,
 } as const;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

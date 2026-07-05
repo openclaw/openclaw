@@ -1,6 +1,10 @@
 // Control UI tests cover sessions behavior.
 import { chromium, type Browser, type Page } from "playwright";
+<<<<<<< HEAD
 import { describe, expect, it } from "vitest";
+=======
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import {
   canRunPlaywrightChromium,
@@ -19,10 +23,14 @@ const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
   ? describe
   : describe.skip;
 
+<<<<<<< HEAD
 type BrowserFixture = {
   browser: Browser;
   page: Page;
 };
+=======
+let browser: Browser;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function readUiCss(): string {
   const files = [
@@ -159,6 +167,7 @@ function sessionsTableHtml() {
   `;
 }
 
+<<<<<<< HEAD
 async function openFixture(width: number, height: number): Promise<BrowserFixture> {
   const browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
   let page: Page | undefined;
@@ -245,5 +254,84 @@ describeBrowserLayout("sessions responsive browser layout", () => {
     } finally {
       await closeFixture(fixture);
     }
+=======
+async function openFixture(width: number, height: number): Promise<Page> {
+  const page = await browser.newPage({ viewport: { width, height } });
+  await page.setContent(
+    `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${sessionsTableHtml()}</body></html>`,
+  );
+  return page;
+}
+
+describeBrowserLayout("sessions responsive browser layout", () => {
+  beforeAll(async () => {
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+  });
+
+  afterAll(async () => {
+    await browser.close();
+  });
+
+  it.each(VIEWPORTS)("keeps compaction details visible at %dx%d", async (width, height) => {
+    const page = await openFixture(width, height);
+    const metrics = await page.evaluate(() => {
+      const container = document.querySelector(".data-table-container");
+      const compaction = document.querySelector(".session-compaction-cell");
+      const trigger = document.querySelector(".session-compaction-trigger");
+      const status = document.querySelector(".session-status-badge");
+      const statusLabel = document.querySelector(".session-status-badge__label");
+      const runtime = document.querySelector(".session-runtime-cell .mono");
+      const kind = document.querySelector(".data-table-badge");
+      const key = document.querySelector(".session-key-cell .session-link");
+      const details = document.querySelector(".session-details-panel");
+      if (
+        !(container instanceof HTMLElement) ||
+        !(compaction instanceof HTMLElement) ||
+        !(status instanceof HTMLElement) ||
+        !(statusLabel instanceof HTMLElement) ||
+        !(runtime instanceof HTMLElement) ||
+        !(kind instanceof HTMLElement) ||
+        !(key instanceof HTMLElement)
+      ) {
+        throw new Error("Missing sessions table fixture elements");
+      }
+      const containerRect = container.getBoundingClientRect();
+      const compactionRect = compaction.getBoundingClientRect();
+      const statusRect = status.getBoundingClientRect();
+      return {
+        bodyOverflow: document.documentElement.scrollWidth - window.innerWidth,
+        compactionText: compaction.textContent?.trim(),
+        statusText: status.textContent?.trim(),
+        runtimeText: runtime.textContent?.trim(),
+        keyWhiteSpace: getComputedStyle(key).whiteSpace,
+        kindWhiteSpace: getComputedStyle(kind).whiteSpace,
+        statusWhiteSpace: getComputedStyle(status).whiteSpace,
+        runtimeWhiteSpace: getComputedStyle(runtime).whiteSpace,
+        hasTrigger: trigger !== null,
+        hasLegacyButton: document.querySelector(".session-checkpoint-toggle") !== null,
+        hasDetails: details !== null,
+        compactionVisible:
+          compactionRect.left >= containerRect.left && compactionRect.right <= containerRect.right,
+        statusVisible:
+          statusRect.left >= containerRect.left && statusRect.right <= containerRect.right,
+      };
+    });
+
+    expect(metrics.bodyOverflow).toBeLessThanOrEqual(1);
+    expect(metrics.compactionText).toBe("1 Checkpoint");
+    expect(metrics.statusText).toBe("Live");
+    expect(metrics.runtimeText).toBe("claude-cli (fallback none)");
+    expect(metrics.keyWhiteSpace).toBe("nowrap");
+    expect(metrics.kindWhiteSpace).toBe("nowrap");
+    expect(metrics.statusWhiteSpace).toBe("nowrap");
+    expect(metrics.runtimeWhiteSpace).toBe("nowrap");
+    expect(metrics.hasTrigger).toBe(true);
+    expect(metrics.hasLegacyButton).toBe(false);
+    expect(metrics.hasDetails).toBe(true);
+    expect(metrics.compactionVisible).toBe(true);
+    expect(metrics.statusVisible).toBe(true);
+
+    await page.close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

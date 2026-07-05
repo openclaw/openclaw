@@ -12,9 +12,12 @@ import {
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
   hashText,
+<<<<<<< HEAD
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   remapChunkLines,
   retryTransientMemoryRead,
   runWithConcurrency,
@@ -22,7 +25,10 @@ import {
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+<<<<<<< HEAD
 import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-runtime";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   MEMORY_BATCH_FAILURE_LIMIT,
   recordMemoryBatchFailure,
@@ -53,9 +59,15 @@ import { MemoryManagerSyncOps, type MemoryIndexWorkItem } from "./manager-sync-o
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { replaceMemoryVectorRow } from "./manager-vector-write.js";
 
+<<<<<<< HEAD
 const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
 const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
+=======
+const VECTOR_TABLE = "chunks_vec";
+const FTS_TABLE = "chunks_fts";
+const EMBEDDING_CACHE_TABLE = "embedding_cache";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
 const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
@@ -248,6 +260,25 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       entries,
       tableName: EMBEDDING_CACHE_TABLE,
     });
+<<<<<<< HEAD
+=======
+    if (this.embeddingCacheMirrorDb && this.embeddingCacheMirrorDb !== this.db) {
+      try {
+        upsertMemoryEmbeddingCache({
+          db: this.embeddingCacheMirrorDb,
+          enabled: this.cache.enabled,
+          provider,
+          providerKey: this.providerKey,
+          entries,
+          tableName: EMBEDDING_CACHE_TABLE,
+        });
+      } catch (err) {
+        log.warn("memory embeddings: failed to mirror safe-reindex cache batch", {
+          error: formatErrorMessage(err),
+        });
+      }
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   private async embedChunksInBatches(chunks: MemoryChunk[]): Promise<number[][]> {
@@ -694,7 +725,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       try {
         this.db
           .prepare(
+<<<<<<< HEAD
             `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?)`,
+=======
+            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           )
           .run(pathname, source);
       } catch {}
@@ -710,16 +745,26 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         });
       } catch {}
     }
+<<<<<<< HEAD
     this.db
       .prepare(`DELETE FROM memory_index_chunks WHERE path = ? AND source = ?`)
       .run(pathname, source);
+=======
+    this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(pathname, source);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   private upsertFileRecord(entry: MemoryIndexEntry, source: MemorySource): void {
     this.db
       .prepare(
+<<<<<<< HEAD
         `INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(path, source) DO UPDATE SET
+=======
+        `INSERT INTO files (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(path) DO UPDATE SET
+           source=excluded.source,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
            hash=excluded.hash,
            mtime=excluded.mtime,
            size=excluded.size`,
@@ -728,9 +773,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   private deleteFileRecord(pathname: string, source: MemorySource): void {
+<<<<<<< HEAD
     this.db
       .prepare(`DELETE FROM memory_index_sources WHERE path = ? AND source = ?`)
       .run(pathname, source);
+=======
+    this.db.prepare(`DELETE FROM files WHERE path = ? AND source = ?`).run(pathname, source);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   /**
@@ -747,6 +796,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     vectorReady: boolean,
   ): void {
     const now = Date.now();
+<<<<<<< HEAD
     runSqliteImmediateTransactionSync(this.db, () => {
       this.clearIndexedFileData(entry.path, source);
       for (let i = 0; i < chunks.length; i++) {
@@ -797,6 +847,55 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       }
       this.upsertFileRecord(entry, source);
     });
+=======
+    this.clearIndexedFileData(entry.path, source);
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const embedding = embeddings[i] ?? [];
+      const id = hashText(
+        `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
+      );
+      this.db
+        .prepare(
+          `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             hash=excluded.hash,
+             model=excluded.model,
+             text=excluded.text,
+             embedding=excluded.embedding,
+             updated_at=excluded.updated_at`,
+        )
+        .run(
+          id,
+          entry.path,
+          source,
+          chunk.startLine,
+          chunk.endLine,
+          chunk.hash,
+          model,
+          chunk.text,
+          JSON.stringify(embedding),
+          now,
+        );
+      if (vectorReady && embedding.length > 0) {
+        replaceMemoryVectorRow({
+          db: this.db,
+          tableName: VECTOR_TABLE,
+          id,
+          embedding,
+        });
+      }
+      if (this.fts.enabled && this.fts.available) {
+        this.db
+          .prepare(
+            `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
+              ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
+      }
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     this.vectorDegradedWriteWarningShown = logMemoryVectorDegradedWrite({
       vectorEnabled: this.vector.enabled,
       vectorReady,
@@ -805,6 +904,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       loadError: this.vector.loadError,
       warn: (message) => log.warn(message),
     });
+<<<<<<< HEAD
+=======
+    this.upsertFileRecord(entry, source);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   private async prepareIndexEntry(

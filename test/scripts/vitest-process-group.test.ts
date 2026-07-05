@@ -117,6 +117,7 @@ describe("vitest process group helpers", () => {
     expectListenerCount(listeners, "exit", 0);
   });
 
+<<<<<<< HEAD
   it("can force-kill process groups after forwarded parent signals", async () => {
     const listeners = new Map<string, Set<() => void>>();
     const fakeProcess = {
@@ -147,6 +148,8 @@ describe("vitest process group helpers", () => {
     teardown();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("raises process listener limits for highly parallel cleanup handlers", () => {
     const listeners = new Map<string, Set<() => void>>();
     let maxListeners = 10;

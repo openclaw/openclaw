@@ -15,7 +15,10 @@ import { Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { getLanguageFromPath, highlightCode } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
+<<<<<<< HEAD
 import { textResult } from "../../tools/common.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { withFileMutationQueue } from "./file-mutation-queue.js";
 import { resolveToCwd } from "./path-utils.js";
@@ -29,9 +32,13 @@ import {
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
 const writeSchema = Type.Object({
+<<<<<<< HEAD
   path: Type.String({
     description: "Path to the file to write (relative or absolute)",
   }),
+=======
+  path: Type.String({ description: "Path to the file to write (relative or absolute)" }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   content: Type.String({ description: "Content to write to the file" }),
 });
 export type { WriteToolInput } from "./tool-contracts.js";
@@ -240,12 +247,16 @@ function formatWriteCall(
 
 function formatWriteResult(
   result: {
+<<<<<<< HEAD
     content: Array<{
       type: string;
       text?: string;
       data?: string;
       mimeType?: string;
     }>;
+=======
+    content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     isError?: boolean;
   },
   theme: typeof import("../../modes/interactive/theme/theme.js").theme,
@@ -305,10 +316,14 @@ async function readOriginalWriteState(
     const originalText = Buffer.isBuffer(originalContent)
       ? originalContent.toString("utf8")
       : originalContent;
+<<<<<<< HEAD
     return {
       state: originalText === content ? "same" : "different",
       beforeStat: stat,
     };
+=======
+    return { state: originalText === content ? "same" : "different", beforeStat: stat };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } catch {
     return { state: "unknown", beforeStat: stat };
   }
@@ -404,6 +419,7 @@ export function createWriteToolDefinition(
       const dir = dirname(absolutePath);
       return withFileMutationQueue(absolutePath, async () => {
         const precheck = await readOriginalWriteState(absolutePath, content, ops);
+<<<<<<< HEAD
         if (signal?.aborted) {
           throw new Error("Operation aborted");
         }
@@ -418,6 +434,12 @@ export function createWriteToolDefinition(
           };
         }
         try {
+=======
+        try {
+          if (signal?.aborted) {
+            throw new Error("Operation aborted");
+          }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           await ops.mkdir(dir);
           if (signal?.aborted) {
             throw new Error("Operation aborted");

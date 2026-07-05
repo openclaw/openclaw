@@ -37,6 +37,7 @@ export {
   type CommandAuthorization,
 } from "../auto-reply/command-auth.js";
 export { resolveStoredModelOverride } from "../auto-reply/reply/stored-model-override.js";
+<<<<<<< HEAD
 export {
   formatFastModeCommandOptions,
   formatFastModeCurrentStatus,
@@ -44,6 +45,8 @@ export {
   formatFastModeStatusValue,
   resolveFastModeState,
 } from "../agents/fast-mode.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type { ModelsProviderData } from "../auto-reply/reply/commands-models.js";
 export { listSkillCommandsForAgents } from "../skills/discovery/chat-commands.js";
 export { listProviderPluginCommandSpecs } from "../plugins/command-specs.js";

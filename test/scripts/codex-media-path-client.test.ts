@@ -5,10 +5,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createJsonlRequestTailer } from "../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mjs";
+<<<<<<< HEAD
 import {
   readPositiveIntEnv,
   readTcpPortEnv,
 } from "../../scripts/e2e/lib/codex-media-path/limits.mjs";
+=======
+import { readPositiveIntEnv } from "../../scripts/e2e/lib/codex-media-path/limits.mjs";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
 const tempRoots: string[] = [];
@@ -109,10 +113,13 @@ describe("codex media path limits", () => {
     ).toThrow("invalid OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES: 64bytes");
   });
 
+<<<<<<< HEAD
   it("rejects out-of-range TCP ports", () => {
     expect(() => readTcpPortEnv("PORT", 18790, { PORT: "65536" })).toThrow("invalid PORT: 65536");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("writes strict positive timeout and port values into generated config", () => {
     const root = makeTempRoot();
     const result = runWriteConfig(root, {
@@ -136,6 +143,7 @@ describe("codex media path limits", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("invalid OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS: 1e3");
   });
+<<<<<<< HEAD
 
   it("rejects out-of-range write-config gateway ports", () => {
     const root = makeTempRoot();
@@ -144,6 +152,8 @@ describe("codex media path limits", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("invalid PORT: 65536");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("codex media path fake app-server", () => {

@@ -1,8 +1,16 @@
 // Run meta error tests cover status reporting when cron run metadata fails.
 import { describe, expect, it } from "vitest";
 import { CommandLaneTaskTimeoutError } from "../../process/command-queue.js";
+<<<<<<< HEAD
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
+=======
+import {
+  makeIsolatedAgentTurnJob,
+  makeIsolatedAgentTurnParams,
+  setupRunCronIsolatedAgentTurnSuite,
+} from "./run.suite-helpers.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   cleanupDirectCronSessionMock,
   loadRunCronIsolatedAgentTurn,
@@ -28,7 +36,11 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       attempts: [],
     });
 
+<<<<<<< HEAD
     const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+=======
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("cron isolated run failed: model provider unreachable");
@@ -49,7 +61,11 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       attempts: [],
     });
 
+<<<<<<< HEAD
     const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+=======
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("cron isolated run failed: retry limit exceeded");
@@ -71,8 +87,13 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     });
 
     const result = await runCronIsolatedAgentTurn(
+<<<<<<< HEAD
       makeIsolatedAgentParamsFixture({
         job: makeIsolatedAgentJobFixture({ deleteAfterRun: true }),
+=======
+      makeIsolatedAgentTurnParams({
+        job: makeIsolatedAgentTurnJob({ deleteAfterRun: true }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }),
     );
 
@@ -91,7 +112,11 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       new CommandLaneTaskTimeoutError("cron-nested", 330_000),
     );
 
+<<<<<<< HEAD
     const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+=======
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("cron: job execution timed out");
@@ -113,7 +138,11 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     );
 
     const result = await runCronIsolatedAgentTurn(
+<<<<<<< HEAD
       makeIsolatedAgentParamsFixture({ abortSignal: abortController.signal }),
+=======
+      makeIsolatedAgentTurnParams({ abortSignal: abortController.signal }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
 
     expect(result.status).toBe("error");

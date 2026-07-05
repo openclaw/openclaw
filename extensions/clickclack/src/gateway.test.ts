@@ -5,12 +5,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedClickClackAccount } from "./types.js";
 
 class FakeSocket extends EventEmitter {
+<<<<<<< HEAD
   emitErrorOnClose = false;
 
   close = vi.fn(() => {
     if (this.emitErrorOnClose) {
       this.emit("error", new Error("socket closed while connecting"));
     }
+=======
+  close = vi.fn(() => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     this.emit("close");
   });
 }
@@ -196,6 +200,7 @@ describe("ClickClack gateway", () => {
     await run;
   });
 
+<<<<<<< HEAD
   it("reconnects after ClickClack websocket errors", async () => {
     const firstSocket = new FakeSocket();
     firstSocket.emitErrorOnClose = true;
@@ -236,6 +241,8 @@ describe("ClickClack gateway", () => {
     expect(mocks.client.websocket).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("clears running status when backlog polling fails", async () => {
     mocks.client.events.mockRejectedValue(new Error("clickclack unavailable"));
     const abort = new AbortController();

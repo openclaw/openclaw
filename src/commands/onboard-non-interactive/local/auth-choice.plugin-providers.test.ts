@@ -1,12 +1,21 @@
 // Non-interactive plugin provider auth tests cover provider choice setup and runtime plugin install requirements.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+<<<<<<< HEAD
 import type { RuntimePluginInstallResult } from "../../runtime-plugin-install.js";
+=======
+import type { CodexRuntimePluginInstallResult } from "../../codex-runtime-plugin-install.js";
+import type { CopilotRuntimePluginInstallResult } from "../../copilot-runtime-plugin-install.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
 
 const ensureCodexRuntimePluginForModelSelection = vi.hoisted(() =>
   vi.fn(
+<<<<<<< HEAD
     async ({ cfg }: { cfg: OpenClawConfig }): Promise<RuntimePluginInstallResult> => ({
+=======
+    async ({ cfg }: { cfg: OpenClawConfig }): Promise<CodexRuntimePluginInstallResult> => ({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       cfg,
       required: false,
       installed: false,
@@ -19,7 +28,11 @@ vi.mock("../../codex-runtime-plugin-install.js", () => ({
 }));
 const ensureCopilotRuntimePluginForModelSelection = vi.hoisted(() =>
   vi.fn(
+<<<<<<< HEAD
     async ({ cfg }: { cfg: OpenClawConfig }): Promise<RuntimePluginInstallResult> => ({
+=======
+    async ({ cfg }: { cfg: OpenClawConfig }): Promise<CopilotRuntimePluginInstallResult> => ({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       cfg,
       required: false,
       installed: false,
@@ -41,6 +54,7 @@ const resolveManifestProviderAuthChoice = vi.hoisted(() => vi.fn(() => undefined
 vi.mock("../../../plugins/provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoice,
 }));
+<<<<<<< HEAD
 const resolveProviderInstallCatalogEntry = vi.hoisted(() => vi.fn(() => undefined));
 const resolveDeprecatedProviderInstallCatalogEntry = vi.hoisted(() => vi.fn(() => undefined));
 vi.mock("../../../plugins/provider-install-catalog.js", () => ({
@@ -51,6 +65,8 @@ const ensureOnboardingPluginInstalled = vi.hoisted(() => vi.fn());
 vi.mock("../../onboarding-plugin-install.js", () => ({
   ensureOnboardingPluginInstalled,
 }));
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const resolveOwningPluginIdsForProvider = vi.hoisted(() => vi.fn(() => undefined));
 const resolveProviderPluginChoice = vi.hoisted(() => vi.fn());
@@ -67,9 +83,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   resolvePreferredProviderForAuthChoice.mockResolvedValue(undefined);
   resolveManifestProviderAuthChoice.mockReturnValue(undefined);
+<<<<<<< HEAD
   resolveDeprecatedProviderInstallCatalogEntry.mockReturnValue(undefined);
   resolveProviderInstallCatalogEntry.mockReturnValue(undefined);
   ensureOnboardingPluginInstalled.mockResolvedValue(undefined);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveOwningPluginIdsForProvider.mockReturnValue(undefined as never);
   resolveProviderPluginChoice.mockReturnValue(undefined);
   resolvePluginProviders.mockReturnValue([] as never);
@@ -90,7 +109,10 @@ function createRuntime() {
   return {
     error: vi.fn(),
     exit: vi.fn(),
+<<<<<<< HEAD
     log: vi.fn(),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }
 
@@ -160,6 +182,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(result).toEqual({ plugins: { allow: ["vllm"] } });
   });
 
+<<<<<<< HEAD
   it("installs an official catalog provider before applying a cold auth choice", async () => {
     const runtime = createRuntime();
     const runNonInteractive = vi.fn(async ({ config }: { config: OpenClawConfig }) => ({
@@ -271,6 +294,8 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(resolveProviderInstallCatalogEntry).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("fails explicitly when a provider-plugin auth choice resolves to no trusted setup provider", async () => {
     const runtime = createRuntime();
 

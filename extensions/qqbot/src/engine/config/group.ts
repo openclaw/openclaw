@@ -6,18 +6,25 @@ import { resolveAccountBase } from "./resolve.js";
 interface GroupConfig {
   requireMention: boolean;
   ignoreOtherMentions: boolean;
+<<<<<<< HEAD
   commandLevel: QQBotGroupCommandLevel;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   name: string;
   prompt?: string;
   historyLimit: number;
 }
 
+<<<<<<< HEAD
 export type QQBotGroupCommandLevel = "all" | "safety" | "strict";
 
 export const DEFAULT_GROUP_HISTORY_LIMIT = 50;
 // Omitted commandLevel preserves shipped QQBot group behavior. Operators opt in to
 // the fail-closed safety/strict modes per group or wildcard group config.
 export const DEFAULT_GROUP_COMMAND_LEVEL: QQBotGroupCommandLevel = "all";
+=======
+export const DEFAULT_GROUP_HISTORY_LIMIT = 50;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export const DEFAULT_GROUP_PROMPT =
   "If the sender is a bot, respond only when they explicitly @mention you to ask a question or request assistance with a specific task; keep your replies concise and clear, avoiding the urge to race other bots to answer or engage in lengthy, unproductive exchanges. In group chats, prioritize responding to messages from human users; bots should maintain a collaborative rather than competitive dynamic to ensure the conversation remains orderly and does not result in message flooding.";
@@ -25,7 +32,10 @@ export const DEFAULT_GROUP_PROMPT =
 const DEFAULT_GROUP_CONFIG: Readonly<Omit<GroupConfig, "prompt">> = {
   requireMention: true,
   ignoreOtherMentions: false,
+<<<<<<< HEAD
   commandLevel: DEFAULT_GROUP_COMMAND_LEVEL,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   name: "",
   historyLimit: DEFAULT_GROUP_HISTORY_LIMIT,
 };
@@ -58,6 +68,7 @@ function readString(obj: Record<string, unknown>, key: string): string | undefin
   return typeof v === "string" && v.length > 0 ? v : undefined;
 }
 
+<<<<<<< HEAD
 function readCommandLevel(
   obj: Record<string, unknown>,
   key: string,
@@ -66,6 +77,8 @@ function readCommandLevel(
   return v === "all" || v === "safety" || v === "strict" ? v : undefined;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function readHistoryLimit(obj: Record<string, unknown>, key: string): number | undefined {
   const v = obj[key];
   if (typeof v !== "number" || !Number.isFinite(v)) {
@@ -97,10 +110,13 @@ export function resolveGroupConfig(
       readBoolean(specific, "ignoreOtherMentions") ??
       readBoolean(wildcard, "ignoreOtherMentions") ??
       DEFAULT_GROUP_CONFIG.ignoreOtherMentions,
+<<<<<<< HEAD
     commandLevel:
       readCommandLevel(specific, "commandLevel") ??
       readCommandLevel(wildcard, "commandLevel") ??
       DEFAULT_GROUP_CONFIG.commandLevel,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     name: readString(specific, "name") ?? readString(wildcard, "name") ?? DEFAULT_GROUP_CONFIG.name,
     prompt: readString(specific, "prompt") ?? readString(wildcard, "prompt"),
     historyLimit:
@@ -110,6 +126,7 @@ export function resolveGroupConfig(
   };
 }
 
+<<<<<<< HEAD
 export function resolveGroupCommandLevelFromAccountConfig(
   accountConfig: Record<string, unknown> | undefined,
   groupOpenid?: string | null,
@@ -124,6 +141,8 @@ export function resolveGroupCommandLevelFromAccountConfig(
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function resolveHistoryLimit(
   cfg: Record<string, unknown>,
   groupOpenid?: string | null,

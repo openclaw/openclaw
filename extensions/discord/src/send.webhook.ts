@@ -1,7 +1,10 @@
 // Discord plugin module implements send.webhook behavior.
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+<<<<<<< HEAD
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDiscordClientAccountContext } from "./client.js";
 import {
@@ -15,8 +18,11 @@ import { rewriteDiscordKnownMentions } from "./mentions.js";
 import { createDiscordSendResult } from "./send.receipt.js";
 import type { DiscordSendResult } from "./send.types.js";
 
+<<<<<<< HEAD
 const DISCORD_WEBHOOK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type DiscordWebhookSendOpts = {
   cfg: OpenClawConfig;
   webhookId: string;
@@ -57,9 +63,13 @@ function coerceWebhookErrorBody(raw: string): unknown {
 }
 
 async function throwWebhookResponseError(response: Response): Promise<never> {
+<<<<<<< HEAD
   const raw = await readResponseTextLimited(response, DISCORD_WEBHOOK_ERROR_BODY_LIMIT_BYTES).catch(
     () => "",
   );
+=======
+  const raw = await response.text().catch(() => "");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const parsed = coerceWebhookErrorBody(raw);
   if (response.status === 429) {
     throw new RateLimitError(response, {

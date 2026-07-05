@@ -25,7 +25,10 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+<<<<<<< HEAD
 import { toErrorObject } from "../../infra/errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -1236,7 +1239,11 @@ function postNativeHookRelayBridgeRecord(params: {
     const rejectOnce = (error: unknown) => {
       if (!settled) {
         settled = true;
+<<<<<<< HEAD
         reject(toErrorObject(error, "Non-Error rejection"));
+=======
+        reject(toLintErrorObject(error, "Non-Error rejection"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     };
     const req = httpRequest(
@@ -2061,10 +2068,17 @@ async function waitForNativeHookRelayApprovalDecision(params: {
   let onAbort: (() => void) | undefined;
   const abortPromise = new Promise<never>((_, reject) => {
     if (params.signal!.aborted) {
+<<<<<<< HEAD
       reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
       return;
     }
     onAbort = () => reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
+=======
+      reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
+      return;
+    }
+    onAbort = () => reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     params.signal!.addEventListener("abort", onAbort, { once: true });
   });
   try {
@@ -2381,3 +2395,20 @@ export const testing = {
   },
 } as const;
 export { testing as __testing };
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

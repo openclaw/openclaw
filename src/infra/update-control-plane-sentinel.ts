@@ -118,8 +118,13 @@ export async function readControlPlaneUpdateSentinelMeta(
 export async function writeControlPlaneUpdateRestartSentinel(params: {
   result: UpdateRunResult;
   meta: UpdateRestartSentinelMeta;
+<<<<<<< HEAD
 }): Promise<void> {
   await writeRestartSentinel(
+=======
+}): Promise<string> {
+  return await writeRestartSentinel(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     buildUpdateRestartSentinelPayload({
       result: params.result,
       meta: params.meta,

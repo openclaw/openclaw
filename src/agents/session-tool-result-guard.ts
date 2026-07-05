@@ -563,6 +563,11 @@ function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage): boolea
   return isTranscriptOnlyOpenClawAssistantModel(provider, model);
 }
 
+<<<<<<< HEAD
+=======
+export { getRawSessionAppendMessage };
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function installSessionToolResultGuard(
   sessionManager: SessionManager,
   opts?: {
@@ -726,9 +731,13 @@ export function installSessionToolResultGuard(
             capToolResultForPersistence(flushed.message, maxToolResultChars, redactionConfig),
             {
               invalidateSerializedPrefixCache:
+<<<<<<< HEAD
                 persistedSynthetic !== synthetic ||
                 toolResultTransformerMayMutate ||
                 flushed.changed,
+=======
+                persistedSynthetic !== synthetic || toolResultTransformerMayMutate || flushed.changed,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             },
           );
         }

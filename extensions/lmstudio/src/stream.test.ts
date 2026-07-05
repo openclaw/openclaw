@@ -90,6 +90,7 @@ function expectBaseStreamModelFields(baseStream: StreamFn, fields: Record<string
   expect(call[2]).toBeUndefined();
 }
 
+<<<<<<< HEAD
 function expectBaseStreamCallModelFields(
   baseStream: StreamFn,
   callIndex: number,
@@ -102,6 +103,8 @@ function expectBaseStreamCallModelFields(
   expectRecordFields(requireRecord(call[0], "base stream model"), fields);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function collectEvents(stream: ReturnType<StreamFn>): Promise<StreamEvent[]> {
   const resolved = stream instanceof Promise ? await stream : stream;
   const events: StreamEvent[] = [];
@@ -230,6 +233,7 @@ describe("lmstudio stream wrapper", () => {
     });
   });
 
+<<<<<<< HEAD
   it("streams with the canonical model key returned by preload", async () => {
     ensureLmstudioModelLoadedMock.mockResolvedValueOnce("gemma-4-e4b-it-ultra-uncensored-heretic");
     const baseStream = buildDoneStreamFn();
@@ -249,6 +253,8 @@ describe("lmstudio stream wrapper", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("prefers model contextTokens over contextWindow for preload requests", async () => {
     const baseStream = buildDoneStreamFn();
     const wrapped = createWrappedLmstudioStream(baseStream, {
@@ -331,6 +337,7 @@ describe("lmstudio stream wrapper", () => {
     expect(baseStream).toHaveBeenCalledTimes(1);
   });
 
+<<<<<<< HEAD
   it("streams with the canonical model key when preload fails after discovery", async () => {
     ensureLmstudioModelLoadedMock.mockRejectedValueOnce(
       Object.assign(new Error("load failed"), {
@@ -382,6 +389,8 @@ describe("lmstudio stream wrapper", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("skips native model preload when provider params disable it", async () => {
     const baseStream = buildDoneStreamFn();
     const wrapped = wrapLmstudioInferencePreload({

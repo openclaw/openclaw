@@ -1,0 +1,73 @@
+{
+  "scenarios": [
+    {
+      "name": "Memory tools in channel context",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "uses memory_search before answering in-channel",
+          "status": "pass",
+          "details": "Protocol note: I checked memory and the project codename is ORBIT-9."
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 134020,
+    "gatewayProcessCpuMs": 0,
+    "gatewayCpuCoreRatio": 0,
+    "gatewayProcessRssStartBytes": 872013824,
+    "gatewayProcessRssEndBytes": 1067782144,
+    "gatewayProcessRssDeltaBytes": 195768320,
+    "gatewayProcessRssPeakBytes": 1067782144,
+    "gatewayProcessRssPeakDeltaBytes": 195768320,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:15:35.211Z",
+        "gatewayProcessRssBytes": 872013824
+      },
+      {
+        "label": "scenario:memory-tools-channel-context:start",
+        "at": "2026-07-03T13:15:35.468Z",
+        "gatewayProcessRssBytes": 898310144
+      },
+      {
+        "label": "scenario:memory-tools-channel-context:finish",
+        "at": "2026-07-03T13:17:04.177Z",
+        "gatewayProcessRssBytes": 1067782144
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:17:04.201Z",
+        "gatewayProcessRssBytes": 1067782144
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:14:50.157Z",
+    "finishedAt": "2026-07-03T13:17:04.177Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "memory-tools-channel-context"
+    ],
+    "runtimePair": null
+  }
+}

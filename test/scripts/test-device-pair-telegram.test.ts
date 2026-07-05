@@ -1,10 +1,14 @@
 // Test Device Pair Telegram tests cover the dev Telegram pairing smoke helper.
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import {
   parseDevicePairTelegramArgs,
   runDevicePairTelegram,
 } from "../../scripts/dev/test-device-pair-telegram.ts";
+=======
+import { runDevicePairTelegram } from "../../scripts/dev/test-device-pair-telegram.ts";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const scriptUrl = pathToFileURL("scripts/dev/test-device-pair-telegram.ts").href;
 
@@ -13,6 +17,7 @@ describe("scripts/dev/test-device-pair-telegram.ts", () => {
     await expect(import(`${scriptUrl}?case=load-${Date.now()}`)).resolves.toBeDefined();
   });
 
+<<<<<<< HEAD
   it("parses help without requiring Telegram config", () => {
     expect(parseDevicePairTelegramArgs(["--help"])).toEqual({
       accountId: undefined,
@@ -59,6 +64,8 @@ describe("scripts/dev/test-device-pair-telegram.ts", () => {
     expect(sendMessageTelegram).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("sends the generated /pair reply through the injected Telegram runtime", async () => {
     const cfg = { channels: { telegram: { enabled: true } } };
     const loadOpenClawPlugins = vi.fn();

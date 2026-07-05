@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 // Test Support plugin module implements streaming response fixtures.
 export type StreamingResponseFixture = {
   response: Response;
@@ -16,6 +17,16 @@ export function createStreamingResponse(params: {
   let reads = 0;
   let canceled = false;
   const encoder = new TextEncoder();
+=======
+// Test Support plugin module implements streaming error response behavior.
+export function createStreamingErrorResponse(params: {
+  status: number;
+  chunkCount: number;
+  chunkSize: number;
+  byte: number;
+}): { response: Response; getReadCount: () => number } {
+  let reads = 0;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const stream = new ReadableStream<Uint8Array>({
     pull(controller) {
       if (reads >= params.chunkCount) {
@@ -23,6 +34,7 @@ export function createStreamingResponse(params: {
         return;
       }
       reads += 1;
+<<<<<<< HEAD
       const chunk =
         params.text !== undefined
           ? encoder.encode(params.text.repeat(params.chunkSize))
@@ -48,3 +60,13 @@ export function createStreamingErrorResponse(params: {
 }): StreamingResponseFixture {
   return createStreamingResponse(params);
 }
+=======
+      controller.enqueue(new Uint8Array(params.chunkSize).fill(params.byte));
+    },
+  });
+  return {
+    response: new Response(stream, { status: params.status }),
+    getReadCount: () => reads,
+  };
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

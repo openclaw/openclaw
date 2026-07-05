@@ -1,16 +1,27 @@
 // Doctor capability lookup for channel-specific policy and migration behavior.
 import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
+<<<<<<< HEAD
 import type { ChannelDmAllowFromMode } from "../../channels/plugins/dm-access.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { findBundledPackageChannelMetadata } from "../../plugins/bundled-package-channel-metadata.js";
 import type { PluginPackageChannelDoctorCapabilities } from "../../plugins/manifest.js";
+<<<<<<< HEAD
+=======
+import type { AllowFromMode } from "./shared/allow-from-mode.types.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type DoctorGroupModel = "sender" | "route" | "hybrid";
 
 type DoctorChannelCapabilities = {
+<<<<<<< HEAD
   dmAllowFromMode: ChannelDmAllowFromMode;
+=======
+  dmAllowFromMode: AllowFromMode;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   groupModel: DoctorGroupModel;
   groupAllowFromFallbackToAllowFrom: boolean;
   warnOnEmptyGroupSenderAllowlist: boolean;

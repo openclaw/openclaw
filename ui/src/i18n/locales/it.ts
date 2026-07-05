@@ -63,6 +63,10 @@ export const it: TranslationMap = {
     docs: "Docs",
     theme: "Tema",
     colorMode: "Modalità colore",
+<<<<<<< HEAD
+=======
+    colorModeOption: "Modalità colore: {mode}",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resources: "Risorse",
     search: "Cerca",
     save: "Salva",
@@ -200,7 +204,10 @@ export const it: TranslationMap = {
     inherit: "eredita",
     defaultOption: "Predefinito ({value})",
     offExplicit: "disattivato (esplicito)",
+<<<<<<< HEAD
     auto: "auto",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     on: "attivato",
     off: "off",
     full: "completo",
@@ -1448,7 +1455,10 @@ export const it: TranslationMap = {
     jaJP: "日本語 (Giapponese)",
     ko: "한국어 (Coreano)",
     fr: "Français (Francese)",
+<<<<<<< HEAD
     hi: "हिन्दी (Hindi)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ar: "العربية (Arabo)",
     it: "Italiano (Italiano)",
     tr: "Türkçe (Turco)",
@@ -1459,7 +1469,10 @@ export const it: TranslationMap = {
     vi: "Tiếng Việt (Vietnamita)",
     nl: "Nederlands (Olandese)",
     fa: "فارسی (Persiano)",
+<<<<<<< HEAD
     ru: "Русский (Russian)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   cron: {
     quickCreate: {
@@ -1633,7 +1646,10 @@ export const it: TranslationMap = {
       nextHeartbeat: "Prossimo heartbeat",
       wakeModeHelp: "Ora attiva immediatamente. Prossimo heartbeat attende il ciclo successivo.",
       payloadKind: "Cosa deve essere eseguito?",
+<<<<<<< HEAD
       command: "Command",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       systemEvent: "Pubblica messaggio nella timeline principale",
       agentTurn: "Esegui attività assistente (isolata)",
       systemEventHelp:

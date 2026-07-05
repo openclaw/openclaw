@@ -14,6 +14,10 @@ type TaskBoundarySource = {
 const RAW_TASK_MUTATORS = [
   "createTaskRecord",
   "markTaskRunningByRunId",
+<<<<<<< HEAD
+=======
+  "markTaskTerminalByRunId",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "markTaskTerminalById",
   "setTaskRunDeliveryStatusByRunId",
 ] as const;

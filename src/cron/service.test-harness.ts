@@ -236,7 +236,11 @@ export function createMockCronStateForJobs(params: {
     stopped: false,
     restartRecoveryPending: false,
     activeManualRunJobIds: new Set<string>(),
+<<<<<<< HEAD
     manualSetupTimeoutNotified: false,
+=======
+    manualSetupTimeoutRestartNotified: false,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     timer: null,
     storeLoadedAtMs: nowMs,
     op: Promise.resolve(),

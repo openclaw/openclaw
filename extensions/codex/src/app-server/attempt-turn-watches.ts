@@ -36,7 +36,10 @@ export function createCodexAttemptTurnWatchController(params: {
   isTerminalTurnNotificationQueued: () => boolean;
   getActiveAppServerTurnRequests: () => number;
   getActiveTurnItemCount: () => number;
+<<<<<<< HEAD
   getActiveCompletionBlockerItemCount: () => number;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   turnCompletionIdleTimeoutMs: number;
   turnAssistantCompletionIdleTimeoutMs: number;
   turnAttemptIdleTimeoutMs: number;
@@ -122,8 +125,12 @@ export function createCodexAttemptTurnWatchController(params: {
       params.isCompleted() ||
       params.signal.aborted ||
       !completionIdleWatchArmed ||
+<<<<<<< HEAD
       params.getActiveAppServerTurnRequests() > 0 ||
       params.getActiveCompletionBlockerItemCount() > 0
+=======
+      params.getActiveAppServerTurnRequests() > 0
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ) {
       return;
     }
@@ -185,8 +192,12 @@ export function createCodexAttemptTurnWatchController(params: {
       params.isTerminalTurnNotificationQueued() ||
       params.signal.aborted ||
       !completionIdleWatchArmed ||
+<<<<<<< HEAD
       params.getActiveAppServerTurnRequests() > 0 ||
       params.getActiveCompletionBlockerItemCount() > 0
+=======
+      params.getActiveAppServerTurnRequests() > 0
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ) {
       return false;
     }
@@ -305,8 +316,12 @@ export function createCodexAttemptTurnWatchController(params: {
       params.isTerminalTurnNotificationQueued() ||
       params.signal.aborted ||
       !completionIdleWatchArmed ||
+<<<<<<< HEAD
       params.getActiveAppServerTurnRequests() > 0 ||
       params.getActiveCompletionBlockerItemCount() > 0
+=======
+      params.getActiveAppServerTurnRequests() > 0
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ) {
       return;
     }

@@ -4,7 +4,11 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { slackApprovalCapability, testing } from "./approval-native.js";
+=======
+import { slackApprovalCapability, slackNativeApprovalAdapter, testing } from "./approval-native.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function buildConfig(
   overrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>>,
@@ -55,7 +59,11 @@ function createExecApprovalRequest(
 async function resolveExecOriginTarget(
   requestOverrides: Parameters<typeof createExecApprovalRequest>[0] = {},
 ) {
+<<<<<<< HEAD
   return await slackApprovalCapability.native?.resolveOriginTarget?.({
+=======
+  return await slackNativeApprovalAdapter.native?.resolveOriginTarget?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     cfg: buildConfig(),
     accountId: "default",
     approvalKind: "exec",
@@ -78,14 +86,22 @@ describe("slack native approval adapter", () => {
     });
 
     expect(
+<<<<<<< HEAD
       slackApprovalCapability?.getActionAvailabilityState?.({
+=======
+      slackNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         action: "approve",
       }),
     ).toEqual({ kind: "enabled" });
     expect(
+<<<<<<< HEAD
       slackApprovalCapability.native?.describeDeliveryCapabilities({
+=======
+      slackNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         approvalKind: "exec",
@@ -112,7 +128,11 @@ describe("slack native approval adapter", () => {
   });
 
   it("describes native slack approval delivery capabilities", () => {
+<<<<<<< HEAD
     const capabilities = slackApprovalCapability.native?.describeDeliveryCapabilities({
+=======
+    const capabilities = slackNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       cfg: buildConfig(),
       accountId: "default",
       approvalKind: "exec",
@@ -181,7 +201,11 @@ describe("slack native approval adapter", () => {
   });
 
   it("resolves approver dm targets", async () => {
+<<<<<<< HEAD
     const targets = await slackApprovalCapability.native?.resolveApproverDmTargets?.({
+=======
+    const targets = await slackNativeApprovalAdapter.native?.resolveApproverDmTargets?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       cfg: buildConfig(),
       accountId: "default",
       approvalKind: "exec",
@@ -208,7 +232,11 @@ describe("slack native approval adapter", () => {
       },
     });
 
+<<<<<<< HEAD
     const targets = await slackApprovalCapability.native?.resolveApproverDmTargets?.({
+=======
+    const targets = await slackNativeApprovalAdapter.native?.resolveApproverDmTargets?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       cfg,
       accountId: "default",
       approvalKind: "plugin",
@@ -249,7 +277,11 @@ describe("slack native approval adapter", () => {
     };
 
     expect(
+<<<<<<< HEAD
       slackApprovalCapability.native?.describeDeliveryCapabilities({
+=======
+      slackNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         approvalKind: "plugin",
@@ -257,7 +289,11 @@ describe("slack native approval adapter", () => {
       }).enabled,
     ).toBe(true);
     expect(
+<<<<<<< HEAD
       slackApprovalCapability.native?.describeDeliveryCapabilities({
+=======
+      slackNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         approvalKind: "exec",
@@ -274,7 +310,11 @@ describe("slack native approval adapter", () => {
       }).enabled,
     ).toBe(false);
     expect(
+<<<<<<< HEAD
       await slackApprovalCapability.native?.resolveApproverDmTargets?.({
+=======
+      await slackNativeApprovalAdapter.native?.resolveApproverDmTargets?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         approvalKind: "plugin",
@@ -295,7 +335,11 @@ describe("slack native approval adapter", () => {
       }),
     ).toBe(true);
     expect(
+<<<<<<< HEAD
       slackApprovalCapability.delivery?.shouldSuppressForwardingFallback?.({
+=======
+      slackNativeApprovalAdapter.delivery?.shouldSuppressForwardingFallback?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         approvalKind: "plugin",
         target: { channel: "slack", to: "user:U123OWNER", accountId: "default" },
@@ -335,7 +379,11 @@ describe("slack native approval adapter", () => {
     };
 
     expect(
+<<<<<<< HEAD
       slackApprovalCapability.native?.describeDeliveryCapabilities({
+=======
+      slackNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         approvalKind: "exec",
@@ -352,7 +400,11 @@ describe("slack native approval adapter", () => {
       }).enabled,
     ).toBe(false);
     expect(
+<<<<<<< HEAD
       slackApprovalCapability.native?.describeDeliveryCapabilities({
+=======
+      slackNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         approvalKind: "plugin",
@@ -420,7 +472,11 @@ describe("slack native approval adapter", () => {
       }),
     ).toBe(true);
     expect(
+<<<<<<< HEAD
       slackApprovalCapability.native?.describeDeliveryCapabilities({
+=======
+      slackNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         approvalKind: "plugin",
@@ -434,7 +490,11 @@ describe("slack native approval adapter", () => {
       notifyOriginWhenDmOnly: true,
     });
     expect(
+<<<<<<< HEAD
       await slackApprovalCapability.native?.resolveOriginTarget?.({
+=======
+      await slackNativeApprovalAdapter.native?.resolveOriginTarget?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         approvalKind: "plugin",
@@ -495,7 +555,11 @@ describe("slack native approval adapter", () => {
       }),
     ).toBe(false);
     expect(
+<<<<<<< HEAD
       slackApprovalCapability.native?.describeDeliveryCapabilities({
+=======
+      slackNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "work",
         approvalKind: "plugin",
@@ -555,7 +619,11 @@ describe("slack native approval adapter", () => {
       }),
     ).toBe(true);
     expect(
+<<<<<<< HEAD
       slackApprovalCapability.native?.describeDeliveryCapabilities({
+=======
+      slackNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "work",
         approvalKind: "plugin",
@@ -658,7 +726,11 @@ describe("slack native approval adapter", () => {
       }),
     ).toBe(false);
     expect(
+<<<<<<< HEAD
       await slackApprovalCapability.native?.resolveApproverDmTargets?.({
+=======
+      await slackNativeApprovalAdapter.native?.resolveApproverDmTargets?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         approvalKind: "plugin",
@@ -687,7 +759,11 @@ describe("slack native approval adapter", () => {
   });
 
   it("resolves Slack app conversation plugin approvals to the live D-channel thread", async () => {
+<<<<<<< HEAD
     const target = await slackApprovalCapability.native?.resolveOriginTarget?.({
+=======
+    const target = await slackNativeApprovalAdapter.native?.resolveOriginTarget?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       cfg: buildConfig({ allowFrom: ["U123OWNER"] }),
       accountId: "default",
       approvalKind: "plugin",
@@ -763,7 +839,11 @@ describe("slack native approval adapter", () => {
   });
 
   it("falls back to the session-key origin target for plugin approvals when the store is missing", async () => {
+<<<<<<< HEAD
     const target = await slackApprovalCapability.native?.resolveOriginTarget?.({
+=======
+    const target = await slackNativeApprovalAdapter.native?.resolveOriginTarget?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       cfg: {
         ...buildConfig({ allowFrom: ["U123OWNER"] }),
         session: { store: STORE_PATH },
@@ -798,7 +878,11 @@ describe("slack native approval adapter", () => {
       },
     });
 
+<<<<<<< HEAD
     const originTarget = await slackApprovalCapability.native?.resolveOriginTarget?.({
+=======
+    const originTarget = await slackNativeApprovalAdapter.native?.resolveOriginTarget?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       cfg,
       accountId: "default",
       approvalKind: "exec",
@@ -816,7 +900,11 @@ describe("slack native approval adapter", () => {
         expiresAtMs: 1000,
       },
     });
+<<<<<<< HEAD
     const dmTargets = await slackApprovalCapability.native?.resolveApproverDmTargets?.({
+=======
+    const dmTargets = await slackNativeApprovalAdapter.native?.resolveApproverDmTargets?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       cfg,
       accountId: "default",
       approvalKind: "exec",
@@ -837,7 +925,11 @@ describe("slack native approval adapter", () => {
   });
 
   it("skips native delivery when the request is bound to another Slack account", async () => {
+<<<<<<< HEAD
     const originTarget = await slackApprovalCapability.native?.resolveOriginTarget?.({
+=======
+    const originTarget = await slackNativeApprovalAdapter.native?.resolveOriginTarget?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       cfg: buildConfig(),
       accountId: "default",
       approvalKind: "exec",
@@ -854,7 +946,11 @@ describe("slack native approval adapter", () => {
         expiresAtMs: 1000,
       },
     });
+<<<<<<< HEAD
     const dmTargets = await slackApprovalCapability.native?.resolveApproverDmTargets?.({
+=======
+    const dmTargets = await slackNativeApprovalAdapter.native?.resolveApproverDmTargets?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       cfg: buildConfig(),
       accountId: "default",
       approvalKind: "exec",
@@ -876,7 +972,11 @@ describe("slack native approval adapter", () => {
   });
 
   it("suppresses generic slack fallback only for slack-originated approvals", () => {
+<<<<<<< HEAD
     const shouldSuppress = slackApprovalCapability.delivery?.shouldSuppressForwardingFallback;
+=======
+    const shouldSuppress = slackNativeApprovalAdapter.delivery?.shouldSuppressForwardingFallback;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!shouldSuppress) {
       throw new Error("slack native delivery suppression unavailable");
     }
@@ -919,7 +1019,11 @@ describe("slack native approval adapter", () => {
   });
 
   it("keeps plugin forwarding fallback when Slack has no plugin approvers", () => {
+<<<<<<< HEAD
     const shouldSuppress = slackApprovalCapability.delivery?.shouldSuppressForwardingFallback;
+=======
+    const shouldSuppress = slackNativeApprovalAdapter.delivery?.shouldSuppressForwardingFallback;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!shouldSuppress) {
       throw new Error("slack native delivery suppression unavailable");
     }
@@ -951,7 +1055,11 @@ describe("slack native approval adapter", () => {
   });
 
   it("keeps plugin forwarding fallback for Slack targets not handled by native delivery", () => {
+<<<<<<< HEAD
     const shouldSuppress = slackApprovalCapability.delivery?.shouldSuppressForwardingFallback;
+=======
+    const shouldSuppress = slackNativeApprovalAdapter.delivery?.shouldSuppressForwardingFallback;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!shouldSuppress) {
       throw new Error("slack native delivery suppression unavailable");
     }
@@ -984,7 +1092,11 @@ describe("slack native approval adapter", () => {
   });
 
   it("suppresses plugin forwarding fallback for the native origin target", () => {
+<<<<<<< HEAD
     const shouldSuppress = slackApprovalCapability.delivery?.shouldSuppressForwardingFallback;
+=======
+    const shouldSuppress = slackNativeApprovalAdapter.delivery?.shouldSuppressForwardingFallback;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!shouldSuppress) {
       throw new Error("slack native delivery suppression unavailable");
     }
@@ -1036,7 +1148,11 @@ describe("slack native approval adapter", () => {
   });
 
   it("suppresses explicit plugin forwarding targets when native Slack plugin delivery is active", () => {
+<<<<<<< HEAD
     const shouldSuppress = slackApprovalCapability.delivery?.shouldSuppressForwardingFallback;
+=======
+    const shouldSuppress = slackNativeApprovalAdapter.delivery?.shouldSuppressForwardingFallback;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!shouldSuppress) {
       throw new Error("slack native delivery suppression unavailable");
     }
@@ -1078,7 +1194,11 @@ describe("slack native approval adapter", () => {
   });
 
   it("suppresses bare Slack user plugin forwarding targets handled by native DM delivery", () => {
+<<<<<<< HEAD
     const shouldSuppress = slackApprovalCapability.delivery?.shouldSuppressForwardingFallback;
+=======
+    const shouldSuppress = slackNativeApprovalAdapter.delivery?.shouldSuppressForwardingFallback;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!shouldSuppress) {
       throw new Error("slack native delivery suppression unavailable");
     }
@@ -1124,7 +1244,11 @@ describe("slack native approval adapter", () => {
   });
 
   it("keeps explicit plugin forwarding channel targets outside native Slack delivery", () => {
+<<<<<<< HEAD
     const shouldSuppress = slackApprovalCapability.delivery?.shouldSuppressForwardingFallback;
+=======
+    const shouldSuppress = slackNativeApprovalAdapter.delivery?.shouldSuppressForwardingFallback;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!shouldSuppress) {
       throw new Error("slack native delivery suppression unavailable");
     }
@@ -1176,7 +1300,11 @@ describe("slack native approval adapter", () => {
     });
 
     expect(
+<<<<<<< HEAD
       slackApprovalCapability.authorizeActorAction?.({
+=======
+      slackNativeApprovalAdapter.auth.authorizeActorAction?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         senderId: "U123OWNER",
@@ -1186,7 +1314,11 @@ describe("slack native approval adapter", () => {
     ).toEqual({ authorized: true });
 
     expect(
+<<<<<<< HEAD
       slackApprovalCapability.authorizeActorAction?.({
+=======
+      slackNativeApprovalAdapter.auth.authorizeActorAction?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         senderId: "U999EXEC",
@@ -1199,7 +1331,11 @@ describe("slack native approval adapter", () => {
     });
 
     expect(
+<<<<<<< HEAD
       slackApprovalCapability.authorizeActorAction?.({
+=======
+      slackNativeApprovalAdapter.auth.authorizeActorAction?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         senderId: "U999EXEC",

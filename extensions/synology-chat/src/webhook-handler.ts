@@ -554,7 +554,11 @@ async function processAuthorizedSynologyWebhook(params: {
       log: params.log,
     });
 
+<<<<<<< HEAD
     const reply = await params.deliver({
+=======
+    const deliverPromise = params.deliver({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       body: params.message.body,
       from: authorizedWebhookUserId,
       senderName: params.message.payload.username,
@@ -564,6 +568,13 @@ async function processAuthorizedSynologyWebhook(params: {
       commandAuthorized: params.message.commandAuthorized,
       chatUserId: deliveryUserId,
     });
+<<<<<<< HEAD
+=======
+    const timeoutPromise = new Promise<null>((_, reject) => {
+      setTimeout(() => reject(new Error("Agent response timeout (120s)")), 120_000);
+    });
+    const reply = await Promise.race([deliverPromise, timeoutPromise]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!reply) {
       return;
     }

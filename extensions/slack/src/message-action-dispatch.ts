@@ -1,5 +1,8 @@
 // Slack plugin module implements message action dispatch behavior.
+<<<<<<< HEAD
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
@@ -9,11 +12,14 @@ import {
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
 import {
+<<<<<<< HEAD
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultSlackAccountId } from "./accounts.js";
 import {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   buildSlackInteractiveBlocks,
   buildSlackPresentationBlocks,
   resolveSlackInteractiveBlockOffsets,
@@ -203,6 +209,7 @@ export async function handleSlackMessageAction(params: {
   }
 
   if (action === "member-info") {
+<<<<<<< HEAD
     const requesterAccountId = ctx.requesterAccountId
       ? normalizeAccountId(ctx.requesterAccountId)
       : undefined;
@@ -217,6 +224,9 @@ export async function handleSlackMessageAction(params: {
     if (!userId) {
       throw new Error("member-info requires a userId outside a current Slack conversation.");
     }
+=======
+    const userId = readStringParam(actionParams, "userId", { required: true });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return await invoke({ action: "memberInfo", userId, accountId }, cfg);
   }
 

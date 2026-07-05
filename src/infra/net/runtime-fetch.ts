@@ -2,7 +2,10 @@
 // headers/FormData before calling the runtime fetch implementation.
 import type { Dispatcher } from "undici";
 import { normalizeHeadersInitForFetch } from "../fetch-headers.js";
+<<<<<<< HEAD
 import { isFormDataLike } from "./form-data.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { loadUndiciRuntimeDeps, type UndiciRuntimeDeps } from "./undici-runtime.js";
 
 export type DispatcherAwareRequestInit = RequestInit & { dispatcher?: Dispatcher };
@@ -13,6 +16,18 @@ type RuntimeFormDataCtor = NonNullable<UndiciRuntimeDeps["FormData"]>;
 
 type FormDataEntryValueWithOptionalName = FormDataEntryValue & { name?: string };
 
+<<<<<<< HEAD
+=======
+function isFormDataLike(value: unknown): value is FormData {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as FormData).entries === "function" &&
+    (value as { [Symbol.toStringTag]?: unknown })[Symbol.toStringTag] === "FormData"
+  );
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function normalizeRuntimeFormData(
   body: unknown,
   RuntimeFormData: RuntimeFormDataCtor | undefined,

@@ -10,13 +10,18 @@ export type ChatRunTiming = {
   receivedAtMs: number;
 };
 
+<<<<<<< HEAD
 export type ChatRunRegistration = {
+=======
+export type ChatRunEntry = {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sessionKey: string;
   agentId?: string;
   clientRunId: string;
   chatSendTiming?: ChatRunTiming;
 };
 
+<<<<<<< HEAD
 export type ChatRunEntry = ChatRunRegistration & {
   registeredAtMs: number;
   registeredSequence: number;
@@ -75,6 +80,8 @@ export function isChatAbortMarkerCurrent(
   return abortedAtMs >= entry.registeredAtMs;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type BufferedAgentEvent = {
   sessionKey?: string;
   agentId?: string;
@@ -82,7 +89,11 @@ export type BufferedAgentEvent = {
 };
 
 export type ChatRunRegistry = {
+<<<<<<< HEAD
   add: (sessionId: string, entry: ChatRunRegistration) => void;
+=======
+  add: (sessionId: string, entry: ChatRunEntry) => void;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   peek: (sessionId: string) => ChatRunEntry | undefined;
   shift: (sessionId: string) => ChatRunEntry | undefined;
   remove: (sessionId: string, clientRunId: string, sessionKey?: string) => ChatRunEntry | undefined;
@@ -93,6 +104,7 @@ export type ChatRunRegistry = {
 export function createChatRunRegistry(): ChatRunRegistry {
   const chatRunSessions = new Map<string, ChatRunEntry[]>();
 
+<<<<<<< HEAD
   const add = (sessionId: string, entry: ChatRunRegistration) => {
     const registeredEntry = createChatRunEntry(entry);
     const queue = chatRunSessions.get(sessionId);
@@ -100,6 +112,14 @@ export function createChatRunRegistry(): ChatRunRegistry {
       queue.push(registeredEntry);
     } else {
       chatRunSessions.set(sessionId, [registeredEntry]);
+=======
+  const add = (sessionId: string, entry: ChatRunEntry) => {
+    const queue = chatRunSessions.get(sessionId);
+    if (queue) {
+      queue.push(entry);
+    } else {
+      chatRunSessions.set(sessionId, [entry]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   };
 
@@ -155,7 +175,11 @@ export type ChatRunState = {
   deltaLastBroadcastText: Map<string, string>;
   agentDeltaSentAt: Map<string, number>;
   bufferedAgentEvents: Map<string, BufferedAgentEvent>;
+<<<<<<< HEAD
   abortedRuns: Map<string, ChatAbortMarker>;
+=======
+  abortedRuns: Map<string, number>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   clearRun: (runId: string) => void;
   clear: () => void;
 };
@@ -171,7 +195,11 @@ export function createChatRunState(): ChatRunState {
   const deltaLastBroadcastText = new Map<string, string>();
   const agentDeltaSentAt = new Map<string, number>();
   const bufferedAgentEvents = new Map<string, BufferedAgentEvent>();
+<<<<<<< HEAD
   const abortedRuns = new Map<string, ChatAbortMarker>();
+=======
+  const abortedRuns = new Map<string, number>();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const clearRun = (runId: string) => {
     rawBuffers.delete(runId);

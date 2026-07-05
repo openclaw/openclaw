@@ -1534,6 +1534,7 @@ function getGuardedFetchCall(fetchMock: typeof fetchWithSsrFGuardMock): GuardedF
   return (fetchMock.mock.calls.at(0)?.[0] as GuardedFetchCall | undefined) ?? { url: "" };
 }
 
+<<<<<<< HEAD
 function cancelTrackedResponse(
   text: string,
   init: ResponseInit,
@@ -1556,6 +1557,8 @@ function cancelTrackedResponse(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function createOllamaTestStream(params: {
   baseUrl: string;
   defaultHeaders?: Record<string, string>;
@@ -2706,6 +2709,7 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
+<<<<<<< HEAD
   it("surfaces bounded non-2xx HTTP response text as a status-prefixed error", async () => {
     const tracked = cancelTrackedResponse(`${"Service Unavailable ".repeat(1024)}tail`, {
       status: 503,
@@ -2714,6 +2718,14 @@ describe("createOllamaStreamFn", () => {
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: tracked.response,
+=======
+  it("surfaces non-2xx HTTP response as status-prefixed error", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response("Service Unavailable", {
+        status: 503,
+        statusText: "Service Unavailable",
+      }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       release: vi.fn(async () => undefined),
     });
     try {
@@ -2729,10 +2741,13 @@ describe("createOllamaStreamFn", () => {
       // The error message must start with the HTTP status code so that
       // extractLeadingHttpStatus can parse it for failover/retry logic.
       expect(errorEvent.error.errorMessage).toMatch(/^503\b/);
+<<<<<<< HEAD
       expect(errorEvent.error.errorMessage).toContain("Service Unavailable");
       expect(errorEvent.error.errorMessage).not.toContain("tail");
       expect(tracked.wasCanceled()).toBe(true);
       expect(textSpy).not.toHaveBeenCalled();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } finally {
       fetchWithSsrFGuardMock.mockReset();
     }

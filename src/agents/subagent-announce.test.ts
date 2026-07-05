@@ -21,6 +21,10 @@ const resolveAgentIdFromSessionKeyMock = vi.fn((sessionKey: string) => {
 });
 const resolveStorePathMock = vi.fn((_store: unknown, _options: unknown) => "/tmp/sessions.json");
 const resolveMainSessionKeyMock = vi.fn((_cfg: unknown) => "agent:main:main");
+<<<<<<< HEAD
+=======
+const readLatestAssistantReplyMock = vi.fn(async (_params?: unknown) => "raw subagent reply");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const isEmbeddedAgentRunActiveMock = vi.fn((_sessionId: string) => false);
 const queueEmbeddedAgentMessageWithOutcomeMock = vi.fn(
   (sessionId: string, _text: string, _options?: unknown): EmbeddedAgentQueueMessageOutcome => ({
@@ -74,6 +78,13 @@ vi.mock("./subagent-announce.runtime.js", () => ({
     waitForEmbeddedAgentRunEndMock(sessionId, timeoutMs),
 }));
 
+<<<<<<< HEAD
+=======
+vi.mock("./tools/agent-step.js", () => ({
+  readLatestAssistantReply: (params?: unknown) => readLatestAssistantReplyMock(params),
+}));
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.mock("./subagent-announce-delivery.runtime.js", () =>
   createSubagentAnnounceDeliveryRuntimeMock({
     callGateway: (request: unknown) => callGatewayMock(request),
@@ -267,6 +278,10 @@ describe("subagent announce seam flow", () => {
     resolveAgentIdFromSessionKeyMock.mockReset().mockImplementation(() => "main");
     resolveStorePathMock.mockReset().mockImplementation(() => "/tmp/sessions.json");
     resolveMainSessionKeyMock.mockReset().mockImplementation(() => "agent:main:main");
+<<<<<<< HEAD
+=======
+    readLatestAssistantReplyMock.mockReset().mockResolvedValue("raw subagent reply");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     isEmbeddedAgentRunActiveMock.mockReset().mockReturnValue(false);
     queueEmbeddedAgentMessageWithOutcomeMock
       .mockReset()

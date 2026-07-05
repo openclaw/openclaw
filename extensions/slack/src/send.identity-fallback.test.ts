@@ -1,7 +1,11 @@
 // Slack tests cover send.identity fallback plugin behavior.
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
+=======
+import { createSlackSendTestClient, installSlackBlockTestMocks } from "./blocks.test-helpers.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   logVerbose: vi.fn(),
@@ -9,8 +13,13 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   shouldLogVerbose: () => false,
 }));
 
+<<<<<<< HEAD
 const { clearSlackDefaultSendIdentitiesForTest, sendMessageSlack, setSlackDefaultSendIdentity } =
   await import("./send.js");
+=======
+installSlackBlockTestMocks();
+const { sendMessageSlack } = await import("./send.js");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 
 type SlackMissingScopeError = Error & {
@@ -60,6 +69,7 @@ function readPostMessagePayload(
 describe("sendMessageSlack customize-scope fallback", () => {
   beforeEach(() => {
     vi.mocked(logVerbose).mockClear();
+<<<<<<< HEAD
     clearSlackDefaultSendIdentitiesForTest();
   });
 
@@ -105,6 +115,8 @@ describe("sendMessageSlack customize-scope fallback", () => {
       icon_emoji: ":robot_face:",
       unfurl_links: false,
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("retries without identity when needed contains chat:write.customize", async () => {

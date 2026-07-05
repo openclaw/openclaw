@@ -63,3 +63,18 @@ export function resolveCronNotificationSessionKey(params: {
     ? params.sessionKey.trim()
     : `cron:${params.jobId}:failure`;
 }
+<<<<<<< HEAD
+=======
+
+/** Resolves the session key used to deliver failure notifications for a cron job. */
+export function resolveCronFailureNotificationSessionKey(job: {
+  id: string;
+  sessionTarget?: string | null;
+  sessionKey?: string | null;
+}): string {
+  return resolveCronNotificationSessionKey({
+    jobId: job.id,
+    sessionKey: resolveCronDeliverySessionKey(job),
+  });
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

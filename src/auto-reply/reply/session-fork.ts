@@ -1,8 +1,13 @@
+<<<<<<< HEAD
 import path from "node:path";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import { updateSessionStore } from "../../config/sessions/store.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+=======
+/** Public session-fork facade with parent-size admission checks. */
+import type { SessionEntry } from "../../config/sessions/types.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
 /**
@@ -13,6 +18,10 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 const DEFAULT_PARENT_FORK_MAX_TOKENS = 100_000;
 const sessionForkRuntimeLoader = createLazyImportLoader(() => import("./session-fork.runtime.js"));
 
+<<<<<<< HEAD
+=======
+/** Decision for whether a child session should fork parent context or start isolated. */
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type ParentForkDecision =
   | {
       status: "fork";
@@ -27,6 +36,7 @@ export type ParentForkDecision =
       message: string;
     };
 
+<<<<<<< HEAD
 type ParentForkDecisionParams = {
   parentEntry: SessionEntry;
   agentId?: string;
@@ -87,6 +97,8 @@ export type ForkSessionEntryFromParentParams = Omit<ForkSessionFromParentParams,
   }) => Partial<SessionEntry> | null;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function loadSessionForkRuntime(): Promise<typeof import("./session-fork.runtime.js")> {
   return sessionForkRuntimeLoader.load();
 }
@@ -101,6 +113,7 @@ function formatParentForkTooLargeMessage(params: {
   );
 }
 
+<<<<<<< HEAD
 function resolveParentForkStorePath(params: {
   agentId?: string;
   config?: OpenClawConfig;
@@ -126,6 +139,17 @@ export async function resolveParentForkDecision(
   const parentTokens = await resolveParentForkTokenCount({
     parentEntry: params.parentEntry,
     storePath: resolveParentForkStorePath(params),
+=======
+/** Decides whether parent context is small enough to fork into a child session. */
+export async function resolveParentForkDecision(params: {
+  parentEntry: SessionEntry;
+  storePath: string;
+}): Promise<ParentForkDecision> {
+  const maxTokens = DEFAULT_PARENT_FORK_MAX_TOKENS;
+  const parentTokens = await resolveParentForkTokenCount({
+    parentEntry: params.parentEntry,
+    storePath: params.storePath,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   if (typeof parentTokens === "number" && parentTokens > maxTokens) {
     return {
@@ -143,6 +167,7 @@ export async function resolveParentForkDecision(
   };
 }
 
+<<<<<<< HEAD
 export async function forkSessionFromParent(
   params: ForkSessionFromParentParams,
 ): Promise<{ sessionId: string; sessionFile: string } | null> {
@@ -288,6 +313,16 @@ export async function forkSessionEntryFromParent(
         (result.status === "skipped" && result.sessionEntry === params.fallbackEntry),
     },
   );
+=======
+/** Forks a new session transcript from a parent session. */
+export async function forkSessionFromParent(params: {
+  parentEntry: SessionEntry;
+  agentId: string;
+  sessionsDir: string;
+}): Promise<{ sessionId: string; sessionFile: string } | null> {
+  const runtime = await loadSessionForkRuntime();
+  return runtime.forkSessionFromParentRuntime(params);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function resolveParentForkTokenCount(params: {

@@ -26,6 +26,10 @@ import * as embeddedRuns from "./embedded-agent-runner/runs.js";
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
 import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
+<<<<<<< HEAD
+=======
+import * as agentStep from "./tools/agent-step.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type AgentCallRequest = {
   method?: string;
@@ -130,6 +134,10 @@ const resolveStorePathSpy = vi.spyOn(configSessions, "resolveStorePath");
 const resolveMainSessionKeySpy = vi.spyOn(configSessions, "resolveMainSessionKey");
 const callGatewaySpy = vi.spyOn(gatewayCall, "callGateway");
 const getGlobalHookRunnerSpy = vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner");
+<<<<<<< HEAD
+=======
+const readLatestAssistantReplySpy = vi.spyOn(agentStep, "readLatestAssistantReply");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const isEmbeddedAgentRunActiveSpy = vi.spyOn(embeddedRuns, "isEmbeddedAgentRunActive");
 const isEmbeddedAgentRunStreamingSpy = vi.spyOn(embeddedRuns, "isEmbeddedAgentRunStreaming");
 const queueEmbeddedAgentMessageWithOutcomeSpy = vi.spyOn(
@@ -423,6 +431,12 @@ describe("subagent announce formatting", () => {
       .mockImplementation(
         () => hookRunnerMock as unknown as ReturnType<typeof hookRunnerGlobal.getGlobalHookRunner>,
       );
+<<<<<<< HEAD
+=======
+    readLatestAssistantReplySpy
+      .mockReset()
+      .mockImplementation(async (params) => await readLatestAssistantReplyMock(params?.sessionKey));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     isEmbeddedAgentRunActiveSpy
       .mockReset()
       .mockImplementation((sessionId) => embeddedRunMock.isEmbeddedAgentRunActive(sessionId));

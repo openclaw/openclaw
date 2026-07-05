@@ -31,7 +31,10 @@ import {
 import { couldNormalizeToolNamePrefixToAllowedTool, normalizeToolName } from "../../tool-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
+<<<<<<< HEAD
 import { isRunnerToolCallBlockType } from "./attempt.tool-call-block-type.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 
 const BLANK_TOOL_CALL_NAME_DESCRIPTION = "blank tool name";
@@ -239,6 +242,13 @@ function normalizeToolCallNameForDispatch(
   return resolveStructuredAllowedToolName(trimmed, allowedToolNames) ?? trimmed;
 }
 
+<<<<<<< HEAD
+=======
+function isToolCallBlockType(type: unknown): boolean {
+  return type === "toolCall" || type === "toolUse" || type === "functionCall";
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const REPLAY_TOOL_CALL_NAME_MAX_CHARS = 64;
 
 type ReplayToolCallBlock = {
@@ -295,7 +305,11 @@ function isReplayToolCallBlock(block: unknown): block is ReplayToolCallBlock {
   if (!block || typeof block !== "object") {
     return false;
   }
+<<<<<<< HEAD
   return isRunnerToolCallBlockType((block as { type?: unknown }).type);
+=======
+  return isToolCallBlockType((block as { type?: unknown }).type);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function replayToolCallHasInput(block: ReplayToolCallBlock): boolean {
@@ -530,7 +544,11 @@ function sanitizeAnthropicReplayToolResults(
             continue;
           }
           const typedBlock = block as { type?: unknown; id?: unknown };
+<<<<<<< HEAD
           if (!isRunnerToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
+=======
+          if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             continue;
           }
           const trimmedId = typedBlock.id.trim();
@@ -622,7 +640,11 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
       continue;
     }
     const typedBlock = block as { type?: unknown; id?: unknown };
+<<<<<<< HEAD
     if (!isRunnerToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
+=======
+    if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       continue;
     }
     const trimmedId = typedBlock.id.trim();
@@ -639,7 +661,11 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
       continue;
     }
     const typedBlock = block as { type?: unknown; id?: unknown };
+<<<<<<< HEAD
     if (!isRunnerToolCallBlockType(typedBlock.type)) {
+=======
+    if (!isToolCallBlockType(typedBlock.type)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       continue;
     }
     if (typeof typedBlock.id === "string") {
@@ -671,7 +697,11 @@ function trimWhitespaceFromToolCallNamesInMessage(
 ): void {
   visitObjectContentBlocks(message, (block) => {
     const typedBlock = block as { type?: unknown; name?: unknown; id?: unknown };
+<<<<<<< HEAD
     if (!isRunnerToolCallBlockType(typedBlock.type)) {
+=======
+    if (!isToolCallBlockType(typedBlock.type)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return;
     }
     const rawId = typeof typedBlock.id === "string" ? typedBlock.id : undefined;
@@ -718,7 +748,11 @@ function classifyToolCallMessage(
       continue;
     }
     const typedBlock = block as { type?: unknown; name?: unknown };
+<<<<<<< HEAD
     if (!isRunnerToolCallBlockType(typedBlock.type)) {
+=======
+    if (!isToolCallBlockType(typedBlock.type)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       continue;
     }
     sawToolCall = true;
@@ -1174,12 +1208,17 @@ export function sanitizeReplayToolCallIdsForStream(params: {
 
 /** Downgrades OpenAI Responses replay turns into the stream format expected by runtime callers. */
 export function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): AgentMessage[] {
+<<<<<<< HEAD
   const repaired = sanitizeToolUseResultPairing(messages, {
     erroredAssistantResultPolicy: "drop",
     missingToolResultText: "aborted",
   });
   return downgradeOpenAIFunctionCallReasoningPairs(
     normalizeOpenAIResponsesToolCallIds(downgradeOpenAIReasoningBlocks(repaired)),
+=======
+  return downgradeOpenAIFunctionCallReasoningPairs(
+    normalizeOpenAIResponsesToolCallIds(downgradeOpenAIReasoningBlocks(messages)),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
 }
 
@@ -1218,6 +1257,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       allowedToolNames,
       allowProviderOwnedThinkingReplay,
     );
+<<<<<<< HEAD
     const isOpenAIResponsesApi =
       (model as { api?: unknown }).api === "openai-responses" ||
       (model as { api?: unknown }).api === "openai-chatgpt-responses" ||
@@ -1231,6 +1271,12 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       : replayInputsChanged
         ? sanitizeToolUseResultPairing(sanitized.messages)
         : sanitized.messages;
+=======
+    const replayInputsChanged = sanitized.messages !== messages;
+    let nextMessages = replayInputsChanged
+      ? sanitizeToolUseResultPairing(sanitized.messages)
+      : sanitized.messages;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     let strippedTrailingAssistantPrefill = false;
     if (transcriptPolicy?.validateAnthropicTurns) {
       nextMessages = sanitizeAnthropicReplayToolResults(nextMessages, {

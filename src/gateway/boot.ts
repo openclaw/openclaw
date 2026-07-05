@@ -18,7 +18,12 @@ import {
   resolveMainSessionKey,
 } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
+<<<<<<< HEAD
 import { preserveTemporarySessionMapping } from "../config/sessions/session-accessor.js";
+=======
+import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -32,6 +37,17 @@ function generateBootSessionId(): string {
   return `boot-${ts}-${suffix}`;
 }
 
+<<<<<<< HEAD
+=======
+type SessionMappingSnapshot = {
+  storePath: string;
+  sessionKey: string;
+  canRestore: boolean;
+  hadEntry: boolean;
+  entry?: SessionEntry;
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const log = createSubsystemLogger("gateway/boot");
 const BOOT_FILENAME = "BOOT.md";
 
@@ -92,6 +108,71 @@ async function loadBootFile(
   }
 }
 
+<<<<<<< HEAD
+=======
+function snapshotSessionMapping(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+}): SessionMappingSnapshot {
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+  try {
+    const store = loadSessionStore(storePath, { skipCache: true });
+    const entry = store[params.sessionKey];
+    if (!entry) {
+      return {
+        storePath,
+        sessionKey: params.sessionKey,
+        canRestore: true,
+        hadEntry: false,
+      };
+    }
+    return {
+      storePath,
+      sessionKey: params.sessionKey,
+      canRestore: true,
+      hadEntry: true,
+      entry: structuredClone(entry),
+    };
+  } catch (err) {
+    log.debug("boot: could not snapshot session mapping", {
+      sessionKey: params.sessionKey,
+      error: String(err),
+    });
+    return {
+      storePath,
+      sessionKey: params.sessionKey,
+      canRestore: false,
+      hadEntry: false,
+    };
+  }
+}
+
+async function restoreSessionMapping(
+  snapshot: SessionMappingSnapshot,
+): Promise<string | undefined> {
+  if (!snapshot.canRestore) {
+    return undefined;
+  }
+  try {
+    await updateSessionStore(
+      snapshot.storePath,
+      (store) => {
+        if (snapshot.hadEntry && snapshot.entry) {
+          store[snapshot.sessionKey] = snapshot.entry;
+          return;
+        }
+        delete store[snapshot.sessionKey];
+      },
+      { activeSessionKey: snapshot.sessionKey },
+    );
+    return undefined;
+  } catch (err) {
+    return formatErrorMessage(err);
+  }
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function runBootOnce(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
@@ -122,6 +203,7 @@ export async function runBootOnce(params: {
   const sessionKey = resolveBootSessionKey(mainSessionKey);
   const message = buildBootPrompt(result.content ?? "");
   const sessionId = generateBootSessionId();
+<<<<<<< HEAD
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
 
@@ -165,6 +247,41 @@ export async function runBootOnce(params: {
     });
   }
   const mappingRestoreFailure = mappingPreservation.restoreFailure;
+=======
+  const mappingSnapshot = snapshotSessionMapping({
+    cfg: params.cfg,
+    sessionKey,
+  });
+
+  // Register the boot prompt for the message-tool echo guard so the
+  // tool layer can drop fallback-model echoes that copy substantial
+  // BOOT.md content without preserving the wrapper markers above.
+  // Always cleared in finally so a failed run does not leave a stale
+  // entry that mis-fires on an unrelated subsequent run reusing the
+  // same session key. Refs #53732.
+  setBootEchoContextForSession(sessionKey, message);
+  let agentFailure: string | undefined;
+  try {
+    await agentCommand(
+      {
+        message,
+        sessionKey,
+        sessionId,
+        deliver: false,
+        suppressPromptPersistence: true,
+      },
+      bootRuntime,
+      params.deps,
+    );
+  } catch (err) {
+    agentFailure = formatErrorMessage(err);
+    log.error(`boot: agent run failed: ${agentFailure}`);
+  } finally {
+    clearBootEchoContextForSession(sessionKey);
+  }
+
+  const mappingRestoreFailure = await restoreSessionMapping(mappingSnapshot);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (mappingRestoreFailure) {
     log.error(`boot: failed to restore session mapping: ${mappingRestoreFailure}`);
   }

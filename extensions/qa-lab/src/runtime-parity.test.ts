@@ -168,6 +168,7 @@ describe("runtime parity", () => {
     const scoped = __testing.filterMockRequestsForParentPrompt(
       [
         {
+<<<<<<< HEAD
           prompt: "Fanout worker alpha: inspect the QA workspace and finish with exactly ALPHA-OK.",
           allInputText:
             "Delegate one bounded QA task to a subagent. Fanout worker alpha: inspect the QA workspace and finish with exactly ALPHA-OK.",
@@ -175,26 +176,35 @@ describe("runtime parity", () => {
         },
         {
           prompt: "Delegate one bounded QA task to a subagent.",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           allInputText: "Delegate one bounded QA task to a subagent.",
           plannedToolName: "sessions_spawn",
         },
         {
+<<<<<<< HEAD
           prompt: "Continue the bounded QA task with the retained child result.",
           allInputText:
             "Delegate one bounded QA task to a subagent. Continue the bounded QA task with the retained child result.",
           plannedToolName: "sessions_spawn",
         },
         {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           allInputText: "Inspect the QA workspace and return one concise protocol note.",
           plannedToolName: "read",
         },
         {
+<<<<<<< HEAD
           prompt: "Delegate one bounded QA task to a subagent.",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           allInputText: "Delegate one bounded QA task to a subagent. Tool result: child accepted.",
           toolOutput: "child accepted",
         },
       ],
       "Delegate one bounded QA task to a subagent.",
+<<<<<<< HEAD
       [
         "Delegate one bounded QA task to a subagent.",
         "Continue the bounded QA task with the retained child result.",
@@ -205,6 +215,13 @@ describe("runtime parity", () => {
     expect(scoped.map((request) => request.plannedToolName ?? "result")).toEqual([
       "sessions_spawn",
       "sessions_spawn",
+=======
+    );
+
+    expect(scoped).toHaveLength(2);
+    expect(scoped.map((request) => request.plannedToolName ?? "result")).toEqual([
+      "sessions_spawn",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "result",
     ]);
   });

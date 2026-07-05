@@ -172,6 +172,16 @@ function hasSetupEntryFeature(
   return entry?.features?.[feature] === true;
 }
 
+<<<<<<< HEAD
+=======
+function hasChannelEntryFeature(
+  entry: BundledChannelEntryRuntimeContract | undefined,
+  feature: keyof NonNullable<BundledChannelEntryRuntimeContract["features"]>,
+): boolean {
+  return entry?.features?.[feature] === true;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveBundledChannelBoundaryRoot(params: {
   packageRoot: string;
   pluginsDir?: string;
@@ -809,6 +819,26 @@ export function listBundledChannelSetupPlugins(): readonly ChannelPlugin[] {
   });
 }
 
+<<<<<<< HEAD
+=======
+export function listBundledChannelSetupPluginsByFeature(
+  feature: keyof NonNullable<BundledChannelSetupEntryRuntimeContract["features"]>,
+  options: { config?: OpenClawConfig } = {},
+): readonly ChannelPlugin[] {
+  const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
+  return listBundledChannelPluginIdsForSetupFeature(rootScope, feature, {
+    config: options.config,
+  }).flatMap((id) => {
+    const setupEntry = getLazyGeneratedBundledChannelSetupEntryForRoot(id, rootScope, loadContext);
+    if (!hasSetupEntryFeature(setupEntry, feature)) {
+      return [];
+    }
+    const plugin = getBundledChannelSetupPluginForRoot(id, rootScope, loadContext);
+    return plugin ? [plugin] : [];
+  });
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function listBundledChannelLegacySessionSurfaces(
   options: {
     config?: OpenClawConfig;
@@ -855,6 +885,18 @@ export function listBundledChannelLegacyStateMigrationDetectors(
   });
 }
 
+<<<<<<< HEAD
+=======
+export function hasBundledChannelEntryFeature(
+  id: ChannelId,
+  feature: keyof NonNullable<BundledChannelEntryRuntimeContract["features"]>,
+): boolean {
+  const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
+  const entry = getLazyGeneratedBundledChannelEntryForRoot(id, rootScope, loadContext)?.entry;
+  return hasChannelEntryFeature(entry, feature);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function getBundledChannelAccountInspector(
   id: ChannelId,
 ): NonNullable<ChannelPlugin["config"]["inspectAccount"]> | undefined {
@@ -888,6 +930,17 @@ export function getBundledChannelSetupSecrets(
   return getBundledChannelSetupSecretsForRoot(id, rootScope, loadContext);
 }
 
+<<<<<<< HEAD
+=======
+export function requireBundledChannelPlugin(id: ChannelId): ChannelPlugin {
+  const plugin = getBundledChannelPlugin(id);
+  if (!plugin) {
+    throw new Error(`missing bundled channel plugin: ${id}`);
+  }
+  return plugin;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function setBundledChannelRuntime(id: ChannelId, runtime: PluginRuntime): void {
   const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
   const setter = getLazyGeneratedBundledChannelEntryForRoot(id, rootScope, loadContext)?.entry

@@ -9,12 +9,19 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+<<<<<<< HEAD
 import { createServer, request as httpRequest } from "node:http";
+=======
+import { createServer } from "node:http";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
+<<<<<<< HEAD
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/plugins/assertions.mjs";
 
@@ -143,6 +150,7 @@ function runPluginsSweepShell(script: string, env: NodeJS.ProcessEnv = {}) {
   });
 }
 
+<<<<<<< HEAD
 async function waitForPortFile(portFile: string): Promise<number> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     if (existsSync(portFile)) {
@@ -182,6 +190,8 @@ function requestFixtureRegistry(
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("plugins Docker assertions", () => {
   it("rejects loose ClawHub preflight limits instead of parsing prefixes", () => {
     const timeoutResult = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "clawhub-preflight"], {
@@ -211,6 +221,7 @@ describe("plugins Docker assertions", () => {
     );
   });
 
+<<<<<<< HEAD
   it("passes ClawHub preflight body timeouts into the bounded reader", () => {
     const script = readFileSync(ASSERTIONS_SCRIPT, "utf8");
 
@@ -220,6 +231,8 @@ describe("plugins Docker assertions", () => {
     ).toHaveLength(2);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps sweep artifact paths aligned with the assertion scratch root", () => {
     const scripts = [
       "scripts/e2e/lib/plugins/sweep.sh",
@@ -439,6 +452,7 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
     }
   });
 
+<<<<<<< HEAD
   it("rejects invalid fixture stop attempts before cleanup polling", () => {
     const result = spawnSync(
       "/bin/bash",
@@ -506,6 +520,8 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
     expect(result.stdout).not.toContain("probe");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("bounds npm fixture registry logs when readiness fails", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-npm-fixture-log-"));
     try {
@@ -549,6 +565,7 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
     }
   });
 
+<<<<<<< HEAD
   it("keeps npm fixture registry alive after malformed package paths", async () => {
     const tempDirs: string[] = [];
     const root = makeTempDir(tempDirs, "openclaw-plugin-npm-fixture-request-");
@@ -648,6 +665,8 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("cleans ClawHub fixture children when readiness times out", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-clawhub-fixture-cleanup-"));
     try {
@@ -696,6 +715,7 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
     }
   });
 
+<<<<<<< HEAD
   it("rejects invalid plugin fixture log byte limits before ClawHub fixture setup", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-clawhub-fixture-log-invalid-"));
     try {
@@ -745,6 +765,8 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("bounds ClawHub fixture server logs when readiness fails", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-clawhub-fixture-log-"));
     try {
@@ -937,6 +959,7 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
     }
   });
 
+<<<<<<< HEAD
   it("rejects ClawHub install paths that resolve outside the managed extensions root", () => {
     const tempDirs: string[] = [];
     const root = makeTempDir(tempDirs, "openclaw-plugins-clawhub-path-");
@@ -986,6 +1009,8 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("times out stalled ClawHub package metadata requests", async () => {
     const server = createServer((_request, _response) => {});
     await new Promise<void>((resolve) => {

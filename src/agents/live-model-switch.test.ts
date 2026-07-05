@@ -27,18 +27,33 @@ vi.mock("./model-selection.js", async () => {
   };
 });
 
+<<<<<<< HEAD
 vi.mock("../config/sessions/session-accessor.js", () => ({
   loadSessionEntry: (scope: { sessionKey: string }) => {
     const store = state.loadSessionStoreMock(scope) as Record<string, unknown> | undefined;
     return store?.[scope.sessionKey];
   },
   patchSessionEntry: (...args: unknown[]) => state.updateSessionStoreMock(...args),
+=======
+vi.mock("../config/sessions/store.js", () => ({
+  loadSessionStore: (...args: unknown[]) => state.loadSessionStoreMock(...args),
+  updateSessionStore: (...args: unknown[]) => state.updateSessionStoreMock(...args),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("../config/sessions/paths.js", () => ({
   resolveStorePath: (...args: unknown[]) => state.resolveStorePathMock(...args),
 }));
 
+<<<<<<< HEAD
+=======
+vi.mock("../config/sessions.js", () => ({
+  loadSessionStore: (...args: unknown[]) => state.loadSessionStoreMock(...args),
+  resolveStorePath: (...args: unknown[]) => state.resolveStorePathMock(...args),
+  updateSessionStore: (...args: unknown[]) => state.updateSessionStoreMock(...args),
+}));
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 let mod: typeof import("./live-model-switch.js");
 
 async function loadModule() {
@@ -123,6 +138,7 @@ describe("live model switch", () => {
     state.updateSessionStoreMock
       .mockReset()
       .mockImplementation(
+<<<<<<< HEAD
         async (
           scope: { sessionKey: string },
           updater: (
@@ -146,6 +162,11 @@ describe("live model switch", () => {
           }
           Object.assign(entry, next);
           return entry;
+=======
+        async (_path: string, updater: (store: Record<string, unknown>) => void) => {
+          const store: Record<string, unknown> = {};
+          updater(store);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
       );
   });
@@ -182,12 +203,15 @@ describe("live model switch", () => {
     expect(state.resolveStorePathMock).toHaveBeenCalledWith("/tmp/custom-store.json", {
       agentId: "reply",
     });
+<<<<<<< HEAD
     expect(state.loadSessionStoreMock).toHaveBeenCalledWith({
       storePath: "/tmp/session-store.json",
       sessionKey: "main",
       hydrateSkillPromptRefs: false,
       readConsistency: "latest",
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("prefers persisted session overrides ahead of stale runtime model fields", async () => {
@@ -463,12 +487,19 @@ describe("live model switch", () => {
       const result = shouldSwitchToLiveModel(makeShouldSwitchParams());
 
       expect(result).toBeUndefined();
+<<<<<<< HEAD
       expect(state.loadSessionStoreMock).toHaveBeenCalledWith({
         hydrateSkillPromptRefs: false,
         clone: false,
         readConsistency: "latest",
         sessionKey: "main",
         storePath: "/tmp/session-store.json",
+=======
+      expect(state.loadSessionStoreMock).toHaveBeenCalledWith("/tmp/session-store.json", {
+        hydrateSkillPromptRefs: false,
+        skipCache: true,
+        clone: false,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
     });
 
@@ -498,6 +529,15 @@ describe("live model switch", () => {
         modelOverride: "claude-opus-4-6",
       };
       state.loadSessionStoreMock.mockReturnValue({ main: sessionEntry });
+<<<<<<< HEAD
+=======
+      state.updateSessionStoreMock.mockImplementation(
+        async (_path: string, updater: (store: Record<string, unknown>) => void) => {
+          const store: Record<string, typeof sessionEntry> = { main: sessionEntry };
+          updater(store);
+        },
+      );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       const { shouldSwitchToLiveModel } = await loadModule();
 
@@ -557,7 +597,16 @@ describe("live model switch", () => {
 
     it("deletes liveModelSwitchPending from the session entry", async () => {
       const sessionEntry = { liveModelSwitchPending: true, sessionId: "s-1" };
+<<<<<<< HEAD
       state.loadSessionStoreMock.mockReturnValue({ main: sessionEntry });
+=======
+      state.updateSessionStoreMock.mockImplementation(
+        async (_path: string, updater: (store: Record<string, unknown>) => void) => {
+          const store: Record<string, typeof sessionEntry> = { main: sessionEntry };
+          updater(store);
+        },
+      );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       const { clearLiveModelSwitchPending } = await loadModule();
 

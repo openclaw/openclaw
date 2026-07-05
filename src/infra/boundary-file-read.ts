@@ -8,6 +8,13 @@ export {
   matchRootFileOpenFailure,
   openRootFile,
   openRootFileSync,
+<<<<<<< HEAD
   type RootFileOpenFailure,
+=======
+  type OpenRootFileParams,
+  type OpenRootFileSyncParams,
+  type RootFileOpenFailure,
+  type RootFileOpenFailureReason,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type RootFileOpenResult,
 } from "@openclaw/fs-safe/advanced";

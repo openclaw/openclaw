@@ -77,3 +77,9 @@ vi.mock("./stage-sandbox-media.runtime.js", () => ({
 vi.mock("./typing.js", () => ({
   createTypingController: vi.fn(() => createMockTypingController()),
 }));
+<<<<<<< HEAD
+=======
+
+/** Shared placeholder mock registrar for get-reply tests that need common mock imports. */
+export function registerGetReplyCommonMocks(): void {}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

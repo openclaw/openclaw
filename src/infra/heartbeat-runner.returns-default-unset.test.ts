@@ -1287,6 +1287,7 @@ describe("runHeartbeatOnce", () => {
         expectedTexts: ["Thinking\n\n_Because it helps_"],
       },
       {
+<<<<<<< HEAD
         // Reasoning-only result: the selector returns no main reply, but the
         // documented includeReasoning opt-in must still deliver the Thinking
         // message instead of going silent (#92242 follow-up / review finding).
@@ -1296,6 +1297,8 @@ describe("runHeartbeatOnce", () => {
         expectedTexts: ["Thinking\n\n_Because it helps_"],
       },
       {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         name: "visible final that starts with thinking prose",
         caseDir: "hb-thinking-visible-final",
         replies: [{ text: "Thinking... all clear" }],
@@ -1380,6 +1383,7 @@ describe("runHeartbeatOnce", () => {
     },
   );
 
+<<<<<<< HEAD
   it("does not surface a trailing legacy reasoning payload as the reply when includeReasoning is unset", async () => {
     // With includeReasoning unset, a legacy "Reasoning:"-prefixed payload after
     // the final answer must not become the visible heartbeat reply, and no
@@ -1441,6 +1445,8 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("loads the default agent session from templated stores", async () => {
     const tmpDir = await createCaseDir("openclaw-hb");
     const storeTemplate = path.join(tmpDir, "agents", "{agentId}", "sessions.json");

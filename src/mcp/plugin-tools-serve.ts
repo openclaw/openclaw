@@ -42,7 +42,11 @@ function resolvePluginToolPolicy(config: OpenClawConfig): {
 
 function resolveTools(config: OpenClawConfig): AnyAgentTool[] {
   const pluginToolPolicy = resolvePluginToolPolicy(config);
+<<<<<<< HEAD
   const runtimeRegistry = ensureStandalonePluginToolRegistryLoaded({
+=======
+  ensureStandalonePluginToolRegistryLoaded({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     context: { config },
     ...pluginToolPolicy,
   });
@@ -50,7 +54,10 @@ function resolveTools(config: OpenClawConfig): AnyAgentTool[] {
     context: { config },
     ...pluginToolPolicy,
     suppressNameConflicts: true,
+<<<<<<< HEAD
     runtimeRegistry,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 }
 

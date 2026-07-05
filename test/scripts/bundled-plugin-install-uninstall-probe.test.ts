@@ -7,8 +7,11 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import { withEnvAsync } from "../../src/test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const tempDirs: string[] = [];
 const probePath = path.resolve("scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs");
@@ -17,10 +20,13 @@ const runtimeSmokePath = path.resolve(
 );
 const sweepPath = path.resolve("scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh");
 
+<<<<<<< HEAD
 function expectedTaskkillPath(): string {
   return resolveWindowsTaskkillPath();
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type PluginListEntry = {
   id: string;
   origin: string;
@@ -103,11 +109,36 @@ function runRuntimeSmoke(root: string, args: string[]) {
 }
 
 async function importRuntimeSmokeWithEnv(env: Record<string, string | undefined>) {
+<<<<<<< HEAD
   return await withEnvAsync(env, async () => {
     return await import(
       `${pathToFileURL(runtimeSmokePath).href}?case=${Date.now()}-${Math.random()}`
     );
   });
+=======
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(env)) {
+    previous.set(key, process.env[key]);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  try {
+    return await import(
+      `${pathToFileURL(runtimeSmokePath).href}?case=${Date.now()}-${Math.random()}`
+    );
+  } finally {
+    for (const [key, value] of previous.entries()) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function listenOnLoopback(server: HttpServer | NetServer): Promise<number> {
@@ -255,6 +286,7 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(result.stderr).toContain("invalid bundled plugin runtime index: 1e3");
   });
 
+<<<<<<< HEAD
   it("rejects unsafe bundled plugin runtime limit env values", async () => {
     await expect(
       importRuntimeSmokeWithEnv({
@@ -275,6 +307,8 @@ describe("bundled plugin install/uninstall probe", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("caps noisy runtime gateway logs", async () => {
     const runtimeSmoke = await importRuntimeSmokeWithEnv({
       OPENCLAW_BUNDLED_PLUGIN_RUNTIME_GATEWAY_LOG_BYTES: "64",
@@ -445,6 +479,7 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(child.kill).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("signals Windows runtime child process trees with taskkill", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const child = {
@@ -516,6 +551,8 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(child.kill).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.runIf(process.platform !== "win32")("stops runtime gateway process groups", async () => {
     const runtimeSmoke = await importRuntimeSmokeWithEnv({
       OPENCLAW_BUNDLED_PLUGIN_RUNTIME_TEARDOWN_GRACE_MS: "50",
@@ -828,6 +865,7 @@ describe("bundled plugin install/uninstall probe", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+<<<<<<< HEAD
     "keeps closed runtime command groups tracked for parent cleanup",
     async () => {
       const root = makePackageRoot();
@@ -894,6 +932,8 @@ describe("bundled plugin install/uninstall probe", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     "cleans detached runtime gateway groups when the parent is signaled",
     async () => {
       const root = makePackageRoot();
@@ -1072,6 +1112,7 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(fs.existsSync(rpcStateDir)).toBe(false);
   });
 
+<<<<<<< HEAD
   it("ignores structured logs after gateway RPC payloads", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const root = makePackageRoot();
@@ -1099,6 +1140,8 @@ describe("bundled plugin install/uninstall probe", () => {
     ).resolves.toEqual({ status: "ok" });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("accepts successful runtime HTTP probes", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const server = createHttpServer((_request, response) => {
@@ -1215,6 +1258,7 @@ describe("bundled plugin install/uninstall probe", () => {
     }
   });
 
+<<<<<<< HEAD
   it("bounds readyz diagnostic response bodies", async () => {
     const runtimeSmoke = await importRuntimeSmokeWithEnv({
       OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "100",
@@ -1243,6 +1287,8 @@ describe("bundled plugin install/uninstall probe", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("bounds stalled runtime HTTP probes", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const sockets = new Set<Socket>();
@@ -1350,6 +1396,7 @@ describe("bundled plugin install/uninstall probe", () => {
     );
   });
 
+<<<<<<< HEAD
   it("selects packaged plugins when list output includes structured diagnostics", () => {
     const root = makePackageRoot();
     const pluginRoot = path.join(root, "dist-runtime", "extensions", "admin-http-rpc");
@@ -1382,6 +1429,8 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(result.stdout.trim()).toBe(`admin-http-rpc\tadmin-http-rpc\t1\t${pluginRoot}`);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not select source-only bundled plugins for package-backed sweeps", () => {
     const root = makePackageRoot();
     writePluginManifest(root, "extensions/qa-channel", {

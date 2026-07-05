@@ -1,9 +1,16 @@
 // Parallels Npm Update Smoke tests cover parallels npm update smoke script behavior.
+<<<<<<< HEAD
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+=======
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { runWindowsBackgroundPowerShell } from "../../scripts/e2e/parallels/guest-transports.ts";
 import { run as hostCommandRun } from "../../scripts/e2e/parallels/host-command.ts";
 import {
@@ -14,7 +21,10 @@ import {
 import {
   freshLaneTimeoutMs,
   NpmUpdateSmoke,
+<<<<<<< HEAD
   parseRegistryPackageMetadata,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   parseArgs,
   spawnLoggedCommand,
 } from "../../scripts/e2e/parallels/npm-update-smoke.ts";
@@ -61,6 +71,7 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
   throw new Error(`timeout waiting for pid ${pid} to exit`);
 }
 
+<<<<<<< HEAD
 async function waitFor(predicate: () => boolean, label: string, timeoutMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -74,11 +85,14 @@ async function waitFor(predicate: () => boolean, label: string, timeoutMs = 2_00
   throw new Error(`timeout waiting for ${label}`);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function decodePowerShellFromArgs(args: string[]): string {
   const encoded = args[args.indexOf("-EncodedCommand") + 1];
   return encoded ? Buffer.from(encoded, "base64").toString("utf16le") : "";
 }
 
+<<<<<<< HEAD
 function extractWindowsBackgroundControlMarkers(decoded: string): {
   done: string;
   exitPrefix: string;
@@ -103,6 +117,9 @@ function extractWindowsBackgroundControlMarkers(decoded: string): {
 
 afterEach(() => {
   vi.useRealTimers();
+=======
+afterEach(() => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { force: true, recursive: true });
   }
@@ -159,6 +176,7 @@ describe("parallels npm update smoke", () => {
     expect(stopCalls).toBe(1);
   });
 
+<<<<<<< HEAD
   it("removes uploaded guest update scripts when chmod fails", () => {
     const root = makeTempDir();
     const logPath = path.join(root, "prlctl.log");
@@ -224,6 +242,8 @@ exit 1
     expect(log.match(/^cleanup$/gm)).toHaveLength(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("has a one-command beta validation mode with fresh target coverage", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
@@ -247,6 +267,7 @@ exit 1
     expect(script).toContain("this.updateExpectedNeedle = this.targetTarballVersion");
   });
 
+<<<<<<< HEAD
   it("accepts keyed and nested npm metadata for published update targets", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
@@ -281,6 +302,8 @@ exit 1
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("guards beta validation against cross-version harness checkouts", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
@@ -345,6 +368,7 @@ exit 1
     expect(scripts).not.toContain("cat /tmp/openclaw-parallels-");
   });
 
+<<<<<<< HEAD
   it("passes platform model timeouts to POSIX update agent turns", () => {
     const input = {
       auth: TEST_AUTH,
@@ -374,6 +398,8 @@ exit 1
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("streams fresh lane logs instead of retaining them in memory", async () => {
     const root = makeTempDir();
     const logPath = path.join(root, "fresh.log");
@@ -406,6 +432,7 @@ exit 1
     withEnv({ OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S: "3" }, () => {
       expect(freshLaneTimeoutMs("macos")).toBe(3000);
     });
+<<<<<<< HEAD
 
     withEnv(
       { OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S: String(Number.MAX_SAFE_INTEGER) },
@@ -429,6 +456,8 @@ exit 1
     );
 
     expect(code).toBe(0);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it.runIf(process.platform !== "win32")("times out fresh lane process groups", async () => {
@@ -469,6 +498,7 @@ exit 1
     await waitForDead(descendantPid, 2000);
   });
 
+<<<<<<< HEAD
   it.runIf(process.platform !== "win32")(
     "lets fresh lane descendants exit during timeout kill grace",
     async () => {
@@ -609,6 +639,8 @@ exit 1
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("runs Windows updates through a detached done-file runner", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
     const transports = readFileSync(GUEST_TRANSPORTS_PATH, "utf8");
@@ -622,6 +654,7 @@ exit 1
 
   it("cleans timed-out Windows background work and reads bounded log chunks", async () => {
     const decodedCommands: string[] = [];
+<<<<<<< HEAD
     const inputs: string[] = [];
     const fakeRun: typeof hostCommandRun = (_command, args, options) => {
       const decoded = decodePowerShellFromArgs(args);
@@ -629,6 +662,11 @@ exit 1
       if (options?.input) {
         inputs.push(String(options.input));
       }
+=======
+    const fakeRun: typeof hostCommandRun = (_command, args) => {
+      const decoded = decodePowerShellFromArgs(args);
+      decodedCommands.push(decoded);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (decoded.includes("Start-Process")) {
         return { status: 0, stderr: "", stdout: "started\n" };
       }
@@ -648,6 +686,7 @@ exit 1
     ).rejects.toThrow("windows background timeout timed out");
 
     const commands = decodedCommands.join("\n---\n");
+<<<<<<< HEAD
     const payloads = inputs.join("\n---\n");
     expect(commands).toContain("$pidPath");
     expect(commands).toContain("function Write-OpenClawUtf8File");
@@ -655,6 +694,9 @@ exit 1
     expect(payloads).toContain("Write-OpenClawUtf8File $exitPath '0'");
     expect(payloads).toContain("Write-OpenClawUtf8File $donePath 'done'");
     expect(commands).toContain("Write-OpenClawUtf8File $pidPath ([string]$process.Id)");
+=======
+    expect(commands).toContain("$pidPath");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(commands).toContain("Start-Process -FilePath powershell.exe");
     expect(commands).toContain("-PassThru");
     expect(commands).toContain("[System.IO.File]::Open($logPath");
@@ -666,6 +708,7 @@ exit 1
     expect(commands).toContain(
       "Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath, $pidPath",
     );
+<<<<<<< HEAD
     expect(`${commands}\n${payloads}`).not.toContain("Set-Content -Path $exitPath");
     expect(`${commands}\n${payloads}`).not.toContain("Set-Content -Path $donePath");
     expect(commands).not.toContain("Set-Content -Path $pidPath");
@@ -714,6 +757,11 @@ exit 1
     );
   });
 
+=======
+    expect(commands).not.toContain("ReadAllBytes");
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("drains completed Windows background logs before cleanup", async () => {
     const decodedCommands: string[] = [];
     const output: string[] = [];
@@ -725,7 +773,10 @@ exit 1
         return { status: 0, stderr: "", stdout: "started\n" };
       }
       if (decoded.includes("__OPENCLAW_LOG_LENGTH__")) {
+<<<<<<< HEAD
         const markers = extractWindowsBackgroundControlMarkers(decoded);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         pollCount += 1;
         return {
           status: 0,
@@ -733,6 +784,7 @@ exit 1
           stdout:
             pollCount === 1
               ? [
+<<<<<<< HEAD
                   `${markers.lengthPrefix}128`,
                   `${markers.offsetPrefix}64`,
                   "first chunk",
@@ -746,6 +798,21 @@ exit 1
                   "second chunk",
                   `${markers.exitPrefix}0`,
                   markers.done,
+=======
+                  "__OPENCLAW_LOG_LENGTH__:128",
+                  "__OPENCLAW_LOG_OFFSET__:64",
+                  "first chunk",
+                  "__OPENCLAW_BACKGROUND_EXIT__:0",
+                  "__OPENCLAW_BACKGROUND_DONE__",
+                  "",
+                ].join("\n")
+              : [
+                  "__OPENCLAW_LOG_LENGTH__:128",
+                  "__OPENCLAW_LOG_OFFSET__:128",
+                  "second chunk",
+                  "__OPENCLAW_BACKGROUND_EXIT__:0",
+                  "__OPENCLAW_BACKGROUND_DONE__",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                   "",
                 ].join("\n"),
         };
@@ -783,6 +850,7 @@ exit 1
     expect(script).toContain('"/usr/sbin/chown", sudoUser, scriptPath');
   });
 
+<<<<<<< HEAD
   it("selects macOS desktop users with homes on spaced mounted volumes", () => {
     const root = makeTempDir();
     const prlctlPath = path.join(root, "prlctl");
@@ -871,6 +939,8 @@ exit 7
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("scrubs future plugin entries before invoking old same-guest updaters", () => {
     const script = readFileSync(UPDATE_SCRIPTS_PATH, "utf8");
     const macosScript = macosUpdateScript({

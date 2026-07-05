@@ -340,6 +340,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       meta: sentinelMeta,
     });
 
+<<<<<<< HEAD
     let sentinelPersisted: boolean;
     try {
       await writeRestartSentinel(payload);
@@ -347,6 +348,14 @@ export const updateHandlers: GatewayRequestHandlers = {
       recordLatestUpdateRestartSentinel(payload);
     } catch {
       sentinelPersisted = false;
+=======
+    let sentinelPath: string | null;
+    try {
+      sentinelPath = await writeRestartSentinel(payload);
+      recordLatestUpdateRestartSentinel(payload);
+    } catch {
+      sentinelPath = null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
 
     // Only restart the gateway when the update actually succeeded.
@@ -392,7 +401,11 @@ export const updateHandlers: GatewayRequestHandlers = {
         ...(handoff ? { handoff } : {}),
         restart,
         sentinel: {
+<<<<<<< HEAD
           persisted: sentinelPersisted,
+=======
+          path: sentinelPath,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           payload,
         },
       },

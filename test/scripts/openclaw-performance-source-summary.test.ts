@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 import { spawnSync } from "node:child_process";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +21,7 @@ function writeJson(filePath: string, value: unknown) {
   fs.writeFileSync(filePath, JSON.stringify(value), "utf8");
 }
 
+<<<<<<< HEAD
 function runCli(...args: string[]) {
   return spawnSync(process.execPath, ["scripts/openclaw-performance-source-summary.mjs", ...args], {
     cwd: path.resolve("."),
@@ -30,6 +34,8 @@ function expectNoNodeStack(stderr: string) {
   expect(stderr).not.toContain("\n    at ");
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function writeSourceFixture(sourceDir: string) {
   writeJson(path.join(sourceDir, "gateway-cpu", "gateway-startup-bench.json"), {
     results: [
@@ -134,12 +140,16 @@ describe("parseArgs", () => {
     for (const flag of ["--source-dir", "--baseline-source-dir", "--output"]) {
       expect(() => parseArgs([flag])).toThrow(`${flag} requires a value`);
       expect(() => parseArgs([flag, ""])).toThrow(`${flag} requires a value`);
+<<<<<<< HEAD
       expect(() => parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(() => parseArgs([flag, "--source-dir", "reports/current"])).toThrow(
         `${flag} requires a value`,
       );
     }
   });
+<<<<<<< HEAD
 
   it("reports CLI argument errors without a Node stack trace", () => {
     const missingSource = runCli();
@@ -154,6 +164,8 @@ describe("parseArgs", () => {
     expect(unknownArg.stderr.trim()).toBe("Unknown argument: --wat");
     expectNoNodeStack(unknownArg.stderr);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("buildMarkdown", () => {

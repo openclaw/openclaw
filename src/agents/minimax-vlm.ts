@@ -1,9 +1,15 @@
+<<<<<<< HEAD
 import { readResponseBodySnippet } from "../infra/http-error-body.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Adapts MiniMax VLM image-understanding requests for agent image inputs.
  */
 import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global-dispatcher.js";
+<<<<<<< HEAD
 import { resolvePositiveTimerTimeoutMs } from "../shared/number-coercion.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isRecord } from "../utils.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 
@@ -14,7 +20,62 @@ type MinimaxBaseResp = {
 
 const MINIMAX_VLM_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const MINIMAX_VLM_ERROR_BODY_MAX_CHARS = 400;
+<<<<<<< HEAD
 const DEFAULT_MINIMAX_VLM_TIMEOUT_MS = 60_000;
+=======
+
+async function readErrorBodySnippet(res: Response): Promise<string> {
+  try {
+    const body = res.body;
+    if (!body || typeof body.getReader !== "function") {
+      return (await res.text()).slice(0, MINIMAX_VLM_ERROR_BODY_MAX_CHARS);
+    }
+
+    const reader = body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    let truncated = false;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done || !value?.byteLength) {
+          break;
+        }
+        const remaining = MINIMAX_VLM_ERROR_BODY_MAX_BYTES - total;
+        if (remaining <= 0) {
+          truncated = true;
+          break;
+        }
+        if (value.byteLength > remaining) {
+          chunks.push(value.subarray(0, remaining));
+          total += remaining;
+          truncated = true;
+          break;
+        }
+        chunks.push(value);
+        total += value.byteLength;
+        if (total >= MINIMAX_VLM_ERROR_BODY_MAX_BYTES) {
+          truncated = true;
+          break;
+        }
+      }
+    } finally {
+      if (truncated) {
+        await reader.cancel().catch(() => undefined);
+      }
+      try {
+        reader.releaseLock();
+      } catch {}
+    }
+
+    return new TextDecoder()
+      .decode(Buffer.concat(chunks, total))
+      .slice(0, MINIMAX_VLM_ERROR_BODY_MAX_CHARS);
+  } catch {
+    return "";
+  }
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export function isMinimaxVlmProvider(provider: string): boolean {
   const normalized = provider.trim().toLowerCase();
@@ -109,7 +170,16 @@ export async function minimaxUnderstandImage(params: {
   // Without this, HTTP_PROXY/HTTPS_PROXY env vars are silently ignored (#51619).
   ensureGlobalUndiciEnvProxyDispatcher();
 
+<<<<<<< HEAD
   const timeoutMs = resolvePositiveTimerTimeoutMs(params.timeoutMs, DEFAULT_MINIMAX_VLM_TIMEOUT_MS);
+=======
+  const timeoutMs =
+    typeof params.timeoutMs === "number" &&
+    Number.isFinite(params.timeoutMs) &&
+    params.timeoutMs > 0
+      ? Math.floor(params.timeoutMs)
+      : 60_000;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const res = await fetch(url, {
     method: "POST",
@@ -127,10 +197,14 @@ export async function minimaxUnderstandImage(params: {
 
   const traceId = res.headers.get("Trace-Id") ?? "";
   if (!res.ok) {
+<<<<<<< HEAD
     const body = await readResponseBodySnippet(res, {
       maxBytes: MINIMAX_VLM_ERROR_BODY_MAX_BYTES,
       maxChars: MINIMAX_VLM_ERROR_BODY_MAX_CHARS,
     });
+=======
+    const body = await readErrorBodySnippet(res);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const trace = traceId ? ` Trace-Id: ${traceId}` : "";
     throw new Error(
       `MiniMax VLM request failed (${res.status} ${res.statusText}).${trace}${

@@ -19,6 +19,13 @@ const kilocodePresetAppliers = createModelCatalogPresetAppliers({
   }),
 });
 
+<<<<<<< HEAD
+=======
+export function applyKilocodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return kilocodePresetAppliers.applyProviderConfig(cfg);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function applyKilocodeConfig(cfg: OpenClawConfig): OpenClawConfig {
   return kilocodePresetAppliers.applyConfig(cfg);
 }

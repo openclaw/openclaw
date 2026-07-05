@@ -766,6 +766,7 @@ describe("skill mutations", () => {
     });
   });
 
+<<<<<<< HEAD
   it("shows ClawHub trust warnings returned by successful skill installs", async () => {
     const { state, request } = createState();
     request.mockImplementation(async (method: string) => {
@@ -863,6 +864,8 @@ describe("skill mutations", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.each([
     {
       name: "legacy install",

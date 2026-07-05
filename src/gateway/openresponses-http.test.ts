@@ -1372,6 +1372,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(response?.output?.[1]?.name).toBe("get_weather");
   });
 
+<<<<<<< HEAD
   it("buffers replaceable assistant events for streaming responses", async () => {
     const port = enabledPort;
     agentCommand.mockClear();
@@ -1449,6 +1450,8 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(deltas).toBe("final answer");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("falls back to payload text for streamed function_call responses", async () => {
     const port = enabledPort;
     agentCommand.mockClear();

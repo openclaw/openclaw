@@ -111,6 +111,7 @@ describe("slack config schema", () => {
     });
   });
 
+<<<<<<< HEAD
   it("accepts relay mode with a SecretInput auth token", () => {
     expectSlackConfigValid({
       mode: "relay",
@@ -141,6 +142,8 @@ describe("slack config schema", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects invalid Socket Mode ping/pong transport tuning", () => {
     expectSlackConfigIssue(
       {

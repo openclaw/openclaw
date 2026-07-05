@@ -953,6 +953,7 @@ describe("sendMessageTelegram", () => {
 
     expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
     const richMessage = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
+<<<<<<< HEAD
     expect(richMessage?.html).toContain("<table bordered striped>");
   });
 
@@ -979,6 +980,9 @@ describe("sendMessageTelegram", () => {
       skip_entity_detection: true,
     });
     expect(richMessage?.html).not.toContain("mailto:");
+=======
+    expect(richMessage?.html).toContain("<table>");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it.each([
@@ -1056,6 +1060,7 @@ describe("sendMessageTelegram", () => {
     expect(richHtml).toContain("nested<br>line");
   });
 
+<<<<<<< HEAD
   it("materializes bullet and paragraph line breaks in rich Markdown sends", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 60, chat: { id: "123" } });
 
@@ -1087,6 +1092,8 @@ describe("sendMessageTelegram", () => {
     expect(richHtml).toContain("<pre><code>a\nb</code></pre>");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves nonempty Markdown when rich rendering is empty", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
     const markdown = "[reference]: https://example.com";
@@ -1100,6 +1107,7 @@ describe("sendMessageTelegram", () => {
     expect(botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.html).toBe(markdown);
   });
 
+<<<<<<< HEAD
   it.each([
     {
       name: "local path",
@@ -1129,6 +1137,8 @@ describe("sendMessageTelegram", () => {
     expect(richHtml).toContain('<a href="https://example.com/docs">docs</a>');
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("renders complex markdown into HTML text", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 46, chat: { id: "123" } });
     const markdown = [

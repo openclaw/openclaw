@@ -2,7 +2,10 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+<<<<<<< HEAD
 import { parseSessionThreadInfo } from "./thread-info.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { SessionEntry } from "./types.js";
 
 const storeState = vi.hoisted(() => {
@@ -38,6 +41,10 @@ vi.mock("./targets.js", () => ({
 }));
 
 let extractDeliveryInfo: typeof import("./delivery-info.js").extractDeliveryInfo;
+<<<<<<< HEAD
+=======
+let parseSessionThreadInfo: typeof import("./delivery-info.js").parseSessionThreadInfo;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const buildEntry = (deliveryContext: SessionEntry["deliveryContext"]): SessionEntry => ({
   sessionId: "session-1",
@@ -46,7 +53,11 @@ const buildEntry = (deliveryContext: SessionEntry["deliveryContext"]): SessionEn
 });
 
 beforeAll(async () => {
+<<<<<<< HEAD
   ({ extractDeliveryInfo } = await import("./delivery-info.js"));
+=======
+  ({ extractDeliveryInfo, parseSessionThreadInfo } = await import("./delivery-info.js"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 beforeEach(() => {

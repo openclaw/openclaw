@@ -6,7 +6,11 @@ import {
   readPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
 } from "./installed-plugin-index-store.js";
+<<<<<<< HEAD
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
+=======
+import type { InstalledPluginIndex } from "./installed-plugin-index.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   loadPluginManifestRegistryForInstalledIndex,
   resolveInstalledManifestRegistryIndexFingerprint,
@@ -151,6 +155,7 @@ function createIndexWithPackageJson(rootDir: string): InstalledPluginIndex {
   };
 }
 
+<<<<<<< HEAD
 function createIndexWithUnhashedPackageJson(rootDir: string): InstalledPluginIndex {
   const index = createIndexWithFileSignatures(rootDir);
   const packageJsonPath = writePackageManifest(rootDir, "Installed");
@@ -169,6 +174,8 @@ function createIndexWithUnhashedPackageJson(rootDir: string): InstalledPluginInd
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("loadPluginManifestRegistryForInstalledIndex", () => {
   it("reuses frozen installed-index fingerprints when file signatures are persisted", () => {
     const rootDir = makeTempDir();
@@ -198,6 +205,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(second).not.toBe(first);
   });
 
+<<<<<<< HEAD
   it("reuses package realpaths across mutable installed-index fingerprint builds", () => {
     const rootDir = makeTempDir();
     writePlugin(rootDir, "installed", "installed-");
@@ -289,6 +297,8 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(packageJsonPathCalls).toHaveLength(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not cache shallow-frozen installed-index fingerprints with mutable nested records", () => {
     const rootDir = makeTempDir();
     writePlugin(rootDir, "installed", "installed-");

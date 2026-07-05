@@ -59,6 +59,7 @@ type RuntimeReplaceConfigFileParams = {
   afterWrite: RuntimeConfigAfterWrite;
   writeOptions?: RuntimeWriteConfigOptions;
 };
+<<<<<<< HEAD
 type RuntimeSessionEntry = import("../../config/sessions/types.js").SessionEntry;
 type RuntimeSessionStoreReadParams = {
   agentId?: string;
@@ -96,6 +97,8 @@ type RuntimeSessionStoreEntryUpdateParams = {
   takeCacheOwnership?: boolean;
   requireWriteSuccess?: boolean;
 };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type PluginRuntimeThinkingPolicyRequest = {
   provider?: string | null;
   model?: string | null;
@@ -242,6 +245,7 @@ export type PluginRuntimeCore = {
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
+<<<<<<< HEAD
       getSessionEntry: (params: RuntimeSessionStoreReadParams) => RuntimeSessionEntry | undefined;
       listSessionEntries: (
         params?: RuntimeSessionStoreListParams,
@@ -280,6 +284,21 @@ export type PluginRuntimeCore = {
        * transition before SQLite migration. Callers must migrate away from
        * resolving transcript file paths directly.
        */
+=======
+      getSessionEntry: typeof import("../../config/sessions/session-accessor.js").loadSessionEntry;
+      listSessionEntries: typeof import("../../config/sessions/session-accessor.js").listSessionEntries;
+      patchSessionEntry: typeof import("../../config/sessions/store.js").patchSessionEntry;
+      upsertSessionEntry: typeof import("../../config/sessions/store.js").upsertSessionEntry;
+      /**
+       * @deprecated Use getSessionEntry/listSessionEntries for reads and
+       * patchSessionEntry/upsertSessionEntry for writes. This keeps the legacy
+       * mutable whole-store compatibility shape.
+       */
+      loadSessionStore: typeof import("../../config/sessions/store-load.js").loadSessionStore;
+      saveSessionStore: import("../../config/sessions/runtime-types.js").SaveSessionStore;
+      updateSessionStore: typeof import("../../config/sessions/store.js").updateSessionStore;
+      updateSessionStoreEntry: typeof import("../../config/sessions/store.js").updateSessionStoreEntry;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       resolveSessionFilePath: typeof import("../../config/sessions/paths.js").resolveSessionFilePath;
     };
   };

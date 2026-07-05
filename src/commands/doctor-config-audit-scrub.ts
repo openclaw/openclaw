@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import { note } from "../../packages/terminal-core/src/note.js";
+<<<<<<< HEAD
 import {
   resolveConfigAuditLogPath,
   scrubConfigAuditLog,
@@ -11,11 +12,17 @@ import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.j
 
 const NOTE_TITLE = "Config audit";
 const CONFIG_AUDIT_SCRUB_CHECK_ID = "core/doctor/config-audit-scrub";
+=======
+import { scrubConfigAuditLog } from "../config/io.audit.js";
+
+const NOTE_TITLE = "Config audit";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function formatEntryCount(count: number): string {
   return `${count} ${count === 1 ? "entry" : "entries"}`;
 }
 
+<<<<<<< HEAD
 export async function detectConfigAuditScrubIssue(params?: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
@@ -58,6 +65,8 @@ export function configAuditScrubToRepairEffect(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Scrubs pre-redactor config audit records or previews the number of affected entries.
  *

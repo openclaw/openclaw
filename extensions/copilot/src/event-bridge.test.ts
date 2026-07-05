@@ -15,6 +15,7 @@ const REGISTERED_EVENT_TYPES = [
   "assistant.usage",
   "tool.execution_start",
   "tool.execution_complete",
+<<<<<<< HEAD
   "session.plan_changed",
   "exit_plan_mode.requested",
   "exit_plan_mode.completed",
@@ -24,6 +25,8 @@ const REGISTERED_EVENT_TYPES = [
   "session.compaction_start",
   "session.compaction_complete",
   "session.idle",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "session.error",
   "abort",
 ] as const;
@@ -150,6 +153,7 @@ describe("attachEventBridge", () => {
     expect(bridge.snapshot().assistantTexts).toEqual(["hello"]);
   });
 
+<<<<<<< HEAD
   it("ignores child assistant and usage events but keeps child tool side effects", async () => {
     const session = createFakeSession();
     const onAssistantDelta = vi.fn();
@@ -194,6 +198,8 @@ describe("attachEventBridge", () => {
     expect(onAssistantDelta).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("interleaved messageIds produce two ordered assistantTexts entries", () => {
     const session = createFakeSession();
     const bridge = attachEventBridge(session, {
@@ -505,6 +511,7 @@ describe("attachEventBridge", () => {
     });
   });
 
+<<<<<<< HEAD
   it("projects Copilot plan events through the generic plan stream", async () => {
     const session = createFakeSession();
     const onAgentEvent = vi.fn().mockResolvedValue(undefined);
@@ -596,6 +603,8 @@ describe("attachEventBridge", () => {
     bridge.detach();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves all-zero usage snapshot after an invalid assistant.usage event", () => {
     const session = createFakeSession();
     const bridge = attachEventBridge(session, {
@@ -749,6 +758,7 @@ describe("attachEventBridge", () => {
     expect(bridge.snapshot().toolMetas).toEqual([]);
   });
 
+<<<<<<< HEAD
   it("serializes compaction callbacks and clears active compaction state on completion", async () => {
     const session = createFakeSession();
     const calls: string[] = [];
@@ -903,6 +913,8 @@ describe("attachEventBridge", () => {
     expect(onCompactionComplete).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("session.error populates streamError with errorCode or errorType only when not aborted", () => {
     const activeSession = createFakeSession();
     const activeBridge = attachEventBridge(activeSession, {

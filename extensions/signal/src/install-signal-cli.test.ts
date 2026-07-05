@@ -5,6 +5,7 @@ import path from "node:path";
 import JSZip from "jszip";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import * as tar from "tar";
+<<<<<<< HEAD
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReleaseAsset } from "./install-signal-cli.js";
 
@@ -14,11 +15,20 @@ const { fetchWithSsrFGuardMock, resolveBrewExecutableMock, runPluginCommandWithT
     resolveBrewExecutableMock: vi.fn(),
     runPluginCommandWithTimeoutMock: vi.fn(),
   }));
+=======
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReleaseAsset } from "./install-signal-cli.js";
+
+const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
+  fetchWithSsrFGuardMock: vi.fn(),
+}));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
+<<<<<<< HEAD
 vi.mock("openclaw/plugin-sdk/setup-tools", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/setup-tools")>();
   return {
@@ -35,6 +45,11 @@ const {
   downloadToFile,
   extractSignalCliArchive,
   installSignalCli,
+=======
+const {
+  downloadToFile,
+  extractSignalCliArchive,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   installSignalCliFromRelease,
   looksLikeArchive,
   pickAsset,
@@ -90,8 +105,11 @@ async function withTempFile(run: (filePath: string) => Promise<void>) {
 
 beforeEach(() => {
   fetchWithSsrFGuardMock.mockReset();
+<<<<<<< HEAD
   resolveBrewExecutableMock.mockReset();
   runPluginCommandWithTimeoutMock.mockReset();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 function requireAsset(asset: ReleaseAsset | undefined, label: string): ReleaseAsset {
@@ -161,6 +179,7 @@ describe("pickAsset", () => {
       const result = requireAsset(pickAsset(SAMPLE_ASSETS, "darwin", "x64"), "darwin x64");
       expect(result.name).toContain("macOS-native");
     });
+<<<<<<< HEAD
 
     it("does not fall back to Linux client archives when macOS assets are absent", () => {
       const currentUpstreamAssets: ReleaseAsset[] = [
@@ -180,6 +199,8 @@ describe("pickAsset", () => {
 
       expect(pickAsset(currentUpstreamAssets, "darwin", "arm64")).toBeUndefined();
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   describe("win32", () => {
@@ -342,6 +363,7 @@ describe("installSignalCliFromRelease", () => {
   });
 });
 
+<<<<<<< HEAD
 describe("installSignalCli", () => {
   const originalPlatform = process.platform;
   const originalArch = process.arch;
@@ -382,6 +404,8 @@ describe("installSignalCli", () => {
   });
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("extractSignalCliArchive", () => {
   async function withArchiveWorkspace(run: (workDir: string) => Promise<void>) {
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-signal-install-"));

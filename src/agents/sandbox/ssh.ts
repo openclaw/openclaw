@@ -8,7 +8,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveRootPath } from "../../infra/boundary-path.js";
+<<<<<<< HEAD
 import { toErrorObject } from "../../infra/errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { parseSshTarget } from "../../infra/ssh-tunnel.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveUserPath } from "../../utils.js";
@@ -308,6 +311,7 @@ export function buildValidatedExecRemoteCommand(params: {
   return buildExecRemoteCommand(params);
 }
 
+<<<<<<< HEAD
 export const VALIDATE_REMOTE_WORKDIR_SCRIPT = [
   "set -e",
   'target="$1"',
@@ -362,6 +366,8 @@ export function buildRemoteWorkdirValidationCommand(params: {
   ]);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function createExecCommandFrame(kind: ExecCommandFrame["kind"], parenDepth = 0): ExecCommandFrame {
   return { kind, quote: "plain", escaping: false, parenDepth };
 }
@@ -798,7 +804,11 @@ export async function uploadDirectoryToSshTarget(params: {
     const fail = (error: unknown) => {
       tar.kill("SIGKILL");
       ssh.kill("SIGKILL");
+<<<<<<< HEAD
       reject(toErrorObject(error, "Non-Error rejection"));
+=======
+      reject(toLintErrorObject(error, "Non-Error rejection"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
 
     tar.on("error", fail);
@@ -901,3 +911,20 @@ async function writeSecretMaterial(
   await fs.chmod(pathname, 0o600);
   return pathname;
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

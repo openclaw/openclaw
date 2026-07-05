@@ -4,7 +4,10 @@ import { normalizeCaptureSavedView, normalizeCaptureSavedViews } from "./capture
 import { formatErrorMessage } from "./errors.js";
 import {
   type Bootstrap,
+<<<<<<< HEAD
   type EvidenceEnvelope,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type OutcomesEnvelope,
   type ReportEnvelope,
   type RunnerSelection,
@@ -161,11 +164,14 @@ function isEditableElement(target: EventTarget | null): boolean {
 }
 
 export async function createQaLabApp(root: HTMLDivElement) {
+<<<<<<< HEAD
   const initialUrl = new URL(window.location.href);
   const initialEvidencePath =
     initialUrl.searchParams.get("evidencePath")?.trim() ||
     initialUrl.searchParams.get("path")?.trim() ||
     "";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const state: UiState = {
     theme: detectTheme(),
     bootstrap: null,
@@ -209,6 +215,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
     captureErrorsOnly: false,
     captureCoverage: null,
     captureStartupStatus: null,
+<<<<<<< HEAD
     evidence: null,
     evidenceArtifactFilter: "all",
     evidenceError: null,
@@ -216,6 +223,8 @@ export async function createQaLabApp(root: HTMLDivElement) {
     evidencePathDraft: initialEvidencePath,
     evidenceSearchText: "",
     evidenceStatusFilter: "all",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     captureControlsExpanded: false,
     captureSummaryExpanded: false,
     captureSavedViews: loadCaptureSavedViews(),
@@ -226,11 +235,18 @@ export async function createQaLabApp(root: HTMLDivElement) {
     capturePinnedLaneIds: [],
     selectedCaptureSessionIds: [],
     selectedCaptureEventKey: null,
+<<<<<<< HEAD
     selectedEvidenceEntryId: null,
     selectedConversationId: null,
     selectedThreadId: null,
     selectedScenarioId: null,
     activeTab: initialUrl.pathname === "/evidence" || initialEvidencePath ? "evidence" : "chat",
+=======
+    selectedConversationId: null,
+    selectedThreadId: null,
+    selectedScenarioId: null,
+    activeTab: "chat",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     runnerDraft: null,
     runnerDraftDirty: false,
     composer: {
@@ -330,6 +346,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
       ccli: state.captureCollapsedLaneIds.join(","),
       ccpi: state.capturePinnedLaneIds.join(","),
       er: state.error,
+<<<<<<< HEAD
       el: state.evidenceLoading,
       ee: state.evidenceError,
       ep: state.evidence?.evidencePath ?? null,
@@ -341,6 +358,8 @@ export async function createQaLabApp(root: HTMLDivElement) {
       eaf: state.evidenceArtifactFilter,
       esq: state.evidenceSearchText,
       ese: state.selectedEvidenceEntryId,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   }
 
@@ -363,9 +382,12 @@ export async function createQaLabApp(root: HTMLDivElement) {
       state.snapshot = snapshot;
       state.latestReport = report.report ?? bootstrap.latestReport;
       state.scenarioRun = outcomes.run;
+<<<<<<< HEAD
       if (!state.evidencePathDraft.trim() && bootstrap.runner.artifacts?.evidencePath) {
         state.evidencePathDraft = bootstrap.runner.artifacts.evidencePath;
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (!state.runnerDraft || !state.runnerDraftDirty) {
         state.runnerDraft = {
           ...bootstrap.runner.selection,
@@ -645,6 +667,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
     }
   }
 
+<<<<<<< HEAD
   async function loadEvidence(pathOverride?: string) {
     const evidencePath = (pathOverride ?? state.evidencePathDraft).trim();
     if (!evidencePath) {
@@ -676,6 +699,8 @@ export async function createQaLabApp(root: HTMLDivElement) {
     }
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   async function sendKickoff() {
     state.busy = true;
     state.error = null;
@@ -891,6 +916,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
     root
       .querySelector<HTMLElement>("[data-action='download-report']")
       ?.addEventListener("click", downloadReport);
+<<<<<<< HEAD
     root
       .querySelector<HTMLElement>("[data-action='load-evidence']")
       ?.addEventListener("click", () => void loadEvidence());
@@ -904,6 +930,8 @@ export async function createQaLabApp(root: HTMLDivElement) {
         state.activeTab = "evidence";
         void loadEvidence(evidencePath);
       });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     /* Scenario All/None */
     root
@@ -971,6 +999,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
       }));
     });
 
+<<<<<<< HEAD
     root.querySelector<HTMLInputElement>("#evidence-path")?.addEventListener("input", (e) => {
       state.evidencePathDraft = (e.currentTarget as HTMLInputElement).value;
     });
@@ -1018,6 +1047,8 @@ export async function createQaLabApp(root: HTMLDivElement) {
       });
     });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     root.querySelector<HTMLSelectElement>("#capture-session")?.addEventListener("change", (e) => {
       state.selectedCaptureSessionIds = readMultiSelect(e.currentTarget as HTMLSelectElement);
       state.selectedCaptureEventKey = null;
@@ -1762,9 +1793,12 @@ export async function createQaLabApp(root: HTMLDivElement) {
 
   render();
   await refresh();
+<<<<<<< HEAD
   if (initialEvidencePath) {
     await loadEvidence(initialEvidencePath);
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   void pollUiVersion();
   setInterval(() => void refresh(), 1_000);
   setInterval(() => void pollUiVersion(), 1_000);

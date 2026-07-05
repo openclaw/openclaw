@@ -5,7 +5,11 @@ scenario:
   surface: runtime
   coverage:
     primary:
+<<<<<<< HEAD
       - anthropic.signed-redacted-thinking-replay
+=======
+      - signed-redacted-thinking-replay
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     secondary:
       - runtime.retry-policy
   gatewayConfigPatch:

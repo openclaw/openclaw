@@ -32,6 +32,10 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+<<<<<<< HEAD
+=======
+import { requestSafeGatewayRestart } from "../infra/restart-coordinator.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   consumeSelectedSystemEventEntries,
   enqueueSystemEventEntry,
@@ -546,14 +550,31 @@ export function buildGatewayCronService(params: {
       }).catch(() => {});
     },
     onIsolatedAgentSetupTimeout: ({ job, error, timeoutMs }) => {
+<<<<<<< HEAD
+=======
+      const restart = requestSafeGatewayRestart({
+        reason: "cron.isolated_agent_setup_timeout",
+        delayMs: 0,
+        preservePendingEmitHooks: true,
+      });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       cronLogger.warn(
         {
           jobId: job.id,
           jobName: job.name,
           timeoutMs,
           error,
+<<<<<<< HEAD
         },
         "cron: isolated agent setup timed out before runner start; backing off job without gateway restart",
+=======
+          restartStatus: restart.status,
+          restartCoalesced: restart.restart.coalesced,
+          restartSummary: restart.preflight.summary,
+          restartDelayMs: restart.restart.delayMs,
+        },
+        "cron: isolated agent setup timed out before runner start; requested safe gateway restart",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       );
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) =>

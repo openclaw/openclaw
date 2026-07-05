@@ -13,7 +13,10 @@ let findModelInCatalog: typeof import("./model-catalog.js").findModelInCatalog;
 let loadManifestModelCatalog: typeof import("./model-catalog.js").loadManifestModelCatalog;
 let loadModelCatalog: typeof import("./model-catalog.js").loadModelCatalog;
 let modelSupportsInput: typeof import("./model-catalog.js").modelSupportsInput;
+<<<<<<< HEAD
 let resetModelCatalogCache: typeof import("./model-catalog.js").resetModelCatalogCache;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 let resetModelCatalogCacheForTest: typeof import("./model-catalog.js").resetModelCatalogCacheForTest;
 let augmentCatalogMock: ReturnType<typeof vi.fn>;
 let prepareOpenClawModelsJsonSourceMock: ReturnType<typeof vi.fn>;
@@ -338,7 +341,10 @@ describe("loadModelCatalog", () => {
       loadManifestModelCatalog,
       loadModelCatalog,
       modelSupportsInput,
+<<<<<<< HEAD
       resetModelCatalogCache,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       resetModelCatalogCacheForTest,
     } = await import("./model-catalog.js"));
     const providerRuntime = await import("../plugins/provider-runtime.runtime.js");
@@ -514,6 +520,7 @@ describe("loadModelCatalog", () => {
     });
   });
 
+<<<<<<< HEAD
   it("exposes only a fully loaded process catalog snapshot", async () => {
     mockAgentDiscoveryModels([
       { id: "runtime-reasoner", name: "Runtime Reasoner", provider: "ollama", reasoning: true },
@@ -565,6 +572,8 @@ describe("loadModelCatalog", () => {
     await expect(loadModelCatalog({ cacheOnly: true })).resolves.toBe(freshCatalog);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves runtime model params in the internal catalog", async () => {
     mockAgentDiscoveryModels([
       {
@@ -780,7 +789,10 @@ describe("loadModelCatalog", () => {
 
       const result = await loadModelCatalog({ config: {} as OpenClawConfig });
       expect(result).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
+<<<<<<< HEAD
       await expect(loadModelCatalog({ cacheOnly: true })).resolves.toEqual([]);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } finally {
       setLoggerOverride(null);
       resetLogger();

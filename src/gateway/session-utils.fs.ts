@@ -15,6 +15,10 @@ import {
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+<<<<<<< HEAD
+=======
+import { escapeRegExp } from "../shared/regexp.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
@@ -27,11 +31,14 @@ import {
   readSessionTranscriptIndex,
   type IndexedTranscriptEntry,
 } from "./session-transcript-index.fs.js";
+<<<<<<< HEAD
 import {
   extractJsonNullableStringFieldPrefix,
   extractJsonNumberFieldPrefix,
   extractJsonStringFieldPrefix,
 } from "./session-transcript-json.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
 type SessionTitleFields = {
@@ -301,6 +308,43 @@ function isOversizedTranscriptLine(line: string): boolean {
   return Buffer.byteLength(line, "utf8") > MAX_TRANSCRIPT_PARSE_LINE_BYTES;
 }
 
+<<<<<<< HEAD
+=======
+function extractJsonStringFieldPrefix(prefix: string, field: string): string | undefined {
+  const match = new RegExp(`"${escapeRegExp(field)}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`).exec(prefix);
+  if (!match) {
+    return undefined;
+  }
+  try {
+    const decoded = JSON.parse(`"${match[1]}"`) as unknown;
+    return normalizeTailEntryString(decoded);
+  } catch {
+    return undefined;
+  }
+}
+
+function extractJsonNullableStringFieldPrefix(
+  prefix: string,
+  field: string,
+): string | null | undefined {
+  if (new RegExp(`"${escapeRegExp(field)}"\\s*:\\s*null`).test(prefix)) {
+    return null;
+  }
+  return extractJsonStringFieldPrefix(prefix, field);
+}
+
+function extractJsonNumberFieldPrefix(prefix: string, field: string): number | undefined {
+  const match = new RegExp(
+    `"${escapeRegExp(field)}"\\s*:\\s*(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)`,
+  ).exec(prefix);
+  if (!match) {
+    return undefined;
+  }
+  const decoded = Number(match[1]);
+  return Number.isFinite(decoded) ? decoded : undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function buildOversizedTranscriptRecord(line: string): TailTranscriptRecord {
   const prefix = line.slice(0, OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS);
   const messageMatch = /"message"\s*:/.exec(prefix);
@@ -326,6 +370,13 @@ function buildOversizedTranscriptRecord(line: string): TailTranscriptRecord {
   return { record };
 }
 
+<<<<<<< HEAD
+=======
+function normalizeTailEntryString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function parseTailTranscriptRecord(line: string): TailTranscriptRecord | null {
   if (isOversizedTranscriptLine(line)) {
     return buildOversizedTranscriptRecord(line);
@@ -643,7 +694,26 @@ export async function readSessionMessageCountAsync(
   if (!filePath) {
     return 0;
   }
+<<<<<<< HEAD
   return await readSessionMessageCountFromPathAsync(filePath);
+=======
+  let stat: fs.Stats | null = null;
+  try {
+    stat = await fs.promises.stat(filePath);
+    const cached = getCachedTranscriptMessageCount(filePath, stat);
+    if (typeof cached === "number") {
+      return cached;
+    }
+  } catch {
+    // Count from the transcript reader below when stat metadata is unavailable.
+  }
+  const index = await readSessionTranscriptIndex(filePath);
+  const count = index?.entries.length ?? 0;
+  if (stat) {
+    setCachedTranscriptMessageCount(filePath, stat, count);
+  }
+  return count;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function readRecentSessionMessagesWithStats(

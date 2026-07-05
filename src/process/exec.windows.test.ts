@@ -7,7 +7,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import {
   resetWindowsInstallRootsForTests,
   getWindowsInstallRoots,
+<<<<<<< HEAD
   getWindowsSystem32ExePath,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "../infra/windows-install-roots.js";
 import { withMockedWindowsPlatform, withRestoredMocks } from "../test-utils/vitest-spies.js";
 
@@ -296,6 +299,7 @@ describe("windows command wrapper behavior", () => {
     });
   });
 
+<<<<<<< HEAD
   it("escapes caret arguments in Windows command wrappers", async () => {
     spawnMock.mockImplementation(
       (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
@@ -314,6 +318,8 @@ describe("windows command wrapper behavior", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps child exitCode when close reports null on Windows npm shims", async () => {
     const child = createMockChild({ closeCode: null, exitCode: 0 });
 
@@ -416,6 +422,7 @@ describe("windows command wrapper behavior", () => {
     });
   });
 
+<<<<<<< HEAD
   it("wraps spaced .cmd command paths in an outer cmd.exe command line", async () => {
     const expectedComSpec = expectedTrustedCmdExe();
 
@@ -445,6 +452,8 @@ describe("windows command wrapper behavior", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("sets windowsHide on direct runExec invocations too", async () => {
     execFileMock.mockImplementation(
       (
@@ -497,7 +506,11 @@ describe("windows command wrapper behavior", () => {
         expect(child.kill).not.toHaveBeenCalled();
         expect(spawnMock).toHaveBeenCalledTimes(2);
         const taskkillCall = requireSpawnCall(1);
+<<<<<<< HEAD
         expect(taskkillCall[0]).toBe(getWindowsSystem32ExePath("taskkill.exe"));
+=======
+        expect(taskkillCall[0]).toBe("taskkill");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         expect(taskkillCall[1]).toEqual(["/PID", "1234", "/T", "/F"]);
         expect(taskkillCall[2]).toEqual({
           stdio: "ignore",

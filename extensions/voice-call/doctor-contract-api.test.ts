@@ -12,7 +12,11 @@ import type {
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { resolveSessionStoreAgentIds, stateMigrations } from "./doctor-contract-api.js";
+=======
+import { stateMigrations } from "./doctor-contract-api.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   createTestStorePath,
   makePersistedCall,
@@ -68,6 +72,7 @@ describe("voice-call doctor state migration", () => {
     await fs.rm(storePath, { recursive: true, force: true });
   });
 
+<<<<<<< HEAD
   it("reports top-level and per-number session-store agents", () => {
     expect(
       resolveSessionStoreAgentIds({
@@ -104,6 +109,8 @@ describe("voice-call doctor state migration", () => {
     ).toEqual(["main"]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("imports legacy calls.jsonl into plugin state", async () => {
     const sourcePath = path.join(storePath, "calls.jsonl");
     const call = makePersistedCall({

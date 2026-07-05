@@ -17,8 +17,11 @@ export type LmstudioModelWire = {
   display_name?: string;
   max_context_length?: number;
   format?: "gguf" | "mlx" | null;
+<<<<<<< HEAD
   variants?: unknown;
   selected_variant?: unknown;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   capabilities?: {
     vision?: boolean;
     trained_for_tool_use?: boolean;
@@ -221,6 +224,7 @@ export function resolveLoadedContextWindow(
   return contextWindow;
 }
 
+<<<<<<< HEAD
 function normalizeLmstudioVariantIds(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -271,6 +275,8 @@ export function resolveLmstudioCanonicalModelKey(params: {
   return modelKey;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Normalizes a server path by stripping trailing slash and inference suffixes.
  *

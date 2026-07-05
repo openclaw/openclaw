@@ -13,7 +13,10 @@ import type {
   Usage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+<<<<<<< HEAD
 import { resolveCacheRetention } from "./cache-retention.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
@@ -28,6 +31,23 @@ import { buildBaseOptions } from "./simple-options.js";
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
 
+<<<<<<< HEAD
+=======
+/**
+ * Resolve cache retention preference.
+ * Defaults to "short" and uses OPENCLAW_CACHE_RETENTION for backward compatibility.
+ */
+function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention {
+  if (cacheRetention) {
+    return cacheRetention;
+  }
+  if (typeof process !== "undefined" && process.env.OPENCLAW_CACHE_RETENTION === "long") {
+    return "long";
+  }
+  return "short";
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function getCompat(model: Model<"openai-responses">): Required<OpenAIResponsesCompat> {
   return {
     sendSessionIdHeader: model.compat?.sendSessionIdHeader ?? true,

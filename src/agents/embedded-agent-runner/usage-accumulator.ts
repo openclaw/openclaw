@@ -1,7 +1,11 @@
 /**
  * Accumulates and normalizes per-call token usage across embedded runs.
  */
+<<<<<<< HEAD
 import type { NormalizedUsage } from "../usage.js";
+=======
+import { normalizeUsage, type NormalizedUsage, type UsageLike } from "../usage.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type UsageAccumulator = {
   input: number;
@@ -112,3 +116,11 @@ export const toLastCallUsage = (usage: UsageAccumulator): NormalizedUsage | unde
     total: usage.lastTotal || undefined,
   };
 };
+<<<<<<< HEAD
+=======
+
+export const resolveLastCallUsage = (
+  rawUsage: UsageLike | null | undefined,
+  usageAccumulator: UsageAccumulator,
+): NormalizedUsage | undefined => normalizeUsage(rawUsage) ?? toLastCallUsage(usageAccumulator);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

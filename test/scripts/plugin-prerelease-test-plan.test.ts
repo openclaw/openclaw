@@ -174,7 +174,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     const script = readFileSync("scripts/e2e/kitchen-sink-rpc-docker.sh", "utf8");
     const walkScript = readFileSync("scripts/e2e/kitchen-sink-rpc-walk.mjs", "utf8");
 
+<<<<<<< HEAD
     expect(lane).toMatchObject({
+=======
+    expect(lane).toEqual({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:kitchen-sink-rpc",
       e2eImageKind: "functional",
       live: false,
@@ -183,7 +187,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       retryPatterns: [],
       retries: 0,
       stateScenario: "empty",
+<<<<<<< HEAD
       timeoutMs: 1_500_000,
+=======
+      timeoutMs: 900000,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       weight: 3,
     });
     expect(script).toContain("OPENCLAW_ENTRY=/app/openclaw.mjs");
@@ -339,8 +347,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         "${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
       OPENCLAW_CI_RUN_CONTROL_UI_I18N:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}",
+<<<<<<< HEAD
       OPENCLAW_CI_RUN_IOS_BUILD:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ios_build || 'false' }}",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       OPENCLAW_CI_RUN_MACOS:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}",
       OPENCLAW_CI_RUN_NODE:
@@ -366,7 +377,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     ).toEqual({
       check_name: "check-dependencies",
       task: "dependencies",
+<<<<<<< HEAD
       runner: "blacksmith-4vcpu-ubuntu-2404",
+=======
+      runner: "blacksmith-8vcpu-ubuntu-2404",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     expect(
       workflow.jobs["check-shard"].steps.find((step) => step.name === "Run check shard").run,
@@ -533,6 +548,10 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "normal_ci",
       "plugin_prerelease",
       "release_checks",
+<<<<<<< HEAD
+=======
+      "prepare_release_package",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "npm_telegram",
       "summary",
     ]) {

@@ -1,0 +1,72 @@
+{
+  "scenarios": [
+    {
+      "name": "OTEL trace smoke",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "emits a traced qa-channel turn",
+          "status": "pass"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 28632,
+    "gatewayProcessCpuMs": 2000,
+    "gatewayCpuCoreRatio": 0.07,
+    "gatewayProcessRssStartBytes": 837177344,
+    "gatewayProcessRssEndBytes": 1096691712,
+    "gatewayProcessRssDeltaBytes": 259514368,
+    "gatewayProcessRssPeakBytes": 1096691712,
+    "gatewayProcessRssPeakDeltaBytes": 259514368,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:17:14.388Z",
+        "gatewayProcessRssBytes": 837177344
+      },
+      {
+        "label": "scenario:otel-trace-smoke:start",
+        "at": "2026-07-03T13:17:14.407Z",
+        "gatewayProcessRssBytes": 837193728
+      },
+      {
+        "label": "scenario:otel-trace-smoke:finish",
+        "at": "2026-07-03T13:17:17.317Z",
+        "gatewayProcessRssBytes": 1096691712
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:17:17.329Z",
+        "gatewayProcessRssBytes": 1096691712
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:16:48.685Z",
+    "finishedAt": "2026-07-03T13:17:17.317Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "otel-trace-smoke"
+    ],
+    "runtimePair": null
+  }
+}

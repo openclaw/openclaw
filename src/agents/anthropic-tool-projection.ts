@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { projectRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
 
 type AnthropicToolDescriptor = {
@@ -34,6 +37,13 @@ export type AnthropicProjectedToolChoice =
   | { readonly type: "none" }
   | ({ readonly type: "tool"; readonly name: string } & AnthropicParallelToolChoice);
 
+<<<<<<< HEAD
+=======
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isProviderSupportedViolation(violation: string): boolean {
   return violation.endsWith(".$dynamicRef") || violation.endsWith(".$dynamicAnchor");
 }

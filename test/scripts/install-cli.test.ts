@@ -158,6 +158,7 @@ describe("install-cli.sh", () => {
     expect(script).toContain('activate_repo_pnpm_version "$repo_dir"');
   });
 
+<<<<<<< HEAD
   it("uses the repo Corepack pnpm when a global pnpm version is already present", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-pnpm-version-"));
     const bin = join(tmp, "bin");
@@ -215,6 +216,8 @@ describe("install-cli.sh", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("links an existing usable Alpine/musl Node runtime without sudo", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-alpine-"));
     const bin = join(tmp, "bin");

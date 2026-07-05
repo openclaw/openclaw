@@ -27,7 +27,11 @@ const CASES: GuidanceCase[] = [
     forbidden: ["cat ~/.openclaw/openclaw.json"],
   },
   {
+<<<<<<< HEAD
     file: "extensions/canvas/skills/canvas/SKILL.md",
+=======
+    file: "skills/canvas/SKILL.md",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     required: ["OPENCLAW_CONFIG_PATH"],
     forbidden: ["cat ~/.openclaw/openclaw.json"],
   },

@@ -5,7 +5,11 @@ import path from "node:path";
 import JSON5 from "json5";
 import { beforeAll, describe, expect, it } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+<<<<<<< HEAD
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+=======
+import { captureEnv } from "../test-utils/env.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { runConfigSet } from "./config-cli.js";
 
 function createTestRuntime() {
@@ -91,8 +95,13 @@ async function withExecDryRunConfigHarness(
       "utf8",
     );
 
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_TEST_FAST", "1");
     setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+=======
+    process.env.OPENCLAW_TEST_FAST = "1";
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     clearConfigCache();
     clearRuntimeConfigSnapshot();
 
@@ -117,8 +126,13 @@ describe("config cli integration", () => {
     const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_TEST_FAST"]);
     try {
       fs.writeFileSync(configPath, `${JSON.stringify({ gateway: { port: 18789 } }, null, 2)}\n`);
+<<<<<<< HEAD
       setTestEnvValue("OPENCLAW_TEST_FAST", "1");
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+=======
+      process.env.OPENCLAW_TEST_FAST = "1";
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       clearConfigCache();
       clearRuntimeConfigSnapshot();
       await runConfigSet({
@@ -152,8 +166,13 @@ describe("config cli integration", () => {
         "utf8",
       );
 
+<<<<<<< HEAD
       setTestEnvValue("OPENCLAW_TEST_FAST", "1");
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+=======
+      process.env.OPENCLAW_TEST_FAST = "1";
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       clearConfigCache();
       clearRuntimeConfigSnapshot();
 
@@ -222,9 +241,15 @@ describe("config cli integration", () => {
         "utf8",
       );
 
+<<<<<<< HEAD
       setTestEnvValue("OPENCLAW_TEST_FAST", "1");
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
       setTestEnvValue("DISCORD_BOT_TOKEN", "test-token");
+=======
+      process.env.OPENCLAW_TEST_FAST = "1";
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      process.env.DISCORD_BOT_TOKEN = "test-token";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       clearConfigCache();
       clearRuntimeConfigSnapshot();
 
@@ -293,9 +318,15 @@ describe("config cli integration", () => {
         "utf8",
       );
 
+<<<<<<< HEAD
       setTestEnvValue("OPENCLAW_TEST_FAST", "1");
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
       deleteTestEnvValue("MISSING_TEST_SECRET");
+=======
+      process.env.OPENCLAW_TEST_FAST = "1";
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      delete process.env.MISSING_TEST_SECRET;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       clearConfigCache();
       clearRuntimeConfigSnapshot();
 

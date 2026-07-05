@@ -1703,6 +1703,7 @@ describe("handleTelegramAction", () => {
     expect(sendMessageTelegram).toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("allows inline buttons when legacy capabilities are empty", async () => {
     await handleTelegramAction(
       {
@@ -1722,6 +1723,8 @@ describe("handleTelegramAction", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses interactive button labels as fallback text when message text is omitted", async () => {
     await handleTelegramAction(
       {

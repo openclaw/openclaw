@@ -29,12 +29,19 @@ describe("performMatrixRequest", () => {
   });
 
   it("rejects oversized raw responses before buffering the whole body", async () => {
+<<<<<<< HEAD
     const cancel = vi.fn();
     const stream = new ReadableStream<Uint8Array>({ cancel });
     stubRuntimeFetch(
       vi.fn(
         async () =>
           new Response(stream, {
+=======
+    stubRuntimeFetch(
+      vi.fn(
+        async () =>
+          new Response("too-big", {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             status: 200,
             headers: {
               "content-length": "8192",
@@ -55,7 +62,10 @@ describe("performMatrixRequest", () => {
         ssrfPolicy: { allowPrivateNetwork: true },
       }),
     ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
+<<<<<<< HEAD
     expect(cancel).toHaveBeenCalledOnce();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("rejects malformed raw content-length before buffering the body", async () => {
@@ -198,6 +208,7 @@ describe("performMatrixRequest", () => {
       "MockAgent",
     );
   });
+<<<<<<< HEAD
 
   it("rejects oversized JSON responses via content-length before buffering the body", async () => {
     const cancel = vi.fn();
@@ -333,6 +344,8 @@ describe("performMatrixRequest", () => {
     expect(result.text).toBe(payload);
     expect(result.buffer.toString("utf8")).toBe(payload);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("createMatrixGuardedFetch", () => {
@@ -345,6 +358,7 @@ describe("createMatrixGuardedFetch", () => {
     clearTestUndiciRuntimeDepsOverride();
   });
 
+<<<<<<< HEAD
   it("rejects and cancels SDK responses above the declared size limit", async () => {
     const cancel = vi.fn();
     const stream = new ReadableStream<Uint8Array>({ cancel });
@@ -368,6 +382,8 @@ describe("createMatrixGuardedFetch", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("strips matrix-js-sdk state_after sync opt-in from /sync requests", async () => {
     const runtimeFetch = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
@@ -384,11 +400,18 @@ describe("createMatrixGuardedFetch", () => {
       ssrfPolicy: { allowPrivateNetwork: true },
     });
 
+<<<<<<< HEAD
     const response = await guardedFetch(
       "http://127.0.0.1:8008/_matrix/client/v3/sync?filter=abc&org.matrix.msc4222.use_state_after=true&timeout=30000",
     );
 
     await expect(response.json()).resolves.toEqual({});
+=======
+    await guardedFetch(
+      "http://127.0.0.1:8008/_matrix/client/v3/sync?filter=abc&org.matrix.msc4222.use_state_after=true&timeout=30000",
+    );
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(runtimeFetch).toHaveBeenCalledTimes(1);
     expect(runtimeFetch.mock.calls.at(0)?.[0]).toBe(
       "http://127.0.0.1:8008/_matrix/client/v3/sync?filter=abc&timeout=30000",

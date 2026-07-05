@@ -63,6 +63,24 @@ export function generateNoVncPassword() {
   return out;
 }
 
+<<<<<<< HEAD
+=======
+export function buildNoVncDirectUrl(port: number) {
+  return `http://127.0.0.1:${port}/vnc.html`;
+}
+
+export function buildNoVncObserverTargetUrl(params: { port: number; password?: string }) {
+  const query = new URLSearchParams({
+    autoconnect: "1",
+    resize: "remote",
+  });
+  if (params.password?.trim()) {
+    query.set("password", params.password);
+  }
+  return `${buildNoVncDirectUrl(params.port)}#${query.toString()}`;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function issueNoVncObserverToken(params: {
   noVncPort: number;
   password?: string;

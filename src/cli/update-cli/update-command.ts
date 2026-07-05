@@ -5,12 +5,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
+<<<<<<< HEAD
 import { confirm, isCancel, text } from "@clack/prompts";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+=======
+import { confirm, isCancel } from "@clack/prompts";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   checkShellCompletionStatus,
@@ -51,7 +58,10 @@ import {
   resolveGatewayService,
   type GatewayService,
 } from "../../daemon/service.js";
+<<<<<<< HEAD
 import type { ClawHubRiskAcknowledgementRequest } from "../../infra/clawhub-install-trust.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
@@ -103,7 +113,10 @@ import {
   type PreUpdateConfigRestoreInput,
 } from "../../infra/update-post-core-context.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
+<<<<<<< HEAD
 import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -116,7 +129,10 @@ import {
   resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "../../plugins/official-external-install-records.js";
 import {
+<<<<<<< HEAD
   isClawHubTrustSkippedOutcome,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   syncPluginsForUpdateChannel,
   updateNpmInstalledPlugins,
   type PluginUpdateIntegrityDriftParams,
@@ -238,6 +254,7 @@ type MissingPluginInstallPayload = {
 
 type PostUpdatePluginWarning = NonNullable<PostCorePluginUpdateResult["warnings"]>[number];
 
+<<<<<<< HEAD
 function isClawHubTrustNotice(message: string): boolean {
   const trimmed = stripAnsi(message).trimStart();
   return (
@@ -298,6 +315,8 @@ function resolveUpdateClawHubRiskAcknowledgementOptions(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function pickUpdateQuip(): string {
   return UPDATE_QUIPS[Math.floor(Math.random() * UPDATE_QUIPS.length)] ?? "Update complete.";
 }
@@ -615,6 +634,7 @@ function createPostUpdatePluginWarning(params: {
   };
 }
 
+<<<<<<< HEAD
 function createGuidedPostUpdatePluginOutcome(
   outcome: PluginUpdateOutcome,
   options: { includeWarningInReason?: boolean } = {},
@@ -633,6 +653,18 @@ function createGuidedPostUpdatePluginOutcome(
   const warning = createPostUpdatePluginWarning({
     ...(outcome.pluginId && outcome.pluginId !== "unknown" ? { pluginId: outcome.pluginId } : {}),
     reason: warningReason,
+=======
+function createGuidedPostUpdatePluginOutcome(outcome: PluginUpdateOutcome): {
+  outcome: PluginUpdateOutcome;
+  warning?: PostUpdatePluginWarning;
+} {
+  if (outcome.status !== "error" && !isDisabledAfterFailureOutcome(outcome)) {
+    return { outcome };
+  }
+  const warning = createPostUpdatePluginWarning({
+    ...(outcome.pluginId && outcome.pluginId !== "unknown" ? { pluginId: outcome.pluginId } : {}),
+    reason: outcome.message,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   return {
     outcome: {
@@ -661,10 +693,13 @@ function isDisabledAfterFailureOutcome(outcome: PluginUpdateOutcome): boolean {
   return outcome.status === "skipped" && outcome.message.includes("after plugin update failure");
 }
 
+<<<<<<< HEAD
 function isActionableSkippedPostUpdateOutcome(outcome: PluginUpdateOutcome): boolean {
   return isDisabledAfterFailureOutcome(outcome) || isClawHubTrustSkippedOutcome(outcome);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Build the post-core-update result we return when the active config cannot
  * even be parsed. Mandatory post-core convergence requires a parseable
@@ -1843,6 +1878,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     return invalid.result;
   }
 
+<<<<<<< HEAD
   const clawHubTrustNotices = new Set<string>();
   const loggedPluginWarnings = new Set<string>();
   const hasLoggedPluginWarning = (message: string): boolean =>
@@ -1878,6 +1914,15 @@ export async function updatePluginsAfterCoreUpdate(params: {
       }
     },
   };
+=======
+  const pluginLogger = params.opts.json
+    ? {}
+    : {
+        info: (msg: string) => defaultRuntime.log(msg),
+        warn: (msg: string) => defaultRuntime.log(theme.warn(msg)),
+        error: (msg: string) => defaultRuntime.log(theme.error(msg)),
+      };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   if (!params.opts.json) {
     defaultRuntime.log("");
@@ -1885,6 +1930,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   }
 
   const warnings: PostUpdatePluginWarning[] = [];
+<<<<<<< HEAD
   const clawHubRiskAcknowledgementOptions = resolveUpdateClawHubRiskAcknowledgementOptions(
     params.opts,
     {
@@ -1900,6 +1946,8 @@ export async function updatePluginsAfterCoreUpdate(params: {
       },
     },
   );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const pluginInstallRecords =
     params.pluginInstallRecords ?? (await loadInstalledPluginIndexInstallRecords());
   const syncConfig = withPluginInstallRecords(
@@ -1913,7 +1961,10 @@ export async function updatePluginsAfterCoreUpdate(params: {
     externalizedBundledPluginBridges: await listPersistedBundledPluginLocationBridges({
       workspaceDir: params.root,
     }),
+<<<<<<< HEAD
     ...clawHubRiskAcknowledgementOptions,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     logger: pluginLogger,
   });
   for (const error of syncResult.summary.errors) {
@@ -1987,7 +2038,10 @@ export async function updatePluginsAfterCoreUpdate(params: {
       disableOnFailure: true,
       logger: pluginLogger,
       onIntegrityDrift: onPluginIntegrityDrift,
+<<<<<<< HEAD
       ...clawHubRiskAcknowledgementOptions,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     pluginConfig = repairResult.config;
     pluginsChanged ||= repairResult.changed;
@@ -1996,27 +2050,42 @@ export async function updatePluginsAfterCoreUpdate(params: {
     return missingIds;
   };
 
+<<<<<<< HEAD
   const missingPayloadIdSet = new Set(await collectMissingPayloadWarnings(pluginInstallRecords));
+=======
+  const missingPayloadIds = await collectMissingPayloadWarnings(pluginInstallRecords);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const npmResult = await updateNpmInstalledPlugins({
     config: pluginConfig,
     timeoutMs: params.timeoutMs,
     updateChannel: params.channel,
+<<<<<<< HEAD
     skipIds: new Set([...syncResult.summary.switchedToNpm, ...missingPayloadIdSet]),
+=======
+    skipIds: new Set([...syncResult.summary.switchedToNpm, ...missingPayloadIds]),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     skipDisabledPlugins: true,
     syncOfficialPluginInstalls: true,
     disableOnFailure: true,
     logger: pluginLogger,
     onIntegrityDrift: onPluginIntegrityDrift,
+<<<<<<< HEAD
     ...clawHubRiskAcknowledgementOptions,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   pluginConfig = npmResult.config;
   pluginsChanged ||= npmResult.changed;
   npmPluginsChanged ||= npmResult.changed;
   for (const rawOutcome of npmResult.outcomes) {
+<<<<<<< HEAD
     const includeWarningInReason =
       params.opts.json || !rawOutcome.warning || !hasLoggedPluginWarning(rawOutcome.warning);
     const guided = createGuidedPostUpdatePluginOutcome(rawOutcome, { includeWarningInReason });
+=======
+    const guided = createGuidedPostUpdatePluginOutcome(rawOutcome);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     pluginUpdateOutcomes.push(guided.outcome);
     if (guided.warning) {
       warnings.push(guided.warning);
@@ -2031,7 +2100,11 @@ export async function updatePluginsAfterCoreUpdate(params: {
   });
   pluginUpdateOutcomes.push(
     ...remainingMissingPayloads
+<<<<<<< HEAD
       .filter((entry) => !missingPayloadIdSet.has(entry.pluginId))
+=======
+      .filter((entry) => !missingPayloadIds.includes(entry.pluginId))
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       .map((entry): PluginUpdateOutcome => {
         const warning = createPostUpdatePluginWarning({
           pluginId: entry.pluginId,
@@ -2062,7 +2135,10 @@ export async function updatePluginsAfterCoreUpdate(params: {
     cfg: pluginConfig,
     env: process.env,
     baselineInstallRecords: convergenceBaselineRecords,
+<<<<<<< HEAD
     ...clawHubRiskAcknowledgementOptions,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   for (const change of convergence.changes) {
     if (!params.opts.json) {
@@ -2117,6 +2193,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     });
   }
 
+<<<<<<< HEAD
   for (const notice of clawHubTrustNotices) {
     if (warnings.some((warning) => warning.reason.includes(notice))) {
       continue;
@@ -2128,6 +2205,8 @@ export async function updatePluginsAfterCoreUpdate(params: {
     });
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (params.opts.json) {
     return {
       status: convergenceErrored ? "error" : warnings.length > 0 ? "warning" : "ok",
@@ -2168,9 +2247,13 @@ export async function updatePluginsAfterCoreUpdate(params: {
     );
   }
   for (const warning of syncResult.summary.warnings) {
+<<<<<<< HEAD
     if (!hasLoggedPluginWarning(warning)) {
       defaultRuntime.log(formatPluginUpdateWarning(warning));
     }
+=======
+    defaultRuntime.log(theme.warn(warning));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   for (const error of syncResult.summary.errors) {
     defaultRuntime.log(theme.warn(createPostUpdatePluginWarning({ reason: error }).message));
@@ -2199,7 +2282,11 @@ export async function updatePluginsAfterCoreUpdate(params: {
   }
 
   for (const outcome of pluginUpdateOutcomes) {
+<<<<<<< HEAD
     if (outcome.status !== "error" && !isActionableSkippedPostUpdateOutcome(outcome)) {
+=======
+    if (outcome.status !== "error") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       continue;
     }
     defaultRuntime.log(theme.warn(outcome.message));
@@ -2681,7 +2768,10 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
         timeout: opts.timeout,
         yes: opts.yes,
         restart: false,
+<<<<<<< HEAD
         acknowledgeClawHubRisk: opts.acknowledgeClawHubRisk,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
       timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
       pluginInstallRecords,
@@ -3017,6 +3107,7 @@ async function readPostCorePluginUpdateResultFile(
 function stopPostCoreUpdateChild(child: ChildProcess): void {
   if (process.platform === "win32" && child.pid) {
     try {
+<<<<<<< HEAD
       const killer = spawn(
         getWindowsSystem32ExePath("taskkill.exe"),
         ["/PID", String(child.pid), "/T", "/F"],
@@ -3025,6 +3116,12 @@ function stopPostCoreUpdateChild(child: ChildProcess): void {
           windowsHide: true,
         },
       );
+=======
+      const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       killer.once("error", () => {
         child.kill();
       });
@@ -3107,9 +3204,12 @@ async function continuePostCoreUpdateInFreshProcess(params: {
   if (params.opts.yes) {
     argv.push("--yes");
   }
+<<<<<<< HEAD
   if (params.opts.acknowledgeClawHubRisk) {
     argv.push("--acknowledge-clawhub-risk");
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (params.opts.timeout) {
     argv.push("--timeout", params.opts.timeout);
   }

@@ -80,7 +80,10 @@ export function inspectSlackAccount(params: {
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
   const mode = merged.mode ?? "socket";
   const isHttpMode = mode === "http";
+<<<<<<< HEAD
   const isRelayMode = mode === "relay";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const configBot = inspectSlackToken(merged.botToken);
   const configApp = inspectSlackToken(merged.appToken);
@@ -90,10 +93,16 @@ export function inspectSlackAccount(params: {
   const envBot = allowEnv
     ? normalizeSecretInputString(params.envBotToken ?? process.env.SLACK_BOT_TOKEN)
     : undefined;
+<<<<<<< HEAD
   const envApp =
     allowEnv && !isRelayMode
       ? normalizeSecretInputString(params.envAppToken ?? process.env.SLACK_APP_TOKEN)
       : undefined;
+=======
+  const envApp = allowEnv
+    ? normalizeSecretInputString(params.envAppToken ?? process.env.SLACK_APP_TOKEN)
+    : undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const envUser = allowEnv
     ? normalizeSecretInputString(params.envUserToken ?? process.env.SLACK_USER_TOKEN)
     : undefined;
@@ -102,11 +111,14 @@ export function inspectSlackAccount(params: {
   const appToken = configApp.token ?? envApp;
   const signingSecret = configSigningSecret.token;
   const userToken = configUser.token ?? envUser;
+<<<<<<< HEAD
   const relayConfigured =
     isRelayMode &&
     Boolean(normalizeOptionalString(merged.relay?.url)) &&
     hasConfiguredSecretInput(merged.relay?.authToken) &&
     Boolean(normalizeOptionalString(merged.relay?.gatewayId));
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const botTokenSource: SlackTokenSource = configBot.token
     ? "config"
     : configBot.status === "configured_unavailable"
@@ -180,10 +192,15 @@ export function inspectSlackAccount(params: {
     configured: isHttpMode
       ? (configBot.status !== "missing" || Boolean(envBot)) &&
         configSigningSecret.status !== "missing"
+<<<<<<< HEAD
       : isRelayMode
         ? (configBot.status !== "missing" || Boolean(envBot)) && relayConfigured
         : (configBot.status !== "missing" || Boolean(envBot)) &&
           (configApp.status !== "missing" || Boolean(envApp)),
+=======
+      : (configBot.status !== "missing" || Boolean(envBot)) &&
+        (configApp.status !== "missing" || Boolean(envApp)),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     config: merged,
     groupPolicy: merged.groupPolicy,
     textChunkLimit: merged.textChunkLimit,

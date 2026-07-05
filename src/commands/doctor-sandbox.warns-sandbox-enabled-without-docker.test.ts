@@ -31,12 +31,17 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 
+<<<<<<< HEAD
 const {
   legacySandboxRegistryInspectionToHealthFinding,
   legacySandboxRegistryInspectionToRepairEffect,
   maybeRepairSandboxImages,
   maybeRepairSandboxRegistryFiles,
 } = await import("./doctor-sandbox.js");
+=======
+const { maybeRepairSandboxImages, maybeRepairSandboxRegistryFiles } =
+  await import("./doctor-sandbox.js");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("maybeRepairSandboxImages", () => {
   const mockRuntime: RuntimeEnv = {
@@ -315,6 +320,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
       "Doctor changes",
     );
   });
+<<<<<<< HEAD
 
   it("maps legacy registry files to structured findings and dry-run effects", () => {
     const monolithicFile = {
@@ -397,4 +403,6 @@ describe("maybeRepairSandboxRegistryFiles", () => {
       }),
     );
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

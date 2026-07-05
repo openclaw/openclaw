@@ -304,9 +304,12 @@ by Peter Steinberger and the community.
 ## Community
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, maintainers, and how to submit PRs.
+<<<<<<< HEAD
 Use the [issue chooser](https://github.com/openclaw/openclaw/issues/new/choose) for bugs, docs bugs, and feature requests;
 ask setup/support questions in [Discord](https://discord.gg/clawd); and report vulnerabilities through [SECURITY.md](SECURITY.md).
 PRs should link the relevant issue when possible and follow the [PR template](.github/pull_request_template.md) with problem, impact, and evidence.
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 AI/vibe-coded PRs welcome! 🤖
 
 Special thanks to [Mario Zechner](https://mariozechner.at/) for his support and for

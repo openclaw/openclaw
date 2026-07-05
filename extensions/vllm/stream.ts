@@ -5,7 +5,10 @@ import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createPayloadPatchStreamWrapper,
   isOpenAICompatibleThinkingEnabled,
+<<<<<<< HEAD
   setQwenChatTemplateThinking,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   resolveVllmQwenThinkingFormatFromCompat,
@@ -24,6 +27,28 @@ function resolveVllmQwenThinkingFormat(
   return resolveVllmQwenThinkingFormatFromCompat(ctx.model?.compat);
 }
 
+<<<<<<< HEAD
+=======
+function setQwenChatTemplateThinking(payload: Record<string, unknown>, enabled: boolean): void {
+  const existing = payload.chat_template_kwargs;
+  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+    const next: Record<string, unknown> = {
+      ...(existing as Record<string, unknown>),
+      enable_thinking: enabled,
+    };
+    if (!Object.hasOwn(next, "preserve_thinking")) {
+      next.preserve_thinking = true;
+    }
+    payload.chat_template_kwargs = next;
+    return;
+  }
+  payload.chat_template_kwargs = {
+    enable_thinking: enabled,
+    preserve_thinking: true,
+  };
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isVllmNemotronModel(model: { api?: unknown; provider?: unknown; id?: unknown }): boolean {
   return (
     model.api === "openai-completions" &&

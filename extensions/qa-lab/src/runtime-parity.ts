@@ -1,4 +1,8 @@
 // Qa Lab plugin module implements runtime parity behavior.
+<<<<<<< HEAD
+=======
+import { createHash } from "node:crypto";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -12,7 +16,10 @@ import {
   scanGatewayLogSentinels,
   type GatewayLogSentinelFinding,
 } from "./gateway-log-sentinel.js";
+<<<<<<< HEAD
 import { compareToolCallShape, stableHash } from "./parity-shared.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type RuntimeId = "openclaw" | "codex";
 
@@ -120,7 +127,10 @@ type RuntimeParityTranscriptRecord = {
 };
 
 type RuntimeParityMockRequestSnapshot = {
+<<<<<<< HEAD
   prompt?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   allInputText?: string;
   plannedToolName?: string;
   plannedToolArgs?: unknown;
@@ -145,6 +155,32 @@ function normalizeTextForParity(text: string) {
   return text.replace(/\s+/gu, " ").trim();
 }
 
+<<<<<<< HEAD
+=======
+function sha256(value: string) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function normalizeForStableHash(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeForStableHash(entry));
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.keys(record)
+        .toSorted((left, right) => left.localeCompare(right))
+        .map((key) => [key, normalizeForStableHash(record[key])]),
+    );
+  }
+  return value;
+}
+
+function stableHash(value: unknown) {
+  return sha256(JSON.stringify(normalizeForStableHash(value)) ?? "null");
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function readUsageTotals(raw: unknown): RuntimeParityUsage {
   const usage = isMessageRecord(raw) ? raw : {};
   const inputTokens =
@@ -691,6 +727,29 @@ function aggregateUsage(records: RuntimeParityTranscriptRecord[]): RuntimeParity
   return totals;
 }
 
+<<<<<<< HEAD
+=======
+function compareToolCallShape(
+  left: RuntimeParityToolCall[],
+  right: RuntimeParityToolCall[],
+): string | undefined {
+  if (left.length !== right.length) {
+    return `tool call count differs (${left.length} vs ${right.length})`;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    const leftCall = left[index];
+    const rightCall = right[index];
+    if (!leftCall || !rightCall) {
+      return `tool call row ${index + 1} missing`;
+    }
+    if (leftCall.tool !== rightCall.tool || leftCall.argsHash !== rightCall.argsHash) {
+      return `tool call ${index + 1} differs (${leftCall.tool}/${leftCall.argsHash} vs ${rightCall.tool}/${rightCall.argsHash})`;
+    }
+  }
+  return undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function compareToolResultShape(
   left: RuntimeParityToolCall[],
   right: RuntimeParityToolCall[],
@@ -760,6 +819,7 @@ function resolveRuntimeParityToolCalls(params: {
 function filterMockRequestsForParentPrompt(
   requests: RuntimeParityMockRequestSnapshot[],
   parentPrompt: string,
+<<<<<<< HEAD
   parentPrompts: readonly string[] = [parentPrompt],
 ) {
   const normalizedParentPrompts = parentPrompts
@@ -776,6 +836,16 @@ function filterMockRequestsForParentPrompt(
     const normalizedHistory = normalizeTextForParity(request.allInputText ?? "");
     return normalizedParentPrompts.some((prompt) => normalizedHistory.includes(prompt));
   });
+=======
+) {
+  const normalizedParentPrompt = normalizeTextForParity(parentPrompt);
+  if (!normalizedParentPrompt) {
+    return requests;
+  }
+  const matching = requests.filter((request) =>
+    normalizeTextForParity(request.allInputText ?? "").includes(normalizedParentPrompt),
+  );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return matching.length > 0 ? matching : requests;
 }
 
@@ -975,7 +1045,10 @@ async function loadRuntimeParityTranscripts(params: {
 async function loadRuntimeParityMockToolCalls(
   mockBaseUrl: string | undefined,
   parentPrompt: string,
+<<<<<<< HEAD
   parentPrompts: readonly string[] = [parentPrompt],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ): Promise<RuntimeParityToolCall[] | null> {
   const normalizedBaseUrl = mockBaseUrl?.trim().replace(/\/+$/u, "");
   if (!normalizedBaseUrl) {
@@ -1001,7 +1074,10 @@ async function loadRuntimeParityMockToolCalls(
     }
     const requests = payload.filter(isMessageRecord).map(
       (entry): RuntimeParityMockRequestSnapshot => ({
+<<<<<<< HEAD
         prompt: readNonEmptyString(entry.prompt),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         allInputText: readNonEmptyString(entry.allInputText),
         plannedToolName: readNonEmptyString(entry.plannedToolName),
         plannedToolArgs: entry.plannedToolArgs ?? null,
@@ -1009,7 +1085,11 @@ async function loadRuntimeParityMockToolCalls(
       }),
     );
     return resolveToolCallOrderFromMockRequests(
+<<<<<<< HEAD
       filterMockRequestsForParentPrompt(requests, parentPrompt, parentPrompts),
+=======
+      filterMockRequestsForParentPrompt(requests, parentPrompt),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
   } catch {
     return null;
@@ -1026,6 +1106,7 @@ export async function captureRuntimeParityCell(
   });
   const transcriptRecords = buildTranscriptRecords(transcriptBytes);
   const transcriptToolCalls = resolveToolCallOrder(transcriptRecords);
+<<<<<<< HEAD
   const parentPrompts = transcriptRecords
     .filter((record) => record.role === "user")
     .map((record) => extractAssistantText(record.message))
@@ -1036,6 +1117,14 @@ export async function captureRuntimeParityCell(
     parentPrompt,
     parentPrompts,
   );
+=======
+  const parentPrompt =
+    transcriptRecords
+      .filter((record) => record.role === "user" && !isToolResultLikeMessage(record.message))
+      .map((record) => extractAssistantText(record.message))
+      .find(Boolean) ?? "";
+  const mockToolCalls = await loadRuntimeParityMockToolCalls(params.mockBaseUrl, parentPrompt);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const gatewayLogs = params.gateway.logs?.();
   const sentinelFindings = [
     ...scanGatewayLogSentinels(gatewayLogs),

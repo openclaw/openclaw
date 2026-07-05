@@ -13,8 +13,12 @@ import { defaultRuntime } from "../../runtime.js";
 import { shortenHomeInString } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
+<<<<<<< HEAD
 import { quoteCliArg } from "../quote-cli-arg.js";
 import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./cli-utils.js";
+=======
+import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatPermissions, parseNodeList, parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import {
@@ -133,6 +137,16 @@ function isPendingApprovalState(
   return state === "pending-approval" || state === "pending-reapproval";
 }
 
+<<<<<<< HEAD
+=======
+function quoteCliArg(value: string): string {
+  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) {
+    return value;
+  }
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function formatPendingApprovalCommand(raw: unknown, opts: NodesRpcOpts): string | null {
   const requestId = normalizeOptionalString(raw);
   if (!requestId) {
@@ -146,6 +160,19 @@ function formatPendingApprovalCommand(raw: unknown, opts: NodesRpcOpts): string 
   return formatCliCommand(args.map(quoteCliArg).join(" "));
 }
 
+<<<<<<< HEAD
+=======
+function formatConnectionFlagReminder(opts: NodesRpcOpts): string | null {
+  const flags = [
+    normalizeOptionalString(opts.url) ? "--url" : null,
+    normalizeOptionalString(opts.token) ? "--token" : null,
+  ].filter((flag) => flag !== null);
+  return flags.length > 0
+    ? `Reuse the same ${flags.join("/")} option${flags.length === 1 ? "" : "s"} when rerunning.`
+    : null;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function parseSinceMs(raw: unknown, label: string): number | undefined {
   if (raw === undefined || raw === null) {
     return undefined;

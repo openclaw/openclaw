@@ -6,7 +6,10 @@ const mocks = vi.hoisted(() => ({
   ensurePluginRegistryLoaded: vi.fn(),
   resolveActivatableProviderOwnerPluginIds: vi.fn(),
   resolveBundledProviderCompatPluginIds: vi.fn(),
+<<<<<<< HEAD
   resolveManifestActivationPlan: vi.fn(),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveOwningPluginIdsForProvider: vi.fn(),
 }));
 
@@ -21,10 +24,13 @@ vi.mock("../../plugins/providers.js", () => ({
   resolveOwningPluginIdsForProviderRef: mocks.resolveOwningPluginIdsForProvider,
 }));
 
+<<<<<<< HEAD
 vi.mock("../../plugins/activation-planner.js", () => ({
   resolveManifestActivationPlan: mocks.resolveManifestActivationPlan,
 }));
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("ensureSelectedAgentHarnessPlugin", () => {
   let ensureSelectedAgentHarnessPlugin: typeof import("./runtime-plugin.js").ensureSelectedAgentHarnessPlugin;
 
@@ -32,6 +38,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     mocks.ensurePluginRegistryLoaded.mockReset();
     mocks.resolveActivatableProviderOwnerPluginIds.mockReset();
     mocks.resolveBundledProviderCompatPluginIds.mockReset();
+<<<<<<< HEAD
     mocks.resolveManifestActivationPlan.mockReset();
     mocks.resolveOwningPluginIdsForProvider.mockReset();
     mocks.resolveManifestActivationPlan.mockImplementation(
@@ -56,6 +63,9 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
         };
       },
     );
+=======
+    mocks.resolveOwningPluginIdsForProvider.mockReset();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mocks.resolveOwningPluginIdsForProvider.mockImplementation(
       ({ provider }: { provider: string }) => (provider === "openai" ? ["openai"] : undefined),
     );
@@ -160,6 +170,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     );
   });
 
+<<<<<<< HEAD
   it("loads a manifest-owned custom harness runtime before selection", async () => {
     mocks.resolveManifestActivationPlan.mockReturnValueOnce({
       entries: [{ pluginId: "custom-harness-plugin", origin: "workspace" }],
@@ -215,6 +226,8 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not bypass a restrictive allowlist that omits a configured Copilot harness", async () => {
     // A configured harness can request loading, but explicit plugin allowlists
     // remain the operator's boundary and are not widened implicitly.
@@ -241,7 +254,25 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       workspaceDir: "/tmp/workspace",
     });
 
+<<<<<<< HEAD
     expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+=======
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "all",
+        workspaceDir: "/tmp/workspace",
+        onlyPluginIds: ["copilot"],
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["telegram"],
+            entries: expect.not.objectContaining({
+              copilot: expect.anything(),
+            }),
+          }),
+        }),
+      }),
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("widens a scoped harness allowlist with the provider owner for openai models", async () => {
@@ -406,7 +437,26 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     expect(mocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
     expect(mocks.resolveBundledProviderCompatPluginIds).not.toHaveBeenCalled();
     expect(mocks.resolveActivatableProviderOwnerPluginIds).not.toHaveBeenCalled();
+<<<<<<< HEAD
     expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+=======
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "all",
+        workspaceDir: "/tmp/workspace",
+        onlyPluginIds: ["codex"],
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["telegram"],
+            entries: expect.not.objectContaining({
+              codex: expect.anything(),
+              openai: expect.anything(),
+            }),
+          }),
+        }),
+      }),
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("keeps real bundled memory-core in a Codex scoped load when the provider has no owner plugin", async () => {
@@ -471,6 +521,9 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
 
     expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
     expect(mocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
+<<<<<<< HEAD
     expect(mocks.resolveManifestActivationPlan).not.toHaveBeenCalled();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

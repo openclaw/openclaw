@@ -19,3 +19,16 @@ export function hydrateResolvedSkills<T extends SnapshotWithRuntimeSkills>(
   }
   return { ...snapshot, resolvedSkills: rebuild().resolvedSkills };
 }
+<<<<<<< HEAD
+=======
+
+export async function hydrateResolvedSkillsAsync<T extends SnapshotWithRuntimeSkills>(
+  snapshot: T,
+  rebuild: () => Promise<SnapshotRebuild<T>>,
+): Promise<T> {
+  if (snapshot.resolvedSkills !== undefined) {
+    return snapshot;
+  }
+  return { ...snapshot, resolvedSkills: (await rebuild()).resolvedSkills };
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

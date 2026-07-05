@@ -3,6 +3,7 @@
  * Verifies failed process outcomes surface useful text/details for shell
  * errors, timeouts, signals, and runtime failures.
  */
+<<<<<<< HEAD
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +21,21 @@ const supervisorMock = vi.hoisted(() => ({
   cancel: vi.fn<ProcessSupervisor["cancel"]>(),
   cancelScope: vi.fn<ProcessSupervisor["cancelScope"]>(),
   getRecord: vi.fn<ProcessSupervisor["getRecord"]>(),
+=======
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SpawnInput } from "../process/supervisor/index.js";
+import { captureEnv } from "../test-utils/env.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.js";
+import { createExecTool } from "./bash-tools.exec.js";
+import { resolveShellFromPath } from "./shell-utils.js";
+
+const supervisorMock = vi.hoisted(() => ({
+  spawn: vi.fn(),
+  cancel: vi.fn(),
+  cancelScope: vi.fn(),
+  reconcileOrphans: vi.fn(),
+  getRecord: vi.fn(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("../process/supervisor/index.js", () => ({
@@ -30,7 +46,10 @@ const isWin = process.platform === "win32";
 const defaultShell = isWin
   ? undefined
   : process.env.OPENCLAW_TEST_SHELL || resolveShellFromPath("bash") || process.env.SHELL || "sh";
+<<<<<<< HEAD
 const tempDirs = createTempDirTracker();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function requireTextContent(
   result: Awaited<ReturnType<ReturnType<typeof createExecTool>["execute"]>>,
@@ -53,6 +72,7 @@ function requireFailedDetails(
   return details;
 }
 
+<<<<<<< HEAD
 function mockSuccessfulSpawn(stdout = "ok\n") {
   supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
     runId: input.runId ?? "call-success",
@@ -113,6 +133,8 @@ async function expectUnavailableWorkdir(params: {
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("exec foreground failures", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
 
@@ -125,6 +147,10 @@ describe("exec foreground failures", () => {
     supervisorMock.spawn.mockReset();
     supervisorMock.cancel.mockReset();
     supervisorMock.cancelScope.mockReset();
+<<<<<<< HEAD
+=======
+    supervisorMock.reconcileOrphans.mockReset();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     supervisorMock.getRecord.mockReset();
     resetProcessRegistryForTests();
   });
@@ -133,7 +159,10 @@ describe("exec foreground failures", () => {
     vi.useRealTimers();
     envSnapshot?.restore();
     envSnapshot = undefined;
+<<<<<<< HEAD
     tempDirs.cleanup();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("returns a failed text result when the default timeout is exceeded", async () => {
@@ -211,6 +240,7 @@ describe("exec foreground failures", () => {
       );
     }
   });
+<<<<<<< HEAD
 
   it("returns a failed result for unavailable explicit host workdirs before launching", async () => {
     const missingWorkdir = path.join(
@@ -637,4 +667,6 @@ describe("exec foreground failures", () => {
       fs.rmSync(outsideDir, { recursive: true, force: true });
     }
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

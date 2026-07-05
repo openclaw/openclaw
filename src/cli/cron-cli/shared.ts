@@ -265,6 +265,7 @@ export function parseCronToolsAllow(input: unknown): string[] | undefined {
   return tools.length > 0 ? tools : undefined;
 }
 
+<<<<<<< HEAD
 export function parseCronFallbacks(input: unknown): string[] | undefined {
   if (input === undefined) {
     return undefined;
@@ -280,6 +281,8 @@ export function parseCronFallbacks(input: unknown): string[] | undefined {
     .filter((fallback): fallback is string => Boolean(fallback));
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Parse a one-shot `--at` value into an ISO string (UTC).
  *

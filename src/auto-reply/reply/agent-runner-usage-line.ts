@@ -1,11 +1,16 @@
+<<<<<<< HEAD
 import { hasNonzeroUsage, type NormalizedUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
+=======
+/** Formats and appends token/cost usage lines to reply payloads. */
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   estimateUsageCost,
   formatTokenCount,
   formatUsd,
   type ModelCostConfig,
+<<<<<<< HEAD
   resolveModelCostConfig,
 } from "../../utils/usage-format.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
@@ -15,6 +20,13 @@ import { buildUsageContract } from "../usage-bar/contract.js";
 import { loadUsageBarTemplate } from "../usage-bar/template.js";
 import { renderUsageBar } from "../usage-bar/translator.js";
 
+=======
+} from "../../utils/usage-format.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import type { ReplyPayload } from "../types.js";
+
+/** Formats the optional usage/cost summary appended to agent replies. */
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export const formatResponseUsageLine = (params: {
   usage?: {
     input?: number;
@@ -60,6 +72,7 @@ export const formatResponseUsageLine = (params: {
   return `Usage: ${inputLabel} in / ${outputLabel} out${cacheSuffix}${suffix}`;
 };
 
+<<<<<<< HEAD
 export const resolveResponseUsageLine = (params: {
   config: OpenClawConfig;
   sessionRaw?: string | null;
@@ -110,6 +123,9 @@ export const resolveResponseUsageLine = (params: {
   return formatted ?? undefined;
 };
 
+=======
+/** Appends a usage line to the last text payload while preserving payload metadata. */
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPayload[] => {
   let index = -1;
   for (let i = payloads.length - 1; i >= 0; i -= 1) {

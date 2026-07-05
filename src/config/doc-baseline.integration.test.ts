@@ -5,6 +5,10 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   type ConfigDocBaselineEntry,
+<<<<<<< HEAD
+=======
+  flattenConfigDocBaselineEntries,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   renderConfigDocBaselineArtifacts,
   writeConfigDocBaselineArtifacts,
 } from "./doc-baseline.js";
@@ -43,6 +47,7 @@ describe("config doc baseline integration", () => {
   function getSharedByPath() {
     sharedByPathPromise ??= getSharedRendered().then(
       ({ baseline }) =>
+<<<<<<< HEAD
         new Map(
           [
             ...baseline.coreEntries,
@@ -50,6 +55,9 @@ describe("config doc baseline integration", () => {
             ...baseline.pluginEntries,
           ].map((entry) => [entry.path, entry]),
         ),
+=======
+        new Map(flattenConfigDocBaselineEntries(baseline).map((entry) => [entry.path, entry])),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
     return sharedByPathPromise;
   }

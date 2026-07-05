@@ -4,6 +4,10 @@
 import {
   GPT5_BEHAVIOR_CONTRACT,
   GPT5_HEARTBEAT_PROMPT_OVERLAY,
+<<<<<<< HEAD
+=======
+  renderGpt5PromptOverlay,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveGpt5SystemPromptContribution,
 } from "openclaw/plugin-sdk/provider-model-shared";
 
@@ -18,3 +22,13 @@ export function resolveCodexSystemPromptContribution(
 ) {
   return resolveGpt5SystemPromptContribution(params);
 }
+<<<<<<< HEAD
+=======
+
+/** Renders the Codex prompt overlay text for supported GPT-5-family models. */
+export function renderCodexPromptOverlay(
+  params: Parameters<typeof renderGpt5PromptOverlay>[0],
+): string | undefined {
+  return renderGpt5PromptOverlay(params);
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

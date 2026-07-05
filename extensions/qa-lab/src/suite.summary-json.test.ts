@@ -34,6 +34,7 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.alternateModelName).toBe("gpt-5.5-alt");
     expect(json.run.fastMode).toBe(true);
     expect(json.run.concurrency).toBe(2);
+<<<<<<< HEAD
     expect(json.run.channelDriver).toBeNull();
     expect(json.run.channel).toBeNull();
     expect(json.run.channelCapabilityMatrixPath).toBeNull();
@@ -70,6 +71,11 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.channelDriverSmokePath).toBeNull();
   });
 
+=======
+    expect(json.run.scenarioIds).toBeNull();
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("includes scenarioIds in run metadata when provided", () => {
     const scenarioIds = ["approval-turn-tool-followthrough", "subagent-handoff", "memory-recall"];
     const json = buildQaSuiteSummaryJson({

@@ -6,7 +6,10 @@ import path from "node:path";
 import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   resolveMemoryDreamingConfig,
+<<<<<<< HEAD
   resolveMemoryLightDreamingConfig,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
@@ -224,6 +227,7 @@ async function createHistoricalRemHarnessWorkspace(params: {
 
 function formatDreamingSummary(cfg: OpenClawConfig): string {
   const pluginConfig = resolveMemoryPluginConfig(cfg);
+<<<<<<< HEAD
   const light = resolveMemoryLightDreamingConfig({ pluginConfig, cfg });
   const deep = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
   const rem = resolveMemoryRemDreamingConfig({ pluginConfig, cfg });
@@ -241,6 +245,14 @@ function formatDreamingSummary(cfg: OpenClawConfig): string {
   const deepSummary = deep.enabled ? `${deepLabel}${deepDetails}` : null;
   const phases = [lightSummary, remSummary, deepSummary].filter(Boolean);
   return phases.length > 0 ? phases.join(" · ") : "off";
+=======
+  const dreaming = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
+  if (!dreaming.enabled) {
+    return "off";
+  }
+  const timezone = dreaming.timezone ? ` (${dreaming.timezone})` : "";
+  return `${dreaming.cron}${timezone} · limit=${dreaming.limit} · minScore=${dreaming.minScore} · minRecallCount=${dreaming.minRecallCount} · minUniqueQueries=${dreaming.minUniqueQueries} · recencyHalfLifeDays=${dreaming.recencyHalfLifeDays} · maxAgeDays=${dreaming.maxAgeDays ?? "none"} · maxPromotedSnippetTokens=${dreaming.maxPromotedSnippetTokens}`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function formatAuditCounts(audit: ShortTermAuditSummary): string {

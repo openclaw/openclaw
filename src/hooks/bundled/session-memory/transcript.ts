@@ -1,6 +1,7 @@
 // Session memory transcript helpers persist compact session transcript excerpts.
 import fs from "node:fs/promises";
 import path from "node:path";
+<<<<<<< HEAD
 import { sanitizeModelSpecialTokens } from "../../../security/external-content.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
 
@@ -36,6 +37,10 @@ export function sanitizeSessionMemoryTranscriptText(text: string): string | null
   return withoutArtifacts || null;
 }
 
+=======
+import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function extractTextMessageContent(content: unknown): string | undefined {
   if (typeof content === "string") {
     return content;
@@ -79,9 +84,14 @@ export async function getRecentSessionContent(
               continue;
             }
             const text = extractTextMessageContent(msg.content);
+<<<<<<< HEAD
             const sanitized = text ? sanitizeSessionMemoryTranscriptText(text) : null;
             if (sanitized && !sanitized.startsWith("/")) {
               allMessages.push(`${role}: ${sanitized}`);
+=======
+            if (text && !text.startsWith("/")) {
+              allMessages.push(`${role}: ${text}`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             }
           }
         }

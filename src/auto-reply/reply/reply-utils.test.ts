@@ -1,14 +1,24 @@
 // Tests reply utility helpers for response normalization and send decisions.
 import { afterEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { parseAudioTag } from "../../media/audio-tags.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
+=======
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import { parseAudioTag } from "../../media/audio-tags.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import { matchesMentionWithExplicit } from "./mentions.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { createReplyReferencePlanner, isSingleUseReplyToMode } from "./reply-reference.js";
 import {
   extractShortModelName,
+<<<<<<< HEAD
+=======
+  hasTemplateVariables,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveResponsePrefixTemplate,
 } from "./response-prefix-template.js";
 import {
@@ -247,6 +257,7 @@ describe("normalizeReplyPayload", () => {
     expect(reasons).toEqual(["silent"]);
   });
 
+<<<<<<< HEAD
   it("suppresses quoted NO_REPLY string payloads", () => {
     const reasons: string[] = [];
     const result = normalizeReplyPayload(
@@ -257,6 +268,8 @@ describe("normalizeReplyPayload", () => {
     expect(reasons).toEqual(["silent"]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("suppresses leaked reasoning when the final answer is NO_REPLY (#66701)", () => {
     const reasons: string[] = [];
     const result = normalizeReplyPayload(
@@ -315,6 +328,7 @@ describe("normalizeReplyPayload", () => {
     expect(reply.mediaUrl).toBe("https://example.com/img.png");
   });
 
+<<<<<<< HEAD
   it("strips quoted NO_REPLY string text but keeps media payload", () => {
     const result = normalizeReplyPayload({
       text: '"NO_REPLY"',
@@ -325,6 +339,8 @@ describe("normalizeReplyPayload", () => {
     expect(reply.mediaUrl).toBe("https://example.com/img.png");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("strips legacy uppercase TOOL_CALL blocks from normalized replies", () => {
     const result = normalizeReplyPayload({
       text: [
@@ -483,6 +499,7 @@ describe("typing controller", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     expect(onReplyStart).toHaveBeenCalledTimes(1);
   });
+<<<<<<< HEAD
 
   it("can send the first typing signal without periodic keepalive refreshes", async () => {
     vi.useFakeTimers();
@@ -504,6 +521,8 @@ describe("typing controller", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     expect(onReplyStart).toHaveBeenCalledTimes(1);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("resolveTypingMode", () => {
@@ -552,6 +571,7 @@ describe("resolveTypingMode", () => {
         expected: "message",
       },
       {
+<<<<<<< HEAD
         name: "configured instant typing mode wins over message-tool-only default",
         input: {
           configured: "instant" as const,
@@ -563,6 +583,8 @@ describe("resolveTypingMode", () => {
         expected: "instant",
       },
       {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         name: "default mentioned group chat",
         input: {
           configured: undefined,
@@ -880,6 +902,7 @@ describe("createTypingSignaler", () => {
     }
   });
 
+<<<<<<< HEAD
   it("starts typing on execution activity for active reply modes", async () => {
     for (const mode of ["instant", "message", "thinking"] as const) {
       const typing = createMockTypingController();
@@ -893,6 +916,8 @@ describe("createTypingSignaler", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("suppresses typing when disabled", async () => {
     const disabledCases = [
       { mode: "instant" as const, isHeartbeat: true },
@@ -905,7 +930,10 @@ describe("createTypingSignaler", () => {
       await signaler.signalRunStart();
       await signaler.signalTextDelta("hi");
       await signaler.signalReasoningDelta();
+<<<<<<< HEAD
       await signaler.signalExecutionActivity?.();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       expect(typing.startTypingLoop, `mode=${params.mode}`).not.toHaveBeenCalled();
       expect(typing.startTypingOnText, `mode=${params.mode}`).not.toHaveBeenCalled();
@@ -1504,3 +1532,15 @@ describe("extractShortModelName", () => {
     }
   });
 });
+<<<<<<< HEAD
+=======
+
+describe("hasTemplateVariables", () => {
+  it("handles empty, static, and repeated variable checks", () => {
+    expect(hasTemplateVariables("")).toBe(false);
+    expect(hasTemplateVariables("[{model}]")).toBe(true);
+    expect(hasTemplateVariables("[{model}]")).toBe(true);
+    expect(hasTemplateVariables("[Claude]")).toBe(false);
+  });
+});
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

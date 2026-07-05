@@ -296,9 +296,14 @@ export async function recoverOrphanedSubagentSessions(params: {
         const messages = await readSessionMessagesAsync(
           {
             agentId: resolveAgentIdFromSessionKey(childSessionKey),
+<<<<<<< HEAD
             sessionEntry: entry,
             sessionId: entry.sessionId,
             sessionKey: childSessionKey,
+=======
+            sessionFile: entry.sessionFile,
+            sessionId: entry.sessionId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             storePath,
           },
           {

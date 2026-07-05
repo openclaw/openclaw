@@ -8,10 +8,14 @@ import {
   isRecord,
   normalizeOptionalString as readNonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+<<<<<<< HEAD
 import {
   createDirectReplyTranscriptSentinelScanner,
   extractGatewayMessageText,
 } from "./gateway-log-sentinel.js";
+=======
+import { createDirectReplyTranscriptSentinelScanner } from "./gateway-log-sentinel.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type {
   QaRawSessionStoreEntry,
@@ -50,6 +54,44 @@ function isSessionStoreLockTimeout(error: unknown) {
   );
 }
 
+<<<<<<< HEAD
+=======
+function extractSessionTranscriptText(message: Record<string, unknown>) {
+  const rawContent = message.content;
+  if (typeof rawContent === "string") {
+    return rawContent.trim();
+  }
+  if (!Array.isArray(rawContent)) {
+    return "";
+  }
+  const parts: string[] = [];
+  for (const block of rawContent) {
+    if (typeof block === "string") {
+      if (block.trim()) {
+        parts.push(block.trim());
+      }
+      continue;
+    }
+    if (!isRecord(block)) {
+      continue;
+    }
+    const text = readNonEmptyString(block.text);
+    if (text) {
+      parts.push(text);
+      continue;
+    }
+    const content = readNonEmptyString(block.content);
+    if (
+      content &&
+      (block.type === "output_text" || block.type === "text" || block.type === "message")
+    ) {
+      parts.push(content);
+    }
+  }
+  return parts.join("\n").trim();
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function readSessionTranscriptLineMessage(line: string) {
   const trimmed = line.trim();
   if (!trimmed) {
@@ -100,7 +142,11 @@ async function readSessionTranscriptFileSummary(
     if (!message || message.role !== "assistant") {
       return;
     }
+<<<<<<< HEAD
     const text = extractGatewayMessageText(message);
+=======
+    const text = extractSessionTranscriptText(message);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (text) {
       finalText = text;
     }

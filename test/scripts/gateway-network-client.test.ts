@@ -1,6 +1,10 @@
 // Gateway Network Client tests cover gateway network client script behavior.
 import { EventEmitter } from "node:events";
+<<<<<<< HEAD
 import { describe, expect, it, vi } from "vitest";
+=======
+import { describe, expect, it } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { runGatewayNetworkClient } from "../../scripts/e2e/lib/gateway-network/client.mjs";
 import { readGatewayNetworkClientConnectTimeoutMs } from "../../scripts/e2e/lib/gateway-network/limits.mjs";
 import { onceFrame } from "../../scripts/e2e/lib/gateway-network/ws-frames.mjs";
@@ -126,11 +130,15 @@ describe("gateway network WebSocket open guard", () => {
       stdout,
       deps: {
         delay: async () => {},
+<<<<<<< HEAD
         onceFrame: async (
           _ws: unknown,
           predicate: (frame: unknown) => boolean,
           _timeoutMs?: number,
         ) => {
+=======
+        onceFrame: async (_ws: unknown, predicate: (frame: unknown) => boolean) => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           const frame = {
             type: "res",
             id: sentMethods.at(-1) === "connect" ? "c1" : "h1",
@@ -161,6 +169,7 @@ describe("gateway network WebSocket open guard", () => {
     expect(harness.closeCount).toBe(1);
   });
 
+<<<<<<< HEAD
   it("bounds socket and frame waits by the client deadline", async () => {
     const harness = createNetworkClientHarness([{ ok: true }, healthResponse()]);
     const openSocket = vi.fn(harness.deps.openSocket);
@@ -214,6 +223,8 @@ describe("gateway network WebSocket open guard", () => {
     expect(delays).toEqual([50]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("fails a connected socket whose health success lacks summary evidence", async () => {
     const harness = createNetworkClientHarness([{ ok: true }, { ok: true }]);
 

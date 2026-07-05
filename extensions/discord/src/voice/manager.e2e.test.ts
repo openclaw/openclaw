@@ -2627,8 +2627,12 @@ describe("DiscordVoiceManager", () => {
     try {
       agentCommandMock
         .mockResolvedValueOnce({ payloads: [{ text: "first answer" }] })
+<<<<<<< HEAD
         .mockResolvedValueOnce({ payloads: [{ text: "second answer" }] })
         .mockResolvedValueOnce({ payloads: [{ text: "third answer" }] });
+=======
+        .mockResolvedValueOnce({ payloads: [{ text: "second answer" }] });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const manager = createManager({
         groupPolicy: "open",
         voice: {
@@ -2639,7 +2643,10 @@ describe("DiscordVoiceManager", () => {
       });
 
       await manager.join({ guildId: "g1", channelId: "1001" });
+<<<<<<< HEAD
       const player = getLastAudioPlayer();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const entry = getSessionEntry(manager) as {
         realtime?: {
           beginSpeakerTurn: (
@@ -2681,6 +2688,7 @@ describe("DiscordVoiceManager", () => {
 
       await vi.advanceTimersByTimeAsync(1_510);
       expectUserMessageIncludes("second answer");
+<<<<<<< HEAD
 
       const idleHandler = player.on.mock.calls.find(([event]) => event === "idle")?.[1] as
         | (() => void)
@@ -2694,6 +2702,8 @@ describe("DiscordVoiceManager", () => {
       bridgeParams?.onTranscript?.("user", "third question", true);
       await vi.advanceTimersByTimeAsync(260);
       expectUserMessageNotIncludes("third answer");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } finally {
       vi.useRealTimers();
     }

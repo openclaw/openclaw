@@ -46,6 +46,7 @@ describe("pw-role-snapshot", () => {
     expect(res.snapshot).not.toContain("button");
   });
 
+<<<<<<< HEAD
   it("keeps named branches with refs and drops empty branches when compact", () => {
     const aria = ['- list "Menu":', '  - button "Save"', '- list "Empty":', "  - generic"].join(
       "\n",
@@ -56,6 +57,8 @@ describe("pw-role-snapshot", () => {
     expect(res.snapshot).toBe('- list "Menu":\n  - button "Save" [ref=e1]');
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("computes stats", () => {
     const aria = ['- button "OK"', '- button "Cancel"'].join("\n");
     const res = buildRoleSnapshotFromAriaSnapshot(aria);

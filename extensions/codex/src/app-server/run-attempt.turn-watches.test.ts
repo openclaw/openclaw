@@ -49,7 +49,13 @@ const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   web_search: "disabled",
 });
 
+<<<<<<< HEAD
 function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
+=======
+function writeCodexAppServerBinding(
+  ...args: Parameters<typeof writeRawCodexAppServerBinding>
+) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const [sessionFile, binding, lookup] = args;
   return writeRawCodexAppServerBinding(
     sessionFile,
@@ -76,7 +82,10 @@ describe("createCodexAttemptTurnWatchController", () => {
       isTerminalTurnNotificationQueued: () => false,
       getActiveAppServerTurnRequests: () => 0,
       getActiveTurnItemCount: () => 0,
+<<<<<<< HEAD
       getActiveCompletionBlockerItemCount: () => 0,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       turnCompletionIdleTimeoutMs: 500,
       turnAssistantCompletionIdleTimeoutMs: 500,
       turnAttemptIdleTimeoutMs: 200,
@@ -806,6 +815,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(result.promptError).toBeNull();
   });
 
+<<<<<<< HEAD
   it("keeps an eliciting MCP tool active past the completion timeout", async () => {
     const harness = createStartedThreadHarness();
     const bridgedResponse = {
@@ -893,6 +903,8 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(result.promptError).toBeNull();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("counts pending user input requests as turn attempt progress", async () => {
     const harness = createStartedThreadHarness();
     const params = createParams(

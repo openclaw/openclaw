@@ -1,5 +1,9 @@
 // Discord plugin module implements client behavior.
+<<<<<<< HEAD
 import type { APIInteraction } from "discord-api-types/v10";
+=======
+import type { APIApplicationCommand, APIInteraction } from "discord-api-types/v10";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { DiscordCommandDeployer, type DeployCommandOptions } from "./command-deploy.js";
 import type { BaseCommand } from "./commands.js";
@@ -272,10 +276,24 @@ export class Client {
     return await this.entityCache.fetchMember(guildId, userId);
   }
 
+<<<<<<< HEAD
+=======
+  async getDiscordCommands(): Promise<APIApplicationCommand[]> {
+    return await this.commandDeployer.getCommands();
+  }
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   async deployCommands(options: DeployCommandOptions = {}) {
     return await this.commandDeployer.deploy(options);
   }
 
+<<<<<<< HEAD
+=======
+  async reconcileCommands() {
+    return await this.deployCommands({ mode: "reconcile" });
+  }
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   async handleInteraction(rawData: APIInteraction, _ctx?: Context): Promise<void> {
     await dispatchInteraction(this, rawData);
   }

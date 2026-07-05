@@ -63,6 +63,10 @@ export const th: TranslationMap = {
     docs: "เอกสาร",
     theme: "ธีม",
     colorMode: "โหมดสี",
+<<<<<<< HEAD
+=======
+    colorModeOption: "โหมดสี: {mode}",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resources: "ทรัพยากร",
     search: "ค้นหา",
     save: "บันทึก",
@@ -198,7 +202,10 @@ export const th: TranslationMap = {
     inherit: "สืบทอด",
     defaultOption: "ค่าเริ่มต้น ({value})",
     offExplicit: "ปิด (ระบุชัดเจน)",
+<<<<<<< HEAD
     auto: "auto",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     on: "เปิด",
     off: "ปิด",
     full: "เต็ม",
@@ -1408,7 +1415,10 @@ export const th: TranslationMap = {
     jaJP: "日本語 (ญี่ปุ่น)",
     ko: "한국어 (เกาหลี)",
     fr: "Français (ฝรั่งเศส)",
+<<<<<<< HEAD
     hi: "हिन्दी (ฮินดี)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ar: "العربية (อาหรับ)",
     it: "Italiano (อิตาลี)",
     tr: "Türkçe (ตุรกี)",
@@ -1419,7 +1429,10 @@ export const th: TranslationMap = {
     vi: "Tiếng Việt (เวียดนาม)",
     nl: "Nederlands (ดัตช์)",
     fa: "فارسی (เปอร์เซีย)",
+<<<<<<< HEAD
     ru: "Русский (รัสเซีย)",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   cron: {
     quickCreate: {
@@ -1587,7 +1600,10 @@ export const th: TranslationMap = {
       nextHeartbeat: "heartbeat ถัดไป",
       wakeModeHelp: "Now จะทริกเกอร์ทันที ส่วน Next heartbeat จะรอรอบถัดไป",
       payloadKind: "ต้องการให้รันอะไร?",
+<<<<<<< HEAD
       command: "Command",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       systemEvent: "โพสต์ข้อความไปยังไทม์ไลน์หลัก",
       agentTurn: "รันงานของผู้ช่วย (แยก)",
       systemEventHelp: "ส่งข้อความของคุณไปยังไทม์ไลน์หลักของเกตเวย์ (เหมาะสำหรับการเตือน/ทริกเกอร์)",

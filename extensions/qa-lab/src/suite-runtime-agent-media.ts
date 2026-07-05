@@ -89,6 +89,7 @@ async function resolveGeneratedImagePath(params: {
   const startedAt = Date.now();
   while (Date.now() - startedAt < params.timeoutMs) {
     if (params.env.mock) {
+<<<<<<< HEAD
       try {
         const requests = await fetchJson<Array<{ allInputText?: string; toolOutput?: string }>>(
           `${params.env.mock.baseUrl}/debug/requests`,
@@ -105,6 +106,20 @@ async function resolveGeneratedImagePath(params: {
         }
       } catch {
         // The mock debug endpoint is best-effort; generated media files are the durable fallback.
+=======
+      const requests = await fetchJson<Array<{ allInputText?: string; toolOutput?: string }>>(
+        `${params.env.mock.baseUrl}/debug/requests`,
+      );
+      for (let index = requests.length - 1; index >= 0; index -= 1) {
+        const request = requests[index];
+        if (!(request.allInputText ?? "").includes(params.promptSnippet)) {
+          continue;
+        }
+        const mediaPath = extractMediaPathFromText(request.toolOutput);
+        if (mediaPath) {
+          return mediaPath;
+        }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     }
 

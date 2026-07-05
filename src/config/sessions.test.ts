@@ -4,7 +4,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { createDeferred } from "../test-utils/deferred.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { withEnv } from "../test-utils/env.js";
 import {
   applySessionStoreEntryPatch,
@@ -989,8 +992,25 @@ describe("sessions", () => {
       },
     });
 
+<<<<<<< HEAD
     const firstStarted = createDeferred();
     const releaseFirst = createDeferred();
+=======
+    const createDeferred = <T>() => {
+      let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
+      let reject: ((reason?: unknown) => void) | undefined;
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      if (!resolve || !reject) {
+        throw new Error("Expected deferred callbacks to be initialized");
+      }
+      return { promise, resolve, reject };
+    };
+    const firstStarted = createDeferred<void>();
+    const releaseFirst = createDeferred<void>();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const p1 = updateSessionStoreEntry({
       storePath,

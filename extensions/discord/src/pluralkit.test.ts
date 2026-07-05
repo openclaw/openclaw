@@ -20,6 +20,7 @@ const buildResponse = (params: { status: number; body?: unknown }): MockResponse
   };
 };
 
+<<<<<<< HEAD
 function cancelTrackedResponse(
   text: string,
   init: ResponseInit,
@@ -42,6 +43,8 @@ function cancelTrackedResponse(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("fetchPluralKitMessageInfo", () => {
   it("returns null when disabled", async () => {
     const fetcher = vi.fn();
@@ -87,6 +90,7 @@ describe("fetchPluralKitMessageInfo", () => {
     expect(result?.member?.id).toBe("mem_1");
     expect(receivedHeaders?.Authorization).toBe("pk_test");
   });
+<<<<<<< HEAD
 
   it("bounds PluralKit API error bodies without using response.text()", async () => {
     const tracked = cancelTrackedResponse(`${"plural failure ".repeat(1024)}tail`, {
@@ -113,4 +117,6 @@ describe("fetchPluralKitMessageInfo", () => {
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

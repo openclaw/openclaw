@@ -4,7 +4,11 @@
  * provider transport hooks.
  */
 import type { Model } from "openclaw/plugin-sdk/llm";
+<<<<<<< HEAD
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+=======
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
@@ -196,10 +200,13 @@ describe("anthropic transport stream", () => {
     guardedFetchMock.mockResolvedValue(createSseResponse());
   });
 
+<<<<<<< HEAD
   afterEach(() => {
     vi.useRealTimers();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses the guarded fetch transport for api-key Anthropic requests", async () => {
     const model = makeAnthropicTransportModel({
       headers: { "X-Provider": "anthropic" },
@@ -270,6 +277,7 @@ describe("anthropic transport stream", () => {
     expect(headers.get("X-Provider")).toBe("foundry");
   });
 
+<<<<<<< HEAD
   it("bounds streamed Anthropic error responses without content-length", async () => {
     const encoder = new TextEncoder();
     let pullCount = 0;
@@ -345,6 +353,8 @@ describe("anthropic transport stream", () => {
     expect((cancelReason as Error).message).toBe(result.errorMessage);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("honors ANTHROPIC_BASE_URL when model base URL is blank", async () => {
     vi.stubEnv("ANTHROPIC_BASE_URL", " https://anthropic-proxy.example/v1 ");
 
@@ -1070,6 +1080,7 @@ describe("anthropic transport stream", () => {
     });
   });
 
+<<<<<<< HEAD
   it("routes interleaved active content blocks by their event indexes", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
@@ -1120,6 +1131,8 @@ describe("anthropic transport stream", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves provider-seeded thinking signatures when no signature_delta follows", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([

@@ -12,7 +12,10 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
   assertOkOrThrowProviderError,
+<<<<<<< HEAD
   readProviderJsonResponse,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
@@ -646,9 +649,13 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       try {
         await assertOkOrThrowHttpError(response, "fal image generation failed");
 
+<<<<<<< HEAD
         const payload = parseFalImageGenerationResponse(
           await readProviderJsonResponse(response, "fal.image-generation"),
         );
+=======
+        const payload = parseFalImageGenerationResponse(await response.json());
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const images: GeneratedImageAsset[] = [];
         let imageIndex = 0;
         for (const entry of payload.images) {

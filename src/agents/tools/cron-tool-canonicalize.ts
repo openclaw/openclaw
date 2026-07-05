@@ -243,6 +243,7 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
   }
 }
 
+<<<<<<< HEAD
 /**
  * Normalizes whitespace-padded cron object keys. Some tool-call
  * extraction/serialization pipelines can produce keys with trailing spaces
@@ -270,13 +271,18 @@ function repairPaddedCronKeys(value: Record<string, unknown>): void {
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Converts model-friendly cron tool shorthands into the nested gateway job/patch shape. */
 export function canonicalizeCronToolObject(
   value: Record<string, unknown>,
 ): Record<string, unknown> {
   const unwrapped = isRecord(value.data) ? value.data : isRecord(value.job) ? value.job : value;
   const next = { ...unwrapped };
+<<<<<<< HEAD
   repairPaddedCronKeys(next);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   repairConcatenatedCronToolKeys(next);
   canonicalizeCronToolSchedule(next);
   canonicalizeCronToolPayload(next);

@@ -1067,6 +1067,7 @@ describe("searchMemoryWiki", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("discovers pages in nested subdirectories", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,
@@ -1096,6 +1097,8 @@ describe("searchMemoryWiki", () => {
     expect(paths).toEqual(["sources/sub/nested.md", "sources/top.md"]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("drops gateway-style owner-qualified session hits that collide with the scoped store", async () => {
     const { config } = await createQueryVault({
       initialize: true,

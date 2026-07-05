@@ -33,6 +33,7 @@ describe("agents bind matrix integration", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("rejects a binding spec with extra colon segments instead of silently truncating", () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "matrix", plugin: matrixBindingPlugin, source: "test" }]),
@@ -59,6 +60,8 @@ describe("agents bind matrix integration", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry());
   });

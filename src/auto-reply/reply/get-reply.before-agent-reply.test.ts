@@ -62,12 +62,16 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
 
     mocks.initSessionState.mockResolvedValue(
       createGetReplySessionState({
+<<<<<<< HEAD
         sessionCtx: buildGetReplyGroupCtx({
           OriginatingChannel: "Telegram",
           Provider: "telegram",
           SenderId: "42",
           ChatId: "-100123-native",
         }),
+=======
+        sessionCtx: buildGetReplyGroupCtx({ OriginatingChannel: "Telegram", Provider: "telegram" }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         sessionKey: "agent:main:telegram:-100123",
         sessionScope: "per-chat",
         isGroup: true,
@@ -108,6 +112,7 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
           sessionId?: string;
           workspaceDir?: string;
           messageProvider?: string;
+<<<<<<< HEAD
           trigger?: string;
           channelId?: string;
           senderId?: string;
@@ -117,6 +122,11 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
             sender?: { id?: string };
             chat?: { id?: string };
           };
+=======
+          senderId?: string;
+          trigger?: string;
+          channelId?: string;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
       ]
     >;
@@ -126,6 +136,7 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
     expect(hookCtx.sessionId).toBe("session-1");
     expect(hookCtx.workspaceDir).toBe("/tmp/workspace");
     expect(hookCtx.messageProvider).toBe("telegram");
+<<<<<<< HEAD
     expect(hookCtx.trigger).toBe("user");
     expect(hookCtx.channel).toBe("telegram");
     expect(hookCtx.channelId).toBe("-100123");
@@ -133,6 +144,11 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
     expect(hookCtx.chatId).toBe("-100123-native");
     expect(hookCtx.channelContext?.sender?.id).toBe("42");
     expect(hookCtx.channelContext?.chat?.id).toBe("-100123-native");
+=======
+    expect(hookCtx.senderId).toBe("telegram-user-42");
+    expect(hookCtx.trigger).toBe("user");
+    expect(hookCtx.channelId).toBe("-100123");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(mocks.handleInlineActions.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.runBeforeAgentReply.mock.invocationCallOrder[0] ?? 0,
     );

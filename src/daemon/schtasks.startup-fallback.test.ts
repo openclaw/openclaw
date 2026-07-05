@@ -3,10 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import {
   getWindowsCmdExePath,
   getWindowsPowerShellExePath,
 } from "../infra/windows-install-roots.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import "./test-helpers/schtasks-base-mocks.js";
 import {
   inspectPortUsage,
@@ -139,11 +142,15 @@ function makeSpawnSyncResult(overrides: Partial<SpawnSyncResult> = {}): SpawnSyn
 function mockWindowsNodeHostProcess(processId = 5151): void {
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   spawnSync.mockImplementation((command, args) => {
+<<<<<<< HEAD
     if (
       command === getWindowsPowerShellExePath() &&
       Array.isArray(args) &&
       args.includes(NODE_PROCESS_QUERY)
     ) {
+=======
+    if (command === "powershell" && Array.isArray(args) && args.includes(NODE_PROCESS_QUERY)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return makeSpawnSyncResult({
         stdout: JSON.stringify([
           {
@@ -300,7 +307,11 @@ describe("Windows startup fallback", () => {
       const startupEntryPath = resolveStartupEntryPath(env);
       const startupScript = await fs.readFile(startupEntryPath, "utf8");
       expect(result.scriptPath).toBe(resolveTaskScriptPath(env));
+<<<<<<< HEAD
       expect(startupScript).toContain(`start "" /min ${getWindowsCmdExePath()} /d /c`);
+=======
+      expect(startupScript).toContain('start "" /min cmd.exe /d /c');
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(startupScript).toContain("gateway.cmd");
       expectStartupFallbackSpawn();
       expect(childUnref).toHaveBeenCalled();
@@ -412,7 +423,11 @@ describe("Windows startup fallback", () => {
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
       spawnSync.mockImplementation((command, args) => {
         if (
+<<<<<<< HEAD
           command === getWindowsPowerShellExePath() &&
+=======
+          command === "powershell" &&
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           Array.isArray(args) &&
           args.includes(
             "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
@@ -482,7 +497,11 @@ describe("Windows startup fallback", () => {
       fastForwardTaskStartWait();
       spawnSync.mockImplementation((command, args) => {
         if (
+<<<<<<< HEAD
           command === getWindowsPowerShellExePath() &&
+=======
+          command === "powershell" &&
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           Array.isArray(args) &&
           args.includes(
             "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
@@ -570,7 +589,11 @@ describe("Windows startup fallback", () => {
       );
       spawnSync.mockImplementation((command, args) => {
         if (
+<<<<<<< HEAD
           command === getWindowsPowerShellExePath() &&
+=======
+          command === "powershell" &&
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           Array.isArray(args) &&
           args.includes(
             "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
@@ -676,6 +699,7 @@ describe("Windows startup fallback", () => {
     });
   });
 
+<<<<<<< HEAD
   it("removes hidden Startup-folder entries when the caller env lacks the marker", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       schtasksResponses.push({ code: 0, stdout: "", stderr: "" });
@@ -692,6 +716,8 @@ describe("Windows startup fallback", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("reports runtime from the gateway listener when using the Startup fallback", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       addStartupFallbackMissingResponses();

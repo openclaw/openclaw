@@ -7,7 +7,11 @@ import {
   errorShape,
   type SessionsResolveParams,
 } from "../../packages/gateway-protocol/src/index.js";
+<<<<<<< HEAD
 import { canonicalizeSessionEntryAliases, type SessionEntry } from "../config/sessions.js";
+=======
+import { updateSessionStore, type SessionEntry } from "../config/sessions.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
@@ -15,6 +19,10 @@ import {
   filterAndSortSessionEntries,
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
+<<<<<<< HEAD
+=======
+  migrateAndPruneGatewaySessionStoreKey,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveDeletedAgentIdFromSessionKey,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils.js";
@@ -157,12 +165,20 @@ export async function resolveSessionKeyFromResolveParams(params: {
     if (!legacyKey) {
       return noSessionFoundResult({ p, message: `No session found: ${key}` });
     }
+<<<<<<< HEAD
     await canonicalizeSessionEntryAliases({
       storePath: target.storePath,
       target: {
         canonicalKey: target.canonicalKey,
         storeKeys: target.storeKeys,
       },
+=======
+    await updateSessionStore(target.storePath, (s) => {
+      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store: s });
+      if (!s[primaryKey] && s[legacyKey]) {
+        s[primaryKey] = s[legacyKey];
+      }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     const refreshedTarget = resolveGatewaySessionStoreTargetWithStore({
       cfg,

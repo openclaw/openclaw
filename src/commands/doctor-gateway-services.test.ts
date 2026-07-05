@@ -110,9 +110,12 @@ vi.mock("./doctor-gateway-auth-token.js", () => ({
 }));
 
 import {
+<<<<<<< HEAD
   detectExtraGatewayServiceIssues,
   extraGatewayServiceToHealthFinding,
   extraGatewayServiceToRepairEffects,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   maybeRepairGatewayServiceConfig,
   maybeScanExtraGatewayServices,
 } from "./doctor-gateway-services.js";
@@ -579,14 +582,23 @@ describe("maybeRepairGatewayServiceConfig", () => {
       installEntrypoint:
         "/Users/test/Library/pnpm/global/5/node_modules/.pnpm/openclaw@2026.3.12/node_modules/openclaw/dist/index.js",
       realpath: async (value: string) => {
+<<<<<<< HEAD
         const normalized = value.replaceAll("\\", "/").replace(/^[A-Z]:/i, "");
         if (normalized.includes("/global/5/node_modules/openclaw/")) {
           return normalized.replace(
+=======
+        if (value.includes("/global/5/node_modules/openclaw/")) {
+          return value.replace(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             "/global/5/node_modules/openclaw/",
             "/global/5/node_modules/.pnpm/openclaw@2026.3.12/node_modules/openclaw/",
           );
         }
+<<<<<<< HEAD
         return normalized;
+=======
+        return value;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     });
 
@@ -1193,6 +1205,7 @@ describe("maybeScanExtraGatewayServices", () => {
     expectNoteContaining("custom-gateway.service", "Other gateway-like services detected");
   });
 
+<<<<<<< HEAD
   it("threads deep scans through structured extra gateway service detection", async () => {
     mocks.findExtraGatewayServices.mockResolvedValue([]);
 
@@ -1270,6 +1283,8 @@ describe("maybeScanExtraGatewayServices", () => {
     ).toEqual([]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("removes legacy Linux user systemd services", async () => {
     mockProcessPlatform("linux");
     mocks.findExtraGatewayServices.mockResolvedValue([

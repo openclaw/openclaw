@@ -5,7 +5,10 @@ import path from "node:path";
 import { bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+<<<<<<< HEAD
 import { withEnvAsync } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { PluginNpmIntegrityDriftParams } from "./install.js";
 
 const APP_ROOT = "/app";
@@ -42,10 +45,15 @@ const tempDirs: string[] = [];
 
 vi.mock("./install.js", () => ({
   installPluginFromNpmSpec: (...args: unknown[]) => installPluginFromNpmSpecMock(...args),
+<<<<<<< HEAD
   resolvePluginInstallDir: (pluginId: string, extensionsDir = "/tmp") => {
     const separator = process.platform === "win32" ? "\\" : "/";
     return `${extensionsDir.replace(/[\\/]+$/, "")}${separator}${pluginId}`;
   },
+=======
+  resolvePluginInstallDir: (pluginId: string, extensionsDir = "/tmp") =>
+    `${extensionsDir}/${pluginId}`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   PLUGIN_INSTALL_ERROR_CODE: {
     NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
   },
@@ -66,9 +74,12 @@ vi.mock("./clawhub.js", () => ({
     ARTIFACT_UNAVAILABLE: "artifact_unavailable",
     ARCHIVE_INTEGRITY_MISMATCH: "archive_integrity_mismatch",
     ARTIFACT_DOWNLOAD_UNAVAILABLE: "artifact_download_unavailable",
+<<<<<<< HEAD
     CLAWHUB_SECURITY_UNAVAILABLE: "clawhub_security_unavailable",
     CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED: "clawhub_risk_acknowledgement_required",
     CLAWHUB_DOWNLOAD_BLOCKED: "clawhub_download_blocked",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   installPluginFromClawHub: (...args: unknown[]) => installPluginFromClawHubMock(...args),
 }));
@@ -220,6 +231,7 @@ function createClawHubInstallConfig(params: {
   };
 }
 
+<<<<<<< HEAD
 function createEnabledDemoClawHubInstallConfig(): OpenClawConfig {
   const installPath = createInstalledPackageDir({
     name: "demo",
@@ -249,6 +261,8 @@ function createEnabledDemoClawHubInstallConfig(): OpenClawConfig {
   return config;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function createGitInstallConfig(params: {
   pluginId: string;
   spec: string;
@@ -1113,6 +1127,7 @@ describe("updateNpmInstalledPlugins", () => {
     );
   });
 
+<<<<<<< HEAD
   it("does not apply official beta-channel sync to third-party npm specs", async () => {
     const installPath = createInstalledPackageDir({
       name: "@martian-engineering/lossless-claw",
@@ -1152,6 +1167,8 @@ describe("updateNpmInstalledPlugins", () => {
     expect(npmInstallCall()?.spec).toBe("@martian-engineering/lossless-claw");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not skip trusted official default updates when latest resolves to the installed prerelease", async () => {
     const installPath = createInstalledPackageDir({
       name: "@openclaw/acpx",
@@ -1848,6 +1865,10 @@ describe("updateNpmInstalledPlugins", () => {
       path.join(installPath, "package.json"),
       JSON.stringify({ name: "@martian-engineering/lossless-claw", version: "0.9.0" }),
     );
+<<<<<<< HEAD
+=======
+    vi.stubEnv("HOME", home);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mockNpmViewMetadata({
       name: "@martian-engineering/lossless-claw",
       version: "0.9.0",
@@ -1856,6 +1877,7 @@ describe("updateNpmInstalledPlugins", () => {
     });
     installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
 
+<<<<<<< HEAD
     const result = await withEnvAsync({ HOME: home }, () =>
       updateNpmInstalledPlugins({
         config: createNpmInstallConfig({
@@ -1871,6 +1893,21 @@ describe("updateNpmInstalledPlugins", () => {
         pluginIds: ["lossless-claw"],
       }),
     );
+=======
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "lossless-claw",
+        spec: "@martian-engineering/lossless-claw",
+        installPath: "~/.openclaw/extensions/lossless-claw",
+        resolvedName: "@martian-engineering/lossless-claw",
+        resolvedVersion: "0.9.0",
+        resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
+        integrity: "sha512-same",
+        shasum: "same",
+      }),
+      pluginIds: ["lossless-claw"],
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(false);
@@ -1934,7 +1971,11 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
+<<<<<<< HEAD
   it("falls through to npm reinstall when metadata probing fails for valid specs", async () => {
+=======
+  it("falls through to npm reinstall when metadata probing fails", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const warn = vi.fn();
     const installPath = createInstalledPackageDir({
       name: "@martian-engineering/lossless-claw",
@@ -1969,6 +2010,7 @@ describe("updateNpmInstalledPlugins", () => {
     expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
   });
 
+<<<<<<< HEAD
   it("records range metadata probing failures without falling through to npm reinstall", async () => {
     const warn = vi.fn();
     const installPath = createInstalledPackageDir({
@@ -2070,6 +2112,8 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.each([
     {
       source: "npm",
@@ -2610,12 +2654,15 @@ describe("updateNpmInstalledPlugins", () => {
             installPath: "/tmp/demo",
           },
         },
+<<<<<<< HEAD
         allow: ["demo", "other"],
         deny: ["blocked"],
         slots: {
           memory: "demo",
           contextEngine: "demo",
         },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     } satisfies OpenClawConfig;
 
@@ -2636,12 +2683,15 @@ describe("updateNpmInstalledPlugins", () => {
       enabled: false,
       config: { preserved: true },
     });
+<<<<<<< HEAD
     expect(result.config.plugins?.allow).toEqual(["other"]);
     expect(result.config.plugins?.deny).toEqual(["blocked"]);
     expect(result.config.plugins?.slots).toEqual({
       memory: "memory-core",
       contextEngine: "legacy",
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(result.config.plugins?.installs?.demo).toEqual(config.plugins.installs.demo);
     expect(result.outcomes).toEqual([
       {
@@ -2652,6 +2702,7 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("keeps an existing ClawHub plugin enabled when a risky update is not acknowledged", async () => {
     installPluginFromClawHubMock.mockResolvedValue({
       ok: false,
@@ -2879,10 +2930,44 @@ describe("updateNpmInstalledPlugins", () => {
     const result = await updateNpmInstalledPlugins({
       config,
       pluginIds: ["demo"],
+=======
+  it("clears stale plugin policy and slot references when disabling failed updates", async () => {
+    const warn = vi.fn();
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: false,
+      error: "security scan blocked install",
+    });
+    const config = {
+      plugins: {
+        allow: ["demo", "keep"],
+        deny: ["demo", "blocked"],
+        slots: {
+          memory: "demo",
+          contextEngine: "demo",
+        },
+        entries: {
+          demo: {
+            enabled: true,
+          },
+        },
+        installs: {
+          demo: {
+            source: "npm" as const,
+            spec: "@acme/demo",
+            installPath: "/tmp/demo",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       disableOnFailure: true,
       logger: { warn },
     });
 
+<<<<<<< HEAD
     expect(result.changed).toBe(true);
     expect(result.config.plugins?.entries?.demo).toEqual({
       enabled: false,
@@ -2895,6 +2980,22 @@ describe("updateNpmInstalledPlugins", () => {
     const message =
       'Disabled "demo" after plugin update failure; OpenClaw will continue without it. Failed to update demo: ClawHub blocked this release; update was not started. (ClawHub clawhub:demo).';
     expect(warn).toHaveBeenCalledWith(message);
+=======
+    const message =
+      'Disabled "demo" after plugin update failure; OpenClaw will continue without it. Failed to update demo: security scan blocked install';
+    expect(warn).toHaveBeenCalledWith(message);
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.entries?.demo).toEqual({
+      enabled: false,
+    });
+    expect(result.config.plugins?.installs?.demo).toEqual(config.plugins.installs.demo);
+    expect(result.config.plugins?.allow).toEqual(["keep"]);
+    expect(result.config.plugins?.deny).toEqual(["blocked"]);
+    expect(result.config.plugins?.slots).toEqual({
+      memory: "memory-core",
+      contextEngine: "legacy",
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(result.outcomes).toEqual([
       {
         pluginId: "demo",
@@ -3559,7 +3660,11 @@ describe("updateNpmInstalledPlugins", () => {
     );
   });
 
+<<<<<<< HEAD
   it("does not fall back to npm for blocked official ClawHub artifact downloads", async () => {
+=======
+  it("falls back to npm for trusted official ClawHub artifact blocks", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const warnMessages: string[] = [];
     const installPath = createInstalledPackageDir({
       name: "@openclaw/discord",
@@ -3567,11 +3672,30 @@ describe("updateNpmInstalledPlugins", () => {
     });
     installPluginFromClawHubMock.mockResolvedValueOnce({
       ok: false,
+<<<<<<< HEAD
       code: "clawhub_download_blocked",
       error:
         'ClawHub blocked artifact download for "@openclaw/discord@2026.5.16-beta.5"; install was not started. ClawHub /api/v1/packages/%40openclaw%2Fdiscord/versions/2026.5.16-beta.5/artifact/download failed (403): Blocked: this package release has been flagged as malicious and cannot be downloaded.',
       version: "2026.5.16-beta.5",
     });
+=======
+      code: "artifact_unavailable",
+      error:
+        'ClawHub artifact download for "@openclaw/discord@2026.5.16-beta.5" is not available yet (ClawHub /api/v1/packages/%40openclaw%2Fdiscord/versions/2026.5.16-beta.5/artifact/download failed (403): Blocked: this package release has been flagged as malicious and cannot be downloaded.). Use "npm:@openclaw/discord@2026.5.16-beta.5" for launch installs while ClawHub artifact routing is being rolled out.',
+    });
+    installPluginFromNpmSpecMock.mockResolvedValueOnce(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "discord",
+        targetDir: "/tmp/openclaw-plugins/discord",
+        version: "2026.5.16-beta.5",
+        npmResolution: {
+          name: "@openclaw/discord",
+          version: "2026.5.16-beta.5",
+          resolvedSpec: "@openclaw/discord@2026.5.16-beta.5",
+        },
+      }),
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const result = await updateNpmInstalledPlugins({
       config: createClawHubInstallConfig({
@@ -3590,6 +3714,7 @@ describe("updateNpmInstalledPlugins", () => {
     });
 
     expect(clawHubInstallCall()?.spec).toBe("clawhub:@openclaw/discord@beta");
+<<<<<<< HEAD
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.config.plugins?.entries?.discord?.enabled).toBeUndefined();
     expectRecordFields(result.config.plugins?.installs?.discord, {
@@ -3609,6 +3734,34 @@ describe("updateNpmInstalledPlugins", () => {
       },
     ]);
     expect(warnMessages).toStrictEqual([]);
+=======
+    expect(npmInstallCall()?.spec).toBe("@openclaw/discord@beta");
+    expect(npmInstallCall()?.expectedPluginId).toBe("discord");
+    expect(npmInstallCall()?.trustedSourceLinkedOfficialInstall).toBe(true);
+    expect(result.config.plugins?.entries?.discord?.enabled).toBeUndefined();
+    expectRecordFields(result.config.plugins?.installs?.discord, {
+      source: "npm",
+      spec: "@openclaw/discord@2026.5.16-beta.5",
+      installPath: "/tmp/openclaw-plugins/discord",
+      version: "2026.5.16-beta.5",
+    });
+    expect(result.config.plugins?.installs?.discord?.clawhubPackage).toBeUndefined();
+    expect(result.config.plugins?.installs?.discord?.clawhubUrl).toBeUndefined();
+    expect(result.config.plugins?.installs?.discord?.artifactKind).toBeUndefined();
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "discord",
+        status: "updated",
+        currentVersion: "2026.5.12",
+        nextVersion: "2026.5.16-beta.5",
+        message:
+          "Updated discord: 2026.5.12 -> 2026.5.16-beta.5. (warning: official ClawHub artifact fallback used @openclaw/discord@beta).",
+      },
+    ]);
+    expect(warnMessages).toEqual([
+      'Plugin "discord" could not download official ClawHub artifact for clawhub:@openclaw/discord@beta; using npm @openclaw/discord@beta instead. Core update can still complete.',
+    ]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("uses the default npm spec when beta ClawHub falls back before an artifact block", async () => {
@@ -3925,6 +4078,7 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
+<<<<<<< HEAD
   it("forwards ClawHub risk acknowledgement inputs without dry-run prompts", async () => {
     const onClawHubRisk = vi.fn(async () => true);
     const config = createClawHubInstallConfig({
@@ -3976,6 +4130,8 @@ describe("updateNpmInstalledPlugins", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("migrates legacy unscoped install keys when a scoped npm package updates", async () => {
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: true,
@@ -4236,7 +4392,10 @@ describe("updateNpmInstalledPlugins", () => {
   it("reuses the recorded managed extensions root when updating external plugins", async () => {
     const installPath = "/var/openclaw/extensions/demo";
     const extensionsDir = "/var/openclaw/extensions";
+<<<<<<< HEAD
     const expectedExtensionsDir = path.resolve(extensionsDir);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     installPluginFromNpmSpecMock.mockResolvedValue(
       createSuccessfulNpmUpdateResult({
         pluginId: "demo",
@@ -4320,10 +4479,17 @@ describe("updateNpmInstalledPlugins", () => {
       pluginIds: ["demo"],
     });
 
+<<<<<<< HEAD
     expect(npmInstallCall()?.extensionsDir).toBe(expectedExtensionsDir);
     expect(clawHubInstallCall()?.extensionsDir).toBe(expectedExtensionsDir);
     expect(marketplaceInstallCall()?.extensionsDir).toBe(expectedExtensionsDir);
     expect(gitInstallCall()?.extensionsDir).toBe(expectedExtensionsDir);
+=======
+    expect(npmInstallCall()?.extensionsDir).toBe(extensionsDir);
+    expect(clawHubInstallCall()?.extensionsDir).toBe(extensionsDir);
+    expect(marketplaceInstallCall()?.extensionsDir).toBe(extensionsDir);
+    expect(gitInstallCall()?.extensionsDir).toBe(extensionsDir);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });
 
@@ -4406,7 +4572,13 @@ describe("syncPluginsForUpdateChannel", () => {
       }),
     );
 
+<<<<<<< HEAD
     await withEnvAsync({ HOME: "/tmp/process-home" }, async () => {
+=======
+    const previousHome = process.env.HOME;
+    process.env.HOME = "/tmp/process-home";
+    try {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const result = await syncPluginsForUpdateChannel({
         channel: "beta",
         env: {
@@ -4436,7 +4608,17 @@ describe("syncPluginsForUpdateChannel", () => {
         sourcePath: "~/plugins/feishu",
         installPath: "~/plugins/feishu",
       });
+<<<<<<< HEAD
     });
+=======
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("installs an externalized bundled plugin and rewrites its old bundled path plugin index", async () => {
@@ -4554,12 +4736,18 @@ describe("syncPluginsForUpdateChannel", () => {
         clawhubPackage: "legacy-chat",
       }),
     );
+<<<<<<< HEAD
     const onClawHubRisk = vi.fn(async () => true);
 
     const result = await syncPluginsForUpdateChannel({
       channel: "stable",
       acknowledgeClawHubRisk: true,
       onClawHubRisk,
+=======
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       externalizedBundledPluginBridges: [
         {
           bundledPluginId: "legacy-chat",
@@ -4593,8 +4781,11 @@ describe("syncPluginsForUpdateChannel", () => {
     expect(clawHubInstallCall()?.baseUrl).toBe("https://clawhub.ai");
     expect(clawHubInstallCall()?.mode).toBe("update");
     expect(clawHubInstallCall()?.expectedPluginId).toBe("legacy-chat");
+<<<<<<< HEAD
     expect(clawHubInstallCall()?.acknowledgeClawHubRisk).toBe(true);
     expect(clawHubInstallCall()?.onClawHubRisk).toBe(onClawHubRisk);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(true);
     expect(result.summary.switchedToClawHub).toEqual(["legacy-chat"]);
@@ -4845,7 +5036,10 @@ describe("syncPluginsForUpdateChannel", () => {
       ok: false,
       code: "archive_integrity_mismatch",
       error: "ClawHub ClawPack integrity mismatch.",
+<<<<<<< HEAD
       warning: "WARNING\nSecurity scan: suspicious",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     const config: OpenClawConfig = {
       channels: {
@@ -4882,7 +5076,10 @@ describe("syncPluginsForUpdateChannel", () => {
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(false);
     expect(result.config).toBe(config);
+<<<<<<< HEAD
     expect(result.summary.warnings).toEqual(["WARNING\nSecurity scan: suspicious"]);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(result.summary.errors).toEqual([
       "Failed to update legacy-chat: ClawHub ClawPack integrity mismatch. (ClawHub clawhub:legacy-chat@2026.5.1-beta.2).",
     ]);

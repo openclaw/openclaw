@@ -41,6 +41,23 @@ export async function validateLineMediaUrl(url: string): Promise<void> {
   });
 }
 
+<<<<<<< HEAD
+=======
+export function detectLineMediaKind(mimeType: string): LineOutboundMediaKind {
+  const normalized = normalizeLowercaseStringOrEmpty(mimeType);
+  if (normalized.startsWith("image/")) {
+    return "image";
+  }
+  if (normalized.startsWith("video/")) {
+    return "video";
+  }
+  if (normalized.startsWith("audio/")) {
+    return "audio";
+  }
+  return "image";
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isHttpsUrl(url: string): boolean {
   try {
     return new URL(url).protocol === "https:";

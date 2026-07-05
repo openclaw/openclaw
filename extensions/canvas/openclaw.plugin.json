@@ -6,7 +6,10 @@
   "enabledByDefault": true,
   "name": "Canvas",
   "description": "Experimental Canvas control and A2UI rendering surfaces for paired nodes.",
+<<<<<<< HEAD
   "skills": ["./skills"],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "contracts": {
     "tools": ["canvas"]
   },

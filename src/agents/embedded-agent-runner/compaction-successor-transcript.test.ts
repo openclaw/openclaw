@@ -6,6 +6,10 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
+<<<<<<< HEAD
+=======
+  rotateRuntimeTranscriptAfterCompaction,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   rotateTranscriptAfterCompaction,
   rotateTranscriptFileAfterCompaction,
   shouldRotateCompactionTranscript,
@@ -117,6 +121,27 @@ function createCompactedSession(sessionDir: string): {
 }
 
 describe("rotateTranscriptAfterCompaction", () => {
+<<<<<<< HEAD
+=======
+  it("does not create session metadata for missing runtime transcripts", async () => {
+    const dir = await createTmpDir();
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(storePath, "{}\n", "utf8");
+
+    const result = await rotateRuntimeTranscriptAfterCompaction({
+      scope: {
+        agentId: "main",
+        sessionId: "missing-session",
+        sessionKey: "agent:main:missing",
+        storePath,
+      },
+    });
+
+    expect(result.rotated).toBe(false);
+    expect(await fs.readFile(storePath, "utf8")).toBe("{}\n");
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("can rotate a persisted transcript without opening a manager", async () => {
     const dir = await createTmpDir();
     const { sessionFile } = createCompactedSession(dir);
@@ -164,6 +189,7 @@ describe("rotateTranscriptAfterCompaction", () => {
         summary: "Summary of old user and old assistant.",
         tokensBefore: 5000,
       },
+<<<<<<< HEAD
       // The last assistant reply before firstKeptEntryId is preserved so the
       // successor shows compactionSummary → assistant → user (issue #76729).
       {
@@ -171,6 +197,8 @@ describe("rotateTranscriptAfterCompaction", () => {
         content: [{ type: "text", text: "old assistant" }],
         timestamp: 2,
       },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       { role: "user", content: "kept user", timestamp: 3 },
       {
         role: "assistant",
@@ -186,6 +214,7 @@ describe("rotateTranscriptAfterCompaction", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("keeps the paired tool result without replaying summarized custom context", async () => {
     const dir = await createTmpDir();
     const manager = SessionManager.create(dir, dir);
@@ -229,6 +258,8 @@ describe("rotateTranscriptAfterCompaction", () => {
     expect(JSON.stringify(messages)).not.toContain("summarized custom context");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("creates a compacted successor transcript and leaves the archive untouched", async () => {
     const dir = await createTmpDir();
     const { manager, sessionFile, firstKeptId, oldUserId } = createCompactedSession(dir);

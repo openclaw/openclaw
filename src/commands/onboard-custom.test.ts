@@ -108,6 +108,7 @@ describe("promptCustomApiConfig", () => {
     expect(prompter.confirm).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("cancels custom provider verification response bodies", async () => {
     const prompter = createTestPrompter({
       text: ["http://localhost:11434/v1", "", "llama3", "custom", ""],
@@ -129,6 +130,8 @@ describe("promptCustomApiConfig", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("handles explicit OpenAI Responses flow", async () => {
     const prompter = createTestPrompter({
       text: ["https://proxy.example.com/v1", "test-key", "gpt-5.4", "custom", ""],

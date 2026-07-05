@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import crypto from "node:crypto";
 // Memory Core doctor contract migrates shipped workspace dreaming state.
 import fsSync from "node:fs";
@@ -24,6 +25,14 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
+=======
+// Memory Core doctor contract migrates shipped workspace dreaming state.
+import fs from "node:fs/promises";
+import path from "node:path";
+import { resolveMemoryDreamingWorkspaces } from "openclaw/plugin-sdk/memory-core-host-status";
+import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   DAILY_INGESTION_STATE_RELATIVE_PATH,
   SESSION_INGESTION_STATE_RELATIVE_PATH,
   normalizeDailyIngestionState,
@@ -55,6 +64,7 @@ type LegacySource = {
   filePath: string;
 };
 
+<<<<<<< HEAD
 type LegacyMemorySidecarSource = {
   agentId: string;
   legacyPath: string;
@@ -978,6 +988,8 @@ function groupLegacyMemorySidecarSourcesByPath(
   return [...groups.values()];
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveConfiguredWorkspaces(config: unknown, env: NodeJS.ProcessEnv): string[] {
   return resolveMemoryDreamingWorkspaces(
     config as Parameters<typeof resolveMemoryDreamingWorkspaces>[0],
@@ -1210,6 +1222,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       return { changes, warnings };
     },
   },
+<<<<<<< HEAD
   {
     id: "memory-core-legacy-sidecar-index-to-agent-sqlite",
     label: "Memory Core legacy memory index sidecar",
@@ -1270,4 +1283,6 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       return { changes, warnings };
     },
   },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ];

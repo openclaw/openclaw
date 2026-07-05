@@ -7,7 +7,10 @@ const WORKFLOW = ".github/workflows/openclaw-performance.yml";
 
 type WorkflowStep = {
   name?: string;
+<<<<<<< HEAD
   id?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if?: string;
   run?: string;
   env?: Record<string, string>;
@@ -44,6 +47,7 @@ describe("OpenClaw performance workflow", () => {
     expect(workflow).toContain("Optional parent workflow dispatch identifier");
   });
 
+<<<<<<< HEAD
   it("pins the Kova evaluator that reads agent payloads", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
     const kovaRef = "4f146016583018bad9e24f8e64a6af5f963bb7ee";
@@ -68,6 +72,8 @@ describe("OpenClaw performance workflow", () => {
     expect(checkout.with?.ref).toBe("${{ steps.target.outputs.checkout_ref }}");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses the clawgrit reports token for every report repo push path", () => {
     const prepare = findStep("Prepare clawgrit reports checkout");
     const publish = findStep("Publish to clawgrit reports");

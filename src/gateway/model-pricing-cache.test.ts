@@ -454,6 +454,7 @@ describe("model-pricing-cache", () => {
     });
   });
 
+<<<<<<< HEAD
   it("cancels remote pricing error response bodies", async () => {
     const config = {
       agents: {
@@ -493,6 +494,8 @@ describe("model-pricing-cache", () => {
     expect(health.sources[0]?.detail).toContain("HTTP 429");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("records malformed remote pricing catalog JSON as source failures", async () => {
     const config = {
       agents: {
@@ -1261,7 +1264,10 @@ describe("model-pricing-cache", () => {
       },
     } as unknown as OpenClawConfig;
 
+<<<<<<< HEAD
     const liteLLMCancel = vi.fn(async () => undefined);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       if (url.includes("openrouter.ai")) {
@@ -1284,19 +1290,27 @@ describe("model-pricing-cache", () => {
           },
         );
       }
+<<<<<<< HEAD
       const liteLLMResponse = new Response("{}", {
+=======
+      return new Response("{}", {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         status: 200,
         headers: {
           "Content-Type": "application/json",
           "Content-Length": "6000000",
         },
       });
+<<<<<<< HEAD
       vi.spyOn(liteLLMResponse.body!, "cancel").mockImplementation(liteLLMCancel);
       return liteLLMResponse;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     await refreshGatewayModelPricingCache({ config, fetchImpl });
 
+<<<<<<< HEAD
     expect(liteLLMCancel).toHaveBeenCalledOnce();
     expect(getCachedGatewayModelPricing({ provider: "kimi", model: "kimi-k2.6" })).toEqual({
       input: 0.95,
@@ -1363,6 +1377,8 @@ describe("model-pricing-cache", () => {
     expect(health.sources[0]?.detail).toContain(
       "LiteLLM pricing response too large: 5242881 bytes",
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(getCachedGatewayModelPricing({ provider: "kimi", model: "kimi-k2.6" })).toEqual({
       input: 0.95,
       output: 4,

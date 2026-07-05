@@ -8,7 +8,10 @@ import type {
 import type { SessionEntry, SessionScope } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
+<<<<<<< HEAD
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 // Input contract for buildStatusText. Most fields are already resolved by the
 // caller so status rendering can stay presentation-focused and side-effect-light.
@@ -26,7 +29,11 @@ export type BuildStatusTextParams = {
   model: string;
   contextTokens?: number;
   resolvedThinkLevel?: ThinkLevel;
+<<<<<<< HEAD
   resolvedFastMode?: FastMode;
+=======
+  resolvedFastMode?: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolvedHarness?: string;
   resolvedVerboseLevel: VerboseLevel;
   resolvedReasoningLevel: ReasoningLevel;

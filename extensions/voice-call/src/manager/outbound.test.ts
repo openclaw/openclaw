@@ -155,12 +155,19 @@ describe("voice-call outbound helpers", () => {
         fromNumber: "+14155550100",
         tts: { provider: "openai", providers: { openai: { voice: "nova" } } },
       },
+<<<<<<< HEAD
       coreSession: { mainKey: "work" },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       storePath: "/tmp/voice-call.json",
       webhookUrl: "https://example.com/webhook",
     };
 
+<<<<<<< HEAD
     const result = await initiateCall(ctx as never, "+14155550123", "main", {
+=======
+    const result = await initiateCall(ctx as never, "+14155550123", "session-1", {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       mode: "notify",
       message: "hello there",
     });
@@ -179,7 +186,11 @@ describe("voice-call outbound helpers", () => {
       inlineTwiml: "<Response />",
     });
     expect(ctx.providerCallIdMap.get("provider-1")).toBe(callId);
+<<<<<<< HEAD
     expect(ctx.activeCalls.get(callId)?.sessionKey).toBe("agent:main:work");
+=======
+    expect(ctx.activeCalls.get(callId)?.sessionKey).toBe("session-1");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(persistCallRecordMock).toHaveBeenCalledTimes(2);
   });
 
@@ -204,9 +215,13 @@ describe("voice-call outbound helpers", () => {
     expect(result.success).toBe(true);
     expect(result.callId).toBeTypeOf("string");
     expect(result.callId).not.toBe("");
+<<<<<<< HEAD
     expect(ctx.activeCalls.get(result.callId)?.sessionKey).toBe(
       `agent:main:voice:call:${result.callId}`,
     );
+=======
+    expect(ctx.activeCalls.get(result.callId)?.sessionKey).toBe(`voice:call:${result.callId}`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("initiates conversation calls with pre-connect DTMF TwiML", async () => {
@@ -407,7 +422,10 @@ describe("voice-call outbound helpers", () => {
     const call = {
       callId: "call-1",
       providerCallId: "provider-1",
+<<<<<<< HEAD
       direction: "inbound",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       state: "active",
       to: "+15550002222",
       metadata: { numberRouteKey: "+15550002222" },
@@ -442,6 +460,7 @@ describe("voice-call outbound helpers", () => {
     });
   });
 
+<<<<<<< HEAD
   it("keeps top-level TTS for outbound calls to a number with an inbound route", async () => {
     const call = {
       callId: "call-1",
@@ -476,6 +495,8 @@ describe("voice-call outbound helpers", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("sends DTMF through connected provider calls", async () => {
     const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
     const sendDtmfProvider = vi.fn(async () => {});

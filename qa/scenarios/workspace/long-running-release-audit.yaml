@@ -14,7 +14,10 @@ scenario:
     - Agent starts from the seeded project README instead of guessing.
     - Agent inspects docs and source files across multiple directories.
     - Agent writes a JSON audit and a Markdown handoff with all required findings.
+<<<<<<< HEAD
     - Each JSON finding carries a boolean verified field; missing current source evidence is verified false.
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     - Agent verifies the generated JSON before finalizing.
   docsRefs:
     - docs/help/testing.md
@@ -132,8 +135,12 @@ scenario:
         Do a release readiness audit for the small project under `audit-fixture/`.
         Start from `audit-fixture/README.md`, find the current checklist, inspect the referenced docs/source, then create `audit-fixture/release-audit.json` and `audit-fixture/release-handoff.md`.
 
+<<<<<<< HEAD
         The JSON should include current finding ids, source files, statuses, and a boolean `verified` on each finding.
         If a current checklist source is referenced but missing from the fixture, include that source as a finding with `verified: false`.
+=======
+        The JSON should include current finding ids, source files, statuses, and a boolean `verified`.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         The Markdown handoff should summarize what is ready and what needs follow-up.
         Check your generated JSON before finalizing.
         Final reply exactly: RELEASE-AUDIT-COMPLETE
@@ -213,6 +220,7 @@ flow:
             expr: "!JSON.stringify(Array.isArray(report.findings) ? report.findings : report).includes('REL-STALE-000') && !handoffText.includes('REL-STALE-000')"
             message:
               expr: "`stale archive finding leaked into audit: report=${reportText}\\nhandoff=${handoffText}`"
+<<<<<<< HEAD
         - set: reportFindings
           value:
             expr: "Array.isArray(report) ? report : (Array.isArray(report.findings) ? report.findings : [])"
@@ -235,6 +243,21 @@ flow:
             - lambda:
                 params: [text]
                 expr: "text.trim() === 'RELEASE-AUDIT-COMPLETE'"
+=======
+        - assert:
+            expr: "JSON.stringify(report).includes('ui/control-panel.ts') && /blocked|missing|not found|no current source file|no matching source file/i.test(`${reportText}\\n${handoffText}`)"
+            message:
+              expr: "`missing UI evidence was not explicitly blocked: report=${reportText}\\nhandoff=${handoffText}`"
+        - assert:
+            expr: "JSON.stringify(report).includes('verified')"
+            message:
+              expr: "`report did not include a verification field: ${reportText}`"
+        - call: waitForCondition
+          saveAs: outbound
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && candidate.text.trim() === 'RELEASE-AUDIT-COMPLETE').at(-1)"
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             - expr: liveTurnTimeoutMs(env, 45000)
             - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
         - call: readRawQaSessionStore

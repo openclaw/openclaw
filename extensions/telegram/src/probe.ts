@@ -162,8 +162,12 @@ export async function probeTelegram(
         // On timeout or network error, promote the transport to its IPv4
         // fallback dispatcher so the next retry (and all future probes
         // sharing this cached transport) skip the stalled IPv6 path.
+<<<<<<< HEAD
         // Keep the original socket code in transport fallback diagnostics.
         transport.forceFallback?.("probe timeout/network error", err);
+=======
+        transport.forceFallback?.("probe timeout/network error");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         if (i < 2) {
           const remainingAfterAttemptMs = resolveRemainingBudgetMs();
           if (remainingAfterAttemptMs <= 0) {

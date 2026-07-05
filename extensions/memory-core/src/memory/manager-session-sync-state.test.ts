@@ -66,6 +66,7 @@ describe("memory session sync state", () => {
     expect(plan.activePaths).toEqual(new Set(["sessions/incremental.jsonl"]));
   });
 
+<<<<<<< HEAD
   it("marks identity-targeted syncs as session work", async () => {
     const { shouldSyncSessionsForReindex } = await import("./manager-session-reindex.js");
 
@@ -79,6 +80,8 @@ describe("memory session sync state", () => {
     ).toBe(true);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("marks missing and changed startup session files dirty", () => {
     const dirtyFiles = resolveMemorySessionStartupDirtyFiles({
       files: [

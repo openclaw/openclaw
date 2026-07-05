@@ -1,5 +1,9 @@
 /**
+<<<<<<< HEAD
  * Tests malformed XML arg_value suffix cleanup and path normalization for read paths.
+=======
+ * Tests malformed XML arg_value suffix cleanup for read paths.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
  * The wrapper should repair path params without touching unrelated payloads.
  */
 import { describe, expect, it, vi } from "vitest";
@@ -30,6 +34,7 @@ describe("createOpenClawReadTool malformed XML arg-value suffix handling", () =>
     );
   });
 
+<<<<<<< HEAD
   it("normalizes hallucinated Office/codex read path extensions", async () => {
     const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "ok" }] }));
     const base = {
@@ -53,6 +58,8 @@ describe("createOpenClawReadTool malformed XML arg-value suffix handling", () =>
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects read paths that become empty after suffix stripping", async () => {
     const execute = vi.fn();
     const base = {

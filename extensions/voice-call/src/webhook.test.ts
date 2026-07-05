@@ -31,7 +31,10 @@ const mocks = vi.hoisted(() => {
   };
 
   return {
+<<<<<<< HEAD
     generateVoiceResponse: vi.fn(async () => ({ text: null })),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     getRealtimeTranscriptionProvider: vi.fn<(...args: unknown[]) => unknown>(
       () => realtimeTranscriptionProvider,
     ),
@@ -44,10 +47,13 @@ vi.mock("./realtime-transcription.runtime.js", () => ({
   listRealtimeTranscriptionProviders: mocks.listRealtimeTranscriptionProviders,
 }));
 
+<<<<<<< HEAD
 vi.mock("./response-generator.js", () => ({
   generateVoiceResponse: mocks.generateVoiceResponse,
 }));
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const provider: VoiceCallProvider = {
   name: "mock",
   verifyWebhook: () => ({ ok: true, verifiedRequestKey: "mock:req:base" }),
@@ -255,6 +261,10 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
       }
       expect(mediaStreamHandler["handleUpgrade"]).toBeTypeOf("function");
       expect(mediaStreamHandler["sendAudio"]).toBeTypeOf("function");
+<<<<<<< HEAD
+=======
+      expect(mediaStreamHandler["closeAll"]).toBeTypeOf("function");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } finally {
       await server.stop();
     }
@@ -1651,6 +1661,7 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
   });
 });
 
+<<<<<<< HEAD
 describe("VoiceCallWebhookServer classic response routing", () => {
   it("keeps outbound calls on the top-level agent when the dialed number has an inbound route", async () => {
     const call = createCall(Date.now());
@@ -1691,6 +1702,8 @@ describe("VoiceCallWebhookServer classic response routing", () => {
   });
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("VoiceCallWebhookServer response normalization", () => {
   it("preserves explicit empty provider response bodies", async () => {
     const responseProvider: VoiceCallProvider = {

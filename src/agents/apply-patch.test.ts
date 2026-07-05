@@ -11,7 +11,11 @@ import {
   createRebindableDirectoryAlias,
   withRealpathSymlinkRebindRace,
 } from "../test-utils/symlink-rebind-race.js";
+<<<<<<< HEAD
 import { applyPatch, createApplyPatchTool } from "./apply-patch.js";
+=======
+import { applyPatch } from "./apply-patch.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
@@ -43,16 +47,25 @@ function createMemoryPatchSandbox(initialFiles: Record<string, string> = {}) {
   const files = new Map<string, string>(
     Object.entries(initialFiles).map(([filePath, contents]) => [`/sandbox/${filePath}`, contents]),
   );
+<<<<<<< HEAD
   const writeFile = vi.fn(async ({ filePath, data }) => {
     files.set(filePath, Buffer.isBuffer(data) ? data.toString("utf8") : data);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const bridge: SandboxFsBridge = {
     resolvePath: ({ filePath }) => ({
       relativePath: filePath,
       containerPath: `/sandbox/${filePath}`,
     }),
     readFile: async ({ filePath }) => Buffer.from(files.get(filePath) ?? "", "utf8"),
+<<<<<<< HEAD
     writeFile,
+=======
+    writeFile: async ({ filePath, data }) => {
+      files.set(filePath, Buffer.isBuffer(data) ? data.toString("utf8") : data);
+    },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     remove: async ({ filePath }) => {
       files.delete(filePath);
     },
@@ -73,8 +86,11 @@ function createMemoryPatchSandbox(initialFiles: Record<string, string> = {}) {
   };
   return {
     files,
+<<<<<<< HEAD
     bridge,
     writeFile,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     options: {
       cwd: "/local/workspace",
       sandbox: {
@@ -158,6 +174,7 @@ describe("applyPatch", () => {
     expect(result.summary.modified).toEqual(["source.txt"]);
   });
 
+<<<<<<< HEAD
   it("returns a terminal no-op without rewriting unchanged update hunks", async () => {
     const memory = createMemoryPatchSandbox({
       "source.txt": "foo\nbar\n",
@@ -237,6 +254,8 @@ describe("applyPatch", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("applies context-only insertions at the requested context", async () => {
     const memory = createMemoryPatchSandbox({
       "source.txt": "alpha\nanchor\nomega\n",

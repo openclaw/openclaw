@@ -13,6 +13,10 @@ export const XAI_DEFAULT_MAX_TOKENS = 64_000;
 const XAI_LEGACY_CONTEXT_WINDOW = 131_072;
 const XAI_LEGACY_MAX_TOKENS = 8_192;
 export const XAI_DEFAULT_MODEL_ID = "grok-4.3";
+<<<<<<< HEAD
+=======
+export const XAI_DEFAULT_MODEL_REF = `xai/${XAI_DEFAULT_MODEL_ID}`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type XaiCost = ModelDefinitionConfig["cost"];
 

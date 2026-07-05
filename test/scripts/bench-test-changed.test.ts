@@ -87,6 +87,7 @@ describe("bench-test-changed script", () => {
     expect(nextFlag.stderr).not.toContain("at ");
   });
 
+<<<<<<< HEAD
   it("rejects duplicate max worker values before inspecting git state", () => {
     const result = runBenchTestChanged(["--max-workers", "2", "--max-workers", "3"]);
 
@@ -96,6 +97,8 @@ describe("bench-test-changed script", () => {
     expect(result.stderr).not.toContain("at ");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects unknown options before collecting changed paths", () => {
     const result = runBenchTestChanged(["--max-worker", "4"]);
 

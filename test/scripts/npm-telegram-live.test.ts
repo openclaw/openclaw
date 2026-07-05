@@ -148,6 +148,7 @@ describe("package Telegram live Docker E2E", () => {
     );
   });
 
+<<<<<<< HEAD
   it("uses unique direct-run output dirs by default", () => {
     const repoRoot = mkTempRoot();
     const firstDir = testing.resolvePackageTelegramOutputDir({}, repoRoot);
@@ -164,6 +165,8 @@ describe("package Telegram live Docker E2E", () => {
     ).toBe(".artifacts/custom");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("mounts configured output paths before entering the container", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
     const dockerEnvStart = script.indexOf("docker_env=(");

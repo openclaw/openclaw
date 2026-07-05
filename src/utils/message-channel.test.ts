@@ -5,10 +5,15 @@ import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
+<<<<<<< HEAD
   NATIVE_APPROVAL_CHANNELS,
   isInternalNonDeliveryChannel,
   isMarkdownCapableMessageChannel,
   isNativeApprovalChannel,
+=======
+  isInternalNonDeliveryChannel,
+  isMarkdownCapableMessageChannel,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveGatewayMessageChannel,
 } from "./message-channel.js";
 
@@ -81,6 +86,7 @@ describe("message-channel", () => {
     expect(isInternalNonDeliveryChannel("HEARTBEAT")).toBe(false);
   });
 
+<<<<<<< HEAD
   it("lists native chat exec approval channels", () => {
     for (const channel of NATIVE_APPROVAL_CHANNELS) {
       expect(isNativeApprovalChannel(channel)).toBe(true);
@@ -94,6 +100,8 @@ describe("message-channel", () => {
     expect(isNativeApprovalChannel("TELEGRAM")).toBe(false);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("reads markdown capability from channel metadata", () => {
     expect(isMarkdownCapableMessageChannel("telegram")).toBe(true);
     expect(isMarkdownCapableMessageChannel("whatsapp")).toBe(false);

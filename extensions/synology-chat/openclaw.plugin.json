@@ -2,7 +2,10 @@
   "id": "synology-chat",
   "name": "Synology Chat",
   "description": "Synology Chat channel plugin for OpenClaw channels and direct messages.",
+<<<<<<< HEAD
   "icon": "https://cdn.simpleicons.org/synology",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "activation": {
     "onStartup": false
   },

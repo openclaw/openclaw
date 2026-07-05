@@ -14,6 +14,7 @@ import {
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
+<<<<<<< HEAD
 // Default ceiling for non-raw JSON control-plane responses (whoami, receipts,
 // directory search, key-backup status, generic doRequest). Matrix homeservers
 // are untrusted, so bound the body the same way the raw media path is bounded
@@ -24,6 +25,8 @@ const MATRIX_JSON_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
 // Keep that path bounded without applying the tighter control-plane JSON cap.
 const MATRIX_SDK_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type QueryValue =
   | string
   | number
@@ -100,7 +103,11 @@ function withoutMatrixStateAfterSyncParam(rawUrl: string): string {
 
 function buildBufferedResponse(params: {
   source: Response;
+<<<<<<< HEAD
   body: BodyInit;
+=======
+  body: ArrayBuffer;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   url: string;
 }): Response {
   const response = new Response(params.body, {
@@ -119,6 +126,7 @@ function buildBufferedResponse(params: {
   return response;
 }
 
+<<<<<<< HEAD
 async function enforceDeclaredResponseSize(params: {
   response: Response;
   maxBytes: number;
@@ -145,6 +153,8 @@ async function enforceDeclaredResponseSize(params: {
   throw error;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function fetchWithMatrixDispatcher(params: {
   url: string;
   init: MatrixDispatcherRequestInit;
@@ -280,6 +290,7 @@ export function createMatrixGuardedFetch(params: {
     });
 
     try {
+<<<<<<< HEAD
       await enforceDeclaredResponseSize({
         response,
         maxBytes: MATRIX_SDK_RESPONSE_MAX_BYTES,
@@ -295,6 +306,12 @@ export function createMatrixGuardedFetch(params: {
       return buildBufferedResponse({
         source: response,
         body: Uint8Array.from(body),
+=======
+      const body = await response.arrayBuffer();
+      return buildBufferedResponse({
+        source: response,
+        body,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         url,
       });
     } finally {
@@ -365,6 +382,7 @@ export async function performMatrixRequest(params: {
 
   try {
     if (params.raw) {
+<<<<<<< HEAD
       if (params.maxBytes) {
         await enforceDeclaredResponseSize({
           response,
@@ -374,6 +392,16 @@ export async function performMatrixRequest(params: {
               `Matrix media exceeds configured size limit (${length} bytes > ${params.maxBytes} bytes)`,
             ),
         });
+=======
+      const contentLength = response.headers.get("content-length");
+      if (params.maxBytes && contentLength) {
+        const length = parseMediaContentLength(contentLength);
+        if (length !== null && length > params.maxBytes) {
+          throw new MatrixMediaSizeLimitError(
+            `Matrix media exceeds configured size limit (${length} bytes > ${params.maxBytes} bytes)`,
+          );
+        }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
       const bytes = params.maxBytes
         ? await readResponseWithLimit(response, params.maxBytes, {
@@ -390,6 +418,7 @@ export async function performMatrixRequest(params: {
         buffer: bytes,
       };
     }
+<<<<<<< HEAD
     const jsonMaxBytes = params.maxBytes ?? MATRIX_JSON_RESPONSE_MAX_BYTES;
     await enforceDeclaredResponseSize({
       response,
@@ -412,6 +441,13 @@ export async function performMatrixRequest(params: {
       response,
       text: buffer.toString("utf8"),
       buffer,
+=======
+    const text = await response.text();
+    return {
+      response,
+      text,
+      buffer: Buffer.from(text, "utf8"),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
   } finally {
     await release();

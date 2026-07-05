@@ -170,6 +170,7 @@ export async function startClickClackGatewayAccount(
       }
       const socket = client.websocket(workspaceId, afterCursor);
       await new Promise<void>((resolve, reject) => {
+<<<<<<< HEAD
         let settled = false;
         let removeAbortListener: (() => void) | undefined;
         const finishSocketCycle = () => {
@@ -187,6 +188,13 @@ export async function startClickClackGatewayAccount(
         };
         ctx.abortSignal.addEventListener("abort", abort, { once: true });
         removeAbortListener = () => ctx.abortSignal.removeEventListener("abort", abort);
+=======
+        const abort = () => {
+          socket.close();
+          resolve();
+        };
+        ctx.abortSignal.addEventListener("abort", abort, { once: true });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         socket.on("message", (data) => {
           void (async () => {
             const event = parseSocketEvent(data);
@@ -206,6 +214,7 @@ export async function startClickClackGatewayAccount(
             });
           })().catch(reject);
         });
+<<<<<<< HEAD
         socket.on("close", finishSocketCycle);
         socket.on("error", (error) => {
           if (settled || ctx.abortSignal.aborted) {
@@ -220,6 +229,13 @@ export async function startClickClackGatewayAccount(
           finishSocketCycle();
           socket.close();
         });
+=======
+        socket.on("close", () => {
+          ctx.abortSignal.removeEventListener("abort", abort);
+          resolve();
+        });
+        socket.on("error", reject);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
       if (!ctx.abortSignal.aborted) {
         await new Promise((resolve) => {

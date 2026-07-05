@@ -31,6 +31,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
+<<<<<<< HEAD
 function jsonResponse(payload: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(payload), {
     status: 200,
@@ -46,6 +47,8 @@ function malformedJsonResponse(): Response {
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
   vi.resetModules();
@@ -59,6 +62,7 @@ describe("lmstudio-models", () => {
     }
     return JSON.parse(init.body) as unknown;
   };
+<<<<<<< HEAD
   const cancelTrackedResponse = (
     text: string,
     init: ResponseInit,
@@ -107,6 +111,36 @@ describe("lmstudio-models", () => {
       }
       if (String(url).endsWith("/api/v1/models/load")) {
         return jsonResponse({ status: "loaded" });
+=======
+  const createModelLoadFetchMock = (params?: {
+    loadedContextLength?: number;
+    maxContextLength?: number;
+  }) =>
+    vi.fn(async (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith("/api/v1/models")) {
+        return {
+          ok: true,
+          json: async () => ({
+            models: [
+              {
+                type: "llm",
+                key: "qwen3-8b-instruct",
+                max_context_length: params?.maxContextLength,
+                loaded_instances: params?.loadedContextLength
+                  ? [{ id: "inst-1", config: { context_length: params.loadedContextLength } }]
+                  : [],
+              },
+            ],
+          }),
+        };
+      }
+      if (String(url).endsWith("/api/v1/models/load")) {
+        return {
+          ok: true,
+          json: async () => ({ status: "loaded" }),
+          requestInit: init,
+        };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
       throw new Error(`Unexpected fetch URL: ${String(url)}`);
     });
@@ -124,6 +158,7 @@ describe("lmstudio-models", () => {
     const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
     expect(loadBody.context_length).toBe(contextLength);
   };
+<<<<<<< HEAD
   const expectLoadModelKey = (
     fetchMock: ReturnType<typeof createModelLoadFetchMock>,
     modelKey: string,
@@ -136,6 +171,8 @@ describe("lmstudio-models", () => {
     const loadBody = parseJsonRequestBody(loadInit) as { model: string };
     expect(loadBody.model).toBe(modelKey);
   };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   afterEach(() => {
     fetchWithSsrFGuardMock.mockReset();
@@ -304,8 +341,14 @@ describe("lmstudio-models", () => {
   });
 
   it("discovers llm models and maps metadata", async () => {
+<<<<<<< HEAD
     const fetchMock = vi.fn(async (_url: string | URL, _init?: RequestInit) =>
       jsonResponse({
+=======
+    const fetchMock = vi.fn(async (_url: string | URL, _init?: RequestInit) => ({
+      ok: true,
+      json: async () => ({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         models: [
           {
             type: "llm",
@@ -337,7 +380,11 @@ describe("lmstudio-models", () => {
           },
         ],
       }),
+<<<<<<< HEAD
     );
+=======
+    }));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const models = await discoverLmstudioModels({
       baseUrl: "http://localhost:1234/v1",
@@ -393,7 +440,17 @@ describe("lmstudio-models", () => {
   });
 
   it("reports malformed model list JSON with an owned error", async () => {
+<<<<<<< HEAD
     const fetchMock = vi.fn(async () => malformedJsonResponse());
+=======
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError("bad json");
+      },
+    }));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const result = await fetchLmstudioModels({
       baseUrl: "http://localhost:1234/v1",
@@ -406,7 +463,15 @@ describe("lmstudio-models", () => {
 
   it("reports wrong-shaped model list payloads with owned errors", async () => {
     for (const payload of [[], { models: {} }, { models: [null] }]) {
+<<<<<<< HEAD
       const fetchMock = vi.fn(async () => jsonResponse(payload));
+=======
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => payload,
+      }));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       const result = await fetchLmstudioModels({
         baseUrl: "http://localhost:1234/v1",
@@ -421,9 +486,18 @@ describe("lmstudio-models", () => {
   it("caps oversized direct fetch timeouts before discovering models", async () => {
     const timeoutController = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+<<<<<<< HEAD
     const fetchMock = vi.fn(async (_url: string | URL, _init?: RequestInit) =>
       jsonResponse({ models: [] }),
     );
+=======
+    const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      requestInit: init,
+      json: async () => ({ models: [] }),
+    }));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const result = await fetchLmstudioModels({
       baseUrl: "http://localhost:1234/v1",
@@ -463,7 +537,11 @@ describe("lmstudio-models", () => {
         baseUrl: "http://localhost:1234/v1",
         modelKey: "qwen3-8b-instruct",
       }),
+<<<<<<< HEAD
     ).resolves.toBe("qwen3-8b-instruct");
+=======
+    ).resolves.toBeUndefined();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const calledUrls = fetchMock.mock.calls.map((call) => String(call[0]));
@@ -483,12 +561,17 @@ describe("lmstudio-models", () => {
         modelKey: "qwen3-8b-instruct",
         requestedContextLength: 8192,
       }),
+<<<<<<< HEAD
     ).resolves.toBe("qwen3-8b-instruct");
+=======
+    ).resolves.toBeUndefined();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expectLoadContextLength(fetchMock, 8192);
   });
 
+<<<<<<< HEAD
   it("loads the canonical model key when the requested key is an advertised variant", async () => {
     const canonicalKey = "gemma-4-e4b-it-ultra-uncensored-heretic";
     const variantKey = `${canonicalKey}@q4_k_m`;
@@ -572,6 +655,25 @@ describe("lmstudio-models", () => {
       }
       if (String(url).endsWith("/api/v1/models/load")) {
         return malformedJsonResponse();
+=======
+  it("reports malformed model load JSON with an owned error", async () => {
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (String(url).endsWith("/api/v1/models")) {
+        return {
+          ok: true,
+          json: async () => ({
+            models: [{ type: "llm", key: "qwen3-8b-instruct", loaded_instances: [] }],
+          }),
+        };
+      }
+      if (String(url).endsWith("/api/v1/models/load")) {
+        return {
+          ok: true,
+          json: async () => {
+            throw new SyntaxError("bad json");
+          },
+        };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
       throw new Error(`Unexpected fetch URL: ${String(url)}`);
     });
@@ -582,6 +684,7 @@ describe("lmstudio-models", () => {
         baseUrl: "http://localhost:1234/v1",
         modelKey: "qwen3-8b-instruct",
       }),
+<<<<<<< HEAD
     ).rejects.toThrow("LM Studio model load: malformed JSON response");
   });
 
@@ -659,6 +762,9 @@ describe("lmstudio-models", () => {
     expect((error as Error).message).not.toContain("tail");
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
+=======
+    ).rejects.toThrow("LM Studio model load returned malformed JSON");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("reloads model to the clamped default target when already loaded below the default window", async () => {
@@ -673,7 +779,11 @@ describe("lmstudio-models", () => {
         baseUrl: "http://localhost:1234/v1",
         modelKey: "qwen3-8b-instruct",
       }),
+<<<<<<< HEAD
     ).resolves.toBe("qwen3-8b-instruct");
+=======
+    ).resolves.toBeUndefined();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expectLoadContextLength(fetchMock, 32768);
@@ -693,7 +803,11 @@ describe("lmstudio-models", () => {
         },
         modelKey: " qwen3-8b-instruct ",
       }),
+<<<<<<< HEAD
     ).resolves.toBe("qwen3-8b-instruct");
+=======
+    ).resolves.toBeUndefined();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const loadCall = findModelLoadCall(fetchMock);
@@ -729,7 +843,11 @@ describe("lmstudio-models", () => {
         modelKey: "qwen3-8b-instruct",
         requestedContextLength: 8192,
       }),
+<<<<<<< HEAD
     ).resolves.toBe("qwen3-8b-instruct");
+=======
+    ).resolves.toBeUndefined();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expectLoadContextLength(fetchMock, 8192);
   });
@@ -747,7 +865,11 @@ describe("lmstudio-models", () => {
         modelKey: "qwen3-8b-instruct",
         requestedContextLength: 8192.5,
       }),
+<<<<<<< HEAD
     ).resolves.toBe("qwen3-8b-instruct");
+=======
+    ).resolves.toBeUndefined();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expectLoadContextLength(fetchMock, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
   });

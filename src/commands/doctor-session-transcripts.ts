@@ -16,11 +16,16 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "../config/sessions/transcript-tree.js";
+<<<<<<< HEAD
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { shortenHomePath } from "../utils.js";
 
 const SESSION_TRANSCRIPTS_CHECK_ID = "core/doctor/session-transcripts";
 
+=======
+import { shortenHomePath } from "../utils.js";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type TranscriptEntry = Record<string, unknown> & {
   id?: unknown;
   parentId?: unknown;
@@ -39,10 +44,13 @@ type TranscriptRepairResult = {
   reason?: string;
 };
 
+<<<<<<< HEAD
 export type SessionTranscriptHealthIssue = TranscriptRepairResult & {
   broken: true;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type ActiveTranscriptPath = {
   entries: TranscriptEntry[];
   entriesToPersist: TranscriptEntry[];
@@ -379,6 +387,7 @@ async function listSessionTranscriptFiles(sessionDirs: string[]): Promise<string
   return files.toSorted((a, b) => a.localeCompare(b));
 }
 
+<<<<<<< HEAD
 export async function detectSessionTranscriptHealthIssues(params?: {
   sessionDirs?: string[];
 }): Promise<SessionTranscriptHealthIssue[]> {
@@ -430,6 +439,8 @@ export function sessionTranscriptIssueToRepairEffect(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Scans session transcript files and reports or repairs legacy/broken transcript state. */
 export async function noteSessionTranscriptHealth(params?: {
   shouldRepair?: boolean;
@@ -444,6 +455,7 @@ export async function noteSessionTranscriptHealth(params?: {
     return;
   }
 
+<<<<<<< HEAD
   const results: TranscriptRepairResult[] = [];
   if (shouldRepair) {
     const files = await listSessionTranscriptFiles(sessionDirs);
@@ -452,6 +464,16 @@ export async function noteSessionTranscriptHealth(params?: {
     }
   } else {
     results.push(...(await detectSessionTranscriptHealthIssues({ sessionDirs })));
+=======
+  const files = await listSessionTranscriptFiles(sessionDirs);
+  if (files.length === 0) {
+    return;
+  }
+
+  const results: TranscriptRepairResult[] = [];
+  for (const filePath of files) {
+    results.push(await repairBrokenSessionTranscriptFile({ filePath, shouldRepair }));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   const broken = results.filter((result) => result.broken);
   if (broken.length === 0) {

@@ -424,6 +424,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
   }
 
   private emitError(error: unknown): void {
+<<<<<<< HEAD
     const normalized = error instanceof Error ? error : new Error(String(error));
     try {
       this.options.callbacks.onError?.(normalized);
@@ -437,6 +438,9 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
         // replace the original provider/session error.
       }
     }
+=======
+    this.options.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   private captureFrame(direction: "inbound" | "outbound", payload: Buffer | string): void {

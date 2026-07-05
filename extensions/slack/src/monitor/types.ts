@@ -8,7 +8,11 @@ export type MonitorSlackOpts = {
   botToken?: string;
   appToken?: string;
   accountId?: string;
+<<<<<<< HEAD
   mode?: "socket" | "http" | "relay";
+=======
+  mode?: "socket" | "http";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   config?: OpenClawConfig;
   runtime?: RuntimeEnv;
   channelRuntime?: ChannelRuntimeSurface;

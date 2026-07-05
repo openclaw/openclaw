@@ -372,8 +372,11 @@ function itemKindToToolName(kind: string | undefined): string | undefined {
       return "apply_patch";
     case "search":
       return "web_search";
+<<<<<<< HEAD
     case "api":
       return "api";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     case "tool":
       return "tool_call";
     default:
@@ -413,6 +416,7 @@ function resolveCommandProgressCorrelationKey(input: { toolCallId?: string }): s
   return toolCallId ? `command:${toolCallId}` : undefined;
 }
 
+<<<<<<< HEAD
 function isTerminalProgressStatus(status: string | undefined): boolean {
   const normalized = normalizeOptionalLowercaseString(status);
   return (
@@ -422,6 +426,8 @@ function isTerminalProgressStatus(status: string | undefined): boolean {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isEmptyReasoningProgressItem(
   input: Extract<ChannelProgressDraftLineInput, { event: "item" }>,
   meta: string | undefined,
@@ -455,6 +461,18 @@ function buildCommandOutputProgressLine(
     return line;
   }
   if (status === "completed") {
+<<<<<<< HEAD
+=======
+    if (!line.detail) {
+      const statusLine = {
+        ...line,
+        detail: status,
+        text: formatToolAggregate(name, [status], { markdown: options?.markdown }),
+      };
+      setProgressDraftLineCorrelationKey(statusLine, correlationKey);
+      return statusLine;
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return line;
   }
   if (!line.detail || line.detail === status) {
@@ -1104,6 +1122,7 @@ export function normalizeChannelProgressDraftLineIdentity(
   /** Progress line whose duplicate/update identity should be normalized. */
   line: string | ChannelProgressDraftLine | undefined,
 ): string {
+<<<<<<< HEAD
   const text = typeof line === "string" ? line : line ? getProgressDraftLineText(line) : undefined;
   return (
     text
@@ -1111,6 +1130,11 @@ export function normalizeChannelProgressDraftLineIdentity(
       .replace(/\s+/g, " ")
       .trim() ?? ""
   );
+=======
+  const text = typeof line === "string" ? line : line?.text;
+  const status = typeof line === "object" ? line.status : undefined;
+  return compactStrings([text, status]).join(" ");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function mergeChannelProgressDraftLine<TLine extends string | ChannelProgressDraftLine>(
@@ -1133,7 +1157,12 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
     );
     if (existingIndex >= 0) {
       const replacement = mergeProgressDraftLineUpdate(lines[existingIndex], line);
+<<<<<<< HEAD
       if (replacement === lines[existingIndex]) {
+=======
+      const replacementIdentity = normalizeChannelProgressDraftLineIdentity(replacement);
+      if (normalizeChannelProgressDraftLineIdentity(lines[existingIndex]) === replacementIdentity) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         return lines;
       }
       const next = [...lines];
@@ -1141,8 +1170,13 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
       return next.slice(-maxLines);
     }
   }
+<<<<<<< HEAD
   const previous = lines.at(-1);
   if (previous && normalizeChannelProgressDraftLineIdentity(previous) === normalized) {
+=======
+  const previous = normalizeChannelProgressDraftLineIdentity(lines.at(-1));
+  if (previous === normalized) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return lines;
   }
   return [...lines, line].slice(-maxLines);
@@ -1158,16 +1192,24 @@ function mergeProgressDraftLineUpdate<TLine extends string | ChannelProgressDraf
   if (
     line.kind !== "command-output" ||
     !line.status ||
+<<<<<<< HEAD
+=======
+    line.status === "completed" ||
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     (line.detail && line.detail !== line.status)
   ) {
     return line;
   }
   const previousDetail = previous.detail?.trim();
+<<<<<<< HEAD
   if (
     !previousDetail ||
     previousDetail === previous.status ||
     isTerminalProgressStatus(previous.status)
   ) {
+=======
+  if (!previousDetail || previousDetail === previous.status) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return line;
   }
   const replacement = {

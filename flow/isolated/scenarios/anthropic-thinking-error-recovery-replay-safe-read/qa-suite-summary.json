@@ -1,0 +1,73 @@
+{
+  "scenarios": [
+    {
+      "name": "Anthropic thinking error recovery after replay-safe read",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "retries a thinking-only Anthropic error after a replay-safe read",
+          "status": "pass",
+          "details": "ANTHROPIC-THINKING-ERROR-RECOVERED-OK\nrequests=4"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 46168,
+    "gatewayProcessCpuMs": 2000,
+    "gatewayCpuCoreRatio": 0.043,
+    "gatewayProcessRssStartBytes": 869093376,
+    "gatewayProcessRssEndBytes": 1047597056,
+    "gatewayProcessRssDeltaBytes": 178503680,
+    "gatewayProcessRssPeakBytes": 1047597056,
+    "gatewayProcessRssPeakDeltaBytes": 178503680,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:14:39.140Z",
+        "gatewayProcessRssBytes": 869093376
+      },
+      {
+        "label": "scenario:anthropic-thinking-error-recovery-replay-safe-read:start",
+        "at": "2026-07-03T13:14:39.187Z",
+        "gatewayProcessRssBytes": 872804352
+      },
+      {
+        "label": "scenario:anthropic-thinking-error-recovery-replay-safe-read:finish",
+        "at": "2026-07-03T13:14:45.521Z",
+        "gatewayProcessRssBytes": 1047597056
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:14:45.545Z",
+        "gatewayProcessRssBytes": 1047597056
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:13:59.353Z",
+    "finishedAt": "2026-07-03T13:14:45.521Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "anthropic-thinking-error-recovery-replay-safe-read"
+    ],
+    "runtimePair": null
+  }
+}

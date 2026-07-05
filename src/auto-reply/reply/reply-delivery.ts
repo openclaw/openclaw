@@ -6,7 +6,11 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
+<<<<<<< HEAD
 import { mergeReactionDirectiveChannelData, parseReplyDirectives } from "./reply-directives.js";
+=======
+import { parseReplyDirectives } from "./reply-directives.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
@@ -51,10 +55,13 @@ export function normalizeReplyPayloadDirectives(params: {
   const mediaUrls = params.payload.mediaUrls ?? parsed?.mediaUrls;
   const mediaUrl = params.payload.mediaUrl ?? parsed?.mediaUrl ?? mediaUrls?.[0];
 
+<<<<<<< HEAD
   const channelData = mergeReactionDirectiveChannelData(
     params.payload.channelData,
     parsed?.reaction,
   );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return {
     payload: copyReplyPayloadMetadata(params.payload, {
       ...params.payload,
@@ -65,7 +72,10 @@ export function normalizeReplyPayloadDirectives(params: {
       replyToTag: params.payload.replyToTag || parsed?.replyToTag,
       replyToCurrent: params.payload.replyToCurrent || parsed?.replyToCurrent,
       audioAsVoice: Boolean(params.payload.audioAsVoice || parsed?.audioAsVoice),
+<<<<<<< HEAD
       ...(channelData ? { channelData } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }),
     isSilent: parsed?.isSilent ?? false,
   };

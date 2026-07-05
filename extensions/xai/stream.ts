@@ -14,7 +14,10 @@ const XAI_FAST_MODEL_IDS = new Map<string, string>([
   ["grok-4", "grok-4-fast"],
   ["grok-4-0709", "grok-4-fast"],
 ]);
+<<<<<<< HEAD
 type DynamicFastMode = boolean | (() => boolean | undefined);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function resolveXaiFastModelId(modelId: unknown): string | undefined {
   if (typeof modelId !== "string") {
@@ -53,6 +56,7 @@ function supportsReasoningControls(model: { compat?: unknown; reasoning?: unknow
   return model.reasoning === true && compat?.supportsReasoningEffort !== false;
 }
 
+<<<<<<< HEAD
 const XAI_REASONING_ENCRYPTED_CONTENT_INCLUDE = "reasoning.encrypted_content";
 
 /** xAI-only: request encrypted reasoning for every reasoning-capable model, even when effort is unsupported. */
@@ -73,6 +77,8 @@ function ensureXaiResponsesEncryptedReasoningInclude(
   payloadObj.include = include;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const TOOL_RESULT_IMAGE_REPLAY_TEXT = "Attached image(s) from tool result:";
 
 type ReplayableInputImagePart =
@@ -201,13 +207,19 @@ export function createXaiToolPayloadCompatibilityWrapper(
           }
           normalizeXaiResponsesToolResultPayload(payloadObj, model);
           if (!supportsReasoningControls(model)) {
+<<<<<<< HEAD
             // Only grok-4.3* advertises configurable effort; drop effort fields elsewhere.
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             delete payloadObj.reasoning;
             delete payloadObj.reasoningEffort;
             delete payloadObj.reasoning_effort;
           }
+<<<<<<< HEAD
           // All reasoning xAI models should still request + later replay encrypted_content.
           ensureXaiResponsesEncryptedReasoningInclude(payloadObj, model);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }
         return originalOnPayload?.(payload, model);
       },
@@ -217,17 +229,25 @@ export function createXaiToolPayloadCompatibilityWrapper(
 
 export function createXaiFastModeWrapper(
   baseStreamFn: StreamFn | undefined,
+<<<<<<< HEAD
   fastMode: DynamicFastMode,
+=======
+  fastMode: boolean,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const supportsFastAliasTransport =
       model.api === "openai-completions" || model.api === "openai-responses";
+<<<<<<< HEAD
     if (
       (typeof fastMode === "function" ? fastMode() : fastMode) !== true ||
       !supportsFastAliasTransport ||
       model.provider !== "xai"
     ) {
+=======
+    if (!fastMode || !supportsFastAliasTransport || model.provider !== "xai") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return underlying(model, context, options);
     }
 
@@ -240,6 +260,7 @@ export function createXaiFastModeWrapper(
   };
 }
 
+<<<<<<< HEAD
 function resolveXaiFastMode(extraParams: Record<string, unknown> | undefined): boolean | undefined {
   const raw = extraParams?.fastMode ?? extraParams?.fast_mode;
   if (typeof raw === "function") {
@@ -265,6 +286,16 @@ export function wrapXaiProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
       wrappedStreamFn = createXaiFastModeWrapper(wrappedStreamFn, () =>
         resolveXaiFastMode(extraParams),
       );
+=======
+export function wrapXaiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
+  const extraParams = ctx.extraParams;
+  const fastMode = extraParams?.fastMode;
+  const toolStreamEnabled = extraParams?.tool_stream !== false;
+  return composeProviderStreamWrappers(ctx.streamFn, (streamFn) => {
+    let wrappedStreamFn = createXaiToolPayloadCompatibilityWrapper(streamFn);
+    if (typeof fastMode === "boolean") {
+      wrappedStreamFn = createXaiFastModeWrapper(wrappedStreamFn, fastMode);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     wrappedStreamFn = createPlainTextToolCallCompatWrapper(wrappedStreamFn);
     return createToolStreamWrapper(wrappedStreamFn, toolStreamEnabled);

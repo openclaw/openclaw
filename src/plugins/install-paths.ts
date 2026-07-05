@@ -120,6 +120,7 @@ export function resolvePluginNpmProjectDir(params: {
   );
 }
 
+<<<<<<< HEAD
 const PLUGIN_NPM_GENERATION_PROJECT_SEPARATOR = "__openclaw-generation__";
 
 /** Resolves the managed npm artifact-generation project directory prefix for a package. */
@@ -141,6 +142,8 @@ export function resolvePluginNpmGenerationProjectDir(params: {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Resolves the installed node_modules package directory for a managed npm plugin. */
 export function resolvePluginNpmPackageDir(params: {
   packageName: string;

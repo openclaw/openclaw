@@ -1,8 +1,14 @@
 // Qa Lab plugin module implements suite runtime agent process behavior.
+<<<<<<< HEAD
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+=======
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import path from "node:path";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -15,13 +21,19 @@ import {
   readQaChildOutput,
 } from "./child-output.js";
 import { QaSuiteInfraError } from "./errors.js";
+<<<<<<< HEAD
 import { extractGatewayMessageText } from "./gateway-log-sentinel.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveQaNodeExecPath } from "./node-exec.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import { waitForGatewayHealthy, waitForTransportReady } from "./suite-runtime-gateway.js";
 import type { QaDreamingStatus, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
+<<<<<<< HEAD
 import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type QaMemorySearchResult = {
   results?: Array<{ snippet?: string; text?: string; path?: string }>;
@@ -37,6 +49,7 @@ type QaCronJob = {
   state?: { nextRunAtMs?: number };
 };
 
+<<<<<<< HEAD
 type QaChatHistoryResponse = {
   messages?: unknown[];
 };
@@ -46,19 +59,25 @@ type QaAgentWaitResult = {
   error?: string;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const ANSI_ESCAPE_PATTERN = new RegExp(String.raw`\x1B\[[0-?]*[ -/]*[@-~]`, "g");
 const MANAGED_DREAMING_CRON_MARKER = "[managed-by=memory-core.short-term-promotion]";
 const MANAGED_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
 const MANAGED_DREAMING_PROMPT = "__openclaw_memory_core_short_term_promotion_dream__";
 
+<<<<<<< HEAD
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function stripAnsiCodes(text: string) {
   return text.replace(ANSI_ESCAPE_PATTERN, "");
 }
 
+<<<<<<< HEAD
 function findBalancedJsonEnd(text: string, startIndex: number) {
   const opening = text[startIndex];
   const firstClosing = opening === "{" ? "}" : opening === "[" ? "]" : "";
@@ -163,16 +182,23 @@ function resolveQaCliJsonPayloadMatcher(args: readonly string[]) {
 }
 
 function parseQaCliJsonOutput(text: string, args: readonly string[]) {
+=======
+function parseQaCliJsonOutput(text: string) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const cleaned = stripAnsiCodes(text).trim();
   if (!cleaned) {
     return {};
   }
+<<<<<<< HEAD
   const matchesExpectedPayload = resolveQaCliJsonPayloadMatcher(args);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   try {
     return JSON.parse(cleaned) as unknown;
   } catch {
     // Some startup repair logs are emitted on stdout before command JSON.
     const lines = cleaned.split(/\r?\n/);
+<<<<<<< HEAD
     const candidates: unknown[] = [];
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index];
@@ -202,6 +228,19 @@ function parseQaCliJsonOutput(text: string, args: readonly string[]) {
     if (diagnosticOnly !== undefined) {
       return diagnosticOnly;
     }
+=======
+    for (let index = 0; index < lines.length; index += 1) {
+      const candidate = lines[index].trim();
+      if (!candidate.startsWith("{") && !candidate.startsWith("[")) {
+        continue;
+      }
+      try {
+        return JSON.parse(lines.slice(index).join("\n")) as unknown;
+      } catch {
+        // Keep looking for the actual payload start.
+      }
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     // Keep a line-oriented fallback for compact payloads followed by diagnostics.
     for (const line of lines.toReversed()) {
@@ -223,6 +262,7 @@ function signalQaCliProcessTree(
   child: Pick<ChildProcessWithoutNullStreams, "kill" | "pid">,
   signal: NodeJS.Signals,
 ) {
+<<<<<<< HEAD
   if (process.platform === "win32") {
     if (typeof child.pid === "number") {
       const result = spawnSync(
@@ -241,6 +281,9 @@ function signalQaCliProcessTree(
     return;
   }
   if (typeof child.pid === "number") {
+=======
+  if (process.platform !== "win32" && typeof child.pid === "number") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     try {
       process.kill(-child.pid, signal);
       return;
@@ -286,7 +329,11 @@ async function runQaCli(
       clearTimeout(timeout);
       reject(error);
     });
+<<<<<<< HEAD
     child.once("close", (code) => {
+=======
+    child.once("exit", (code) => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       clearTimeout(timeout);
       if (code === 0) {
         if (stdout.exceeded) {
@@ -308,7 +355,11 @@ async function runQaCli(
   if (!opts?.json) {
     return text;
   }
+<<<<<<< HEAD
   return parseQaCliJsonOutput(text, args);
+=======
+  return parseQaCliJsonOutput(text);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function startAgentRun(
@@ -339,7 +390,11 @@ async function startAgentRun(
       message: params.message,
       deliver: true,
       channel: delivery.channel,
+<<<<<<< HEAD
       to: delivery.to ?? target,
+=======
+      to: target,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       replyChannel: delivery.replyChannel,
       replyTo: delivery.replyTo,
       ...(params.threadId ? { threadId: params.threadId } : {}),
@@ -362,18 +417,30 @@ async function waitForAgentRun(
   runId: string,
   timeoutMs = 30_000,
 ) {
+<<<<<<< HEAD
   const waitTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 30_000);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   try {
     return (await env.gateway.call(
       "agent.wait",
       {
         runId,
+<<<<<<< HEAD
         timeoutMs: waitTimeoutMs,
       },
       {
         timeoutMs: resolveQaGatewayTimeoutWithGraceMs(waitTimeoutMs),
       },
     )) as QaAgentWaitResult;
+=======
+        timeoutMs,
+      },
+      {
+        timeoutMs: resolveQaGatewayTimeoutWithGraceMs(timeoutMs),
+      },
+    )) as { status?: string; error?: string };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } catch (error) {
     throw new QaSuiteInfraError(
       "agent_wait_failed",
@@ -383,6 +450,7 @@ async function waitForAgentRun(
   }
 }
 
+<<<<<<< HEAD
 function isSuccessfulAgentWaitResult(waited: QaAgentWaitResult) {
   if (waited.status === "ok" || waited.status === "completed" || waited.status === "succeeded") {
     return true;
@@ -442,6 +510,8 @@ async function waitForAgentHistoryReply(
   throw new Error(`timed out after ${timeoutMs}ms`);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function listCronJobs(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
   const payload = (await env.gateway.call(
     "cron.list",
@@ -555,7 +625,11 @@ async function runAgentPrompt(
 ) {
   const started = await startAgentRun(env, params);
   const waited = await waitForAgentRun(env, started.runId!, params.timeoutMs ?? 30_000);
+<<<<<<< HEAD
   if (!isSuccessfulAgentWaitResult(waited)) {
+=======
+  if (waited.status !== "ok") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     throw new Error(
       `agent.wait returned ${waited.status ?? "unknown"}: ${waited.error ?? "no error"}`,
     );
@@ -575,7 +649,10 @@ export {
   runAgentPrompt,
   runQaCli,
   startAgentRun,
+<<<<<<< HEAD
   waitForAgentHistoryReply,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   waitForMemorySearchMatch,
   waitForAgentRun,
 };

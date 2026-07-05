@@ -2,7 +2,10 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { setAbortMemory } from "./abort-primitives.js";
+<<<<<<< HEAD
 import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const sessionAccessorRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/session-accessor.js"),
@@ -17,7 +20,10 @@ export async function applySessionHints(params: {
   baseBody: string;
   abortedLastRun: boolean;
   sessionEntry?: SessionEntry;
+<<<<<<< HEAD
   sessionEntryHandle?: ReplySessionEntryHandle;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
@@ -30,6 +36,7 @@ export async function applySessionHints(params: {
   if (abortedHint) {
     prefixedBodyBase = `${abortedHint}\n\n${prefixedBodyBase}`;
     // The abort hint is one-shot; clear durable state once it is added.
+<<<<<<< HEAD
     const sessionEntry = params.sessionEntryHandle?.getCurrent() ?? params.sessionEntry;
     if (sessionEntry && params.sessionEntryHandle && params.sessionKey) {
       const updatedAt = Date.now();
@@ -37,6 +44,13 @@ export async function applySessionHints(params: {
         abortedLastRun: false,
         updatedAt,
       });
+=======
+    if (params.sessionEntry && params.sessionStore && params.sessionKey) {
+      const updatedAt = Date.now();
+      params.sessionEntry.abortedLastRun = false;
+      params.sessionEntry.updatedAt = updatedAt;
+      params.sessionStore[params.sessionKey] = params.sessionEntry;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (params.storePath) {
         const sessionKey = params.sessionKey;
         const { patchSessionEntry } = await loadSessionAccessorRuntime();
@@ -49,6 +63,7 @@ export async function applySessionHints(params: {
             abortedLastRun: false,
             updatedAt,
           }),
+<<<<<<< HEAD
           { fallbackEntry: params.sessionEntryHandle.getCurrent() ?? sessionEntry },
         );
       }
@@ -70,6 +85,9 @@ export async function applySessionHints(params: {
             updatedAt,
           }),
           { fallbackEntry: sessionEntry },
+=======
+          { fallbackEntry: params.sessionEntry },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         );
       }
     } else if (params.abortKey) {

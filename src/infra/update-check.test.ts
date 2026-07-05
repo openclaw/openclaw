@@ -219,6 +219,7 @@ describe("resolveNpmChannelTag", () => {
     );
   });
 
+<<<<<<< HEAD
   it("cancels public registry HTTP failure bodies", async () => {
     const cancel = vi.fn(async () => undefined);
     const fetch = vi.fn(
@@ -237,6 +238,8 @@ describe("resolveNpmChannelTag", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("falls back to latest when beta is older", async () => {
     versionByTag.beta = "1.0.0-beta.1";
     versionByTag.latest = "1.0.1-1";

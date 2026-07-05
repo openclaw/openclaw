@@ -1,6 +1,9 @@
 // Commit helpers that move transient plugin install records into the persisted install index.
+<<<<<<< HEAD
 import fs from "node:fs";
 import path from "node:path";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isDeepStrictEqual } from "node:util";
 import {
   replaceConfigFile,
@@ -14,13 +17,17 @@ import {
 import type { ConfigWriteOptions } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+<<<<<<< HEAD
 import { isPathInside } from "../infra/path-guards.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   loadInstalledPluginIndexInstallRecords,
   PLUGIN_INSTALLS_CONFIG_PATH,
   withoutPluginInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
+<<<<<<< HEAD
 import {
   clearRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
@@ -28,6 +35,8 @@ import {
   resolveRetainedManagedNpmInstallMarkerPath,
 } from "../plugins/managed-npm-retention.js";
 import { planPluginUninstall } from "../plugins/uninstall.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function mergeUnsetPaths(
   left?: ConfigWriteOptions["unsetPaths"],
@@ -99,6 +108,7 @@ function mergeAfterWrite(
   };
 }
 
+<<<<<<< HEAD
 function installPathsOverlap(left: string, right: string): boolean {
   const resolvedLeft = path.resolve(left);
   const resolvedRight = path.resolve(right);
@@ -271,6 +281,8 @@ async function restoreClearedRetainedManagedNpmInstallMarkers(
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function commitPluginInstallRecordsWithWriter(params: {
   previousInstallRecords?: Record<string, PluginInstallRecord>;
   nextInstallRecords: Record<string, PluginInstallRecord>;
@@ -280,6 +292,7 @@ async function commitPluginInstallRecordsWithWriter(params: {
 }): Promise<ConfigReplaceResult | void> {
   const previousInstallRecords =
     params.previousInstallRecords ?? (await loadInstalledPluginIndexInstallRecords());
+<<<<<<< HEAD
   const retainedMarkerPaths: string[] = [];
   const clearedMarkerSnapshots: Array<{ markerPath: string; contents: string }> = [];
   try {
@@ -322,6 +335,33 @@ async function commitPluginInstallRecordsWithWriter(params: {
   } catch (error) {
     await restoreClearedRetainedManagedNpmInstallMarkers(clearedMarkerSnapshots);
     await removeCreatedRetainedManagedNpmInstallMarkers(retainedMarkerPaths);
+=======
+  await writePersistedInstalledPluginIndexInstallRecords(params.nextInstallRecords);
+  try {
+    const installRecordsChanged = !isDeepStrictEqual(
+      previousInstallRecords,
+      params.nextInstallRecords,
+    );
+    return await params.commit(params.nextConfig, {
+      ...params.writeOptions,
+      ...(installRecordsChanged && params.writeOptions?.afterWrite === undefined
+        ? { afterWrite: { mode: "restart", reason: PLUGIN_SOURCE_CHANGED_RESTART_REASON } }
+        : {}),
+      unsetPaths: mergeUnsetPaths(params.writeOptions?.unsetPaths, [
+        Array.from(PLUGIN_INSTALLS_CONFIG_PATH),
+      ]),
+    });
+  } catch (error) {
+    try {
+      // Keep config and install index atomic from the caller's perspective.
+      await writePersistedInstalledPluginIndexInstallRecords(previousInstallRecords);
+    } catch (rollbackError) {
+      throw new Error(
+        "Failed to commit plugin install records and could not restore the previous plugin index",
+        { cause: rollbackError },
+      );
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     throw error;
   }
 }

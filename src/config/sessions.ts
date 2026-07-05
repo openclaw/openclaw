@@ -11,6 +11,7 @@ export * from "./sessions/lifecycle.js";
 export * from "./sessions/paths.js";
 export * from "./sessions/reset.js";
 export {
+<<<<<<< HEAD
   canonicalizeSessionEntryAliases,
   deleteSessionEntryLifecycle,
   patchSessionEntryWithKey,
@@ -23,6 +24,14 @@ export {
   type ResetSessionEntryLifecycleParams,
   type ResetSessionEntryLifecycleResult,
   type SessionEntryCandidateAccessScope,
+=======
+  deleteSessionEntryLifecycle,
+  resetSessionEntryLifecycle,
+  type DeleteSessionEntryLifecycleParams,
+  type DeleteSessionEntryLifecycleResult,
+  type ResetSessionEntryLifecycleParams,
+  type ResetSessionEntryLifecycleResult,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type SessionLifecycleArchivedTranscript,
   type SessionLifecycleStoreTarget,
 } from "./sessions/session-accessor.js";
@@ -32,7 +41,10 @@ export * from "./sessions/types.js";
 export * from "./sessions/transcript.js";
 export * from "./sessions/session-file.js";
 export * from "./sessions/session-file-rotation.js";
+<<<<<<< HEAD
 export * from "./sessions/session-registry-maintenance.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export * from "./sessions/delivery-info.js";
 export * from "./sessions/disk-budget.js";
 export * from "./sessions/targets.js";

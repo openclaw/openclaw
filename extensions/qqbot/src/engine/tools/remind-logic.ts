@@ -58,6 +58,12 @@ type RemindCronPlan =
       error: string;
     };
 
+<<<<<<< HEAD
+=======
+const PREPARED_CRON_PARAMS_INSTRUCTION =
+  "Gateway cron action prepared for internal QQ reminder scheduling.";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * JSON Schema for AI tool parameters (used by framework registration).
  * AI Tool 参数的 JSON Schema 定义（供框架注册使用）。
@@ -334,6 +340,33 @@ export function prepareRemindCronAction(
   };
 }
 
+<<<<<<< HEAD
+=======
+/**
+ * Execute the reminder tool logic.
+ * 执行提醒工具逻辑。
+ *
+ * Validates params, parses time, and returns a structured result
+ * containing cron job params that the framework shell passes back
+ * as the tool output.
+ *
+ * When the AI omits `to` / `accountId`, the bridge layer can supply
+ * `ctx.fallbackTo` / `ctx.fallbackAccountId` (typically resolved from
+ * the request-scoped AsyncLocalStorage) to fill them in.
+ */
+export function executeRemind(params: RemindParams, ctx: RemindExecuteContext = {}) {
+  const plan = prepareRemindCronAction(params, ctx);
+  if (!plan.ok) {
+    return json({ error: plan.error });
+  }
+  return json({
+    _instruction: PREPARED_CRON_PARAMS_INSTRUCTION,
+    action: plan.action,
+    summary: plan.summary,
+  });
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function executeScheduledRemind(
   params: RemindParams,
   ctx: RemindExecuteContext,

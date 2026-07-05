@@ -2753,6 +2753,7 @@ example
       loadSessionLogs({ sessionFile, limit: Number.POSITIVE_INFINITY }),
     ).resolves.toEqual([]);
   });
+<<<<<<< HEAD
 
   it("keeps the latest logs when transcript timestamps are out of order", async () => {
     const root = await makeSessionCostRoot("session-logs-unsorted-limit");
@@ -2777,4 +2778,6 @@ example
 
     expect(logs?.map((log) => log.content)).toEqual(["third", "fourth"]);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

@@ -31,13 +31,17 @@ import {
   capturePluginToolDescriptor,
   createPluginToolDescriptorConfigCacheKeyMemo,
   readCachedPluginToolDescriptors,
+<<<<<<< HEAD
   resetPluginToolDescriptorCache as resetCachedPluginToolDescriptors,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type CachedPluginToolDescriptor,
   type PluginToolDescriptorConfigCacheKeyMemo,
   writeCachedPluginToolDescriptors,
 } from "./tool-descriptor-cache.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
+<<<<<<< HEAD
 let cachedDescriptorRuntimeRegistries = new WeakMap<CachedPluginToolDescriptor, PluginRegistry>();
 
 export function resetPluginToolDescriptorCache(): void {
@@ -46,6 +50,12 @@ export function resetPluginToolDescriptorCache(): void {
 }
 
 export { resetPluginToolDescriptorCache as resetPluginToolFactoryCache };
+=======
+export {
+  resetPluginToolDescriptorCache,
+  resetPluginToolDescriptorCache as resetPluginToolFactoryCache,
+} from "./tool-descriptor-cache.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** MCP bridge metadata attached to plugin tools surfaced through agent tool lists. */
 export type PluginToolMcpMeta = {
@@ -697,16 +707,20 @@ function createCachedDescriptorPluginTool(params: {
       const registry = resolvePluginToolRegistry({
         loadOptions,
         onlyPluginIds: [pluginId],
+<<<<<<< HEAD
         retainedRegistry: cachedDescriptorRuntimeRegistries.get(params.descriptor),
         onRetainRegistry: (retainedRegistry) => {
           cachedDescriptorRuntimeRegistries.set(params.descriptor, retainedRegistry);
         },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
       const candidates = registry?.tools.filter((candidate) => candidate.pluginId === pluginId);
       if (!candidates || candidates.length === 0) {
         throw new Error(`plugin tool runtime unavailable (${pluginId}): ${toolName}`);
       }
       const requestedToolName = normalizeToolName(toolName);
+<<<<<<< HEAD
       const matchingNamedCandidates: PluginToolRegistration[] = [];
       const unnamedCandidates: PluginToolRegistration[] = [];
       for (const candidate of candidates) {
@@ -718,6 +732,8 @@ function createCachedDescriptorPluginTool(params: {
           matchingNamedCandidates.push(candidate);
         }
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const resolveCandidateTool = (
         candidate: PluginToolRegistration,
       ): AnyAgentTool | undefined => {
@@ -735,6 +751,15 @@ function createCachedDescriptorPluginTool(params: {
         }
         return undefined;
       };
+<<<<<<< HEAD
+=======
+      const matchingNamedCandidates = candidates.filter(
+        (candidate) =>
+          candidate.names.length > 0 &&
+          candidate.names.some((name) => normalizeToolName(name) === requestedToolName),
+      );
+      const unnamedCandidates = candidates.filter((candidate) => candidate.names.length === 0);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       for (const candidate of [...matchingNamedCandidates, ...unnamedCandidates]) {
         let matchedTool: AnyAgentTool | undefined;
         try {
@@ -913,8 +938,11 @@ function resolveCachedPluginTools(params: {
 function resolvePluginToolRegistry(params: {
   loadOptions: PluginLoadOptions;
   onlyPluginIds?: readonly string[];
+<<<<<<< HEAD
   retainedRegistry?: PluginRegistry;
   onRetainRegistry?: (registry: PluginRegistry) => void;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }) {
   const lookup = {
     env: params.loadOptions.env,
@@ -940,6 +968,7 @@ function resolvePluginToolRegistry(params: {
     return activeRegistry;
   }
 
+<<<<<<< HEAD
   if (registryHasScopedPluginTools(params.retainedRegistry, params.onlyPluginIds)) {
     return params.retainedRegistry;
   }
@@ -950,6 +979,9 @@ function resolvePluginToolRegistry(params: {
     params.loadOptions.activate === false &&
     params.loadOptions.toolDiscovery === true &&
     params.onRetainRegistry !== undefined;
+=======
+  const forceStandaloneLoad = Boolean(channelRegistry || activeRegistry);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const standaloneRegistry = ensureStandaloneRuntimePluginRegistryLoaded({
     surface: "active",
     forceLoad: forceStandaloneLoad,
@@ -958,9 +990,12 @@ function resolvePluginToolRegistry(params: {
     loadOptions: params.loadOptions,
   });
   if (registryHasScopedPluginTools(standaloneRegistry, params.onlyPluginIds)) {
+<<<<<<< HEAD
     if (shouldRetainColdLoadedToolRegistry) {
       params.onRetainRegistry?.(standaloneRegistry);
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return standaloneRegistry;
   }
   return standaloneRegistry ?? channelRegistry ?? activeRegistry;
@@ -1047,16 +1082,26 @@ export function ensureStandalonePluginToolRegistryLoaded(params: {
   allowGatewaySubagentBinding?: boolean;
   hasAuthForProvider?: (providerId: string) => boolean;
   env?: NodeJS.ProcessEnv;
+<<<<<<< HEAD
 }): PluginRegistry | undefined {
   const loadState = resolvePluginToolLoadState(params);
   if (!loadState) {
     return undefined;
   }
   const registry = ensureStandaloneRuntimePluginRegistryLoaded({
+=======
+}): void {
+  const loadState = resolvePluginToolLoadState(params);
+  if (!loadState) {
+    return;
+  }
+  ensureStandaloneRuntimePluginRegistryLoaded({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     surface: "channel",
     requiredPluginIds: loadState.onlyPluginIds,
     loadOptions: loadState.loadOptions,
   });
+<<<<<<< HEAD
   if (registryHasScopedPluginTools(registry, loadState.onlyPluginIds)) {
     return registry;
   }
@@ -1064,6 +1109,8 @@ export function ensureStandalonePluginToolRegistryLoaded(params: {
     loadOptions: loadState.loadOptions,
     onlyPluginIds: loadState.onlyPluginIds,
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function resolvePluginTools(params: {
@@ -1075,7 +1122,10 @@ export function resolvePluginTools(params: {
   allowGatewaySubagentBinding?: boolean;
   hasAuthForProvider?: (providerId: string) => boolean;
   env?: NodeJS.ProcessEnv;
+<<<<<<< HEAD
   runtimeRegistry?: PluginRegistry;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }): AnyAgentTool[] {
   // Fast path: when plugins are effectively disabled, avoid discovery/jiti entirely.
   // This matters a lot for unit tests and for tool construction hot paths.
@@ -1129,6 +1179,7 @@ export function resolvePluginTools(params: {
     onlyPluginIds: runtimePluginIds,
     runtimeOptions,
   });
+<<<<<<< HEAD
   let registry = registryHasScopedPluginTools(params.runtimeRegistry, runtimePluginIds)
     ? params.runtimeRegistry
     : undefined;
@@ -1138,6 +1189,12 @@ export function resolvePluginTools(params: {
       onlyPluginIds: runtimePluginIds,
     });
   }
+=======
+  let registry = resolvePluginToolRegistry({
+    loadOptions,
+    onlyPluginIds: runtimePluginIds,
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!registry) {
     // Cold registry: path-based plugins (origin "config") registered via plugins.load.paths
     // are not pinned to any active channel/surface registry until explicitly loaded.

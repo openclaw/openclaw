@@ -17,7 +17,10 @@ const GEMINI_3_1_FLASH_LITE_PREFIX = "gemini-3.1-flash-lite";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
 const GEMINI_3_FLASH_LITE_PREFIX = "gemini-3-flash-lite";
 const GEMINI_3_FLASH_PREFIX = "gemini-3-flash";
+<<<<<<< HEAD
 const GEMINI_3_5_FLASH_PREFIX = "gemini-3.5-flash";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const GEMINI_PRO_LATEST_ID = "gemini-pro-latest";
 const GEMINI_FLASH_LATEST_ID = "gemini-flash-latest";
 const GEMINI_FLASH_LITE_LATEST_ID = "gemini-flash-lite-latest";
@@ -189,7 +192,10 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
     };
   } else if (
     lower.startsWith(GEMINI_3_1_FLASH_PREFIX) ||
+<<<<<<< HEAD
     lower.startsWith(GEMINI_3_5_FLASH_PREFIX) ||
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     lower.startsWith(GEMINI_3_FLASH_PREFIX) ||
     lower === GEMINI_FLASH_LATEST_ID
   ) {

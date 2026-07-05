@@ -88,6 +88,7 @@ function parseProviderModelKey(key: string): { provider: string; modelId: string
   return provider && modelId ? { provider, modelId } : undefined;
 }
 
+<<<<<<< HEAD
 function resolveEffectiveProvider(
   provider: string | undefined,
   modelId: string | undefined,
@@ -99,6 +100,8 @@ function resolveEffectiveProvider(
   return parseProviderModelKey(modelId?.trim() ?? "")?.provider;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function providerMatchesCaller(provider: string, callerProvider: string): boolean {
   return !callerProvider || provider === callerProvider;
 }
@@ -107,6 +110,7 @@ function resolvePolicyMatch(
   matches: AgentModelRuntimePolicyMatch[],
   callerProvider: string,
 ): AgentModelRuntimePolicyResolution {
+<<<<<<< HEAD
   const providerMatches = callerProvider
     ? matches.filter((match) => match.provider === callerProvider)
     : [];
@@ -116,6 +120,13 @@ function resolvePolicyMatch(
     return {};
   }
   if (!callerProvider && candidates.some((match) => match.provider !== first.provider)) {
+=======
+  const [first] = matches;
+  if (!first) {
+    return {};
+  }
+  if (!callerProvider && matches.some((match) => match.provider !== first.provider)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return { ambiguous: true };
   }
   return {
@@ -252,9 +263,12 @@ export function resolveModelRuntimePolicy(params: {
   agentId?: string;
   sessionKey?: string;
 }): ResolvedModelRuntimePolicy {
+<<<<<<< HEAD
   const callerProvider = normalizeProviderId(params.provider ?? "");
   const effectiveProvider = resolveEffectiveProvider(params.provider, params.modelId);
   const inferredMatchedProvider = callerProvider ? undefined : effectiveProvider;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (process.env.OPENCLAW_BUILD_PRIVATE_QA === "1") {
     const forcedRuntime = process.env.OPENCLAW_QA_FORCE_RUNTIME?.trim().toLowerCase();
     if (forcedRuntime === "openclaw" || forcedRuntime === "codex") {
@@ -262,17 +276,22 @@ export function resolveModelRuntimePolicy(params: {
     }
   }
 
+<<<<<<< HEAD
   const agentModelPolicy = resolveAgentModelEntryRuntimePolicy({
     ...params,
     provider: effectiveProvider,
     matchKind: "exact",
   });
+=======
+  const agentModelPolicy = resolveAgentModelEntryRuntimePolicy({ ...params, matchKind: "exact" });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (agentModelPolicy.ambiguous) {
     return {};
   }
   if (agentModelPolicy.policy) {
     return agentModelPolicy;
   }
+<<<<<<< HEAD
   const providerConfig = resolveProviderConfig(params.config, effectiveProvider);
   const modelConfig = resolveModelConfig({
     providerConfig,
@@ -289,17 +308,34 @@ export function resolveModelRuntimePolicy(params: {
   const agentWildcardModelPolicy = resolveAgentModelEntryRuntimePolicy({
     ...params,
     provider: effectiveProvider,
+=======
+  const providerConfig = resolveProviderConfig(params.config, params.provider);
+  const modelConfig = resolveModelConfig({
+    providerConfig,
+    provider: params.provider,
+    modelId: params.modelId,
+  });
+  if (hasRuntimePolicy(modelConfig?.agentRuntime)) {
+    return { policy: modelConfig?.agentRuntime, source: "model" };
+  }
+  const agentWildcardModelPolicy = resolveAgentModelEntryRuntimePolicy({
+    ...params,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     matchKind: "provider-wildcard",
   });
   if (agentWildcardModelPolicy.policy) {
     return agentWildcardModelPolicy;
   }
   if (hasRuntimePolicy(providerConfig?.agentRuntime)) {
+<<<<<<< HEAD
     return {
       policy: providerConfig?.agentRuntime,
       source: "provider",
       ...(inferredMatchedProvider ? { matchedProvider: inferredMatchedProvider } : {}),
     };
+=======
+    return { policy: providerConfig?.agentRuntime, source: "provider" };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   return {};
 }

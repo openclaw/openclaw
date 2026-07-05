@@ -11,6 +11,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
   filterToolsByPolicy,
+<<<<<<< HEAD
+=======
+  isToolAllowedByPolicyName,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
   resolveInheritedToolPolicyForSession,
@@ -18,7 +22,10 @@ import {
   resolveTrustedGroupId,
 } from "./agent-tools.policy.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
+<<<<<<< HEAD
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 vi.mock("../channels/plugins/session-conversation.js", () => ({
   resolveSessionConversation: ({ rawId }: { rawId: string }) => ({

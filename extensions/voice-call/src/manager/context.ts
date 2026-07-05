@@ -1,5 +1,9 @@
 // Voice Call plugin module implements context behavior.
+<<<<<<< HEAD
 import type { VoiceCallConfig, VoiceCallCoreSessionConfig } from "../config.js";
+=======
+import type { VoiceCallConfig } from "../config.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallId, CallRecord } from "../types.js";
 
@@ -21,7 +25,10 @@ type CallManagerRuntimeState = {
 type CallManagerRuntimeDeps = {
   provider: VoiceCallProvider | null;
   config: VoiceCallConfig;
+<<<<<<< HEAD
   coreSession?: VoiceCallCoreSessionConfig;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   storePath: string;
   webhookUrl: string | null;
 };

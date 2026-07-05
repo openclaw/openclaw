@@ -33,11 +33,15 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
+<<<<<<< HEAD
 import {
   isReplaceableAssistantStreamEvent,
   resolveAssistantStreamDeltaText,
   resolveAssistantStreamSnapshotText,
 } from "./agent-event-assistant-text.js";
+=======
+import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -916,13 +920,19 @@ export async function handleOpenResponsesHttpRequest(
   setSseHeaders(res);
 
   let accumulatedText = "";
+<<<<<<< HEAD
   let bufferedReplaceableAssistantContent = "";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let sawAssistantDelta = false;
   let closed = false;
   let unsubscribe = () => {};
   let stopWatchingDisconnect = () => {};
   let finalUsage: Usage | undefined;
+<<<<<<< HEAD
   let finalizeStatus: ResponseResource["status"] | null = null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
 
   const maybeFinalize = () => {
@@ -988,7 +998,10 @@ export async function handleOpenResponsesHttpRequest(
     if (finalizeRequested) {
       return;
     }
+<<<<<<< HEAD
     finalizeStatus = status;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     finalizeRequested = { status, text };
     maybeFinalize();
   };
@@ -1035,6 +1048,7 @@ export async function handleOpenResponsesHttpRequest(
     }
 
     if (evt.stream === "assistant") {
+<<<<<<< HEAD
       if (isReplaceableAssistantStreamEvent(evt)) {
         const snapshot = resolveAssistantStreamSnapshotText(evt);
         if (snapshot) {
@@ -1068,6 +1082,15 @@ export async function handleOpenResponsesHttpRequest(
             delta: text,
           });
         }
+=======
+      const text = evt.data?.text;
+      const replace = evt.data?.replace === true;
+      if (replace && typeof text === "string") {
+        accumulatedText = text;
+      }
+      const content = resolveAssistantStreamDeltaText(evt);
+      if (!content) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         return;
       }
 
@@ -1097,8 +1120,12 @@ export async function handleOpenResponsesHttpRequest(
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
+<<<<<<< HEAD
         const finalText =
           accumulatedText || bufferedReplaceableAssistantContent || "No response from OpenClaw.";
+=======
+        const finalText = accumulatedText || "No response from OpenClaw.";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const finalStatus = phase === "error" ? "failed" : "completed";
         requestFinalize(finalStatus, finalText);
       }
@@ -1131,12 +1158,15 @@ export async function handleOpenResponsesHttpRequest(
       // Check for pending client tool calls BEFORE maybeFinalize() because the
       // lifecycle:end event may already have requested finalization.
       const resultAny = result as { payloads?: Array<{ text?: string }>; meta?: unknown };
+<<<<<<< HEAD
       const resultPayloadText = Array.isArray(resultAny.payloads)
         ? resultAny.payloads
             .map((p) => (typeof p.text === "string" ? p.text : ""))
             .filter(Boolean)
             .join("\n\n")
         : "";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const meta = resultAny.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
@@ -1177,16 +1207,32 @@ export async function handleOpenResponsesHttpRequest(
       ) {
         const usage = finalUsage ?? createEmptyUsage();
         const finalText =
+<<<<<<< HEAD
           accumulatedText || resultPayloadText || bufferedReplaceableAssistantContent;
 
         if (toolChoiceConstraint && finalText && !sawAssistantDelta) {
+=======
+          accumulatedText ||
+          (Array.isArray(resultAny.payloads)
+            ? resultAny.payloads
+                .map((p) => (typeof p.text === "string" ? p.text : ""))
+                .filter(Boolean)
+                .join("\n\n")
+            : "");
+
+        if (toolChoiceConstraint && accumulatedText) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           sawAssistantDelta = true;
           writeSseEvent(res, {
             type: "response.output_text.delta",
             item_id: outputItemId,
             output_index: 0,
             content_index: 0,
+<<<<<<< HEAD
             delta: finalText,
+=======
+            delta: accumulatedText,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           });
         }
         writeSseEvent(res, {
@@ -1271,6 +1317,7 @@ export async function handleOpenResponsesHttpRequest(
         return;
       }
 
+<<<<<<< HEAD
       // Fallback: if no streaming deltas were received, send the full response as text
       if (!sawAssistantDelta) {
         const content =
@@ -1281,6 +1328,27 @@ export async function handleOpenResponsesHttpRequest(
         if (finalizeStatus !== null) {
           finalizeRequested = { status: finalizeStatus, text: content };
         }
+=======
+      maybeFinalize();
+
+      if (closed) {
+        return;
+      }
+
+      // Fallback: if no streaming deltas were received, send the full response as text
+      if (!sawAssistantDelta) {
+        const payloads = resultAny.payloads;
+        const content =
+          Array.isArray(payloads) && payloads.length > 0
+            ? payloads
+                .map((p) => (typeof p.text === "string" ? p.text : ""))
+                .filter(Boolean)
+                .join("\n\n")
+            : "No response from OpenClaw.";
+
+        accumulatedText = content;
+        sawAssistantDelta = true;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
         writeSseEvent(res, {
           type: "response.output_text.delta",
@@ -1290,8 +1358,11 @@ export async function handleOpenResponsesHttpRequest(
           delta: content,
         });
       }
+<<<<<<< HEAD
 
       maybeFinalize();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } catch (err) {
       if (closed || abortController.signal.aborted) {
         return;

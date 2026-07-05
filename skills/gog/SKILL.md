@@ -13,7 +13,11 @@ metadata:
             {
               "id": "brew",
               "kind": "brew",
+<<<<<<< HEAD
               "formula": "gogcli",
+=======
+              "formula": "steipete/tap/gogcli",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               "bins": ["gog"],
               "label": "Install gog (brew)",
             },

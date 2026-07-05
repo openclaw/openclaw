@@ -79,6 +79,26 @@ export function getPluginCommandSpecs(
   return listProviderPluginCommandSpecs(providerName);
 }
 
+<<<<<<< HEAD
+=======
+export function getPluginCommandSpecsFromRegistrations(
+  commands: readonly PluginCommandRegistration[],
+  provider?: string,
+  options: PluginCommandSpecOptions = {},
+): Array<{
+  name: string;
+  description: string;
+  descriptionLocalizations?: Record<string, string>;
+  acceptsArgs: boolean;
+}> {
+  const providerName = normalizeOptionalLowercaseString(provider);
+  if (!pluginNativeCommandsEnabled(providerName, options)) {
+    return [];
+  }
+  return listProviderPluginCommandSpecsFromRegistrations(commands, providerName);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function getPluginCommandEntrySpecs(
   provider?: string,
   options: PluginCommandSpecOptions = {},
@@ -116,6 +136,24 @@ export function listProviderPluginCommandSpecs(provider?: string): Array<{
     .map((cmd) => serializePluginCommandSpec(cmd, provider));
 }
 
+<<<<<<< HEAD
+=======
+export function listProviderPluginCommandSpecsFromRegistrations(
+  commands: readonly PluginCommandRegistration[],
+  provider?: string,
+): Array<{
+  name: string;
+  description: string;
+  descriptionLocalizations?: Record<string, string>;
+  acceptsArgs: boolean;
+}> {
+  return commands
+    .map((entry) => entry.command)
+    .filter((cmd) => pluginCommandSupportsChannel(cmd, provider))
+    .map((cmd) => serializePluginCommandSpec(cmd, provider));
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function serializePluginCommandSpec(
   cmd: OpenClawPluginCommandDefinition,
   provider?: string,

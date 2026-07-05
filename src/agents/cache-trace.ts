@@ -8,7 +8,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
+<<<<<<< HEAD
 import { redactAgentDiagnosticPayload } from "./diagnostic-redaction.js";
+=======
+import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
 import type { AgentMessage, StreamFn } from "./runtime/index.js";
 import { stableStringify } from "./stable-stringify.js";
@@ -156,6 +160,7 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
     };
 
     if (payload.prompt !== undefined && cfg.includePrompt) {
+<<<<<<< HEAD
       event.prompt = redactAgentDiagnosticPayload(payload.prompt);
     }
     if (payload.system !== undefined && cfg.includeSystem) {
@@ -167,6 +172,19 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
     }
     if (payload.model) {
       event.model = redactAgentDiagnosticPayload(payload.model);
+=======
+      event.prompt = payload.prompt;
+    }
+    if (payload.system !== undefined && cfg.includeSystem) {
+      event.system = sanitizeDiagnosticPayload(payload.system);
+      event.systemDigest = digest(payload.system);
+    }
+    if (payload.options) {
+      event.options = sanitizeDiagnosticPayload(payload.options) as Record<string, unknown>;
+    }
+    if (payload.model) {
+      event.model = sanitizeDiagnosticPayload(payload.model) as Record<string, unknown>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
 
     const messages = payload.messages;
@@ -179,15 +197,26 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
       if (cfg.includeMessages) {
         // Full messages are optional; summaries/digests are always recorded when
         // message payloads are supplied.
+<<<<<<< HEAD
         event.messages = redactAgentDiagnosticPayload(messages);
+=======
+        event.messages = sanitizeDiagnosticPayload(messages) as AgentMessage[];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     }
 
     if (payload.note) {
+<<<<<<< HEAD
       event.note = redactAgentDiagnosticPayload(payload.note);
     }
     if (payload.error) {
       event.error = redactAgentDiagnosticPayload(payload.error);
+=======
+      event.note = payload.note;
+    }
+    if (payload.error) {
+      event.error = payload.error;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
 
     const line = safeJsonStringify(event);

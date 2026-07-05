@@ -152,7 +152,11 @@ vi.mock("./model-auth-env-vars.js", () => {
     bedrock: "amazon-bedrock",
     "aws-bedrock": "amazon-bedrock",
   };
+<<<<<<< HEAD
   const resolveMockProviderAuthEvidence = (params?: { config?: OpenClawConfig }) => {
+=======
+  const resolveProviderEnvAuthEvidence = (params?: { config?: OpenClawConfig }) => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const evidence = {
       "google-vertex": [
         {
@@ -186,10 +190,19 @@ vi.mock("./model-auth-env-vars.js", () => {
   };
   return {
     listKnownProviderEnvApiKeyNames: () => [...new Set(Object.values(candidates).flat())],
+<<<<<<< HEAD
     resolveProviderEnvAuthLookupMaps: (params?: { config?: OpenClawConfig }) => ({
       aliasMap,
       envCandidateMap: candidates,
       authEvidenceMap: resolveMockProviderAuthEvidence(params),
+=======
+    resolveProviderEnvApiKeyCandidates: () => candidates,
+    resolveProviderEnvAuthEvidence,
+    resolveProviderEnvAuthLookupMaps: (params?: { config?: OpenClawConfig }) => ({
+      aliasMap,
+      envCandidateMap: candidates,
+      authEvidenceMap: resolveProviderEnvAuthEvidence(params),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       setupProviderFallbackRefs: ["anthropic-vertex"],
     }),
   };

@@ -2,6 +2,10 @@
 // restore/preview/send flows over session stores, transcripts, and active runs.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+<<<<<<< HEAD
+=======
+import path from "node:path";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -60,7 +64,10 @@ import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.j
 import {
   applySessionPatchProjection,
   createSessionEntryWithTranscript,
+<<<<<<< HEAD
   preflightSessionTranscriptForManualCompact,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -85,7 +92,11 @@ import {
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
+<<<<<<< HEAD
   createFileBackedCompactionCheckpointStore,
+=======
+  forkCompactionCheckpointTranscriptAsync,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   getSessionCompactionCheckpoint,
   listSessionCompactionCheckpoints,
 } from "../session-compaction-checkpoints.js";
@@ -135,8 +146,11 @@ import type {
 } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
+<<<<<<< HEAD
 const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function filterSessionStoreToConfiguredAgents(
   cfg: OpenClawConfig,
   store: Record<string, SessionEntry>,
@@ -188,7 +202,11 @@ function inheritSessionRuntimeSelection(
       ? { contextTokens: parentEntry.contextTokens }
       : {}),
     ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
+<<<<<<< HEAD
     ...(parentEntry.fastMode !== undefined ? { fastMode: parentEntry.fastMode } : {}),
+=======
+    ...(typeof parentEntry.fastMode === "boolean" ? { fastMode: parentEntry.fastMode } : {}),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ...(parentEntry.verboseLevel ? { verboseLevel: parentEntry.verboseLevel } : {}),
     ...(parentEntry.traceLevel ? { traceLevel: parentEntry.traceLevel } : {}),
     ...(parentEntry.reasoningLevel ? { reasoningLevel: parentEntry.reasoningLevel } : {}),
@@ -351,6 +369,77 @@ function buildDashboardSessionKey(agentId: string): string {
   return `agent:${agentId}:dashboard:${randomUUID()}`;
 }
 
+<<<<<<< HEAD
+=======
+function cloneCheckpointSessionEntry(params: {
+  currentEntry: SessionEntry;
+  nextSessionId: string;
+  nextSessionFile: string;
+  label?: string;
+  parentSessionKey?: string;
+  totalTokens?: number;
+  preserveCompactionCheckpoints?: boolean;
+}): SessionEntry {
+  return {
+    ...params.currentEntry,
+    sessionId: params.nextSessionId,
+    sessionFile: params.nextSessionFile,
+    updatedAt: Date.now(),
+    systemSent: false,
+    abortedLastRun: false,
+    startedAt: undefined,
+    endedAt: undefined,
+    runtimeMs: undefined,
+    status: undefined,
+    inputTokens: undefined,
+    outputTokens: undefined,
+    cacheRead: undefined,
+    cacheWrite: undefined,
+    estimatedCostUsd: undefined,
+    totalTokens:
+      typeof params.totalTokens === "number" && Number.isFinite(params.totalTokens)
+        ? params.totalTokens
+        : undefined,
+    totalTokensFresh:
+      typeof params.totalTokens === "number" && Number.isFinite(params.totalTokens)
+        ? true
+        : undefined,
+    label: params.label ?? params.currentEntry.label,
+    parentSessionKey: params.parentSessionKey ?? params.currentEntry.parentSessionKey,
+    compactionCheckpoints: params.preserveCompactionCheckpoints
+      ? params.currentEntry.compactionCheckpoints
+      : undefined,
+  };
+}
+
+function resolveCheckpointForkSource(
+  checkpoint: NonNullable<ReturnType<typeof getSessionCompactionCheckpoint>>,
+): { sourceFile: string; sourceLeafId?: string; totalTokens?: number } | null {
+  const preCompactionFile = checkpoint.preCompaction.sessionFile?.trim();
+  if (preCompactionFile) {
+    return {
+      sourceFile: preCompactionFile,
+      sourceLeafId: checkpoint.preCompaction.entryId ?? checkpoint.preCompaction.leafId,
+      totalTokens: checkpoint.tokensBefore,
+    };
+  }
+  const postCompactionFile = checkpoint.postCompaction.sessionFile?.trim();
+  if (!postCompactionFile) {
+    return null;
+  }
+  const postCompactionLeafId =
+    checkpoint.postCompaction.entryId ?? checkpoint.postCompaction.leafId;
+  if (!postCompactionLeafId) {
+    return null;
+  }
+  return {
+    sourceFile: postCompactionFile,
+    sourceLeafId: postCompactionLeafId,
+    totalTokens: checkpoint.tokensAfter,
+  };
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isAgentMainSessionKey(cfg: OpenClawConfig, sessionKey: string): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
@@ -764,9 +853,14 @@ async function handleSessionSend(params: {
   const messageSeq =
     (await readSessionMessageCountAsync({
       agentId: requestedAgentId,
+<<<<<<< HEAD
       sessionEntry: entry,
       sessionId: entry.sessionId,
       sessionKey: canonicalKey,
+=======
+      sessionFile: entry.sessionFile,
+      sessionId: entry.sessionId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       storePath,
     })) + 1;
   let sendAcked = false;
@@ -1091,6 +1185,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         const cachedStoreTarget = resolveGatewaySessionStoreTargetWithStore({
           cfg,
           key,
+<<<<<<< HEAD
+=======
+          scanLegacyKeys: false,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         });
         const store = storeCache.get(cachedStoreTarget.storePath) ?? cachedStoreTarget.store;
         storeCache.set(cachedStoreTarget.storePath, store);
@@ -1107,9 +1205,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         const items = readSessionPreviewItemsFromTranscript(
           {
             agentId: target.agentId,
+<<<<<<< HEAD
             sessionEntry: entry,
             sessionId: entry.sessionId,
             sessionKey: target.canonicalKey,
+=======
+            sessionFile: entry.sessionFile,
+            sessionId: entry.sessionId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             storePath: target.storePath,
           },
           limit,
@@ -1467,9 +1570,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const messageSeq = initialMessage
       ? (await readSessionMessageCountAsync({
           agentId: target.agentId,
+<<<<<<< HEAD
           sessionEntry: createdEntry,
           sessionId: createdEntry.sessionId,
           sessionKey: target.canonicalKey,
+=======
+          sessionFile: createdEntry.sessionFile,
+          sessionId: createdEntry.sessionId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           storePath: target.storePath,
         })) + 1
       : undefined;
@@ -1595,7 +1703,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const loaded = loadSessionEntry(key, { agentId: requestedAgent.agentId });
+<<<<<<< HEAD
     const { cfg: loadedCfg, entry, canonicalKey, legacyKey } = loaded;
+=======
+    const { cfg: loadedCfg, entry, canonicalKey } = loaded;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const target = resolveGatewaySessionStoreTarget({
       cfg: loadedCfg,
       key: canonicalKey,
@@ -1610,7 +1722,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const checkpoint = getSessionCompactionCheckpoint({ entry, checkpointId });
+<<<<<<< HEAD
     if (!checkpoint) {
+=======
+    const forkSource = checkpoint ? resolveCheckpointForkSource(checkpoint) : null;
+    if (!checkpoint || !forkSource) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       respond(
         false,
         undefined,
@@ -1618,6 +1735,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+<<<<<<< HEAD
     const nextKey = buildDashboardSessionKey(target.agentId);
     const branchedSession = await compactionCheckpointStore.branchCheckpointSession({
       storePath: target.storePath,
@@ -1646,6 +1764,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     if (branchedSession.status === "failed") {
+=======
+    const branchedSession = await forkCompactionCheckpointTranscriptAsync({
+      sourceFile: forkSource.sourceFile,
+      sourceLeafId: forkSource.sourceLeafId,
+      sessionDir: path.dirname(forkSource.sourceFile),
+    });
+    if (!branchedSession?.sessionFile) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       respond(
         false,
         undefined,
@@ -1653,16 +1779,40 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+<<<<<<< HEAD
+=======
+    const nextKey = buildDashboardSessionKey(target.agentId);
+    const label = entry.label?.trim() ? `${entry.label.trim()} (checkpoint)` : "Checkpoint branch";
+    const nextEntry = cloneCheckpointSessionEntry({
+      currentEntry: entry,
+      nextSessionId: branchedSession.sessionId,
+      nextSessionFile: branchedSession.sessionFile,
+      label,
+      parentSessionKey: canonicalKey,
+      totalTokens: forkSource.totalTokens,
+    });
+
+    await updateSessionStore(target.storePath, (store) => {
+      store[nextKey] = nextEntry;
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     respond(
       true,
       {
         ok: true,
         sourceKey: canonicalKey,
+<<<<<<< HEAD
         key: branchedSession.key,
         sessionId: branchedSession.entry.sessionId,
         checkpoint: branchedSession.checkpoint,
         entry: branchedSession.entry,
+=======
+        key: nextKey,
+        sessionId: nextEntry.sessionId,
+        checkpoint,
+        entry: nextEntry,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
       undefined,
     );
@@ -1674,7 +1824,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       reason: "checkpoint-branch",
     });
     emitSessionsChanged(context, {
+<<<<<<< HEAD
       sessionKey: branchedSession.key,
+=======
+      sessionKey: nextKey,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       reason: "checkpoint-branch",
     });
   },
@@ -1717,7 +1871,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const loaded = loadSessionEntry(key, { agentId: requestedAgent.agentId });
+<<<<<<< HEAD
     const { entry, canonicalKey, legacyKey, storePath } = loaded;
+=======
+    const { entry, canonicalKey, storePath } = loaded;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!entry?.sessionId) {
       respond(
         false,
@@ -1727,7 +1885,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const checkpoint = getSessionCompactionCheckpoint({ entry, checkpointId });
+<<<<<<< HEAD
     if (!checkpoint) {
+=======
+    const forkSource = checkpoint ? resolveCheckpointForkSource(checkpoint) : null;
+    if (!checkpoint || !forkSource) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       respond(
         false,
         undefined,
@@ -1750,6 +1913,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
+<<<<<<< HEAD
     const restoredSession = await compactionCheckpointStore.restoreCheckpointSession({
       storePath,
       sessionKey: canonicalKey,
@@ -1776,6 +1940,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     if (restoredSession.status === "failed") {
+=======
+    const restoredSession = await forkCompactionCheckpointTranscriptAsync({
+      sourceFile: forkSource.sourceFile,
+      sourceLeafId: forkSource.sourceLeafId,
+      sessionDir: path.dirname(forkSource.sourceFile),
+    });
+    if (!restoredSession?.sessionFile) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       respond(
         false,
         undefined,
@@ -1783,15 +1955,36 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+<<<<<<< HEAD
+=======
+    const nextEntry = cloneCheckpointSessionEntry({
+      currentEntry: entry,
+      nextSessionId: restoredSession.sessionId,
+      nextSessionFile: restoredSession.sessionFile,
+      totalTokens: forkSource.totalTokens,
+      preserveCompactionCheckpoints: true,
+    });
+
+    await updateSessionStore(storePath, (store) => {
+      store[canonicalKey] = nextEntry;
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     respond(
       true,
       {
         ok: true,
+<<<<<<< HEAD
         key: restoredSession.key,
         sessionId: restoredSession.entry.sessionId,
         checkpoint: restoredSession.checkpoint,
         entry: restoredSession.entry,
+=======
+        key: canonicalKey,
+        sessionId: nextEntry.sessionId,
+        checkpoint,
+        entry: nextEntry,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
       undefined,
     );
@@ -2349,9 +2542,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const { messages } = await readRecentSessionMessagesWithStatsAsync(
       {
         agentId: requestedAgent.agentId,
+<<<<<<< HEAD
         sessionEntry: entry,
         sessionId: entry.sessionId,
         sessionKey: key,
+=======
+        sessionFile: entry.sessionFile,
+        sessionId: entry.sessionId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         storePath,
       },
       {
@@ -2568,6 +2766,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
+<<<<<<< HEAD
     const trimPreflight = await preflightSessionTranscriptForManualCompact(
       {
         sessionId,
@@ -2625,6 +2824,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const trimResult = await trimSessionTranscriptForManualCompact(
       {
         sessionId,

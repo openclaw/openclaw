@@ -14,7 +14,11 @@ import { inferCronJobName } from "../../../cron/service/normalize.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
 import { normalizeLegacyDeliveryInput } from "./legacy-delivery.js";
 import {
+<<<<<<< HEAD
   classifyUnresolvedAgentTurnShellToolPrompt,
+=======
+  hasUnresolvedAgentTurnShellToolPrompt,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   hasLegacyOpenAICodexCronModelRef,
   migrateLegacyAgentTurnCommandPayload,
   migrateLegacyCronPayload,
@@ -41,7 +45,10 @@ type CronStoreIssues = Partial<Record<CronStoreIssueKey, number>>;
 
 type NormalizeCronStoreJobsResult = {
   issues: CronStoreIssues;
+<<<<<<< HEAD
   unresolvedAgentTurnCommandPromptJobs: string[];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   unresolvedAgentTurnShellToolPromptJobs: string[];
   jobs: Array<Record<string, unknown>>;
   mutated: boolean;
@@ -247,12 +254,16 @@ export function normalizeStoredCronJobs(
   jobs: Array<Record<string, unknown>>,
 ): NormalizeCronStoreJobsResult {
   const issues: CronStoreIssues = {};
+<<<<<<< HEAD
   const unresolvedAgentTurnCommandPromptJobs: string[] = [];
   const unresolvedAgentTurnShellToolPromptJobs: string[] = [];
   const unresolvedAgentTurnPromptJobsByKind = {
     commandPromptWithoutShellAccess: unresolvedAgentTurnCommandPromptJobs,
     shellToolPrompt: unresolvedAgentTurnShellToolPromptJobs,
   };
+=======
+  const unresolvedAgentTurnShellToolPromptJobs: string[] = [];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let mutated = false;
   const keptJobs: Array<Record<string, unknown>> = [];
   const removedJobs: NormalizeCronStoreJobsResult["removedJobs"] = [];
@@ -427,6 +438,7 @@ export function normalizeStoredCronJobs(
       if (migrateLegacyAgentTurnCommandPayload(payloadRecord)) {
         mutated = true;
         trackIssue("legacyAgentTurnCommandPayload");
+<<<<<<< HEAD
       } else {
         const unresolvedPromptKind = classifyUnresolvedAgentTurnShellToolPrompt(payloadRecord);
         if (unresolvedPromptKind) {
@@ -435,6 +447,13 @@ export function normalizeStoredCronJobs(
           if (name) {
             unresolvedAgentTurnPromptJobsByKind[unresolvedPromptKind].push(name);
           }
+=======
+      } else if (hasUnresolvedAgentTurnShellToolPrompt(payloadRecord)) {
+        trackIssue("unresolvedAgentTurnShellToolPrompt");
+        const name = normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id);
+        if (name) {
+          unresolvedAgentTurnShellToolPromptJobs.push(name);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }
       }
     }
@@ -635,6 +654,7 @@ export function normalizeStoredCronJobs(
     jobs.splice(0, jobs.length, ...keptJobs);
   }
 
+<<<<<<< HEAD
   return {
     issues,
     unresolvedAgentTurnCommandPromptJobs,
@@ -643,4 +663,7 @@ export function normalizeStoredCronJobs(
     mutated,
     removedJobs,
   };
+=======
+  return { issues, unresolvedAgentTurnShellToolPromptJobs, jobs, mutated, removedJobs };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }

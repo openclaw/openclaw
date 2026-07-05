@@ -52,6 +52,33 @@ export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<b
   return true;
 }
 
+<<<<<<< HEAD
+=======
+export type LegacyWorkspaceDetection = {
+  activeWorkspace: string;
+  legacyDirs: string[];
+};
+
+/** Detects legacy workspace directories related to the active workspace. */
+export function detectLegacyWorkspaceDirs(params: {
+  workspaceDir: string;
+}): LegacyWorkspaceDetection {
+  const activeWorkspace = path.resolve(params.workspaceDir);
+  const legacyDirs: string[] = [];
+  return { activeWorkspace, legacyDirs };
+}
+
+/** Formats a warning for legacy workspace directories found near the active workspace. */
+export function formatLegacyWorkspaceWarning(detection: LegacyWorkspaceDetection): string {
+  return [
+    "Extra workspace directories detected (may contain old agent files):",
+    ...detection.legacyDirs.map((dir) => `- ${shortenHomePath(dir)}`),
+    `Active workspace: ${shortenHomePath(detection.activeWorkspace)}`,
+    "If unused, archive or move to Trash.",
+  ].join("\n");
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type RootMemoryFilesDetection = {
   workspaceDir: string;
   canonicalPath: string;

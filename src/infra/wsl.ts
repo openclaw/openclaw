@@ -11,8 +11,13 @@ export function resetWSLStateForTests(): void {
 }
 
 /** Detects WSL from environment variables without touching the filesystem. */
+<<<<<<< HEAD
 export function isWSLEnv(env: Record<string, string | undefined> = process.env): boolean {
   if (env.WSL_INTEROP || env.WSL_DISTRO_NAME || env.WSLENV) {
+=======
+export function isWSLEnv(): boolean {
+  if (process.env.WSL_INTEROP || process.env.WSL_DISTRO_NAME || process.env.WSLENV) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return true;
   }
   return false;

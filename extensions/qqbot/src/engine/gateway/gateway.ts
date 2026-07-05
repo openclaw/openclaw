@@ -1,11 +1,15 @@
 // Qqbot plugin module implements gateway behavior.
 import path from "node:path";
+<<<<<<< HEAD
 import {
   classifyCoreCommandForGroup,
   PRIVATE_CHAT_ONLY_TEXT,
 } from "../commands/command-visibility.js";
 import { initCommands } from "../commands/slash-commands-impl.js";
 import { resolveGroupCommandLevelFromAccountConfig } from "../config/group.js";
+=======
+import { initCommands } from "../commands/slash-commands-impl.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createNodeSessionStoreReader } from "../group/activation.js";
 import type { HistoryEntry } from "../group/history.js";
 import { setOutboundAudioPort } from "../messaging/outbound.js";
@@ -17,8 +21,11 @@ import {
   sendInputNotify as senderSendInputNotify,
   createRawInputNotifyFn,
   accountToCreds,
+<<<<<<< HEAD
   buildDeliveryTarget,
   sendText as senderSendText,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "../messaging/sender.js";
 import { setRefIndex } from "../ref/store.js";
 import { runDiagnostics } from "../utils/diagnostics.js";
@@ -151,6 +158,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     }
 
     if (inbound.skipped) {
+<<<<<<< HEAD
       if (inbound.skipReason === "private_command_only") {
         log?.info("Rejected private-only command in qqbot group before mention gate", {
           accountId: account.accountId,
@@ -170,6 +178,8 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
         inbound.typing.keepAlive?.stop();
         return;
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       log?.info(
         `Skipped group inbound: reason=${inbound.skipReason ?? "unknown"} group=${event.groupOpenid ?? ""}`,
         {
@@ -183,6 +193,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       return;
     }
 
+<<<<<<< HEAD
     // Keep this after buildInboundContext() so ingress access policy can silently drop
     // unauthorized group senders before we emit any command-specific reply.
     const groupCommandLevel =
@@ -220,6 +231,8 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       return;
     }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     try {
       await runWithRequestContext(
         {

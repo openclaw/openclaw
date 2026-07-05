@@ -1,0 +1,73 @@
+{
+  "scenarios": [
+    {
+      "name": "Skill install hot availability",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "picks up a newly added workspace skill without restart",
+          "status": "pass",
+          "details": "HOT-INSTALL-OK"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 47054,
+    "gatewayProcessCpuMs": 2000,
+    "gatewayCpuCoreRatio": 0.043,
+    "gatewayProcessRssStartBytes": 919281664,
+    "gatewayProcessRssEndBytes": 1014747136,
+    "gatewayProcessRssDeltaBytes": 95465472,
+    "gatewayProcessRssPeakBytes": 1014747136,
+    "gatewayProcessRssPeakDeltaBytes": 95465472,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:16:24.683Z",
+        "gatewayProcessRssBytes": 919281664
+      },
+      {
+        "label": "scenario:skill-install-hot-availability:start",
+        "at": "2026-07-03T13:16:24.712Z",
+        "gatewayProcessRssBytes": 919998464
+      },
+      {
+        "label": "scenario:skill-install-hot-availability:finish",
+        "at": "2026-07-03T13:16:31.382Z",
+        "gatewayProcessRssBytes": 1007239168
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:16:31.419Z",
+        "gatewayProcessRssBytes": 1014747136
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:15:44.328Z",
+    "finishedAt": "2026-07-03T13:16:31.382Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "skill-install-hot-availability"
+    ],
+    "runtimePair": null
+  }
+}

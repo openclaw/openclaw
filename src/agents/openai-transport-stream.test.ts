@@ -435,6 +435,7 @@ describe("openai transport stream", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("collapses cumulative message snapshot items into one text block (#91959)", async () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);
@@ -645,6 +646,8 @@ describe("openai transport stream", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("backfills Azure Responses completed function calls when item events are absent", async () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);

@@ -2,7 +2,10 @@
 import type { HistoryPort } from "../../adapter/history.port.js";
 import type { QQBotInboundAccess } from "../../adapter/index.js";
 import type { MentionGatePort } from "../../adapter/mention-gate.port.js";
+<<<<<<< HEAD
 import { classifyCoreCommandForGroup } from "../../commands/command-visibility.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { DEFAULT_GROUP_PROMPT, resolveGroupSettings } from "../../config/group.js";
 import { resolveGroupActivation } from "../../group/activation.js";
 import { toAttachmentSummaries, type HistoryEntry } from "../../group/history.js";
@@ -96,7 +99,10 @@ export function runGroupGateStage(input: GroupGateStageInput): GroupGateStageRes
   const groupInfo: InboundGroupInfo = {
     gate,
     activation,
+<<<<<<< HEAD
     commandLevel: settings.config.commandLevel,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     historyLimit,
     isMerged: isMergedTurn(event),
     mergedMessages: event.merge?.messages,
@@ -108,6 +114,7 @@ export function runGroupGateStage(input: GroupGateStageInput): GroupGateStageRes
     },
   };
 
+<<<<<<< HEAD
   const commandVisibility = classifyCoreCommandForGroup(userContent, settings.config.commandLevel);
   if (
     commandAuthorized &&
@@ -117,6 +124,8 @@ export function runGroupGateStage(input: GroupGateStageInput): GroupGateStageRes
     return { kind: "skip", groupInfo, skipReason: "private_command_only" };
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (gate.action === "pass") {
     return { kind: "pass", groupInfo };
   }

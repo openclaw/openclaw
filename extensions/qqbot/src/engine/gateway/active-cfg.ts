@@ -13,6 +13,11 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 
+<<<<<<< HEAD
+=======
+export type GatewayCfg = OpenClawConfig;
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type GatewayCfgLoader = () => OpenClawConfig;
 
 export interface ActiveCfgProvider {

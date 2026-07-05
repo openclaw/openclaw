@@ -161,8 +161,12 @@ describe("skills gateway handlers (clawhub)", () => {
           slug: "agentreceipt",
           requestedVersion: "1.2.3",
           version: "1.2.3",
+<<<<<<< HEAD
           securityAuditUrl:
             "https://clawhub.ai/openclaw/skills/agentreceipt/security-audit?version=1.2.3",
+=======
+          securityAuditUrl: "https://clawhub.ai/openclaw/agentreceipt/security-audit?version=1.2.3",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           security: { status: "clean", passed: true },
           scannerPayload: { ignored: true },
         },
@@ -263,7 +267,10 @@ describe("skills gateway handlers (clawhub)", () => {
       slug: "calendar",
       version: "1.2.3",
       targetDir: "/tmp/workspace/skills/calendar",
+<<<<<<< HEAD
       warning: "Review ClawHub security details before installing.",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     const { ok, response, error } = await callSkillsHandler("skills.install", {
@@ -282,12 +289,17 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(ok).toBe(true);
     expect(error).toBeUndefined();
     const result = response as
+<<<<<<< HEAD
       | { ok?: boolean; message?: string; slug?: string; version?: string; warning?: string }
+=======
+      | { ok?: boolean; message?: string; slug?: string; version?: string }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       | undefined;
     expect(result?.ok).toBe(true);
     expect(result?.message).toBe("Installed calendar@1.2.3");
     expect(result?.slug).toBe("calendar");
     expect(result?.version).toBe("1.2.3");
+<<<<<<< HEAD
     expect(result?.warning).toBe("Review ClawHub security details before installing.");
   });
 
@@ -349,6 +361,8 @@ describe("skills gateway handlers (clawhub)", () => {
     });
     expect(ok).toBe(true);
     expect(error).toBeUndefined();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("routes explicit agent ClawHub installs through that agent workspace", async () => {
@@ -421,7 +435,10 @@ describe("skills gateway handlers (clawhub)", () => {
         version: "1.2.3",
         changed: true,
         targetDir: "/tmp/workspace/skills/calendar",
+<<<<<<< HEAD
         warning: "Latest skill version needs review before use.",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     ]);
 
@@ -443,7 +460,11 @@ describe("skills gateway handlers (clawhub)", () => {
           skillKey?: string;
           config?: {
             source?: string;
+<<<<<<< HEAD
             results?: Array<{ ok?: boolean; slug?: string; version?: string; warning?: string }>;
+=======
+            results?: Array<{ ok?: boolean; slug?: string; version?: string }>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           };
         }
       | undefined;
@@ -454,6 +475,7 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(result?.config?.results?.[0]?.ok).toBe(true);
     expect(result?.config?.results?.[0]?.slug).toBe("calendar");
     expect(result?.config?.results?.[0]?.version).toBe("1.2.3");
+<<<<<<< HEAD
     expect(result?.config?.results?.[0]?.warning).toBe(
       "Latest skill version needs review before use.",
     );
@@ -533,6 +555,8 @@ describe("skills gateway handlers (clawhub)", () => {
         warnings: ["Latest skill version is marked malicious; OpenClaw will not download it."],
       },
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("rejects ClawHub skills.update requests without slug or all", async () => {

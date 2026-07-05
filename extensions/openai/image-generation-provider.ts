@@ -8,13 +8,19 @@ import type {
 } from "openclaw/plugin-sdk/image-generation";
 import {
   parseOpenAiCompatibleImageResponse,
+<<<<<<< HEAD
   resolveInlineImageJsonResponseMaxBytes,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { resolveClosestSize } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+<<<<<<< HEAD
 import { MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   ensureAuthProfileStore,
   isProviderApiKeyConfigured,
@@ -26,7 +32,10 @@ import {
   assertOkOrThrowHttpError,
   postJsonRequest,
   postMultipartRequest,
+<<<<<<< HEAD
   readProviderJsonResponse,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
@@ -69,7 +78,10 @@ const MOCK_OPENAI_PROVIDER_ID = "mock-openai";
 const OPENAI_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const OPENAI_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 const OPENAI_QUALITIES = ["low", "medium", "high", "auto"] as const;
+<<<<<<< HEAD
 const MB = 1024 * 1024;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const OPENAI_IMAGE_MODELS = [
   DEFAULT_OPENAI_IMAGE_MODEL,
   OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL,
@@ -124,6 +136,7 @@ function resolveOpenAIImageCount(count: number | undefined): number {
   return Math.max(1, Math.min(OPENAI_MAX_IMAGE_RESULTS, Math.trunc(count)));
 }
 
+<<<<<<< HEAD
 function resolveGeneratedImageMaxBytes(cfg: OpenClawConfig): number {
   const configured = cfg.agents?.defaults?.mediaMaxMb;
   if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
@@ -132,6 +145,8 @@ function resolveGeneratedImageMaxBytes(cfg: OpenClawConfig): number {
   return MAX_IMAGE_BYTES;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isPublicOpenAIImageBaseUrl(baseUrl: string): boolean {
   const trimmed = baseUrl.trim();
   if (!trimmed) {
@@ -518,7 +533,10 @@ async function readResponseBodyText(response: Response): Promise<string> {
       if (value) {
         byteLength += value.byteLength;
         if (byteLength > MAX_CODEX_IMAGE_SSE_BYTES) {
+<<<<<<< HEAD
           await reader.cancel().catch(() => undefined);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           throw new Error("OpenAI Codex image generation response exceeded size limit");
         }
         chunks.push(decoder.decode(value, { stream: !done }));
@@ -1024,12 +1042,16 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
           isEdit ? "OpenAI image edit failed" : "OpenAI image generation failed",
         );
 
+<<<<<<< HEAD
         const data = await readProviderJsonResponse(response, "openai.image-generation", {
           maxBytes: resolveInlineImageJsonResponseMaxBytes(
             count,
             resolveGeneratedImageMaxBytes(req.cfg),
           ),
         });
+=======
+        const data = await response.json();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const output = resolveOutputMime(req.outputFormat);
         const images = parseOpenAiCompatibleImageResponse(data, {
           defaultMimeType: output.mimeType,

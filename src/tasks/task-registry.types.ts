@@ -144,3 +144,11 @@ export type TaskRecord = {
   terminalSummary?: string;
   terminalOutcome?: TaskTerminalOutcome;
 };
+<<<<<<< HEAD
+=======
+
+export type TaskRegistrySnapshot = {
+  tasks: TaskRecord[];
+  deliveryStates: TaskDeliveryState[];
+};
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

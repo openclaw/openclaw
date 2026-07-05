@@ -18,6 +18,7 @@ let lifecycleHandler:
     }) => void)
   | undefined;
 
+<<<<<<< HEAD
 const sessionStore = vi.hoisted(
   () =>
     new Proxy<Record<string, { sessionId: string; updatedAt: number }>>(
@@ -33,6 +34,8 @@ const sessionStore = vi.hoisted(
     ),
 );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async (opts: unknown) => {
     const request = opts as { method?: string };
@@ -57,6 +60,21 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => {
+<<<<<<< HEAD
+=======
+  const sessionStore = new Proxy<Record<string, { sessionId: string; updatedAt: number }>>(
+    {},
+    {
+      get(target, prop, receiver) {
+        if (typeof prop !== "string" || prop in target) {
+          return Reflect.get(target, prop, receiver);
+        }
+        return { sessionId: `sess-${prop}`, updatedAt: 1 };
+      },
+    },
+  );
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return {
     loadSessionStore: vi.fn(() => sessionStore),
     resolveAgentIdFromSessionKey: (key: string) => {
@@ -69,11 +87,14 @@ vi.mock("../config/sessions.js", () => {
   };
 });
 
+<<<<<<< HEAD
 vi.mock("../config/sessions/session-accessor.js", () => ({
   loadSessionEntry: (scope: { sessionKey: string }) => sessionStore[scope.sessionKey],
   patchSessionEntry: async () => null,
 }));
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const announceSpy = vi.fn(async (_params: unknown) => true);
 const runSubagentEndedHookMock = vi.fn(async (_eventValue?: unknown, _ctx?: unknown) => {});
 const emitSessionLifecycleEventMock = vi.fn();

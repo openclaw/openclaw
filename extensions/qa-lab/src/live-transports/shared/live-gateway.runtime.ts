@@ -128,6 +128,7 @@ export async function startQaLiveLaneGateway(params: {
       },
     };
   } catch (error) {
+<<<<<<< HEAD
     if (mock) {
       try {
         await mock.stop();
@@ -140,6 +141,9 @@ export async function startQaLiveLaneGateway(params: {
         });
       }
     }
+=======
+    await mock?.stop().catch(() => {});
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     throw error;
   }
 }

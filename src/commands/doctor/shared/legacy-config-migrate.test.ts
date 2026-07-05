@@ -64,6 +64,7 @@ describe("compatibility binding repair migrate", () => {
 });
 
 describe("legacy memory search config migrate", () => {
+<<<<<<< HEAD
   it("removes sidecar memory search index paths", () => {
     const res = migrateLegacyConfigForTest({
       memorySearch: {
@@ -112,6 +113,8 @@ describe("legacy memory search config migrate", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("moves legacy OpenAI Codex provider config to canonical OpenAI provider config", () => {
     const res = migrateLegacyConfigForTest({
       models: {

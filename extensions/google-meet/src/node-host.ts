@@ -332,11 +332,19 @@ function startChrome(params: Record<string, unknown>) {
   }
 
   if (params.launch !== false) {
+<<<<<<< HEAD
     const argv = ["open", "-a", "Google Chrome", url];
+=======
+    const argv = ["open", "-a", "Google Chrome"];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const browserProfile = readString(params.browserProfile);
     if (browserProfile) {
       argv.push("--args", `--profile-directory=${browserProfile}`);
     }
+<<<<<<< HEAD
+=======
+    argv.push(url);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const result = runCommandWithTimeout(argv, timeoutMs);
     if (result.code !== 0) {
       if (bridgeId) {

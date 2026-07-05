@@ -21,10 +21,14 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+<<<<<<< HEAD
 import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+=======
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-request-guards";
 import {
   resolveSlackAccount,
@@ -70,13 +74,19 @@ import {
   SLACK_SOCKET_RECONNECT_POLICY,
   waitForSlackSocketDisconnect,
 } from "./reconnect-policy.js";
+<<<<<<< HEAD
 import { setSlackDefaultSendIdentity } from "./send.runtime.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { registerSlackMonitorSlashCommands } from "./slash.js";
 import type { MonitorSlackOpts } from "./types.js";
 
 let slackBoltInterop: SlackBoltResolvedExports | undefined;
+<<<<<<< HEAD
 type SlackRelaySourceModule = typeof import("./relay-source.js");
 let slackRelaySourcePromise: Promise<SlackRelaySourceModule> | undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 async function getSlackBoltInterop(): Promise<SlackBoltResolvedExports> {
   if (!slackBoltInterop) {
@@ -89,11 +99,14 @@ async function getSlackBoltInterop(): Promise<SlackBoltResolvedExports> {
   return slackBoltInterop;
 }
 
+<<<<<<< HEAD
 function loadSlackRelaySource(): Promise<SlackRelaySourceModule> {
   slackRelaySourcePromise ??= import("./relay-source.js");
   return slackRelaySourcePromise;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 
@@ -157,6 +170,7 @@ function parseApiAppIdFromAppToken(raw?: string) {
   return match?.[1]?.toUpperCase();
 }
 
+<<<<<<< HEAD
 function resolveSlackRelayConfig(params: { relay: unknown; accountId: string }): {
   url: string;
   authToken: string;
@@ -184,6 +198,8 @@ function resolveSlackRelayConfig(params: { relay: unknown; accountId: string }):
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const cfg = opts.config ?? getRuntimeConfig();
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
@@ -226,6 +242,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   });
   const botToken = resolveSlackBotToken(opts.botToken ?? account.botToken);
   const appToken = resolveSlackAppToken(opts.appToken ?? account.appToken);
+<<<<<<< HEAD
   const relayConfig =
     slackMode === "relay"
       ? resolveSlackRelayConfig({
@@ -240,6 +257,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         : slackMode === "relay"
           ? `Slack bot token missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken or SLACK_BOT_TOKEN for default).`
           : `Slack bot + app tokens missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken/appToken or SLACK_BOT_TOKEN/SLACK_APP_TOKEN for default).`;
+=======
+  if (!botToken || (slackMode !== "http" && !appToken)) {
+    const missing =
+      slackMode === "http"
+        ? `Slack bot token missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken or SLACK_BOT_TOKEN for default).`
+        : `Slack bot + app tokens missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken/appToken or SLACK_BOT_TOKEN/SLACK_APP_TOKEN for default).`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     throw new Error(missing);
   }
   if (slackMode === "http" && !signingSecret) {
@@ -293,8 +317,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     interop: await getSlackBoltInterop(),
     slackMode,
     botToken,
+<<<<<<< HEAD
     appToken: slackMode === "socket" ? (appToken ?? undefined) : undefined,
     signingSecret: slackMode === "http" ? (signingSecret ?? undefined) : undefined,
+=======
+    appToken: appToken ?? undefined,
+    signingSecret: signingSecret ?? undefined,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     slackWebhookPath,
     clientOptions: clientOptions as Record<string, unknown>,
     ...(slackCfg.socketMode ? { socketMode: slackCfg.socketMode } : {}),
@@ -339,12 +368,20 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   let botId = "";
   let teamId = "";
   let apiAppId = "";
+<<<<<<< HEAD
   const expectedApiAppIdFromAppToken =
     slackMode === "socket" ? parseApiAppIdFromAppToken(appToken) : undefined;
   let authTestFailed = false;
   let authTestError: string | undefined;
   try {
     const auth = await app.client.auth.test();
+=======
+  const expectedApiAppIdFromAppToken = parseApiAppIdFromAppToken(appToken);
+  let authTestFailed = false;
+  let authTestError: string | undefined;
+  try {
+    const auth = await app.client.auth.test({ token: botToken });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     botUserId = auth.user_id ?? "";
     botId = (auth as { bot_id?: string }).bot_id ?? "";
     teamId = auth.team_id ?? "";
@@ -665,6 +702,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           continue;
         }
       }
+<<<<<<< HEAD
     } else if (slackMode === "relay" && relayConfig) {
       runtime.log?.(
         `slack relay mode connecting to ${relayConfig.url} gateway_id:${relayConfig.gatewayId}`,
@@ -679,6 +717,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         setStatus: opts.setStatus,
         setIdentity: (identity) => setSlackDefaultSendIdentity(account.accountId, identity),
       });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } else {
       runtime.log?.(`slack http mode listening at ${slackWebhookPath}`);
       if (!opts.abortSignal?.aborted) {
@@ -690,9 +730,12 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       }
     }
   } finally {
+<<<<<<< HEAD
     if (slackMode === "relay") {
       setSlackDefaultSendIdentity(account.accountId, undefined);
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     opts.abortSignal?.removeEventListener("abort", stopOnAbort);
     unregisterHttpHandler?.();
     await gracefulStop();

@@ -12,7 +12,10 @@ import { extractShippedPluginInstallConfigRecords } from "../config/plugin-insta
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
+<<<<<<< HEAD
 import { normalizeUpdateChannel } from "../infra/update-channels.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   loadInstalledPluginIndexInstallRecords,
   withoutPluginInstallRecords,
@@ -24,7 +27,10 @@ import {
   updateNpmInstalledPlugins,
 } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
+<<<<<<< HEAD
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   containsConfigIncludeDirective,
   resolveCombinedPluginAndHookConfigMutationPreflight,
@@ -102,12 +108,16 @@ function projectUpdaterResultOntoSourceConfig(params: {
 /** Run plugin/hook-pack updates, persist changed install records, and refresh runtime registry. */
 export async function runPluginUpdateCommand(params: {
   id?: string;
+<<<<<<< HEAD
   opts: {
     all?: boolean;
     acknowledgeClawHubRisk?: boolean;
     dryRun?: boolean;
     dangerouslyForceUnsafeInstall?: boolean;
   };
+=======
+  opts: { all?: boolean; dryRun?: boolean; dangerouslyForceUnsafeInstall?: boolean };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }) {
   assertConfigWriteAllowedInCurrentMode();
 
@@ -149,7 +159,11 @@ export async function runPluginUpdateCommand(params: {
   );
   const logger = {
     info: (msg: string) => defaultRuntime.log(msg),
+<<<<<<< HEAD
     warn: (msg: string) => defaultRuntime.log(msg.includes("╭─") ? msg : theme.warn(msg)),
+=======
+    warn: (msg: string) => defaultRuntime.log(theme.warn(msg)),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
   if (params.opts.dangerouslyForceUnsafeInstall) {
     defaultRuntime.log(theme.warn(DEPRECATED_DANGEROUS_FORCE_UNSAFE_UPDATE_WARNING));
@@ -267,6 +281,7 @@ export async function runPluginUpdateCommand(params: {
           pluginIds: pluginSelection.pluginIds,
           specOverrides: pluginSelection.specOverrides,
           dryRun: params.opts.dryRun,
+<<<<<<< HEAD
           officialPluginUpdateChannel: params.opts.all
             ? (normalizeUpdateChannel(cfg.update?.channel) ?? undefined)
             : undefined,
@@ -277,6 +292,9 @@ export async function runPluginUpdateCommand(params: {
             action: "updating",
             allowPrompt: !params.opts.dryRun,
           }),
+=======
+          dangerouslyForceUnsafeInstall: params.opts.dangerouslyForceUnsafeInstall,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           logger,
           onIntegrityDrift: async (drift) => {
             const specLabel = drift.resolvedSpec ?? drift.spec;

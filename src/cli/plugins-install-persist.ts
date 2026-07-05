@@ -388,11 +388,14 @@ function resolveReplacedManagedInstallRemoval(params: {
   if (!previousInstallPath || !nextInstallPath) {
     return null;
   }
+<<<<<<< HEAD
   if (params.previousInstall.source === "npm" && params.nextInstall.source === "npm") {
     // npm plugin updates can leave a running gateway holding imports into the
     // previous dist tree until restart; keep replaced generations available.
     return null;
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (
     shouldPreserveReplacedInstallPath({
       removalTarget: previousInstallPath,
@@ -455,10 +458,16 @@ export async function persistPluginInstall(params: {
     () => loadInstalledPluginIndexInstallRecords(),
     { command: "install" },
   );
+<<<<<<< HEAD
   const previousInstall = installRecords[params.pluginId];
   const replacedInstallRemoval = resolveReplacedManagedInstallRemoval({
     pluginId: params.pluginId,
     previousInstall,
+=======
+  const replacedInstallRemoval = resolveReplacedManagedInstallRemoval({
+    pluginId: params.pluginId,
+    previousInstall: installRecords[params.pluginId],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     nextInstall: params.install,
   });
   const nextInstallRecords = recordPluginInstallInRecords(installRecords, {

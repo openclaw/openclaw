@@ -23,10 +23,13 @@ export function extractFirstTextBlock(message: unknown): string | undefined {
 
 export type AssistantPhase = "commentary" | "final_answer";
 
+<<<<<<< HEAD
 function isAssistantTextContentBlockType(value: unknown): boolean {
   return value === "text" || value === "input_text" || value === "output_text";
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Narrows unknown phase metadata to assistant text phases that affect visibility. */
 export function normalizeAssistantPhase(value: unknown): AssistantPhase | undefined {
   return value === "commentary" || value === "final_answer" ? value : undefined;
@@ -77,7 +80,11 @@ export function resolveAssistantMessagePhase(message: unknown): AssistantPhase |
       continue;
     }
     const record = block as { type?: unknown; textSignature?: unknown };
+<<<<<<< HEAD
     if (!isAssistantTextContentBlockType(record.type)) {
+=======
+    if (record.type !== "text") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       continue;
     }
     const phase = parseAssistantTextSignature(record.textSignature)?.phase;
@@ -160,7 +167,11 @@ export function extractAssistantTextForPhase(
       return false;
     }
     const record = block as { type?: unknown; textSignature?: unknown };
+<<<<<<< HEAD
     if (!isAssistantTextContentBlockType(record.type)) {
+=======
+    if (record.type !== "text") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return false;
     }
     return Boolean(parseAssistantTextSignature(record.textSignature)?.phase);
@@ -177,7 +188,11 @@ export function extractAssistantTextForPhase(
         return null;
       }
       const record = block as { type?: unknown; text?: unknown; textSignature?: unknown };
+<<<<<<< HEAD
       if (!isAssistantTextContentBlockType(record.type) || typeof record.text !== "string") {
+=======
+      if (record.type !== "text" || typeof record.text !== "string") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         return null;
       }
       const signature = parseAssistantTextSignature(record.textSignature);

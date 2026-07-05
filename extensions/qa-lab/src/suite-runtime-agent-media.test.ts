@@ -115,6 +115,7 @@ describe("qa suite runtime agent media helpers", () => {
     ).resolves.toBe(mediaPath);
   });
 
+<<<<<<< HEAD
   it("falls back to generated image files when mock request logs are unavailable", async () => {
     fetchJsonMock.mockRejectedValue(new Error("mock debug unavailable"));
     const tempRoot = await makeTempDir("qa-generated-image-");
@@ -136,6 +137,8 @@ describe("qa suite runtime agent media helpers", () => {
     ).resolves.toBe(mediaPath);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("applies provider image generation config with transport-required plugins", async () => {
     const env = {
       providerMode: "mock-openai",

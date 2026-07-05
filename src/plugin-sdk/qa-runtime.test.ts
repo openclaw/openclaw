@@ -1,8 +1,15 @@
+<<<<<<< HEAD
 import { createServer } from "node:net";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Tests QA runtime command loading and private CLI gating.
  */
 import { Command } from "commander";
+<<<<<<< HEAD
+=======
+import { createServer } from "node:net";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupTempDirs,
@@ -25,6 +32,7 @@ vi.mock("../infra/openclaw-root.js", () => ({
 describe("plugin-sdk qa-runtime", () => {
   const tempDirs: string[] = [];
   const originalPrivateQaCli = process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+<<<<<<< HEAD
   const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
   beforeEach(() => {
@@ -33,16 +41,26 @@ describe("plugin-sdk qa-runtime", () => {
     resolveOpenClawPackageRootSync.mockReset().mockReturnValue(null);
     delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+=======
+
+  beforeEach(() => {
+    loadBundledPluginPublicSurfaceModuleSync.mockReset();
+    resolveOpenClawPackageRootSync.mockReset().mockReturnValue(null);
+    delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   afterEach(() => {
     cleanupTempDirs(tempDirs);
     restorePrivateQaCliEnv(originalPrivateQaCli);
+<<<<<<< HEAD
     if (originalBundledPluginsDir === undefined) {
       delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     } else {
       process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   async function occupyLoopbackPort(): Promise<{ close: () => Promise<void>; port: number }> {
@@ -68,6 +86,7 @@ describe("plugin-sdk qa-runtime", () => {
     };
   }
 
+<<<<<<< HEAD
   function cancelTrackedFetchResponse(ok = true) {
     let canceled = false;
     return {
@@ -83,6 +102,8 @@ describe("plugin-sdk qa-runtime", () => {
     };
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("stays cold until the runtime seam is used", async () => {
     const module = await import("./qa-runtime.js");
 
@@ -364,6 +385,7 @@ describe("plugin-sdk qa-runtime", () => {
     expect(fetchImpl).toHaveBeenCalledWith("http://172.18.0.4:18789/healthz");
   });
 
+<<<<<<< HEAD
   it("cancels compose service health probe response bodies", async () => {
     const module = await import("./qa-runtime.js");
     const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
@@ -410,6 +432,8 @@ describe("plugin-sdk qa-runtime", () => {
     expect(second.wasCanceled()).toBe(true);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("resolves an unpinned QA Docker host port away from an occupied loopback default", async () => {
     const module = await import("./qa-runtime.js");
     const reservation = await occupyLoopbackPort();

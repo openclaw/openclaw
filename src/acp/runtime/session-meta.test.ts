@@ -152,6 +152,7 @@ describe("ACP session metadata SQLite store", () => {
         })?.acp?.runtimeSessionName,
       ).toBe("codex-normalized");
       expect(loadSessionStore(storePath)[storeSessionKey]?.acp).toBeUndefined();
+<<<<<<< HEAD
       const legacyEmbeddedEntry = loadSessionStore(storePath)[storeSessionKey];
       expect(legacyEmbeddedEntry).toBeDefined();
       if (!legacyEmbeddedEntry) {
@@ -170,6 +171,8 @@ describe("ACP session metadata SQLite store", () => {
           },
         },
       });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       await upsertAcpSessionMeta({
         cfg,
@@ -188,6 +191,7 @@ describe("ACP session metadata SQLite store", () => {
           sessionKey: storeSessionKey,
         })?.acp,
       ).toBeUndefined();
+<<<<<<< HEAD
       expect(loadSessionStore(storePath)[storeSessionKey]?.acp).toBeUndefined();
     });
   });
@@ -287,6 +291,8 @@ describe("ACP session metadata SQLite store", () => {
         })?.acp?.runtimeSessionName,
       ).toBe("codex-alias");
       expect(await listAcpSessionEntries({ cfg, databasePath })).toHaveLength(1);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   });
 

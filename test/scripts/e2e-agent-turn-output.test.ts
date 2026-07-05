@@ -80,6 +80,7 @@ describe("scripts/e2e/lib/agent-turn-output", () => {
     }
   });
 
+<<<<<<< HEAD
   it("does not accept reply-shaped JSON embedded in diagnostic lines", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-e2e-agent-output-"));
     try {
@@ -100,6 +101,8 @@ describe("scripts/e2e/lib/agent-turn-output", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not accept markers that only appear in error payload text", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-e2e-agent-output-"));
     try {

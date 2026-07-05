@@ -21,6 +21,7 @@ async function listShellScripts(dir: string): Promise<string[]> {
   return scripts;
 }
 
+<<<<<<< HEAD
 async function extractClawhubSkillInstallVerifier(): Promise<string> {
   const script = await readFile("scripts/e2e/lib/skills/clawhub-install-proof.sh", "utf8");
   const marker =
@@ -37,6 +38,8 @@ async function extractClawhubSkillInstallVerifier(): Promise<string> {
   return script.slice(verifierStart, verifierEnd);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("e2e shell tempfile hygiene", () => {
   it("does not allocate FIFO paths with mktemp -u", async () => {
     const offenders: string[] = [];
@@ -193,6 +196,7 @@ test ! -e "$ONBOARD_TMP_DIR"
     }
   });
 
+<<<<<<< HEAD
   it("rejects invalid onboarding gateway wait attempts before probing", async () => {
     const tempRoot = await mkdtemp(path.join(tmpdir(), "openclaw-onboard-gateway-attempts-"));
     const fixturePath = path.join(tempRoot, "gateway-attempts.sh");
@@ -234,6 +238,8 @@ exit "$status"
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("removes fallback ClawHub skill install HOME on failure", async () => {
     const tempRoot = await mkdtemp(path.join(tmpdir(), "openclaw-clawhub-home-test-"));
     const fakeBin = path.join(tempRoot, "bin");
@@ -270,6 +276,7 @@ exit 42
       await rm(tempRoot, { force: true, recursive: true });
     }
   });
+<<<<<<< HEAD
 
   it("rejects ClawHub skill info paths that only share a resolved prefix", async () => {
     const tempRoot = await mkdtemp(path.join(tmpdir(), "openclaw-clawhub-info-path-"));
@@ -322,4 +329,6 @@ exit 42
       await rm(tempRoot, { force: true, recursive: true });
     }
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

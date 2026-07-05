@@ -1,6 +1,9 @@
 /** Implementation of `openclaw models status`. */
 import path from "node:path";
+<<<<<<< HEAD
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import {
@@ -573,6 +576,24 @@ export async function modelsStatusCommand(
     };
     const resolveProviderAuthHealthId = (provider: string): string =>
       resolveProviderIdForAuth(provider, envLookupParams);
+<<<<<<< HEAD
+=======
+    const resolveStatusAuthOrder = (
+      order: Record<string, string[]> | undefined,
+      provider: string,
+    ): string[] | undefined => {
+      if (!order) {
+        return undefined;
+      }
+      const providerKey = normalizeProviderId(provider);
+      for (const [key, value] of Object.entries(order)) {
+        if (normalizeProviderId(key) === providerKey) {
+          return value;
+        }
+      }
+      return undefined;
+    };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const listRuntimeAuthProviderCandidates = (
       provider: string,
       options?: { includeLegacyOpenAICodex?: boolean },
@@ -599,10 +620,17 @@ export async function modelsStatusCommand(
       const providerKey = normalizeProviderId(provider);
       const providerAuthKey = resolveProviderAuthHealthId(providerKey);
       const explicitOrder =
+<<<<<<< HEAD
         findNormalizedProviderValue(store.order, providerAuthKey) ??
         findNormalizedProviderValue(store.order, providerKey) ??
         findNormalizedProviderValue(cfg.auth?.order, providerAuthKey) ??
         findNormalizedProviderValue(cfg.auth?.order, providerKey);
+=======
+        resolveStatusAuthOrder(store.order, providerAuthKey) ??
+        resolveStatusAuthOrder(store.order, providerKey) ??
+        resolveStatusAuthOrder(cfg.auth?.order, providerAuthKey) ??
+        resolveStatusAuthOrder(cfg.auth?.order, providerKey);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const isEligibleOrHealthRescued = (profileId: string): boolean => {
         const credential = store.profiles[profileId];
         if (!credential) {

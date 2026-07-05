@@ -1,6 +1,9 @@
 // Whatsapp tests cover channel outbound plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { cacheInboundMessageMeta } from "./quoted-message.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const hoisted = vi.hoisted(() => ({
   sendMessageWhatsApp: vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" })),
@@ -103,6 +106,7 @@ describe("whatsappChannelOutbound", () => {
     });
   });
 
+<<<<<<< HEAD
   it("uses the live WhatsApp sender for quoted text replies", async () => {
     const legacySend = vi.fn(async () => ({ messageId: "legacy-1", toJid: "legacy-jid" }));
     cacheInboundMessageMeta("default", "5511999999999@c.us", "reply-live-1", {
@@ -179,6 +183,8 @@ describe("whatsappChannelOutbound", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects non-WhatsApp provider-prefixed outbound targets", () => {
     const result = whatsappChannelOutbound.resolveTarget?.({
       to: "telegram:1234567890",

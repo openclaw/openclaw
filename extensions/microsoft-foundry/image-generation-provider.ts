@@ -10,9 +10,13 @@ import type {
 import {
   imageSourceUploadFileName,
   parseOpenAiCompatibleImageResponse,
+<<<<<<< HEAD
   resolveInlineImageJsonResponseMaxBytes,
 } from "openclaw/plugin-sdk/image-generation";
 import { MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
+=======
+} from "openclaw/plugin-sdk/image-generation";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -20,7 +24,10 @@ import {
   createProviderOperationDeadline,
   postJsonRequest,
   postMultipartRequest,
+<<<<<<< HEAD
   readProviderJsonResponse,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
@@ -43,9 +50,13 @@ const DEFAULT_IMAGE_SIZE = { width: 1024, height: 1024 };
 const MAI_MIN_IMAGE_SIDE_PX = 768;
 const MAI_MAX_IMAGE_PIXELS = 1_048_576;
 const MAI_IMAGE_BASE_PATH = "/mai/v1";
+<<<<<<< HEAD
 const MAI_IMAGE_MAX_RESULTS = 1;
 const MAI_IMAGE_OUTPUT_MIME = "image/png";
 const MB = 1024 * 1024;
+=======
+const MAI_IMAGE_OUTPUT_MIME = "image/png";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const MAI_IMAGE_UPLOAD_MIME_TYPES = new Set(["image/jpeg", "image/jpg", "image/png"]);
 
 type ModelProviderConfig = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string];
@@ -113,6 +124,7 @@ function resolveMaiImageSize(size: string | undefined): { width: number; height:
   return { width, height };
 }
 
+<<<<<<< HEAD
 function resolveGeneratedImageMaxBytes(req: {
   cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
 }): number {
@@ -123,6 +135,8 @@ function resolveGeneratedImageMaxBytes(req: {
   return MAX_IMAGE_BYTES;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function assertSingleImageCount(count: number | undefined): void {
   if (count === undefined || count === 1) {
     return;
@@ -271,12 +285,20 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
       }),
     capabilities: {
       generate: {
+<<<<<<< HEAD
         maxCount: MAI_IMAGE_MAX_RESULTS,
+=======
+        maxCount: 1,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         supportsSize: true,
       },
       edit: {
         enabled: true,
+<<<<<<< HEAD
         maxCount: MAI_IMAGE_MAX_RESULTS,
+=======
+        maxCount: 1,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         maxInputImages: 1,
         supportsSize: false,
       },
@@ -382,6 +404,7 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
       const { response, release } = await request;
       try {
         await assertOkOrThrowHttpError(response, `${label} failed`);
+<<<<<<< HEAD
         const payload = await readProviderJsonResponse(
           response,
           "microsoft-foundry.image-generation",
@@ -394,6 +417,10 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
         );
         return {
           images: parseMaiImageResponse(payload, label),
+=======
+        return {
+          images: parseMaiImageResponse(await response.json(), label),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           model,
         };
       } finally {

@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+<<<<<<< HEAD
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -9,6 +10,10 @@ import {
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
+=======
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -23,8 +28,11 @@ import {
   configureMemoryCoreDreamingState,
   resetMemoryCoreDreamingStateForTests,
 } from "./src/dreaming-state.js";
+<<<<<<< HEAD
 import { bm25RankToScore, buildFtsQuery } from "./src/memory/hybrid.js";
 import { searchKeyword, searchVector } from "./src/memory/manager-search.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { testing as shortTermTesting } from "./src/short-term-promotion.js";
 
 function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
@@ -38,6 +46,7 @@ function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigration
   };
 }
 
+<<<<<<< HEAD
 function legacyMemoryIndexMigration() {
   const migration = stateMigrations.find(
     (entry) => entry.id === "memory-core-legacy-sidecar-index-to-agent-sqlite",
@@ -382,6 +391,8 @@ async function searchMigratedKeywordRows(agentPath: string, query: string) {
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("memory-core doctor dreaming migration", () => {
   let rootDir = "";
   let workspaceDir = "";
@@ -610,6 +621,7 @@ describe("memory-core doctor dreaming migration", () => {
     const recall = await shortTermTesting.readRecallStore(workspaceDir, "2026-04-05T12:00:00.000Z");
     expect(recall.entries["memory:memory/2026-04-05.md:1:1"]?.conceptTags).toContain("glacier");
   });
+<<<<<<< HEAD
 
   it("migrates the legacy memory sidecar index to the per-agent SQLite database", async () => {
     const stateDir = path.join(rootDir, "state");
@@ -1468,4 +1480,6 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(legacyPath)).resolves.toBeUndefined();
     await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

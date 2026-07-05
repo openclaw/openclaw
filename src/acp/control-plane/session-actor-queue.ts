@@ -18,6 +18,13 @@ export class SessionActorQueue {
     return total;
   }
 
+<<<<<<< HEAD
+=======
+  getPendingCountForSession(actorKey: string): number {
+    return this.pendingBySession.get(actorKey) ?? 0;
+  }
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   async run<T>(actorKey: string, op: () => Promise<T>): Promise<T> {
     return this.queue.enqueue(actorKey, op, {
       onEnqueue: () => {

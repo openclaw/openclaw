@@ -1,15 +1,21 @@
 // Gateway RPC handlers for safe gateway restart requests and preflight state.
+<<<<<<< HEAD
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   createSafeGatewayRestartPreflight,
   requestSafeGatewayRestart,
 } from "../../infra/restart-coordinator.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+<<<<<<< HEAD
 function isRestartRequestParams(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function normalizeReason(value: unknown): string | undefined {
   // Restart reasons are operator-visible log context, not payload storage.
   // Trim and cap them before passing through to the coordinator.
@@ -25,6 +31,7 @@ function normalizeSkipDeferral(value: unknown): boolean {
 /** Gateway request handlers for safe restart coordination. */
 export const restartHandlers: GatewayRequestHandlers = {
   "gateway.restart.request": async ({ respond, params }) => {
+<<<<<<< HEAD
     if (!isRestartRequestParams(params)) {
       respond(
         false,
@@ -33,6 +40,8 @@ export const restartHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const result = requestSafeGatewayRestart({
       reason: normalizeReason(params.reason),
       delayMs: 0,

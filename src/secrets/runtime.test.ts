@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
 const EMPTY_LOADABLE_PLUGIN_ORIGINS = new Map();
+<<<<<<< HEAD
 const BUNDLED_CODEX_PLUGIN_ORIGINS = new Map([["codex", "bundled" as const]]);
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
@@ -12,6 +13,10 @@ const CODEX_APP_SERVER_TOKEN_REF = {
   id: "CODEX_APP_SERVER_TOKEN",
 } as const;
 
+=======
+const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function expectWarning(
   snapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>,
   expected: { code: string; path: string },
@@ -97,6 +102,7 @@ describe("secrets runtime snapshot", () => {
     });
   });
 
+<<<<<<< HEAD
   it("resolves active bundled Codex app-server plugin SecretRefs", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
@@ -169,6 +175,8 @@ describe("secrets runtime snapshot", () => {
     ).rejects.toThrow('Environment variable "CODEX_APP_SERVER_TOKEN" is missing or empty.');
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("fails when an active exec ref id contains traversal segments", async () => {
     await expect(
       prepareSecretsRuntimeSnapshot({

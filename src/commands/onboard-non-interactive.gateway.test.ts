@@ -6,7 +6,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
+<<<<<<< HEAD
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+=======
+import { captureEnv } from "../test-utils/env.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createThrowingRuntime } from "./onboard-non-interactive.test-helpers.js";
 import type { installGatewayDaemonNonInteractive } from "./onboard-non-interactive/local/daemon-install.js";
 
@@ -336,8 +340,13 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       throw new Error("temp home not initialized");
     }
     const stateDir = await fs.mkdtemp(path.join(tempHome, prefix));
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
+=======
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    delete process.env.OPENCLAW_CONFIG_PATH;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return stateDir;
   };
   const withStateDir = async (
@@ -364,6 +373,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       "OPENCLAW_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
     ]);
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "1");
     setTestEnvValue("OPENCLAW_SKIP_GMAIL_WATCHER", "1");
     setTestEnvValue("OPENCLAW_SKIP_CRON", "1");
@@ -374,6 +384,18 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
     tempHome = await makeTempWorkspace("openclaw-onboard-");
     setTestEnvValue("HOME", tempHome);
+=======
+    process.env.OPENCLAW_SKIP_CHANNELS = "1";
+    process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
+    process.env.OPENCLAW_SKIP_CRON = "1";
+    process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
+    process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+
+    tempHome = await makeTempWorkspace("openclaw-onboard-");
+    process.env.HOME = tempHome;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await loadGatewayOnboardModules();
   });
@@ -783,7 +805,11 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           runtime,
         ),
       ).rejects.toThrow(
+<<<<<<< HEAD
         /only waits for an already-running gateway unless you pass `--install-daemon` to `openclaw onboard`[\s\S]*openclaw onboard --install-daemon[\s\S]*openclaw onboard --skip-health/,
+=======
+        /only waits for an already-running gateway unless you pass --install-daemon[\s\S]*--skip-health/,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       );
     });
   }, 60_000);
@@ -969,8 +995,13 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       return;
     }
     await withStateDir("state-lan-", async (stateDir) => {
+<<<<<<< HEAD
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
       setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+=======
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       const port = getPseudoPort(40_000);
       const workspace = path.join(stateDir, "openclaw");

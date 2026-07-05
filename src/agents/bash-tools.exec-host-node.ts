@@ -178,9 +178,12 @@ export async function executeNodeHostCommand(
         agentId: prepared.agentId,
         sessionKey: prepared.sessionKey,
       }),
+<<<<<<< HEAD
       approvalReviewerDeviceIds: params.approvalReviewerDeviceId
         ? [params.approvalReviewerDeviceId]
         : undefined,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ...(options.requireDeliveryRoute !== undefined
         ? { requireDeliveryRoute: options.requireDeliveryRoute }
         : {}),

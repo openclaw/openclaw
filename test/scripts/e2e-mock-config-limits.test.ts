@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 
 const mockOpenAiPath = "scripts/e2e/mock-openai-server.mjs";
 const webSearchMockPath = "scripts/e2e/lib/openai-web-search-minimal/mock-server.mjs";
+<<<<<<< HEAD
 const browserCdpFixturePath = "scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs";
 const configReloadAssertPath = "scripts/e2e/lib/config-reload/assert-log.mjs";
 const clickClackFixturePath = "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs";
@@ -17,6 +18,10 @@ const scrubbedEnvKeys = [
   "CLICKCLACK_FIXTURE_PORT",
   "CLICKCLACK_FIXTURE_REQUEST_MAX_BYTES",
   "FIXTURE_PORT",
+=======
+const configReloadAssertPath = "scripts/e2e/lib/config-reload/assert-log.mjs";
+const scrubbedEnvKeys = [
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "MOCK_PORT",
   "MOCK_REQUEST_LOG",
   "OPENCLAW_CONFIG_RELOAD_LOG_MAX_READ_BYTES",
@@ -166,6 +171,7 @@ describe("e2e mock and config helper numeric limits", () => {
     expect(fallbackPort.stderr).toContain("invalid OPENCLAW_MOCK_OPENAI_PORT: 44080http");
   });
 
+<<<<<<< HEAD
   it("rejects out-of-range mock OpenAI port env values", () => {
     const mockPort = runScript(mockOpenAiPath, { MOCK_PORT: "65536" });
     expect(mockPort.status).not.toBe(0);
@@ -178,6 +184,8 @@ describe("e2e mock and config helper numeric limits", () => {
     expect(fallbackPort.stderr).toContain("invalid OPENCLAW_MOCK_OPENAI_PORT: 65536");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects loose OpenAI web-search mock port env values", () => {
     const result = runScript(webSearchMockPath, { MOCK_PORT: "80http" });
 
@@ -185,6 +193,7 @@ describe("e2e mock and config helper numeric limits", () => {
     expect(result.stderr).toContain("invalid MOCK_PORT: 80http");
   });
 
+<<<<<<< HEAD
   it("rejects out-of-range fixture listener ports", () => {
     const webSearch = runScript(webSearchMockPath, { MOCK_PORT: "65536" });
     expect(webSearch.status).not.toBe(0);
@@ -201,6 +210,8 @@ describe("e2e mock and config helper numeric limits", () => {
     expect(clickClack.stderr).toContain("invalid CLICKCLACK_FIXTURE_PORT: 65536");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects loose config-reload log timeout env values", () => {
     const result = runScript(configReloadAssertPath, {
       OPENCLAW_CONFIG_RELOAD_LOG_TIMEOUT_MS: "30000ms",

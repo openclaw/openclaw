@@ -3,7 +3,10 @@ import { resolveProviderRequestHeaders } from "../agents/provider-request-config
 import { parseStrictFiniteNumber } from "./parse-finite-number.js";
 import {
   buildUsageHttpErrorSnapshot,
+<<<<<<< HEAD
   discardUsageResponseBody,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   fetchJson,
   readUsageJson,
 } from "./provider-usage.fetch.shared.js";
@@ -89,7 +92,10 @@ export async function fetchCodexUsage(
   );
 
   if (!res.ok) {
+<<<<<<< HEAD
     await discardUsageResponseBody(res);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return buildUsageHttpErrorSnapshot({
       provider: "openai",
       status: res.status,

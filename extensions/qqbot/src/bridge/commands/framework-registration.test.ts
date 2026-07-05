@@ -94,6 +94,7 @@ describe("registerQQBotFrameworkCommands", () => {
       createCommandContext(config, "qqbot:group:GROUP_OPENID"),
     );
 
+<<<<<<< HEAD
     expect(missingFromResult).toEqual({ text: "该命令仅限私聊使用，请在私聊中发送。" });
     expect(nonQQBotResult).toEqual({ text: "该命令仅限私聊使用，请在私聊中发送。" });
     expect(groupResult).toEqual({ text: "该命令仅限私聊使用，请在私聊中发送。" });
@@ -113,6 +114,11 @@ describe("registerQQBotFrameworkCommands", () => {
     const result = await command.handler(createCommandContext(config, "qqbot:group:GROUP_OPENID"));
 
     expect(result).toEqual({ text: "该命令仅限私聊使用，请在私聊中发送。" });
+=======
+    expect(missingFromResult).toEqual({ text: "💡 请在私聊中使用此指令" });
+    expect(nonQQBotResult).toEqual({ text: "💡 请在私聊中使用此指令" });
+    expect(groupResult).toEqual({ text: "💡 请在私聊中使用此指令" });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(writes).toHaveLength(0);
   });
 

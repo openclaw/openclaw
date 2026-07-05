@@ -420,6 +420,7 @@ describe("runConfigureWizard", () => {
 
   it("persists provider-owned web search config changes returned by setupSearch", async () => {
     setupBaseWizardState();
+<<<<<<< HEAD
     mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) => {
       const configured = createEnabledWebSearchConfig("firecrawl", {
         enabled: true,
@@ -439,6 +440,17 @@ describe("runConfigureWizard", () => {
     queueWizardPrompts({
       select: [],
       confirm: [true, true],
+=======
+    mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) =>
+      createEnabledWebSearchConfig("firecrawl", {
+        enabled: true,
+        config: { webSearch: { apiKey: "fc-entered-key" } },
+      })(cfg),
+    );
+    queueWizardPrompts({
+      select: [],
+      confirm: [true, false],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     await runWebConfigureWizard();
@@ -452,12 +464,15 @@ describe("runConfigureWizard", () => {
     const search = getWebSearch(written);
     expect(search.provider).toBe("firecrawl");
     expect(search.enabled).toBe(true);
+<<<<<<< HEAD
     const tools = requireRecord(written.tools, "tools config");
     const web = requireRecord(tools.web, "web config");
     expect(requireRecord(web.fetch, "web fetch config")).toEqual({
       enabled: true,
       provider: "firecrawl",
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const firecrawl = getPluginEntry(written, "firecrawl");
     expect(firecrawl.enabled).toBe(true);
     const firecrawlConfig = requireRecord(firecrawl.config, "firecrawl config");
@@ -465,6 +480,7 @@ describe("runConfigureWizard", () => {
       "fc-entered-key",
     );
     expect(mocks.setupSearch).toHaveBeenCalledOnce();
+<<<<<<< HEAD
     expect(mocks.setupSearch).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
@@ -504,6 +520,8 @@ describe("runConfigureWizard", () => {
       enabled: true,
       provider: "firecrawl",
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("notes unavailable web search providers under plugin policy", async () => {

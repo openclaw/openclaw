@@ -1,6 +1,9 @@
 // Github Copilot plugin module implements usage behavior.
 import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
+<<<<<<< HEAD
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   buildUsageHttpErrorSnapshot,
   fetchJson,
@@ -42,10 +45,14 @@ export async function fetchCopilotUsage(
     });
   }
 
+<<<<<<< HEAD
   const data = await readProviderJsonResponse<CopilotUsageResponse>(
     res,
     "github-copilot-usage",
   );
+=======
+  const data = (await res.json()) as CopilotUsageResponse;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const windows: UsageWindow[] = [];
 
   if (data.quota_snapshots?.premium_interactions) {

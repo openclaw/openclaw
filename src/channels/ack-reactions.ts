@@ -1,6 +1,9 @@
 /** Channel-level policy for which inbound messages should receive an ack reaction. */
+<<<<<<< HEAD
 import { toErrorObject } from "../infra/errors.js";
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type AckReactionScope = "all" | "direct" | "group-all" | "group-mentions" | "off" | "none";
 
 /** WhatsApp group-mode policy; direct-message ack reactions are configured separately. */
@@ -120,7 +123,11 @@ export function createAckReactionHandle(params: {
     sendPromise = params.send();
   } catch (err) {
     // Convert sync throws into the same Promise<boolean> flow used for async send failures.
+<<<<<<< HEAD
     sendPromise = Promise.reject(toErrorObject(err, "Non-Error rejection"));
+=======
+    sendPromise = Promise.reject(toLintErrorObject(err, "Non-Error rejection"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   return {
@@ -176,3 +183,20 @@ export function removeAckReactionHandleAfterReply(params: {
     onError: params.onError,
   });
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

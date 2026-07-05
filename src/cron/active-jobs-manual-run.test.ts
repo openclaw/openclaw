@@ -1,6 +1,10 @@
 // Regression: upstream commit 7d1575b5df (#60310, 2026-04-04) introduced
 // activeJobIds + markCronJobActive/clearCronJobActive but only wired the pair
+<<<<<<< HEAD
 // into the scheduled due-job path. The manual-run path (cron.run() →
+=======
+// into runDueJob and executeJob. The manual-run path (cron.run() →
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // prepareManualRun + finishPreparedManualRun in src/cron/service/ops.ts) was
 // left without the mark/clear pair, so task-registry.maintenance.ts
 // hasBackingSession (cron branch under isRuntimeAuthoritative()=true)
@@ -27,7 +31,11 @@ import {
   isCronActiveJobMarkerCurrent,
   isCronJobActive,
   markCronJobActive,
+<<<<<<< HEAD
   resetCronActiveJobs,
+=======
+  resetCronActiveJobsForTests,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./active-jobs.js";
 import { CronService } from "./service.js";
 import {
@@ -90,7 +98,11 @@ async function createManualRunHarness(jobId: string) {
 
 describe("cron activeJobIds — manual-run mark/clear", () => {
   beforeEach(() => {
+<<<<<<< HEAD
     resetCronActiveJobs();
+=======
+    resetCronActiveJobsForTests();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   afterEach(() => {
@@ -155,7 +167,11 @@ describe("cron activeJobIds — manual-run mark/clear", () => {
 
     expect(isCronActiveJobMarkerCurrent(marker)).toBe(true);
 
+<<<<<<< HEAD
     resetCronActiveJobs();
+=======
+    resetCronActiveJobsForTests();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(isCronActiveJobMarkerCurrent(marker)).toBe(false);
     expect(isCronJobActive("manual-main-cutoff")).toBe(false);
@@ -182,7 +198,11 @@ describe("cron activeJobIds — manual-run mark/clear", () => {
     }
   });
 
+<<<<<<< HEAD
   it("sends one setup-timeout notification when concurrent manual runs both stall before runner start", async () => {
+=======
+  it("requests one setup-timeout restart when concurrent manual runs both stall before runner start", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     vi.useFakeTimers();
     const now = Date.parse("2025-12-13T17:00:00.000Z");
     vi.setSystemTime(now);

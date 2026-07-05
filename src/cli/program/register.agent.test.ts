@@ -1,8 +1,12 @@
 // Register agent tests cover agent command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { registerAgentsCommands } from "./register.agent.js";
 import { registerAgentTurnCommand } from "./register.agent-turn.js";
+=======
+import { registerAgentCommands } from "./register.agent.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const mocks = vi.hoisted(() => ({
   agentCliCommandMock: vi.fn(),
@@ -66,11 +70,18 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: mocks.runtime,
 }));
 
+<<<<<<< HEAD
 describe("agent command registration", () => {
   async function runCli(args: string[]) {
     const program = new Command();
     registerAgentTurnCommand(program, { agentChannelOptions: "last|telegram|discord" });
     registerAgentsCommands(program);
+=======
+describe("registerAgentCommands", () => {
+  async function runCli(args: string[]) {
+    const program = new Command();
+    registerAgentCommands(program, { agentChannelOptions: "last|telegram|discord" });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await program.parseAsync(args, { from: "user" });
   }
 
@@ -118,6 +129,7 @@ describe("agent command registration", () => {
     expect(deps).toBeUndefined();
   });
 
+<<<<<<< HEAD
   it("forwards a message file to the agent command", async () => {
     await runCli(["agent", "--message-file", "task.md", "--agent", "ops"]);
 
@@ -129,6 +141,8 @@ describe("agent command registration", () => {
     expect(deps).toBeUndefined();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("accepts a model override for one-shot agent runs", async () => {
     await runCli(["agent", "--message", "hi", "--agent", "ops", "--model", "openai/gpt-5.4"]);
 
@@ -233,7 +247,11 @@ describe("agent command registration", () => {
 
   it("documents bind accountId resolution behavior in help text", () => {
     const program = new Command();
+<<<<<<< HEAD
     registerAgentsCommands(program);
+=======
+    registerAgentCommands(program, { agentChannelOptions: "last|telegram|discord" });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const agents = program.commands.find((command) => command.name() === "agents");
     const bind = agents?.commands.find((command) => command.name() === "bind");
     const help = bind?.helpInformation() ?? "";

@@ -80,6 +80,13 @@ class CodexThreadStartRequestError extends Error {
   }
 }
 
+<<<<<<< HEAD
+=======
+export function isCodexThreadStartRequestError(error: unknown): boolean {
+  return error instanceof CodexThreadStartRequestError;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type CodexThreadFinalConfigPatchDecision =
   | { action: "resume"; binding: CodexAppServerThreadBinding }
   | { action: "start" };
@@ -1113,9 +1120,13 @@ export function buildThreadStartParams(
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
     ...codexThreadSandboxOrPermissions(options.appServer),
+<<<<<<< HEAD
     ...(options.appServer.serviceTier !== undefined
       ? { serviceTier: options.appServer.serviceTier }
       : {}),
+=======
+    ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     serviceName: "OpenClaw",
     config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
@@ -1195,9 +1206,13 @@ export function buildThreadResumeParams(
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
     ...codexThreadSandboxOrPermissions(options.appServer),
+<<<<<<< HEAD
     ...(options.appServer.serviceTier !== undefined
       ? { serviceTier: options.appServer.serviceTier }
       : {}),
+=======
+    ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
@@ -1432,9 +1447,13 @@ export function buildTurnStartParams(
         }),
     model: modelSelection.model,
     personality: CODEX_NATIVE_PERSONALITY_NONE,
+<<<<<<< HEAD
     ...(options.appServer.serviceTier !== undefined
       ? { serviceTier: options.appServer.serviceTier }
       : {}),
+=======
+    ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     effort: resolveReasoningEffort(params.thinkLevel, modelSelection.model),
     ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
     collaborationMode: buildTurnCollaborationMode(params, {

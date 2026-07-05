@@ -5,7 +5,10 @@ import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import {
   buildUsageErrorSnapshot,
   buildUsageHttpErrorSnapshot,
+<<<<<<< HEAD
   discardUsageResponseBody,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   fetchJson,
   parseFiniteNumber,
 } from "./provider-usage.fetch.shared.js";
@@ -108,6 +111,7 @@ describe("provider usage fetch shared helpers", () => {
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 
+<<<<<<< HEAD
   it("cancels unread response bodies when discarding usage responses", async () => {
     const response = new Response("not needed", { status: 429 });
     const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
@@ -117,6 +121,8 @@ describe("provider usage fetch shared helpers", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("maps configured status codes to token expired", () => {
     const snapshot = buildUsageHttpErrorSnapshot({
       provider: "openai",

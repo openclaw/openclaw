@@ -6,7 +6,11 @@ scenario:
   runtimeParityTier: soak
   coverage:
     primary:
+<<<<<<< HEAD
       - runtime.long-run-stability
+=======
+      - runtime.soak-100
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     secondary:
       - runtime.long-context
   objective: Provide an optional long-run soak that can be scheduled or run in Testbox without entering the maintainer default gate.

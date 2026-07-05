@@ -81,7 +81,10 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   timeoutMs?: number;
   token?: string;
   password?: string;
+<<<<<<< HEAD
   localPortOverride?: number;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   json?: boolean;
 }): Promise<boolean> {
   if (!isGatewayHealthAuthUnavailableError(params.error)) {
@@ -91,7 +94,10 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
     config: params.config,
     token: params.token,
     password: params.password,
+<<<<<<< HEAD
     localPortOverride: params.localPortOverride,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   const probe = await probeGatewayStatus({
     url: details.url,
@@ -691,7 +697,10 @@ export async function healthCommand(
     config?: OpenClawConfig;
     token?: string;
     password?: string;
+<<<<<<< HEAD
     localPortOverride?: number;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   runtime: RuntimeEnv,
 ) {
@@ -713,7 +722,10 @@ export async function healthCommand(
           config: cfg,
           token: opts.token,
           password: opts.password,
+<<<<<<< HEAD
           localPortOverride: opts.localPortOverride,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }),
     );
   } catch (error) {
@@ -725,7 +737,10 @@ export async function healthCommand(
         timeoutMs: opts.timeoutMs,
         token: opts.token,
         password: opts.password,
+<<<<<<< HEAD
         localPortOverride: opts.localPortOverride,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         json: opts.json,
       })
     ) {
@@ -753,10 +768,14 @@ export async function healthCommand(
     const debugEnabled = isTruthyEnvValue(process.env.OPENCLAW_DEBUG_HEALTH);
     const rich = isRich();
     if (opts.verbose) {
+<<<<<<< HEAD
       const details = buildGatewayConnectionDetails({
         config: cfg,
         localPortOverride: opts.localPortOverride,
       });
+=======
+      const details = buildGatewayConnectionDetails({ config: cfg });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       logGatewayConnectionDetails({
         runtime,
         info,

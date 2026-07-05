@@ -33,12 +33,17 @@ import type {
 import { readBool, readNonNegativeInteger, readString } from "@openclaw/acp-core/meta";
 import { defaultAcpSessionStore, type AcpSessionStore } from "@openclaw/acp-core/session";
 import { toAcpSessionLineageMeta } from "@openclaw/acp-core/session-lineage-meta";
+<<<<<<< HEAD
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeFastMode,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+=======
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { GatewaySessionRow, SessionsListResult } from "../gateway/session-utils.js";
@@ -102,13 +107,18 @@ import {
   resolveListSessionsPageSize,
 } from "./translator.session-list.js";
 import { AcpTranslatorSessionUpdates } from "./translator.session-updates.js";
+<<<<<<< HEAD
 import { ACP_AGENT_INFO } from "./types.js";
+=======
+import { ACP_AGENT_INFO, type AcpServerOptions } from "./types.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 // Maximum allowed prompt size (2MB) to prevent DoS via memory exhaustion (CWE-400, GHSA-cxpw-2g23-2vgw)
 const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
 const ACP_LOAD_SESSION_REPLAY_LIMIT = 1_000_000;
 const ACP_GATEWAY_DISCONNECT_GRACE_MS = 5_000;
 
+<<<<<<< HEAD
 type ChatSendAck = {
   runId?: unknown;
   status?: unknown;
@@ -127,6 +137,8 @@ function isTerminalChatSendAckSuccess(status: unknown): boolean {
   return normalizedChatSendAckStatus(status) === "ok";
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 let acpCommandsModulePromise: Promise<typeof import("./commands.js")> | undefined;
 let acpSdkModulePromise: Promise<typeof import("@agentclientprotocol/sdk")> | undefined;
 
@@ -199,8 +211,12 @@ function isAdminScopeProvenanceRejection(err: unknown): boolean {
 }
 
 function isGatewayCloseError(err: unknown): boolean {
+<<<<<<< HEAD
   const message = err instanceof Error ? err.message : String(err);
   return message.startsWith("gateway closed (");
+=======
+  return err instanceof Error && err.message.startsWith("gateway closed (");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 type AgentWaitResult = {
@@ -256,7 +272,10 @@ export class AcpGatewayAgent implements Agent {
   private sessionUpdates: AcpTranslatorSessionUpdates;
   private sessionCreateRateLimiter: FixedWindowRateLimiter;
   private pendingPrompts = new Map<string, PendingPrompt>();
+<<<<<<< HEAD
   private settlingPromptKeys = new Set<string>();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   private approvalRelays = new Map<string, PendingApprovalRelay>();
   private clientCapabilities: ClientCapabilityState = normalizeClientCapabilities(undefined);
   private clientInfo: InitializeRequest["clientInfo"] = null;
@@ -264,10 +283,13 @@ export class AcpGatewayAgent implements Agent {
   private activeDisconnectContext: DisconnectContext | null = null;
   private disconnectGeneration = 0;
 
+<<<<<<< HEAD
   private pendingPromptKey(sessionId: string, runId: string): string {
     return `${sessionId}\u0000${runId}`;
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   private getPendingPrompt(sessionId: string, runId: string): PendingPrompt | undefined {
     const pending = this.pendingPrompts.get(sessionId);
     if (pending?.idempotencyKey !== runId) {
@@ -730,6 +752,7 @@ export class AcpGatewayAgent implements Agent {
             pending.sendAccepted = true;
           }
         };
+<<<<<<< HEAD
         const applyTerminalAck = async (ack: ChatSendAck | undefined): Promise<boolean> => {
           const status = normalizedChatSendAckStatus(ack?.status);
           const pending = () => this.getPendingPrompt(params.sessionId, runId);
@@ -778,6 +801,18 @@ export class AcpGatewayAgent implements Agent {
           if (terminal) {
             return;
           }
+=======
+        try {
+          await this.gateway.request(
+            "chat.send",
+            {
+              ...requestParams,
+              systemInputProvenance,
+              systemProvenanceReceipt,
+            },
+            { timeoutMs: null },
+          );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           markSendAccepted();
           await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
         } catch (err) {
@@ -785,10 +820,14 @@ export class AcpGatewayAgent implements Agent {
             (systemInputProvenance || systemProvenanceReceipt) &&
             isAdminScopeProvenanceRejection(err)
           ) {
+<<<<<<< HEAD
             const terminal = await sendChat(requestParams);
             if (terminal) {
               return;
             }
+=======
+            await this.gateway.request("chat.send", requestParams, { timeoutMs: null });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             markSendAccepted();
             await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
             return;
@@ -798,11 +837,15 @@ export class AcpGatewayAgent implements Agent {
       };
 
       void sendWithProvenanceFallback().catch((err: unknown) => {
+<<<<<<< HEAD
         const promptKey = this.pendingPromptKey(params.sessionId, runId);
         if (
           isGatewayCloseError(err) &&
           (this.getPendingPrompt(params.sessionId, runId) || this.settlingPromptKeys.has(promptKey))
         ) {
+=======
+        if (isGatewayCloseError(err) && this.getPendingPrompt(params.sessionId, runId)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           return;
         }
         this.clearApprovalRelaysForPrompt(params.sessionId, runId, { denyActive: true });
@@ -1223,6 +1266,7 @@ export class AcpGatewayAgent implements Agent {
     pending: PendingPrompt,
     stopReason: StopReason,
   ): Promise<void> {
+<<<<<<< HEAD
     const promptKey = this.pendingPromptKey(sessionId, pending.idempotencyKey);
     this.settlingPromptKeys.add(promptKey);
     try {
@@ -1254,6 +1298,33 @@ export class AcpGatewayAgent implements Agent {
     } finally {
       this.settlingPromptKeys.delete(promptKey);
     }
+=======
+    this.clearApprovalRelaysForPrompt(sessionId, pending.idempotencyKey, { denyActive: true });
+    this.pendingPrompts.delete(sessionId);
+    this.sessionStore.clearActiveRun(sessionId);
+    if (this.pendingPrompts.size === 0) {
+      this.clearDisconnectTimer();
+    }
+    const sessionSnapshot = await this.getSessionSnapshot(pending.sessionKey);
+    try {
+      await this.sendSessionSnapshotUpdate(
+        {
+          sessionId,
+          sessionKey: pending.sessionKey,
+          ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+        },
+        sessionSnapshot,
+        {
+          includeControls: false,
+          record: true,
+          runId: pending.idempotencyKey,
+        },
+      );
+    } catch (err) {
+      this.log(`session snapshot update failed for ${sessionId}: ${String(err)}`);
+    }
+    pending.resolve({ stopReason });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   private findPendingBySessionKey(sessionKey: string, runId?: string): PendingPrompt | undefined {
@@ -1574,7 +1645,10 @@ export class AcpGatewayAgent implements Agent {
       modelProvider: session.modelProvider,
       model: session.model,
       fastMode: session.fastMode,
+<<<<<<< HEAD
       effectiveFastMode: session.effectiveFastMode,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       verboseLevel: session.verboseLevel,
       traceLevel: session.traceLevel,
       reasoningLevel: session.reasoningLevel,
@@ -1591,7 +1665,11 @@ export class AcpGatewayAgent implements Agent {
     value: string | boolean,
   ): {
     overrides: Partial<GatewaySessionPresentationRow>;
+<<<<<<< HEAD
     patch?: Record<string, string | boolean | null>;
+=======
+    patch?: Record<string, string | boolean>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } {
     if (typeof value !== "string") {
       throw new Error(
@@ -1604,6 +1682,7 @@ export class AcpGatewayAgent implements Agent {
           patch: { thinkingLevel: value },
           overrides: { thinkingLevel: value },
         };
+<<<<<<< HEAD
       case ACP_FAST_MODE_CONFIG_ID: {
         const fastMode = normalizeFastMode(value);
         if (fastMode === undefined) {
@@ -1614,6 +1693,13 @@ export class AcpGatewayAgent implements Agent {
           overrides: { fastMode },
         };
       }
+=======
+      case ACP_FAST_MODE_CONFIG_ID:
+        return {
+          patch: { fastMode: value === "on" },
+          overrides: { fastMode: value === "on" },
+        };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       case ACP_VERBOSE_LEVEL_CONFIG_ID:
         return {
           patch: { verboseLevel: value },
@@ -1629,6 +1715,7 @@ export class AcpGatewayAgent implements Agent {
           patch: { reasoningLevel: value },
           overrides: { reasoningLevel: value },
         };
+<<<<<<< HEAD
       case ACP_RESPONSE_USAGE_CONFIG_ID: {
         const next = value === "inherit" ? null : value;
         return {
@@ -1636,6 +1723,13 @@ export class AcpGatewayAgent implements Agent {
           overrides: { responseUsage: next as GatewaySessionPresentationRow["responseUsage"] },
         };
       }
+=======
+      case ACP_RESPONSE_USAGE_CONFIG_ID:
+        return {
+          patch: { responseUsage: value },
+          overrides: { responseUsage: value as GatewaySessionPresentationRow["responseUsage"] },
+        };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       case ACP_ELEVATED_LEVEL_CONFIG_ID:
         return {
           patch: { elevatedLevel: value },

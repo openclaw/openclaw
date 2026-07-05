@@ -207,12 +207,17 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
       }
     }
 
+<<<<<<< HEAD
     // A flush can fire mid-line, before `openFence` advances to `nextOpenFence` below, so it closes
     // against the still-open `openFence`. A fence-closing line that also carries trailing text would
     // otherwise reserve 0 yet still get a closing fence appended on flush, overflowing maxChars.
     const fenceToReserve = nextOpenFence ?? openFence;
     const reserveChars = fenceToReserve ? closeFenceLine(fenceToReserve).length + 1 : 0;
     const reserveLines = fenceToReserve ? 1 : 0;
+=======
+    const reserveChars = nextOpenFence ? closeFenceLine(nextOpenFence).length + 1 : 0;
+    const reserveLines = nextOpenFence ? 1 : 0;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const effectiveMaxChars = maxChars - reserveChars;
     const effectiveMaxLines = maxLines - reserveLines;
     const charLimit = effectiveMaxChars > 0 ? effectiveMaxChars : maxChars;

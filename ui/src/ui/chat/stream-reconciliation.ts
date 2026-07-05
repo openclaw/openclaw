@@ -332,7 +332,11 @@ function insertMessageAtIndex(messages: unknown[], message: unknown, index: numb
   return [...messages.slice(0, index), message, ...messages.slice(index)];
 }
 
+<<<<<<< HEAD
 export function messageTimestampMs(message: unknown): number | null {
+=======
+function messageTimestampMs(message: unknown): number | null {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!message || typeof message !== "object") {
     return null;
   }

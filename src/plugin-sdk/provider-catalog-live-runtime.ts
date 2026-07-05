@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import {
   clearLiveCatalogCacheForTests,
@@ -46,6 +49,7 @@ export type CachedLiveProviderModelRowsParams = FetchLiveProviderModelRowsParams
   shouldCacheRows?: (rows: readonly unknown[]) => boolean;
 };
 
+<<<<<<< HEAD
 // Live model catalogs are fetched at runtime from provider-controlled endpoints,
 // so the success body is untrusted just like the error body. A faulty or hostile
 // provider can stream an unbounded JSON document; reading it without a ceiling
@@ -55,6 +59,8 @@ export type CachedLiveProviderModelRowsParams = FetchLiveProviderModelRowsParams
 // for provider error bodies.
 const LIVE_MODEL_CATALOG_BODY_MAX_BYTES = 4 * 1024 * 1024;
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export class LiveModelCatalogHttpError extends Error {
   readonly status: number;
 
@@ -137,6 +143,7 @@ function buildHeaders(params: FetchLiveProviderModelIdsParams): Headers {
   return headers;
 }
 
+<<<<<<< HEAD
 async function cancelUnreadResponseBody(response: Response): Promise<void> {
   if (!response.bodyUsed) {
     await response.body?.cancel().catch(() => undefined);
@@ -154,18 +161,27 @@ async function readLiveModelCatalogJson(response: Response, timeoutMs: number): 
   return JSON.parse(new TextDecoder().decode(buffer));
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function fetchLiveProviderModelRows(
   params: FetchLiveProviderModelRowsParams,
 ): Promise<readonly unknown[]> {
   const fetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
+<<<<<<< HEAD
   const timeoutMs = params.timeoutMs ?? 5_000;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const { response, release } = await fetchGuard({
     url: params.endpoint,
     init: {
       headers: buildHeaders(params),
     },
     signal: params.signal,
+<<<<<<< HEAD
     timeoutMs,
+=======
+    timeoutMs: params.timeoutMs ?? 5_000,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     policy: params.policy ?? ssrfPolicyFromHttpBaseUrlAllowedHostname(params.endpoint),
     ...(params.lookupFn ? { lookupFn: params.lookupFn } : {}),
     ...(params.requireHttps !== undefined ? { requireHttps: params.requireHttps } : {}),
@@ -173,12 +189,18 @@ export async function fetchLiveProviderModelRows(
   });
   try {
     if (!response.ok) {
+<<<<<<< HEAD
       await cancelUnreadResponseBody(response);
       throw new LiveModelCatalogHttpError(params.providerId, response.status);
     }
     return (params.readRows ?? readDefaultLiveModelCatalogRows)(
       await readLiveModelCatalogJson(response, timeoutMs),
     );
+=======
+      throw new LiveModelCatalogHttpError(params.providerId, response.status);
+    }
+    return (params.readRows ?? readDefaultLiveModelCatalogRows)(await response.json());
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } finally {
     await release();
   }

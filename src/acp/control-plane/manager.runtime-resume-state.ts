@@ -3,7 +3,11 @@ import { resolveSessionIdentityFromMeta } from "@openclaw/acp-core/runtime/sessi
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+<<<<<<< HEAD
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+=======
+import { formatErrorMessage } from "../../infra/errors.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { AcpRuntimeError } from "../runtime/errors.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import type {
@@ -17,6 +21,7 @@ export function isRecoverableManagerAcpxExitError(message: string): boolean {
   return /^acpx exited with (code \d+|signal [a-z0-9]+)/i.test(message.trim());
 }
 
+<<<<<<< HEAD
 /** acpx detail code for a persistent session that can no longer be resumed and must be re-created. */
 const SESSION_RESUME_REQUIRED_DETAIL_CODE = "SESSION_RESUME_REQUIRED";
 
@@ -39,6 +44,14 @@ function isRecoverableMissingManagerPersistentSessionError(error: AcpRuntimeErro
     current = (current as { cause?: unknown }).cause;
   }
   return false;
+=======
+function isRecoverableMissingManagerPersistentSessionError(message: string): boolean {
+  const normalized = message.trim();
+  return (
+    /persistent acp session .* could not be resumed/i.test(normalized) &&
+    /(resource not found|no matching session)/i.test(normalized)
+  );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /** Prepares a one-time fresh-handle retry for recoverable pre-output runtime failures. */
@@ -67,7 +80,11 @@ export async function prepareFreshManagerRuntimeHandleRetry(params: {
     !params.runtime ||
     !params.meta ||
     params.meta.mode !== "persistent" ||
+<<<<<<< HEAD
     !isRecoverableMissingManagerPersistentSessionError(params.error)
+=======
+    !isRecoverableMissingManagerPersistentSessionError(params.error.message)
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ) {
     return false;
   }
@@ -204,7 +221,11 @@ export async function tryPrepareFreshManagerRuntimeSession(params: {
     const backend = params.deps.getRuntimeBackend(configuredBackend || undefined);
     if (!backend) {
       if (params.missingBackendError) {
+<<<<<<< HEAD
         throw toErrorObject(params.missingBackendError, "Non-Error thrown");
+=======
+        throw toLintErrorObject(params.missingBackendError, "Non-Error thrown");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
       return;
     }
@@ -217,3 +238,20 @@ export async function tryPrepareFreshManagerRuntimeSession(params: {
     );
   }
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

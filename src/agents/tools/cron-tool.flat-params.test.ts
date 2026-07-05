@@ -181,6 +181,7 @@ describe("cron tool flat-params", () => {
       staggerMs: 30_000,
     });
   });
+<<<<<<< HEAD
 
   it("trims trailing whitespace from recognized job object keys (#95407)", async () => {
     const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
@@ -317,4 +318,6 @@ describe("cron tool flat-params", () => {
     expect(params.enabled).toBe(true);
     expect(params.description).toBe("All keys should be preserved as-is");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

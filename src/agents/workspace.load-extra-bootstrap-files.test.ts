@@ -4,9 +4,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { loadExtraBootstrapFilesWithDiagnostics } from "./workspace.js";
 
 describe("loadExtraBootstrapFilesWithDiagnostics", () => {
+=======
+import { loadExtraBootstrapFiles, loadExtraBootstrapFilesWithDiagnostics } from "./workspace.js";
+
+describe("loadExtraBootstrapFiles", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let fixtureRoot = "";
   let fixtureCount = 0;
 
@@ -26,11 +32,14 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     }
   });
 
+<<<<<<< HEAD
   async function loadExtraBootstrapFileList(dir: string, extraPatterns: string[]) {
     const { files } = await loadExtraBootstrapFilesWithDiagnostics(dir, extraPatterns);
     return files;
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("loads recognized bootstrap files from glob patterns", async () => {
     const workspaceDir = await createWorkspaceDir("glob");
     const packageDir = path.join(workspaceDir, "packages", "core");
@@ -38,7 +47,11 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     await fs.writeFile(path.join(packageDir, "TOOLS.md"), "tools", "utf-8");
     await fs.writeFile(path.join(packageDir, "README.md"), "not bootstrap", "utf-8");
 
+<<<<<<< HEAD
     const files = await loadExtraBootstrapFileList(workspaceDir, ["packages/*/*"]);
+=======
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["packages/*/*"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(files).toStrictEqual([
       {
@@ -56,7 +69,11 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     await fs.mkdir(packageDir, { recursive: true });
     await fs.writeFile(path.join(packageDir, "AGENTS.md"), "agents", "utf-8");
 
+<<<<<<< HEAD
     const files = await loadExtraBootstrapFileList(workspaceDir, ["./packages/*/AGENTS.md"]);
+=======
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["./packages/*/AGENTS.md"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(files).toStrictEqual([
       {
@@ -74,7 +91,11 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     await fs.mkdir(packageDir, { recursive: true });
     await fs.writeFile(path.join(packageDir, "AGENTS.md"), "literal agents", "utf-8");
 
+<<<<<<< HEAD
     const files = await loadExtraBootstrapFileList(workspaceDir, ["pkg[1]/AGENTS.md"]);
+=======
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["pkg[1]/AGENTS.md"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(files).toStrictEqual([
       {
@@ -94,7 +115,11 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     await fs.mkdir(outsideDir, { recursive: true });
     await fs.writeFile(path.join(outsideDir, "AGENTS.md"), "outside", "utf-8");
 
+<<<<<<< HEAD
     const files = await loadExtraBootstrapFileList(workspaceDir, ["../outside/AGENTS.md"]);
+=======
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["../outside/AGENTS.md"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(files).toHaveLength(0);
   });
@@ -111,7 +136,11 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     await fs.writeFile(path.join(realWorkspace, "AGENTS.md"), "linked agents", "utf-8");
     await fs.symlink(realWorkspace, linkedWorkspace, "dir");
 
+<<<<<<< HEAD
     const files = await loadExtraBootstrapFileList(linkedWorkspace, ["AGENTS.md"]);
+=======
+    const files = await loadExtraBootstrapFiles(linkedWorkspace, ["AGENTS.md"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(files).toStrictEqual([
       {
@@ -147,7 +176,11 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
       throw err;
     }
 
+<<<<<<< HEAD
     const files = await loadExtraBootstrapFileList(workspaceDir, ["AGENTS.md"]);
+=======
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["AGENTS.md"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(files).toHaveLength(0);
   });
 

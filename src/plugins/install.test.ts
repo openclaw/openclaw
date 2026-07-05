@@ -14,10 +14,13 @@ import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { initializeGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
+<<<<<<< HEAD
 import {
   resolvePluginNpmGenerationProjectDir,
   resolvePluginNpmProjectDir,
 } from "./install-paths.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import * as installSecurityScan from "./install-security-scan.js";
 import {
   installPluginFromArchive,
@@ -28,7 +31,10 @@ import {
   PLUGIN_INSTALL_ERROR_CODE,
   resolvePluginInstallDir,
 } from "./install.js";
+<<<<<<< HEAD
 import { markRetainedManagedNpmInstall } from "./managed-npm-retention.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { packToArchive } from "./test-helpers/archive-fixtures.js";
 import { createSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
 import {
@@ -2004,7 +2010,11 @@ describe("installPluginFromArchive", () => {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('Bundle "denied-dependency-bundle" installation blocked');
       expect(result.error).toContain('"plain-crypto-js" as package name');
+<<<<<<< HEAD
       expect(result.error.replaceAll("\\", "/")).toContain("vendor/plain-crypto-js/package.json");
+=======
+      expect(result.error).toContain("vendor/plain-crypto-js/package.json");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     expect(warnings.some((warning) => warning.includes('"plain-crypto-js" as package name'))).toBe(
       true,
@@ -2584,6 +2594,7 @@ describe("installPluginFromNpmSpec", () => {
       ]),
     });
     mockSuccessfulManagedNpmInstall({ packageName, version: "1.2.3" });
+<<<<<<< HEAD
     const scanSpy = vi
       .spyOn(installSecurityScan, "scanPackageInstallSource")
       .mockResolvedValueOnce({
@@ -2592,6 +2603,14 @@ describe("installPluginFromNpmSpec", () => {
           reason: "blocked by package scan",
         },
       });
+=======
+    const scanSpy = vi.spyOn(installSecurityScan, "scanPackageInstallSource").mockResolvedValueOnce({
+      blocked: {
+        code: "security_scan_blocked",
+        reason: "blocked by package scan",
+      },
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const captured = captureSecurityEvents();
 
     let result: Awaited<ReturnType<typeof installPluginFromNpmPackArchive>>;
@@ -2743,6 +2762,7 @@ describe("installPluginFromNpmSpec", () => {
     expect(requests[0]?.request.kind).toBe("plugin-npm");
   });
 
+<<<<<<< HEAD
   it("does not treat similarly named npm projects as update generations", async () => {
     const root = suiteTempRootTracker.makeTempDir();
     const npmDir = path.join(root, "npm");
@@ -2954,6 +2974,8 @@ describe("installPluginFromNpmSpec", () => {
     expect(requests[0]?.request.kind).toBe("plugin-npm");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("runs operator policy for npm dry-run probes", async () => {
     const root = suiteTempRootTracker.makeTempDir();
     const npmDir = path.join(root, "npm");
@@ -3232,9 +3254,13 @@ describe("installPluginFromDir", () => {
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('blocked dependencies "plain-crypto-js" as package name');
+<<<<<<< HEAD
       expect(result.error.replaceAll("\\", "/")).toContain(
         "node_modules/plain-crypto-js/package.json",
       );
+=======
+      expect(result.error).toContain("node_modules/plain-crypto-js/package.json");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     expect(captured.events).toHaveLength(1);
     expect(captured.events[0]).toMatchObject({

@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
+<<<<<<< HEAD
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -11,6 +12,9 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+=======
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createConfigIO } from "./io.js";
 import {
   maybeRecoverSuspiciousConfigRead,
@@ -23,7 +27,10 @@ import {
 import type { ConfigFileSnapshot } from "./types.js";
 
 const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
+<<<<<<< HEAD
 type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("config observe recovery", () => {
   let fixtureRoot = "";
@@ -48,6 +55,7 @@ describe("config observe recovery", () => {
   });
 
   afterAll(async () => {
+<<<<<<< HEAD
     closeOpenClawStateDatabaseForTest();
     await fsp.rm(fixtureRoot, { recursive: true, force: true });
   });
@@ -73,6 +81,11 @@ describe("config observe recovery", () => {
     );
   }
 
+=======
+    await fsp.rm(fixtureRoot, { recursive: true, force: true });
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   async function seedConfig(configPath: string, config: Record<string, unknown>): Promise<void> {
     await fsp.mkdir(path.dirname(configPath), { recursive: true });
     await fsp.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
@@ -272,6 +285,50 @@ describe("config observe recovery", () => {
     };
   }
 
+<<<<<<< HEAD
+=======
+  function withAsyncHealthWriteFailure(
+    deps: ObserveRecoveryDeps,
+    healthPath: string,
+  ): ObserveRecoveryDeps {
+    const writeFile = deps.fs.promises.writeFile.bind(deps.fs.promises);
+    return {
+      ...deps,
+      fs: {
+        ...deps.fs,
+        promises: {
+          ...deps.fs.promises,
+          writeFile: async (target, data, options) => {
+            if (target === healthPath) {
+              throw new Error("health write failed");
+            }
+            return await writeFile(target, data, options);
+          },
+        },
+      },
+    };
+  }
+
+  function withSyncHealthWriteFailure(
+    deps: ObserveRecoveryDeps,
+    healthPath: string,
+  ): ObserveRecoveryDeps {
+    const writeFileSync = deps.fs.writeFileSync.bind(deps.fs);
+    return {
+      ...deps,
+      fs: {
+        ...deps.fs,
+        writeFileSync: (target, data, options) => {
+          if (target === healthPath) {
+            throw new Error("health write failed");
+          }
+          return writeFileSync(target, data, options);
+        },
+      },
+    };
+  }
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("auto-restores suspicious update-channel-only roots from backup", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath, warn } = makeDeps(home);
@@ -941,6 +998,7 @@ describe("config observe recovery", () => {
     });
   });
 
+<<<<<<< HEAD
   it("writes async health state to SQLite", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, warn } = makeDeps(home);
@@ -977,6 +1035,45 @@ describe("config observe recovery", () => {
         last_observed_suspicious_signature: expect.any(String),
       });
       expectWarnNotContaining(warn, "Config health-state write failed");
+=======
+  it("logs async health-state write failures", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, warn } = makeDeps(home);
+      const snapshot = await makeSnapshot(configPath, recoverableTelegramConfig);
+      const healthPath = path.join(home, ".openclaw", "logs", "config-health.json");
+
+      await expect(
+        promoteConfigSnapshotToLastKnownGood({
+          deps: withAsyncHealthWriteFailure(deps, healthPath),
+          snapshot,
+          logger: deps.logger,
+        }),
+      ).resolves.toBe(true);
+
+      expectWarnContaining(
+        warn,
+        `Config health-state write failed: ${healthPath}: health write failed`,
+      );
+    });
+  });
+
+  it("logs sync health-state write failures", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, warn } = makeDeps(home);
+      const healthPath = path.join(home, ".openclaw", "logs", "config-health.json");
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await writeClobberedUpdateChannel(configPath);
+
+      recoverClobberedUpdateChannelSync({
+        deps: withSyncHealthWriteFailure(deps, healthPath),
+        configPath,
+      });
+
+      expectWarnContaining(
+        warn,
+        `Config health-state write failed: ${healthPath}: health write failed`,
+      );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   });
 

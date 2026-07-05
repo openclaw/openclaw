@@ -5,10 +5,22 @@ import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-reg
 import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
 import { getChannelPlugin, normalizeChannelId } from "../../../channels/plugins/index.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+<<<<<<< HEAD
 import { resolveChannelAccountId, resolveCommandSurfaceChannel } from "../channel-context.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel, sortSubagentRuns } from "../subagents-utils.js";
 import { RECENT_WINDOW_MINUTES, type SubagentsCommandContext, stopWithText } from "./shared.js";
+=======
+import type { CommandHandlerResult } from "../commands-types.js";
+import { formatRunLabel, sortSubagentRuns } from "../subagents-utils.js";
+import {
+  RECENT_WINDOW_MINUTES,
+  type SubagentsCommandContext,
+  resolveChannelAccountId,
+  resolveCommandSurfaceChannel,
+  stopWithText,
+} from "./shared.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function formatConversationBindingText(params: { conversationId: string }): string {
   return `binding:${params.conversationId}`;

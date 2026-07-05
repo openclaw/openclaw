@@ -3,8 +3,11 @@
  * Exercises result coercion, error wrapping, client delegation, and conflict
  * detection at the ToolDefinition boundary.
  */
+<<<<<<< HEAD
 import os from "node:os";
 import path from "node:path";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
@@ -16,7 +19,10 @@ import {
   toToolDefinitions,
 } from "./agent-tool-definition-adapter.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+<<<<<<< HEAD
 import { createExecTool } from "./bash-tools.exec.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
@@ -96,6 +102,7 @@ describe("agent tool definition adapter", () => {
     expect(details?.error).toBe("nope");
   });
 
+<<<<<<< HEAD
   it("preserves exec deny before prepared workdir failures", async () => {
     const tool = createExecTool({
       security: "deny",
@@ -276,6 +283,8 @@ describe("agent tool definition adapter", () => {
     expect(validateWorkdir).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("coerces details-only tool results to include content", async () => {
     const tool = {
       name: "memory_query",

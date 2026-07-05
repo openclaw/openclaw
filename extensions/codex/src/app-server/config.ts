@@ -13,11 +13,14 @@ import {
 } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+<<<<<<< HEAD
 import {
   buildSecretInputSchema,
   normalizeResolvedSecretInputString,
   type SecretInput,
 } from "openclaw/plugin-sdk/secret-input";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
 import { z } from "zod";
@@ -167,7 +170,10 @@ export type CodexAppServerStartOptions = {
   transport: CodexAppServerTransportMode;
   command: string;
   commandSource?: CodexAppServerCommandSource;
+<<<<<<< HEAD
   managedFallbackCommandPaths?: string[];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   args: string[];
   url?: string;
   authToken?: string;
@@ -189,7 +195,11 @@ export type CodexAppServerRuntimeOptions = {
   approvalPolicySource?: CodexAppServerApprovalPolicySource;
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
+<<<<<<< HEAD
   serviceTier?: CodexServiceTier | null;
+=======
+  serviceTier?: CodexServiceTier;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   networkProxy?: ResolvedCodexAppServerNetworkProxyConfig;
 };
 
@@ -217,8 +227,13 @@ export type CodexPluginConfig = {
     command?: string;
     args?: string[] | string;
     url?: string;
+<<<<<<< HEAD
     authToken?: SecretInput;
     headers?: Record<string, SecretInput>;
+=======
+    authToken?: string;
+    headers?: Record<string, string>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     clearEnv?: string[];
     remoteWorkspaceRoot?: string;
     codeModeOnly?: boolean;
@@ -300,7 +315,10 @@ const DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 60_000;
 const DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX = "openclaw-network";
 
 const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
+<<<<<<< HEAD
 const SecretInputSchema = buildSecretInputSchema();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const codexAppServerPolicyModeSchema = z.enum(["yolo", "guardian"]);
 const codexAppServerApprovalPolicySchema = z.enum([
   "never",
@@ -333,9 +351,13 @@ const codexAppServerNetworkProxySchema = z
     baseProfile: z.enum(["read-only", "workspace"]).optional(),
     mode: z.enum(["limited", "full"]).optional(),
     domains: z.record(z.string(), codexAppServerNetworkProxyDomainPermissionSchema).optional(),
+<<<<<<< HEAD
     unixSockets: z
       .record(z.string(), codexAppServerNetworkProxyUnixSocketPermissionSchema)
       .optional(),
+=======
+    unixSockets: z.record(z.string(), codexAppServerNetworkProxyUnixSocketPermissionSchema).optional(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     proxyUrl: z.string().trim().min(1).optional(),
     socksUrl: z.string().trim().min(1).optional(),
     enableSocks5: z.boolean().optional(),
@@ -396,8 +418,13 @@ const codexPluginConfigSchema = z
         command: z.string().optional(),
         args: z.union([z.array(z.string()), z.string()]).optional(),
         url: z.string().optional(),
+<<<<<<< HEAD
         authToken: SecretInputSchema.optional(),
         headers: z.record(z.string(), SecretInputSchema).optional(),
+=======
+        authToken: z.string().optional(),
+        headers: z.record(z.string(), z.string()).optional(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         clearEnv: z.array(z.string()).optional(),
         remoteWorkspaceRoot: codexAppServerRemoteWorkspaceRootSchema.optional(),
         codeModeOnly: z.boolean().optional(),
@@ -540,10 +567,14 @@ export function resolveCodexAppServerRuntimeOptions(
   const args = resolveArgs(config.args, env.OPENCLAW_CODEX_APP_SERVER_ARGS);
   const headers = normalizeHeaders(config.headers);
   const clearEnv = normalizeStringList(config.clearEnv);
+<<<<<<< HEAD
   const authToken = normalizeCodexAppServerSecretInput({
     value: config.authToken,
     path: "plugins.entries.codex.config.appServer.authToken",
   });
+=======
+  const authToken = readNonEmptyString(config.authToken);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const url = readNonEmptyString(config.url);
   const connectionClass = inferCodexAppServerConnectionClass({ transport, url });
   const remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate = "preconfigured";
@@ -877,6 +908,7 @@ export function codexAppServerStartOptionsKey(
     transport: options.transport,
     command: options.command,
     commandSource: options.commandSource ?? null,
+<<<<<<< HEAD
     managedFallbackCommandPaths: [...(options.managedFallbackCommandPaths ?? [])],
     args: options.args,
     url: options.url ?? null,
@@ -884,6 +916,14 @@ export function codexAppServerStartOptionsKey(
     headers: Object.entries(options.headers)
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, value]) => [key, hashSecretForKey(value, `header:${key}`)]),
+=======
+    args: options.args,
+    url: options.url ?? null,
+    authToken: hashSecretForKey(options.authToken, "authToken"),
+    headers: Object.entries(options.headers).toSorted(([left], [right]) =>
+      left.localeCompare(right),
+    ),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     env: Object.entries(options.env ?? {})
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, value]) => [key, hashSecretForKey(value, `env:${key}`)]),
@@ -2050,6 +2090,7 @@ function normalizeHeaders(value: unknown): Record<string, string> {
   }
   return Object.fromEntries(
     Object.entries(value)
+<<<<<<< HEAD
       .map(
         ([key, child]) =>
           [
@@ -2060,10 +2101,14 @@ function normalizeHeaders(value: unknown): Record<string, string> {
             }),
           ] as const,
       )
+=======
+      .map(([key, child]) => [key.trim(), readNonEmptyString(child)] as const)
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       .filter((entry): entry is readonly [string, string] => Boolean(entry[0] && entry[1])),
   );
 }
 
+<<<<<<< HEAD
 function normalizeCodexAppServerSecretInput(params: {
   value: unknown;
   path: string;
@@ -2071,6 +2116,8 @@ function normalizeCodexAppServerSecretInput(params: {
   return normalizeResolvedSecretInputString(params);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function normalizeStringList(value: unknown): string[] {
   return normalizeTrimmedStringList(value);
 }

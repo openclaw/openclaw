@@ -6,6 +6,10 @@ import {
   formatDelay,
   generateJobName,
   buildReminderPrompt,
+<<<<<<< HEAD
+=======
+  executeRemind,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   executeScheduledRemind,
   prepareRemindCronAction,
   type RemindCronAction,
@@ -112,6 +116,24 @@ describe("engine/tools/remind-logic", () => {
     });
   });
 
+<<<<<<< HEAD
+=======
+  describe("executeRemind", () => {
+    it("renders internal scheduling output without exposing cronParams", () => {
+      const result = executeRemind({ action: "list" });
+      expect(result.details).toEqual({
+        _instruction: "Gateway cron action prepared for internal QQ reminder scheduling.",
+        action: "list",
+        summary: undefined,
+      });
+      expect((result.details as { _instruction: string })["_instruction"]).not.toContain(
+        "Use the cron tool",
+      );
+      expect(result.details).not.toHaveProperty("cronParams");
+    });
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   describe("prepareRemindCronAction", () => {
     it("returns error when removing without jobId", () => {
       const result = prepareRemindCronAction({ action: "remove" });

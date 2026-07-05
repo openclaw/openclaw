@@ -1,9 +1,14 @@
 // Exa tests cover exa web search provider plugin behavior.
+<<<<<<< HEAD
 import { describe, expect, it, vi } from "vitest";
+=======
+import { describe, expect, it } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { testing } from "../test-api.js";
 import { createExaWebSearchProvider as createContractExaWebSearchProvider } from "../web-search-contract-api.js";
 import { createExaWebSearchProvider } from "./exa-web-search-provider.js";
 
+<<<<<<< HEAD
 function cancelTrackedResponse(
   text: string,
   init: ResponseInit,
@@ -53,6 +58,8 @@ function streamingJsonResponse(params: { chunkCount: number; chunkSize: number }
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("exa web search provider", () => {
   it("exposes the expected metadata and selection wiring", () => {
     const provider = createExaWebSearchProvider();
@@ -291,6 +298,7 @@ describe("exa web search provider", () => {
       "Exa API returned malformed JSON",
     );
   });
+<<<<<<< HEAD
 
   it("parses well-formed Exa search JSON under the byte cap", async () => {
     const response = new Response(
@@ -328,4 +336,6 @@ describe("exa web search provider", () => {
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

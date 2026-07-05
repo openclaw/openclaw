@@ -25,8 +25,11 @@ const {
   formatThinkingLevels,
   resolveSupportedThinkingLevel,
   resolveThinkingDefaultForModel,
+<<<<<<< HEAD
   resolveMessagesResponseUsageDefault,
   resolveEffectiveResponseUsage,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } = await import("./thinking.js");
 
 beforeEach(() => {
@@ -809,6 +812,7 @@ describe("normalizeReasoningLevel", () => {
     expect(normalizeReasoningLevel("streaming")).toBe("stream");
   });
 });
+<<<<<<< HEAD
 
 describe("resolveMessagesResponseUsageDefault", () => {
   it("returns undefined when unset (preserves off-by-default behavior)", () => {
@@ -877,3 +881,5 @@ describe("resolveEffectiveResponseUsage", () => {
     expect(resolveEffectiveResponseUsage("off", cfg)).toBe("off");        // explicit off persists
   });
 });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

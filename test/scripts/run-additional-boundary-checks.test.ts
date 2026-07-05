@@ -1,5 +1,8 @@
 // Run Additional Boundary Checks tests cover run additional boundary checks script behavior.
+<<<<<<< HEAD
 import { spawn, spawnSync } from "node:child_process";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,7 +11,10 @@ import {
   BOUNDARY_CHECKS,
   createBoundedOutputBuffer,
   formatCommand,
+<<<<<<< HEAD
   parseCliArgs,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   parseShardSelection,
   parseShardSpec,
   resolveConcurrency,
@@ -31,6 +37,7 @@ function createOutputBuffer() {
   };
 }
 
+<<<<<<< HEAD
 function runCli(...args: string[]) {
   return spawnSync(process.execPath, ["scripts/run-additional-boundary-checks.mjs", ...args], {
     cwd: path.resolve("."),
@@ -38,6 +45,8 @@ function runCli(...args: string[]) {
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -47,6 +56,7 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+<<<<<<< HEAD
 function isProcessZombie(pid: number): boolean {
   const result = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], {
     encoding: "utf8",
@@ -54,6 +64,8 @@ function isProcessZombie(pid: number): boolean {
   return result.status === 0 && result.stdout.trim().startsWith("Z");
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -82,6 +94,7 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
   throw new Error(`process still alive: ${pid}`);
 }
 
+<<<<<<< HEAD
 async function waitForNotRunning(pid: number, timeoutMs: number): Promise<void> {
   const deadlineAt = Date.now() + timeoutMs;
   while (Date.now() < deadlineAt) {
@@ -108,6 +121,8 @@ async function waitForChildClose(
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("run-additional-boundary-checks", () => {
   it("runs prompt snapshot drift checks in CI", () => {
     expect(BOUNDARY_CHECKS[0]).toEqual({
@@ -176,6 +191,7 @@ describe("run-additional-boundary-checks", () => {
     expect(() => parseShardSpec("9007199254740993/9007199254740994")).toThrow("Invalid shard spec");
   });
 
+<<<<<<< HEAD
   it("parses CLI help and shard args before running checks", () => {
     expect(parseCliArgs(["--help"], {})).toEqual({ help: true, shardSpec: "" });
     expect(parseCliArgs(["--shard", "2/4"], {})).toEqual({ help: false, shardSpec: "2/4" });
@@ -205,6 +221,8 @@ describe("run-additional-boundary-checks", () => {
     expect(unknown.stderr).not.toContain("pnpm");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps the raw HTTP/2 import guard in source boundary checks", () => {
     expect(BOUNDARY_CHECKS).toContainEqual({
       label: "lint:tmp:no-raw-http2-imports",
@@ -270,6 +288,7 @@ describe("run-additional-boundary-checks", () => {
     expect(result.output).toContain("timed out after 50ms");
   });
 
+<<<<<<< HEAD
   it("clamps oversized check timers before scheduling", async () => {
     const result = await runSingleCheck(
       {
@@ -289,12 +308,18 @@ describe("run-additional-boundary-checks", () => {
     expect(result.timedOut).toBe(false);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.skipIf(process.platform === "win32")(
     "waits for timed-out process groups after the wrapper exits",
     async () => {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-timeout-"));
       const childPidPath = path.join(tempDir, "child.pid");
+<<<<<<< HEAD
       let childPid: number | undefined;
+=======
+      let childPid = 0;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       try {
         const childScript = [
           "process.on('SIGTERM', () => {});",
@@ -330,13 +355,18 @@ describe("run-additional-boundary-checks", () => {
         expect(result.timedOut).toBe(true);
         await waitForDead(childPid, 2000);
       } finally {
+<<<<<<< HEAD
         if (childPid !== undefined && isProcessAlive(childPid)) {
+=======
+        if (childPid && isProcessAlive(childPid)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           process.kill(childPid, "SIGKILL");
         }
         fs.rmSync(tempDir, { force: true, recursive: true });
       }
     },
   );
+<<<<<<< HEAD
 
   it.skipIf(process.platform === "win32")(
     "cleans active check descendants on parent signal",
@@ -417,4 +447,6 @@ await runChecks(
       }
     },
   );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

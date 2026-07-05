@@ -5,6 +5,7 @@
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
+<<<<<<< HEAD
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { ExtensionContext } from "./sessions/index.js";
@@ -21,6 +22,10 @@ type CapturedNodeHostParams = Pick<
   "env" | "requestedEnv" | "workdir"
 >;
 
+=======
+import type { ExtensionContext } from "./sessions/index.js";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const mocks = vi.hoisted(() => ({
   hookRunner: undefined as
     | {
@@ -34,7 +39,14 @@ const mocks = vi.hoisted(() => ({
     env: Record<string, string>;
     requestedEnv?: Record<string, string>;
   }>,
+<<<<<<< HEAD
   nodeHostParams: [] as CapturedNodeHostParams[],
+=======
+  nodeHostParams: [] as Array<{
+    env: Record<string, string>;
+    requestedEnv?: Record<string, string>;
+  }>,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   spawnInputs: [] as Array<{
     env?: Record<string, string>;
   }>,
@@ -42,7 +54,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => mocks.hookRunner,
+<<<<<<< HEAD
   getGlobalHookRunnerRegistry: () => null,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("../infra/shell-env.js", () => ({
@@ -67,11 +82,18 @@ vi.mock("./bash-tools.exec-host-gateway.js", () => ({
 
 vi.mock("./bash-tools.exec-host-node.js", () => ({
   executeNodeHostCommand: vi.fn(
+<<<<<<< HEAD
     async (params: Pick<ExecuteNodeHostCommandParams, "env" | "requestedEnv" | "workdir">) => {
       mocks.nodeHostParams.push({
         env: { ...params.env },
         requestedEnv: params.requestedEnv ? { ...params.requestedEnv } : undefined,
         workdir: params.workdir,
+=======
+    async (params: { env: Record<string, string>; requestedEnv?: Record<string, string> }) => {
+      mocks.nodeHostParams.push({
+        env: { ...params.env },
+        requestedEnv: params.requestedEnv ? { ...params.requestedEnv } : undefined,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
       return {
         content: [{ type: "text", text: "node ok" }],
@@ -110,6 +132,10 @@ vi.mock("../process/supervisor/index.js", () => ({
     },
     cancel: vi.fn(),
     cancelScope: vi.fn(),
+<<<<<<< HEAD
+=======
+    reconcileOrphans: vi.fn(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     getRecord: vi.fn(),
   }),
 }));
@@ -141,6 +167,7 @@ describe("exec resolve_exec_env hook wiring", () => {
     mocks.spawnInputs.length = 0;
   });
 
+<<<<<<< HEAD
   it("adds only channel identity env to gateway exec subprocesses", async () => {
     const tool = createExecTool({
       host: "auto",
@@ -166,6 +193,8 @@ describe("exec resolve_exec_env hook wiring", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("merges filtered plugin env into gateway execution and approval-visible requested env", async () => {
     installResolveExecEnvHook({
       EXISTING: "plugin",
@@ -183,10 +212,13 @@ describe("exec resolve_exec_env hook wiring", () => {
       sessionKey: "agent:main:telegram:chat-1",
       messageProvider: "telegram",
       currentChannelId: "chat-1",
+<<<<<<< HEAD
       channelContext: {
         sender: { id: "ou_1", unionId: "on_1" },
         chat: { id: "oc_1" },
       },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     await tool.execute("call-1", {
       command: "echo ok",
@@ -205,6 +237,7 @@ describe("exec resolve_exec_env hook wiring", () => {
         sessionKey: "agent:main:telegram:chat-1",
         messageProvider: "telegram",
         channelId: "chat-1",
+<<<<<<< HEAD
         channelContext: {
           sender: { id: "ou_1", unionId: "on_1" },
           chat: { id: "oc_1" },
@@ -221,6 +254,14 @@ describe("exec resolve_exec_env hook wiring", () => {
       chat: { id: "oc_1" },
       sender: { id: "ou_1" },
     });
+=======
+      },
+    );
+    expect(mocks.gatewayParams[0]?.requestedEnv).toEqual({
+      EXISTING: "plugin",
+      PLUGIN_SAFE: "yes",
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(mocks.gatewayParams[0]?.env).toMatchObject({
       EXISTING: "plugin",
       PLUGIN_SAFE: "yes",
@@ -245,17 +286,24 @@ describe("exec resolve_exec_env hook wiring", () => {
       security: "full",
       ask: "off",
       sessionKey: "agent:main:main",
+<<<<<<< HEAD
       channelContext: {
         sender: { id: "ou_node" },
         chat: { id: "oc_node" },
       },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     await tool.execute("call-node", {
       command: "echo ok",
       env: { REQUEST_SAFE: "request" },
     });
 
+<<<<<<< HEAD
     expect(mocks.nodeHostParams[0]?.requestedEnv).toMatchObject({
+=======
+    expect(mocks.nodeHostParams[0]?.requestedEnv).toEqual({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       NODE_HOST_SAFE: "yes",
       REQUEST_SAFE: "request",
     });
@@ -263,6 +311,7 @@ describe("exec resolve_exec_env hook wiring", () => {
       NODE_HOST_SAFE: "yes",
       REQUEST_SAFE: "request",
     });
+<<<<<<< HEAD
     expect(
       JSON.parse(mocks.nodeHostParams[0]?.requestedEnv?.[CHANNEL_CONTEXT_ENV_KEY] ?? "{}"),
     ).toEqual({
@@ -640,6 +689,11 @@ describe("exec resolve_exec_env hook wiring", () => {
     expect(mocks.nodeHostParams[0]?.workdir).toBe(remoteWorkdir);
   });
 
+=======
+    expect(mocks.nodeHostParams[0]?.env).not.toHaveProperty("LD_PRELOAD");
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps plugin env out of before_tool_call params before execution", async () => {
     mocks.hookRunner = {
       hasHooks: vi.fn(
@@ -790,6 +844,7 @@ describe("exec resolve_exec_env hook wiring", () => {
     expect(mocks.nodeHostParams[0]?.requestedEnv).not.toHaveProperty("GATEWAY_PLUGIN_SAFE");
   });
 
+<<<<<<< HEAD
   it("lets before_tool_call reroute gateway-invalid workdirs to node host execution", async () => {
     mocks.hookRunner = {
       hasHooks: vi.fn(
@@ -841,6 +896,8 @@ describe("exec resolve_exec_env hook wiring", () => {
     expect(mocks.spawnInputs).toHaveLength(0);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("lets before_tool_call rewrite host when no resolve_exec_env hook is registered", async () => {
     mocks.hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_tool_call"),

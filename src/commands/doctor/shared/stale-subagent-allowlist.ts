@@ -1,7 +1,14 @@
 // Doctor scanner and repair for subagent allowlists that reference missing agents.
+<<<<<<< HEAD
 import { listAgentIds } from "../../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId, normalizeOptionalAgentId } from "../../../routing/session-key.js";
+=======
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentIds } from "../../../agents/agent-scope-config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { normalizeAgentId } from "../../../routing/session-key.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type StaleSubagentAllowlistHit = {
   /** Config path containing the stale allowAgents entry. */
@@ -12,6 +19,17 @@ export type StaleSubagentAllowlistHit = {
   normalizedAgentId: string;
 };
 
+<<<<<<< HEAD
+=======
+function normalizeOptionalAgentId(value: string | undefined | null): string | undefined {
+  const trimmed = normalizeOptionalString(value) ?? "";
+  if (!trimmed) {
+    return undefined;
+  }
+  return normalizeAgentId(trimmed);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function collectConfiguredSubagentTargetIds(cfg: OpenClawConfig): Set<string> {
   const ids = new Set<string>(listAgentIds(cfg));
   for (const agent of cfg.agents?.list ?? []) {

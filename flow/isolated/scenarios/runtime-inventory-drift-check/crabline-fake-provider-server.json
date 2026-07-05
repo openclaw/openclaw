@@ -1,0 +1,15 @@
+{
+  "adminToken": "26a62e404744faea3c76fe8fc6c2f5787134cf6953f9e0b7",
+  "baseUrl": "http://127.0.0.1:38029",
+  "botToken": "424242:crabline-telegram-token",
+  "endpoints": {
+    "adminInboundUrl": "http://127.0.0.1:38029/crabline/telegram/inbound",
+    "apiRoot": "http://127.0.0.1:38029"
+  },
+  "env": {
+    "TELEGRAM_BOT_TOKEN": "424242:crabline-telegram-token"
+  },
+  "provider": "telegram",
+  "recorderPath": "/home/runner/_work/openclaw/openclaw/.artifacts/qa-e2e/smoke-ci-profile/flow/isolated/scenarios/runtime-inventory-drift-check/artifacts/crabline/telegram-fake-provider.jsonl",
+  "version": 1
+}

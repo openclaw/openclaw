@@ -33,6 +33,7 @@ const loadCostUsageSummaryMock = vi.hoisted(() =>
     },
   })),
 );
+<<<<<<< HEAD
 type FastModeStateMockResult = {
   mode: boolean | "auto" | undefined;
   enabled: boolean;
@@ -45,6 +46,10 @@ const resolveFastModeStateMock = vi.hoisted(() =>
     enabled: true,
     source: "agent",
   })),
+=======
+const resolveFastModeStateMock = vi.hoisted(() =>
+  vi.fn(() => ({ enabled: true, source: "agent" })),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 );
 
 vi.mock("../../agents/agent-scope.js", async () => {
@@ -62,6 +67,7 @@ vi.mock("../../infra/session-cost-usage.js", () => ({
   loadCostUsageSummary: loadCostUsageSummaryMock,
 }));
 
+<<<<<<< HEAD
 vi.mock("../../agents/fast-mode.js", async () => {
   const actual = await vi.importActual<typeof import("../../agents/fast-mode.js")>(
     "../../agents/fast-mode.js",
@@ -71,6 +77,11 @@ vi.mock("../../agents/fast-mode.js", async () => {
     resolveFastModeState: resolveFastModeStateMock,
   };
 });
+=======
+vi.mock("../../agents/fast-mode.js", () => ({
+  resolveFastModeState: resolveFastModeStateMock,
+}));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function buildUsageParams(): HandleCommandsParams {
   return {
@@ -221,6 +232,7 @@ describe("handleUsageCommand", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toBe("⚙️ Usage footer: full.");
   });
+<<<<<<< HEAD
 
   it("updates usage footer mode as a session preference", async () => {
     const params = buildUsageParams();
@@ -341,17 +353,23 @@ describe("handleUsageCommand", () => {
     // Effective current = "off" (explicit, not inherited), so cycle → "tokens"
     expect(result?.reply?.text).toBe("⚙️ Usage footer: tokens.");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("handleFastCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resolveSessionAgentIdMock.mockReturnValue("target");
+<<<<<<< HEAD
     resolveFastModeStateMock.mockReturnValue({
       mode: true,
       enabled: true,
       source: "agent",
     });
+=======
+    resolveFastModeStateMock.mockReturnValue({ enabled: true, source: "agent" });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("uses the canonical target session agent for /fast status", async () => {
@@ -370,6 +388,7 @@ describe("handleFastCommand", () => {
     expect(result?.reply?.text).toContain("Current fast mode: on");
   });
 
+<<<<<<< HEAD
   it("shows the resolved auto threshold for /fast status", async () => {
     resolveFastModeStateMock.mockReturnValue({
       mode: "auto",
@@ -387,6 +406,8 @@ describe("handleFastCommand", () => {
     expect(result?.reply?.text).toContain("Current fast mode: auto (30 sec) (default: model)");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("prefers the target session entry from sessionStore for /fast status", async () => {
     const params = buildUsageParams();
     params.command.commandBodyNormalized = "/fast status";

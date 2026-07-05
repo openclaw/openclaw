@@ -40,7 +40,10 @@ import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { formatSlackError } from "../../errors.js";
 import { formatSlackFileReference } from "../../file-reference.js";
+<<<<<<< HEAD
 import type { SlackSendIdentity } from "../../send.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { hasSlackThreadParticipationWithPersistence } from "../../sent-thread-cache.js";
 import type { SlackAttachment, SlackFile, SlackMessageEvent } from "../../types.js";
 import { normalizeAllowListLower, normalizeSlackAllowOwnerEntry } from "../allow-list.js";
@@ -620,11 +623,15 @@ export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
   message: SlackMessageEvent;
+<<<<<<< HEAD
   opts: {
     source: "message" | "app_mention";
     wasMentioned?: boolean;
     relayIdentity?: SlackSendIdentity;
   };
+=======
+  opts: { source: "message" | "app_mention"; wasMentioned?: boolean };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }): Promise<PreparedSlackMessage | null> {
   const { ctx, account, message, opts } = params;
   const cfg = ctx.cfg;
@@ -1136,7 +1143,11 @@ export async function prepareSlackMessage(params: {
       ? `slack:channel:${message.channel}`
       : `slack:group:${message.channel}`;
 
+<<<<<<< HEAD
   enqueueSystemEvent(inboundLabel, {
+=======
+  enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sessionKey,
     contextKey: `slack:message:${message.channel}:${message.ts ?? "unknown"}`,
   });
@@ -1395,7 +1406,10 @@ export async function prepareSlackMessage(params: {
     ctx,
     account,
     message,
+<<<<<<< HEAD
     ...(opts.relayIdentity ? { relayIdentity: opts.relayIdentity } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     route,
     channelConfig,
     replyTarget,

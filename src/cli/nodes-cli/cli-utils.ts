@@ -1,4 +1,5 @@
 // Node CLI runtime helpers: terminal theme adaptation and standard error handling.
+<<<<<<< HEAD
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -6,6 +7,12 @@ import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { unauthorizedHintForMessage } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
+=======
+import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
+import { defaultRuntime } from "../../runtime.js";
+import { runCommandWithRuntime } from "../cli-utils.js";
+import { unauthorizedHintForMessage } from "./rpc.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Return color helpers that degrade to plain text in non-rich terminals. */
 export function getNodesTheme() {
@@ -21,6 +28,7 @@ export function getNodesTheme() {
   };
 }
 
+<<<<<<< HEAD
 export function formatConnectionFlagReminder(opts: NodesRpcOpts): string | null {
   const flags = [
     normalizeOptionalString(opts.url) ? "--url" : null,
@@ -35,6 +43,12 @@ export function formatConnectionFlagReminder(opts: NodesRpcOpts): string | null 
 export function runNodesCommand(label: string, action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
     const message = formatErrorMessage(err);
+=======
+/** Run a node CLI action with standard failure text and authorization hints. */
+export function runNodesCommand(label: string, action: () => Promise<void>) {
+  return runCommandWithRuntime(defaultRuntime, action, (err) => {
+    const message = String(err);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const { error, warn } = getNodesTheme();
     defaultRuntime.error(error(`nodes ${label} failed: ${message}`));
     const hint = unauthorizedHintForMessage(message);

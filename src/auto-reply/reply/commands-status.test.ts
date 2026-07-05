@@ -957,8 +957,11 @@ describe("buildStatusReply subagent summary", () => {
           OPENAI_API_KEY: undefined,
           OPENAI_OAUTH_TOKEN: undefined,
         },
+<<<<<<< HEAD
         skipSessionCleanup: true,
         skipHomeCleanup: true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     );
   });
@@ -1044,8 +1047,11 @@ describe("buildStatusReply subagent summary", () => {
           OPENAI_API_KEY: undefined,
           OPENAI_OAUTH_TOKEN: undefined,
         },
+<<<<<<< HEAD
         skipSessionCleanup: true,
         skipHomeCleanup: true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     );
   });
@@ -1070,6 +1076,7 @@ describe("buildStatusReply subagent summary", () => {
       ],
     });
 
+<<<<<<< HEAD
     await withTempHome(
       async (dir) => {
         saveStatusTestAuthProfile({ dir, profileId: "work", provider: "openai" });
@@ -1133,6 +1140,68 @@ describe("buildStatusReply subagent summary", () => {
       },
       { skipSessionCleanup: true, skipHomeCleanup: true },
     );
+=======
+    await withTempHome(async (dir) => {
+      saveStatusTestAuthProfile({ dir, profileId: "work", provider: "openai" });
+
+      const text = await buildStatusText({
+        cfg: {
+          ...baseCfg,
+          agents: {
+            defaults: {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+        sessionEntry: {
+          sessionId: "sess-status-codex-synthetic-usage",
+          updatedAt: 0,
+          authProfileOverride: "work",
+        },
+        sessionKey: "agent:main:main",
+        parentSessionKey: "agent:main:main",
+        sessionScope: "per-sender",
+        statusChannel: "mobilechat",
+        provider: "openai",
+        model: "gpt-5.5",
+        contextTokens: 32_000,
+        resolvedFastMode: false,
+        resolvedVerboseLevel: "off",
+        resolvedReasoningLevel: "off",
+        resolveDefaultThinkingLevel: async () => undefined,
+        isGroup: false,
+        defaultGroupActivation: () => "mention",
+        modelAuthOverride: "oauth",
+        activeModelAuthOverride: "oauth",
+      });
+
+      const normalized = normalizeTestText(text);
+      expect(normalized).toContain("Model: openai/gpt-5.5");
+      expect(normalized).toContain("Runtime: OpenAI Codex");
+      expect(normalized).toContain("Usage: 5h 91% left");
+      const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
+        ([params]) => params?.providers?.includes("openai"),
+      );
+      if (!providerUsageCall) {
+        throw new Error("expected provider usage summary call for synthetic Codex auth");
+      }
+      expect(providerUsageCall[0]).toMatchObject({
+        timeoutMs: 8000,
+        providers: ["openai"],
+        auth: [
+          {
+            ...expectedCodexRuntimeUsageAuth[0],
+            authProfileId: "work",
+          },
+        ],
+        config: expect.objectContaining({
+          agents: expect.objectContaining({
+            defaults: expect.objectContaining({ agentRuntime: { id: "codex" } }),
+          }),
+        }),
+      });
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("forwards legacy Codex profile providers to Codex synthetic usage", async () => {
@@ -1148,6 +1217,7 @@ describe("buildStatusReply subagent summary", () => {
       ],
     });
 
+<<<<<<< HEAD
     await withTempHome(
       async (dir) => {
         saveStatusTestAuthProfile({
@@ -1216,6 +1286,16 @@ describe("buildStatusReply subagent summary", () => {
 
     await withTempHome(async () => {
       const text = await buildStatusText({
+=======
+    await withTempHome(async (dir) => {
+      saveStatusTestAuthProfile({
+        dir,
+        profileId: "openai-codex:legacy",
+        provider: "openai-codex",
+      });
+
+      await buildStatusText({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg: {
           ...baseCfg,
           agents: {
@@ -1225,8 +1305,14 @@ describe("buildStatusReply subagent summary", () => {
           },
         },
         sessionEntry: {
+<<<<<<< HEAD
           sessionId: "sess-status-codex-no-profile",
           updatedAt: 0,
+=======
+          sessionId: "sess-status-codex-legacy-profile",
+          updatedAt: 0,
+          authProfileOverride: "openai-codex:legacy",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
         sessionKey: "agent:main:main",
         parentSessionKey: "agent:main:main",
@@ -1241,6 +1327,7 @@ describe("buildStatusReply subagent summary", () => {
         resolveDefaultThinkingLevel: async () => undefined,
         isGroup: false,
         defaultGroupActivation: () => "mention",
+<<<<<<< HEAD
       });
 
       expect(normalizeTestText(text)).toContain("Usage: 5h 84% left");
@@ -1248,6 +1335,21 @@ describe("buildStatusReply subagent summary", () => {
         ([params]) => params?.providers?.includes("openai"),
       );
       expect(providerUsageCall?.[0]?.auth).toEqual(expectedCodexRuntimeUsageAuth);
+=======
+        modelAuthOverride: "oauth",
+        activeModelAuthOverride: "oauth",
+      });
+
+      const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
+        ([params]) => params?.providers?.includes("openai"),
+      );
+      expect(providerUsageCall?.[0]?.auth).toEqual([
+        {
+          ...expectedCodexRuntimeUsageAuth[0],
+          authProfileId: "openai-codex:legacy",
+        },
+      ]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   });
 
@@ -1264,6 +1366,7 @@ describe("buildStatusReply subagent summary", () => {
       ],
     });
 
+<<<<<<< HEAD
     await withTempHome(
       async (dir) => {
         saveStatusTestAuthProfiles({
@@ -1459,6 +1562,51 @@ describe("buildStatusReply subagent summary", () => {
     expect(normalized).toContain("Fallback: custom-runtime/unknown-fallback-model");
     expect(normalized).toContain("Context: 49k/123k");
     expect(normalized).not.toContain("Context: 49k/1.0m");
+=======
+    await withTempHome(async (dir) => {
+      saveStatusTestAuthProfiles({
+        dir,
+        profiles: [
+          { profileId: "openai:status", provider: "openai" },
+          { profileId: "anthropic:work", provider: "anthropic" },
+        ],
+      });
+
+      await buildStatusText({
+        cfg: {
+          ...baseCfg,
+          agents: {
+            defaults: {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+        sessionEntry: {
+          sessionId: "sess-status-codex-stale-profile",
+          updatedAt: 0,
+          authProfileOverride: "anthropic:work",
+        },
+        sessionKey: "agent:main:main",
+        parentSessionKey: "agent:main:main",
+        sessionScope: "per-sender",
+        statusChannel: "mobilechat",
+        provider: "openai",
+        model: "gpt-5.5",
+        contextTokens: 32_000,
+        resolvedFastMode: false,
+        resolvedVerboseLevel: "off",
+        resolvedReasoningLevel: "off",
+        resolveDefaultThinkingLevel: async () => undefined,
+        isGroup: false,
+        defaultGroupActivation: () => "mention",
+      });
+
+      const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
+        ([params]) => params?.providers?.includes("openai"),
+      );
+      expect(providerUsageCall?.[0]?.auth).toEqual(expectedCodexRuntimeUsageAuth);
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("shows DeepSeek balance summaries in /status output", async () => {
@@ -1509,6 +1657,7 @@ describe("buildStatusReply subagent summary", () => {
     expect(providerUsageCall[0]?.providers).toEqual(["deepseek"]);
   });
 
+<<<<<<< HEAD
   it("uses the session-selected model provider for /status usage", async () => {
     const usageResetBase = Math.floor(Date.now() / 1000);
     providerUsageMock.loadProviderUsageSummary.mockImplementation(
@@ -1744,6 +1893,8 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses Codex OAuth auth labels for explicit OpenAI OpenClaw auth order", async () => {
     await withTempHome(
       async (dir) => {
@@ -1814,7 +1965,11 @@ describe("buildStatusReply subagent summary", () => {
         expect(normalized).toContain("oauth (openai:status)");
         expect(normalized).not.toContain("api-key (openai:backup)");
       },
+<<<<<<< HEAD
       { env: { OPENAI_API_KEY: undefined }, skipSessionCleanup: true, skipHomeCleanup: true },
+=======
+      { env: { OPENAI_API_KEY: undefined } },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
   });
 
@@ -1917,7 +2072,11 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     const normalized = normalizeTestText(text);
+<<<<<<< HEAD
     expect(normalized).toContain("Model: anthropic/claude-opus-4-7");
+=======
+    expect(normalized).toContain("Session selected: anthropic/claude-opus-4-7");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(normalized).toContain("oauth (claude-cli)");
     expect(normalized).not.toContain("api-key (env: ANTHROPIC_API_KEY)");
     expect(normalized).not.toContain("Usage:");

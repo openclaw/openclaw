@@ -84,6 +84,7 @@ export async function sendDiscordOutboundPayload(params: {
   const sendContext = await createDiscordPayloadSendContext(ctx);
 
   if (payload.audioAsVoice && mediaUrls.length > 0) {
+<<<<<<< HEAD
     // audioAsVoice emits one logical Discord reply across voice/text/media sends.
     // Capture before helper calls consume implicit single-use reply targets.
     const voiceReplyTo = sendContext.resolveReplyTo();
@@ -93,6 +94,15 @@ export async function sendDiscordOutboundPayload(params: {
           ...resolveDiscordDeliveryOptions(ctx, sendContext),
           replyTo: voiceReplyTo,
         }),
+=======
+    let lastResult = await sendContext.withRetry(
+      async () =>
+        await sendContext.sendVoice(
+          sendContext.target,
+          mediaUrls[0],
+          resolveDiscordDeliveryOptions(ctx, sendContext),
+        ),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
     if (payload.text?.trim()) {
       lastResult = await sendContext.withRetry(
@@ -100,7 +110,10 @@ export async function sendDiscordOutboundPayload(params: {
           await sendContext.send(sendContext.target, payload.text, {
             verbose: false,
             ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
+<<<<<<< HEAD
             replyTo: voiceReplyTo,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           }),
       );
     }
@@ -110,7 +123,10 @@ export async function sendDiscordOutboundPayload(params: {
           await sendContext.send(sendContext.target, "", {
             verbose: false,
             ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
+<<<<<<< HEAD
             replyTo: voiceReplyTo,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           }),
       );
     }

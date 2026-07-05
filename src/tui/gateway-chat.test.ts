@@ -47,13 +47,21 @@ type ModeExecProviderFixture = {
   tokenMarker: string;
   passwordMarker: string;
   providers: {
+<<<<<<< HEAD
     tokenprovider: {
+=======
+    tokenProvider: {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       source: "exec";
       command: string;
       args: string[];
       allowInsecurePath: true;
     };
+<<<<<<< HEAD
     passwordprovider: {
+=======
+    passwordProvider: {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       source: "exec";
       command: string;
       args: string[];
@@ -85,13 +93,21 @@ async function withModeExecProviderFixture(
       tokenMarker,
       passwordMarker,
       providers: {
+<<<<<<< HEAD
         tokenprovider: {
+=======
+        tokenProvider: {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           source: "exec",
           command: process.execPath,
           args: ["-e", tokenExecProgram],
           allowInsecurePath: true,
         },
+<<<<<<< HEAD
         passwordprovider: {
+=======
+        passwordProvider: {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           source: "exec",
           command: process.execPath,
           args: ["-e", passwordExecProgram],
@@ -361,7 +377,11 @@ describe("resolveGatewayConnection", () => {
       loadConfig.mockReturnValue({
         secrets: {
           providers: {
+<<<<<<< HEAD
             fileprovider: {
+=======
+            fileProvider: {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               source: "file",
               path: secretFile,
               mode: "json",
@@ -372,7 +392,11 @@ describe("resolveGatewayConnection", () => {
         gateway: {
           mode: "local",
           auth: {
+<<<<<<< HEAD
             token: { source: "file", provider: "fileprovider", id: "/gatewayToken" },
+=======
+            token: { source: "file", provider: "fileProvider", id: "/gatewayToken" },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           },
         },
       });
@@ -396,7 +420,11 @@ describe("resolveGatewayConnection", () => {
     loadConfig.mockReturnValue({
       secrets: {
         providers: {
+<<<<<<< HEAD
           execprovider: {
+=======
+          execProvider: {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             source: "exec",
             command: process.execPath,
             args: ["-e", execProgram],
@@ -407,7 +435,11 @@ describe("resolveGatewayConnection", () => {
       gateway: {
         mode: "local",
         auth: {
+<<<<<<< HEAD
           token: { source: "exec", provider: "execprovider", id: "EXEC_GATEWAY_TOKEN" },
+=======
+          token: { source: "exec", provider: "execProvider", id: "EXEC_GATEWAY_TOKEN" },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
       },
     });
@@ -428,8 +460,13 @@ describe("resolveGatewayConnection", () => {
             mode: "local",
             auth: {
               mode: "token",
+<<<<<<< HEAD
               token: { source: "exec", provider: "tokenprovider", id: "TOKEN_SECRET" },
               password: { source: "exec", provider: "passwordprovider", id: "PASSWORD_SECRET" },
+=======
+              token: { source: "exec", provider: "tokenProvider", id: "TOKEN_SECRET" },
+              password: { source: "exec", provider: "passwordProvider", id: "PASSWORD_SECRET" },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             },
           },
         });
@@ -455,8 +492,13 @@ describe("resolveGatewayConnection", () => {
             mode: "local",
             auth: {
               mode: "password",
+<<<<<<< HEAD
               token: { source: "exec", provider: "tokenprovider", id: "TOKEN_SECRET" },
               password: { source: "exec", provider: "passwordprovider", id: "PASSWORD_SECRET" },
+=======
+              token: { source: "exec", provider: "tokenProvider", id: "TOKEN_SECRET" },
+              password: { source: "exec", provider: "passwordProvider", id: "PASSWORD_SECRET" },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             },
           },
         });
@@ -655,6 +697,7 @@ describe("GatewayChatClient", () => {
     });
   });
 
+<<<<<<< HEAD
   it("returns the actual chat send ack status from the gateway", async () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
@@ -673,6 +716,8 @@ describe("GatewayChatClient", () => {
     expect(result).toEqual({ runId: "run-gateway", status: "timeout" });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("lists gateway commands through commands.list", async () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",

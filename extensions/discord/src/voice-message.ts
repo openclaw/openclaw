@@ -22,7 +22,10 @@ import {
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-runtime";
 import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+<<<<<<< HEAD
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -35,7 +38,10 @@ const DISCORD_VOICE_MESSAGE_FLAG = 1 << 13;
 const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
 const WAVEFORM_SAMPLES = 256;
 const DISCORD_OPUS_SAMPLE_RATE_HZ = 48_000;
+<<<<<<< HEAD
 const DISCORD_VOICE_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const DISCORD_VOICE_UPLOAD_SSRF_POLICY: SsrFPolicy = {
   allowRfc2544BenchmarkRange: true,
   allowIpv6UniqueLocalRange: true,
@@ -301,9 +307,13 @@ async function createVoiceRequestError(
   response: Response,
   fallbackMessage: string,
 ): Promise<Error> {
+<<<<<<< HEAD
   const raw = await readResponseTextLimited(response, DISCORD_VOICE_ERROR_BODY_LIMIT_BYTES).catch(
     () => "",
   );
+=======
+  const raw = await response.text().catch(() => "");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const parsed = coerceDiscordErrorBody(raw);
   if (response.status === 429) {
     throw createRateLimitError(response, {

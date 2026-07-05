@@ -1,5 +1,8 @@
 // Check Gateway Cpu Scenarios tests cover check gateway cpu scenarios script behavior.
+<<<<<<< HEAD
 import { spawnSync } from "node:child_process";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -15,6 +18,7 @@ function makeTempRoot(): string {
   return root;
 }
 
+<<<<<<< HEAD
 function runCli(...args: string[]) {
   return spawnSync(process.execPath, ["scripts/check-gateway-cpu-scenarios.mjs", ...args], {
     cwd: path.resolve("."),
@@ -27,6 +31,8 @@ function expectNoNodeStack(stderr: string) {
   expect(stderr).not.toContain("\n    at ");
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function writeQaSuiteSummary(
   outputDir: string,
   counts: { failed: number; passed: number; total: number } = { failed: 0, passed: 1, total: 1 },
@@ -105,6 +111,7 @@ describe("gateway CPU scenario guard", () => {
       "--cpu-core-warn",
       "--hot-wall-warn-ms",
     ]) {
+<<<<<<< HEAD
       for (const value of ["--skip-qa", "-h"]) {
         expect(() => testing.parseArgs([flag, value])).toThrow(`Missing value for ${flag}`);
       }
@@ -142,6 +149,16 @@ describe("gateway CPU scenario guard", () => {
     const outputDir = makeTempRoot();
     const startupOutput = path.join(outputDir, "gateway-startup-bench.json");
     const calls: SpawnCall[] = [];
+=======
+      expect(() => testing.parseArgs([flag, "--skip-qa"])).toThrow(`Missing value for ${flag}`);
+    }
+  });
+
+  it("prepares CLI startup artifacts before running the startup bench", async () => {
+    const outputDir = makeTempRoot();
+    const startupOutput = path.join(outputDir, "gateway-startup-bench.json");
+    const calls: Array<{ command: string; args: string[] }> = [];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const options = testing.parseArgs([
       "--output-dir",
       outputDir,
@@ -154,8 +171,13 @@ describe("gateway CPU scenario guard", () => {
 
     const result = await testing.runGatewayCpuScenarios(options, {
       silent: true,
+<<<<<<< HEAD
       spawnSync: (command: string, args: string[], opts?: { env?: Record<string, string> }) => {
         calls.push({ args, command, env: opts?.env });
+=======
+      spawnSync: (command: string, args: string[]) => {
+        calls.push({ command, args });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         if (args.includes("scripts/bench-gateway-startup.ts")) {
           writeFileSync(startupOutput, `${JSON.stringify({ results: [{ id: "default" }] })}\n`);
         }
@@ -169,8 +191,11 @@ describe("gateway CPU scenario guard", () => {
       "--import",
     ]);
     expect(calls[1]?.args).toContain("scripts/bench-gateway-startup.ts");
+<<<<<<< HEAD
     expect(calls[0]?.env?.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN).toBe("false");
     expect(calls[1]?.env?.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN).toBe("false");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("fails successful startup benches that do not write a report", async () => {
@@ -317,7 +342,10 @@ describe("gateway CPU scenario guard", () => {
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
       OPENCLAW_STATE_DIR: path.join(outputDir, "qa-state-root", "state"),
       OPENCLAW_TEST_DISABLE_UPDATE_CHECK: "1",
+<<<<<<< HEAD
       PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       USERPROFILE: path.join(outputDir, "qa-state-root", "home"),
     });
     expect(calls[0]?.env?.OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS).toBeUndefined();
@@ -365,7 +393,10 @@ describe("gateway CPU scenario guard", () => {
       OPENCLAW_CONFIG_PATH: path.join(outputDir, "qa-state-root", "state", "openclaw.json"),
       OPENCLAW_HOME: path.join(outputDir, "qa-state-root", "home"),
       OPENCLAW_STATE_DIR: path.join(outputDir, "qa-state-root", "state"),
+<<<<<<< HEAD
       PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       USERPROFILE: path.join(outputDir, "qa-state-root", "home"),
     });
     expect(calls[0]?.env?.HOME).not.toBe("/real/user/home");

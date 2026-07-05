@@ -4,6 +4,12 @@
  */
 import { toSafeImportPath } from "./import-specifier.js";
 
+<<<<<<< HEAD
+=======
+/** Runtime-facing alias for import specifier normalization helpers. */
+export { toSafeImportPath as toSafeRuntimeImportPath } from "./import-specifier.js";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Resolves lazy runtime import parts against the caller's module URL or path.
  * Absolute normalized paths stay standalone; relative parts resolve against the normalized base.

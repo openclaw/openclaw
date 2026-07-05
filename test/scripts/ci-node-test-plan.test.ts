@@ -3,10 +3,14 @@ import { existsSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import fg from "fast-glob";
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import {
   createNodeTestShardBundles,
   createNodeTestShards,
 } from "../../scripts/lib/ci-node-test-plan.mjs";
+=======
+import { createNodeTestShards } from "../../scripts/lib/ci-node-test-plan.mjs";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, sortRepoPaths, toRepoPath } from "../../src/test-utils/repo-files.js";
 import { commandsLightTestFiles } from "../vitest/vitest.commands-light-paths.mjs";
@@ -110,6 +114,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(payload.includePatterns).toBeGreaterThan(0);
   });
 
+<<<<<<< HEAD
   it("bundles split shards deterministically without changing coverage", () => {
     const base = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
     const bundled = createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false });
@@ -189,6 +194,8 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     ).toBe(true);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("splits the slow core unit shards while keeping paired source/security coverage", () => {
     const coreUnitShards = createNodeTestShards()
       .filter((shard) => shard.shardName.startsWith("core-unit-"))
@@ -403,12 +410,15 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         configs: ["test/vitest/vitest.infra.config.ts"],
         requiresDist: false,
         runner: "blacksmith-4vcpu-ubuntu-2404",
+<<<<<<< HEAD
         shardName: "core-runtime-infra-misc",
       },
       {
         configs: ["test/vitest/vitest.infra.config.ts"],
         requiresDist: false,
         runner: "blacksmith-4vcpu-ubuntu-2404",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         shardName: "core-runtime-infra-misc-dedupe-disk",
       },
       {
@@ -494,12 +504,15 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "core-runtime-infra-process",
       },
       {
+<<<<<<< HEAD
         configs: ["test/vitest/vitest.tui-pty.config.ts"],
         requiresDist: false,
         runner: "blacksmith-4vcpu-ubuntu-2404",
         shardName: "core-runtime-tui-pty",
       },
       {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         configs: [
           "test/vitest/vitest.media.config.ts",
           "test/vitest/vitest.media-understanding.config.ts",
@@ -543,6 +556,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("runs the TUI PTY local smoke inside the CI node shard", () => {
     const tuiPtyShard = createNodeTestShards().find(
       (shard) => shard.shardName === "core-runtime-tui-pty",
@@ -558,6 +572,8 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("covers every infra test exactly once across core runtime infra shards", () => {
     const infraShards = createNodeTestShards().filter((shard) =>
       shard.shardName.startsWith("core-runtime-infra-"),
@@ -582,7 +598,10 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       "core-runtime-infra-gateway-watch",
       "core-runtime-infra-heartbeat-core",
       "core-runtime-infra-heartbeat-runner",
+<<<<<<< HEAD
       "core-runtime-infra-misc",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "core-runtime-infra-misc-dedupe-disk",
       "core-runtime-infra-misc-os",
       "core-runtime-infra-misc-values",
@@ -862,7 +881,11 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       .flatMap((shard) => shard.includePatterns ?? [])
       .toSorted((a, b) => a.localeCompare(b));
     const expected = listTestFiles("src/agents")
+<<<<<<< HEAD
       .filter((file) => !relative("src/agents", file).replaceAll("\\", "/").includes("/"))
+=======
+      .filter((file) => !relative("src/agents", file).includes("/"))
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       .toSorted((a, b) => a.localeCompare(b));
 
     expect(actual).toEqual(expected);

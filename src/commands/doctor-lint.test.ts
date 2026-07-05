@@ -2,7 +2,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetCoreHealthChecksForTest } from "../flows/doctor-core-checks.js";
+<<<<<<< HEAD
 import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-check-registry.js";
+=======
+import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { runDoctorLintCli } from "./doctor-lint.js";
 
 const mocks = vi.hoisted(() => ({
@@ -77,6 +81,7 @@ describe("runDoctorLintCli", () => {
     }
   });
 
+<<<<<<< HEAD
   it("does not expose deep mode to extension health check context", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
@@ -110,6 +115,8 @@ describe("runDoctorLintCli", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("emits structured JSON for invalid config snapshots", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
@@ -155,7 +162,11 @@ describe("runDoctorLintCli", () => {
     try {
       const exitCode = await runDoctorLintCli(runtime, {
         json: true,
+<<<<<<< HEAD
         onlyIds: ["core/doctor/not-a-check"],
+=======
+        onlyIds: ["core/doctor/session-locks"],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
 
       expect(exitCode).toBe(1);
@@ -167,7 +178,11 @@ describe("runDoctorLintCli", () => {
           {
             checkId: "core/doctor/lint-selection",
             severity: "error",
+<<<<<<< HEAD
             path: "core/doctor/not-a-check",
+=======
+            path: "core/doctor/session-locks",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           },
         ],
       });
@@ -225,6 +240,7 @@ describe("runDoctorLintCli", () => {
     }
   });
 
+<<<<<<< HEAD
   it("runs core contribution checks plus registered extension checks", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
@@ -393,6 +409,8 @@ describe("runDoctorLintCli", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects invalid severity thresholds", async () => {
     await expect(runDoctorLintCli(runtime, { severityMin: "warnng" })).rejects.toThrow(
       "Invalid --severity-min value",

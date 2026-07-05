@@ -33,6 +33,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
 }));
 
+<<<<<<< HEAD
 vi.mock("openclaw/plugin-sdk/provider-http", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-http")>(
     "openclaw/plugin-sdk/provider-http",
@@ -48,6 +49,17 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
     sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
   };
 });
+=======
+vi.mock("openclaw/plugin-sdk/provider-http", () => ({
+  assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+  createProviderOperationDeadline: createProviderOperationDeadlineMock,
+  postJsonRequest: postJsonRequestMock,
+  postMultipartRequest: postMultipartRequestMock,
+  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+  resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
+  sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
+}));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/provider-auth-runtime");
@@ -55,6 +67,7 @@ afterAll(() => {
   vi.resetModules();
 });
 
+<<<<<<< HEAD
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
     status: 200,
@@ -67,6 +80,15 @@ function mockGeneratedPngResponse() {
     response: jsonResponse({
       data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
     }),
+=======
+function mockGeneratedPngResponse() {
+  postJsonRequestMock.mockResolvedValue({
+    response: {
+      json: async () => ({
+        data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
+      }),
+    },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     release: vi.fn(async () => {}),
   });
 }

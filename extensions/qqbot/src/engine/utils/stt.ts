@@ -8,7 +8,10 @@
 import * as fs from "node:fs";
 import path from "node:path";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
+<<<<<<< HEAD
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeOptionalString,
@@ -17,8 +20,11 @@ import {
   sanitizeFileName,
 } from "./string-normalize.js";
 
+<<<<<<< HEAD
 const STT_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 interface STTConfig {
   baseUrl: string;
   apiKey: string;
@@ -94,9 +100,13 @@ export async function transcribeAudio(
   });
   try {
     if (!resp.ok) {
+<<<<<<< HEAD
       const detail = await readResponseTextLimited(resp, STT_ERROR_BODY_LIMIT_BYTES).catch(
         () => "",
       );
+=======
+      const detail = await resp.text().catch(() => "");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       throw new Error(`STT failed (HTTP ${resp.status}): ${detail.slice(0, 300)}`);
     }
 

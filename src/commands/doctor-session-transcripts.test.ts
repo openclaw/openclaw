@@ -12,11 +12,16 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 }));
 
 import {
+<<<<<<< HEAD
   detectSessionTranscriptHealthIssues,
   noteSessionTranscriptHealth,
   repairBrokenSessionTranscriptFile,
   sessionTranscriptIssueToHealthFinding,
   sessionTranscriptIssueToRepairEffect,
+=======
+  noteSessionTranscriptHealth,
+  repairBrokenSessionTranscriptFile,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./doctor-session-transcripts.js";
 
 function countNonEmptyLines(value: string): number {
@@ -153,6 +158,7 @@ describe("doctor session transcript repair", () => {
     expect(countNonEmptyLines(await fs.readFile(filePath, "utf-8"))).toBe(3);
   });
 
+<<<<<<< HEAD
   it("maps affected transcripts to structured findings and dry-run effects", async () => {
     const filePath = await writeTranscript([
       { type: "session", version: 3, id: "session-1", timestamp: "2026-04-25T00:00:00Z" },
@@ -191,6 +197,8 @@ describe("doctor session transcript repair", () => {
     expect(await fs.readFile(filePath, "utf-8")).toContain("openai-codex");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("repairs supported current-version linear transcripts", async () => {
     const filePath = await writeTranscript([
       { type: "session", version: 3, id: "session-linear", timestamp: "2026-06-15T00:00:00Z" },

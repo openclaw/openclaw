@@ -23,6 +23,11 @@ export type QaRuntimeCapabilityLayer =
   | "optional-profile-or-plugin"
   | "structural-text";
 
+<<<<<<< HEAD
+=======
+export type QaCodexToolLoading = "direct" | "searchable";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type RuntimeParityComparisonMode = "default" | "codex-native-workspace" | "outcome-only";
 
 export type QaRuntimeToolCoverageMetadata = {

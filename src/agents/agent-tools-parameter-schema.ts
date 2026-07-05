@@ -29,9 +29,12 @@ function resolveToolParameterSchemaCacheKey(
 ): string {
   const normalizedProvider = normalizeLowercaseStringOrEmpty(options?.modelProvider);
   const normalizedModelId = normalizeLowercaseStringOrEmpty(options?.modelId);
+<<<<<<< HEAD
   const toolSchemaProfile = normalizeLowercaseStringOrEmpty(
     options?.modelCompat?.toolSchemaProfile,
   );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const unsupportedKeywords = Array.from(
     resolveUnsupportedToolSchemaKeywords(options?.modelCompat),
   ).toSorted();
@@ -39,7 +42,10 @@ function resolveToolParameterSchemaCacheKey(
   return JSON.stringify([
     normalizedProvider,
     normalizedModelId,
+<<<<<<< HEAD
     toolSchemaProfile,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     unsupportedKeywords,
     omitEmptyArrayItems,
   ]);
@@ -61,10 +67,13 @@ function rememberCachedToolParameterSchema(schema: object, key: string, value: T
   return value;
 }
 
+<<<<<<< HEAD
 function isGeminiModelId(modelId: string): boolean {
   return /(?:^|[/:])gemini(?:$|[-/:.])/.test(modelId);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function extractEnumValues(schema: unknown): unknown[] | undefined {
   if (!schema || typeof schema !== "object") {
     return undefined;
@@ -777,6 +786,7 @@ function normalizeToolParameterSchemaUncached(
   //
   // Normalize once here so callers can always pass `tools` through unchanged.
   const normalizedProvider = normalizeLowercaseStringOrEmpty(options?.modelProvider);
+<<<<<<< HEAD
   const normalizedModelId = normalizeLowercaseStringOrEmpty(options?.modelId);
   const normalizedToolSchemaProfile = normalizeLowercaseStringOrEmpty(
     options?.modelCompat?.toolSchemaProfile,
@@ -786,6 +796,10 @@ function normalizeToolParameterSchemaUncached(
     normalizedProvider.includes("gemini") ||
     isGeminiModelId(normalizedModelId) ||
     normalizedToolSchemaProfile === "gemini";
+=======
+  const isGeminiProvider =
+    normalizedProvider.includes("google") || normalizedProvider.includes("gemini");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const isAnthropicProvider = normalizedProvider.includes("anthropic");
   const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
   const omitEmptyArrayItems = shouldOmitEmptyArrayItems(options?.modelCompat);
@@ -796,6 +810,7 @@ function normalizeToolParameterSchemaUncached(
       ? stripEmptyArrayItemsFromArraySchemas(normalizedSchema)
       : normalizedSchema;
     if (isGeminiProvider && !isAnthropicProvider) {
+<<<<<<< HEAD
       const geminiCompatibleSchema = cleanSchemaForGemini(arrayItemsCompatibleSchema);
       return unsupportedToolSchemaKeywords.size > 0
         ? (stripUnsupportedSchemaKeywords(
@@ -803,6 +818,9 @@ function normalizeToolParameterSchemaUncached(
             unsupportedToolSchemaKeywords,
           ) as TSchema)
         : geminiCompatibleSchema;
+=======
+      return cleanSchemaForGemini(arrayItemsCompatibleSchema);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     if (unsupportedToolSchemaKeywords.size > 0) {
       return stripUnsupportedSchemaKeywords(

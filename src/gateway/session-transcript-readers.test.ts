@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+<<<<<<< HEAD
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   readLatestRecentSessionUsageFromTranscriptAsync,
   readRecentSessionMessagesWithStats,
@@ -17,6 +20,7 @@ import {
 describe("session transcript reader facade", () => {
   let tempDir: string;
   let storePath: string;
+<<<<<<< HEAD
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
@@ -28,6 +32,23 @@ describe("session transcript reader facade", () => {
 
   afterEach(() => {
     envSnapshot.restore();
+=======
+  let originalStateDir: string | undefined;
+
+  beforeEach(() => {
+    originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-transcript-readers-"));
+    storePath = path.join(tempDir, "sessions.json");
+    process.env.OPENCLAW_STATE_DIR = tempDir;
+  });
+
+  afterEach(() => {
+    if (originalStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalStateDir;
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -38,7 +59,11 @@ describe("session transcript reader facade", () => {
       `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
       "utf-8",
     );
+<<<<<<< HEAD
     return { sessionId, sessionKey: `agent:main:${sessionId}`, storePath };
+=======
+    return { sessionId, storePath };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   test("reads active-branch messages and message ids through a scope", async () => {

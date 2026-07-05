@@ -3,7 +3,11 @@ import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { SecretProviderConfig, SecretRef } from "../config/types.secrets.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
+<<<<<<< HEAD
 import { isValidSecretProviderAlias, isValidSecretRef } from "./ref-contract.js";
+=======
+import { isValidExecSecretRefId, isValidSecretProviderAlias } from "./ref-contract.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { parseDotPath, toDotPath } from "./shared.js";
 import { resolvePlanTargetAgainstRegistry, type ResolvedPlanTarget } from "./target-registry.js";
 
@@ -140,7 +144,11 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
       ref.provider.trim().length === 0 ||
       typeof ref.id !== "string" ||
       ref.id.trim().length === 0 ||
+<<<<<<< HEAD
       !isValidSecretRef(ref as SecretRef)
+=======
+      (ref.source === "exec" && !isValidExecSecretRefId(ref.id))
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ) {
       return false;
     }

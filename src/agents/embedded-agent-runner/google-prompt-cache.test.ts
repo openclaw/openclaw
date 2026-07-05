@@ -68,6 +68,7 @@ function createCacheFetchMock(params: { name: string; expireTime: string }) {
   );
 }
 
+<<<<<<< HEAD
 // Builds a 200-OK response whose body streams more than 1 MiB with no
 // Content-Length, mirroring a buggy/hostile Google cachedContents endpoint.
 // The shared byte-cap reader must cancel the body before fully buffering it.
@@ -92,6 +93,8 @@ function createOversizedJsonResponse(): { response: Response; cancel: ReturnType
   return { response, cancel };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function createCapturingStreamFn(result = "stream") {
   // The wrapper mutates payloads through onPayload before calling the real
   // stream; capture that final payload instead of mocking Google responses.
@@ -280,6 +283,7 @@ describe("google prompt cache", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("cancels failed cache creation response bodies", async () => {
     const now = 1_500_000;
     const response = new Response("permission denied", { status: 403 });
@@ -314,6 +318,8 @@ describe("google prompt cache", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("reuses a persisted cache entry without creating a second cache", async () => {
     const now = 2_000_000;
     const entries: SessionCustomEntry[] = [];
@@ -452,6 +458,7 @@ describe("google prompt cache", () => {
     expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-3");
   });
 
+<<<<<<< HEAD
   it("cancels failed cache refresh response bodies", async () => {
     const now = 3_500_000;
     const expireSoon = new Date(now + 60_000).toISOString();
@@ -503,6 +510,8 @@ describe("google prompt cache", () => {
     expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-4");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not bypass failed-cache backoff when the process clock is invalid", async () => {
     const systemPromptDigest = crypto.createHash("sha256").update("Follow policy.").digest("hex");
     const sessionManager = makeSessionManager([
@@ -576,6 +585,7 @@ describe("google prompt cache", () => {
     expect(wrapped).toBeUndefined();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+<<<<<<< HEAD
 
   it("bounds an oversized cache-creation response body instead of buffering it", async () => {
     const now = 4_000_000;
@@ -663,4 +673,6 @@ describe("google prompt cache", () => {
     expect(cancel).toHaveBeenCalledOnce();
     expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-overflow");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

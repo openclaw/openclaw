@@ -14,10 +14,14 @@ import {
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../installed-plugin-index-install-records.js";
 import type { PluginLoadOptions } from "../loader.js";
 import type { PluginManifestRegistry } from "../manifest-registry.js";
+<<<<<<< HEAD
 import {
   isPluginMetadataSnapshotCompatible,
   resolvePluginMetadataSnapshot,
 } from "../plugin-metadata-snapshot.js";
+=======
+import { resolvePluginMetadataSnapshot } from "../plugin-metadata-snapshot.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { PluginLogger } from "../types.js";
 
 const log = createSubsystemLogger("plugins");
@@ -76,6 +80,7 @@ export function resolvePluginRuntimeLoadContext(
   const rawConfig = options?.config ?? getRuntimeConfig();
   const rawWorkspaceDir =
     options?.workspaceDir ?? resolveAgentWorkspaceDir(rawConfig, resolveDefaultAgentId(rawConfig));
+<<<<<<< HEAD
   const initialMetadataSnapshot =
     options?.manifestRegistry === undefined
       ? resolvePluginMetadataSnapshot({
@@ -86,6 +91,20 @@ export function resolvePluginRuntimeLoadContext(
         })
       : undefined;
   const manifestRegistry = options?.manifestRegistry ?? initialMetadataSnapshot?.manifestRegistry;
+=======
+  const metadataSnapshot = options?.manifestRegistry
+    ? undefined
+    : resolvePluginMetadataSnapshot({
+        config: rawConfig,
+        env,
+        workspaceDir: rawWorkspaceDir,
+        allowWorkspaceScopedCurrent: true,
+      });
+  const manifestRegistry = options?.manifestRegistry ?? metadataSnapshot?.manifestRegistry;
+  const installRecords = metadataSnapshot
+    ? extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index)
+    : undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const activationSourceConfig = resolvePluginActivationSourceConfig({
     config: rawConfig,
     activationSourceConfig: options?.activationSourceConfig,
@@ -94,11 +113,16 @@ export function resolvePluginRuntimeLoadContext(
     config: rawConfig,
     env,
     manifestRegistry,
+<<<<<<< HEAD
     discovery: initialMetadataSnapshot?.discovery,
+=======
+    discovery: metadataSnapshot?.discovery,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   const config = autoEnabled.config;
   const workspaceDir =
     options?.workspaceDir ?? resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+<<<<<<< HEAD
   const metadataSnapshot =
     options?.manifestRegistry !== undefined
       ? undefined
@@ -121,6 +145,8 @@ export function resolvePluginRuntimeLoadContext(
   const installRecords = metadataSnapshot
     ? extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index)
     : undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (metadataSnapshot) {
     // Reusable snapshots stay available to later manifest-policy lookups for this runtime load.
     if (isReusableCurrentPluginMetadataSnapshot(metadataSnapshot)) {
@@ -142,7 +168,11 @@ export function resolvePluginRuntimeLoadContext(
     workspaceDir,
     env,
     logger: options?.logger ?? createPluginRuntimeLoaderLogger(),
+<<<<<<< HEAD
     ...(finalManifestRegistry ? { manifestRegistry: finalManifestRegistry } : {}),
+=======
+    manifestRegistry,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     installRecords,
   };
 }

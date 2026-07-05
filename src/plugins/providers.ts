@@ -37,10 +37,13 @@ type NormalizedPluginsConfig = ReturnType<typeof normalizePluginsConfigWithRegis
 type ProviderRegistryLoadParams = ProviderManifestLoadParams & {
   onlyPluginIds?: readonly string[];
 };
+<<<<<<< HEAD
 export type ProviderRefOwnership =
   | { status: "unowned" }
   | { status: "owned"; pluginIds: string[] }
   | { status: "ambiguous"; pluginIds: string[] };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function loadProviderRegistrySnapshot(params: ProviderManifestLoadParams): PluginRegistrySnapshot {
   if (params.registry) {
@@ -522,6 +525,7 @@ function dedupeSortedPluginIds(values: Iterable<string>): string[] {
   return sortUniqueStrings(values);
 }
 
+<<<<<<< HEAD
 function classifyProviderRefOwnership(pluginIds: string[] | undefined): ProviderRefOwnership {
   if (!pluginIds || pluginIds.length === 0) {
     return { status: "unowned" };
@@ -532,6 +536,8 @@ function classifyProviderRefOwnership(pluginIds: string[] | undefined): Provider
   return { status: "ambiguous", pluginIds };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function listNormalizedOwnerMapPluginIds(
   owners: ReadonlyMap<string, readonly string[]>,
   normalizedId: string,
@@ -716,6 +722,7 @@ export function resolveOwningPluginIdsForProviderRef(params: {
   );
 }
 
+<<<<<<< HEAD
 export function resolveProviderRefOwnership(params: {
   provider: string;
   config?: PluginLoadOptions["config"];
@@ -741,6 +748,8 @@ export function resolveProviderRefOwnership(params: {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function resolveOwningPluginIdsForModelRef(params: {
   model: string;
   config?: PluginLoadOptions["config"];

@@ -20,7 +20,10 @@ import {
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
+<<<<<<< HEAD
 import { isRegularFileStat, writeGuardedVaultPage } from "./vault-page-write.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const OKF_RESERVED_FILENAMES = new Set(["index.md", "log.md"]);
@@ -33,6 +36,14 @@ const OKF_RELATED_SECTION_PATTERN = new RegExp(
 const OKF_VOLATILE_TIMESTAMP_LINE_PATTERN = /^(?:importedAt|updatedAt): .*\n/gm;
 const OKF_HASH_CHARS = 8;
 
+<<<<<<< HEAD
+=======
+type FileStatLike = {
+  isFile?: unknown;
+  nlink?: unknown;
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type OkfConceptDocument = {
   conceptId: string;
   relativePath: string;
@@ -84,6 +95,21 @@ function trimMarkdownExtension(value: string): string {
   return value.replace(/\.md$/i, "");
 }
 
+<<<<<<< HEAD
+=======
+function isRegularFileStat(value: unknown): value is FileStatLike & { nlink: number } {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const stat = value as FileStatLike;
+  const isFile =
+    typeof stat.isFile === "function"
+      ? (stat.isFile as () => boolean).call(stat)
+      : stat.isFile === true;
+  return isFile && typeof stat.nlink === "number";
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type OkfBundleMetadata = {
   key: string;
   version?: string;
@@ -328,12 +354,20 @@ function safeDecodeOkfLinkPath(value: string | undefined): string {
 function getMarkdownDestinationSuffix(destination: string): string {
   const queryIndex = destination.indexOf("?");
   const fragmentIndex = destination.indexOf("#");
+<<<<<<< HEAD
   const suffixIndex =
     queryIndex === -1
       ? fragmentIndex
       : fragmentIndex === -1
         ? queryIndex
         : Math.min(queryIndex, fragmentIndex);
+=======
+  const suffixIndex = queryIndex === -1
+    ? fragmentIndex
+    : fragmentIndex === -1
+      ? queryIndex
+      : Math.min(queryIndex, fragmentIndex);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return suffixIndex === -1 ? "" : destination.slice(suffixIndex);
 }
 
@@ -466,6 +500,7 @@ async function writeOkfConceptPage(params: {
   ) {
     return { changed: false, created: !pageStat };
   }
+<<<<<<< HEAD
   await writeGuardedVaultPage({
     vault,
     pagePath: params.pagePath,
@@ -473,6 +508,27 @@ async function writeOkfConceptPage(params: {
     pageStat,
     pageLabel: "OKF concept page",
   });
+=======
+  try {
+    if (isRegularFileStat(pageStat) && pageStat.nlink > 1) {
+      await vault.remove(params.pagePath);
+    }
+    await vault.write(params.pagePath, params.content);
+  } catch (error) {
+    if (error instanceof FsSafeError) {
+      if (error.code !== "symlink" && error.code !== "path-alias") {
+        throw new Error(
+          `Refusing to write OKF concept page (${error.code}): ${params.pagePath}: ${error.message}`,
+          { cause: error },
+        );
+      }
+      throw new Error(`Refusing to write OKF concept page through symlink: ${params.pagePath}`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return { changed: true, created: !pageStat };
 }
 

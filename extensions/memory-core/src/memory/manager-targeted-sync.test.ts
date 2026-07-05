@@ -1,7 +1,11 @@
 // Memory Core tests cover manager targeted sync plugin behavior.
+<<<<<<< HEAD
 import type { MemorySessionSyncTarget } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
 import { enqueueMemoryTargetedSessionSync } from "./manager-sync-control.js";
+=======
+import { describe, expect, it, vi } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   clearMemorySyncedSessionFiles,
   markMemoryTargetSessionFilesDirty,
@@ -86,6 +90,7 @@ describe("memory targeted session sync", () => {
     expect(result).toEqual({ handled: true, sessionsDirty: true });
     expect(sessionsDirtyFiles.size).toBe(0);
   });
+<<<<<<< HEAD
 
   it("queues identity session targets while a sync is already running", async () => {
     let resolveSyncing: (() => void) | undefined;
@@ -123,4 +128,6 @@ describe("memory targeted session sync", () => {
       sessionFiles: [],
     });
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

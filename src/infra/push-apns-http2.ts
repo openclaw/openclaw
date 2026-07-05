@@ -1,7 +1,10 @@
 // Opens APNs HTTP/2 sessions with optional managed proxy tunneling.
 import http2 from "node:http2";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+<<<<<<< HEAD
 import { toErrorObject } from "./errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { openHttpConnectTunnel } from "./net/http-connect-tunnel.js";
 import {
   getActiveManagedProxyUrl,
@@ -181,7 +184,11 @@ export async function probeApnsHttp2ReachabilityViaProxy(
         settled = true;
         cleanup();
         session.destroy(err instanceof Error ? err : new Error(String(err)));
+<<<<<<< HEAD
         reject(toErrorObject(err, "Non-Error rejection"));
+=======
+        reject(toLintErrorObject(err, "Non-Error rejection"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       };
 
       const request = session.request({
@@ -230,3 +237,20 @@ export async function probeApnsHttp2ReachabilityViaProxy(
     }
   }
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

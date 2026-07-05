@@ -3,7 +3,10 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+<<<<<<< HEAD
 import { toQaErrorObject } from "./errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import {
   createQaChannelGatewayConfig,
@@ -18,10 +21,13 @@ function toPosixRelative(fromDir: string, toPath: string): string {
   return path.relative(fromDir, toPath).split(path.sep).join("/");
 }
 
+<<<<<<< HEAD
 function yamlDoubleQuoted(value: string) {
   return JSON.stringify(value);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function renderImageBlock(params: {
   outputDir: string;
   repoRoot: string;
@@ -32,7 +38,11 @@ function renderImageBlock(params: {
     return `    image: ${params.imageName}\n`;
   }
   const context = toPosixRelative(params.outputDir, params.repoRoot) || ".";
+<<<<<<< HEAD
   return `    build:\n      context: ${yamlDoubleQuoted(context)}\n      dockerfile: Dockerfile\n      args:\n        OPENCLAW_EXTENSIONS: "qa-channel qa-lab"\n`;
+=======
+  return `    build:\n      context: ${context}\n      dockerfile: Dockerfile\n      args:\n        OPENCLAW_EXTENSIONS: "qa-channel qa-lab"\n`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function renderCompose(params: {
@@ -85,7 +95,11 @@ ${imageBlock}    pull_policy: never
       - "127.0.0.1:${params.qaLabPort}:${QA_LAB_INTERNAL_PORT}"
     volumes:
       - ./state:/opt/openclaw-scaffold:ro
+<<<<<<< HEAD
 ${params.bindUiDist ? `      - ${yamlDoubleQuoted(`${qaLabUiMount}:${QA_LAB_UI_OVERLAY_DIR}:ro`)}\n` : ""}    healthcheck:
+=======
+${params.bindUiDist ? `      - ${qaLabUiMount}:${QA_LAB_UI_OVERLAY_DIR}:ro\n` : ""}    healthcheck:
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       test:
         - CMD
         - node
@@ -128,7 +142,11 @@ ${imageBlock}    pull_policy: never
       OPENCLAW_PROFILE: ""
     volumes:
       - ./state:/opt/openclaw-scaffold:ro
+<<<<<<< HEAD
       - ${yamlDoubleQuoted(`${repoMount}:/opt/openclaw-repo:ro`)}
+=======
+      - ${repoMount}:/opt/openclaw-repo:ro
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     healthcheck:
       test:
         - CMD
@@ -151,7 +169,11 @@ ${
     command:
       - sh
       - -lc
+<<<<<<< HEAD
       - mkdir -p /tmp/openclaw/workspace /tmp/openclaw/state && cp /opt/openclaw-scaffold/openclaw.json /tmp/openclaw/openclaw.json && cp -R /opt/openclaw-scaffold/seed-workspace/. /tmp/openclaw/workspace/ && rm -rf /tmp/openclaw/workspace/repo && ln -s /opt/openclaw-repo /tmp/openclaw/workspace/repo && exec node dist/index.js gateway run --port 18789 --bind lan --allow-unconfigured
+=======
+      - mkdir -p /tmp/openclaw/workspace /tmp/openclaw/state && cp /opt/openclaw-scaffold/openclaw.json /tmp/openclaw/openclaw.json && cp -R /opt/openclaw-scaffold/seed-workspace/. /tmp/openclaw/workspace/ && ln -snf /opt/openclaw-repo /tmp/openclaw/workspace/repo && exec node dist/index.js gateway run --port 18789 --bind lan --allow-unconfigured
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 `;
 }
 
@@ -348,7 +370,11 @@ export async function buildQaDockerHarnessImage(
       return await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
         execFile(command, args, { cwd }, (error, stdout, stderr) => {
           if (error) {
+<<<<<<< HEAD
             reject(toQaErrorObject(error, "Non-Error rejection"));
+=======
+            reject(toLintErrorObject(error, "Non-Error rejection"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             return;
           }
           resolve({ stdout, stderr });
@@ -373,3 +399,20 @@ export async function buildQaDockerHarnessImage(
 
   return { imageName };
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

@@ -603,6 +603,7 @@ describe("Engine contract tests", () => {
     });
   });
 
+<<<<<<< HEAD
   it("delegateCompactionToRuntime forwards the caller abortSignal to the runtime (#89868)", async () => {
     installCompactRuntimeSpy();
     const controller = new AbortController();
@@ -629,6 +630,8 @@ describe("Engine contract tests", () => {
     expect(compactRuntimeParams.abortSignal).toBeUndefined();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("builds a normalized memory system prompt addition from the active memory prompt path", () => {
     registerMemoryPromptSection(({ citationsMode }) => [
       "## Memory Recall",
@@ -1084,6 +1087,7 @@ describe("Factory context passing", () => {
   });
 });
 
+<<<<<<< HEAD
 describe("Read-only plugin discovery registrations", () => {
   beforeEach(() => {
     registerLegacyContextEngine();
@@ -1166,6 +1170,8 @@ describe("Read-only plugin discovery registrations", () => {
   });
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // ═══════════════════════════════════════════════════════════════════════════
 // 4. Invalid engine fallback
 // ═══════════════════════════════════════════════════════════════════════════

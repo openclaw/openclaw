@@ -14,6 +14,7 @@ import {
 import { ensureAuthProfileStore, hasAnyAuthProfileStoreSource } from "../auth-profiles/store.js";
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
 
+<<<<<<< HEAD
 const sessionAccessorLoader = createLazyImportLoader(
   () => import("../../config/sessions/session-accessor.js"),
 );
@@ -22,6 +23,16 @@ const sessionAccessorLoader = createLazyImportLoader(
 // not import persistence code unless an override must be updated.
 function loadSessionAccessor() {
   return sessionAccessorLoader.load();
+=======
+const sessionStoreRuntimeLoader = createLazyImportLoader(
+  () => import("../../config/sessions/store.runtime.js"),
+);
+
+// Session-store writes are lazy-loaded so read-only auth resolution paths do not
+// import persistence code unless an override must be updated.
+function loadSessionStoreRuntime() {
+  return sessionStoreRuntimeLoader.load();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 // Current session overrides are only valid when the selected provider can use
@@ -83,12 +94,19 @@ export async function clearSessionAuthProfileOverride(params: {
   sessionStore[sessionKey] = sessionEntry;
   if (storePath) {
     await (
+<<<<<<< HEAD
       await loadSessionAccessor()
     ).patchSessionEntry(
       { storePath, sessionKey },
       () => sessionEntry,
       { fallbackEntry: sessionEntry, replaceEntry: true },
     );
+=======
+      await loadSessionStoreRuntime()
+    ).updateSessionStore(storePath, (store) => {
+      store[sessionKey] = sessionEntry;
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 
@@ -238,12 +256,19 @@ export async function resolveSessionAuthProfileOverride(params: {
     sessionStore[sessionKey] = sessionEntry;
     if (storePath) {
       await (
+<<<<<<< HEAD
         await loadSessionAccessor()
       ).patchSessionEntry(
         { storePath, sessionKey },
         () => sessionEntry,
         { fallbackEntry: sessionEntry, replaceEntry: true },
       );
+=======
+        await loadSessionStoreRuntime()
+      ).updateSessionStore(storePath, (storeLocal) => {
+        storeLocal[sessionKey] = sessionEntry;
+      });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   }
 

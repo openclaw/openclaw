@@ -123,7 +123,11 @@ export function createMediaGenerateProviderListActionResult<
   };
 }
 
+<<<<<<< HEAD
 /** Creates status action helpers for a media generation task type. */
+=======
+/** Creates status and duplicate-guard action helpers for a media generation task type. */
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function createMediaGenerateTaskStatusActions<Task>(params: {
   inactiveText: string;
   findActiveTask: (sessionKey?: string) => Task | undefined;
@@ -140,6 +144,7 @@ export function createMediaGenerateTaskStatusActions<Task>(params: {
         buildStatusDetails: params.buildStatusDetails,
       });
     },
+<<<<<<< HEAD
   };
 }
 
@@ -173,6 +178,16 @@ export function createMediaGenerateDuplicateGuardResult<Task>(params: {
       action: "status",
       duplicateGuard: true,
       ...params.buildStatusDetails(blockingTask),
+=======
+
+    createDuplicateGuardResult(sessionKey?: string): MediaGenerateActionResult | undefined {
+      return createMediaGenerateDuplicateGuardResult({
+        sessionKey,
+        findActiveTask: params.findActiveTask,
+        buildStatusText: params.buildStatusText,
+        buildStatusDetails: params.buildStatusDetails,
+      });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
   };
 }
@@ -202,3 +217,32 @@ function createMediaGenerateStatusActionResult<Task>(params: {
     },
   };
 }
+<<<<<<< HEAD
+=======
+
+function createMediaGenerateDuplicateGuardResult<Task>(params: {
+  sessionKey?: string;
+  findActiveTask: (sessionKey?: string) => Task | undefined;
+  buildStatusText: TaskStatusTextBuilder<Task>;
+  buildStatusDetails: (task: Task) => Record<string, unknown>;
+}): MediaGenerateActionResult | undefined {
+  const activeTask = params.findActiveTask(params.sessionKey);
+  if (!activeTask) {
+    return undefined;
+  }
+  // Duplicate guard returns the active status payload so callers can show current progress.
+  return {
+    content: [
+      {
+        type: "text",
+        text: params.buildStatusText(activeTask, { duplicateGuard: true }),
+      },
+    ],
+    details: {
+      action: "status",
+      duplicateGuard: true,
+      ...params.buildStatusDetails(activeTask),
+    },
+  };
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

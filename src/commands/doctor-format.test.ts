@@ -41,6 +41,7 @@ describe("buildGatewayRuntimeHints", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("uses the provided env when rendering WSL systemd recovery hints", () => {
     const hints = buildGatewayRuntimeHints(
       {
@@ -58,6 +59,8 @@ describe("buildGatewayRuntimeHints", () => {
     expect(hints.join("\n")).not.toContain("systemd user services are unavailable");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not warn for normal systemd cgroup metrics", () => {
     expect(
       buildGatewayRuntimeHints(

@@ -15,6 +15,7 @@ export type ParsedThreadSessionSuffix = {
   threadId: string | undefined;
 };
 
+<<<<<<< HEAD
 export type ParsedSessionDeliveryRoute = {
   accountId?: string;
   channel: string;
@@ -23,6 +24,8 @@ export type ParsedSessionDeliveryRoute = {
   threadId?: string;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type RawSessionConversationRef = {
   channel: string;
   kind: "group" | "channel";
@@ -79,6 +82,7 @@ function findCasePreservingPeerDescriptor(
 }
 
 export function requiresFoldedSessionKeyAliasProof(sessionKey: string | undefined | null): boolean {
+<<<<<<< HEAD
   const raw = normalizeOptionalString(sessionKey);
   if (!raw) {
     return false;
@@ -102,6 +106,10 @@ export function requiresFoldedSessionKeyAliasProof(sessionKey: string | undefine
     parts[bodyStartIndex],
     parts[bodyStartIndex + 1],
   );
+=======
+  const ref = parseRawSessionConversationRef(sessionKey);
+  const descriptor = findCasePreservingPeerDescriptor(ref?.channel, ref?.kind);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return descriptor?.span === "tail";
 }
 
@@ -196,9 +204,14 @@ function collectCasePreservedSpans(raw: string): PreservedSpan[] {
             spans.push({ start: threadIdStart, end: raw.length, trim: false });
           }
         };
+<<<<<<< HEAD
         // Preserve tails behind nested or malformed ownership wrappers without
         // treating an inner channel-shaped identity as a runtime route.
         const scopedRe = new RegExp(`^(?:agent:[^:]*:)+:*${channel}:${kind}:`, "i");
+=======
+        // Tail: anchored to the real agent-scoped head; preserve through key end.
+        const scopedRe = new RegExp(`^agent:[^:]+:${channel}:${kind}:`, "i");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const scopedMatch = scopedRe.exec(raw);
         if (scopedMatch) {
           collectTailSpan(scopedMatch[0].length);
@@ -266,8 +279,13 @@ export function parseAgentSessionKey(
   if (!raw) {
     return null;
   }
+<<<<<<< HEAD
   const parts = raw.split(":");
   if (parts.length < 3 || !parts[1] || !parts[2]) {
+=======
+  const parts = raw.split(":").filter(Boolean);
+  if (parts.length < 3) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return null;
   }
   if (parts[0] !== "agent") {
@@ -351,6 +369,7 @@ export function parseThreadSessionSuffix(
   return { baseSessionKey, threadId };
 }
 
+<<<<<<< HEAD
 const SESSION_DELIVERY_PEER_KINDS = new Set<ParsedSessionDeliveryRoute["peerKind"]>([
   "channel",
   "direct",
@@ -401,6 +420,8 @@ export function parseSessionDeliveryRoute(
   return { channel, peerId, peerKind, threadId: parsedThread.threadId };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function parseRawSessionConversationRef(
   sessionKey: string | undefined | null,
 ): RawSessionConversationRef | null {
@@ -409,6 +430,7 @@ export function parseRawSessionConversationRef(
     return null;
   }
 
+<<<<<<< HEAD
   const rawParts = raw.split(":");
   // Only the outer ownership wrapper is authoritative for routing. Any inner
   // agent-shaped identity is opaque plugin input and must not inherit policy.
@@ -424,6 +446,13 @@ export function parseRawSessionConversationRef(
   // Empty opaque tail segments are valid (for example compressed IPv6), but
   // structural owner/channel/kind/first-id segments must be present.
   if (parts.length < 3 || !normalizeOptionalString(parts[2])) {
+=======
+  const rawParts = raw.split(":").filter(Boolean);
+  const bodyStartIndex =
+    rawParts.length >= 3 && normalizeOptionalLowercaseString(rawParts[0]) === "agent" ? 2 : 0;
+  const parts = rawParts.slice(bodyStartIndex);
+  if (parts.length < 3) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return null;
   }
 
@@ -441,3 +470,20 @@ export function parseRawSessionConversationRef(
 
   return { channel, kind, rawId, prefix };
 }
+<<<<<<< HEAD
+=======
+
+export function resolveThreadParentSessionKey(
+  sessionKey: string | undefined | null,
+): string | null {
+  const { baseSessionKey, threadId } = parseThreadSessionSuffix(sessionKey);
+  if (!threadId) {
+    return null;
+  }
+  const parent = normalizeOptionalString(baseSessionKey);
+  if (!parent) {
+    return null;
+  }
+  return parent;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

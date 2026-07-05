@@ -1,12 +1,19 @@
 // Qa Lab plugin module implements suite runtime flow behavior.
+<<<<<<< HEAD
 import { createHash, randomUUID } from "node:crypto";
+=======
+import { randomUUID } from "node:crypto";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-host-core";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+<<<<<<< HEAD
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/runtime-doctor";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   callQaBrowserRequest,
@@ -47,7 +54,10 @@ import {
   runAgentPrompt,
   runQaCli,
   startAgentRun,
+<<<<<<< HEAD
   waitForAgentHistoryReply,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   waitForAgentRun,
   writeWorkspaceSkill,
 } from "./suite-runtime-agent.js";
@@ -87,6 +97,7 @@ type QaSuiteScenarioFlowEnv = {
   transport: QaSuiteRuntimeEnv["transport"] & QaScenarioRuntimeEnv["transport"];
 } & Omit<QaSuiteRuntimeEnv, "transport">;
 
+<<<<<<< HEAD
 function activeMemoryToggleKey(sessionKey: string) {
   return createHash("sha256").update(sessionKey, "utf8").digest("hex");
 }
@@ -120,6 +131,8 @@ function setActiveMemorySessionDisabled(
   store.delete(key);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type QaSuiteStep = {
   name: string;
   run: () => Promise<string | void>;
@@ -186,7 +199,11 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     browserSnapshot: qaBrowserSnapshot,
     browserAct: qaBrowserAct,
     webOpenPage: async (webParams: Parameters<typeof qaWebOpenPage>[0]) => {
+<<<<<<< HEAD
       const opened = await qaWebOpenPage({ ...webParams, repoRoot: params.env.repoRoot });
+=======
+      const opened = await qaWebOpenPage(webParams);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       params.env.webSessionIds.add(opened.pageId);
       return opened;
     },
@@ -214,7 +231,10 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     resolveGeneratedImagePath,
     startAgentRun,
     waitForAgentRun,
+<<<<<<< HEAD
     waitForAgentHistoryReply,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     listCronJobs,
     findManagedDreamingCronJob,
     waitForCronRunCompletion,
@@ -240,8 +260,11 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     extractQaToolPayload,
     formatMemoryDreamingDay,
     resolveSessionTranscriptsDirForAgent,
+<<<<<<< HEAD
     activeMemoryToggleKey,
     setActiveMemorySessionDisabled,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     buildAgentSessionKey,
     normalizeLowercaseStringOrEmpty,
     formatErrorMessage: params.formatErrorMessage,

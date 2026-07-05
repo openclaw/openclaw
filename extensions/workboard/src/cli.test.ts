@@ -106,6 +106,7 @@ describe("registerWorkboardCli", () => {
     expect(showOutput).toContain("[redacted]");
   });
 
+<<<<<<< HEAD
   it("hides archived cards from text output by default and reveals them with --include-archived", async () => {
     const store = new WorkboardStore(createMemoryStore());
     await store.create({ title: "Active card" });
@@ -140,6 +141,8 @@ describe("registerWorkboardCli", () => {
     expect(output).toContain("archivedAt");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not fall back to local dispatch for explicit gateway targets", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Remote target", status: "ready" });

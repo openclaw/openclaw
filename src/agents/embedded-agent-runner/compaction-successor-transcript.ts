@@ -14,6 +14,13 @@ import {
   TranscriptFileState,
   writeTranscriptFileAtomic,
 } from "./transcript-file-state.js";
+<<<<<<< HEAD
+=======
+import {
+  resolveRuntimeTranscriptReadTarget,
+  type RuntimeTranscriptScope,
+} from "./transcript-runtime-state.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type ReadonlySessionManagerForRotation = Pick<
   TranscriptFileState,
@@ -99,6 +106,36 @@ export async function rotateTranscriptFileAfterCompaction(params: {
   });
 }
 
+<<<<<<< HEAD
+=======
+/**
+ * Rotates a runtime transcript after compaction using agent/session identity.
+ */
+export async function rotateRuntimeTranscriptAfterCompaction(params: {
+  sessionManager?: ReadonlySessionManagerForRotation;
+  scope: RuntimeTranscriptScope;
+  now?: () => Date;
+}): Promise<CompactionTranscriptRotation> {
+  const target = await resolveRuntimeTranscriptReadTarget(params.scope);
+  let sessionManager = params.sessionManager;
+  if (!sessionManager) {
+    try {
+      sessionManager = await readTranscriptFileState(target.sessionFile);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return { rotated: false, reason: "missing session file" };
+      }
+      throw err;
+    }
+  }
+  return await rotateTranscriptAfterCompaction({
+    sessionManager,
+    sessionFile: target.sessionFile,
+    ...(params.now ? { now: params.now } : {}),
+  });
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function findLatestCompactionIndex(entries: SessionEntry[]): number {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     if (entries[index]?.type === "compaction") {
@@ -134,6 +171,7 @@ function buildSuccessorEntries(params: {
     }
   }
 
+<<<<<<< HEAD
   // Preserve the last assistant message before firstKeptEntryId so the successor
   // transcript keeps a compactionSummary → assistant → user structure instead of
   // dropping the assistant reply (issue #76729).
@@ -188,6 +226,8 @@ function buildSuccessorEntries(params: {
     }
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const latestStateEntryIds = collectLatestStateEntryIds(branch.slice(0, latestCompactionIndex));
   const staleStateEntryIds = new Set<string>();
   for (const entry of branch.slice(0, latestCompactionIndex)) {
@@ -197,6 +237,7 @@ function buildSuccessorEntries(params: {
   }
 
   const removedIds = new Set<string>();
+<<<<<<< HEAD
   const keptPreCompactionEntries = branch
     .slice(0, latestCompactionIndex)
     .filter((entry) => !summarizedBranchIds.has(entry.id));
@@ -216,17 +257,28 @@ function buildSuccessorEntries(params: {
         entry.type === "message" &&
         !preservedPreCompactionIds.has(entry.id)) ||
       (summarizedBranchIds.has(entry.id) && summarizedContextMarker) ||
+=======
+  const keptBranchEntries = branch.filter((entry) => !summarizedBranchIds.has(entry.id));
+  const duplicateUserMessageIds =
+    collectDuplicateUserMessageEntryIdsForCompaction(keptBranchEntries);
+  for (const entry of allEntries) {
+    if (
+      (summarizedBranchIds.has(entry.id) && entry.type === "message") ||
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       staleStateEntryIds.has(entry.id) ||
       duplicateUserMessageIds.has(entry.id)
     ) {
       removedIds.add(entry.id);
     }
   }
+<<<<<<< HEAD
   // The preserved assistant reply is pre-compaction content that needs thinking
   // signature stripping, same as other pre-compaction kept entries.
   for (const entryId of preservedPreCompactionIds) {
     preCompactionKeptBranchIds.add(entryId);
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   for (const entry of allEntries) {
     if (entry.type === "label" && removedIds.has(entry.targetId)) {
       removedIds.add(entry.id);
@@ -261,6 +313,7 @@ function buildSuccessorEntries(params: {
     // signatures are bound to the original context prefix; the successor file has a different
     // prefix so those signatures would cause Anthropic "Invalid signature in thinking block".
     // Post-compaction entries were generated in the new context and have valid signatures.
+<<<<<<< HEAD
     // Move the compaction boundary back to the preserved turn so its complete
     // assistant/tool-result sequence is included in the successor context.
     let transformed: SessionEntry = reparented;
@@ -278,6 +331,12 @@ function buildSuccessorEntries(params: {
     ) {
       transformed = { ...reparented, firstKeptEntryId: preservedAssistantId };
     }
+=======
+    const transformed =
+      reparented.type === "message" && preCompactionKeptBranchIds.has(reparented.id)
+        ? { ...reparented, message: stripThinkingSignaturesFromMessage(reparented.message) }
+        : reparented;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     keptEntries.push(transformed);
   }
 

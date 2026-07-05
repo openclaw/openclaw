@@ -102,6 +102,7 @@ export type MemoryPluginRuntime = {
     purpose?: "default" | "status" | "cli";
   }): Promise<{
     manager: RegisteredMemorySearchManager | null;
+<<<<<<< HEAD
     debug?: {
       backend?: "builtin" | "qmd";
       purpose?: "default" | "status" | "cli";
@@ -117,6 +118,8 @@ export type MemoryPluginRuntime = {
       qmdIdentityHash?: string;
       failureCode?: "qmd-unavailable";
     };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     error?: string;
   }>;
   resolveMemoryBackendConfig(params: {
@@ -363,3 +366,8 @@ export function clearMemoryPluginState(): void {
   memoryPluginState.corpusSupplements = [];
   memoryPluginState.promptSupplements = [];
 }
+<<<<<<< HEAD
+=======
+
+export const resetMemoryPluginState = clearMemoryPluginState;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

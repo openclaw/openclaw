@@ -1,6 +1,9 @@
 // Mistral provider tests cover request mapping and stream conversion.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { Context, Model } from "../types.js";
 
 const mistralMockState = vi.hoisted(() => ({
@@ -215,6 +218,7 @@ describe("Mistral provider", () => {
       function: { name: "healthy_tool" },
     });
   });
+<<<<<<< HEAD
 
   it("strips the internal cache boundary marker from the system message", async () => {
     const stream = streamSimpleMistral(
@@ -235,4 +239,6 @@ describe("Mistral provider", () => {
     expect(systemMessage?.content).toBe("Stable\nDynamic");
     expect(JSON.stringify(payload)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

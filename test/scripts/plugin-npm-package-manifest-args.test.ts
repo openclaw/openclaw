@@ -13,6 +13,7 @@ describe("plugin-npm-package-manifest run args", () => {
     });
   });
 
+<<<<<<< HEAD
   it("returns help before resolving package dirs", () => {
     expect(parseRunArgs(["--help"])).toEqual({
       help: true,
@@ -22,15 +23,20 @@ describe("plugin-npm-package-manifest run args", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects missing or option-looking package dirs", () => {
     expect(() => parseRunArgs(["--run"])).toThrow(usage);
     expect(() => parseRunArgs(["--run", "--", "npm", "pack"])).toThrow(usage);
     expect(() => parseRunArgs(["--run", "--bad", "--", "npm", "pack"])).toThrow(usage);
   });
+<<<<<<< HEAD
 
   it("rejects unexpected args before the command separator", () => {
     expect(() => parseRunArgs(["--run", "extensions/slack", "extra", "--", "npm"])).toThrow(
       "unexpected plugin npm package manifest run argument: extra",
     );
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

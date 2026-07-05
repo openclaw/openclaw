@@ -7,7 +7,10 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+<<<<<<< HEAD
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { saveAuthProfileStore } from "../auth-profiles/store.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
@@ -51,6 +54,11 @@ const providerAuthAliasMocks = vi.hoisted(() => ({
     },
   ),
 }));
+<<<<<<< HEAD
+=======
+const ORIGINAL_HOME = process.env.HOME;
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.mock("../cli-runner.js", () => ({
   runCliAgent: runCliAgentMock,
 }));
@@ -209,6 +217,7 @@ function firstEmbeddedAgentArg(callIndex = 0) {
 describe("CLI attempt execution", () => {
   let tmpDir: string;
   let storePath: string;
+<<<<<<< HEAD
   let homeEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
   async function runOpenClawEmbeddedAttemptForTest(overrides?: {
@@ -265,6 +274,10 @@ describe("CLI attempt execution", () => {
 
   beforeEach(async () => {
     homeEnvSnapshot = captureEnv(["HOME"]);
+=======
+
+  beforeEach(async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-attempt-"));
     storePath = path.join(tmpDir, "sessions.json");
     runCliAgentMock.mockReset();
@@ -275,8 +288,16 @@ describe("CLI attempt execution", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+<<<<<<< HEAD
     homeEnvSnapshot?.restore();
     homeEnvSnapshot = undefined;
+=======
+    if (ORIGINAL_HOME === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = ORIGINAL_HOME;
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -328,7 +349,11 @@ describe("CLI attempt execution", () => {
       workspaceDir: tmpDir,
       homeDir,
     });
+<<<<<<< HEAD
     setTestEnvValue("HOME", homeDir);
+=======
+    process.env.HOME = homeDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(
       path.join(projectsDir, `${cliSessionId}.jsonl`),
@@ -365,7 +390,11 @@ describe("CLI attempt execution", () => {
       workspaceDir: tmpDir,
       homeDir,
     });
+<<<<<<< HEAD
     setTestEnvValue("HOME", homeDir);
+=======
+    process.env.HOME = homeDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(
       path.join(projectsDir, "stale-cli-session.jsonl"),
@@ -605,7 +634,11 @@ describe("CLI attempt execution", () => {
   it("does not pass --resume when the stored Claude CLI transcript is missing", async () => {
     const sessionKey = "agent:main:direct:claude-missing-transcript";
     const homeDir = path.join(tmpDir, "home");
+<<<<<<< HEAD
     setTestEnvValue("HOME", homeDir);
+=======
+    process.env.HOME = homeDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const sessionEntry: SessionEntry = {
       sessionId: "openclaw-session-123",
       updatedAt: Date.now(),
@@ -654,7 +687,11 @@ describe("CLI attempt execution", () => {
       workspaceDir: tmpDir,
       homeDir,
     });
+<<<<<<< HEAD
     setTestEnvValue("HOME", homeDir);
+=======
+    process.env.HOME = homeDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(
       path.join(projectsDir, `${cliSessionId}.jsonl`),
@@ -710,7 +747,11 @@ describe("CLI attempt execution", () => {
       workspaceDir: cwd,
       homeDir,
     });
+<<<<<<< HEAD
     setTestEnvValue("HOME", homeDir);
+=======
+    process.env.HOME = homeDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(
       path.join(projectsDir, `${cliSessionId}.jsonl`),
@@ -789,6 +830,7 @@ describe("CLI attempt execution", () => {
     expect(firstRunCliAgentArg().authProfileId).toBe("openai:work");
   });
 
+<<<<<<< HEAD
   it("skips auto auth-profile resolution for CLI-owned transport", async () => {
     const sessionKey = "agent:main:direct:codex-cli-owned-transport";
     const sessionEntry: SessionEntry = {
@@ -841,6 +883,8 @@ describe("CLI attempt execution", () => {
     expect(firstRunCliAgentArg().authProfileId).toBeUndefined();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("selects a google-gemini-cli auth profile for canonical Google models routed through Gemini CLI", async () => {
     const sessionKey = "agent:main:direct:gemini-cli-auth-bridge";
     const sessionEntry: SessionEntry = {
@@ -1688,11 +1732,14 @@ describe("CLI attempt execution", () => {
       } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {
         currentChannelId: "channel:voice-room",
+<<<<<<< HEAD
         chatId: "voice-room",
         channelContext: {
           sender: { id: "sender-voice", unionId: "sender-union" },
           chat: { id: "voice-room" },
         },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         senderId: "sender-voice",
       } as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
@@ -1713,11 +1760,14 @@ describe("CLI attempt execution", () => {
       messageChannel: "discord",
       messageProvider: "discord-voice",
       currentChannelId: "channel:voice-room",
+<<<<<<< HEAD
       chatId: "voice-room",
       channelContext: {
         sender: { id: "sender-voice", unionId: "sender-union" },
         chat: { id: "voice-room" },
       },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       senderId: "sender-voice",
     });
   });
@@ -1820,6 +1870,7 @@ describe("CLI attempt execution", () => {
     expect(firstRunCliAgentArg().authProfileId).toBeUndefined();
   });
 
+<<<<<<< HEAD
   it("does not pass auth-order profiles to configured CLI runtimes that do not stage them", async () => {
     const sessionKey = "agent:main:direct:anthropic-claude-runtime-auth-order";
     const sessionEntry: SessionEntry = {
@@ -1895,6 +1946,8 @@ describe("CLI attempt execution", () => {
     expect(firstRunCliAgentArg().authProfileId).toBeUndefined();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("forwards runtime toolsAllow into CLI attempts so the CLI harness can fail closed", async () => {
     const sessionKey = "agent:main:direct:claude-tools-allow";
     const sessionEntry: SessionEntry = {
@@ -2142,6 +2195,7 @@ describe("CLI attempt execution", () => {
       timeoutMs: 1_000,
       runId: "run-canonical-codex-cli",
       opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+<<<<<<< HEAD
       runContext: {
         chatId: "chat-embedded",
         channelContext: {
@@ -2150,6 +2204,9 @@ describe("CLI attempt execution", () => {
         },
         senderId: "sender-embedded",
       } as Parameters<typeof runAgentAttempt>[0]["runContext"],
+=======
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       spawnedBy: undefined,
       messageChannel: "telegram",
       skillsSnapshot: undefined,
@@ -2166,6 +2223,7 @@ describe("CLI attempt execution", () => {
     expectMockArgFields(runEmbeddedAgentMock, {
       provider: "openai",
       model: "gpt-5.4",
+<<<<<<< HEAD
       chatId: "chat-embedded",
       channelContext: {
         sender: { id: "sender-embedded", unionId: "embedded-union" },
@@ -2193,6 +2251,11 @@ describe("CLI attempt execution", () => {
     expect(embeddedArg.suppressLiveStreamOutput).toBe(true);
   });
 
+=======
+    });
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("forwards selected auth profiles through metadata-scoped provider aliases", async () => {
     const sessionKey = "agent:main:direct:metadata-auth-alias";
     const sessionEntry: SessionEntry = {

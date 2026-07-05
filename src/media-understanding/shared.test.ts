@@ -1,5 +1,9 @@
 // Shared provider helper tests cover deadlines, guarded fetch policy, HTTP
+<<<<<<< HEAD
 // config, and multipart transcription.
+=======
+// config, multipart transcription, and error response parsing.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   MAX_DATE_TIMESTAMP_MS,
   MAX_TIMER_TIMEOUT_MS,
@@ -40,6 +44,10 @@ import {
   pollProviderOperationJson,
   postJsonRequest,
   postTranscriptionRequest,
+<<<<<<< HEAD
+=======
+  readErrorResponse,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   waitProviderOperationPollInterval,
@@ -581,6 +589,35 @@ describe("resolveProviderHttpRequestConfig", () => {
   });
 });
 
+<<<<<<< HEAD
+=======
+describe("readErrorResponse", () => {
+  it("caps streamed error bodies instead of buffering the whole response", async () => {
+    const encoder = new TextEncoder();
+    let reads = 0;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          reads += 1;
+          controller.enqueue(encoder.encode("a".repeat(2048)));
+          if (reads >= 10) {
+            controller.close();
+          }
+        },
+      }),
+      {
+        status: 500,
+      },
+    );
+
+    const detail = await readErrorResponse(response);
+
+    expect(detail).toBe(`${"a".repeat(300)}…`);
+    expect(reads).toBe(2);
+  });
+});
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("fetchWithTimeoutGuarded", () => {
   it("applies a default timeout when callers omit one", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({

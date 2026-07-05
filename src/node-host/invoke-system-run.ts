@@ -19,9 +19,17 @@ import {
   resolveAllowAlwaysPersistenceDecision,
   resolveExecApprovals,
   resolveExecModePolicy,
+<<<<<<< HEAD
   type ExecAllowlistEntry,
   type ExecAsk,
   type ExecCommandSegment,
+=======
+  resolveExecPolicyForMode,
+  type ExecAllowlistEntry,
+  type ExecAsk,
+  type ExecCommandSegment,
+  type ExecMode,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type ExecSegmentSatisfiedBy,
   type ExecSecurity,
   type SkillBinTrustEntry,
@@ -29,7 +37,10 @@ import {
 import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
+<<<<<<< HEAD
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   extractEnvAssignmentKeysFromDispatchWrappers,
@@ -144,6 +155,15 @@ const APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval script operand changed before execution";
 type ExecToolConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["exec"]>;
 
+<<<<<<< HEAD
+=======
+type LayeredExecPolicy = {
+  mode?: ExecMode;
+  security: ExecSecurity;
+  ask: ExecAsk;
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type EffectiveSystemRunExecPolicy = {
   agentExec: ExecToolConfig | undefined;
   globalExec: ExecToolConfig | undefined;
@@ -153,6 +173,32 @@ type EffectiveSystemRunExecPolicy = {
   autoReview: boolean;
 };
 
+<<<<<<< HEAD
+=======
+function hasLegacyExecPolicyOverride(exec?: ExecToolConfig): boolean {
+  return exec?.security !== undefined || exec?.ask !== undefined;
+}
+
+function applyExecPolicyLayer(base: LayeredExecPolicy, layer?: ExecToolConfig): LayeredExecPolicy {
+  if (!layer) {
+    return base;
+  }
+  if (layer.mode) {
+    return {
+      mode: layer.mode,
+      ...resolveExecPolicyForMode(layer.mode),
+    };
+  }
+  if (hasLegacyExecPolicyOverride(layer)) {
+    return {
+      security: layer.security ?? base.security,
+      ask: layer.ask ?? base.ask,
+    };
+  }
+  return base;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function warnWritableTrustedDirOnce(message: string): void {
   if (safeBinTrustedDirWarningCache.has(message)) {
     return;

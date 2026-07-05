@@ -15,12 +15,19 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { normalizeProviderResolvedModelWithPlugin } from "../../plugins/provider-runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ModelListAuthIndex } from "./list.auth-index.js";
+<<<<<<< HEAD
 import { isLocalBaseUrl } from "./list.local-url.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ListRowModel } from "./list.model-row.js";
 import { toModelRow } from "./list.model-row.js";
 import type { ConfiguredEntry, ModelRow } from "./list.types.js";
 import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
+<<<<<<< HEAD
 import { modelKey } from "./shared.js";
+=======
+import { isLocalBaseUrl, modelKey } from "./shared.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type ConfiguredByKey = Map<string, ConfiguredEntry>;
 type ModelCatalogModule = typeof import("../../agents/model-catalog.js");

@@ -20,7 +20,11 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderAuthEvidence } from "../../secrets/provider-env-vars.js";
 import { shortenHomePath } from "../../utils.js";
+<<<<<<< HEAD
 import { maskApiKey } from "../../utils/mask-api-key.js";
+=======
+import { maskApiKey } from "./list.format.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ProviderAuthOverview } from "./list.types.js";
 
 function formatMarkerOrSecret(value: string): string {

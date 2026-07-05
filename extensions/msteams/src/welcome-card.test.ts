@@ -85,6 +85,7 @@ describe("buildWelcomeCard", () => {
     expect(actions[0]?.title).toBe("What can you do?");
   });
 
+<<<<<<< HEAD
   it("styles the heading with valid PascalCase Adaptive Card enum values", () => {
     // Lowercase weight/size fall back to Default in the Teams renderer, so the heading must use the
     // schema's PascalCase enums to render bold/medium.
@@ -94,6 +95,8 @@ describe("buildWelcomeCard", () => {
     expect(heading?.size).toBe("Medium");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses custom bot name", () => {
     const card = buildWelcomeCard({ botName: "TestBot" });
     const body = card.body as Array<{ text: string }>;

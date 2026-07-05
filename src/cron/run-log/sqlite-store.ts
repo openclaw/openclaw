@@ -6,7 +6,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+<<<<<<< HEAD
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import type { CronDeliveryStatus, CronRunStatus } from "../types.js";
@@ -28,12 +31,26 @@ function getCronRunLogKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<CronRunLogDatabase>(db);
 }
 
+<<<<<<< HEAD
+=======
+function normalizeNumber(value: number | bigint | null): number | undefined {
+  if (typeof value === "bigint") {
+    return Number(value);
+  }
+  return typeof value === "number" ? value : undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function booleanToInteger(value: boolean | undefined): number | null {
   return typeof value === "boolean" ? (value ? 1 : 0) : null;
 }
 
 function integerToBoolean(value: number | bigint | null): boolean | undefined {
+<<<<<<< HEAD
   const normalized = normalizeSqliteNumber(value);
+=======
+  const normalized = normalizeNumber(value);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return normalized == null ? undefined : normalized !== 0;
 }
 
@@ -85,7 +102,11 @@ export function parseStoredRunLogEntry(row: CronRunLogRow): CronRunLogEntry | nu
   }
   return {
     ...parsed,
+<<<<<<< HEAD
     ts: normalizeSqliteNumber(row.ts) ?? parsed.ts,
+=======
+    ts: normalizeNumber(row.ts) ?? parsed.ts,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     jobId: row.job_id,
     status: (row.status as CronRunStatus | null) ?? parsed.status,
     error: row.error ?? parsed.error,
@@ -96,9 +117,15 @@ export function parseStoredRunLogEntry(row: CronRunLogRow): CronRunLogEntry | nu
     sessionId: row.session_id ?? parsed.sessionId,
     sessionKey: row.session_key ?? parsed.sessionKey,
     runId: row.run_id ?? parsed.runId,
+<<<<<<< HEAD
     runAtMs: normalizeSqliteNumber(row.run_at_ms) ?? parsed.runAtMs,
     durationMs: normalizeSqliteNumber(row.duration_ms) ?? parsed.durationMs,
     nextRunAtMs: normalizeSqliteNumber(row.next_run_at_ms) ?? parsed.nextRunAtMs,
+=======
+    runAtMs: normalizeNumber(row.run_at_ms) ?? parsed.runAtMs,
+    durationMs: normalizeNumber(row.duration_ms) ?? parsed.durationMs,
+    nextRunAtMs: normalizeNumber(row.next_run_at_ms) ?? parsed.nextRunAtMs,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     model: row.model ?? parsed.model,
     provider: row.provider ?? parsed.provider,
   };
@@ -169,7 +196,11 @@ export function countCronRunLogRows(params: {
       params,
     ),
   );
+<<<<<<< HEAD
   return normalizeSqliteNumber(row?.count ?? null) ?? 0;
+=======
+  return normalizeNumber(row?.count ?? null) ?? 0;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /** Reads a sorted, filtered page of cron run-log rows. */
@@ -205,7 +236,11 @@ function nextCronRunLogSeq(db: DatabaseSync, storeKey: string, jobId: string): n
       .where("store_key", "=", storeKey)
       .where("job_id", "=", jobId),
   );
+<<<<<<< HEAD
   return (normalizeSqliteNumber(row?.seq ?? null) ?? 0) + 1;
+=======
+  return (normalizeNumber(row?.seq ?? null) ?? 0) + 1;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /** Appends a cron run-log entry with a per-job monotonic sequence number. */

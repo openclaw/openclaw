@@ -1025,6 +1025,7 @@ describe("createModelSelectionState respects session model override", () => {
     expect(state.resetModelOverride).toBe(false);
   });
 
+<<<<<<< HEAD
   it("keeps provider-qualified stored overrides when providerOverride is also persisted", async () => {
     const cfg = {
       agents: {
@@ -1108,6 +1109,8 @@ describe("createModelSelectionState respects session model override", () => {
     expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("clears disallowed model overrides and falls back to the default", async () => {
     const cfg = {
       agents: {

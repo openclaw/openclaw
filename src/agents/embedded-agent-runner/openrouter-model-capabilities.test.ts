@@ -105,6 +105,7 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
+<<<<<<< HEAD
   it("cancels failed OpenRouter catalog response bodies", async () => {
     await withOpenRouterStateDir(async () => {
       const response = new Response("temporarily unavailable", { status: 503 });
@@ -120,6 +121,8 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses endpoint-specific OpenRouter context length when top_provider reports one", async () => {
     await withOpenRouterStateDir(async () => {
       vi.stubGlobal(
@@ -312,6 +315,7 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
+<<<<<<< HEAD
   it("bounds an oversized streamed OpenRouter catalog instead of buffering it whole", async () => {
     await withOpenRouterStateDir(async () => {
       // First pull emits a chunk larger than the cap; a well-behaved bounded read
@@ -410,6 +414,8 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not refetch immediately after an awaited miss for the same model id", async () => {
     await withOpenRouterStateDir(async () => {
       const fetchSpy = vi.fn(

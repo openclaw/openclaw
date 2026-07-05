@@ -78,16 +78,26 @@ import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
 import {
+<<<<<<< HEAD
   reconcileRealtimeTalkCatalogSelection,
   type RealtimeTalkCatalogProvider,
 } from "./chat/realtime-talk-catalog.ts";
 import {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   createRealtimeTalkConversationState,
   updateRealtimeTalkConversation,
   type RealtimeTalkConversationEntry,
   type RealtimeTalkConversationState,
 } from "./chat/realtime-talk-conversation.ts";
 import {
+<<<<<<< HEAD
+=======
+  reconcileRealtimeTalkCatalogSelection,
+  type RealtimeTalkCatalogProvider,
+} from "./chat/realtime-talk-catalog.ts";
+import {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   RealtimeTalkSession,
   type RealtimeTalkLaunchOptions,
   type RealtimeTalkStatus,
@@ -262,7 +272,10 @@ export class OpenClawApp extends LitElement {
   chatSessionMessageSubscriptionKey: string | null = null;
   chatSessionMessageSubscriptionRequestedKey: string | null = null;
   currentSessionId: string | null = null;
+<<<<<<< HEAD
   reconnectResumeSessionId: string | null = null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   @state() chatLoading = false;
   @state() chatSending = false;
   @state() chatMessage = "";
@@ -645,12 +658,16 @@ export class OpenClawApp extends LitElement {
   @state() clawhubDetailLoading = false;
   @state() clawhubDetailError: string | null = null;
   @state() clawhubInstallSlug: string | null = null;
+<<<<<<< HEAD
   @state() clawhubInstallMessage: {
     kind: "success" | "error";
     text: string;
     acknowledgeSlug?: string;
     acknowledgeVersion?: string;
   } | null = null;
+=======
+  @state() clawhubInstallMessage: { kind: "success" | "error"; text: string } | null = null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   @state() clawhubVerdicts: Record<string, ClawHubSkillSecurityVerdict> = {};
   @state() clawhubVerdictsLoading = false;
   @state() clawhubVerdictsError: string | null = null;

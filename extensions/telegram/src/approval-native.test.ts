@@ -3,7 +3,11 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { saveSessionStore, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { telegramApprovalCapability } from "./approval-native.js";
+=======
+import { telegramApprovalCapability, telegramNativeApprovalAdapter } from "./approval-native.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function buildConfig(
   overrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>>,
@@ -60,7 +64,11 @@ describe("telegram native approval adapter", () => {
   });
 
   it("normalizes direct-chat origin targets so DM dedupe can converge", async () => {
+<<<<<<< HEAD
     const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
+=======
+    const target = await telegramNativeApprovalAdapter.native?.resolveOriginTarget?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       cfg: buildConfig(),
       accountId: "default",
       approvalKind: "exec",
@@ -85,7 +93,11 @@ describe("telegram native approval adapter", () => {
   });
 
   it("parses topic-scoped turn-source targets in the extension", async () => {
+<<<<<<< HEAD
     const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
+=======
+    const target = await telegramNativeApprovalAdapter.native?.resolveOriginTarget?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       cfg: buildConfig(),
       accountId: "default",
       approvalKind: "exec",
@@ -123,7 +135,11 @@ describe("telegram native approval adapter", () => {
       },
     });
 
+<<<<<<< HEAD
     const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
+=======
+    const target = await telegramNativeApprovalAdapter.native?.resolveOriginTarget?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       cfg: {
         ...buildConfig(),
         session: { store: STORE_PATH },
@@ -162,7 +178,11 @@ describe("telegram native approval adapter", () => {
       },
     });
 
+<<<<<<< HEAD
     const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
+=======
+    const target = await telegramNativeApprovalAdapter.native?.resolveOriginTarget?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       cfg: {
         ...buildConfig(),
         session: { store: STORE_PATH },
@@ -188,7 +208,11 @@ describe("telegram native approval adapter", () => {
   });
 
   it("marks DM-only telegram approvals to notify the origin chat after delivery", () => {
+<<<<<<< HEAD
     const capabilities = telegramApprovalCapability.native?.describeDeliveryCapabilities({
+=======
+    const capabilities = telegramNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       cfg: buildConfig(),
       accountId: "default",
       approvalKind: "exec",

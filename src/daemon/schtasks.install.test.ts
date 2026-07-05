@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import {
   installScheduledTask,
   readScheduledTaskCommand,
@@ -12,6 +13,10 @@ import {
 } from "./schtasks.js";
 import { auditGatewayServiceConfig, SERVICE_AUDIT_CODES } from "./service-audit.js";
 import { buildServiceEnvironment } from "./service-env.js";
+=======
+import { installScheduledTask, readScheduledTaskCommand } from "./schtasks.js";
+import { auditGatewayServiceConfig, SERVICE_AUDIT_CODES } from "./service-audit.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const schtasksCalls: string[][] = [];
 const schtasksResponses: { code: number; stdout: string; stderr: string }[] = [];
@@ -80,6 +85,7 @@ describe("installScheduledTask", () => {
     });
   }
 
+<<<<<<< HEAD
   function expectInitialTaskQueries(taskName = "OpenClaw Gateway"): void {
     expect(schtasksCalls[0]).toEqual(["/Query"]);
     expect(schtasksCalls[1]).toEqual(["/Query", "/TN", taskName]);
@@ -87,6 +93,15 @@ describe("installScheduledTask", () => {
 
   function expectTaskRunCall(index: number, taskName = "OpenClaw Gateway"): void {
     expect(schtasksCalls[index]).toEqual(["/Run", "/TN", taskName]);
+=======
+  function expectInitialTaskQueries(): void {
+    expect(schtasksCalls[0]).toEqual(["/Query"]);
+    expect(schtasksCalls[1]).toEqual(["/Query", "/TN", "OpenClaw Gateway"]);
+  }
+
+  function expectTaskRunCall(index: number): void {
+    expect(schtasksCalls[index]).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   it("writes quoted set assignments and escapes metacharacters", async () => {
@@ -248,6 +263,7 @@ describe("installScheduledTask", () => {
     });
   });
 
+<<<<<<< HEAD
   it("uses the hidden launcher for generated Windows gateway service installs", async () => {
     await withUserProfileDir(async (_tmpDir, env) => {
       schtasksResponses.push(okSchtasksResponse, missingTaskResponse);
@@ -325,6 +341,8 @@ describe("installScheduledTask", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("creates the Scheduled Task via XML with battery start/continue enabled (#59299)", async () => {
     await withUserProfileDir(async (_tmpDir, env) => {
       schtasksResponses.push(okSchtasksResponse, missingTaskResponse);

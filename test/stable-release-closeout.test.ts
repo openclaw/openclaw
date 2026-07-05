@@ -38,9 +38,12 @@ describe("stable release closeout", () => {
   it("parses stable and correction tags", () => {
     expect(parseStableReleaseTag("v2026.6.8")).toBe("2026.6.8");
     expect(parseStableReleaseTag("v2026.6.8-2")).toBe("2026.6.8");
+<<<<<<< HEAD
     expect(() => parseStableReleaseTag("v2026.6.8-0")).toThrow(
       "expected a stable release tag",
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(() => parseStableReleaseTag("v2026.6.8-beta.1")).toThrow(
       "expected a stable release tag",
     );

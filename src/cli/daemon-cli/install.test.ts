@@ -388,6 +388,7 @@ describe("runDaemonInstall", () => {
     });
   });
 
+<<<<<<< HEAD
   it("captures service install warnings in json install output", async () => {
     installDaemonServiceAndEmitMock.mockImplementationOnce(async (params?: unknown) => {
       await (params as { install: () => Promise<void> }).install();
@@ -405,6 +406,8 @@ describe("runDaemonInstall", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not treat env-template gateway.auth.token as plaintext during install", async () => {
     loadConfigMock.mockReturnValue({
       gateway: { auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" } },

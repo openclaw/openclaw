@@ -1,16 +1,26 @@
 // Plugin Update Unchanged Docker tests cover plugin update unchanged docker script behavior.
+<<<<<<< HEAD
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+=======
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { describe, expect, it } from "vitest";
 
 const PLUGIN_UPDATE_DOCKER_SCRIPT = "scripts/e2e/plugin-update-unchanged-docker.sh";
 const PLUGIN_UPDATE_SCENARIO_SCRIPT = "scripts/e2e/lib/plugin-update/unchanged-scenario.sh";
 const CORRUPT_UPDATE_SCENARIO_SCRIPT = "scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh";
 const PLUGIN_UPDATE_PROBE_SCRIPT = "scripts/e2e/lib/plugin-update/probe.mjs";
+<<<<<<< HEAD
 const PLUGIN_UPDATE_REGISTRY_SCRIPT = "scripts/e2e/lib/plugin-update/registry-server.mjs";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const CORRUPT_PLUGIN_ID = "demo-corrupt-plugin";
 
 function runProbe(command: string, payload: unknown): void {
@@ -60,6 +70,7 @@ function runProbeFileStatus(
   return { status: result.status, stderr: result.stderr };
 }
 
+<<<<<<< HEAD
 async function waitForPortFile(portFile: string): Promise<number> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     if (existsSync(portFile)) {
@@ -73,6 +84,8 @@ async function waitForPortFile(portFile: string): Promise<number> {
   throw new Error("registry did not write a port file");
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("plugin update unchanged Docker E2E", () => {
   it("seeds current plugin install ledger state before checking config stability", () => {
     const runner = readFileSync(PLUGIN_UPDATE_DOCKER_SCRIPT, "utf8");
@@ -93,6 +106,7 @@ describe("plugin update unchanged Docker E2E", () => {
     const script = readFileSync(PLUGIN_UPDATE_SCENARIO_SCRIPT, "utf8");
 
     expect(script).toContain("OPENCLAW_PLUGIN_UPDATE_TIMEOUT_SECONDS");
+<<<<<<< HEAD
     expect(script).toContain('registry_port_file=/tmp/openclaw-e2e-registry.port');
     expect(script).toContain('node scripts/e2e/lib/plugin-update/registry-server.mjs "$registry_port_file"');
     expect(script).toContain('export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$registry_port_file")"');
@@ -106,6 +120,11 @@ describe("plugin update unchanged Docker E2E", () => {
     expect(script).not.toContain(
       'plugin_update_timeout_seconds="${OPENCLAW_PLUGIN_UPDATE_TIMEOUT_SECONDS:-180}"',
     );
+=======
+    expect(script).toContain(
+      'openclaw_e2e_maybe_timeout "${plugin_update_timeout_seconds}s" node "$entry" plugins update',
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(script).not.toMatch(
       /^\s*timeout "\$\{plugin_update_timeout_seconds\}s" node "\$entry"/mu,
     );
@@ -117,6 +136,7 @@ describe("plugin update unchanged Docker E2E", () => {
     expect(script).not.toContain("cat /tmp/openclaw-e2e-registry.log");
   });
 
+<<<<<<< HEAD
   it("serves plugin metadata from an ephemeral registry port", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-update-registry-"));
     const portFile = path.join(root, "registry.port");
@@ -140,6 +160,8 @@ describe("plugin update unchanged Docker E2E", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("bounds assert-output diagnostics to the saved command log tail", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-update-probe-"));
     const logPath = path.join(root, "plugin-update-output.log");
@@ -197,12 +219,15 @@ describe("plugin update unchanged Docker E2E", () => {
     const script = readFileSync(CORRUPT_UPDATE_SCENARIO_SCRIPT, "utf8");
 
     expect(script).toContain("OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS");
+<<<<<<< HEAD
     expect(script).toContain(
       "openclaw_e2e_read_positive_int_env OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS 900",
     );
     expect(script).not.toContain(
       'update_timeout_seconds="${OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS:-900}"',
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(
       script.match(/openclaw_e2e_maybe_timeout "\$\{update_timeout_seconds\}s" \\/gu)?.length,
     ).toBe(2);

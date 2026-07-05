@@ -1,6 +1,10 @@
 // Control UI tests cover form controls behavior.
 import { chromium, type Browser, type Page } from "playwright";
+<<<<<<< HEAD
 import { describe, expect, it } from "vitest";
+=======
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
 import {
   canRunPlaywrightChromium,
@@ -12,10 +16,14 @@ const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
   ? describe
   : describe.skip;
 
+<<<<<<< HEAD
 type MobileFixture = {
   browser: Browser;
   page: Page;
 };
+=======
+let browser: Browser;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function readUiCss(): string {
   const files = [
@@ -56,6 +64,7 @@ function controlsHtml() {
   `;
 }
 
+<<<<<<< HEAD
 async function openMobileFixture(): Promise<MobileFixture> {
   const browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
   let page: Page | undefined;
@@ -85,6 +94,31 @@ describeBrowserLayout("touch-primary form controls", () => {
   it("keeps text-entry controls large enough to avoid mobile focus zoom", async () => {
     const fixture = await openMobileFixture();
     const { page } = fixture;
+=======
+async function openMobileFixture(): Promise<Page> {
+  const page = await browser.newPage({
+    hasTouch: true,
+    isMobile: true,
+    viewport: { width: 390, height: 844 },
+  });
+  await page.setContent(
+    `<!doctype html><html data-theme-mode="light"><head><style>${readUiCss()}</style></head><body>${controlsHtml()}</body></html>`,
+  );
+  return page;
+}
+
+describeBrowserLayout("touch-primary form controls", () => {
+  beforeAll(async () => {
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+  });
+
+  afterAll(async () => {
+    await browser.close();
+  });
+
+  it("keeps text-entry controls large enough to avoid mobile focus zoom", async () => {
+    const page = await openMobileFixture();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     try {
       const metrics = await page.evaluate(() => {
         const selectors = [
@@ -128,13 +162,21 @@ describeBrowserLayout("touch-primary form controls", () => {
         expect(size.fontSize, size.selector).toBeGreaterThanOrEqual(16);
       }
     } finally {
+<<<<<<< HEAD
       await closeMobileFixture(fixture);
+=======
+      await page.close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
   it("keeps native select affordances visible in light mode", async () => {
+<<<<<<< HEAD
     const fixture = await openMobileFixture();
     const { page } = fixture;
+=======
+    const page = await openMobileFixture();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     try {
       const selects = await page.locator(".cfg-select, .field select").evaluateAll((nodes) =>
         nodes.map((node) => {
@@ -154,7 +196,11 @@ describeBrowserLayout("touch-primary form controls", () => {
         expect(select.repeat).toContain("no-repeat");
       }
     } finally {
+<<<<<<< HEAD
       await closeMobileFixture(fixture);
+=======
+      await page.close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 });

@@ -29,7 +29,10 @@ const resolveEmbeddedAgentStreamFnMock = vi.fn();
 const prepareCliRunContextMock = vi.fn();
 const executePreparedCliRunMock = vi.fn();
 const diagDebugMock = vi.fn();
+<<<<<<< HEAD
 const ensureSelectedAgentHarnessPluginMock = vi.fn();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 vi.mock("../llm/stream.js", async () => {
   const original = await vi.importActual<typeof import("../llm/stream.js")>("../llm/stream.js");
@@ -120,7 +123,11 @@ vi.mock("./model-runtime-aliases.js", () => ({
         }
       }
     }
+<<<<<<< HEAD
     return runtime === "claude-cli" ? runtime : undefined;
+=======
+    return runtime || undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
 }));
 
@@ -132,11 +139,14 @@ vi.mock("./cli-runner/execute.runtime.js", () => ({
   executePreparedCliRun: (...args: unknown[]) => executePreparedCliRunMock(...args),
 }));
 
+<<<<<<< HEAD
 vi.mock("./harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: (...args: unknown[]) =>
     ensureSelectedAgentHarnessPluginMock(...args),
 }));
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.mock("./embedded-agent-runner/runs.js", () => ({
   getActiveEmbeddedRunSnapshot: (...args: unknown[]) => getActiveEmbeddedRunSnapshotMock(...args),
 }));
@@ -461,7 +471,10 @@ describe("runBtwSideQuestion", () => {
     prepareCliRunContextMock.mockReset();
     executePreparedCliRunMock.mockReset();
     diagDebugMock.mockReset();
+<<<<<<< HEAD
     ensureSelectedAgentHarnessPluginMock.mockReset();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     clearAgentHarnesses();
 
     readFileMock.mockResolvedValue("mock transcript");
@@ -842,6 +855,7 @@ describe("runBtwSideQuestion", () => {
     expect(streamSimpleMock).toHaveBeenCalledTimes(1);
   });
 
+<<<<<<< HEAD
   it("loads a cold Copilot harness before selecting the /btw provider fallback", async () => {
     let loaded = false;
     ensureSelectedAgentHarnessPluginMock.mockImplementation(async () => {
@@ -891,6 +905,8 @@ describe("runBtwSideQuestion", () => {
     expect(streamSimpleMock).toHaveBeenCalledOnce();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("runs CLI-runtime alias BTW as an ephemeral CLI side question", async () => {
     const cleanup = vi.fn(async () => undefined);
     prepareCliRunContextMock.mockResolvedValueOnce({

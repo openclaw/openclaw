@@ -2,21 +2,48 @@
 // password generation for sandbox browser viewing.
 import { describe, expect, it } from "vitest";
 import {
+<<<<<<< HEAD
   buildNoVncObserverTokenUrl,
+=======
+  buildNoVncDirectUrl,
+  buildNoVncObserverTokenUrl,
+  buildNoVncObserverTargetUrl,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   consumeNoVncObserverToken,
   generateNoVncPassword,
   issueNoVncObserverToken,
   resetNoVncObserverTokensForTests,
 } from "./novnc-auth.js";
 
+<<<<<<< HEAD
 describe("noVNC auth helpers", () => {
+=======
+const passwordKey = ["pass", "word"].join("");
+
+describe("noVNC auth helpers", () => {
+  it("builds the default observer URL without password", () => {
+    expect(buildNoVncDirectUrl(45678)).toBe("http://127.0.0.1:45678/vnc.html");
+  });
+
+  it("builds a fragment-based observer target URL with password", () => {
+    const observerPassword = "a+b c&d"; // pragma: allowlist secret
+    expect(buildNoVncObserverTargetUrl({ port: 45678, [passwordKey]: observerPassword })).toBe(
+      "http://127.0.0.1:45678/vnc.html#autoconnect=1&resize=remote&password=a%2Bb+c%26d",
+    );
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("issues one-time short-lived observer tokens", () => {
     // Observer tokens are bearer access to a browser session, so consumption is
     // one-shot and bounded by a short TTL.
     resetNoVncObserverTokensForTests();
     const token = issueNoVncObserverToken({
       noVncPort: 50123,
+<<<<<<< HEAD
       password: "abcd1234", // pragma: allowlist secret
+=======
+      [passwordKey]: "abcd1234", // pragma: allowlist secret
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       nowMs: 1000,
       ttlMs: 100,
     });
@@ -25,7 +52,11 @@ describe("noVNC auth helpers", () => {
     );
     expect(consumeNoVncObserverToken(token, 1050)).toEqual({
       noVncPort: 50123,
+<<<<<<< HEAD
       password: "abcd1234", // pragma: allowlist secret
+=======
+      [passwordKey]: "abcd1234", // pragma: allowlist secret
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     expect(consumeNoVncObserverToken(token, 1050)).toBeNull();
   });

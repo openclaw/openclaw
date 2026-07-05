@@ -10,7 +10,10 @@ import {
   type RestartRecoveryCandidate,
 } from "./chat-abort.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
+<<<<<<< HEAD
 import { chatAbortMarkerTimestampMs } from "./server-chat-state.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { ChatRunState } from "./server-chat-state.js";
 import type { ChatRunEntry } from "./server-chat.js";
 import {
@@ -228,8 +231,13 @@ export function startGatewayMaintenanceTimers(params: {
     }
 
     const ABORTED_RUN_TTL_MS = 60 * 60_000;
+<<<<<<< HEAD
     for (const [runId, abortMarker] of params.chatRunState.abortedRuns) {
       if (now - chatAbortMarkerTimestampMs(abortMarker) <= ABORTED_RUN_TTL_MS) {
+=======
+    for (const [runId, abortedAt] of params.chatRunState.abortedRuns) {
+      if (now - abortedAt <= ABORTED_RUN_TTL_MS) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         continue;
       }
       params.chatRunState.abortedRuns.delete(runId);

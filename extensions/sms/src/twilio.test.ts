@@ -53,6 +53,7 @@ function readUrlEncodedRequestBody(init: RequestInit | undefined): URLSearchPara
   throw new Error("Expected Twilio request body to be URL-encoded.");
 }
 
+<<<<<<< HEAD
 function cancelTrackedTextResponse(
   text: string,
   init?: ResponseInit,
@@ -75,6 +76,8 @@ function cancelTrackedTextResponse(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("Twilio SMS helpers", () => {
   afterEach(() => {
     fetchWithSsrFGuardMock.mockReset();
@@ -494,6 +497,7 @@ describe("Twilio SMS helpers", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+<<<<<<< HEAD
   it("bounds and cancels oversized guarded Twilio error bodies", async () => {
     const release = vi.fn(async () => {});
     const tracked = cancelTrackedTextResponse(`${"upstream unavailable ".repeat(512)}tail`, {
@@ -523,6 +527,8 @@ describe("Twilio SMS helpers", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects malformed JSON from successful Twilio sends", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => new Response("not json", { status: 201 }));
 
@@ -554,6 +560,7 @@ describe("Twilio SMS helpers", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+<<<<<<< HEAD
   it("bounds and cancels oversized guarded Twilio success bodies", async () => {
     const release = vi.fn(async () => {});
     const tracked = cancelTrackedTextResponse("x".repeat(1024 * 1024 + 1), { status: 201 });
@@ -576,6 +583,8 @@ describe("Twilio SMS helpers", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("exposes a typed Twilio SMS API error", () => {
     const error = new TwilioSmsApiError(
       429,

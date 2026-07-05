@@ -61,7 +61,10 @@ describe("package manager build policy", () => {
 
     expect(packageJson.pnpm).toBeUndefined();
     expect(workspace.allowBuilds?.["@discordjs/opus"]).toBe(false);
+<<<<<<< HEAD
     expect(workspace.allowBuilds?.["node-llama-cpp"]).toBe(false);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(workspace.blockExoticSubdeps).toBe(true);
     expect(workspace.onlyBuiltDependencies).toBeUndefined();
   });

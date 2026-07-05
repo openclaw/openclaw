@@ -6,7 +6,10 @@ import {
   findFailureOutboundMessage,
   formatTransportTranscript,
   readTransportTranscript,
+<<<<<<< HEAD
   waitForNoOutbound,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   waitForOutboundMessage,
   waitForTransportOutboundMessage,
 } from "./suite-runtime-transport.js";
@@ -99,6 +102,7 @@ describe("qa suite transport helpers", () => {
     await expect(pending).rejects.toThrow("Tool read not found");
   });
 
+<<<<<<< HEAD
   it("checks no-outbound waits from the supplied outbound cursor", async () => {
     const state = createQaBusState();
     state.addOutboundMessage({
@@ -124,6 +128,8 @@ describe("qa suite transport helpers", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("fails raw scenario waitForCondition calls when a classified failure reply arrives", async () => {
     const state = createQaBusState();
     const waitForCondition = createScenarioWaitForCondition(state);

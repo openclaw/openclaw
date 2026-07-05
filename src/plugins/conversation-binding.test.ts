@@ -1,26 +1,39 @@
 // Covers plugin conversation binding persistence and lookup behavior.
+<<<<<<< HEAD
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+=======
+import fs from "node:fs";
+import path from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type {
   ConversationRef,
   SessionBindingAdapter,
   SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
+<<<<<<< HEAD
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 const tempRoot = makeTrackedTempDir("openclaw-plugin-binding", tempDirs);
+<<<<<<< HEAD
 const previousStateDir = process.env.OPENCLAW_STATE_DIR;
 
 type PluginBindingApprovalsDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_binding_approvals">;
+=======
+const approvalsPath = path.join(tempRoot, "plugin-binding-approvals.json");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const sessionBindingState = vi.hoisted(() => {
   const records = new Map<string, SessionBindingRecord>();
@@ -100,6 +113,61 @@ const pluginRuntimeState = vi.hoisted(
     }) satisfies { registry: PluginRegistry },
 );
 
+<<<<<<< HEAD
+=======
+const jsonFileMockState = vi.hoisted(() => ({
+  writeJsonOverride: null as
+    | null
+    | ((
+        actualWriteJson: (filePath: string, value: unknown, options?: unknown) => Promise<void>,
+        filePath: string,
+        value: unknown,
+        options?: unknown,
+      ) => Promise<void>),
+}));
+
+vi.mock("../infra/home-dir.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../infra/home-dir.js")>("../infra/home-dir.js");
+  return {
+    ...actual,
+    expandHomePrefix: (value: string) => {
+      if (value === "~/.openclaw/plugin-binding-approvals.json") {
+        return approvalsPath;
+      }
+      return actual.expandHomePrefix(value);
+    },
+  };
+});
+
+vi.mock("../infra/json-files.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../infra/json-files.js")>("../infra/json-files.js");
+  return {
+    ...actual,
+    writeJson: async (
+      filePath: string,
+      value: unknown,
+      options?: Parameters<typeof actual.writeJson>[2],
+    ) => {
+      if (jsonFileMockState.writeJsonOverride) {
+        return await jsonFileMockState.writeJsonOverride(
+          actual.writeJson as (
+            filePath: string,
+            value: unknown,
+            options?: unknown,
+          ) => Promise<void>,
+          filePath,
+          value,
+          options,
+        );
+      }
+      return await actual.writeJson(filePath, value, options);
+    },
+  };
+});
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.mock("./runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./runtime.js")>("./runtime.js");
   return {
@@ -158,12 +226,15 @@ function createAdapter(channel: string, accountId: string): SessionBindingAdapte
 }
 
 afterAll(() => {
+<<<<<<< HEAD
   closeOpenClawStateDatabaseForTest();
   if (previousStateDir == null) {
     delete process.env.OPENCLAW_STATE_DIR;
   } else {
     process.env.OPENCLAW_STATE_DIR = previousStateDir;
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -414,6 +485,7 @@ async function expectResolutionDoesNotWait(params: {
   expect(result.status).toBe(params.expectedStatus);
 }
 
+<<<<<<< HEAD
 function clearPluginBindingApprovalRows(): void {
   runOpenClawStateWriteTransaction(({ db }) => {
     const approvalsDb = getNodeSqliteKysely<PluginBindingApprovalsDatabase>(db);
@@ -468,6 +540,14 @@ describe("plugin conversation binding approvals", () => {
     sessionBindingState.reset();
     testing.reset();
     setActivePluginRegistry(createEmptyPluginRegistry());
+=======
+describe("plugin conversation binding approvals", () => {
+  beforeEach(() => {
+    sessionBindingState.reset();
+    testing.reset();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    fs.rmSync(approvalsPath, { force: true });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "default" });
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "work" });
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "isolated" });
@@ -532,6 +612,7 @@ describe("plugin conversation binding approvals", () => {
     expect(differentAccount.status).toBe("pending");
   });
 
+<<<<<<< HEAD
   it("persists overlapping always-allow approvals", async () => {
     const firstRequest = await requestPendingBinding(
       createDiscordCodexBindRequest(
@@ -607,6 +688,86 @@ describe("plugin conversation binding approvals", () => {
         plugin_root: "/plugins/codex-a",
       },
     ]);
+=======
+  it("serializes overlapping always-allow approval writes", async () => {
+    const firstWriteGate = createDeferredVoid();
+    const firstWriteStarted = createDeferredVoid();
+    let writeCount = 0;
+    jsonFileMockState.writeJsonOverride = async (actualWriteJson, filePath, value, options) => {
+      writeCount += 1;
+      if (writeCount === 1) {
+        firstWriteStarted.resolve();
+        await firstWriteGate.promise;
+      }
+      await actualWriteJson(filePath, value, options);
+    };
+
+    try {
+      const firstRequest = await requestPendingBinding(
+        createDiscordCodexBindRequest(
+          "channel:race-1",
+          "Bind this conversation to Codex thread race-1.",
+          "default",
+        ),
+      );
+      const firstApproval = resolvePluginConversationBindingApproval({
+        approvalId: firstRequest.approvalId,
+        decision: "allow-always",
+        senderId: "user-1",
+      });
+      await firstWriteStarted.promise;
+
+      const secondRequest = await requestPendingBinding(
+        createDiscordCodexBindRequest(
+          "channel:race-2",
+          "Bind this conversation to Codex thread race-2.",
+          "work",
+        ),
+      );
+      let secondSettled = false;
+      const secondApproval = resolvePluginConversationBindingApproval({
+        approvalId: secondRequest.approvalId,
+        decision: "allow-always",
+        senderId: "user-1",
+      }).then((result) => {
+        secondSettled = true;
+        return result;
+      });
+
+      await flushMicrotasks();
+      expect(secondSettled).toBe(false);
+      expect(writeCount).toBe(1);
+
+      firstWriteGate.resolve();
+      const [firstResult, secondResult] = await Promise.all([firstApproval, secondApproval]);
+
+      expect(firstResult.status).toBe("approved");
+      expect(secondResult.status).toBe("approved");
+      expect(writeCount).toBe(2);
+
+      const persisted = JSON.parse(fs.readFileSync(approvalsPath, "utf8")) as {
+        approvals: Array<{ accountId: string; channel: string; pluginRoot: string }>;
+      };
+      expect(persisted.approvals).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            accountId: "default",
+            channel: "discord",
+            pluginRoot: "/plugins/codex-a",
+          }),
+          expect.objectContaining({
+            accountId: "work",
+            channel: "discord",
+            pluginRoot: "/plugins/codex-a",
+          }),
+        ]),
+      );
+      expect(persisted.approvals).toHaveLength(2);
+    } finally {
+      firstWriteGate.resolve();
+      jsonFileMockState.writeJsonOverride = null;
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("shares pending bind approvals across duplicate module instances", async () => {
@@ -669,7 +830,11 @@ describe("plugin conversation binding approvals", () => {
     expect(rebound.status).toBe("bound");
 
     first.testing.reset();
+<<<<<<< HEAD
     clearPluginBindingApprovalRows();
+=======
+    fs.rmSync(approvalsPath, { force: true });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("does not share persistent approvals across plugin roots even with the same plugin id", async () => {

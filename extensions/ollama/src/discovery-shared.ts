@@ -1,5 +1,6 @@
 // Ollama plugin module implements discovery shared behavior.
 import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
+<<<<<<< HEAD
 import type {
   ModelProviderConfig,
   ModelDefinitionConfig,
@@ -12,6 +13,9 @@ import type {
 type OllamaProviderConfigInput = Omit<Partial<ModelProviderConfig>, "models"> & {
   models?: ModelDefinitionConfig[];
 };
+=======
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
@@ -29,7 +33,11 @@ export type OllamaPluginConfig = {
 type OllamaDiscoveryContext = {
   config: {
     models?: {
+<<<<<<< HEAD
       providers?: Record<string, OllamaProviderConfigInput | undefined>;
+=======
+      providers?: Record<string, ModelProviderConfig | undefined>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
   };
   env: NodeJS.ProcessEnv;
@@ -160,6 +168,7 @@ export function isLocalOllamaBaseUrl(baseUrl: string | undefined | null): boolea
   );
 }
 
+<<<<<<< HEAD
 const HOSTED_OLLAMA_CLOUD_HOSTNAMES = new Set(["ollama.com", "api.ollama.com"]);
 
 export function isHostedOllamaCloud(baseUrl: string | undefined | null): boolean {
@@ -176,6 +185,8 @@ export function isHostedOllamaCloud(baseUrl: string | undefined | null): boolean
   return HOSTED_OLLAMA_CLOUD_HOSTNAMES.has(host) || host.endsWith(".ollama.com");
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isLoopbackOllamaBaseUrl(baseUrl: string | undefined | null): boolean {
   if (!baseUrl) {
     return true;
@@ -194,7 +205,11 @@ function isLoopbackOllamaBaseUrl(baseUrl: string | undefined | null): boolean {
 }
 
 function hasExplicitRemoteOllamaApiProvider(
+<<<<<<< HEAD
   providers: Record<string, OllamaProviderConfigInput | undefined> | undefined,
+=======
+  providers: Record<string, ModelProviderConfig | undefined> | undefined,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ): boolean {
   if (!providers) {
     return false;
@@ -215,7 +230,11 @@ function hasExplicitRemoteOllamaApiProvider(
 }
 
 export function shouldUseSyntheticOllamaAuth(
+<<<<<<< HEAD
   providerConfig: OllamaProviderConfigInput | undefined,
+=======
+  providerConfig: ModelProviderConfig | undefined,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ): boolean {
   if (!hasMeaningfulExplicitOllamaConfig(providerConfig)) {
     return false;
@@ -224,7 +243,11 @@ export function shouldUseSyntheticOllamaAuth(
 }
 
 function hasMeaningfulExplicitOllamaConfig(
+<<<<<<< HEAD
   providerConfig: OllamaProviderConfigInput | undefined,
+=======
+  providerConfig: ModelProviderConfig | undefined,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ): boolean {
   if (!providerConfig) {
     return false;
@@ -279,6 +302,7 @@ export async function resolveOllamaDiscoveryResult(params: {
   if (!hasExplicitModels && discoveryEnabled === false) {
     return null;
   }
+<<<<<<< HEAD
   // When the base URL points to hosted Ollama Cloud, skip auto-discovery.
   // Cloud instances are shared tenants where available models are managed
   // by the provider; only use explicitly configured models.
@@ -287,6 +311,8 @@ export async function resolveOllamaDiscoveryResult(params: {
   if (!hasExplicitModels && configuredBaseUrl && isHostedOllamaCloud(configuredBaseUrl)) {
     return null;
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const resolvedOllamaAuth = params.ctx.resolveProviderApiKey(OLLAMA_PROVIDER_ID);
   const ollamaKey = resolvedOllamaAuth.apiKey;
   const ollamaDiscoveryKey = resolvedOllamaAuth.discoveryApiKey;
@@ -297,6 +323,10 @@ export async function resolveOllamaDiscoveryResult(params: {
     ollamaKey.trim() !== OLLAMA_DEFAULT_API_KEY;
   const explicitApiKey = readStringValue(explicit?.apiKey);
   if (hasExplicitModels && explicit) {
+<<<<<<< HEAD
+=======
+    const configuredBaseUrl = readProviderBaseUrl(explicit) ?? OLLAMA_DEFAULT_BASE_URL;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const discoveredBaseUrl = resolveOllamaApiBase(configuredBaseUrl);
     const api = explicit.api ?? "ollama";
     const apiKey = resolveOllamaDiscoveryApiKey({
@@ -309,7 +339,10 @@ export async function resolveOllamaDiscoveryResult(params: {
     return {
       provider: {
         ...explicit,
+<<<<<<< HEAD
         models: explicit.models ?? [],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         baseUrl: resolveOllamaRuntimeBaseUrl({ api, configuredBaseUrl, discoveredBaseUrl }),
         api,
         ...(apiKey ? { apiKey } : {}),
@@ -330,6 +363,10 @@ export async function resolveOllamaDiscoveryResult(params: {
     return null;
   }
 
+<<<<<<< HEAD
+=======
+  const configuredBaseUrl = readProviderBaseUrl(explicit);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const quiet = !hasRealOllamaKey && !hasMeaningfulExplicitConfig;
   const provider = await getCachedLiveCatalogValue({
     keyParts: [

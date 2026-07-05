@@ -1,13 +1,17 @@
 // Env deprecation tests ensure legacy prefixed variables warn once without
 // leaking secret-shaped names or values.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { captureEnv, deleteTestEnvValue, withEnv } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   resetLegacyOpenClawEnvWarningForTest,
   warnLegacyOpenClawEnvVars,
 } from "./env-deprecation.js";
 
 describe("warnLegacyOpenClawEnvVars", () => {
+<<<<<<< HEAD
   let envSnapshot: ReturnType<typeof captureEnv>;
   let emitWarning: ReturnType<typeof vi.spyOn>;
 
@@ -17,12 +21,28 @@ describe("warnLegacyOpenClawEnvVars", () => {
     emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
     deleteTestEnvValue("NODE_ENV");
     deleteTestEnvValue("VITEST");
+=======
+  const originalNodeEnv = process.env.NODE_ENV;
+  const originalVitest = process.env.VITEST;
+  let emitWarning: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    resetLegacyOpenClawEnvWarningForTest();
+    emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    delete process.env.NODE_ENV;
+    delete process.env.VITEST;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   afterEach(() => {
     emitWarning.mockRestore();
     resetLegacyOpenClawEnvWarningForTest();
+<<<<<<< HEAD
     envSnapshot.restore();
+=======
+    restoreEnv("NODE_ENV", originalNodeEnv);
+    restoreEnv("VITEST", originalVitest);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("warns with counts and prefixes instead of secret-shaped env names", () => {
@@ -87,6 +107,7 @@ describe("warnLegacyOpenClawEnvVars", () => {
   });
 
   it("does not let process.env test flags suppress a synthetic env", () => {
+<<<<<<< HEAD
     withEnv({ VITEST: "true" }, () => {
       warnLegacyOpenClawEnvVars({ CLAWDBOT_GATEWAY_TOKEN: "old-token" });
 
@@ -94,3 +115,20 @@ describe("warnLegacyOpenClawEnvVars", () => {
     });
   });
 });
+=======
+    process.env.VITEST = "true";
+
+    warnLegacyOpenClawEnvVars({ CLAWDBOT_GATEWAY_TOKEN: "old-token" });
+
+    expect(emitWarning).toHaveBeenCalledOnce();
+  });
+});
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = value;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -23,6 +24,23 @@ import {
   hasRestartSentinel,
   markUpdateRestartSentinelFailure,
   readRestartSentinel,
+=======
+// Covers restart sentinel persistence, summaries, and messages.
+import fs from "node:fs/promises";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import {
+  buildRestartSuccessContinuation,
+  consumeRestartSentinel,
+  finalizeUpdateRestartSentinelRunningVersion,
+  formatDoctorNonInteractiveHint,
+  formatRestartSentinelMessage,
+  markUpdateRestartSentinelFailure,
+  readRestartSentinel,
+  resolveRestartSentinelPath,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   summarizeRestartSentinel,
   trimLogTail,
   writeRestartSentinel,
@@ -36,6 +54,7 @@ import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-pay
 
 async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<void> {
   await withTempDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
+<<<<<<< HEAD
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, run);
     } finally {
@@ -86,6 +105,34 @@ function insertSentinelRow(values: { version?: number; payloadJson: string }) {
 
 describe("restart sentinel", () => {
   it("writes and reads a sentinel", async () => {
+=======
+    await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, run);
+  });
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error);
+    const statError = error as NodeJS.ErrnoException;
+    expect({
+      code: statError.code,
+      path: statError.path,
+      syscall: statError.syscall,
+    }).toEqual({
+      code: "ENOENT",
+      path: targetPath,
+      syscall: "stat",
+    });
+    return;
+  }
+  throw new Error(`Expected path to be missing: ${targetPath}`);
+}
+
+describe("restart sentinel", () => {
+  it("writes and consumes a sentinel", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await withRestartSentinelStateDir(async () => {
       const payload = {
         kind: "update" as const,
@@ -98,6 +145,7 @@ describe("restart sentinel", () => {
         },
         stats: { mode: "git" },
       };
+<<<<<<< HEAD
       await writeRestartSentinel(payload);
       expect(readSentinelRow()).toMatchObject({
         sentinel_key: "current",
@@ -106,10 +154,15 @@ describe("restart sentinel", () => {
         status: "ok",
         payload_json: JSON.stringify(payload),
       });
+=======
+      const filePath = await writeRestartSentinel(payload);
+      expect(filePath).toBe(resolveRestartSentinelPath());
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       const read = await readRestartSentinel();
       expect(read?.payload.kind).toBe("update");
       expect(read?.payload.continuation).toEqual(payload.continuation);
+<<<<<<< HEAD
     });
   });
 
@@ -171,22 +224,42 @@ describe("restart sentinel", () => {
 
       await expect(hasRestartSentinel()).resolves.toBe(false);
       await expect(readRestartSentinel()).resolves.toBeNull();
+=======
+
+      const consumed = await consumeRestartSentinel();
+      expect(consumed?.payload.sessionKey).toBe(payload.sessionKey);
+      expect(consumed?.payload.continuation).toEqual(payload.continuation);
+
+      const empty = await readRestartSentinel();
+      expect(empty).toBeNull();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   });
 
   it("drops invalid sentinel payloads", async () => {
     await withRestartSentinelStateDir(async () => {
+<<<<<<< HEAD
       insertSentinelRow({ payloadJson: "not-json" });
+=======
+      const filePath = resolveRestartSentinelPath();
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, "not-json", "utf-8");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       const read = await readRestartSentinel();
       expect(read).toBeNull();
 
+<<<<<<< HEAD
       expect(readSentinelRow()).toBeUndefined();
+=======
+      await expectPathMissing(filePath);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   });
 
   it("drops structurally invalid sentinel payloads", async () => {
     await withRestartSentinelStateDir(async () => {
+<<<<<<< HEAD
       insertSentinelRow({ version: 2, payloadJson: JSON.stringify(null) });
 
       await expect(readRestartSentinel()).resolves.toBeNull();
@@ -221,6 +294,14 @@ describe("restart sentinel", () => {
           "\n",
         ),
       );
+=======
+      const filePath = resolveRestartSentinelPath();
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, JSON.stringify({ version: 2, payload: null }), "utf-8");
+
+      await expect(readRestartSentinel()).resolves.toBeNull();
+      await expectPathMissing(filePath);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   });
 
@@ -272,6 +353,7 @@ describe("restart sentinel", () => {
     expect(result).toContain("Gateway restart");
   });
 
+<<<<<<< HEAD
   it("formats config write success notices as restart required when marked", () => {
     const payload = {
       kind: "config-patch" as const,
@@ -314,6 +396,8 @@ describe("restart sentinel", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("formats summary, distinct reason, and doctor hint together", () => {
     const payload = {
       kind: "config-patch" as const,

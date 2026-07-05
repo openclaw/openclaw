@@ -5,7 +5,10 @@ import { runDoctorRepairSequence } from "./repair-sequencing.js";
 
 const mocks = vi.hoisted(() => ({
   applyPluginAutoEnable: vi.fn(),
+<<<<<<< HEAD
   materializePluginAutoEnableCandidates: vi.fn(),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   collectActiveToolSchemaProjectionWarnings: vi.fn(),
   ensureAuthProfileStore: vi.fn(),
   evaluateStoredCredentialEligibility: vi.fn(),
@@ -29,7 +32,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: mocks.applyPluginAutoEnable,
+<<<<<<< HEAD
   materializePluginAutoEnableCandidates: mocks.materializePluginAutoEnableCandidates,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("../doctor-plugin-registry.js", () => ({
@@ -214,12 +220,15 @@ describe("doctor repair sequencing", () => {
       config: params.config,
       changes: [],
     }));
+<<<<<<< HEAD
     mocks.materializePluginAutoEnableCandidates.mockImplementation(
       (params: { config: OpenClawConfig }) => ({
         config: params.config,
         changes: [],
       }),
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mocks.ensureAuthProfileStore.mockReturnValue({
       profiles: {},
       usageStats: {},
@@ -576,6 +585,7 @@ describe("doctor repair sequencing", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("explicitly enables plugins repaired from env-only configuration", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
       changes: ['Installed missing configured plugin "exa" from @openclaw/exa-plugin.'],
@@ -683,6 +693,8 @@ describe("doctor repair sequencing", () => {
     expect(result.state.pendingChanges).toBe(true);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("moves legacy Codex routes to canonical OpenAI before missing plugin install repair", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockImplementationOnce(
       async (params: { cfg: OpenClawConfig }) => {
@@ -726,6 +738,7 @@ describe("doctor repair sequencing", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("repairs #94184 stale Codex model-map refs before missing plugin install repair", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockImplementationOnce(
       async (params: { cfg: OpenClawConfig }) => {
@@ -794,6 +807,8 @@ describe("doctor repair sequencing", () => {
     expect(changeNotes).toContain("Added codex to plugins.allow");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("runs group allowFrom fallback migration after open-policy allowFrom repair", async () => {
     const events: string[] = [];
     mocks.maybeRepairOpenPolicyAllowFrom.mockImplementationOnce((cfg: OpenClawConfig) => {

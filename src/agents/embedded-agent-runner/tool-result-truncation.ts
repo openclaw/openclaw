@@ -25,6 +25,13 @@ import {
   rewriteTranscriptEntriesInSessionManager,
   rewriteTranscriptEntriesInState,
 } from "./transcript-rewrite.js";
+<<<<<<< HEAD
+=======
+import {
+  resolveRuntimeTranscriptReadTarget,
+  type RuntimeTranscriptScope,
+} from "./transcript-runtime-state.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /**
  * Maximum share of the context window a single tool result should occupy.
@@ -261,8 +268,13 @@ export function getToolResultTextLength(msg: AgentMessage): number {
   }
   let totalLength = 0;
   for (const block of content) {
+<<<<<<< HEAD
     if (isToolResultTextBlock(block)) {
       const text = block.text;
+=======
+    if (block && typeof block === "object" && (block as { type?: string }).type === "text") {
+      const text = (block as TextContent).text;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (typeof text === "string") {
         totalLength += text.length;
       }
@@ -299,10 +311,17 @@ export function truncateToolResultMessage(
 
   // Distribute the budget proportionally among text blocks
   const newContent = content.map((block: unknown) => {
+<<<<<<< HEAD
     if (!isToolResultTextBlock(block)) {
       return block; // Keep non-text blocks (images) as-is
     }
     const textBlock = block;
+=======
+    if (!block || typeof block !== "object" || (block as { type?: string }).type !== "text") {
+      return block; // Keep non-text blocks (images) as-is
+    }
+    const textBlock = block as TextContent;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (typeof textBlock.text !== "string") {
       return block;
     }
@@ -316,6 +335,7 @@ export function truncateToolResultMessage(
       1,
       Math.min(maxChars, Math.max(minKeepChars + defaultSuffix.length, proportionalBudget)),
     );
+<<<<<<< HEAD
     const truncatedText = truncateToolResultText(textBlock.text, blockBudget, {
       suffix: suffixFactory,
       minKeepChars,
@@ -325,11 +345,20 @@ export function truncateToolResultMessage(
       nextBlock.content = truncatedText;
     }
     return nextBlock;
+=======
+    return Object.assign({}, textBlock, {
+      text: truncateToolResultText(textBlock.text, blockBudget, {
+        suffix: suffixFactory,
+        minKeepChars,
+      }),
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   return { ...msg, content: newContent } as AgentMessage;
 }
 
+<<<<<<< HEAD
 function isToolResultTextBlock(
   block: unknown,
 ): block is TextContent & { content?: unknown; type: "text" | "toolResult" } {
@@ -343,6 +372,8 @@ function isToolResultTextBlock(
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Truncate oversized tool results in an array of messages (in-memory).
  * Returns a new array with truncated messages.
@@ -355,7 +386,10 @@ export function truncateOversizedToolResultsInMessages(
   contextWindowTokens: number,
   maxCharsOverride?: number,
   aggregateMaxCharsOverride?: number,
+<<<<<<< HEAD
   projectionState?: ToolResultPromptProjectionState,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ): { messages: AgentMessage[]; truncatedCount: number } {
   const maxChars = Math.max(
     1,
@@ -366,6 +400,7 @@ export function truncateOversizedToolResultsInMessages(
     maxChars,
     aggregateMaxCharsOverride,
   );
+<<<<<<< HEAD
   const projectionKeys = projectionState
     ? getToolResultProjectionKeys(messages, projectionState)
     : [];
@@ -394,12 +429,20 @@ export function truncateOversizedToolResultsInMessages(
         (projectedMessage !== undefined && mergedMessage === message),
     };
   });
+=======
+  const branch = messages.map((message, index) => ({
+    id: `message-${index}`,
+    type: "message",
+    message,
+  }));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const plan = buildToolResultReplacementPlan({
     branch,
     maxChars,
     aggregateBudgetChars,
     minKeepChars: RECOVERY_MIN_KEEP_CHARS,
   });
+<<<<<<< HEAD
   if (projectionState) {
     for (const [index] of messages.entries()) {
       const projectionKey = projectionKeys[index];
@@ -417,10 +460,15 @@ export function truncateOversizedToolResultsInMessages(
       messages: hasProjectedChanges ? projectedMessages : messages,
       truncatedCount: 0,
     };
+=======
+  if (plan.replacements.length === 0) {
+    return { messages, truncatedCount: 0 };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   const replacementIds = new Set(plan.replacements.map((replacement) => replacement.entryId));
   const replacedBranch = applyToolResultReplacementsToBranch(branch, plan.replacements);
+<<<<<<< HEAD
   if (projectionState) {
     for (const [index, originalMessage] of messages.entries()) {
       const projectedMessage = replacedBranch[index]?.message;
@@ -433,6 +481,8 @@ export function truncateOversizedToolResultsInMessages(
       }
     }
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return {
     messages: replacedBranch.map((entry) => entry.message as AgentMessage),
     truncatedCount: replacementIds.size,
@@ -467,7 +517,10 @@ type ToolResultBranchEntry = {
   id: string;
   type: string;
   message?: AgentMessage;
+<<<<<<< HEAD
   aggregateEligible?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 type ToolResultReplacement = {
@@ -475,6 +528,7 @@ type ToolResultReplacement = {
   message: AgentMessage;
 };
 
+<<<<<<< HEAD
 export type ToolResultPromptProjectionState = {
   replacements: Map<string, AgentMessage>;
   frozen: Set<string>;
@@ -592,6 +646,8 @@ function getToolResultTextBlocks(message: AgentMessage): string[] {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function buildAggregateToolResultReplacements(params: {
   branch: ToolResultBranchEntry[];
   aggregateBudgetChars: number;
@@ -604,7 +660,11 @@ function buildAggregateToolResultReplacements(params: {
       (
         item,
       ): item is {
+<<<<<<< HEAD
         entry: { id: string; type: string; message: AgentMessage; aggregateEligible?: boolean };
+=======
+        entry: { id: string; type: string; message: AgentMessage };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         index: number;
       } =>
         item.entry.type === "message" &&
@@ -616,7 +676,10 @@ function buildAggregateToolResultReplacements(params: {
       entryId: item.entry.id,
       message: item.entry.message,
       textLength: getToolResultTextLength(item.entry.message),
+<<<<<<< HEAD
       aggregateEligible: item.entry.aggregateEligible !== false,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }))
     .filter((item) => item.textLength > 0);
 
@@ -640,6 +703,7 @@ function buildAggregateToolResultReplacements(params: {
   const replacements: Array<{ entryId: string; message: AgentMessage }> = [];
 
   // Spend aggregate reduction on older entries first so fresh tool output stays intact.
+<<<<<<< HEAD
   for (const candidate of candidates
     .filter((item) => item.aggregateEligible)
     .toSorted((a, b) => {
@@ -648,6 +712,14 @@ function buildAggregateToolResultReplacements(params: {
       }
       return b.textLength - a.textLength;
     })) {
+=======
+  for (const candidate of candidates.toSorted((a, b) => {
+    if (a.index !== b.index) {
+      return a.index - b.index;
+    }
+    return b.textLength - a.textLength;
+  })) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (remainingReduction <= 0) {
       break;
     }
@@ -672,6 +744,7 @@ function buildAggregateToolResultReplacements(params: {
     remainingReduction -= actualReduction;
   }
 
+<<<<<<< HEAD
   if (remainingReduction > 0) {
     for (const candidate of candidates.filter((item) => item.aggregateEligible)) {
       if (remainingReduction <= 0) {
@@ -719,6 +792,11 @@ function clearToolResultText(message: AgentMessage): AgentMessage {
   } as AgentMessage;
 }
 
+=======
+  return replacements;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function buildOversizedToolResultReplacements(params: {
   branch: ToolResultBranchEntry[];
   maxChars: number;
@@ -942,6 +1020,7 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
       sessionFile: params.sessionFile,
       sessionKey: params.sessionKey,
       ...(params.agentId ? { agentId: params.agentId } : {}),
+<<<<<<< HEAD
       ...(params.sessionId && params.sessionKey && params.agentId
         ? {
             target: {
@@ -951,6 +1030,8 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
             },
           }
         : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   }
 
@@ -1022,6 +1103,7 @@ async function truncateOversizedToolResultsInTranscriptState(params: {
       sessionFile: params.sessionFile,
       sessionKey: params.sessionKey,
       ...(params.agentId ? { agentId: params.agentId } : {}),
+<<<<<<< HEAD
       ...(params.sessionId && params.sessionKey && params.agentId
         ? {
             target: {
@@ -1031,6 +1113,8 @@ async function truncateOversizedToolResultsInTranscriptState(params: {
             },
           }
         : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   }
 
@@ -1068,7 +1152,51 @@ export function truncateOversizedToolResultsInSessionManager(params: {
 }
 
 /**
+<<<<<<< HEAD
  * Truncates a named transcript file artifact.
+=======
+ * Truncates oversized tool results for a runtime transcript scope.
+ */
+export async function truncateOversizedToolResultsInRuntimeTranscript(params: {
+  scope: RuntimeTranscriptScope;
+  contextWindowTokens: number;
+  maxCharsOverride?: number;
+  aggregateMaxCharsOverride?: number;
+  config?: SessionWriteLockAcquireTimeoutConfig;
+}): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
+  let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
+
+  try {
+    const target = await resolveRuntimeTranscriptReadTarget(params.scope);
+    sessionLock = await acquireSessionWriteLock({
+      sessionFile: target.sessionFile,
+      ...resolveSessionWriteLockOptions(params.config),
+    });
+    const state = await readTranscriptFileState(target.sessionFile);
+    return await truncateOversizedToolResultsInTranscriptState({
+      state,
+      contextWindowTokens: params.contextWindowTokens,
+      maxCharsOverride: params.maxCharsOverride,
+      aggregateMaxCharsOverride: params.aggregateMaxCharsOverride,
+      sessionFile: target.sessionFile,
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      agentId: target.agentId,
+      config: params.config,
+    });
+  } catch (err) {
+    const errMsg = formatErrorMessage(err);
+    log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);
+    return { truncated: false, truncatedCount: 0, reason: errMsg };
+  } finally {
+    await sessionLock?.release();
+  }
+}
+
+/**
+ * Truncates a named transcript file artifact. Runtime callers should prefer
+ * truncateOversizedToolResultsInRuntimeTranscript with agent/session scope.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
  */
 export async function truncateOversizedToolResultsInSession(params: {
   sessionFile: string;
@@ -1097,7 +1225,10 @@ export async function truncateOversizedToolResultsInSession(params: {
       sessionFile,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+<<<<<<< HEAD
       agentId: params.agentId,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   } catch (err) {
     const errMsg = formatErrorMessage(err);
@@ -1108,6 +1239,27 @@ export async function truncateOversizedToolResultsInSession(params: {
   }
 }
 
+<<<<<<< HEAD
+=======
+/**
+ * Check if a tool result message exceeds the size limit for a given context window.
+ */
+export function isOversizedToolResult(
+  msg: AgentMessage,
+  contextWindowTokens: number,
+  maxCharsOverride?: number,
+): boolean {
+  if ((msg as { role?: string }).role !== "toolResult") {
+    return false;
+  }
+  const maxChars = Math.max(
+    1,
+    maxCharsOverride ?? calculateMaxToolResultChars(contextWindowTokens),
+  );
+  return getToolResultTextLength(msg) > maxChars;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function sessionLikelyHasOversizedToolResults(params: {
   messages: AgentMessage[];
   contextWindowTokens: number;

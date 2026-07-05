@@ -484,6 +484,7 @@ export class MatrixClient {
     this.cryptoBootstrapper ??= new runtime.MatrixCryptoBootstrapper<MatrixRawEvent>({
       getUserId: () => this.getUserId(),
       getPassword: () => this.password,
+<<<<<<< HEAD
       canUnlockSecretStorage: async () => {
         const secretStorage = (
           this.client as {
@@ -517,6 +518,8 @@ export class MatrixClient {
         }
         return await secretStorage.checkKey(key, keyInfo);
       },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       getDeviceId: () => this.client.getDeviceId(),
       verificationManager: this.verificationManager,
       recoveryKeyStore: this.recoveryKeyStore,
@@ -780,9 +783,19 @@ export class MatrixClient {
           "Cross-signing/bootstrap is incomplete for an already owner-signed device; skipping automatic reset and preserving the current identity. Restore the recovery key or run an explicit verification bootstrap if repair is needed.",
         );
       } else {
+<<<<<<< HEAD
         // Forced reset validates the active SSSS recovery key before rotating local keys.
         // Missing or stale recovery material fails without mutating crypto state.
         try {
+=======
+        // No password guard: passwordless token-auth bots should still attempt repair.
+        // UIA failures inside bootstrap() are caught below and logged as warnings.
+        try {
+          // The repair path already force-resets cross-signing; allow secret storage
+          // recreation so the new keys can be persisted. Without this, a device that
+          // lost its recovery key enters a permanent failure loop because the new
+          // cross-signing keys have nowhere to be stored.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           const repaired = await cryptoBootstrapper.bootstrap(
             crypto,
             MATRIX_AUTOMATIC_REPAIR_BOOTSTRAP_OPTIONS,

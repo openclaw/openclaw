@@ -3,7 +3,10 @@ import { appendFileSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+<<<<<<< HEAD
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionTranscriptPathInDir } from "../../../config/sessions/paths.js";
 import {
@@ -175,6 +178,7 @@ describe("embedded attempt session lock lifecycle", () => {
     symlinkOwner.release();
   });
 
+<<<<<<< HEAD
   it("clamps oversized session file owner wait timeouts before arming timers", async () => {
     const sessionFile = await createTempSessionFile();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
@@ -193,6 +197,8 @@ describe("embedded attempt session lock lifecycle", () => {
     secondOwner.release();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("releases the coarse attempt lock before prompt submission and reacquires for cleanup", async () => {
     const releases: string[] = [];
     const acquireSessionWriteLockLocal28 = vi
@@ -3992,6 +3998,7 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(2);
   });
 
+<<<<<<< HEAD
   it("releaseHeldLockWithFence sets deferred flag when bailed out during active scope; re-attempted after scope deactivation (#95915)", async () => {
     const events: string[] = [];
     const releasePrep = vi.fn(async () => events.push("prep-release"));
@@ -4089,6 +4096,8 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(3);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("returns a no-op cleanup lock after prompt lock reacquisition times out", async () => {
     const releases: string[] = [];
     const acquireSessionWriteLockResult = vi

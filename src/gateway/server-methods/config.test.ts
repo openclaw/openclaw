@@ -2,7 +2,10 @@
  * Tests for config gateway methods, writes, validation, and auth transitions.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { withEnvAsync } from "../../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   clearConfigSchemaResponseCacheForTests,
   configHandlers,
@@ -89,6 +92,7 @@ describe("resolveConfigOpenCommand", () => {
 });
 
 describe("config.openFile", () => {
+<<<<<<< HEAD
   it("opens the configured file without shell interpolation", async () => {
     await withEnvAsync({ OPENCLAW_CONFIG_PATH: "/tmp/config $(touch pwned).json" }, async () => {
       execFileMock.mockImplementation((...args: unknown[]) => {
@@ -152,6 +156,72 @@ describe("config.openFile", () => {
         "config.openFile failed path=/tmp/config.json: xdg-open: no method available for opening '/tmp/config.json'",
       );
     });
+=======
+  afterEach(() => {
+    delete process.env.OPENCLAW_CONFIG_PATH;
+  });
+
+  it("opens the configured file without shell interpolation", async () => {
+    process.env.OPENCLAW_CONFIG_PATH = "/tmp/config $(touch pwned).json";
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      expect(["open", "xdg-open", "powershell.exe"]).toContain(args[0]);
+      expect(args[1]).toEqual(["/tmp/config $(touch pwned).json"]);
+      invokeExecFileCallback(args, null);
+      return {} as never;
+    });
+
+    const { respond } = await invokeConfigOpenFile();
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        ok: true,
+        path: "/tmp/config $(touch pwned).json",
+      },
+      undefined,
+    );
+  });
+
+  it("returns a detailed error and logs details when the opener fails", async () => {
+    process.env.OPENCLAW_CONFIG_PATH = "/tmp/config.json";
+    mockExecFileError(Object.assign(new Error("spawn xdg-open ENOENT"), { code: "ENOENT" }));
+
+    const { respond, logGateway } = await invokeConfigOpenFile();
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        ok: false,
+        path: "/tmp/config.json",
+        error: "Failed to open config file: spawn xdg-open ENOENT",
+      },
+      undefined,
+    );
+    expect(logGateway.warn).toHaveBeenCalledWith(
+      "config.openFile failed path=/tmp/config.json: spawn xdg-open ENOENT",
+    );
+  });
+
+  it("returns actionable headless environment error when xdg-open reports no method available", async () => {
+    process.env.OPENCLAW_CONFIG_PATH = "/tmp/config.json";
+    mockExecFileError(new Error("xdg-open: no method available for opening '/tmp/config.json'"));
+
+    const { respond, logGateway } = await invokeConfigOpenFile();
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        ok: false,
+        path: "/tmp/config.json",
+        error:
+          "Cannot open file in headless environment. File path: /tmp/config.json. This environment appears to lack a graphical or terminal browser handler.",
+      },
+      undefined,
+    );
+    expect(logGateway.warn).toHaveBeenCalledWith(
+      "config.openFile failed path=/tmp/config.json: xdg-open: no method available for opening '/tmp/config.json'",
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });
 

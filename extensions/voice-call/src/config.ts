@@ -1,12 +1,16 @@
 // Voice Call helper module supports config behavior.
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES } from "openclaw/plugin-sdk/realtime-voice";
+<<<<<<< HEAD
 import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   buildSecretInputSchema,
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
   type SecretInput,
 } from "openclaw/plugin-sdk/secret-input";
+<<<<<<< HEAD
 import {
   canonicalizeMainSessionAlias,
   type SessionScope,
@@ -15,6 +19,11 @@ import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
 import { deepMergeDefined } from "./deep-merge.js";
 import { normalizePath } from "./path-utils.js";
+=======
+import { z } from "zod";
+import { TtsConfigSchema } from "../api.js";
+import { deepMergeDefined } from "./deep-merge.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
 // -----------------------------------------------------------------------------
@@ -199,6 +208,10 @@ const CallModeSchema = z.enum(["notify", "conversation"]);
 export type CallMode = z.infer<typeof CallModeSchema>;
 
 const VoiceCallSessionScopeSchema = z.enum(["per-phone", "per-call"]);
+<<<<<<< HEAD
+=======
+export type VoiceCallSessionScope = z.infer<typeof VoiceCallSessionScopeSchema>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const OutboundConfigSchema = z
   .object({
@@ -286,6 +299,12 @@ const VoiceCallRealtimeAgentContextConfigSchema = z
     includeWorkspaceFiles: true,
     files: ["SOUL.md", "IDENTITY.md", "USER.md"],
   });
+<<<<<<< HEAD
+=======
+export type VoiceCallRealtimeAgentContextConfig = z.infer<
+  typeof VoiceCallRealtimeAgentContextConfigSchema
+>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
   "off",
@@ -297,6 +316,12 @@ export const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
   "adaptive",
   "max",
 ]);
+<<<<<<< HEAD
+=======
+export type VoiceCallRealtimeConsultThinkingLevel = z.infer<
+  typeof VoiceCallRealtimeConsultThinkingLevelSchema
+>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const VoiceCallStreamingProvidersConfigSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))
@@ -527,8 +552,25 @@ function cloneDefaultVoiceCallConfig(): VoiceCallConfig {
   return structuredClone(DEFAULT_VOICE_CALL_CONFIG);
 }
 
+<<<<<<< HEAD
 function defaultRealtimeStreamPathForServePath(servePath: string): string {
   const normalized = normalizePath(servePath);
+=======
+function normalizeWebhookLikePath(pathname: string): string {
+  const trimmed = pathname.trim();
+  if (!trimmed) {
+    return "/";
+  }
+  const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  if (prefixed === "/") {
+    return prefixed;
+  }
+  return prefixed.endsWith("/") ? prefixed.slice(0, -1) : prefixed;
+}
+
+function defaultRealtimeStreamPathForServePath(servePath: string): string {
+  const normalized = normalizeWebhookLikePath(servePath);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (normalized.endsWith("/webhook")) {
     return `${normalized.slice(0, -"/webhook".length)}/stream/realtime`;
   }
@@ -574,6 +616,7 @@ export function resolveVoiceCallNumberRouteKey(
   );
 }
 
+<<<<<<< HEAD
 /** Resolve inbound-only number routing from a persisted call record. */
 export function resolveVoiceCallNumberRouteKeyForCall(call: {
   direction?: "inbound" | "outbound";
@@ -590,6 +633,8 @@ export function resolveVoiceCallNumberRouteKeyForCall(call: {
   return call.to;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function resolveVoiceCallEffectiveConfig(
   config: VoiceCallConfig,
   phoneOrRouteKey: string | undefined,
@@ -716,6 +761,7 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
   };
 }
 
+<<<<<<< HEAD
 export type VoiceCallCoreSessionConfig = { mainKey?: string; scope?: SessionScope };
 
 export function resolveVoiceCallSessionKey(params: {
@@ -783,6 +829,23 @@ export function resolveVoiceCallAgentSessionKey(params: {
     sessionKey: normalizedScopedKey,
   });
   return canonicalMain === normalizedScopedKey ? normalizedScopedKey : canonicalMain;
+=======
+export function resolveVoiceCallSessionKey(params: {
+  config: Pick<VoiceCallConfig, "sessionScope">;
+  callId: string;
+  phone?: string;
+  explicitSessionKey?: string;
+}): string {
+  const explicit = params.explicitSessionKey?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  if (params.config.sessionScope === "per-call") {
+    return `voice:call:${params.callId}`;
+  }
+  const normalizedPhone = params.phone?.replace(/\D/g, "");
+  return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${params.callId}`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /**

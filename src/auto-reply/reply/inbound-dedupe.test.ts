@@ -32,6 +32,31 @@ describe("inbound dedupe", () => {
     resetInboundDedupe();
   });
 
+<<<<<<< HEAD
+=======
+  it("shares dedupe state across distinct module instances", async () => {
+    const inboundA = await importFreshModule<typeof import("./inbound-dedupe.js")>(
+      import.meta.url,
+      "./inbound-dedupe.js?scope=shared-a",
+    );
+    const inboundB = await importFreshModule<typeof import("./inbound-dedupe.js")>(
+      import.meta.url,
+      "./inbound-dedupe.js?scope=shared-b",
+    );
+
+    inboundA.resetInboundDedupe();
+    inboundB.resetInboundDedupe();
+
+    try {
+      expect(inboundA.shouldSkipDuplicateInbound(sharedInboundContext)).toBe(false);
+      expect(inboundB.shouldSkipDuplicateInbound(sharedInboundContext)).toBe(true);
+    } finally {
+      inboundA.resetInboundDedupe();
+      inboundB.resetInboundDedupe();
+    }
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("deduplicates inbound messages with equivalent numeric and string thread ids", () => {
     expect(
       buildInboundDedupeKey({

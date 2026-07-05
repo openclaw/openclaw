@@ -953,6 +953,7 @@ describe("resolvePluginTools optional tools", () => {
       },
     });
 
+<<<<<<< HEAD
     const runtimeRegistry = ensureStandalonePluginToolRegistryLoaded({
       context: createContext() as never,
       toolAllowlist: ["optional_tool"],
@@ -963,6 +964,17 @@ describe("resolvePluginTools optional tools", () => {
       }),
       runtimeRegistry,
     });
+=======
+    ensureStandalonePluginToolRegistryLoaded({
+      context: createContext() as never,
+      toolAllowlist: ["optional_tool"],
+    });
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        toolAllowlist: ["optional_tool"],
+      }),
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expectResolvedToolNames(tools, ["optional_tool"]);
     expectLoaderSelectedOnlyPluginIds(["optional-demo"]);
@@ -2147,6 +2159,7 @@ describe("resolvePluginTools optional tools", () => {
     expect(factory).toHaveBeenCalledTimes(2);
   });
 
+<<<<<<< HEAD
   it("retains cold-loaded plugin tools for cached descriptor execution after active registry replacement", async () => {
     const factory = vi.fn(() => makeTool("cached_lifecycle_tool"));
     const gatewayRegistry = setRegistry([
@@ -2203,6 +2216,8 @@ describe("resolvePluginTools optional tools", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not reuse cached plugin tool descriptors across sandbox context changes", () => {
     const factory = vi.fn((rawCtx: unknown) => {
       const ctx = rawCtx as { sandboxed?: boolean };
@@ -2606,6 +2621,7 @@ describe("resolvePluginTools optional tools", () => {
       diagnostics: [],
     };
     setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable", "/tmp");
+<<<<<<< HEAD
     const channelRegistry = {
       plugins: [{ id: "memory-core", status: "loaded" }],
       tools: [],
@@ -2623,12 +2639,27 @@ describe("resolvePluginTools optional tools", () => {
 
     const tools = resolvePluginTools({
       ...createResolveToolsParams({
+=======
+    pinActivePluginChannelRegistry({
+      plugins: [{ id: "memory-core", status: "loaded" }],
+      tools: [],
+      diagnostics: [],
+    } as never);
+    resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         context: { ...createContext(), config },
         toolAllowlist: ["memory_search", "memory_get"],
         allowGatewaySubagentBinding: true,
       }),
+<<<<<<< HEAD
       runtimeRegistry,
     });
+=======
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expectResolvedToolNames(tools, ["memory_search", "memory_get"]);
     expect(memorySearchFactory).toHaveBeenCalledTimes(1);

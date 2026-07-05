@@ -36,7 +36,11 @@ export function loadMemoryEmbeddingCache(params: {
     return new Map();
   }
 
+<<<<<<< HEAD
   const tableName = params.tableName ?? "memory_embedding_cache";
+=======
+  const tableName = params.tableName ?? "embedding_cache";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const out = new Map<string, number[]>();
   const batchSize = 400;
   for (const identity of params.providerIdentities) {
@@ -73,7 +77,11 @@ export function upsertMemoryEmbeddingCache(params: {
   if (!params.enabled || !provider || !params.providerKey || params.entries.length === 0) {
     return;
   }
+<<<<<<< HEAD
   const tableName = params.tableName ?? "memory_embedding_cache";
+=======
+  const tableName = params.tableName ?? "embedding_cache";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const now = params.now ?? Date.now();
   const stmt = params.db.prepare(
     `INSERT INTO ${tableName} (provider, model, provider_key, hash, embedding, dims, updated_at)\n` +

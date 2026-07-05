@@ -22,8 +22,12 @@ import { getOptionalTelegramRuntime } from "./runtime.js";
 
 export type TelegramReplyChainEntry = NonNullable<MsgContext["ReplyChain"]>[number];
 
+<<<<<<< HEAD
 export type TelegramCachedMessageNode = Omit<TelegramReplyChainEntry, "messageId"> & {
   messageId: string;
+=======
+export type TelegramCachedMessageNode = TelegramReplyChainEntry & {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sourceMessage: Message;
 };
 
@@ -778,17 +782,25 @@ function compareCachedMessageNodes(
 const SESSION_BOUNDARY_COMMAND_RE = /^\/(?:new|reset)(?:@[A-Za-z0-9_]+)?(?:\s|$)/i;
 const SOFT_RESET_COMMAND_RE = /^\/reset(?:@[A-Za-z0-9_]+)?\s+soft(?:\s|$)/i;
 
+<<<<<<< HEAD
 export function isTelegramSessionBoundaryCommandText(text: string | undefined): boolean {
   const body = text?.trim();
+=======
+function isSessionBoundaryCommandNode(node: TelegramCachedMessageNode): boolean {
+  const body = node.body?.trim();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return Boolean(
     body && SESSION_BOUNDARY_COMMAND_RE.test(body) && !SOFT_RESET_COMMAND_RE.test(body),
   );
 }
 
+<<<<<<< HEAD
 function isSessionBoundaryCommandNode(node: TelegramCachedMessageNode): boolean {
   return isTelegramSessionBoundaryCommandText(node.body);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isAfterSessionBoundary(
   node: TelegramCachedMessageNode,
   boundary?: TelegramCachedMessageNode,

@@ -748,7 +748,10 @@ describe("scripts/test-extension.mjs", () => {
       const root = mkdtempSync(path.join(tmpdir(), "openclaw-test-extension-signal-"));
       const fakePnpmPath = path.join(root, "pnpm");
       const childPidPath = path.join(root, "child.pid");
+<<<<<<< HEAD
       const descendantPidPath = path.join(root, "descendant.pid");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const signaledPath = path.join(root, "signaled");
 
       writeFakePnpm(fakePnpmPath);
@@ -756,7 +759,10 @@ describe("scripts/test-extension.mjs", () => {
         cwd: process.cwd(),
         env: {
           ...process.env,
+<<<<<<< HEAD
           OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH: descendantPidPath,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           OPENCLAW_FAKE_PNPM_PID_PATH: childPidPath,
           OPENCLAW_FAKE_PNPM_SIGNALED_PATH: signaledPath,
           npm_execpath: fakePnpmPath,
@@ -764,6 +770,7 @@ describe("scripts/test-extension.mjs", () => {
         stdio: "ignore",
       });
       let childPid = 0;
+<<<<<<< HEAD
       let descendantPid = 0;
 
       try {
@@ -773,6 +780,13 @@ describe("scripts/test-extension.mjs", () => {
         descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
         expect(Number.isInteger(childPid)).toBe(true);
         expect(Number.isInteger(descendantPid)).toBe(true);
+=======
+
+      try {
+        await waitFor(() => fileExists(childPidPath), 5_000);
+        childPid = Number(readFileSync(childPidPath, "utf8"));
+        expect(Number.isInteger(childPid)).toBe(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
         expect(runner.pid).toBeGreaterThan(0);
         process.kill(runner.pid!, "SIGTERM");
@@ -782,7 +796,10 @@ describe("scripts/test-extension.mjs", () => {
         await waitFor(() => fileExists(signaledPath), 5_000);
         expect(readFileSync(signaledPath, "utf8")).toBe("SIGTERM");
         await waitFor(() => !isProcessAlive(childPid), 5_000);
+<<<<<<< HEAD
         await waitFor(() => !isProcessAlive(descendantPid), 5_000);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       } finally {
         if (runner.pid && isProcessAlive(runner.pid)) {
           process.kill(runner.pid, "SIGKILL");
@@ -790,9 +807,12 @@ describe("scripts/test-extension.mjs", () => {
         if (childPid && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
         }
+<<<<<<< HEAD
         if (descendantPid && isProcessAlive(descendantPid)) {
           process.kill(descendantPid, "SIGKILL");
         }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         rmSync(root, { force: true, recursive: true });
       }
     },
@@ -911,12 +931,16 @@ function writeFakePnpm(filePath: string): void {
     filePath,
     [
       "#!/usr/bin/env node",
+<<<<<<< HEAD
       'const { spawn } = require("node:child_process");',
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       'const fs = require("node:fs");',
       "if (process.env.OPENCLAW_FAKE_PNPM_ARGS_PATH) {",
       "  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_ARGS_PATH, JSON.stringify(process.argv.slice(2)));",
       "  process.exit(0);",
       "}",
+<<<<<<< HEAD
       "if (process.env.OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH) {",
       "  const child = spawn(process.execPath, [",
       '    "-e",',
@@ -924,6 +948,8 @@ function writeFakePnpm(filePath: string): void {
       "  ], { stdio: 'ignore' });",
       "  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH, String(child.pid));",
       "}",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_PID_PATH, String(process.pid));",
       'process.on("SIGTERM", () => {',
       '  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_SIGNALED_PATH, "SIGTERM");',

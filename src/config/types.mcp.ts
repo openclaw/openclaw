@@ -36,8 +36,13 @@ export type McpServerConfig = {
   workingDirectory?: string;
   /** HTTP transport: URL of the remote MCP server (http or https). */
   url?: string;
+<<<<<<< HEAD
   /** Transport type — "stdio" for command-bearing servers, "sse" or "streamable-http" for remote URLs. */
   transport?: "stdio" | "sse" | "streamable-http";
+=======
+  /** HTTP transport type for remote MCP servers. */
+  transport?: "sse" | "streamable-http";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /** HTTP transport: extra HTTP headers sent with every request. */
   headers?: Record<string, string | number | boolean>;
   /** Optional connection timeout in milliseconds. */

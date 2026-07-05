@@ -15,6 +15,10 @@ import type { ApiClient } from "./api-client.js";
 import {
   ChunkedMediaApi,
   UploadDailyLimitExceededError,
+<<<<<<< HEAD
+=======
+  isChunkedUploadImplemented,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./media-chunked.js";
 import type { UploadCacheAdapter } from "./media.js";
 import { UPLOAD_PREPARE_FALLBACK_CODE } from "./retry.js";
@@ -101,6 +105,7 @@ function stubFetchOk(): ReturnType<typeof vi.fn> {
   return fetchWithSsrFGuardMock;
 }
 
+<<<<<<< HEAD
 function cancelTrackedResponse(
   text: string,
   init: ResponseInit,
@@ -123,6 +128,8 @@ function cancelTrackedResponse(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // ============ Tests ============
 
 describe("media-chunked: UploadDailyLimitExceededError", () => {
@@ -136,6 +143,15 @@ describe("media-chunked: UploadDailyLimitExceededError", () => {
   });
 });
 
+<<<<<<< HEAD
+=======
+describe("media-chunked: isChunkedUploadImplemented", () => {
+  it("returns true for the filled-in module", () => {
+    expect(isChunkedUploadImplemented()).toBe(true);
+  });
+});
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
   beforeEach(() => {
     originalFetch = globalThis.fetch;
@@ -281,6 +297,7 @@ describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
     expect(last.totalBytes).toBe(FIXTURE_BUFFER.length);
   });
 
+<<<<<<< HEAD
   it("bounds COS PUT error bodies without using response.text()", async () => {
     const client = mockApiClient();
     const tm = mockTokenManager();
@@ -350,6 +367,8 @@ describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
     expect(JSON.stringify(logger.error.mock.calls)).not.toContain("tail");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("maps UPLOAD_PREPARE_FALLBACK_CODE to UploadDailyLimitExceededError", async () => {
     const client = mockApiClient();
     const tm = mockTokenManager();

@@ -234,6 +234,7 @@ export function getWindowsProgramFilesRoots(
   return result;
 }
 
+<<<<<<< HEAD
 export function getWindowsCmdExePath(
   env: Record<string, string | undefined> = process.env,
 ): string {
@@ -271,6 +272,8 @@ export function getWindowsWmicExePath(
   return path.win32.join(getWindowsInstallRoots(env).systemRoot, "System32", "wbem", "wmic.exe");
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function resetWindowsInstallRootsForTests(
   overrides: WindowsInstallRootsTestOverrides = {},
 ): void {

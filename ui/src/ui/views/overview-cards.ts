@@ -3,7 +3,11 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { html, nothing, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../../i18n/index.ts";
+<<<<<<< HEAD
 import { isCronJobActiveFailure } from "../cron-status.ts";
+=======
+import { resolveCronJobLastRunStatus } from "../cron-status.ts";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatCost, formatTokens, formatRelativeTimestamp } from "../format.ts";
 import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
 import { formatNextRun } from "../presenter.ts";
@@ -134,7 +138,13 @@ export function renderOverviewCards(props: OverviewCardsProps) {
   const cronEnabled = props.cronStatus?.enabled ?? null;
   const cronNext = props.cronStatus?.nextWakeAtMs ?? null;
   const cronJobCount = props.cronJobs.length;
+<<<<<<< HEAD
   const failedCronCount = props.cronJobs.filter(isCronJobActiveFailure).length;
+=======
+  const failedCronCount = props.cronJobs.filter(
+    (j) => resolveCronJobLastRunStatus(j) === "error",
+  ).length;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const authLoading = props.modelAuthStatus === null;
   const authProviders = props.modelAuthStatus?.providers ?? [];
   const monitoredProviders = authProviders.filter(isMonitoredAuthProvider);

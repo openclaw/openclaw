@@ -78,9 +78,12 @@ type DiscoveredModel = {
 type AgentDiscoveryModule = typeof import("./agent-model-discovery.js");
 
 let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
+<<<<<<< HEAD
 let loadedModelCatalogSnapshot: ModelCatalogEntry[] | undefined;
 let loadedModelCatalogGeneration = -1;
 let modelCatalogGeneration = 0;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 let hasLoggedModelCatalogError = false;
 let hasLoggedReadOnlyStaticCatalogError = false;
 type ManifestModelCatalogCacheEntry = {
@@ -130,7 +133,10 @@ function loadProviderApiKeyResolver() {
 
 export function resetModelCatalogCache() {
   modelCatalogPromise = null;
+<<<<<<< HEAD
   modelCatalogGeneration += 1;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   manifestModelCatalogCache = new WeakMap();
   hasLoggedModelCatalogError = false;
   hasLoggedReadOnlyStaticCatalogError = false;
@@ -138,8 +144,11 @@ export function resetModelCatalogCache() {
 
 export function resetModelCatalogCacheForTest() {
   resetModelCatalogCache();
+<<<<<<< HEAD
   loadedModelCatalogSnapshot = undefined;
   loadedModelCatalogGeneration = -1;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   importAgentDiscovery = defaultImportAgentDiscovery;
 }
 
@@ -548,6 +557,7 @@ function loadReadOnlyStaticModelCatalog(params?: {
 export async function loadModelCatalog(params?: {
   config?: OpenClawConfig;
   useCache?: boolean;
+<<<<<<< HEAD
   cacheOnly?: boolean;
   readOnly?: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
@@ -557,6 +567,11 @@ export async function loadModelCatalog(params?: {
       ? (loadedModelCatalogSnapshot ?? [])
       : [];
   }
+=======
+  readOnly?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
+}): Promise<ModelCatalogEntry[]> {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const readOnly = params?.readOnly === true;
   if (readOnly) {
     try {
@@ -569,7 +584,10 @@ export async function loadModelCatalog(params?: {
   }
   if (!readOnly && params?.useCache === false) {
     modelCatalogPromise = null;
+<<<<<<< HEAD
     modelCatalogGeneration += 1;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   const useSharedCache = !readOnly && !params?.metadataSnapshot;
   if (useSharedCache && modelCatalogPromise) {
@@ -824,6 +842,7 @@ export async function loadModelCatalog(params?: {
     return loadCatalog();
   }
 
+<<<<<<< HEAD
   const loadGeneration = modelCatalogGeneration;
   const publishedPromise = loadCatalog().then((catalog) => {
     if (
@@ -838,6 +857,10 @@ export async function loadModelCatalog(params?: {
   });
   modelCatalogPromise = publishedPromise;
   return publishedPromise;
+=======
+  modelCatalogPromise = loadCatalog();
+  return modelCatalogPromise;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /**

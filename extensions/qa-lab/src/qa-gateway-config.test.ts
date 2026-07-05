@@ -22,7 +22,10 @@ function createQaChannelTransportParams(baseUrl = "http://127.0.0.1:43124") {
         },
       },
       messages: {
+<<<<<<< HEAD
         visibleReplies: "automatic",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         groupChat: {
           mentionPatterns: ["\\b@?openclaw\\b"],
           visibleReplies: "automatic",
@@ -103,7 +106,10 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.channels?.["qa-channel"]?.enabled).toBe(true);
     expect(cfg.channels?.["qa-channel"]?.baseUrl).toBe("http://127.0.0.1:43124");
     expect(cfg.channels?.["qa-channel"]?.pollTimeoutMs).toBe(250);
+<<<<<<< HEAD
     expect(cfg.messages?.visibleReplies).toBe("automatic");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(cfg.messages?.groupChat?.mentionPatterns).toEqual(["\\b@?openclaw\\b"]);
     expect(cfg.messages?.groupChat?.visibleReplies).toBe("automatic");
   });

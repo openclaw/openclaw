@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -5,6 +6,14 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { assertQaSuiteArtifactWritten } from "./artifact-assertion.js";
 import { isRepoRootRelativeRef, toRepoRelativePath } from "./cli-paths.js";
+=======
+import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isRepoRootRelativeRef, toRepoRelativePath } from "./cli-paths.js";
+import { QaSuiteArtifactError } from "./errors.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   buildPlaywrightEvidenceSummary,
   buildScriptEvidenceSummary,
@@ -21,7 +30,10 @@ import type { QaProviderMode } from "./providers/index.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import { shellQuote } from "./shell-quote.js";
+<<<<<<< HEAD
 import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type QaTestFileScenario = QaSeedScenarioWithSource & {
   execution: Extract<
@@ -33,7 +45,10 @@ export type QaTestFileScenario = QaSeedScenarioWithSource & {
 export type QaTestFileExecutionKind = "script" | "vitest" | "playwright";
 
 export type QaTestFileScenarioRunParams = {
+<<<<<<< HEAD
   commandTimeoutMs?: number;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   evidenceMode?: QaScorecardEvidenceMode;
   env?: NodeJS.ProcessEnv;
   outputDir: string;
@@ -42,7 +57,10 @@ export type QaTestFileScenarioRunParams = {
   repoRoot: string;
   runCommand?: QaScenarioCommandRunner;
   scenarios: readonly QaSeedScenarioWithSource[];
+<<<<<<< HEAD
   writeEvidenceFile?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 export type QaScenarioCommandExecution = {
@@ -50,12 +68,18 @@ export type QaScenarioCommandExecution = {
   command: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
+<<<<<<< HEAD
   timeoutMs?: number;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 type QaScenarioCommandResult = {
   exitCode: number;
+<<<<<<< HEAD
   failureMessage?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   signal?: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
@@ -81,7 +105,10 @@ type QaTestFileScenarioResult = {
 };
 
 export type QaTestFileScenarioRunResult = {
+<<<<<<< HEAD
   evidence: QaEvidenceSummaryJson;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   evidencePath: string;
   executionKind: QaTestFileExecutionKind;
   outputDir: string;
@@ -93,11 +120,14 @@ type QaTestFileRunnerDefinition = {
   buildSteps(scenario: QaTestFileScenario, context: { outputDir: string }): QaScenarioCommandStep[];
 };
 
+<<<<<<< HEAD
 const DEFAULT_QA_TEST_FILE_COMMAND_TIMEOUT_MS = 30 * 60_000;
 const QA_TEST_FILE_COMMAND_TIMEOUT_KILL_GRACE_MS = 2_000;
 const QA_TEST_FILE_COMMAND_TIMEOUT_FORCE_SETTLE_MS = 500;
 const QA_TEST_FILE_COMMAND_PARENT_SIGNALS = ["SIGINT", "SIGTERM"] as const;
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function isQaTestFileScenario(
   scenario: QaSeedScenarioWithSource,
 ): scenario is QaTestFileScenario {
@@ -121,7 +151,11 @@ function playwrightSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] 
   return [
     {
       command: process.execPath,
+<<<<<<< HEAD
       args: ["scripts/ensure-playwright-chromium.mjs", "--skip-ffmpeg"],
+=======
+      args: ["scripts/ensure-playwright-chromium.mjs"],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
     {
       command: process.execPath,
@@ -189,6 +223,7 @@ function formatCommand(step: QaScenarioCommandStep) {
   return [step.command, ...step.args].map(shellQuote).join(" ");
 }
 
+<<<<<<< HEAD
 type QaScenarioTaskkillRunner = typeof spawnSync;
 
 function killQaScenarioWindowsProcessTree(
@@ -221,19 +256,27 @@ function killQaScenarioWindowsProcessTree(
   return false;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function runQaScenarioCommand(
   execution: QaScenarioCommandExecution,
 ): Promise<QaScenarioCommandResult> {
   return new Promise((resolve, reject) => {
+<<<<<<< HEAD
     const useProcessGroup = process.platform !== "win32";
     const child = spawn(execution.command, execution.args, {
       cwd: execution.cwd,
       detached: useProcessGroup,
+=======
+    const child = spawn(execution.command, execution.args, {
+      cwd: execution.cwd,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       env: execution.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
+<<<<<<< HEAD
     const timeoutMs = execution.timeoutMs;
     let forceKillTimer: NodeJS.Timeout | undefined;
     let forceSettleTimer: NodeJS.Timeout | undefined;
@@ -361,12 +404,15 @@ function runQaScenarioCommand(
               signal: null,
             });
           }, timeoutMs);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     child.stdout?.on("data", (chunk: Buffer) => {
       stdout.push(chunk);
     });
     child.stderr?.on("data", (chunk: Buffer) => {
       stderr.push(chunk);
     });
+<<<<<<< HEAD
     process.once("exit", handleParentExit);
     for (const signal of QA_TEST_FILE_COMMAND_PARENT_SIGNALS) {
       process.once(signal, handleParentSignal);
@@ -397,6 +443,16 @@ function runQaScenarioCommand(
         return;
       }
       finish(result);
+=======
+    child.on("error", reject);
+    child.on("close", (exitCode, signal) => {
+      resolve({
+        exitCode: exitCode ?? (signal ? 1 : 0),
+        signal,
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8"),
+      });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   });
 }
@@ -414,7 +470,10 @@ function buildScenarioEvidenceTarget(scenario: QaTestFileScenario) {
 }
 
 async function runScenarioCommandSteps(params: {
+<<<<<<< HEAD
   commandTimeoutMs: number;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   env: NodeJS.ProcessEnv;
   outputDir: string;
   repoRoot: string;
@@ -429,14 +488,20 @@ async function runScenarioCommandSteps(params: {
   for (const step of params.steps) {
     logChunks.push(`$ ${formatCommand(step)}\n`);
     try {
+<<<<<<< HEAD
       const timeoutMs =
         params.scenario.execution.kind === "script" ? params.commandTimeoutMs : undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const result = await params.runCommand({
         command: step.command,
         args: step.args,
         cwd: params.repoRoot,
         env: params.env,
+<<<<<<< HEAD
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
       if (result.stdout) {
         logChunks.push(result.stdout);
@@ -444,12 +509,19 @@ async function runScenarioCommandSteps(params: {
       if (result.stderr) {
         logChunks.push(result.stderr);
       }
+<<<<<<< HEAD
       if (result.failureMessage || result.exitCode !== 0 || result.signal) {
         failureMessage =
           result.failureMessage ??
           (result.signal
             ? `${path.basename(step.command)} terminated by ${result.signal}`
             : `${path.basename(step.command)} exited with ${result.exitCode}`);
+=======
+      if (result.exitCode !== 0 || result.signal) {
+        failureMessage = result.signal
+          ? `${path.basename(step.command)} terminated by ${result.signal}`
+          : `${path.basename(step.command)} exited with ${result.exitCode}`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         break;
       }
     } catch (error) {
@@ -472,7 +544,10 @@ async function runScenarioCommandSteps(params: {
 
 async function runQaTestFileScenario(params: {
   env: NodeJS.ProcessEnv;
+<<<<<<< HEAD
   commandTimeoutMs: number;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   outputDir: string;
   repoRoot: string;
   runCommand: QaScenarioCommandRunner;
@@ -504,6 +579,7 @@ async function runQaTestFileScenario(params: {
   return {
     ...result,
     ...producerEvidenceResult,
+<<<<<<< HEAD
     ...statusFromProducerEvidence({
       allowBlockedEvidence: params.scenario.execution.allowBlockedEvidence === true,
       producerEvidence: producerEvidenceResult.producerEvidence,
@@ -516,13 +592,26 @@ function statusFromProducerEvidence(params: {
   producerEvidence: QaEvidenceSummaryJson | undefined;
 }): Pick<QaTestFileScenarioResult, "failureMessage" | "status"> {
   const { allowBlockedEvidence, producerEvidence } = params;
+=======
+    ...statusFromProducerEvidence(producerEvidenceResult.producerEvidence),
+  };
+}
+
+function statusFromProducerEvidence(
+  producerEvidence: QaEvidenceSummaryJson | undefined,
+): Pick<QaTestFileScenarioResult, "failureMessage" | "status"> {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!producerEvidence || producerEvidence.entries.length === 0) {
     return { status: "pass" };
   }
   const blockingEntry = producerEvidence.entries.find(
+<<<<<<< HEAD
     (entry) =>
       entry.result.status === "fail" ||
       (!allowBlockedEvidence && entry.result.status === "blocked"),
+=======
+    (entry) => entry.result.status === "fail" || entry.result.status === "blocked",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
   if (blockingEntry) {
     return {
@@ -555,7 +644,10 @@ function buildTestFileEvidence(params: {
   kind: QaTestFileExecutionKind;
   primaryModel: string;
   providerMode: QaProviderMode;
+<<<<<<< HEAD
   repoRoot: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   results: readonly QaTestFileScenarioResult[];
   evidenceMode?: QaScorecardEvidenceMode;
   env?: NodeJS.ProcessEnv;
@@ -582,7 +674,10 @@ function buildTestFileEvidence(params: {
             generatedAt: params.generatedAt,
             primaryModel: params.primaryModel,
             providerMode: params.providerMode,
+<<<<<<< HEAD
             repoRoot: params.repoRoot,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             targets: fallbackResults.map((result) => buildScenarioEvidenceTarget(result.scenario)),
             results: fallbackResults.map((result) => ({
               id: result.scenario.id,
@@ -618,7 +713,10 @@ function buildTestFileEvidence(params: {
     generatedAt: params.generatedAt,
     primaryModel: params.primaryModel,
     providerMode: params.providerMode,
+<<<<<<< HEAD
     repoRoot: params.repoRoot,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     targets: params.results.map((result) => buildScenarioEvidenceTarget(result.scenario)),
     results: params.results.map((result) => ({
       id: result.scenario.id,
@@ -751,6 +849,7 @@ function buildScenarioArtifactPaths(params: {
 async function writeTestFileEvidenceFile(params: {
   evidence: unknown;
   outputDir: string;
+<<<<<<< HEAD
   writeEvidenceFile?: boolean;
 }): Promise<Pick<QaTestFileScenarioRunResult, "evidencePath">> {
   const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
@@ -761,6 +860,27 @@ async function writeTestFileEvidenceFile(params: {
   return { evidencePath };
 }
 
+=======
+}): Promise<Pick<QaTestFileScenarioRunResult, "evidencePath">> {
+  const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
+  await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence, null, 2)}\n`, "utf8");
+  await assertQaTestFileArtifactWritten("evidence", evidencePath);
+  return { evidencePath };
+}
+
+async function assertQaTestFileArtifactWritten(kind: "evidence", filePath: string) {
+  try {
+    await fs.access(filePath);
+  } catch (error) {
+    throw new QaSuiteArtifactError(
+      `${kind}_missing`,
+      `QA suite did not produce ${kind} artifact at ${filePath}: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function runQaTestFileScenarios(
   params: QaTestFileScenarioRunParams,
 ): Promise<QaTestFileScenarioRunResult> {
@@ -771,10 +891,13 @@ export async function runQaTestFileScenarios(
   }
   await fs.mkdir(params.outputDir, { recursive: true });
   const runCommand = params.runCommand ?? runQaScenarioCommand;
+<<<<<<< HEAD
   const commandTimeoutMs = resolvePositiveTimerTimeoutMs(
     params.commandTimeoutMs,
     DEFAULT_QA_TEST_FILE_COMMAND_TIMEOUT_MS,
   );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const env = {
     ...process.env,
     ...params.env,
@@ -784,7 +907,10 @@ export async function runQaTestFileScenarios(
     results.push(
       await runQaTestFileScenario({
         env,
+<<<<<<< HEAD
         commandTimeoutMs,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         outputDir: params.outputDir,
         repoRoot: params.repoRoot,
         runCommand,
@@ -805,23 +931,35 @@ export async function runQaTestFileScenarios(
     kind,
     primaryModel: params.primaryModel,
     providerMode: params.providerMode,
+<<<<<<< HEAD
     repoRoot: params.repoRoot,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     results,
   });
   const paths = await writeTestFileEvidenceFile({
     evidence,
     outputDir: params.outputDir,
+<<<<<<< HEAD
     writeEvidenceFile: params.writeEvidenceFile,
   });
   return {
     ...paths,
     evidence,
+=======
+  });
+  return {
+    ...paths,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     executionKind: kind,
     outputDir: params.outputDir,
     results,
   };
 }
+<<<<<<< HEAD
 
 export const qaTestFileScenarioRunnerTesting = {
   killQaScenarioWindowsProcessTree,
 };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

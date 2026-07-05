@@ -2,28 +2,41 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+<<<<<<< HEAD
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   acquireSessionWriteLock,
   resolveSessionWriteLockOptions,
 } from "../../agents/session-write-lock.js";
+<<<<<<< HEAD
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
 } from "../../gateway/session-store-key.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+<<<<<<< HEAD
 import type {
   SessionTranscriptUpdate,
   SessionTranscriptUpdateTarget,
 } from "../../sessions/transcript-events.js";
+=======
+import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import { extractGeneratedTranscriptSessionId } from "./generated-transcript-session-id.js";
+<<<<<<< HEAD
 import { resolveAgentMainSessionKey } from "./main-session.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -31,6 +44,7 @@ import {
   resolveSessionTranscriptPathInDir,
   resolveStorePath,
 } from "./paths.js";
+<<<<<<< HEAD
 import {
   cleanupPluginHostSessionStore as cleanupFilePluginHostSessionStore,
   clearPluginOwnedSessionState,
@@ -41,6 +55,10 @@ import type {
   ResolvedSessionMaintenanceConfig,
   SessionMaintenanceWarning,
 } from "./store-maintenance.js";
+=======
+import { resolveAndPersistSessionFile } from "./session-file.js";
+import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   getSessionEntry,
   cleanupSessionLifecycleArtifacts as cleanupFileSessionLifecycleArtifacts,
@@ -50,7 +68,10 @@ import {
   loadSessionStore,
   applySessionEntryPatchProjection as applyFileSessionEntryPatchProjection,
   patchSessionEntry as patchFileSessionEntry,
+<<<<<<< HEAD
   patchSessionEntryWithKey as patchFileSessionEntryWithKey,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   purgeDeletedAgentSessionEntries as purgeFileDeletedAgentSessionEntries,
   readSessionUpdatedAt as readFileSessionUpdatedAt,
   resolveSessionStoreEntry,
@@ -75,7 +96,10 @@ import {
   type SessionLifecycleArtifactCleanupResult,
   type SessionLifecycleStoreTarget,
 } from "./store.js";
+<<<<<<< HEAD
 import { resolveAllAgentSessionStoreTargetsSync, type SessionStoreTarget } from "./targets.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { parseSessionThreadInfo } from "./thread-info.js";
 import {
   type AppendSessionTranscriptMessageParams,
@@ -88,6 +112,7 @@ import {
 import { resolveSessionTranscriptFile } from "./transcript-file-resolve.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import { writeJsonlLines } from "./transcript-jsonl.js";
+<<<<<<< HEAD
 import { replayRecentUserAssistantMessages } from "./transcript-replay.js";
 import { streamSessionTranscriptLines } from "./transcript-stream.js";
 import {
@@ -95,11 +120,19 @@ import {
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
 import {
+=======
+import { streamSessionTranscriptLines } from "./transcript-stream.js";
+import {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type OwnedSessionTranscriptPublishedEntry,
   resolveOwnedSessionTranscriptWriteLockRunner,
   withOwnedSessionTranscriptWrites,
 } from "./transcript-write-context.js";
+<<<<<<< HEAD
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
+=======
+import type { SessionEntry } from "./types.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /**
  * Session access API for callers that need entries or transcripts without
@@ -126,14 +159,18 @@ export type SessionAccessScope = {
   env?: NodeJS.ProcessEnv;
   /** Set false for metadata-only reads that do not need hydrated prompt refs. */
   hydrateSkillPromptRefs?: boolean;
+<<<<<<< HEAD
   /** Use latest when the caller must bypass any in-process metadata snapshot. */
   readConsistency?: "latest";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /** Canonical or alias session key for the entry being read or written. */
   sessionKey: string;
   /** Explicit store path for callers that already resolved the owning store. */
   storePath?: string;
 };
 
+<<<<<<< HEAD
 export type LogicalSessionAccessScope = {
   /** Runtime config whose session store rules define the logical session owner. */
   cfg: OpenClawConfig;
@@ -210,16 +247,36 @@ export type ResolvedSessionEntryUpdateResult<T> =
     };
 
 export type SessionTranscriptAccessScope = Omit<SessionAccessScope, "sessionKey"> & {
+=======
+export type SessionTranscriptReadScope = Omit<SessionAccessScope, "sessionKey"> & {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /** Explicit transcript file path; bypasses store lookup when already known. */
   sessionFile?: string;
   /** Runtime session id used to derive a transcript file when no explicit file is provided. */
   sessionId: string;
+<<<<<<< HEAD
   /** Required when resolving through session metadata; optional for explicit transcript artifacts. */
+=======
+  /** Optional key for read callers that can resolve via the session entry. */
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sessionKey?: string;
   /** Channel thread suffix used when deriving topic transcript paths. */
   threadId?: string | number;
 };
 
+<<<<<<< HEAD
+=======
+export type SessionTranscriptAccessScope = SessionTranscriptReadScope & {
+  /**
+   * Identifies the owning entry when the transcript target must be resolved
+   * (and possibly persisted) through the session store. May be omitted only
+   * when an explicit sessionFile binds the operation to a concrete artifact;
+   * such writes never read or update entry metadata.
+   */
+  sessionKey?: string;
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type SessionTranscriptRuntimeScope = SessionAccessScope & {
   /** Resolved file-backed artifact for the current runtime target. */
   sessionFile?: string;
@@ -227,6 +284,7 @@ export type SessionTranscriptRuntimeScope = SessionAccessScope & {
   threadId?: string | number;
 };
 
+<<<<<<< HEAD
 export type SessionTranscriptReadScope = Omit<SessionTranscriptRuntimeScope, "sessionKey"> & {
   /** Canonical key when the caller has a session-store identity for this read. */
   sessionKey?: string;
@@ -242,6 +300,8 @@ export type SessionTranscriptReadTarget = Omit<
   sessionKey?: string;
 };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "sessionId"> & {
   /** Optional for appenders that can operate on an existing explicit transcript target. */
   sessionId?: string;
@@ -254,6 +314,15 @@ export type SessionEntrySummary = {
   entry: SessionEntry;
 };
 
+<<<<<<< HEAD
+=======
+/** Session entry read by the exact persisted session key, without alias resolution. */
+export type ExactSessionEntry = {
+  sessionKey: string;
+  entry: SessionEntry;
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Raw transcript record for non-message events; message records use appendTranscriptMessage. */
 export type TranscriptEvent = unknown;
 
@@ -364,17 +433,21 @@ export type SessionTranscriptManualTrimResult =
       kept: number;
     };
 
+<<<<<<< HEAD
 export type SessionTranscriptManualTrimPreflightResult =
   | Extract<SessionTranscriptManualTrimResult, { compacted: false }>
   | {
       compacted: true;
     };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type SessionEntryUpdateOptions = {
   /** Skip prune/cap/rotation maintenance for specialized internal updates. */
   skipMaintenance?: boolean;
   /** Let the writer cache retain the updated object without cloning. */
   takeCacheOwnership?: boolean;
+<<<<<<< HEAD
   /** Throw when best-effort store recovery cannot confirm the requested write. */
   requireWriteSuccess?: boolean;
 };
@@ -448,6 +521,10 @@ function loadSessionArchiveRuntime() {
   return sessionArchiveRuntimePromise;
 }
 
+=======
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type SessionEntryPatchOptions = {
   /** Entry to synthesize when a patch operation is allowed to create. */
   fallbackEntry?: SessionEntry;
@@ -455,6 +532,7 @@ export type SessionEntryPatchOptions = {
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   /** Keep the previous updatedAt value when the patch should not count as activity. */
   preserveActivity?: boolean;
+<<<<<<< HEAD
   /** Throw when best-effort store recovery cannot confirm the requested write. */
   requireWriteSuccess?: boolean;
   /** Replace the whole entry instead of merging the returned patch. */
@@ -463,6 +541,10 @@ export type SessionEntryPatchOptions = {
   skipMaintenance?: boolean;
   /** Let the writer cache retain the updated object without cloning. */
   takeCacheOwnership?: boolean;
+=======
+  /** Replace the whole entry instead of merging the returned patch. */
+  replaceEntry?: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 export type SessionEntryPatchContext = {
@@ -470,6 +552,7 @@ export type SessionEntryPatchContext = {
   existingEntry?: SessionEntry;
 };
 
+<<<<<<< HEAD
 export type SessionEntryPatchResult = {
   /** Exact persisted key for the patched entry after alias normalization. */
   sessionKey: string;
@@ -613,6 +696,8 @@ type TemporarySessionMappingOperationResult<T> =
       ok: false;
     };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type SessionEntryCreateWithTranscriptContext = {
   /** Current entry under the requested key before creation, if any. */
   existingEntry?: SessionEntry;
@@ -684,6 +769,7 @@ export type DeleteSessionEntryLifecycleParams = {
   target: SessionLifecycleStoreTarget;
 };
 
+<<<<<<< HEAD
 export type CanonicalizeSessionEntryAliasesResult = {
   canonicalKey: string;
   entry?: SessionEntry;
@@ -911,6 +997,13 @@ export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | unde
     const store = loadSessionStore(resolveAccessStorePath(scope), {
       ...(scope.clone === false ? { clone: false } : {}),
       ...(scope.readConsistency === "latest" ? { skipCache: true } : {}),
+=======
+/** Returns the entry for a canonical or alias session key, if one exists. */
+export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
+  if (scope.clone === false) {
+    const store = loadSessionStore(resolveAccessStorePath(scope), {
+      clone: false,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ...(scope.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
     });
     return resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey }).existing;
@@ -918,8 +1011,33 @@ export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | unde
   return getSessionEntry(scope);
 }
 
+<<<<<<< HEAD
 /** Lists entries from the resolved store, preserving the persisted key for each row. */
 export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
+=======
+/**
+ * Returns only the row persisted under the exact key provided.
+ * Use this for authorization-sensitive routing where alias canonicalization
+ * could cross an account or agent boundary.
+ */
+export function loadExactSessionEntry(scope: SessionAccessScope): ExactSessionEntry | undefined {
+  const sessionKey = scope.sessionKey.trim();
+  if (!sessionKey) {
+    return undefined;
+  }
+  const store = loadSessionStore(resolveAccessStorePath(scope), {
+    ...(scope.clone === false ? { clone: false } : {}),
+    ...(scope.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
+  });
+  const entry = Object.hasOwn(store, sessionKey) ? store[sessionKey] : undefined;
+  return entry ? { sessionKey, entry } : undefined;
+}
+
+/** Lists entries from the resolved store, preserving the persisted key for each row. */
+export function listSessionEntries(
+  scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
+): SessionEntrySummary[] {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (scope.clone === false) {
     return Object.entries(
       loadSessionStore(resolveAccessStorePath({ ...scope, sessionKey: "" }), {
@@ -985,15 +1103,20 @@ export async function patchSessionEntry(
     fallbackEntry: options.fallbackEntry,
     maintenanceConfig: options.maintenanceConfig,
     preserveActivity: options.preserveActivity,
+<<<<<<< HEAD
     requireWriteSuccess: options.requireWriteSuccess,
     replaceEntry: options.replaceEntry,
     skipMaintenance: options.skipMaintenance,
     takeCacheOwnership: options.takeCacheOwnership,
+=======
+    replaceEntry: options.replaceEntry,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     update,
   });
 }
 
 /**
+<<<<<<< HEAD
  * Applies an atomic patch and returns the persisted key selected by the backing
  * store. Use when a caller must keep sidecar state keyed to the final row.
  */
@@ -1100,6 +1223,8 @@ function cloneOptionalEntry(entry: SessionEntry | undefined): SessionEntry | und
 }
 
 /**
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
  * Creates or updates one session entry and initializes its transcript header as
  * one storage-sized lifecycle operation. File-backed storage still writes JSON
  * plus JSONL, but callers no longer compose entry write, header creation,
@@ -1155,6 +1280,7 @@ function cloneSessionEntries(store: Record<string, SessionEntry>): Record<string
   );
 }
 
+<<<<<<< HEAD
 function createReplySessionInitializationRevision(entry: SessionEntry | undefined): string {
   return JSON.stringify(entry ?? null);
 }
@@ -1188,6 +1314,8 @@ function resolveInitializedReplySessionEntry(params: {
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // File-backed creation resolves the concrete transcript artifact and writes the
 // header before the store mutation is saved; SQLite adapters implement this as
 // the same lifecycle operation without exposing rollback details to callers.
@@ -1239,11 +1367,15 @@ export async function updateSessionEntry(
     sessionKey: scope.sessionKey,
     skipMaintenance: options.skipMaintenance,
     takeCacheOwnership: options.takeCacheOwnership,
+<<<<<<< HEAD
     requireWriteSuccess: options.requireWriteSuccess,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     update,
   });
 }
 
+<<<<<<< HEAD
 /** Resolves one abort target identity without exposing the mutable store. */
 export function resolveSessionAbortTarget(
   scope: SessionAccessScope,
@@ -1451,6 +1583,8 @@ export async function restoreSessionFromCompactionCheckpoint(
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Applies a session patch projection through the accessor boundary.
  * The resolver sees a read-only snapshot and names the persisted key set; the
@@ -1468,6 +1602,7 @@ export async function applySessionPatchProjection<
   return await applyFileSessionEntryPatchProjection(params);
 }
 
+<<<<<<< HEAD
 /**
  * Applies restart-recovery lifecycle replacements without exposing the backing
  * store shape. The file backend runs selection and replacement under one writer
@@ -1539,6 +1674,8 @@ export async function preserveTemporarySessionMapping<T>(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Removes entries and orphan transcript artifacts owned by a named session lifecycle. */
 export async function cleanupSessionLifecycleArtifacts(
   params: SessionLifecycleArtifactCleanupParams,
@@ -1590,6 +1727,7 @@ export async function purgeDeletedAgentSessionEntries(
   return await purgeFileDeletedAgentSessionEntries(params);
 }
 
+<<<<<<< HEAD
 /**
  * Clears plugin host-owned state inside one resolved session store.
  * This is an internal transaction-sized boundary for the storage backend, not
@@ -1801,6 +1939,18 @@ export async function commitReplySessionInitialization(params: {
     ...committed,
     previousSessionTranscript,
   };
+=======
+/** Reads parsed transcript records from an explicit or derived transcript target. */
+export async function loadTranscriptEvents(
+  scope: SessionTranscriptReadScope,
+): Promise<TranscriptEvent[]> {
+  const transcript = await resolveTranscriptReadAccess(scope);
+  const events: TranscriptEvent[] = [];
+  for await (const line of streamSessionTranscriptLines(transcript.sessionFile)) {
+    events.push(JSON.parse(line) as TranscriptEvent);
+  }
+  return events;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /**
@@ -1878,7 +2028,10 @@ export async function publishTranscriptUpdate(
   emitSessionTranscriptUpdate({
     ...update,
     sessionFile: transcript.sessionFile,
+<<<<<<< HEAD
     ...(transcript.target ? { target: transcript.target } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 }
 
@@ -1887,6 +2040,7 @@ export async function publishTranscriptUpdate(
  * This is one storage-sized mutation: future stores can trim transcript rows and
  * update entry metadata inside the same backend transaction.
  */
+<<<<<<< HEAD
 export async function preflightSessionTranscriptForManualCompact(
   scope: SessionTranscriptRuntimeScope,
   params: { maxLines: number; sessionFile?: string },
@@ -1914,6 +2068,8 @@ export async function preflightSessionTranscriptForManualCompact(
   return { compacted: false, kept: totalLines };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function trimSessionTranscriptForManualCompact(
   scope: SessionTranscriptRuntimeScope,
   params: { maxLines: number; nowMs?: number; sessionFile?: string },
@@ -1924,13 +2080,18 @@ export async function trimSessionTranscriptForManualCompact(
   }
 
   const maxLines = Math.max(1, Math.floor(params.maxLines));
+<<<<<<< HEAD
   let headerLine: string | undefined;
   const tailLines: string[] = [];
   const maxTailLines = Math.max(0, maxLines - 1);
+=======
+  const lines: string[] = [];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let totalLines = 0;
   try {
     for await (const line of streamSessionTranscriptLines(transcript.sessionFile)) {
       totalLines += 1;
+<<<<<<< HEAD
       if (totalLines === 1) {
         headerLine = line;
         continue;
@@ -1938,6 +2099,11 @@ export async function trimSessionTranscriptForManualCompact(
       tailLines.push(line);
       if (tailLines.length > maxTailLines) {
         tailLines.shift();
+=======
+      lines.push(line);
+      if (lines.length > maxLines) {
+        lines.shift();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     }
   } catch {
@@ -1947,11 +2113,16 @@ export async function trimSessionTranscriptForManualCompact(
     return { compacted: false, kept: totalLines };
   }
 
+<<<<<<< HEAD
   const lines = normalizeManualCompactTranscriptLines(headerLine, tailLines);
   if (!lines) {
     return { compacted: false, kept: 0 };
   }
   const archived = await replaceTranscriptForManualCompact(transcript.sessionFile, lines);
+=======
+  const archived = await archiveTranscriptFileForManualCompact(transcript.sessionFile);
+  await writeJsonlLines(transcript.sessionFile, lines);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   await patchSessionEntry(
     {
       ...scope,
@@ -1973,6 +2144,7 @@ export async function trimSessionTranscriptForManualCompact(
   return { archived, compacted: true, kept: lines.length };
 }
 
+<<<<<<< HEAD
 function parseManualCompactTranscriptRecord(line: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(line) as unknown;
@@ -2082,6 +2254,12 @@ async function replaceTranscriptForManualCompact(
   }
   emitSessionTranscriptUpdate({ sessionFile: archived });
   emitSessionTranscriptUpdate({ sessionFile: filePath });
+=======
+async function archiveTranscriptFileForManualCompact(filePath: string): Promise<string> {
+  const archived = `${filePath}.bak.${formatSessionArchiveTimestamp()}`;
+  await fs.promises.rename(filePath, archived);
+  emitSessionTranscriptUpdate({ sessionFile: archived });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return archived;
 }
 
@@ -2451,8 +2629,23 @@ async function persistExpectedSessionTranscriptTurn(
 export async function resolveSessionTranscriptRuntimeTarget(
   scope: SessionTranscriptRuntimeScope,
 ): Promise<SessionTranscriptRuntimeTarget> {
+<<<<<<< HEAD
   const { agentId, sessionEntry, sessionKey, sessionStore } =
     resolveSessionTranscriptRuntimeContext(scope);
+=======
+  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
+  if (!agentId) {
+    throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
+  }
+  const sessionStore = scope.storePath
+    ? loadSessionStore(scope.storePath, { skipCache: true })
+    : undefined;
+  const resolvedStoreEntry = sessionStore
+    ? resolveSessionStoreEntry({ store: sessionStore, sessionKey: scope.sessionKey })
+    : undefined;
+  const sessionEntry = resolvedStoreEntry?.existing ?? loadSessionEntry(scope);
+  const sessionKey = resolvedStoreEntry?.normalizedKey ?? scope.sessionKey;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (scope.sessionFile?.trim()) {
     return {
       agentId,
@@ -2511,7 +2704,22 @@ export async function resolveSessionTranscriptRuntimeTarget(
 export async function resolveSessionTranscriptRuntimeReadTarget(
   scope: SessionTranscriptRuntimeScope,
 ): Promise<SessionTranscriptRuntimeTarget> {
+<<<<<<< HEAD
   const { agentId, sessionEntry, sessionKey } = resolveSessionTranscriptRuntimeContext(scope);
+=======
+  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
+  if (!agentId) {
+    throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
+  }
+  const sessionStore = scope.storePath
+    ? loadSessionStore(scope.storePath, { skipCache: true })
+    : undefined;
+  const resolvedStoreEntry = sessionStore
+    ? resolveSessionStoreEntry({ store: sessionStore, sessionKey: scope.sessionKey })
+    : undefined;
+  const sessionEntry = resolvedStoreEntry?.existing ?? loadSessionEntry(scope);
+  const sessionKey = resolvedStoreEntry?.normalizedKey ?? scope.sessionKey;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (scope.sessionFile?.trim()) {
     return {
       agentId,
@@ -2547,6 +2755,7 @@ export async function resolveSessionTranscriptRuntimeReadTarget(
   };
 }
 
+<<<<<<< HEAD
 type SessionTranscriptRuntimeContext = {
   agentId: string;
   sessionEntry: SessionEntry | undefined;
@@ -2653,6 +2862,8 @@ function resolveConcreteReadStorePath(storePath: string | undefined): string | u
   return trimmed;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function createFallbackSessionEntry(patch: Partial<SessionEntry>): SessionEntry {
   const now = Date.now();
   return {
@@ -2662,6 +2873,7 @@ function createFallbackSessionEntry(patch: Partial<SessionEntry>): SessionEntry 
   };
 }
 
+<<<<<<< HEAD
 function snapshotTemporarySessionMapping(
   scope: SessionAccessScope,
 ): TemporarySessionMappingSnapshot {
@@ -2765,6 +2977,8 @@ async function archivePreviousSessionTranscript(params: {
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveAccessStorePath(scope: SessionAccessScope): string {
   if (scope.storePath) {
     return scope.storePath;
@@ -2776,6 +2990,7 @@ function resolveAccessStorePath(scope: SessionAccessScope): string {
   });
 }
 
+<<<<<<< HEAD
 type ResolvedTranscriptAccess = {
   sessionFile: string;
   target?: SessionTranscriptUpdateTarget;
@@ -2817,6 +3032,39 @@ async function resolveTranscriptAccess(
   }
   if (!scope.sessionId) {
     throw new Error(`Cannot resolve transcript scope without a session id: ${scope.sessionKey}`);
+=======
+async function resolveTranscriptReadAccess(scope: SessionTranscriptReadScope): Promise<{
+  sessionFile: string;
+}> {
+  if (scope.sessionFile?.trim()) {
+    return { sessionFile: scope.sessionFile };
+  }
+  if (scope.sessionKey) {
+    return await resolveTranscriptAccess({ ...scope, sessionKey: scope.sessionKey });
+  }
+  if (scope.storePath) {
+    return {
+      sessionFile: resolveSessionTranscriptPathInDir(
+        scope.sessionId,
+        path.dirname(path.resolve(scope.storePath)),
+        scope.threadId,
+      ),
+    };
+  }
+  if (scope.agentId) {
+    return {
+      sessionFile: resolveSessionTranscriptPath(scope.sessionId, scope.agentId, scope.threadId),
+    };
+  }
+  throw new Error(`Cannot resolve transcript read scope without a session target`);
+}
+
+async function resolveTranscriptAccess(scope: SessionTranscriptWriteScope): Promise<{
+  sessionFile: string;
+}> {
+  if (scope.sessionFile?.trim()) {
+    return { sessionFile: scope.sessionFile };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   // Past this point resolution goes through the session entry, so the owning
   // key is mandatory; explicit-artifact writes returned above never need it.
@@ -2826,16 +3074,26 @@ async function resolveTranscriptAccess(
       "Cannot resolve a transcript write scope without a session key or explicit session file",
     );
   }
+<<<<<<< HEAD
   const target = await resolveSessionTranscriptRuntimeTarget({
+=======
+  if (!scope.sessionId) {
+    throw new Error(`Cannot resolve transcript scope without a session id: ${scopeSessionKey}`);
+  }
+  return await resolveSessionTranscriptRuntimeTarget({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ...scope,
     sessionId: scope.sessionId,
     sessionKey: scopeSessionKey,
   });
+<<<<<<< HEAD
   const updateTarget = projectTranscriptUpdateTarget(target);
   return {
     sessionFile: target.sessionFile,
     ...(updateTarget ? { target: updateTarget } : {}),
   };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function resolveTranscriptTurnTarget(

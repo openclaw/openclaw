@@ -1,0 +1,298 @@
+{
+  "scenarios": [
+    {
+      "name": "Anthropic Opus API key smoke",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "confirms regular Anthropic API-key lane",
+          "status": "pass",
+          "details": "mock-compatible provider=mock-openai"
+        },
+        {
+          "name": "talks through regular Anthropic Opus",
+          "status": "pass",
+          "details": "mock mode: skipped live Anthropic smoke"
+        }
+      ]
+    },
+    {
+      "name": "Subagent completion direct fallback",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "yielded parent receives child completion through direct fallback",
+          "status": "pass",
+          "details": "QA-SUBAGENT-DIRECT-FALLBACK-OK"
+        }
+      ]
+    },
+    {
+      "name": "Subagent fanout synthesis",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "spawns sequential workers and folds both results back into the parent reply",
+          "status": "pass",
+          "details": "subagent-1: ok\nsubagent-2: ok"
+        }
+      ]
+    },
+    {
+      "name": "Personal tool safety followthrough",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "turns short approval into a safe read-backed answer",
+          "status": "pass",
+          "details": "PERSONAL-TOOL-SAFETY-OK"
+        }
+      ]
+    },
+    {
+      "name": "Empty-response retry budget exhausted",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "surfaces a retry error after empty-response exhaustion",
+          "status": "pass",
+          "details": "requests=5"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — edit",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises edit happy and failure paths",
+          "status": "pass",
+          "details": "edit mock provider happy planned args (diagnostic only): {\"path\":\"runtime-tool-fixture-edit.txt\",\"edits\":[{\"oldText\":\"before edit\\n\",\"newText\":\"after edit\\n\"}]}\nedit mock provider failure planned args (diagnostic only): {\"__qaFailureMode\":\"denied-input\"}"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — grep",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises grep happy and failure paths",
+          "status": "pass",
+          "details": "exec mock provider happy planned args (diagnostic only): {\"command\":\"echo runtime-tool-fixture\",\"timeout\":5}\nexec mock provider failure planned args (diagnostic only): {\"__qaFailureMode\":\"denied-input\"}"
+        }
+      ]
+    },
+    {
+      "name": "Personal share-safe diagnostics artifact",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "writes a useful share-safe diagnostics artifact",
+          "status": "pass",
+          "details": "Artifact: personal-diagnostics-summary.txt\nStatus: share-safe diagnostics summary ready\nPERSONAL-DIAGNOSTICS-SAFE-OK"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — bash",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises bash happy and failure paths",
+          "status": "pass",
+          "details": "exec mock provider happy planned args (diagnostic only): {\"command\":\"echo runtime-tool-fixture\",\"timeout\":5}\nexec mock provider failure planned args (diagnostic only): {\"__qaFailureMode\":\"denied-input\"}"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — session_status",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises session_status happy and failure paths",
+          "status": "pass",
+          "details": "session_status mock provider happy planned args (diagnostic only): {\"sessionKey\":\"current\"}\nsession_status mock provider failure planned args (diagnostic only): {\"__qaFailureMode\":\"denied-input\"}"
+        }
+      ]
+    },
+    {
+      "name": "Source and docs discovery report",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "reads seeded material and emits a protocol report",
+          "status": "pass",
+          "details": "Worked:\n\n• Read seeded QA material.\n• Expanded the report structure.\nFailed:\n• None observed in mock mode.\nBlocked:\n• No live provider evidence in this lane.\nFollow-up:\n• Re-run with a real model for qualitative coverage."
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 11,
+    "passed": 11,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 79698,
+    "gatewayProcessCpuMs": 19000,
+    "gatewayCpuCoreRatio": 0.238,
+    "gatewayProcessRssStartBytes": 1582530560,
+    "gatewayProcessRssEndBytes": 809754624,
+    "gatewayProcessRssDeltaBytes": -772775936,
+    "gatewayProcessRssPeakBytes": 1582727168,
+    "gatewayProcessRssPeakDeltaBytes": 196608,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:12:16.106Z",
+        "gatewayProcessRssBytes": 1582530560
+      },
+      {
+        "label": "scenario:anthropic-opus-api-key-smoke:start",
+        "at": "2026-07-03T13:12:16.114Z",
+        "gatewayProcessRssBytes": 1582653440
+      },
+      {
+        "label": "scenario:anthropic-opus-api-key-smoke:finish",
+        "at": "2026-07-03T13:12:16.128Z",
+        "gatewayProcessRssBytes": 1582657536
+      },
+      {
+        "label": "scenario:subagent-completion-direct-fallback:start",
+        "at": "2026-07-03T13:12:16.137Z",
+        "gatewayProcessRssBytes": 1582727168
+      },
+      {
+        "label": "scenario:subagent-completion-direct-fallback:finish",
+        "at": "2026-07-03T13:12:40.878Z",
+        "gatewayProcessRssBytes": 592064512
+      },
+      {
+        "label": "scenario:subagent-fanout-synthesis:start",
+        "at": "2026-07-03T13:12:40.892Z",
+        "gatewayProcessRssBytes": 592064512
+      },
+      {
+        "label": "scenario:subagent-fanout-synthesis:finish",
+        "at": "2026-07-03T13:12:50.573Z",
+        "gatewayProcessRssBytes": 698052608
+      },
+      {
+        "label": "scenario:personal-tool-safety-followthrough:start",
+        "at": "2026-07-03T13:12:50.583Z",
+        "gatewayProcessRssBytes": 698056704
+      },
+      {
+        "label": "scenario:personal-tool-safety-followthrough:finish",
+        "at": "2026-07-03T13:12:53.305Z",
+        "gatewayProcessRssBytes": 752644096
+      },
+      {
+        "label": "scenario:empty-response-retry-budget-exhausted:start",
+        "at": "2026-07-03T13:12:53.320Z",
+        "gatewayProcessRssBytes": 752644096
+      },
+      {
+        "label": "scenario:empty-response-retry-budget-exhausted:finish",
+        "at": "2026-07-03T13:12:55.211Z",
+        "gatewayProcessRssBytes": 759513088
+      },
+      {
+        "label": "scenario:runtime-tool-edit:start",
+        "at": "2026-07-03T13:12:55.223Z",
+        "gatewayProcessRssBytes": 759513088
+      },
+      {
+        "label": "scenario:runtime-tool-edit:finish",
+        "at": "2026-07-03T13:12:58.044Z",
+        "gatewayProcessRssBytes": 761581568
+      },
+      {
+        "label": "scenario:runtime-tool-grep:start",
+        "at": "2026-07-03T13:12:58.048Z",
+        "gatewayProcessRssBytes": 761581568
+      },
+      {
+        "label": "scenario:runtime-tool-grep:finish",
+        "at": "2026-07-03T13:13:01.160Z",
+        "gatewayProcessRssBytes": 777932800
+      },
+      {
+        "label": "scenario:personal-share-safe-diagnostics-artifact:start",
+        "at": "2026-07-03T13:13:01.165Z",
+        "gatewayProcessRssBytes": 777932800
+      },
+      {
+        "label": "scenario:personal-share-safe-diagnostics-artifact:finish",
+        "at": "2026-07-03T13:13:03.003Z",
+        "gatewayProcessRssBytes": 780771328
+      },
+      {
+        "label": "scenario:runtime-tool-bash:start",
+        "at": "2026-07-03T13:13:03.012Z",
+        "gatewayProcessRssBytes": 780771328
+      },
+      {
+        "label": "scenario:runtime-tool-bash:finish",
+        "at": "2026-07-03T13:13:05.440Z",
+        "gatewayProcessRssBytes": 800452608
+      },
+      {
+        "label": "scenario:runtime-tool-session-status:start",
+        "at": "2026-07-03T13:13:05.452Z",
+        "gatewayProcessRssBytes": 800452608
+      },
+      {
+        "label": "scenario:runtime-tool-session-status:finish",
+        "at": "2026-07-03T13:13:08.615Z",
+        "gatewayProcessRssBytes": 809701376
+      },
+      {
+        "label": "scenario:source-docs-discovery-report:start",
+        "at": "2026-07-03T13:13:08.620Z",
+        "gatewayProcessRssBytes": 809701376
+      },
+      {
+        "label": "scenario:source-docs-discovery-report:finish",
+        "at": "2026-07-03T13:13:09.839Z",
+        "gatewayProcessRssBytes": 809754624
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:13:09.859Z",
+        "gatewayProcessRssBytes": 809754624
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:11:50.141Z",
+    "finishedAt": "2026-07-03T13:13:09.839Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "anthropic-opus-api-key-smoke",
+      "subagent-completion-direct-fallback",
+      "subagent-fanout-synthesis",
+      "personal-tool-safety-followthrough",
+      "empty-response-retry-budget-exhausted",
+      "runtime-tool-edit",
+      "runtime-tool-grep",
+      "personal-share-safe-diagnostics-artifact",
+      "runtime-tool-bash",
+      "runtime-tool-session-status",
+      "source-docs-discovery-report"
+    ],
+    "runtimePair": null
+  }
+}

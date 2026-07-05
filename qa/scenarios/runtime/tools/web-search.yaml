@@ -44,7 +44,10 @@ scenario:
         action: hard gate in the standard direct-loading tier
         reason: web_search is an OpenClaw integration tool and must stay visible and callable under OpenClaw and Codex direct runtime parity.
       promptSnippet: "target=web_search"
+<<<<<<< HEAD
       failurePrompt: "tool search qa failure target=web_search. Call web_search exactly once with query OPENCLAW_QA_WEB_SEARCH_DENIED_INPUT and then summarize the failure."
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       failurePromptSnippet: "failure target=web_search"
 
 flow:

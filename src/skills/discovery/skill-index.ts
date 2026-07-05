@@ -18,6 +18,18 @@ export type SkillIndexEntry = {
   userInvocable: boolean;
 };
 
+<<<<<<< HEAD
+=======
+type SkillIndex = {
+  entries: SkillIndexEntry[];
+  runtimeEntries: SkillEntry[];
+  promptVisibleEntries: SkillEntry[];
+  userInvocableEntries: SkillEntry[];
+  byName: ReadonlyMap<string, SkillIndexEntry>;
+  byNormalizedName: ReadonlyMap<string, readonly SkillIndexEntry[]>;
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type BuildSkillIndexOptions = {
   bundledNames?: ReadonlySet<string>;
   agentSkillFilter?: readonly string[];
@@ -75,6 +87,45 @@ export function buildSkillIndexEntries(
   return entries.map((entry) => createSkillIndexEntry(entry, opts, agentSkillSet));
 }
 
+<<<<<<< HEAD
+=======
+export function buildSkillIndex(
+  entries: readonly SkillEntry[],
+  opts?: BuildSkillIndexOptions,
+): SkillIndex {
+  const byName = new Map<string, SkillIndexEntry>();
+  const normalized = new Map<string, SkillIndexEntry[]>();
+  const indexedEntries = buildSkillIndexEntries(entries, opts);
+  const runtimeEntries: SkillEntry[] = [];
+  const promptVisibleEntries: SkillEntry[] = [];
+  const userInvocableEntries: SkillEntry[] = [];
+
+  for (const indexed of indexedEntries) {
+    byName.set(indexed.name, indexed);
+    addNormalizedEntry(normalized, indexed.normalizedName, indexed);
+    addNormalizedEntry(normalized, indexed.normalizedSkillKey, indexed);
+    if (indexed.runtimeVisible) {
+      runtimeEntries.push(indexed.entry);
+    }
+    if (indexed.promptVisible) {
+      promptVisibleEntries.push(indexed.entry);
+    }
+    if (indexed.userInvocable) {
+      userInvocableEntries.push(indexed.entry);
+    }
+  }
+
+  return {
+    entries: indexedEntries,
+    runtimeEntries,
+    promptVisibleEntries,
+    userInvocableEntries,
+    byName,
+    byNormalizedName: normalized,
+  };
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function createSkillIndexEntry(
   entry: SkillEntry,
   opts: BuildSkillIndexOptions | undefined,
@@ -99,3 +150,24 @@ function createSkillIndexEntry(
     userInvocable: isSkillUserInvocable(entry),
   };
 }
+<<<<<<< HEAD
+=======
+
+function addNormalizedEntry(
+  normalized: Map<string, SkillIndexEntry[]>,
+  key: string,
+  entry: SkillIndexEntry,
+) {
+  if (!key) {
+    return;
+  }
+  const existing = normalized.get(key);
+  if (existing) {
+    if (!existing.includes(entry)) {
+      existing.push(entry);
+    }
+    return;
+  }
+  normalized.set(key, [entry]);
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

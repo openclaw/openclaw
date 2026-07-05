@@ -205,6 +205,7 @@ describe("package-mac-app plist stamping", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("prefers repo Corepack pnpm over a global pnpm shim", () => {
     const helperBlock = getPackageManagerHelperBlock();
     const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-root-"));
@@ -267,6 +268,8 @@ describe("package-mac-app plist stamping", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("fails with an actionable error when neither pnpm nor corepack pnpm is available", () => {
     const helperBlock = getPackageManagerHelperBlock();
     const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-root-"));
@@ -377,8 +380,11 @@ describe("package-mac-app plist stamping", () => {
     expect(macosCi).toContain("test/scripts/package-mac-app.test.ts");
     expect(macosCi).toContain("test/scripts/package-mac-dist.test.ts");
     expect(macosCi).toContain("test/scripts/create-dmg.test.ts");
+<<<<<<< HEAD
     expect(macosCi).toContain("test/scripts/codesign-mac-app.test.ts");
     expect(macosCi).toContain("test/scripts/notarize-mac-artifact.test.ts");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("fails closed when required Swift resources are missing", () => {
@@ -387,15 +393,22 @@ describe("package-mac-app plist stamping", () => {
       script.indexOf(
         'OPENCLAWKIT_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClawKit_OpenClawKit.bundle"',
       ),
+<<<<<<< HEAD
       script.indexOf("running_packaged_app_pids()"),
+=======
+      script.indexOf('echo "📦 Copying Textual resources"'),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
 
     expect(openClawKitBlock).toContain("ERROR: OpenClawKit resource bundle not found");
     expect(openClawKitBlock).toContain("exit 1");
     expect(openClawKitBlock).not.toContain("WARN:");
     expect(openClawKitBlock).not.toContain("continuing");
+<<<<<<< HEAD
     expect(script).not.toContain("Textual resource bundle");
     expect(script).not.toContain("ALLOW_MISSING_TEXTUAL_BUNDLE");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("does not mask required Info.plist stamp failures", () => {

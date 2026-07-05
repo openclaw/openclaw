@@ -33,6 +33,26 @@ type AttemptWorkspaceBootstrapRoutingInput = Omit<
   bootstrapFiles?: readonly WorkspaceBootstrapFile[];
 };
 
+<<<<<<< HEAD
+=======
+/**
+ * Maps a resolved bootstrap mode to concrete prompt destinations. Today only
+ * full bootstrap enters system context; limited/none intentionally avoid
+ * runtime-context injection until that path has a separate contract.
+ */
+export function resolveBootstrapContextTargets(params: {
+  bootstrapMode: BootstrapMode;
+}): Pick<
+  AttemptBootstrapRouting,
+  "includeBootstrapInSystemContext" | "includeBootstrapInRuntimeContext"
+> {
+  return {
+    includeBootstrapInSystemContext: params.bootstrapMode === "full",
+    includeBootstrapInRuntimeContext: false,
+  };
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveAttemptBootstrapRouting(
   params: AttemptBootstrapRoutingInput,
 ): AttemptBootstrapRouting {
@@ -49,11 +69,30 @@ function resolveAttemptBootstrapRouting(
 
   return {
     bootstrapMode,
+<<<<<<< HEAD
     includeBootstrapInSystemContext: bootstrapMode === "full",
     includeBootstrapInRuntimeContext: false,
   };
 }
 
+=======
+    ...resolveBootstrapContextTargets({ bootstrapMode }),
+  };
+}
+
+export function hasBootstrapFileContent(files?: readonly WorkspaceBootstrapFile[]): boolean {
+  return (
+    files?.some(
+      (file) =>
+        file.name === DEFAULT_BOOTSTRAP_FILENAME &&
+        !file.missing &&
+        typeof file.content === "string" &&
+        file.content.trim().length > 0,
+    ) ?? false
+  );
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Resolves workspace bootstrap routing after checking pending state and
  * hook-provided bootstrap files. Hook content counts as both pending bootstrap
@@ -66,6 +105,7 @@ export async function resolveAttemptWorkspaceBootstrapRouting(
   const workspaceBootstrapPending = await params.isWorkspaceBootstrapPending(
     params.resolvedWorkspace,
   );
+<<<<<<< HEAD
   const hasHookBootstrapContent =
     params.bootstrapFiles?.some(
       (file) =>
@@ -74,6 +114,9 @@ export async function resolveAttemptWorkspaceBootstrapRouting(
         typeof file.content === "string" &&
         file.content.trim().length > 0,
     ) ?? false;
+=======
+  const hasHookBootstrapContent = hasBootstrapFileContent(params.bootstrapFiles);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return resolveAttemptBootstrapRouting({
     ...params,
     workspaceBootstrapPending: workspaceBootstrapPending || hasHookBootstrapContent,

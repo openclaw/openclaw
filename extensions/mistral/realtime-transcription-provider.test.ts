@@ -38,6 +38,7 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     });
   });
 
+<<<<<<< HEAD
   it("normalizes pasted API key artifacts for realtime auth headers", () => {
     const provider = buildMistralRealtimeTranscriptionProvider();
     const resolved = provider.resolveConfig?.({
@@ -54,6 +55,8 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     expect(resolved?.apiKey).toBe("sk-mistral");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("builds a Mistral realtime websocket URL", () => {
     const url = testing.toMistralRealtimeWsUrl({
       apiKey: "mistral-key",

@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -7,6 +8,11 @@ import { parseArgs as parseSingleBuildArgs } from "../../scripts/lib/plugin-npm-
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+=======
+import { describe, expect, it } from "vitest";
+import { parseArgs as parseBulkBuildArgs } from "../../scripts/check-plugin-npm-runtime-builds.mjs";
+import { parseArgs as parseSingleBuildArgs } from "../../scripts/lib/plugin-npm-runtime-build.mjs";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("plugin npm runtime build args", () => {
   it("parses explicit plugin package build targets", () => {
@@ -18,6 +24,7 @@ describe("plugin npm runtime build args", () => {
     expect(parseSingleBuildArgs(["extensions/slack"])).toEqual({
       packageDir: "extensions/slack",
     });
+<<<<<<< HEAD
     expect(parseSingleBuildArgs(["--", "extensions/slack"])).toEqual({
       packageDir: "extensions/slack",
     });
@@ -32,6 +39,8 @@ describe("plugin npm runtime build args", () => {
       help: true,
       packageDir: "",
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("rejects missing or option-looking package targets", () => {
@@ -39,6 +48,7 @@ describe("plugin npm runtime build args", () => {
     expect(() => parseBulkBuildArgs(["--package", "--package", "extensions/slack"])).toThrow(
       "missing value for --package",
     );
+<<<<<<< HEAD
     expect(() => parseBulkBuildArgs(["--package", "-h"])).toThrow("missing value for --package");
     expect(() => parseSingleBuildArgs(["--package"])).toThrow(
       "usage: node scripts/lib/plugin-npm-runtime-build.mjs <package-dir>",
@@ -87,5 +97,10 @@ describe("plugin npm runtime build args", () => {
         pluginDir: "demo",
       }),
     ).toEqual(["extensions/demo/assets/missing.js"]);
+=======
+    expect(() => parseSingleBuildArgs(["--package"])).toThrow(
+      "usage: node scripts/lib/plugin-npm-runtime-build.mjs <package-dir>",
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

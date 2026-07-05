@@ -256,7 +256,11 @@ function hasChatScope(ctx?: IMessageChatContext): boolean {
  * so comparing the raw strings would falsely flag the same chat as a
  * cross-chat target. Normalize both sides to the bare suffix.
  */
+<<<<<<< HEAD
 export function normalizeDirectChatIdentifier(raw: string): string {
+=======
+function normalizeDirectChatIdentifier(raw: string): string {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const trimmed = raw.trim();
   const lowered = trimmed.toLowerCase();
   for (const prefix of ["imessage;-;", "sms;-;", "any;-;"]) {

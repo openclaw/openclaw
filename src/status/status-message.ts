@@ -1,7 +1,10 @@
 // Status message helpers read and format stored status messages.
 import fs from "node:fs";
 import {
+<<<<<<< HEAD
   type FastMode,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -9,7 +12,10 @@ import {
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveExtraParams } from "../agents/embedded-agent-runner/extra-params.js";
+<<<<<<< HEAD
 import { resolveFastModeState } from "../agents/fast-mode.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveModelAuthMode } from "../agents/model-auth.js";
 import {
   areRuntimeModelRefsEquivalent,
@@ -35,11 +41,15 @@ import type {
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import {
   resolveMainSessionKey,
+<<<<<<< HEAD
   resolveFreshSessionTotalTokens,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
+<<<<<<< HEAD
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
@@ -48,6 +58,15 @@ import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readRecentSessionUsageFromTranscript } from "../gateway/session-transcript-readers.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
+=======
+  resolveFreshSessionTotalTokens,
+  type SessionEntry,
+  type SessionScope,
+} from "../config/sessions.js";
+import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readRecentSessionUsageFromTranscript } from "../gateway/session-transcript-readers.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import {
@@ -56,11 +75,18 @@ import {
 } from "../media-understanding/runner.entries.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+<<<<<<< HEAD
 import { formatFastModeStatusValue } from "../shared/fast-mode.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import {
   estimateUsageCost,
   formatTokenCount,
+=======
+import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
+import {
+  estimateUsageCost,
+  formatTokenCount as formatTokenCountShared,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   formatUsd,
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
@@ -73,6 +99,11 @@ type AgentConfig = Partial<AgentDefaults> & {
   model?: AgentDefaults["model"] | string;
 };
 
+<<<<<<< HEAD
+=======
+export const formatTokenCount = formatTokenCountShared;
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type QueueStatus = {
   mode?: string;
   depth?: number;
@@ -96,7 +127,11 @@ export type StatusArgs = {
   sessionStorePath?: string;
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
+<<<<<<< HEAD
   resolvedFast?: FastMode;
+=======
+  resolvedFast?: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolvedHarness?: string;
   resolvedVerbose?: VerboseLevel;
   resolvedReasoning?: ReasoningLevel;
@@ -325,10 +360,15 @@ const readUsageFromSessionLog = (
     const snapshot = readRecentSessionUsageFromTranscript(
       {
         agentId: agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined),
+<<<<<<< HEAD
         sessionEntry,
         sessionFile: logPath,
         sessionId,
         sessionKey,
+=======
+        sessionFile: sessionEntry?.sessionFile,
+        sessionId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         storePath,
       },
       256 * 1024,
@@ -516,11 +556,14 @@ function resolveChannelModelNote(params: {
     groupChannel: params.entry.groupChannel,
     groupSubject: params.entry.subject,
     parentSessionKey: params.parentSessionKey,
+<<<<<<< HEAD
     directUserIds: [
       params.entry.origin?.nativeDirectUserId,
       params.entry.origin?.from,
       params.entry.origin?.to,
     ],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   if (!channelOverride) {
     return undefined;
@@ -593,17 +636,24 @@ export function buildStatusMessage(args: StatusArgs): string {
   });
   const selectedProvider = entry?.providerOverride ?? resolved.provider ?? DEFAULT_PROVIDER;
   const selectedModel = entry?.modelOverride ?? resolved.model ?? DEFAULT_MODEL;
+<<<<<<< HEAD
   const parseSelectedProvider = Boolean(
     entry?.modelOverride?.trim() && !entry?.providerOverride?.trim(),
   );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const modelRefs = resolveSelectedAndActiveModel({
     selectedProvider,
     selectedModel,
     sessionEntry: entry,
+<<<<<<< HEAD
     parseSelectedProvider,
   });
   const selectedLookupProvider = modelRefs.selected.provider || selectedProvider;
   const selectedLookupModel = modelRefs.selected.model || selectedModel;
+=======
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const initialFallbackState = resolveActiveFallbackState({
     selectedModelRef: modelRefs.selected.label || "unknown",
     activeModelRef: modelRefs.active.label || "unknown",
@@ -724,8 +774,13 @@ export function buildStatusMessage(args: StatusArgs): string {
   const runtimeDiffersFromSelected = activeModelLabel !== (modelRefs.selected.label || "unknown");
   const selectedContextTokens = resolveContextTokensForModel({
     cfg: contextConfig,
+<<<<<<< HEAD
     provider: selectedLookupProvider,
     model: selectedLookupModel,
+=======
+    provider: selectedProvider,
+    model: selectedModel,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     allowAsyncLoad: false,
   });
   const explicitRuntimeContextTokens =
@@ -746,8 +801,13 @@ export function buildStatusMessage(args: StatusArgs): string {
   const channelModelNote = resolveChannelModelNote({
     config: args.config,
     entry,
+<<<<<<< HEAD
     selectedProvider: selectedLookupProvider,
     selectedModel: selectedLookupModel,
+=======
+    selectedProvider,
+    selectedModel,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     parentSessionKey: args.parentSessionKey,
   });
   const persistedContextTokens =
@@ -894,6 +954,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const verboseLevel =
     args.resolvedVerbose ?? args.sessionEntry?.verboseLevel ?? args.agent?.verboseDefault ?? "off";
   const fastMode = args.resolvedFast ?? args.sessionEntry?.fastMode ?? false;
+<<<<<<< HEAD
   const fastModeState = resolveFastModeState({
     cfg: args.config,
     provider: activeProvider,
@@ -901,6 +962,8 @@ export function buildStatusMessage(args: StatusArgs): string {
     agentId: args.agentId,
     sessionEntry: args.sessionEntry,
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const reasoningLevel =
     args.resolvedReasoning ??
     args.sessionEntry?.reasoningLevel ??
@@ -921,6 +984,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   });
 
   const updatedAt = entry?.updatedAt;
+<<<<<<< HEAD
   const sessionStartedAt = resolveSessionLifecycleTimestamps({
     entry,
     agentId: args.agentId,
@@ -933,6 +997,10 @@ export function buildStatusMessage(args: StatusArgs): string {
   const sessionLine = [
     `Session: ${args.sessionKey ?? "unknown"}`,
     sessionDuration ? `duration ${sessionDuration}` : null,
+=======
+  const sessionLine = [
+    `Session: ${args.sessionKey ?? "unknown"}`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     typeof updatedAt === "number" ? `updated ${formatTimeAgo(now - updatedAt)}` : "no activity",
   ]
     .filter(Boolean)
@@ -989,10 +1057,14 @@ export function buildStatusMessage(args: StatusArgs): string {
     `Execution: ${execution.label}`,
     `Runtime: ${agentRuntimeLabel}`,
     `Think: ${thinkLevel}`,
+<<<<<<< HEAD
     `Fast: ${formatFastModeStatusValue({
       mode: fastMode,
       fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
     })}`,
+=======
+    `Fast: ${fastMode ? "on" : "off"}`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     textVerbosity ? `Text: ${textVerbosity}` : null,
     verboseLabel,
     traceLabel,
@@ -1013,7 +1085,11 @@ export function buildStatusMessage(args: StatusArgs): string {
     { config: args.config },
   );
   const selectedAuthMode =
+<<<<<<< HEAD
     normalizeAuthMode(args.modelAuth) ?? resolveModelAuthMode(selectedLookupProvider, args.config);
+=======
+    normalizeAuthMode(args.modelAuth) ?? resolveModelAuthMode(selectedProvider, args.config);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const rawSelectedAuthLabelValue =
     selectedAuthMode && selectedAuthMode !== "unknown"
       ? (args.modelAuth ?? selectedAuthMode)
@@ -1076,12 +1152,25 @@ export function buildStatusMessage(args: StatusArgs): string {
     !areRuntimeModelRefsEquivalent(selectedModelLabel, configuredDefaultModelLabel, {
       config: args.config,
     });
+<<<<<<< HEAD
   const overrideLabel = configDefaultDiffersFromSession
     ? ` · pinned session; config primary ${configuredDefaultModelLabel} · clear /model default`
     : "";
   const modelLines = [
     `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}${overrideLabel}`,
   ];
+=======
+  const modelLines = configDefaultDiffersFromSession
+    ? [
+        `🧠 Configured default: ${configuredDefaultModelLabel}`,
+        `📌 Session selected: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`,
+        "⚠️ Reason: session override",
+        `⚠️ This session is pinned to ${selectedModelLabel}; config primary ${configuredDefaultModelLabel} will apply to new/unpinned sessions.`,
+        "↩️ Clear with: /model default",
+        "📖 Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
+      ]
+    : [`🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   // Show configured fallback models (from agent model config)
   const configuredFallbacks = (() => {

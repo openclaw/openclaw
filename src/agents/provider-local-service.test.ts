@@ -187,6 +187,7 @@ describe("provider local service", () => {
     await waitForProbeFailure(healthUrl);
   });
 
+<<<<<<< HEAD
   it("cancels local service health probe response bodies", async () => {
     let socketClosed = false;
     const sockets = new Set<net.Socket>();
@@ -241,6 +242,8 @@ describe("provider local service", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("serializes concurrent cold starts for the same local service", async () => {
     const port = await freePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;

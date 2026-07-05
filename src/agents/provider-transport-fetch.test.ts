@@ -1130,6 +1130,7 @@ describe("buildGuardedModelFetch", () => {
     expect(items).toEqual([{ ok: true }]);
   });
 
+<<<<<<< HEAD
   it("handles a large transport chunk containing many valid small SSE events", async () => {
     // Regression: one TCP read can deliver >64 KiB of already-delimited SSE
     // events; the cap must apply only to the unterminated tail, not the full chunk.
@@ -1161,6 +1162,8 @@ describe("buildGuardedModelFetch", () => {
     expect(items[0]).toEqual({ ok: true });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("synthesizes SSE frames for JSON bodies returned to streaming OpenAI SDK requests", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response('  {"ok": true}  ', {
@@ -1369,6 +1372,7 @@ describe("buildGuardedModelFetch", () => {
     expect(refreshTimeout).toHaveBeenCalledTimes(2);
   });
 
+<<<<<<< HEAD
   it("errors on oversized SSE body without event boundary in sanitizer", async () => {
     const oversized = "x".repeat(65 * 1024);
     const encoder = new TextEncoder();
@@ -1465,6 +1469,8 @@ describe("buildGuardedModelFetch", () => {
     expect(String(caught)).toMatch(/exceeded.*bytes while synthesizing SSE/i);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   describe("long retry-after handling", () => {
     const anthropicModel = {
       id: "sonnet-4.6",

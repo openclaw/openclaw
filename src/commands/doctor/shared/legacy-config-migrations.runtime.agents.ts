@@ -1,10 +1,13 @@
 // Legacy runtime agent config migrations for memory, heartbeat, sandbox, and runtime policy keys.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+<<<<<<< HEAD
 import {
   isCanonicalToolProviderPolicyKey,
   normalizeToolProviderPolicyKey,
 } from "../../../agents/provider-tool-policy.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isKnownCoreToolId } from "../../../agents/tool-catalog.js";
 import { isToolAllowedByPolicyName } from "../../../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../../../agents/tool-policy-shared.js";
@@ -71,6 +74,7 @@ const LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES: LegacyConfigRule[] = [
   },
 ];
 
+<<<<<<< HEAD
 const LEGACY_MEMORY_SEARCH_STORE_PATH_RULES: LegacyConfigRule[] = [
   {
     path: ["memorySearch", "store", "path"],
@@ -90,6 +94,8 @@ const LEGACY_MEMORY_SEARCH_STORE_PATH_RULES: LegacyConfigRule[] = [
   },
 ];
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const HEARTBEAT_RULE: LegacyConfigRule = {
   path: ["heartbeat"],
   message:
@@ -414,6 +420,7 @@ function hasAgentListLegacyMemorySearchAutoProvider(value: unknown): boolean {
   );
 }
 
+<<<<<<< HEAD
 function hasMemorySearchStorePath(value: unknown): boolean {
   return typeof getRecord(getRecord(value)?.store)?.path === "string";
 }
@@ -438,6 +445,8 @@ function removeLegacyMemorySearchStorePath(
   changes.push(`Removed ${pathLabel}.store.path; memory indexes now use each agent database.`);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function rewriteLegacyMemorySearchAutoProvider(
   memorySearch: Record<string, unknown> | null,
   pathLabel: string,
@@ -1032,6 +1041,24 @@ function addHandledProviderPolicyKey(handledProviders: Set<string>, providerKey:
   handledProviders.add(normalizeToolProviderPolicyKey(providerKey));
 }
 
+<<<<<<< HEAD
+=======
+function normalizeToolProviderPolicyKey(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  const slashIndex = normalized.indexOf("/");
+  if (slashIndex <= 0) {
+    return normalizeProviderId(normalized);
+  }
+  const provider = normalizeProviderId(normalized.slice(0, slashIndex));
+  const modelId = normalized.slice(slashIndex + 1);
+  return modelId ? `${provider}/${modelId}` : provider;
+}
+
+function isCanonicalToolProviderPolicyKey(value: string): boolean {
+  return value.trim().toLowerCase() === normalizeToolProviderPolicyKey(value);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function buildInheritedProviderPolicyLookup(
   inheritedByProvider: Record<string, unknown> | null | undefined,
 ): Map<
@@ -1395,6 +1422,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     },
   }),
   defineLegacyConfigMigration({
+<<<<<<< HEAD
     id: "memorySearch.store.path->agent-database",
     describe: "Remove legacy memory search sidecar index paths",
     legacyRules: LEGACY_MEMORY_SEARCH_STORE_PATH_RULES,
@@ -1421,6 +1449,8 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     },
   }),
   defineLegacyConfigMigration({
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     id: "heartbeat->agents.defaults.heartbeat",
     describe: "Move top-level heartbeat to agents.defaults.heartbeat/channels.defaults.heartbeat",
     legacyRules: [HEARTBEAT_RULE],

@@ -24,7 +24,10 @@ import {
   QA_CHANNEL_REQUIRED_PLUGIN_IDS,
 } from "./qa-channel-transport.js";
 import { buildQaGatewayConfig } from "./qa-gateway-config.js";
+<<<<<<< HEAD
 import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type ModelRow = {
   key: string;
@@ -121,6 +124,7 @@ function killProcessTree(pid: number | undefined, signal: NodeJS.Signals) {
   }
   try {
     if (process.platform === "win32") {
+<<<<<<< HEAD
       const killer = spawn(
         resolveQaWindowsSystem32ExePath("taskkill.exe"),
         ["/pid", String(pid), "/t", "/f"],
@@ -129,6 +133,12 @@ function killProcessTree(pid: number | undefined, signal: NodeJS.Signals) {
           windowsHide: true,
         },
       );
+=======
+      const killer = spawn("taskkill", ["/pid", String(pid), "/t", "/f"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       killer.once("error", () => {
         try {
           process.kill(pid, signal);
@@ -212,7 +222,10 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
     await new Promise<void>((resolve, reject) => {
       let aborted = params.signal?.aborted === true;
       let forceKillTimer: NodeJS.Timeout | undefined;
+<<<<<<< HEAD
       let forceKillAt: number | undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const child = spawn(nodeExecPath, ["dist/index.js", "models", "list", "--all", "--json"], {
         cwd: params.repoRoot,
         env: {
@@ -238,6 +251,7 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
         }
       };
       const finishAbortedCatalogLoad = async () => {
+<<<<<<< HEAD
         cleanupAbortListener();
         const graceRemainingMs =
           forceKillAt === undefined
@@ -250,20 +264,32 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
           clearTimeout(forceKillTimer);
           forceKillTimer = undefined;
         }
+=======
+        cleanup();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         if (processTreeIsAlive(child.pid)) {
           killProcessTree(child.pid, "SIGKILL");
           await waitForProcessTreeExit(child.pid, CATALOG_ABORT_KILL_GRACE_MS);
         }
+<<<<<<< HEAD
         forceKillAt = undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       };
       const abortCatalogLoad = () => {
         aborted = true;
         killProcessTree(child.pid, "SIGTERM");
+<<<<<<< HEAD
         forceKillAt = Date.now() + CATALOG_ABORT_KILL_GRACE_MS;
         forceKillTimer ??= setTimeout(() => {
           forceKillAt = undefined;
           killProcessTree(child.pid, "SIGKILL");
         }, CATALOG_ABORT_KILL_GRACE_MS);
+=======
+        forceKillTimer ??= setTimeout(() => {
+          killProcessTree(child.pid, "SIGKILL");
+        }, 1_000);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         forceKillTimer.unref();
       };
       if (aborted) {

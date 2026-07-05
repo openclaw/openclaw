@@ -500,16 +500,26 @@ function resolveStalledEmbeddedRunAbortMs(stuckSessionWarnMs: number): number {
 
 function isStalledEmbeddedRunRecoveryEligible(params: {
   classification: SessionAttentionClassification | undefined;
+<<<<<<< HEAD
   activity?: DiagnosticSessionActivitySnapshot;
   stuckSessionAbortMs: number;
 }): boolean {
   const lastProgressAgeMs = params.activity?.lastProgressAgeMs;
+=======
+  ageMs: number;
+  stuckSessionAbortMs: number;
+}): boolean {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return (
     params.classification?.eventType === "session.stalled" &&
     params.classification.classification === "stalled_agent_run" &&
     params.classification.activeWorkKind === "embedded_run" &&
+<<<<<<< HEAD
     typeof lastProgressAgeMs === "number" &&
     lastProgressAgeMs >= params.stuckSessionAbortMs
+=======
+    params.ageMs >= params.stuckSessionAbortMs
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
 }
 
@@ -553,6 +563,10 @@ function isStalledModelCallRecoveryEligible(params: {
 function isActiveAbortRecoveryEligible(params: {
   classification: SessionAttentionClassification | undefined;
   activity?: DiagnosticSessionActivitySnapshot;
+<<<<<<< HEAD
+=======
+  ageMs: number;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   stuckSessionAbortMs: number;
 }): boolean {
   return (
@@ -1022,6 +1036,10 @@ export function logSessionAttention(
     isActiveAbortRecoveryEligible({
       classification,
       activity,
+<<<<<<< HEAD
+=======
+      ageMs: params.ageMs,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       stuckSessionAbortMs,
     });
   // The warning backoff throttles repeated log lines/events only. It must never
@@ -1325,6 +1343,10 @@ export function startDiagnosticHeartbeat(
           isActiveAbortRecoveryEligible({
             classification,
             activity,
+<<<<<<< HEAD
+=======
+            ageMs: attentionAgeMs,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             stuckSessionAbortMs,
           })
         ) {

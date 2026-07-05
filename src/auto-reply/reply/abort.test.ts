@@ -5,7 +5,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
+<<<<<<< HEAD
 import type { SessionAbortTargetResult } from "../../config/sessions/session-accessor.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   testing as abortTesting,
   getAbortMemory,
@@ -14,6 +17,10 @@ import {
   isAbortTrigger,
   resetAbortMemoryForTest,
   resolveAbortCutoffFromContext,
+<<<<<<< HEAD
+=======
+  resolveSessionEntryForKey,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   setAbortMemory,
   stopSubagentsForRequester,
   shouldSkipMessageByAbortCutoff,
@@ -382,6 +389,35 @@ describe("abort detection", () => {
     ).toBe(false);
   });
 
+<<<<<<< HEAD
+=======
+  it("resolves session entry when key exists in store", () => {
+    const store = {
+      "session-1": { sessionId: "abc", updatedAt: 0 },
+    } as const;
+    expect(resolveSessionEntryForKey(store, "session-1")).toEqual({
+      entry: store["session-1"],
+      key: "session-1",
+    });
+    expect(resolveSessionEntryForKey(store, "session-2")).toStrictEqual({});
+    expect(resolveSessionEntryForKey(undefined, "session-1")).toStrictEqual({});
+  });
+
+  it("resolves Telegram forum topic session when lookup key has different casing than store", () => {
+    // Store normalizes keys to lowercase; caller may pass mixed-case. /stop in topic must find entry.
+    const storeKey = "agent:main:telegram:group:-1001234567890:topic:99";
+    const lookupKey = "Agent:Main:Telegram:Group:-1001234567890:Topic:99";
+    const store = {
+      [storeKey]: { sessionId: "agent-topic-99", updatedAt: 0 },
+    } as Record<string, { sessionId: string; updatedAt: number }>;
+    // Direct lookup fails (store uses lowercase keys); normalization fallback must succeed.
+    expect(store[lookupKey]).toBeUndefined();
+    const result = resolveSessionEntryForKey(store, lookupKey);
+    expect(result.entry?.sessionId).toBe("agent-topic-99");
+    expect(result.key).toBe(storeKey);
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("fast-aborts even when text commands are disabled", async () => {
     const { cfg } = await createAbortConfig({ commandsTextEnabled: false });
 
@@ -447,6 +483,7 @@ describe("abort detection", () => {
     expectSessionLaneCleared(sessionKey);
   });
 
+<<<<<<< HEAD
   it("fast-abort resolves canonical stored session identity before metadata persistence", async () => {
     const storeKey = "agent:main:telegram:group:-1001234567890:topic:99";
     const lookupKey = "Agent:Main:Telegram:Group:-1001234567890:Topic:99";
@@ -681,6 +718,8 @@ describe("abort detection", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("plain-language stop on ACP-bound session triggers ACP cancel", async () => {
     const sessionKey = "agent:codex:acp:test-1";
     const sessionId = "session-123";

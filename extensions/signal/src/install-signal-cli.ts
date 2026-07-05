@@ -105,7 +105,11 @@ export function pickAsset(
   }
 
   if (platform === "darwin") {
+<<<<<<< HEAD
     return byName(/macos|osx|darwin/);
+=======
+    return byName(/macos|osx|darwin/) || archives[0];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   if (platform === "win32") {
@@ -228,7 +232,11 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
     return {
       ok: false,
       error:
+<<<<<<< HEAD
         `No native signal-cli build is available for ${process.platform}/${process.arch}. ` +
+=======
+        `No native signal-cli build is available for ${process.arch}. ` +
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         "Install Homebrew (https://brew.sh) and try again, or install signal-cli manually.",
     };
   }
@@ -372,9 +380,15 @@ export async function installSignalCli(runtime: RuntimeEnv): Promise<SignalInsta
   }
 
   // The official signal-cli GitHub releases only ship a native binary for
+<<<<<<< HEAD
   // x86-64 Linux.  Other platforms use Homebrew instead of guessing from
   // unrelated release archives.
   const hasNativeRelease = process.platform === "linux" && process.arch === "x64";
+=======
+  // x86-64 Linux.  On other architectures (arm64, armv7, etc.) we delegate
+  // to Homebrew which builds from source and bundles the JRE automatically.
+  const hasNativeRelease = process.platform !== "linux" || process.arch === "x64";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   if (hasNativeRelease) {
     return installSignalCliFromRelease(runtime);

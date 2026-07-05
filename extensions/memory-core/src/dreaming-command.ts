@@ -120,3 +120,15 @@ export async function handleDreamingCommand(api: OpenClawPluginApi, ctx: PluginC
 
   return { text: formatUsage(formatStatus(currentConfig)) };
 }
+<<<<<<< HEAD
+=======
+
+export function registerDreamingCommand(api: OpenClawPluginApi): void {
+  api.registerCommand({
+    name: "dreaming",
+    description: "Enable or disable memory dreaming.",
+    acceptsArgs: true,
+    handler: async (ctx) => await handleDreamingCommand(api, ctx),
+  });
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

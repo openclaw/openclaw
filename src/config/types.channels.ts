@@ -33,7 +33,11 @@ export type ChannelDefaultsConfig = {
   botLoopProtection?: ChannelBotLoopProtectionConfig;
 };
 
+<<<<<<< HEAD
 /** Provider/channel/target model override map used by channel dispatch. Keys are channel-specific group IDs, thread IDs, channel names, or DM peer identifiers (see docs/gateway/config-channels.md). */
+=======
+/** Provider/channel/target model override map used by channel dispatch. */
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type ChannelModelByChannelConfig = Record<string, Record<string, string>>;
 
 export type ExtensionNestedPolicyConfig = {
@@ -127,7 +131,11 @@ export type ExtensionChannelConfig = {
 export interface ChannelsConfig {
   /** Shared defaults inherited by channel sections unless they override them. */
   defaults?: ChannelDefaultsConfig;
+<<<<<<< HEAD
   /** Map provider -> channel id / DM peer id -> model override. See docs/gateway/config-channels.md for supported key forms. */
+=======
+  /** Map provider -> channel id -> model override. */
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   modelByChannel?: ChannelModelByChannelConfig;
   discord?: DiscordConfig;
   googlechat?: GoogleChatConfig;

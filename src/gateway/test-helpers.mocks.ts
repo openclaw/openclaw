@@ -99,6 +99,7 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/agent-model-discovery.js")>(
     "../agents/agent-model-discovery.js",
   );
+<<<<<<< HEAD
   const modelSessions = await vi.importActual<typeof import("../agents/sessions/index.js")>(
     "../agents/sessions/index.js",
   );
@@ -106,6 +107,12 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
   const createActualRegistry = (...args: Parameters<typeof actual.discoverModels>) => {
     const modelsFile = path.join(args[1], "models.json");
     const Registry = modelSessions.ModelRegistry as unknown as {
+=======
+
+  const createActualRegistry = (...args: Parameters<typeof actual.discoverModels>) => {
+    const modelsFile = path.join(args[1], "models.json");
+    const Registry = actual.ModelRegistry as unknown as {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       create?: (
         authStorage: unknown,
         modelsFile: string,
@@ -330,5 +337,17 @@ vi.mock("../plugins/loader.js", async () => {
     loadOpenClawPlugins: () => getTestPluginRegistry(),
   };
 });
+<<<<<<< HEAD
+=======
+vi.mock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
+  sendWebChannelMessage: (...args: unknown[]) =>
+    (gatewayTestHoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
+}));
+vi.mock("/src/plugins/runtime/runtime-web-channel-plugin.js", () => ({
+  sendWebChannelMessage: (...args: unknown[]) =>
+    (gatewayTestHoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
+}));
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 process.env.OPENCLAW_SKIP_CHANNELS = "1";
 process.env.OPENCLAW_SKIP_CRON = "1";

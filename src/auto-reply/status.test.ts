@@ -109,7 +109,10 @@ describe("buildStatusMessage", () => {
       sessionEntry: {
         sessionId: "abc",
         updatedAt: 0,
+<<<<<<< HEAD
         sessionStartedAt: 1 * 60 * 60_000 + 46 * 60_000,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         inputTokens: 1200,
         outputTokens: 800,
         totalTokens: 16_000,
@@ -128,7 +131,11 @@ describe("buildStatusMessage", () => {
       pluginHealthLine: "🔌 Plugins: OK",
       modelAuth: "api-key",
       subagentsLine: "🤖 Subagents: 1\n- active run",
+<<<<<<< HEAD
       now: 4 * 60 * 60_000, // 4 hours after epoch
+=======
+      now: 10 * 60_000, // 10 minutes later
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     const normalized = normalizeTestText(text);
 
@@ -141,8 +148,12 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Context: 16k/32k (50%)");
     expect(normalized).toContain("Compactions: 2");
     expect(normalized).toContain("Session: agent:main:main");
+<<<<<<< HEAD
     expect(normalized).toContain("duration 2h 14m");
     expect(normalized).toContain("updated 4h ago");
+=======
+    expect(normalized).toContain("updated 10m ago");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(normalized).toContain("Execution: direct");
     expect(normalized).toContain("Runtime: OpenClaw Default");
     expect(normalized).not.toContain("Runner:");
@@ -1732,7 +1743,11 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
+<<<<<<< HEAD
     expect(normalized).toContain("Model: google/gemini-3.1-flash-lite");
+=======
+    expect(normalized).toContain("Session selected: google/gemini-3.1-flash-lite");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(normalized).not.toContain("Fallbacks:");
   });
 
@@ -1765,7 +1780,11 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Model: google-antigravity/claude-sonnet-4-6");
   });
 
+<<<<<<< HEAD
   it("renders session-selected model overrides compactly", () => {
+=======
+  it("warns when the session-selected model differs from the configured default", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const text = buildStatusMessage({
       agent: {
         model: "zhipu/glm-4.5-air",
@@ -1785,6 +1804,7 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
+<<<<<<< HEAD
     expect(normalized).toContain("Model: deepseek/deepseek-v4-flash");
     expect(normalized).toContain("pinned session; config primary zhipu/glm-4.5-air");
     expect(normalized).toContain("clear /model default");
@@ -1793,6 +1813,16 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Reason: session override");
     expect(normalized).not.toContain("This session is pinned");
     expect(normalized).not.toContain(
+=======
+    expect(normalized).toContain("Configured default: zhipu/glm-4.5-air");
+    expect(normalized).toContain("Session selected: deepseek/deepseek-v4-flash");
+    expect(normalized).toContain("Reason: session override");
+    expect(normalized).toContain(
+      "This session is pinned to deepseek/deepseek-v4-flash; config primary zhipu/glm-4.5-air will apply to new/unpinned sessions.",
+    );
+    expect(normalized).toContain("Clear with: /model default");
+    expect(normalized).toContain(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
     );
   });
@@ -2704,7 +2734,11 @@ describe("buildHelpMessage", () => {
   });
 
   it("includes /fast in help output", () => {
+<<<<<<< HEAD
     expect(buildHelpMessage()).toContain("/fast status|auto|on|off|default");
+=======
+    expect(buildHelpMessage()).toContain("/fast status|on|off|default");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("includes raw trace mode in help output", () => {

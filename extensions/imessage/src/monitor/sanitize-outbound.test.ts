@@ -49,6 +49,7 @@ describe("sanitizeOutboundText", () => {
     expect(result).not.toMatch(/^assistant:$/m);
   });
 
+<<<<<<< HEAD
   it("preserves prose lines that merely end with 'user:'/'system:'", () => {
     expect(sanitizeOutboundText("Please send this reply to the user:")).toBe(
       "Please send this reply to the user:",
@@ -58,6 +59,8 @@ describe("sanitizeOutboundText", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("collapses excessive blank lines after stripping", () => {
     const text = "Hello\n\n\n\n\nWorld";
     expect(sanitizeOutboundText(text)).toBe("Hello\n\nWorld");

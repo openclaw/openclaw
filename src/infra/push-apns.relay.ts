@@ -15,7 +15,10 @@ import { formatErrorMessage } from "./errors.js";
 import { normalizeHostname } from "./net/hostname.js";
 
 type ApnsRelayPushType = "alert" | "background";
+<<<<<<< HEAD
 type ApnsRelayEnvironment = "production" | "sandbox";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Resolved APNs relay endpoint and client timeout for gateway-originated sends. */
 export type ApnsRelayConfig = {
@@ -37,7 +40,11 @@ export type ApnsRelayPushResponse = {
   status: number;
   apnsId?: string;
   reason?: string;
+<<<<<<< HEAD
   environment?: ApnsRelayEnvironment;
+=======
+  environment: "production";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   tokenSuffix?: string;
 };
 
@@ -57,7 +64,10 @@ export type ApnsRelayRequestSender = (params: {
 
 /** Hosted APNs relay origin used only when registrations prove they were minted there. */
 export const DEFAULT_APNS_RELAY_BASE_URL = "https://ios-push-relay.openclaw.ai";
+<<<<<<< HEAD
 export const DEFAULT_APNS_SANDBOX_RELAY_BASE_URL = "https://ios-push-relay-sandbox.openclaw.ai";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const DEFAULT_APNS_RELAY_TIMEOUT_MS = 10_000;
 const GATEWAY_DEVICE_ID_HEADER = "x-openclaw-gateway-device-id";
 const GATEWAY_SIGNATURE_HEADER = "x-openclaw-gateway-signature";
@@ -103,6 +113,7 @@ function parseReason(value: unknown): string | undefined {
   return typeof value === "string" ? normalizeOptionalString(value) : undefined;
 }
 
+<<<<<<< HEAD
 function parseRelayEnvironment(value: unknown): ApnsRelayEnvironment | undefined {
   const normalized = typeof value === "string" ? normalizeLowercaseStringOrEmpty(value) : "";
   if (normalized === "sandbox" || normalized === "production") {
@@ -111,6 +122,8 @@ function parseRelayEnvironment(value: unknown): ApnsRelayEnvironment | undefined
   return undefined;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Validate and canonicalize an APNs relay base URL for config and registration origins. */
 export function normalizeApnsRelayBaseUrl(
   baseUrl: string,
@@ -179,6 +192,7 @@ export function resolveApnsRelayConfigFromEnv(
     };
   }
 
+<<<<<<< HEAD
   const hostedRelayBaseUrl =
     normalizedRegistrationOrigin?.value === DEFAULT_APNS_RELAY_BASE_URL
       ? DEFAULT_APNS_RELAY_BASE_URL
@@ -186,6 +200,13 @@ export function resolveApnsRelayConfigFromEnv(
         ? DEFAULT_APNS_SANDBOX_RELAY_BASE_URL
         : undefined;
   const baseUrl = explicitBaseUrl ?? hostedRelayBaseUrl;
+=======
+  const baseUrl =
+    explicitBaseUrl ??
+    (normalizedRegistrationOrigin?.value === DEFAULT_APNS_RELAY_BASE_URL
+      ? DEFAULT_APNS_RELAY_BASE_URL
+      : undefined);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const baseUrlSource = envBaseUrl
     ? "OPENCLAW_APNS_RELAY_BASE_URL"
     : configBaseUrl
@@ -257,6 +278,10 @@ async function sendApnsRelayRequest(params: {
       ok: false,
       status: response.status,
       reason: "RelayRedirectNotAllowed",
+<<<<<<< HEAD
+=======
+      environment: "production",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
   }
 
@@ -275,13 +300,20 @@ async function sendApnsRelayRequest(params: {
     typeof body.status === "number" && Number.isFinite(body.status)
       ? Math.trunc(body.status)
       : response.status;
+<<<<<<< HEAD
   const environment = parseRelayEnvironment(body.environment);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return {
     ok: typeof body.ok === "boolean" ? body.ok : response.ok && status >= 200 && status < 300,
     status,
     apnsId: parseReason(body.apnsId),
     reason: parseReason(body.reason),
+<<<<<<< HEAD
     ...(environment ? { environment } : {}),
+=======
+    environment: "production",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     tokenSuffix: parseReason(body.tokenSuffix),
   };
 }

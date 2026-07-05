@@ -301,7 +301,10 @@ export function resolveSessionAgentIds(params: {
   sessionKey?: string;
   config?: OpenClawConfig;
   agentId?: string;
+<<<<<<< HEAD
   fallbackAgentId?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }): {
   defaultAgentId: string;
   sessionAgentId: string;
@@ -309,14 +312,21 @@ export function resolveSessionAgentIds(params: {
   const defaultAgentId = resolveDefaultAgentId(params.config ?? {});
   const explicitAgentIdRaw = normalizeLowercaseStringOrEmpty(params.agentId);
   const explicitAgentId = explicitAgentIdRaw ? normalizeAgentId(explicitAgentIdRaw) : null;
+<<<<<<< HEAD
   const fallbackAgentIdRaw = normalizeLowercaseStringOrEmpty(params.fallbackAgentId);
   const fallbackAgentId = fallbackAgentIdRaw ? normalizeAgentId(fallbackAgentIdRaw) : null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const sessionKey = params.sessionKey?.trim();
   const normalizedSessionKey = sessionKey ? normalizeLowercaseStringOrEmpty(sessionKey) : undefined;
   const parsed = normalizedSessionKey ? parseAgentSessionKey(normalizedSessionKey) : null;
   const sessionAgentId =
+<<<<<<< HEAD
     explicitAgentId ??
     (parsed?.agentId ? normalizeAgentId(parsed.agentId) : (fallbackAgentId ?? defaultAgentId));
+=======
+    explicitAgentId ?? (parsed?.agentId ? normalizeAgentId(parsed.agentId) : defaultAgentId);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return { defaultAgentId, sessionAgentId };
 }
 
@@ -324,7 +334,10 @@ export function resolveSessionAgentId(params: {
   sessionKey?: string;
   config?: OpenClawConfig;
   agentId?: string;
+<<<<<<< HEAD
   fallbackAgentId?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }): string {
   return resolveSessionAgentIds(params).sessionAgentId;
 }

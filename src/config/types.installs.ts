@@ -16,6 +16,7 @@ export type InstallRecordBase = {
   clawhubPackage?: string;
   clawhubFamily?: "code-plugin" | "bundle-plugin";
   clawhubChannel?: "official" | "community" | "private";
+<<<<<<< HEAD
   clawhubTrustDisposition?: "clean" | "review-recommended" | "review-required" | "blocked";
   clawhubTrustScanStatus?: string;
   clawhubTrustModerationState?: string;
@@ -24,6 +25,8 @@ export type InstallRecordBase = {
   clawhubTrustStale?: boolean;
   clawhubTrustCheckedAt?: string;
   clawhubTrustAcknowledgedAt?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   artifactKind?: "legacy-zip" | "npm-pack";
   artifactFormat?: "zip" | "tgz";
   npmIntegrity?: string;

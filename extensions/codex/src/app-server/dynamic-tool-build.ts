@@ -19,7 +19,14 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
+<<<<<<< HEAD
 import { readCodexPluginConfig, type CodexPluginConfig } from "./config.js";
+=======
+import {
+  readCodexPluginConfig,
+  type CodexPluginConfig,
+} from "./config.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   filterCodexDynamicTools,
   isForcedPrivateQaCodexRuntime,
@@ -257,7 +264,10 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     ...sessionKeys,
     sessionId: params.sessionId,
     runId: params.runId,
+<<<<<<< HEAD
     approvalReviewerDeviceId: params.approvalReviewerDeviceId,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     agentDir,
     cwd: input.effectiveCwd ?? input.effectiveWorkspace,
     workspaceDir: input.effectiveWorkspace,
@@ -591,10 +601,16 @@ export function resolveCodexAppServerExecutionCwd(params: {
   nativeToolSurfaceEnabled: boolean;
   remoteWorkspaceRoot?: string;
 }): string {
+<<<<<<< HEAD
   const cwd =
     params.environment && params.nativeToolSurfaceEnabled
       ? params.environment.cwd
       : params.effectiveCwd;
+=======
+  const cwd = params.environment && params.nativeToolSurfaceEnabled
+    ? params.environment.cwd
+    : params.effectiveCwd;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return mapCodexAppServerRemoteWorkspacePath({
     value: cwd,
     localWorkspaceRoot: params.localWorkspaceRoot,

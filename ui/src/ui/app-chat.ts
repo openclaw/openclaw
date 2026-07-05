@@ -1,5 +1,8 @@
 // Control UI module implements app chat behavior.
+<<<<<<< HEAD
 import { isNonTerminalAgentRunStatus } from "../../../src/shared/agent-run-status.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { setLastActiveSessionKey } from "./app-last-active-session.ts";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
@@ -153,6 +156,7 @@ function setChatError(host: ChatHost, error: string | null) {
   host.chatError = error;
 }
 
+<<<<<<< HEAD
 type AcceptedChatSendAck = ChatSendAck & { status: "started" | "in_flight" | "ok" };
 type TerminalFailureChatSendAck = ChatSendAck & { status: "timeout" | "error" };
 
@@ -183,6 +187,8 @@ function formatTerminalChatSendAckError(
   return "The run ended before the message was accepted.";
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type ChatSendOptions = {
   confirmReset?: boolean;
   restoreDraft?: boolean;
@@ -1108,6 +1114,7 @@ async function sendQueuedChatMessage(
       requestDurationMs: roundedControlUiDurationMs(controlUiNowMs() - requestStartedAtMs),
       ...chatSendAckServerTimingEventFields(ack),
     });
+<<<<<<< HEAD
     if (isTerminalFailureChatSendAck(ack)) {
       const error = formatTerminalChatSendAckError(ack, "chat");
       updateQueuedMessageForSession(host, sessionKey, id, (item) => ({
@@ -1140,6 +1147,8 @@ async function sendQueuedChatMessage(
       });
       return "failed";
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     removeQueuedMessageWithoutReleasing(host, id, sessionKey);
     if (isVisibleSession()) {
       appendUserChatMessage(
@@ -1165,7 +1174,11 @@ async function sendQueuedChatMessage(
           },
         );
         void loadChatHistory(host as unknown as ChatState);
+<<<<<<< HEAD
       } else if (isNonTerminalAgentRunStatus(ack.status)) {
+=======
+      } else {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const hasAlreadyAdoptedRunStream =
           host.chatRunId === ack.runId && typeof host.chatStream === "string";
         host.chatRunId = ack.runId;
@@ -1177,6 +1190,7 @@ async function sendQueuedChatMessage(
           (host as ChatHost & { chatStreamStartedAt?: number | null }).chatStreamStartedAt =
             startedAt;
         }
+<<<<<<< HEAD
       } else {
         reconcileChatRunLifecycle(
           host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
@@ -1193,6 +1207,8 @@ async function sendQueuedChatMessage(
             armLocalTerminalReconcile: ack.runId === runId,
           },
         );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     }
     if (prepared.refreshSessions) {
@@ -1205,7 +1221,11 @@ async function sendQueuedChatMessage(
           ...createChatSessionsLoadOverrides(host),
           ...scopedAgentListParamsForRefreshTarget(host, refreshTarget),
         });
+<<<<<<< HEAD
       } else if (isNonTerminalAgentRunStatus(ack.status)) {
+=======
+      } else {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         host.refreshSessionsAfterChat.set(ack.runId, refreshTarget);
       }
     }
@@ -1438,21 +1458,32 @@ async function sendDetachedBtwMessage(
     previousAttachments?: ChatAttachment[];
   },
 ) {
+<<<<<<< HEAD
   const ack = await sendDetachedChatMessage(
+=======
+  const runId = await sendDetachedChatMessage(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     host as unknown as ChatState,
     message,
     opts?.attachments,
   );
+<<<<<<< HEAD
   const ok = isAcceptedChatSendAck(ack);
+=======
+  const ok = Boolean(runId);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!ok && opts?.previousDraft != null) {
     host.chatMessage = opts.previousDraft;
   }
   if (!ok && opts?.previousAttachments) {
     host.chatAttachments = opts.previousAttachments;
   }
+<<<<<<< HEAD
   if (isTerminalFailureChatSendAck(ack)) {
     setChatError(host, formatTerminalChatSendAckError(ack, "detached"));
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (ok) {
     setLastActiveSessionKey(
       host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
@@ -1484,11 +1515,16 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
   host.chatQueue = host.chatQueue.map((entry) =>
     entry.id === id ? { ...entry, kind: "steered", pendingRunId: activeRunId } : entry,
   );
+<<<<<<< HEAD
   const ack = await sendSteerChatMessage(
+=======
+  const runId = await sendSteerChatMessage(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     host as unknown as ChatState,
     message,
     hasAttachments ? attachments : undefined,
   );
+<<<<<<< HEAD
   if (!ack || isTerminalFailureChatSendAck(ack)) {
     host.chatQueue = host.chatQueue.map((entry) => (entry.id === id ? item : entry));
     if (isTerminalFailureChatSendAck(ack)) {
@@ -1499,6 +1535,12 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
   if (ack.status === "ok") {
     removeQueuedMessageWithoutReleasing(host, id, host.sessionKey);
   }
+=======
+  if (!runId) {
+    host.chatQueue = host.chatQueue.map((entry) => (entry.id === id ? item : entry));
+    return;
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   releaseChatAttachmentPayloads(attachments);
   setLastActiveSessionKey(
     host as unknown as Parameters<typeof setLastActiveSessionKey>[0],

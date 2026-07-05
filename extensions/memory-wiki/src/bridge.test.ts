@@ -150,6 +150,7 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(logLines).toHaveLength(2);
   });
 
+<<<<<<< HEAD
   it("skips generated artifacts from its own vault", async () => {
     const workspaceDir = await createBridgeWorkspace("self-import-workspace");
     const vaultDir = path.join(workspaceDir, "memory", "wiki");
@@ -222,6 +223,8 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(sourcePages.filter((name) => name.includes("memory-wiki-sources-"))).toEqual([]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("imports bridge artifacts from legacy providers without agent ids", async () => {
     const workspaceDir = await createBridgeWorkspace("legacy-agentids-workspace");
     const { rootDir: vaultDir, config } = await createVault({

@@ -14,9 +14,13 @@ export type ReplyPayload = Omit<InternalReplyPayload, "trustedLocalMedia">;
 export type { ReplyPayloadTtsSupplement } from "../auto-reply/reply-payload.js";
 export {
   buildTtsSupplementMediaPayload,
+<<<<<<< HEAD
   FAST_MODE_AUTO_PROGRESS_KIND,
   getReplyPayloadTtsSupplement,
   isFastModeAutoProgressPayload,
+=======
+  getReplyPayloadTtsSupplement,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   isReplyPayloadNonTerminalToolErrorWarning,
   isReplyPayloadTtsSupplement,
   markReplyPayloadAsTtsSupplement,

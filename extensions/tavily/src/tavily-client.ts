@@ -1,6 +1,9 @@
 // Tavily plugin module implements tavily client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+<<<<<<< HEAD
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   normalizeCacheKey,
@@ -27,7 +30,10 @@ const EXTRACT_CACHE = new Map<
   { value: Record<string, unknown>; expiresAt: number; insertedAt: number }
 >();
 const DEFAULT_SEARCH_COUNT = 5;
+<<<<<<< HEAD
 const TAVILY_EXTRACT_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type TavilySearchParams = {
   cfg?: OpenClawConfig;
@@ -75,7 +81,10 @@ async function postTavilyJson(params: {
   apiKey: string;
   body: Record<string, unknown>;
   errorLabel: string;
+<<<<<<< HEAD
   responseMaxBytes?: number;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }): Promise<Record<string, unknown>> {
   return postTrustedWebToolsJson(
     {
@@ -86,19 +95,32 @@ async function postTavilyJson(params: {
       errorLabel: params.errorLabel,
       extraHeaders: { "X-Client-Source": "openclaw" },
     },
+<<<<<<< HEAD
     async (response) =>
       readTavilyJsonResponse(response, params.errorLabel, {
         maxBytes: params.responseMaxBytes,
       }),
+=======
+    async (response) => readTavilyJsonResponse(response, params.errorLabel),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
 }
 
 async function readTavilyJsonResponse(
   response: Response,
   label: string,
+<<<<<<< HEAD
   opts?: { maxBytes?: number },
 ): Promise<Record<string, unknown>> {
   return await readProviderJsonResponse<Record<string, unknown>>(response, label, opts);
+=======
+): Promise<Record<string, unknown>> {
+  try {
+    return (await response.json()) as Record<string, unknown>;
+  } catch (cause) {
+    throw new Error(`${label}: malformed JSON response`, { cause });
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export async function runTavilySearch(
@@ -258,8 +280,11 @@ export async function runTavilyExtract(
     apiKey,
     body,
     errorLabel: "Tavily Extract",
+<<<<<<< HEAD
     // Extract can include raw page content and image lists, unlike search metadata.
     responseMaxBytes: TAVILY_EXTRACT_RESPONSE_MAX_BYTES,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   const rawResults = Array.isArray(payload.results) ? payload.results : [];

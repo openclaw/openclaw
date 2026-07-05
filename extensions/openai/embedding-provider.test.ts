@@ -2,6 +2,7 @@
 import type { MemoryEmbeddingProviderCreateOptions } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+<<<<<<< HEAD
 const DEFAULT_MOCK_CLIENT = {
   baseUrl: "https://embeddings.example/v1",
   headers: { Authorization: "Bearer test" },
@@ -11,6 +12,15 @@ const DEFAULT_MOCK_CLIENT = {
 const mocks = vi.hoisted(() => ({
   fetchRemoteEmbeddingVectors: vi.fn(async () => [[1, 0]]),
   resolveRemoteEmbeddingClient: vi.fn(async () => ({ ...DEFAULT_MOCK_CLIENT })),
+=======
+const mocks = vi.hoisted(() => ({
+  fetchRemoteEmbeddingVectors: vi.fn(async () => [[1, 0]]),
+  resolveRemoteEmbeddingClient: vi.fn(async () => ({
+    baseUrl: "https://embeddings.example/v1",
+    headers: { Authorization: "Bearer test" },
+    model: "text-embedding-3-small",
+  })),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
@@ -122,6 +132,7 @@ describe("OpenAI embedding provider", () => {
       }),
     );
   });
+<<<<<<< HEAD
 
   // --- openai/ prefix preservation ---
 
@@ -211,4 +222,6 @@ describe("OpenAI embedding provider", () => {
       errorPrefix: "openai embeddings failed",
     });
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

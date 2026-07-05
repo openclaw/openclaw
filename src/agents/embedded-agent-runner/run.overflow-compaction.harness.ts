@@ -113,6 +113,10 @@ export const mockedContextEngine = {
   })),
 };
 
+<<<<<<< HEAD
+=======
+export const mockedContextEngineCompact = mockedContextEngine.compact;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export const mockedCompactDirect = mockedContextEngine.compact;
 export const mockedResolveContextEngine = vi.fn(async () => mockedContextEngine);
 export const mockedResolveContextEngineOwnerPluginId = vi.fn(() => undefined);
@@ -332,8 +336,13 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedResolveContextEngine.mockResolvedValue(mockedContextEngine);
   mockedBuildAgentRuntimePlan.mockReset();
   mockedBuildAgentRuntimePlan.mockReturnValue({});
+<<<<<<< HEAD
   mockedCompactDirect.mockReset();
   mockedCompactDirect.mockResolvedValue({
+=======
+  mockedContextEngineCompact.mockReset();
+  mockedContextEngineCompact.mockResolvedValue({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ok: false,
     compacted: false,
     reason: "nothing to compact",

@@ -130,6 +130,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listGroupsLive).toHaveBeenCalledTimes(1);
   });
 
+<<<<<<< HEAD
   it("preserves configured directory entries before rejecting reserved literal targets", async () => {
     mocks.getChannelPlugin.mockReturnValue({
       ...createChannelTestPluginBase({
@@ -330,6 +331,8 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.resolveTarget).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not reuse directory cache entries across prepared plugin runtimes", async () => {
     const firstListGroups = vi
       .fn()
@@ -342,18 +345,26 @@ describe("resolveMessagingTarget (directory fallback)", () => {
         { kind: "group", id: "replacement-id", name: "support" } satisfies ChannelDirectoryEntry,
       ]);
     const firstPlugin = {
+<<<<<<< HEAD
       ...createChannelTestPluginBase({
         id: "richchat",
         capabilities: { chatTypes: ["group"] },
       }),
+=======
+      ...createChannelTestPluginBase({ id: "richchat" }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       directory: { listGroups: firstListGroups },
       messaging: { targetResolver: {} },
     } satisfies ChannelPlugin;
     const replacementPlugin = {
+<<<<<<< HEAD
       ...createChannelTestPluginBase({
         id: "richchat",
         capabilities: { chatTypes: ["group"] },
       }),
+=======
+      ...createChannelTestPluginBase({ id: "richchat" }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       directory: { listGroups: replacementListGroups },
       messaging: { targetResolver: {} },
     } satisfies ChannelPlugin;
@@ -424,6 +435,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listGroupsLive).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("defaults bare id-like targets to user for direct-only channel plugins", async () => {
     const directOnlyPlugin = {
       ...createChannelTestPluginBase({
@@ -455,6 +467,8 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listGroupsLive).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses catalog plugin target grammar for unloaded numeric topic ids", async () => {
     mocks.getLoadedChannelPlugin.mockReturnValue(undefined);
     mocks.getChannelPlugin.mockReturnValue({

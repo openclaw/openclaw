@@ -17,7 +17,10 @@ import {
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
   recoverStaleTelegramSpooledUpdateClaims,
+<<<<<<< HEAD
   refreshTelegramSpooledUpdateClaim,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   releaseTelegramSpooledUpdateClaim,
   TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS,
   writeTelegramSpooledUpdate,
@@ -141,6 +144,7 @@ describe("Telegram ingress spool", () => {
     });
   });
 
+<<<<<<< HEAD
   it("refreshes active claim timestamps through the Telegram spool queue", async () => {
     await withTempSpool(async (spoolDir) => {
       await writeTelegramSpooledUpdate({
@@ -167,6 +171,8 @@ describe("Telegram ingress spool", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("marks timed out claims failed without requeueing them", async () => {
     await withTempSpool(async (spoolDir) => {
       await writeTelegramSpooledUpdate({

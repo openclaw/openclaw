@@ -6,7 +6,10 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { hashConfigIncludeRaw } from "../config/includes.js";
+<<<<<<< HEAD
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   loadConfig,
   readConfigFileSnapshotForWrite,
@@ -25,6 +28,7 @@ import {
 } from "./plugins-cli-test-helpers.js";
 
 const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
+<<<<<<< HEAD
 const ORIGINAL_STDIN_TTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 const ORIGINAL_STDOUT_TTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 
@@ -51,6 +55,8 @@ function restoreTty(): void {
     Reflect.deleteProperty(process.stdout, "isTTY");
   }
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function createTrackedPluginConfig(params: {
   pluginId: string;
@@ -151,7 +157,10 @@ describe("plugins cli update", () => {
   });
 
   afterEach(() => {
+<<<<<<< HEAD
     restoreTty();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (ORIGINAL_OPENCLAW_NIX_MODE === undefined) {
       delete process.env.OPENCLAW_NIX_MODE;
     } else {
@@ -1006,6 +1015,7 @@ describe("plugins cli update", () => {
     const updateParams = expectSingleCallParams(updateNpmInstalledPlugins);
     expect(updateParams.pluginIds).toEqual(["codex"]);
     expect(updateParams.syncOfficialPluginInstalls).toBeUndefined();
+<<<<<<< HEAD
     expect(updateParams.updateChannel).toBeUndefined();
     expect(updateParams.officialPluginUpdateChannel).toBeUndefined();
   });
@@ -1083,6 +1093,8 @@ describe("plugins cli update", () => {
     expect(updateParams.dryRun).toBe(true);
     expect(updateParams.acknowledgeClawHubRisk).not.toBe(true);
     expect(updateParams.onClawHubRisk).toBeUndefined();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("writes updated config when updater reports changes", async () => {
@@ -1221,6 +1233,7 @@ describe("plugins cli update", () => {
     expect(runtimeLogs).toContain("Failed to update beta: registry timeout");
   });
 
+<<<<<<< HEAD
   it("exits non-zero when a ClawHub update is skipped for missing risk acknowledgement", async () => {
     const cfg = {
       plugins: {
@@ -1338,6 +1351,8 @@ describe("plugins cli update", () => {
     expect(runtimeLogs.at(-1)).toContain("security data");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("exits non-zero when a hook pack update reports an error", async () => {
     const cfg = {
       hooks: {

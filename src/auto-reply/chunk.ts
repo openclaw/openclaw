@@ -163,10 +163,14 @@ export function chunkByNewline(
       continue;
     }
 
+<<<<<<< HEAD
     // Back the head cut off to a code-point boundary so an over-long line never splits a surrogate
     // pair; the recursive chunkText below is already surrogate-safe, only this first cut was raw.
     const rawLimit = Math.max(1, maxLineLength - prefix.length);
     const firstLimit = avoidTrailingHighSurrogateBreak(lineValue, 0, rawLimit);
+=======
+    const firstLimit = Math.max(1, maxLineLength - prefix.length);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const first = lineValue.slice(0, firstLimit);
     chunks.push(prefix + first);
     const remaining = lineValue.slice(firstLimit);

@@ -3,14 +3,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+<<<<<<< HEAD
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   buildAgentModelCatalogCacheKey,
   readCachedAgentModelCatalog,
   writeCachedAgentModelCatalog,
 } from "./model-catalog-state-cache.js";
 
+<<<<<<< HEAD
 let envSnapshot: ReturnType<typeof captureEnv>;
+=======
+const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 let stateDir: string;
 
 function configuredModel(id: string) {
@@ -32,14 +40,27 @@ function configuredModel(id: string) {
 
 describe("model catalog state cache", () => {
   beforeEach(() => {
+<<<<<<< HEAD
     envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     stateDir = mkdtempSync(join(tmpdir(), "openclaw-model-catalog-state-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+=======
+    stateDir = mkdtempSync(join(tmpdir(), "openclaw-model-catalog-state-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
+<<<<<<< HEAD
     envSnapshot.restore();
+=======
+    if (ORIGINAL_STATE_DIR === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     rmSync(stateDir, { recursive: true, force: true });
   });
 

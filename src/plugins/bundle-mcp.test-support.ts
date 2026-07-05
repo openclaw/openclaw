@@ -2,7 +2,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+<<<<<<< HEAD
 import { withEnvAsync } from "../test-utils/env.js";
+=======
+import { captureEnv } from "../test-utils/env.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export function createBundleMcpTempHarness() {
   const tempDirs: string[] = [];
@@ -91,6 +95,7 @@ export async function withBundleHomeEnv<T>(
   prefix: string,
   run: (params: { homeDir: string; workspaceDir: string }) => Promise<T>,
 ): Promise<T> {
+<<<<<<< HEAD
   const homeDir = await tempHarness.createTempDir(`${prefix}-home-`);
   const workspaceDir = await tempHarness.createTempDir(`${prefix}-workspace-`);
 
@@ -103,4 +108,18 @@ export async function withBundleHomeEnv<T>(
     },
     () => run({ homeDir, workspaceDir }),
   );
+=======
+  const env = captureEnv(["HOME", "USERPROFILE", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
+  try {
+    const homeDir = await tempHarness.createTempDir(`${prefix}-home-`);
+    const workspaceDir = await tempHarness.createTempDir(`${prefix}-workspace-`);
+    process.env.HOME = homeDir;
+    process.env.USERPROFILE = homeDir;
+    delete process.env.OPENCLAW_HOME;
+    delete process.env.OPENCLAW_STATE_DIR;
+    return await run({ homeDir, workspaceDir });
+  } finally {
+    env.restore();
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }

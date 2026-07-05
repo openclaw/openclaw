@@ -20,11 +20,17 @@ import {
   VERCEL_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW,
   VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS,
 } from "./api.js";
+<<<<<<< HEAD
 import { resolveVercelAiGatewayDynamicModel } from "./models.js";
 import {
   buildStaticVercelAiGatewayProvider,
   buildVercelAiGatewayProvider,
   resolveVercelAiGatewayModel,
+=======
+import {
+  buildStaticVercelAiGatewayProvider,
+  buildVercelAiGatewayProvider,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./provider-catalog.js";
 
 const STATIC_MODEL_IDS = [
@@ -55,6 +61,7 @@ async function withLiveDiscovery<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
+<<<<<<< HEAD
 function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(payload), {
     status: 200,
@@ -63,6 +70,8 @@ function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 afterEach(() => {
   clearLiveCatalogCacheForTests();
   fetchWithSsrFGuardMock.mockReset();
@@ -93,6 +102,7 @@ describe("vercel ai gateway provider catalog", () => {
     });
   });
 
+<<<<<<< HEAD
   it("builds runtime metadata for live-only model ids", () => {
     expect(resolveVercelAiGatewayDynamicModel("custom/provider-model")).toEqual({
       id: "custom/provider-model",
@@ -129,12 +139,22 @@ describe("vercel ai gateway provider catalog", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("falls back to the static catalog for malformed successful model list payloads", async () => {
     for (const payload of [[], { data: {} }, { data: [null] }]) {
       clearLiveCatalogCacheForTests();
       fetchWithSsrFGuardMock.mockReset();
       fetchWithSsrFGuardMock.mockResolvedValueOnce({
+<<<<<<< HEAD
         response: jsonResponse(payload),
+=======
+        response: {
+          ok: true,
+          status: 200,
+          json: async () => payload,
+        },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         release: async () => {},
       });
 
@@ -148,6 +168,7 @@ describe("vercel ai gateway provider catalog", () => {
 
   it("falls back from malformed live token metadata", async () => {
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
+<<<<<<< HEAD
       response: jsonResponse({
         data: [
           {
@@ -166,6 +187,30 @@ describe("vercel ai gateway provider catalog", () => {
           },
         ],
       }),
+=======
+      response: {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: [
+            {
+              id: "anthropic/claude-opus-4.6",
+              name: "Claude Opus 4.6",
+              context_window: -1,
+              max_tokens: 128_000.5,
+              tags: ["vision", "reasoning"],
+            },
+            {
+              id: "custom/provider-model",
+              name: "Custom model",
+              context_window: Number.POSITIVE_INFINITY,
+              max_tokens: 0,
+              tags: ["reasoning"],
+            },
+          ],
+        }),
+      },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       release: async () => {},
     });
 

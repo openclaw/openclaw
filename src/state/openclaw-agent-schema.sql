@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS auth_profile_state (
   state_json TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
+<<<<<<< HEAD
 
 CREATE TABLE IF NOT EXISTS memory_index_meta (
   key TEXT PRIMARY KEY,
@@ -132,3 +133,5 @@ CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path
 
 CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source
   ON memory_index_chunks(source);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

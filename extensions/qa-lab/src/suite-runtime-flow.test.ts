@@ -29,7 +29,10 @@ const extractMediaPathFromText = vi.hoisted(() => vi.fn());
 const resolveGeneratedImagePath = vi.hoisted(() => vi.fn());
 const startAgentRun = vi.hoisted(() => vi.fn());
 const waitForAgentRun = vi.hoisted(() => vi.fn());
+<<<<<<< HEAD
 const waitForAgentHistoryReply = vi.hoisted(() => vi.fn());
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const listCronJobs = vi.hoisted(() => vi.fn());
 const findManagedDreamingCronJob = vi.hoisted(() => vi.fn());
 const waitForCronRunCompletion = vi.hoisted(() => vi.fn());
@@ -99,7 +102,10 @@ vi.mock("./suite-runtime-agent.js", () => ({
   resolveGeneratedImagePath,
   startAgentRun,
   waitForAgentRun,
+<<<<<<< HEAD
   waitForAgentHistoryReply,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   listCronJobs,
   findManagedDreamingCronJob,
   readDoctorMemoryStatus,
@@ -257,7 +263,10 @@ describe("qa suite runtime flow", () => {
         findManagedDreamingCronJob: typeof findManagedDreamingCronJob;
         forceMemoryIndex: typeof forceMemoryIndex;
         runAgentPrompt: typeof runAgentPrompt;
+<<<<<<< HEAD
         waitForAgentHistoryReply: typeof waitForAgentHistoryReply;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         runRuntimeToolFixture: (
           envArg: typeof env,
           configArg: Record<string, unknown>,
@@ -281,7 +290,10 @@ describe("qa suite runtime flow", () => {
     expect(call.deps.readSessionTranscriptSummary).toBe(readSessionTranscriptSummary);
     expect(call.deps.findManagedDreamingCronJob).toBe(findManagedDreamingCronJob);
     expect(call.deps.forceMemoryIndex).toBe(forceMemoryIndex);
+<<<<<<< HEAD
     expect(call.deps.waitForAgentHistoryReply).toBe(waitForAgentHistoryReply);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(call.deps.runAgentPrompt).toBe(runAgentPrompt);
     await call.deps.runRuntimeToolFixture(env, { toolName: "read" });
     expect(runRuntimeToolFixture).toHaveBeenCalledWith(
@@ -303,7 +315,11 @@ describe("qa suite runtime flow", () => {
     });
 
     await call.deps.webOpenPage({ url: "https://openclaw.ai" });
+<<<<<<< HEAD
     expect(webOpenPage).toHaveBeenCalledWith({ url: "https://openclaw.ai", repoRoot: "/repo" });
+=======
+    expect(webOpenPage).toHaveBeenCalledWith({ url: "https://openclaw.ai" });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(env.webSessionIds.has("page-1")).toBe(true);
   });
 });

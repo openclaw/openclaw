@@ -13,7 +13,15 @@ import {
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
 import { buildCommandTestParams } from "../commands-spawn.test-harness.js";
+<<<<<<< HEAD
 import { resolveAcpCommandBindingContext, resolveAcpCommandConversationId } from "./context.js";
+=======
+import {
+  resolveAcpCommandBindingContext,
+  resolveAcpCommandConversationId,
+  resolveAcpCommandParentConversationId,
+} from "./context.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
@@ -659,6 +667,10 @@ describe("commands-acp context", () => {
       parentConversationId: "!room:example.org",
     });
     expect(resolveAcpCommandConversationId(params)).toBe("$thread-root");
+<<<<<<< HEAD
+=======
+    expect(resolveAcpCommandParentConversationId(params)).toBe("!room:example.org");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("resolves iMessage DM conversation ids from current targets", () => {
@@ -869,6 +881,10 @@ describe("commands-acp context", () => {
       AccountId: "work",
     });
 
+<<<<<<< HEAD
+=======
+    expect(resolveAcpCommandParentConversationId(params)).toBeUndefined();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(resolveAcpCommandBindingContext(params)).toEqual({
       channel: "feishu",
       accountId: "work",

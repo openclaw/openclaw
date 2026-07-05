@@ -7,7 +7,11 @@ import { withEnvAsync } from "../test-utils/env.js";
 
 let modelsListCommand: typeof import("./models/list.list-command.js").modelsListCommand;
 let loadModelRegistry: typeof import("./models/list.registry.js").loadModelRegistry;
+<<<<<<< HEAD
 let toModelRow: typeof import("./models/list.model-row.js").toModelRow;
+=======
+let toModelRow: typeof import("./models/list.registry.js").toModelRow;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const getRuntimeConfig = vi.fn();
 const readConfigFileSnapshotForWrite = vi.fn().mockResolvedValue({
@@ -413,8 +417,12 @@ describe("models list/status", () => {
 
   beforeAll(async () => {
     ({ modelsListCommand } = await import("./models/list.list-command.js"));
+<<<<<<< HEAD
     ({ loadModelRegistry } = await import("./models/list.registry.js"));
     ({ toModelRow } = await import("./models/list.model-row.js"));
+=======
+    ({ loadModelRegistry, toModelRow } = await import("./models/list.registry.js"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("models list runs model discovery without auth.json sync", async () => {

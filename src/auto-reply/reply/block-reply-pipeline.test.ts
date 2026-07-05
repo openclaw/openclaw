@@ -1,5 +1,8 @@
 /** Tests block reply pipeline buffering, dedupe, and final flush behavior. */
+<<<<<<< HEAD
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import {
@@ -450,6 +453,7 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
 
     expect(pipeline.hasSentPayload({ text: "summary" })).toBe(false);
   });
+<<<<<<< HEAD
 
   it("clamps oversized delivery timeouts before arming timers", async () => {
     vi.useFakeTimers();
@@ -476,4 +480,6 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
     expect(pipeline.isAborted()).toBe(true);
     setTimeoutSpy.mockRestore();
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
+=======
+import {
+  makeIsolatedAgentTurnParams,
+  setupRunCronIsolatedAgentTurnSuite,
+} from "./run.suite-helpers.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   deriveSessionTotalTokensMock,
   loadRunCronIsolatedAgentTurn,
@@ -41,7 +48,11 @@ describe("runCronIsolatedAgentTurn usage accounting", () => {
       },
     });
 
+<<<<<<< HEAD
     const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+=======
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(result.status).toBe("ok");
     expect(cronSession.sessionEntry.inputTokens).toBe(75000);
@@ -90,7 +101,11 @@ describe("runCronIsolatedAgentTurn usage accounting", () => {
       },
     });
 
+<<<<<<< HEAD
     const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+=======
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(result.status).toBe("ok");
     expect(cronSession.sessionEntry.totalTokens).toBe(77000);
@@ -132,7 +147,11 @@ describe("runCronIsolatedAgentTurn usage accounting", () => {
       },
     });
 
+<<<<<<< HEAD
     const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+=======
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(result.status).toBe("ok");
     expect(cronSession.sessionEntry.totalTokens).toBe(77000);

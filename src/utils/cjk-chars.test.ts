@@ -46,6 +46,7 @@ describe("estimateStringChars", () => {
     expect(estimateStringChars("안녕하세요")).toBe(20);
   });
 
+<<<<<<< HEAD
   it("handles East Asian fullwidth letters, numbers, and punctuation", () => {
     expect(estimateStringChars("ＡＢＣ１２３")).toBe(6 * CHARS_PER_TOKEN_ESTIMATE);
     expect(estimateStringChars("hello，world")).toBe(
@@ -53,6 +54,8 @@ describe("estimateStringChars", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("handles CJK punctuation and symbols in the extended range", () => {
     // "⺀" (U+2E80) is in CJK Radicals Supplement range
     expect(estimateStringChars("⺀")).toBe(CHARS_PER_TOKEN_ESTIMATE);

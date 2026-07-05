@@ -35,6 +35,12 @@ vi.mock("./accounts.js", async () => {
   };
 });
 
+<<<<<<< HEAD
+=======
+// Kept for compatibility with existing tests; mocks install at module evaluation.
+export function installSlackBlockTestMocks() {}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function createSlackEditTestClient(): SlackEditTestClient {
   return {
     chat: {

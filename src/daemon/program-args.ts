@@ -3,7 +3,10 @@ import { execFileSync } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+<<<<<<< HEAD
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   buildGatewayDistEntrypointCandidates,
   findFirstAccessibleGatewayEntrypoint,
@@ -166,7 +169,11 @@ async function resolveNodePath(): Promise<string> {
 }
 
 async function resolveBinaryPath(binary: string): Promise<string> {
+<<<<<<< HEAD
   const cmd = process.platform === "win32" ? getWindowsSystem32ExePath("where.exe") : "which";
+=======
+  const cmd = process.platform === "win32" ? "where" : "which";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   try {
     const output = execFileSync(cmd, [binary], { encoding: "utf8" }).trim();
     const resolved = output.split(/\r?\n/)[0]?.trim();

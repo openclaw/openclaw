@@ -18,7 +18,10 @@ import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailab
 import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
 import { formatGatewayRestartHandoffDiagnostic } from "../../infra/restart-handoff.js";
 import { isWSLEnv } from "../../infra/wsl.js";
+<<<<<<< HEAD
 import { resolvePluginVersionDriftUpdateCommand } from "../../plugins/plugin-version-drift.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
@@ -327,11 +330,20 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     rpc?.ok !== true &&
     isSystemdUnavailableDetail(service.runtime?.detail);
   if (systemdUnavailable) {
+<<<<<<< HEAD
     const serviceEnv = service.command?.environment ?? process.env;
     const container = Boolean(resolveDaemonContainerContext(serviceEnv));
     defaultRuntime.error(errorText("systemd user services unavailable."));
     for (const hint of renderSystemdUnavailableHints({
       wsl: isWSLEnv(serviceEnv),
+=======
+    const container = Boolean(
+      resolveDaemonContainerContext(service.command?.environment ?? process.env),
+    );
+    defaultRuntime.error(errorText("systemd user services unavailable."));
+    for (const hint of renderSystemdUnavailableHints({
+      wsl: isWSLEnv(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       kind: classifySystemdUnavailableDetail(service.runtime?.detail),
       container,
     })) {
@@ -482,6 +494,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
           `- ${warnText(entry.pluginId)}: ${entry.installedVersion} (${sourceLabel}) → expected ${drift.gatewayVersion}`,
         );
       }
+<<<<<<< HEAD
       const updateCommands = drift.drifts.map((entry) =>
         formatCliCommand(resolvePluginVersionDriftUpdateCommand(entry)),
       );
@@ -496,6 +509,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
         }
         defaultRuntime.log(`Then run ${formatCliCommand("openclaw gateway restart")}.`);
       }
+=======
+      defaultRuntime.log(
+        `${label("Fix:")} ${formatCliCommand("openclaw plugins update <plugin-id>")} for each drifted plugin, then ${formatCliCommand("openclaw gateway restart")}.`,
+      );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } else {
       defaultRuntime.log(
         infoText(

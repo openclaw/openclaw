@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+<<<<<<< HEAD
 import type { VoiceCallConfig, VoiceCallCoreSessionConfig } from "./config.js";
+=======
+import type { VoiceCallConfig } from "./config.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { CallManagerContext, StreamSessionIssuer } from "./manager/context.js";
 import { processEvent as processManagerEvent } from "./manager/events.js";
 import { getCallByProviderCallId as getCallByProviderCallIdFromMaps } from "./manager/lookup.js";
@@ -82,7 +86,10 @@ export class CallManager {
   private rejectedProviderCallIds = new Set<string>();
   private provider: VoiceCallProvider | null = null;
   private config: VoiceCallConfig;
+<<<<<<< HEAD
   private coreSession: VoiceCallCoreSessionConfig | undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   private storePath: string;
   private webhookUrl: string | null = null;
   private activeTurnCalls = new Set<CallId>();
@@ -104,6 +111,7 @@ export class CallManager {
    */
   streamSessionIssuer: StreamSessionIssuer | undefined;
 
+<<<<<<< HEAD
   constructor(
     config: VoiceCallConfig,
     storePath?: string,
@@ -111,6 +119,10 @@ export class CallManager {
   ) {
     this.config = config;
     this.coreSession = coreSession;
+=======
+  constructor(config: VoiceCallConfig, storePath?: string) {
+    this.config = config;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     this.storePath = resolveDefaultStoreBase(config, storePath);
   }
 
@@ -359,7 +371,10 @@ export class CallManager {
       rejectedProviderCallIds: this.rejectedProviderCallIds,
       provider: this.provider,
       config: this.config,
+<<<<<<< HEAD
       coreSession: this.coreSession,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       storePath: this.storePath,
       webhookUrl: this.webhookUrl,
       activeTurnCalls: this.activeTurnCalls,

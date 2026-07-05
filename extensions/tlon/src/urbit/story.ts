@@ -129,7 +129,11 @@ function parseInlineMarkdown(text: string): StoryInline[] {
 
     // Plain text: consume until next special character or URL start
     // Exclude : and / to allow URL detection to work (stops before https://)
+<<<<<<< HEAD
     const plainMatch = remaining.match(/^[^*_`~[#\n:/]+/);
+=======
+    const plainMatch = remaining.match(/^[^*_`~[#~\n:/]+/);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (plainMatch) {
       result.push(plainMatch[0]);
       remaining = remaining.slice(plainMatch[0].length);

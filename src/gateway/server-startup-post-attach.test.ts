@@ -5,13 +5,19 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { writeRestartSentinel } from "../infra/restart-sentinel.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
 } from "../plugins/hook-types.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+<<<<<<< HEAD
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { withEnvAsync } from "../test-utils/env.js";
 
 const hoisted = vi.hoisted(() => {
@@ -40,6 +46,10 @@ const hoisted = vi.hoisted(() => {
     skipped: 0,
   }));
   const scheduleRestartAbortedMainSessionRecovery = vi.fn();
+<<<<<<< HEAD
+=======
+  const shouldWakeFromRestartSentinel = vi.fn(() => false);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const scheduleRestartSentinelWake = vi.fn();
   const refreshLatestUpdateRestartSentinel = vi.fn<
     typeof import("./server-restart-sentinel.js").refreshLatestUpdateRestartSentinel
@@ -92,6 +102,10 @@ const hoisted = vi.hoisted(() => {
     markStartupOrphanedMainSessionsForRecovery,
     recoverStartupOrphanedMainSessions,
     scheduleRestartAbortedMainSessionRecovery,
+<<<<<<< HEAD
+=======
+    shouldWakeFromRestartSentinel,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     scheduleRestartSentinelWake,
     refreshLatestUpdateRestartSentinel,
     getAcpRuntimeBackend,
@@ -137,9 +151,13 @@ vi.mock("../config/paths.js", async () => {
     STATE_DIR: "/tmp/openclaw-state",
     resolveConfigPath: vi.fn(() => "/tmp/openclaw-state/openclaw.json"),
     resolveGatewayPort: vi.fn(() => 18789),
+<<<<<<< HEAD
     resolveStateDir: vi.fn((env: NodeJS.ProcessEnv = process.env) =>
       env.OPENCLAW_STATE_DIR?.trim() ? actual.resolveStateDir(env) : "/tmp/openclaw-state",
     ),
+=======
+    resolveStateDir: vi.fn(() => "/tmp/openclaw-state"),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 });
 
@@ -179,6 +197,10 @@ vi.mock("../acp/runtime/registry.js", () => ({
 vi.mock("./server-restart-sentinel.js", () => ({
   refreshLatestUpdateRestartSentinel: hoisted.refreshLatestUpdateRestartSentinel,
   scheduleRestartSentinelWake: hoisted.scheduleRestartSentinelWake,
+<<<<<<< HEAD
+=======
+  shouldWakeFromRestartSentinel: hoisted.shouldWakeFromRestartSentinel,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("./server-startup-memory.js", () => ({
@@ -299,7 +321,10 @@ function firstGatewayStartCall(
 
 describe("startGatewayPostAttachRuntime", () => {
   beforeEach(() => {
+<<<<<<< HEAD
     closeOpenClawStateDatabaseForTest();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     vi.stubEnv("OPENCLAW_SKIP_CHANNELS", "0");
     vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", "0");
     hoisted.startPluginServices.mockClear();
@@ -329,9 +354,14 @@ describe("startGatewayPostAttachRuntime", () => {
       skipped: 0,
     });
     hoisted.scheduleRestartAbortedMainSessionRecovery.mockClear();
+<<<<<<< HEAD
     hoisted.scheduleRestartSentinelWake.mockClear();
     hoisted.refreshLatestUpdateRestartSentinel.mockReset();
     hoisted.refreshLatestUpdateRestartSentinel.mockResolvedValue(null);
+=======
+    hoisted.shouldWakeFromRestartSentinel.mockReturnValue(false);
+    hoisted.scheduleRestartSentinelWake.mockClear();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     hoisted.getAcpRuntimeBackend.mockReset();
     hoisted.getAcpRuntimeBackend.mockReturnValue(null);
     hoisted.reconcilePendingSessionIdentities.mockClear();
@@ -362,7 +392,10 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   afterEach(() => {
+<<<<<<< HEAD
     closeOpenClawStateDatabaseForTest();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     vi.useRealTimers();
     vi.unstubAllEnvs();
   });
@@ -563,6 +596,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("skips heavy restart sentinel refresh when no sentinel file exists", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-no-sentinel-"));
+<<<<<<< HEAD
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
         hoisted.refreshLatestUpdateRestartSentinel.mockClear();
@@ -625,12 +659,65 @@ describe("startGatewayPostAttachRuntime", () => {
     } finally {
       closeOpenClawStateDatabaseForTest();
       fs.rmSync(stateDir, { recursive: true, force: true });
+=======
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    const result = await testing.refreshLatestUpdateRestartSentinelIfPresent();
+
+    expect(result).toBeNull();
+    expect(hoisted.refreshLatestUpdateRestartSentinel).not.toHaveBeenCalled();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("refreshes the restart sentinel when the sentinel file exists", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sentinel-"));
+    fs.writeFileSync(path.join(stateDir, "restart-sentinel.json"), "{}\n");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const sentinel = { kind: "update", status: "ok", ts: 1 } as const;
+    hoisted.refreshLatestUpdateRestartSentinel.mockResolvedValue(sentinel);
+
+    const result = await testing.refreshLatestUpdateRestartSentinelIfPresent();
+
+    expect(result).toBe(sentinel);
+    expect(hoisted.refreshLatestUpdateRestartSentinel).toHaveBeenCalledOnce();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("expands tilde-based restart sentinel state paths", async () => {
+    const osHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-home-"));
+    try {
+      const openclawHome = path.join(osHome, "openclaw-home");
+      const stateDirFromHome = path.join(openclawHome, ".openclaw");
+      fs.mkdirSync(stateDirFromHome, { recursive: true });
+      fs.writeFileSync(path.join(stateDirFromHome, "restart-sentinel.json"), "{}\n");
+
+      expect(
+        await testing.hasRestartSentinelFileFast({
+          HOME: osHome,
+          OPENCLAW_HOME: "~/openclaw-home",
+        } as NodeJS.ProcessEnv),
+      ).toBe(true);
+
+      const backslashStateDir = path.resolve(`${osHome}\\openclaw-state`);
+      fs.mkdirSync(backslashStateDir, { recursive: true });
+      fs.writeFileSync(path.join(backslashStateDir, "restart-sentinel.json"), "{}\n");
+
+      expect(
+        await testing.hasRestartSentinelFileFast({
+          HOME: osHome,
+          OPENCLAW_STATE_DIR: "~\\openclaw-state",
+        } as NodeJS.ProcessEnv),
+      ).toBe(true);
+    } finally {
+      fs.rmSync(osHome, { recursive: true, force: true });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
   it("avoids sync filesystem probes while checking restart sentinel presence", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-async-sentinel-"));
     try {
+<<<<<<< HEAD
       await writeRestartSentinel(
         {
           kind: "update",
@@ -639,6 +726,9 @@ describe("startGatewayPostAttachRuntime", () => {
         },
         { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
       );
+=======
+      fs.writeFileSync(path.join(stateDir, "restart-sentinel.json"), "{}\n");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const actualExistsSync = fs.existsSync;
       const existsSync = vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
         if (String(candidate).startsWith(stateDir)) {
@@ -648,7 +738,11 @@ describe("startGatewayPostAttachRuntime", () => {
       });
       try {
         await expect(
+<<<<<<< HEAD
           testing.hasRestartSentinelFast({
+=======
+          testing.hasRestartSentinelFileFast({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             OPENCLAW_STATE_DIR: stateDir,
           } as NodeJS.ProcessEnv),
         ).resolves.toBe(true);
@@ -659,7 +753,10 @@ describe("startGatewayPostAttachRuntime", () => {
         existsSync.mockRestore();
       }
     } finally {
+<<<<<<< HEAD
       closeOpenClawStateDatabaseForTest();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });

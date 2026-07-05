@@ -131,7 +131,11 @@ type FacadeModule = {
   getMemorySearchManager: (params: {
     cfg: OpenClawConfig;
     agentId: string;
+<<<<<<< HEAD
     purpose?: "default" | "status" | "cli";
+=======
+    purpose?: "default" | "status";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }) => Promise<{
     manager: MemorySearchManager | null;
     error?: string;

@@ -30,6 +30,7 @@ function createPrefixOnlyChannelPlugin(
   targetPrefixes: readonly string[],
   aliases?: readonly string[],
 ): ChannelPlugin {
+<<<<<<< HEAD
   const base = createChannelTestPluginBase({
     id,
     config: {
@@ -39,6 +40,9 @@ function createPrefixOnlyChannelPlugin(
       },
     },
   });
+=======
+  const base = createChannelTestPluginBase({ id });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return {
     ...base,
     meta: {
@@ -503,6 +507,7 @@ describe("cron method validation", () => {
     expectResponseError(respond, { messageIncludes: "delivery.channel is required" });
   });
 
+<<<<<<< HEAD
   it("ignores stale ownerless channel config when validating default announce delivery", async () => {
     setRuntimeConfig({
       session: { mainKey: "main" },
@@ -575,6 +580,8 @@ describe("cron method validation", () => {
     expectResponseError(respond, { messageIncludes: "delivery.channel is not configured" });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("accepts provider-prefixed announce target without delivery.channel when multiple channels are configured", async () => {
     setRuntimeConfig(telegramSlackConfig({ includeMainSession: true }));
 

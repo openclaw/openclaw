@@ -12,12 +12,20 @@ import type { SubagentRunRecord } from "../../../agents/subagent-registry.types.
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
+<<<<<<< HEAD
+=======
+  stripToolMessages,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "../../../agents/tools/sessions-helpers.js";
 import { callGateway } from "../../../gateway/call.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { looksLikeSessionId } from "../../../sessions/session-id.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../../command-turn-context.js";
+<<<<<<< HEAD
+=======
+import { resolveCommandSurfaceChannel, resolveChannelAccountId } from "../channel-context.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { extractMessageText, type ChatMessage } from "../commands-subagents-text.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
 import {
@@ -26,6 +34,11 @@ import {
   type SubagentTargetResolution,
 } from "../subagents-utils.js";
 
+<<<<<<< HEAD
+=======
+export { stripToolMessages };
+export { resolveCommandSurfaceChannel, resolveChannelAccountId };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type { ChatMessage } from "../commands-subagents-text.js";
 
 export const COMMAND = "/subagents";

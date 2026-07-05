@@ -330,3 +330,11 @@ export function measureDiagnosticsTimelineSpanSync<T>(
     throw error;
   }
 }
+<<<<<<< HEAD
+=======
+
+/** Lets tests await any future asynchronous timeline cleanup without changing call sites. */
+export async function flushDiagnosticsTimelineForTest(): Promise<void> {
+  await Promise.resolve();
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

@@ -1,10 +1,16 @@
 // Control UI type declarations define types contracts.
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
+<<<<<<< HEAD
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type { FastModeSource } from "../../../src/shared/fast-mode.js";
+=======
+import type { SessionGoal } from "../../../src/config/sessions/types.js";
+import type { CronJobBase } from "../../../src/cron/types-shared.js";
+import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
@@ -13,7 +19,10 @@ import type {
 } from "../../../src/shared/session-types.js";
 export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 export type { SessionGoal } from "../../../src/config/sessions/types.js";
+<<<<<<< HEAD
 export type { FastMode } from "@openclaw/normalization-core/string-coerce";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type ChannelsStatusSnapshot = {
   ts: number;
@@ -484,10 +493,14 @@ export type GatewaySessionRow = {
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
+<<<<<<< HEAD
   fastMode?: FastMode;
   effectiveFastMode?: FastMode;
   effectiveFastModeSource?: FastModeSource;
   fastAutoOnSeconds?: number;
+=======
+  fastMode?: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
@@ -506,8 +519,11 @@ export type GatewaySessionRow = {
   childSessions?: string[];
   model?: string;
   modelProvider?: string;
+<<<<<<< HEAD
   /** Resolved effective usage-footer mode (session override → per-channel config → default → off), carried from gateway session rows/events. */
   effectiveResponseUsage?: "on" | "off" | "tokens" | "full";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;
   compactionCheckpointCount?: number;
@@ -556,7 +572,11 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
   updatedAt?: number;
   thinkingLevel?: string;
+<<<<<<< HEAD
   fastMode?: FastMode;
+=======
+  fastMode?: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;

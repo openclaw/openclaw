@@ -18,7 +18,10 @@ import {
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+<<<<<<< HEAD
 import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 
 function applyCliSessionIdToSessionPatch(
@@ -68,6 +71,13 @@ function applyCliSessionIdToSessionPatch(
   return patch;
 }
 
+<<<<<<< HEAD
+=======
+function resolveNonNegativeNumber(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveNonNegativeTokenCount(value: number | undefined): number | undefined {
   const resolved = resolveNonNegativeNumber(value);
   return resolved === undefined ? undefined : Math.floor(resolved);

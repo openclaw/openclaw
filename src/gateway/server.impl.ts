@@ -46,8 +46,11 @@ import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/di
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
+<<<<<<< HEAD
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
 import { cleanupRetainedManagedNpmInstallGenerations } from "../plugins/managed-npm-retention.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   pinActivePluginChannelRegistry,
@@ -55,7 +58,11 @@ import {
   pinActivePluginSessionExtensionRegistry,
 } from "../plugins/runtime.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+<<<<<<< HEAD
 import { getTotalQueueSize, isGatewayDraining } from "../process/command-queue.js";
+=======
+import { getTotalQueueSize } from "../process/command-queue.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { RuntimeEnv } from "../runtime.js";
 import {
   clearSecretsRuntimeSnapshot,
@@ -553,6 +560,7 @@ export async function startGatewayServer(
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
   normalizeStateDirEnv(process.env);
+<<<<<<< HEAD
   // runGatewayLoop calls this after closing the previous server on both fresh
   // and in-process restarts, making retired plugin generations safe to remove.
   try {
@@ -570,6 +578,8 @@ export async function startGatewayServer(
   } catch (error) {
     log.warn(`retained npm generation cleanup unavailable: ${String(error)}`);
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const { bootstrapGatewayNetworkRuntime } = await import("./server-network-runtime.js");
   bootstrapGatewayNetworkRuntime();
 
@@ -895,7 +905,10 @@ export async function startGatewayServer(
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,
     getStartupPendingReason: () => startupPendingReason,
+<<<<<<< HEAD
     getGatewayDraining: isGatewayDraining,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
     shouldSkipChannelReadiness: () =>
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||

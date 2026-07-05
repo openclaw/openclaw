@@ -574,7 +574,11 @@ describe("diagnostics command", () => {
   });
 
   it("requires an owner for diagnostics", async () => {
+<<<<<<< HEAD
     const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
+=======
+    const { handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const result = await handleDiagnosticsCommand(
       buildDiagnosticsParams("/diagnostics", {
         command: {
@@ -586,7 +590,10 @@ describe("diagnostics command", () => {
     );
 
     expect(result).toEqual({ shouldContinue: false });
+<<<<<<< HEAD
     expect(execCalls).toHaveLength(0);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("routes confirmations back to the Codex diagnostics handler without repeating the preamble", async () => {

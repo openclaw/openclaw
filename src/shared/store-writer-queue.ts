@@ -1,5 +1,8 @@
+<<<<<<< HEAD
 import { AsyncLocalStorage } from "node:async_hooks";
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Pending exclusive store write plus the promise hooks for its caller. */
 export type StoreWriterTask = {
   /** Write operation to run once earlier tasks for the same store path finish. */
@@ -23,6 +26,7 @@ export type StoreWriterQueue = {
 /** Store writer queues keyed by the canonical store path. */
 type StoreWriterQueues = Map<string, StoreWriterQueue>;
 
+<<<<<<< HEAD
 type ActiveStoreWriter = {
   active: boolean;
   parent: ActiveStoreWriter | undefined;
@@ -56,6 +60,8 @@ async function runActiveStoreWriter<T>(
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function getOrCreateStoreWriterQueue(
   queues: StoreWriterQueues,
   storePath: string,
@@ -124,7 +130,10 @@ export async function runQueuedStoreWrite<T>(params: {
   storePath: string;
   label: string;
   fn: () => Promise<T>;
+<<<<<<< HEAD
   reentrant?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }): Promise<T> {
   if (!params.storePath || typeof params.storePath !== "string") {
     throw new Error(
@@ -133,6 +142,7 @@ export async function runQueuedStoreWrite<T>(params: {
       )}`,
     );
   }
+<<<<<<< HEAD
   // Explicit reentrancy keeps one logical read/decide/write section on the
   // active lane; ordinary async children must queue behind the current writer.
   if (params.reentrant === true && isActiveStoreWriter(params.queues, params.storePath)) {
@@ -142,6 +152,12 @@ export async function runQueuedStoreWrite<T>(params: {
   return await new Promise<T>((resolve, reject) => {
     const task: StoreWriterTask = {
       fn: async () => await runActiveStoreWriter(params.queues, params.storePath, params.fn),
+=======
+  const queue = getOrCreateStoreWriterQueue(params.queues, params.storePath);
+  return await new Promise<T>((resolve, reject) => {
+    const task: StoreWriterTask = {
+      fn: async () => await params.fn(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       resolve: (value) => resolve(value as T),
       reject,
     };

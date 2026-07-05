@@ -7,7 +7,10 @@ import {
   createOpenAIAttributionHeadersWrapper,
   createOpenAICompletionsStrictMessageKeysWrapper,
   createOpenAICompletionsToolsCompatWrapper,
+<<<<<<< HEAD
   createOpenAIFastModeWrapper,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   createOpenAIThinkingLevelWrapper,
   createCodexNativeWebSearchWrapper,
 } from "./openai.js";
@@ -36,6 +39,7 @@ const openaiModel = {
   api: "openai-responses",
   provider: "openai",
   id: "gpt-5.2",
+<<<<<<< HEAD
   baseUrl: "https://api.openai.com/v1",
 } as Model<"openai-responses">;
 
@@ -54,6 +58,10 @@ describe("createOpenAIFastModeWrapper", () => {
   });
 });
 
+=======
+} as Model<"openai-responses">;
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("createOpenAICompletionsToolsCompatWrapper", () => {
   it("strips tools fields when OpenAI-compatible models disable tool support", () => {
     const payloads: Array<Record<string, unknown>> = [];

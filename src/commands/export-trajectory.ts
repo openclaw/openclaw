@@ -1,11 +1,18 @@
 /** CLI command for exporting a session transcript as a trajectory artifact. */
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
+<<<<<<< HEAD
 import { getRuntimeConfig } from "../config/config.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveStorePath,
+=======
+import {
+  resolveDefaultSessionStorePath,
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "../config/sessions/paths.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -117,8 +124,13 @@ export async function exportTrajectoryCommand(
   }
   const targetAgentId = resolvedOpts.agent ?? resolveAgentIdFromSessionKey(sessionKey);
   const storePath = resolvedOpts.store
+<<<<<<< HEAD
     ? resolveStorePath(resolvedOpts.store, { agentId: targetAgentId })
     : resolveStorePath(getRuntimeConfig().session?.store, { agentId: targetAgentId });
+=======
+    ? path.resolve(resolvedOpts.store)
+    : resolveDefaultSessionStorePath(targetAgentId);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const entry = loadSessionEntry({
     agentId: targetAgentId,
     sessionKey,

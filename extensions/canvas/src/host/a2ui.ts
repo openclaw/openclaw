@@ -23,8 +23,11 @@ let resolvingA2uiRoot: Promise<string | null> | null = null;
 let cachedA2uiResolvedAtMs = 0;
 const A2UI_ROOT_RETRY_NULL_AFTER_MS = 10_000;
 
+<<<<<<< HEAD
 type A2uiRootResolver = () => Promise<string | null>;
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function resolveA2uiRoot(): Promise<string | null> {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const entryDir = process.argv[1] ? path.dirname(path.resolve(process.argv[1])) : null;
@@ -82,10 +85,17 @@ async function resolveA2uiRootReal(): Promise<string | null> {
   return resolvingA2uiRoot;
 }
 
+<<<<<<< HEAD
 async function handleA2uiHttpRequestWithRootResolver(
   req: IncomingMessage,
   res: ServerResponse,
   resolveRootReal: A2uiRootResolver,
+=======
+/** Handles one HTTP request for the hosted A2UI asset surface. */
+export async function handleA2uiHttpRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ): Promise<boolean> {
   const urlRaw = req.url;
   if (!urlRaw) {
@@ -105,7 +115,11 @@ async function handleA2uiHttpRequestWithRootResolver(
     return true;
   }
 
+<<<<<<< HEAD
   const a2uiRootReal = await resolveRootReal();
+=======
+  const a2uiRootReal = await resolveA2uiRootReal();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!a2uiRootReal) {
     res.statusCode = 503;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -150,6 +164,7 @@ async function handleA2uiHttpRequestWithRootResolver(
     await result.handle.close().catch(() => {});
   }
 }
+<<<<<<< HEAD
 
 /** Creates an HTTP handler for a specific hosted A2UI asset root. */
 export function createA2uiHttpRequestHandler(params: {
@@ -169,3 +184,5 @@ export async function handleA2uiHttpRequest(
 ): Promise<boolean> {
   return await handleA2uiHttpRequestWithRootResolver(req, res, resolveA2uiRootReal);
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

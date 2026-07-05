@@ -111,10 +111,13 @@ function whatsAppReplyDeliveryVisibilityFromDurableResult(result: {
   return whatsAppReplyDeliveryVisibility(result.visibleReplySent === true);
 }
 
+<<<<<<< HEAD
 function readTrimmedString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function markWhatsAppReplyDeliveryErrorVisibleAfterFlush(
   error: unknown,
   flushResult: WhatsAppMediaOnlyFlushResult,
@@ -145,6 +148,7 @@ function logWhatsAppReplyDeliveryError(params: {
   );
 }
 
+<<<<<<< HEAD
 function resolveWhatsAppDurableReplyToId(params: {
   context: Record<string, unknown>;
   info: ReplyDeliveryInfo;
@@ -168,6 +172,8 @@ function resolveWhatsAppDurableReplyToId(params: {
   return null;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveWhatsAppDisableBlockStreaming(cfg: ReturnType<LoadConfigFn>): boolean | undefined {
   if (typeof cfg.channels?.whatsapp?.blockStreaming !== "boolean") {
     return undefined;
@@ -718,12 +724,15 @@ export async function dispatchWhatsAppBufferedReply(params: {
               payload: normalizedDeliveryPayload,
               info,
               to: conversationId,
+<<<<<<< HEAD
               replyToId: resolveWhatsAppDurableReplyToId({
                 context: params.context,
                 info,
                 msg: params.msg,
                 payload: normalizedDeliveryPayload,
               }),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               formatting: {
                 textLimit,
                 tableMode,

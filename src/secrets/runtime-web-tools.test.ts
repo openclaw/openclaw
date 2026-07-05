@@ -256,7 +256,10 @@ function buildTestWebFetchProviders(): PluginWebFetchProviderEntry[] {
       id: "firecrawl",
       label: "firecrawl",
       hint: "firecrawl test provider",
+<<<<<<< HEAD
       requiresCredential: false,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       envVars: ["FIRECRAWL_API_KEY"],
       placeholder: "fc-...",
       signupUrl: "https://example.com/firecrawl",
@@ -583,6 +586,7 @@ describe("runtime web tools resolution", () => {
     });
   });
 
+<<<<<<< HEAD
   it("selects the configured keyless Firecrawl fetch provider without an API key", async () => {
     const { metadata } = await runRuntimeWebTools({
       config: asConfig({
@@ -618,6 +622,8 @@ describe("runtime web tools resolution", () => {
     expect(metadata.fetch.selectedProvider).toBeUndefined();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not auto-select a keyless provider when no credentials are configured", async () => {
     const { metadata } = await runRuntimeWebTools({
       config: asConfig({
@@ -1434,6 +1440,7 @@ describe("runtime web tools resolution", () => {
     expect(resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("resolves SecretRefs for verified installed Firecrawl fetch config", async () => {
     loadInstalledPluginIndexInstallRecordsSyncMock.mockReturnValue({
       firecrawl: {
@@ -1452,22 +1459,39 @@ describe("runtime web tools resolution", () => {
             },
           },
         },
+=======
+  it("uses runtime web fetch discovery when the managed plugin index install records is populated", async () => {
+    loadInstalledPluginIndexInstallRecordsSyncMock.mockReturnValue({
+      "external-fetch": {
+        source: "npm",
+        spec: "@openclaw/external-fetch",
+      },
+    });
+
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         plugins: {
           entries: {
             firecrawl: {
               config: {
                 webFetch: {
+<<<<<<< HEAD
                   apiKey: {
                     source: "env",
                     provider: "default",
                     id: "FIRECRAWL_API_KEY",
                   },
+=======
+                  apiKey: "firecrawl-config-key",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 },
               },
             },
           },
         },
       }),
+<<<<<<< HEAD
       env: {
         FIRECRAWL_API_KEY: "firecrawl-config-key",
       },
@@ -1484,6 +1508,13 @@ describe("runtime web tools resolution", () => {
     ).toBe("firecrawl-config-key");
     expect(resolveBundledWebFetchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
     expect(firstMockArg(resolvePluginWebFetchProvidersMock).sandboxed).toBe(true);
+=======
+    });
+
+    expect(metadata.fetch.selectedProvider).toBe("firecrawl");
+    expect(resolveBundledWebFetchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
+    expect(firstMockArg(resolvePluginWebFetchProvidersMock).origin).toBe("bundled");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("uses env fallback for unresolved web fetch provider SecretRef when active", async () => {

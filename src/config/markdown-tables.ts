@@ -40,6 +40,27 @@ function getDefaultTableModes(): Map<string, MarkdownTableMode> {
   return cachedDefaultTableModes;
 }
 
+<<<<<<< HEAD
+=======
+const EMPTY_DEFAULT_TABLE_MODES = new Map<string, MarkdownTableMode>();
+
+function bindDefaultTableModesMethod<TValue>(value: TValue): TValue {
+  if (typeof value !== "function") {
+    return value;
+  }
+  return value.bind(getDefaultTableModes()) as TValue;
+}
+
+export const DEFAULT_TABLE_MODES: ReadonlyMap<string, MarkdownTableMode> = new Proxy(
+  EMPTY_DEFAULT_TABLE_MODES,
+  {
+    get(_target, prop, _receiver) {
+      return bindDefaultTableModesMethod(Reflect.get(getDefaultTableModes(), prop));
+    },
+  },
+);
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const isMarkdownTableMode = (value: unknown): value is MarkdownTableMode =>
   value === "off" || value === "bullets" || value === "code" || value === "block";
 

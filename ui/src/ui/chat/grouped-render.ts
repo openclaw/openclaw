@@ -25,7 +25,10 @@ import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import { extractThinkingCached, formatReasoningMarkdown } from "./message-extract.ts";
 import { isToolResultMessage, normalizeMessage } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
+<<<<<<< HEAD
 import { formatCompactTokenCount } from "./token-format.ts";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   extractToolCardsCached,
   formatCollapsedToolPreviewText,
@@ -684,6 +687,20 @@ function extractGroupMeta(group: MessageGroup, contextWindow: number | null): Gr
   return { input, output, cacheRead, cacheWrite, cost, model, contextPercent };
 }
 
+<<<<<<< HEAD
+=======
+/** Compact token count formatter (e.g. 128000 → "128k"). */
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) {
+    return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  }
+  if (n >= 1_000) {
+    return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+  }
+  return String(n);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function renderMessageMeta(meta: GroupMeta | null) {
   if (!meta) {
     return nothing;
@@ -693,16 +710,24 @@ function renderMessageMeta(meta: GroupMeta | null) {
 
   // Token counts: ↑input ↓output
   if (meta.input) {
+<<<<<<< HEAD
     parts.push(html`<span class="msg-meta__tokens">↑${formatCompactTokenCount(meta.input)}</span>`);
   }
   if (meta.output) {
     parts.push(
       html`<span class="msg-meta__tokens">↓${formatCompactTokenCount(meta.output)}</span>`,
     );
+=======
+    parts.push(html`<span class="msg-meta__tokens">↑${fmtTokens(meta.input)}</span>`);
+  }
+  if (meta.output) {
+    parts.push(html`<span class="msg-meta__tokens">↓${fmtTokens(meta.output)}</span>`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   // Cache: R/W
   if (meta.cacheRead) {
+<<<<<<< HEAD
     parts.push(
       html`<span class="msg-meta__cache">R${formatCompactTokenCount(meta.cacheRead)}</span>`,
     );
@@ -711,6 +736,12 @@ function renderMessageMeta(meta: GroupMeta | null) {
     parts.push(
       html`<span class="msg-meta__cache">W${formatCompactTokenCount(meta.cacheWrite)}</span>`,
     );
+=======
+    parts.push(html`<span class="msg-meta__cache">R${fmtTokens(meta.cacheRead)}</span>`);
+  }
+  if (meta.cacheWrite) {
+    parts.push(html`<span class="msg-meta__cache">W${fmtTokens(meta.cacheWrite)}</span>`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   // Cost

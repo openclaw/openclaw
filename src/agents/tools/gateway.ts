@@ -28,6 +28,11 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPositiveIntegerParam, readStringParam } from "./common.js";
 
+<<<<<<< HEAD
+=======
+export const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Optional gateway connection overrides accepted by agent tools. */
 export type GatewayCallOptions = {
   gatewayUrl?: string;
@@ -238,11 +243,20 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
   if (trimToUndefined(params.opts.gatewayUrl) !== undefined) {
     return undefined;
   }
+<<<<<<< HEAD
   try {
     const identity = loadOrCreateDeviceIdentity();
     // Approval request/wait calls may cross backend processes. Bind them to the
     // persisted device id so a process-local approval token mismatch cannot hide
     // the pending record from the matching wait call.
+=======
+  if (params.target !== "remote") {
+    return undefined;
+  }
+  try {
+    const identity = loadOrCreateDeviceIdentity();
+    // Remote approval requests are later matched by requester device id.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     // Reject loadOrCreate's unpersisted fallback so another process can see the same id.
     const persistedIdentity = loadDeviceIdentityIfPresent();
     if (persistedIdentity?.deviceId !== identity.deviceId) {
@@ -250,9 +264,12 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
     }
     return identity;
   } catch (error) {
+<<<<<<< HEAD
     if (params.target === "local") {
       return undefined;
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     throw new Error(
       [
         "remote approval gateway calls require a stable device identity.",

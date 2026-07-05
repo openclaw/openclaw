@@ -78,9 +78,12 @@ const DEVICE_TOKEN_MUTATION_PARAMS = {
   deviceId: "device-1",
   role: "operator",
 } as const satisfies Record<string, unknown>;
+<<<<<<< HEAD
 const NODE_PAIR_REMOVE_PARAMS = {
   nodeId: "device-1",
 } as const satisfies Record<string, unknown>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function createLogger() {
   return {
@@ -356,6 +359,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     });
   });
 
+<<<<<<< HEAD
   it("waits for device-backed node removal before dispatching later queued requests", async () => {
     let releaseMutation: (() => void) | undefined;
     const close = createCloseMock();
@@ -398,6 +402,8 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("drains credential mutation barriers installed by earlier queued requests", async () => {
     let releaseFirstMutation: (() => void) | undefined;
     let releaseSecondMutation: (() => void) | undefined;

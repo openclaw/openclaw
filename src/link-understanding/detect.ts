@@ -3,10 +3,14 @@ import { isBlockedHostnameOrIp } from "../infra/net/ssrf.js";
 import { DEFAULT_MAX_LINKS } from "./defaults.js";
 
 // Remove markdown link syntax so only bare URLs are considered.
+<<<<<<< HEAD
 // The link-text portion allows "]" that is not the closing "](" boundary so
 // markdown links whose label contains brackets (e.g. "[my notes [v2]](...)")
 // are still stripped instead of leaking their URL to BARE_LINK_RE.
 const MARKDOWN_LINK_RE = /\[(?:[^\]]|](?!\())*]\((https?:\/\/\S+?)\)/gi;
+=======
+const MARKDOWN_LINK_RE = /\[[^\]]*]\((https?:\/\/\S+?)\)/gi;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const BARE_LINK_RE = /https?:\/\/\S+/gi;
 
 function stripMarkdownLinks(message: string): string {

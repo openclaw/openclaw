@@ -6,7 +6,10 @@ import path from "node:path";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
+<<<<<<< HEAD
   createPluginStateSyncKeyedStoreForTests,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { getSessionBindingService, testing } from "openclaw/plugin-sdk/session-binding-runtime";
@@ -198,8 +201,11 @@ describe("matrix thread bindings", () => {
       state: {
         openKeyedStore: (options: OpenKeyedStoreOptions) =>
           createPluginStateKeyedStoreForTests("matrix", options),
+<<<<<<< HEAD
         openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
           createPluginStateSyncKeyedStoreForTests("matrix", options),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         resolveStateDir: () => stateDir,
       },
     } as PluginRuntime);

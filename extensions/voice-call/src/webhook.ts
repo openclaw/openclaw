@@ -25,7 +25,10 @@ import { isAllowlistedCaller, normalizePhoneNumber } from "./allowlist.js";
 import {
   normalizeVoiceCallConfig,
   resolveVoiceCallEffectiveConfig,
+<<<<<<< HEAD
   resolveVoiceCallNumberRouteKeyForCall,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type VoiceCallConfig,
 } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
@@ -1032,7 +1035,12 @@ export class VoiceCallWebhookServer {
 
     try {
       const { generateVoiceResponse } = await loadResponseGeneratorModule();
+<<<<<<< HEAD
       const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
+=======
+      const numberRouteKey =
+        typeof call.metadata?.numberRouteKey === "string" ? call.metadata.numberRouteKey : call.to;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const effectiveConfig = resolveVoiceCallEffectiveConfig(this.config, numberRouteKey).config;
 
       const result = await generateVoiceResponse({

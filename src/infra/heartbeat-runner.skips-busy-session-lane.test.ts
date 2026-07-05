@@ -7,7 +7,11 @@ import {
   createReplyOperation,
 } from "../auto-reply/reply/reply-run-registry.js";
 import type { OpenClawConfig } from "../config/config.js";
+<<<<<<< HEAD
 import { markCronJobActive, resetCronActiveJobs } from "../cron/active-jobs.js";
+=======
+import { markCronJobActive, resetCronActiveJobsForTests } from "../cron/active-jobs.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { CommandLaneSnapshot } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
@@ -48,7 +52,11 @@ afterAll(() => {
 
 beforeEach(() => {
   resetSystemEventsForTest();
+<<<<<<< HEAD
   resetCronActiveJobs();
+=======
+  resetCronActiveJobsForTests();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   replyRunRegistryTesting.resetReplyRunRegistry();
 });
 

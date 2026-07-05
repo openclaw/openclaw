@@ -1,7 +1,10 @@
 /**
  * Builds subscription params and cleans up embedded attempt resources.
  */
+<<<<<<< HEAD
 import { toErrorObject } from "../../../infra/errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { SubscribeEmbeddedAgentSessionParams } from "../../embedded-agent-subscribe.types.js";
 import { log } from "../logger.js";
 import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt.abort-settle-timeout.js";
@@ -143,6 +146,26 @@ export async function cleanupEmbeddedAttemptResources(params: {
   }
 
   if (sessionLockReleaseError) {
+<<<<<<< HEAD
     throw toErrorObject(sessionLockReleaseError, "Non-Error thrown");
   }
 }
+=======
+    throw toLintErrorObject(sessionLockReleaseError, "Non-Error thrown");
+  }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

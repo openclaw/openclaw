@@ -78,6 +78,7 @@ export type SkillsProps = {
   clawhubDetailLoading: boolean;
   clawhubDetailError: string | null;
   clawhubInstallSlug: string | null;
+<<<<<<< HEAD
   clawhubInstallMessage: {
     kind: "success" | "error";
     text: string;
@@ -85,6 +86,9 @@ export type SkillsProps = {
     acknowledgeVersion?: string;
     acknowledgeLabel?: string;
   } | null;
+=======
+  clawhubInstallMessage: { kind: "success" | "error"; text: string } | null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   onFilterChange: (next: string) => void;
   onAgentChange: (agentId: string) => void;
   onStatusFilterChange: (next: SkillsStatusFilter) => void;
@@ -99,7 +103,11 @@ export type SkillsProps = {
   onClawHubQueryChange: (query: string) => void;
   onClawHubDetailOpen: (slug: string) => void;
   onClawHubDetailClose: () => void;
+<<<<<<< HEAD
   onClawHubInstall: (slug: string, acknowledgeClawHubRisk?: boolean, version?: string) => void;
+=======
+  onClawHubInstall: (slug: string) => void;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 type StatusTabDef = { id: SkillsStatusFilter; label: string };
@@ -324,6 +332,7 @@ export function renderSkills(props: SkillsProps) {
               class="callout ${props.clawhubInstallMessage.kind === "error" ? "danger" : "success"}"
               style="margin-top: 8px;"
             >
+<<<<<<< HEAD
               <div
                 style="max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;"
               >
@@ -347,6 +356,9 @@ export function renderSkills(props: SkillsProps) {
                     "Acknowledge risk and install"}
                   </button>`
                 : nothing}
+=======
+              ${props.clawhubInstallMessage.text}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             </div>`
           : nothing}
         ${renderClawHubResults(props)}

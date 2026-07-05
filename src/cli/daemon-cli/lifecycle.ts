@@ -280,12 +280,19 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
       process.platform === "darwin"
         ? async () => await recoverInstalledLaunchAgent({ result: "started" })
         : undefined,
+<<<<<<< HEAD
     repairLoadedService: async ({ json, stdout, warn, state, issues }) =>
+=======
+    repairLoadedService: async ({ json, stdout, state, issues }) =>
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       await repairLoadedGatewayServiceForStart({
         service,
         json,
         stdout,
+<<<<<<< HEAD
         warn,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         state,
         issues,
       }),
@@ -353,7 +360,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
       return null;
     },
+<<<<<<< HEAD
     postRestartCheck: async ({ warnings, fail, stdout, warn }) => {
+=======
+    postRestartCheck: async ({ warnings, fail, stdout }) => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (restartedWithoutServiceManager) {
         // SIGUSR1 restarts have no service-manager state to watch; use listener health only.
         const health = await waitForGatewayHealthyListener({
@@ -403,7 +414,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         }
 
         await terminateStaleGatewayPids(health.staleGatewayPids);
+<<<<<<< HEAD
         const retryRestart = await service.restart({ env: process.env, stdout, warn });
+=======
+        const retryRestart = await service.restart({ env: process.env, stdout });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         if (retryRestart.outcome === "scheduled") {
           return retryRestart;
         }

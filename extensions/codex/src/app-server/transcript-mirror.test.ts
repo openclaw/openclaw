@@ -21,6 +21,7 @@ import {
   mirrorCodexAppServerTranscript,
 } from "./transcript-mirror.js";
 
+<<<<<<< HEAD
 const publishSessionTranscriptUpdateByIdentityMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => {
@@ -29,6 +30,15 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
   return {
     ...actual,
     publishSessionTranscriptUpdateByIdentity: publishSessionTranscriptUpdateByIdentityMock,
+=======
+const emitSessionTranscriptUpdateMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
+  return {
+    ...actual,
+    emitSessionTranscriptUpdate: emitSessionTranscriptUpdateMock,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 });
 
@@ -45,7 +55,11 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   resetGlobalHookRunner();
+<<<<<<< HEAD
   publishSessionTranscriptUpdateByIdentityMock.mockReset();
+=======
+  emitSessionTranscriptUpdateMock.mockReset();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   for (const dir of tempDirs.splice(0)) {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -131,7 +145,10 @@ describe("mirrorCodexAppServerTranscript", () => {
 
     await mirrorCodexAppServerTranscript({
       sessionFile,
+<<<<<<< HEAD
       sessionId: "session-1",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: "session-1",
       messages: [userMessage, assistantMessage, toolResultMessage],
       idempotencyScope: "scope-1",
@@ -166,32 +183,52 @@ describe("mirrorCodexAppServerTranscript", () => {
 
     const firstMirror = await mirrorCodexAppServerTranscript({
       sessionFile,
+<<<<<<< HEAD
       sessionId: "session-1",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: "agent:main:main",
       messages: [userMessage],
       idempotencyScope: "codex-app-server:thread-1",
     });
     const secondMirror = await mirrorCodexAppServerTranscript({
       sessionFile,
+<<<<<<< HEAD
       sessionId: "session-1",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: "agent:main:main",
       messages: [userMessage],
       idempotencyScope: "codex-app-server:thread-1",
     });
 
+<<<<<<< HEAD
     const updates = publishSessionTranscriptUpdateByIdentityMock.mock.calls.map(
       ([update]) => update as Record<string, unknown> & { update?: Record<string, unknown> },
+=======
+    const updates = emitSessionTranscriptUpdateMock.mock.calls.map(
+      ([update]) => update as Record<string, unknown>,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
     expect(updates).toHaveLength(1);
     expect(updates[0]?.sessionFile).toBe(sessionFile);
     expect(updates[0]?.sessionKey).toBe("agent:main:main");
+<<<<<<< HEAD
     expect(updates[0]?.update?.messageId).toEqual(expect.any(String));
     expect(updates[0]?.update?.message).toMatchObject({
+=======
+    expect(updates[0]?.messageId).toEqual(expect.any(String));
+    expect(updates[0]?.message).toMatchObject({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       role: "user",
       content: [{ type: "text", text: "show me live" }],
       idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
     });
+<<<<<<< HEAD
     expect(updates[0]?.update?.messageSeq).toBe(1);
+=======
+    expect(updates[0]?.messageSeq).toBe(1);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(firstMirror.userMessagesPresent).toHaveLength(1);
     expect(firstMirror.userMessagesPresent[0]).toMatchObject({
       role: "user",
@@ -211,7 +248,10 @@ describe("mirrorCodexAppServerTranscript", () => {
 
     await mirrorCodexAppServerTranscript({
       sessionFile,
+<<<<<<< HEAD
       sessionId: "session-1",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: "agent:main:main",
       messages: [
         attachCodexMirrorIdentity(
@@ -232,6 +272,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "codex-app-server:thread-1",
     });
 
+<<<<<<< HEAD
     const updates = publishSessionTranscriptUpdateByIdentityMock.mock.calls.map(
       ([update]) => update as Record<string, unknown> & { update?: Record<string, unknown> },
     );
@@ -242,6 +283,16 @@ describe("mirrorCodexAppServerTranscript", () => {
         return message?.role;
       }),
     ).toEqual(["user", "assistant"]);
+=======
+    const updates = emitSessionTranscriptUpdateMock.mock.calls.map(
+      ([update]) => update as Record<string, unknown>,
+    );
+    expect(updates.map((update) => update.messageSeq)).toEqual([1, 2]);
+    expect(updates.map((update) => (update.message as { role?: string }).role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("creates the transcript directory on first mirror", async () => {
@@ -250,7 +301,10 @@ describe("mirrorCodexAppServerTranscript", () => {
 
     await mirrorCodexAppServerTranscript({
       sessionFile,
+<<<<<<< HEAD
       sessionId: "session-1",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: "session-1",
       messages: [
         makeAgentAssistantMessage({
@@ -281,14 +335,20 @@ describe("mirrorCodexAppServerTranscript", () => {
 
     await mirrorCodexAppServerTranscript({
       sessionFile,
+<<<<<<< HEAD
       sessionId: "session-1",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: "session-1",
       messages: [...messages],
       idempotencyScope: "scope-1",
     });
     await mirrorCodexAppServerTranscript({
       sessionFile,
+<<<<<<< HEAD
       sessionId: "session-1",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: "session-1",
       messages: [...messages],
       idempotencyScope: "scope-1",
@@ -322,7 +382,10 @@ describe("mirrorCodexAppServerTranscript", () => {
 
     await mirrorCodexAppServerTranscript({
       sessionFile,
+<<<<<<< HEAD
       sessionId: "session-1",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: "session-1",
       messages: [sourceMessage],
       idempotencyScope: "scope-1",
@@ -359,14 +422,20 @@ describe("mirrorCodexAppServerTranscript", () => {
 
     const first = await mirrorCodexAppServerTranscript({
       sessionFile,
+<<<<<<< HEAD
       sessionId: "session-1",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: "session-1",
       messages: [sourceMessage],
       idempotencyScope: "scope-1",
     });
     const second = await mirrorCodexAppServerTranscript({
       sessionFile,
+<<<<<<< HEAD
       sessionId: "session-1",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: "session-1",
       messages: [sourceMessage],
       idempotencyScope: "scope-1",
@@ -407,7 +476,10 @@ describe("mirrorCodexAppServerTranscript", () => {
 
     await mirrorCodexAppServerTranscript({
       sessionFile,
+<<<<<<< HEAD
       sessionId: "session-1",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: "session-1",
       messages: [sourceMessage],
       idempotencyScope: "scope-1",
@@ -433,7 +505,10 @@ describe("mirrorCodexAppServerTranscript", () => {
 
     await mirrorCodexAppServerTranscript({
       sessionFile,
+<<<<<<< HEAD
       sessionId: "session-1",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: "session-1",
       messages: [
         makeAgentAssistantMessage({
@@ -471,7 +546,10 @@ describe("mirrorCodexAppServerTranscript", () => {
 
     await mirrorCodexAppServerTranscript({
       sessionFile,
+<<<<<<< HEAD
       sessionId: "session-1",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: "session-1",
       messages: [
         makeAgentAssistantMessage({
@@ -550,7 +628,10 @@ describe("mirrorCodexAppServerTranscript", () => {
 
     await mirrorCodexAppServerTranscript({
       sessionFile,
+<<<<<<< HEAD
       sessionId: "session-1",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: "session-1",
       messages: [userMessage, assistantMessage],
       idempotencyScope: "codex-app-server:thread-X",
@@ -564,7 +645,10 @@ describe("mirrorCodexAppServerTranscript", () => {
     );
     await mirrorCodexAppServerTranscript({
       sessionFile,
+<<<<<<< HEAD
       sessionId: "session-1",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: "session-1",
       messages: [userMessage, reasoningMessage, assistantMessage],
       idempotencyScope: "codex-app-server:thread-X",
@@ -613,14 +697,20 @@ describe("mirrorCodexAppServerTranscript", () => {
 
     await mirrorCodexAppServerTranscript({
       sessionFile,
+<<<<<<< HEAD
       sessionId: "session-1",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: "session-1",
       messages: [userTurn1, assistantTurn1],
       idempotencyScope: "codex-app-server:thread-X",
     });
     await mirrorCodexAppServerTranscript({
       sessionFile,
+<<<<<<< HEAD
       sessionId: "session-1",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: "session-1",
       messages: [userTurn2, assistantTurn2],
       idempotencyScope: "codex-app-server:thread-X",
@@ -658,7 +748,10 @@ describe("mirrorCodexAppServerTranscript", () => {
     );
     await mirrorCodexAppServerTranscript({
       sessionFile,
+<<<<<<< HEAD
       sessionId: "session-1",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: "session-1",
       messages: [userTurn1, assistantTurn1],
       idempotencyScope: "codex-app-server:thread-X",
@@ -682,7 +775,10 @@ describe("mirrorCodexAppServerTranscript", () => {
     // turn 1's entries (with their original identities preserved).
     await mirrorCodexAppServerTranscript({
       sessionFile,
+<<<<<<< HEAD
       sessionId: "session-1",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: "session-1",
       messages: [userTurn1, assistantTurn1, userTurn2, assistantTurn2],
       idempotencyScope: "codex-app-server:thread-X",
@@ -713,7 +809,10 @@ describe("mirrorCodexAppServerTranscript", () => {
 
     await mirrorCodexAppServerTranscript({
       sessionFile,
+<<<<<<< HEAD
       sessionId: "session-1",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       sessionKey: "session-1",
       messages: [userMessage, assistantMessage],
       idempotencyScope: "scope-1",

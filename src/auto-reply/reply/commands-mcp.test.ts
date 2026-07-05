@@ -84,6 +84,7 @@ describe("handleCommands /mcp", () => {
     });
   });
 
+<<<<<<< HEAD
   it("blocks authorized non-owner senders from writing MCP config", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
       const workspaceDir = await workspaceHarness.createWorkspace();
@@ -127,6 +128,8 @@ describe("handleCommands /mcp", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects internal writes without operator.admin", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
       const workspaceDir = await workspaceHarness.createWorkspace();

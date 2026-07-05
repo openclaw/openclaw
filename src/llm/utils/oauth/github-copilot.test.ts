@@ -166,6 +166,7 @@ describe("GitHub Copilot OAuth model policy", () => {
       }),
     ).resolves.toBe(false);
   });
+<<<<<<< HEAD
 
   it("cancels model enablement response bodies", async () => {
     const cancel = vi.fn(async () => undefined);
@@ -180,4 +181,6 @@ describe("GitHub Copilot OAuth model policy", () => {
 
     expect(cancel).toHaveBeenCalledTimes(1);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

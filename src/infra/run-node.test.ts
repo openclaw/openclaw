@@ -1533,11 +1533,15 @@ describe("run-node script", () => {
         buildPaths: [DIST_ENTRY, BUILD_STAMP],
       });
 
+<<<<<<< HEAD
       const fakeProcess = Object.assign(createFakeProcess(), {
         stdin: {
           isTTY: true,
         },
       });
+=======
+      const fakeProcess = createFakeProcess();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const child = Object.assign(new EventEmitter(), {
         kill: vi.fn((signal: string) => {
           queueMicrotask(() => child.emit("exit", 0, null));
@@ -1588,13 +1592,17 @@ describe("run-node script", () => {
       expect(spawnCall?.[0]).toBe(process.execPath);
       expect(spawnCall?.[1]).toEqual(["openclaw.mjs", "status"]);
       expect(spawnCall?.[2].stdio).toBe("inherit");
+<<<<<<< HEAD
       expect(spawnCall?.[2]).toMatchObject({ detached: false });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(child.kill).toHaveBeenCalledWith("SIGTERM");
       expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
       expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
     });
   });
 
+<<<<<<< HEAD
   it.runIf(process.platform !== "win32")(
     "force-cleans the active openclaw child process group after forwarded SIGTERM",
     async () => {
@@ -1682,6 +1690,8 @@ describe("run-node script", () => {
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rebuilds when extension sources are newer than the build stamp", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {

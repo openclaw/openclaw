@@ -2,11 +2,18 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+<<<<<<< HEAD
 import { afterEach, describe, expect, it } from "vitest";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import { clearConfigCache } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+=======
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CommandContext } from "../auto-reply/reply/commands-types.js";
+import { clearConfigCache } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { runCrestodianRescueMessage } from "./rescue-message.js";
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -55,6 +62,7 @@ describeLive("Crestodian live rescue channel smoke", () => {
   afterEach(() => {
     clearConfigCache();
     if (originalStateDir === undefined) {
+<<<<<<< HEAD
       deleteTestEnvValue("OPENCLAW_STATE_DIR");
     } else {
       setTestEnvValue("OPENCLAW_STATE_DIR", originalStateDir);
@@ -63,14 +71,29 @@ describeLive("Crestodian live rescue channel smoke", () => {
       deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
     } else {
       setTestEnvValue("OPENCLAW_CONFIG_PATH", originalConfigPath);
+=======
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalStateDir;
+    }
+    if (originalConfigPath === undefined) {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+    } else {
+      process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
   it("handles /crestodian status and a persistent approval roundtrip", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "crestodian-live-rescue-"));
     const configPath = path.join(tempDir, "openclaw.json");
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+=======
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await fs.writeFile(
       configPath,
       JSON.stringify(

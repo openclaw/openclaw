@@ -156,6 +156,7 @@ describe("matrix harness runtime", () => {
     );
   });
 
+<<<<<<< HEAD
   it("cancels Matrix versions probe response bodies", async () => {
     const cancel = vi.fn(async () => {});
     const fetchImpl = vi.fn(async () => ({ ok: true, body: { cancel } }));
@@ -168,6 +169,8 @@ describe("matrix harness runtime", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("falls back to the container IP when the host port is unreachable", async () => {
     const calls: string[] = [];
 

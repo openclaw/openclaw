@@ -562,6 +562,7 @@ describe("compactRawCommand middle truncation", () => {
     expect(result).not.toContain("AKIDABCDEFGHIJKLMNOP1234567890");
     expect(result).toContain("AKIDAB…7890");
   });
+<<<<<<< HEAD
 
   it("does not split a surrogate pair when the head boundary lands on an emoji", () => {
     // The one-line form is 140 UTF-16 units. With the default maxLength=120 the head
@@ -584,6 +585,8 @@ describe("compactRawCommand middle truncation", () => {
     expect(result).toContain("…");
     expect(result).toMatch(/b{4}$/);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("coerceDisplayValue middle truncation", () => {

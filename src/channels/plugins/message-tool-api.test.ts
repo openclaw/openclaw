@@ -30,7 +30,14 @@ vi.mock("../../plugins/public-surface-loader.js", () => ({
   loadBundledPluginPublicArtifactModuleSync: loadBundledPluginPublicArtifactModuleSyncMock,
 }));
 
+<<<<<<< HEAD
 import { resolveBundledChannelMessageToolDiscoveryAdapter } from "./message-tool-api.js";
+=======
+import {
+  describeBundledChannelMessageTool,
+  resolveBundledChannelMessageToolDiscoveryAdapter,
+} from "./message-tool-api.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("bundled channel message tool fast path", () => {
   beforeEach(() => {
@@ -50,8 +57,32 @@ describe("bundled channel message tool fast path", () => {
     });
   });
 
+<<<<<<< HEAD
   it("treats missing artifacts as absent discovery", () => {
     expect(resolveBundledChannelMessageToolDiscoveryAdapter("discord")).toBeUndefined();
+=======
+  it("describes message tools through the same artifact", () => {
+    expect(
+      describeBundledChannelMessageTool({
+        channelId: "slack",
+        context: { cfg: {} },
+      }),
+    ).toStrictEqual({
+      actions: ["send", "upload-file"],
+      capabilities: ["presentation"],
+      schema: null,
+    });
+  });
+
+  it("treats missing artifacts as absent discovery", () => {
+    expect(resolveBundledChannelMessageToolDiscoveryAdapter("discord")).toBeUndefined();
+    expect(
+      describeBundledChannelMessageTool({
+        channelId: "discord",
+        context: { cfg: {} },
+      }),
+    ).toBeUndefined();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("ignores present artifacts without discovery", () => {

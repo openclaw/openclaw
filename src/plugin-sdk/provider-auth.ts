@@ -200,12 +200,15 @@ function parseCopilotTokenResponse(value: unknown): {
   return { token, expiresAt: expiresAtMs };
 }
 
+<<<<<<< HEAD
 async function cancelUnreadResponseBody(response: Response): Promise<void> {
   if (!response.bodyUsed) {
     await response.body?.cancel().catch(() => undefined);
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveCopilotProxyHost(proxyEp: string): string | null {
   const trimmed = proxyEp.trim();
   if (!trimmed) {
@@ -306,7 +309,10 @@ export async function resolveCopilotApiToken(params: {
   });
 
   if (!res.ok) {
+<<<<<<< HEAD
     await cancelUnreadResponseBody(res);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     throw new Error(`Copilot token exchange failed: HTTP ${res.status}`);
   }
 

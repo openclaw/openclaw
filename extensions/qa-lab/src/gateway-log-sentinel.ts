@@ -144,7 +144,11 @@ function lineNumberForOffset(logs: string, offset: number) {
   return logs.slice(0, offset).split(/\r?\n/u).length;
 }
 
+<<<<<<< HEAD
 export function extractGatewayMessageText(message: Record<string, unknown>) {
+=======
+function extractMessageText(message: Record<string, unknown>) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const rawContent = message.content;
   if (typeof rawContent === "string") {
     return rawContent.trim();
@@ -274,7 +278,11 @@ export function createDirectReplyTranscriptSentinelScanner() {
       if (message.role !== "assistant") {
         return;
       }
+<<<<<<< HEAD
       const text = extractGatewayMessageText(message);
+=======
+      const text = extractMessageText(message);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (text) {
         lastAssistantText = text;
       }

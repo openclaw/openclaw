@@ -1,6 +1,9 @@
 // E2E Run With Pty tests cover e2e run with pty script behavior.
 import { spawn } from "node:child_process";
+<<<<<<< HEAD
 import { existsSync } from "node:fs";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -128,6 +131,7 @@ describe("run-with-pty", () => {
   posixIt("escalates forwarded termination signals for PTY commands that ignore them", async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-run-with-pty-"));
     const logPath = path.join(tempRoot, "pty.log");
+<<<<<<< HEAD
     const descendantPidPath = path.join(tempRoot, "descendant.pid");
     let descendantPid: number | null = null;
     const probeCode = `
@@ -145,6 +149,17 @@ setInterval(() => {}, 1000);
     const child = spawn(
       process.execPath,
       [scriptPath, logPath, process.execPath, "-e", probeCode],
+=======
+    const child = spawn(
+      process.execPath,
+      [
+        scriptPath,
+        logPath,
+        process.execPath,
+        "-e",
+        "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000);",
+      ],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       {
         env: {
           ...process.env,
@@ -165,8 +180,12 @@ setInterval(() => {}, 1000);
     });
 
     try {
+<<<<<<< HEAD
       await waitFor(() => stdout.text().includes("ready") && existsSync(descendantPidPath));
       descendantPid = Number(await readFile(descendantPidPath, "utf8"));
+=======
+      await waitFor(() => stdout.text().includes("ready"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       child.kill("SIGTERM");
       const result = await waitForClose(child, 5_000);
       const log = await readFile(logPath, "utf8");
@@ -174,11 +193,15 @@ setInterval(() => {}, 1000);
       expect(result).toEqual({ code: 143, signal: null });
       expect(stderr.text()).toBe("");
       expect(log).toContain("ready");
+<<<<<<< HEAD
       expect(isProcessAlive(descendantPid)).toBe(false);
     } finally {
       if (descendantPid && isProcessAlive(descendantPid)) {
         process.kill(descendantPid, "SIGKILL");
       }
+=======
+    } finally {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (child.pid && isProcessAlive(child.pid)) {
         child.kill("SIGKILL");
       }

@@ -5,7 +5,10 @@ import {
   ensureApiKeyFromEnvOrPrompt,
   ensureApiKeyFromOptionEnvOrPrompt,
   maybeApplyApiKeyFromOption,
+<<<<<<< HEAD
   normalizeApiKeyInput,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   normalizeTokenProviderInput,
 } from "./provider-auth-input.js";
 
@@ -230,6 +233,7 @@ describe("normalizeTokenProviderInput", () => {
   });
 });
 
+<<<<<<< HEAD
 describe("normalizeApiKeyInput", () => {
   it("strips shell syntax, pasted line breaks, and non-header-safe artifacts", () => {
     expect(normalizeApiKeyInput("export OPENAI_API_KEY='sk-\r\nabc│';")).toBe("sk-abc");
@@ -240,6 +244,8 @@ describe("normalizeApiKeyInput", () => {
   });
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("maybeApplyApiKeyFromOption", () => {
   it.each(["demo-provider", "  DeMo-PrOvIdEr  "])(
     "stores normalized token when provider %p matches",

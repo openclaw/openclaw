@@ -8,11 +8,19 @@ import { resolveEffectiveOAuthCredential } from "./effective-oauth.js";
 import type { OAuthCredential } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
+<<<<<<< HEAD
   readExternalCliBootstrapCredential: vi.fn<() => OAuthCredential | null>(() => null),
 }));
 
 vi.mock("./external-cli-sync.js", () => ({
   readExternalCliBootstrapCredential: mocks.readExternalCliBootstrapCredential,
+=======
+  readManagedExternalCliCredential: vi.fn<() => OAuthCredential | null>(() => null),
+}));
+
+vi.mock("./external-cli-sync.js", () => ({
+  readManagedExternalCliCredential: mocks.readManagedExternalCliCredential,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 function makeCredential(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
@@ -28,7 +36,11 @@ function makeCredential(overrides: Partial<OAuthCredential> = {}): OAuthCredenti
 
 describe("resolveEffectiveOAuthCredential", () => {
   beforeEach(() => {
+<<<<<<< HEAD
     mocks.readExternalCliBootstrapCredential.mockReset().mockReturnValue(null);
+=======
+    mocks.readManagedExternalCliCredential.mockReset().mockReturnValue(null);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("uses external cli oauth only when local credentials are unusable and safe to bootstrap", () => {
@@ -37,7 +49,11 @@ describe("resolveEffectiveOAuthCredential", () => {
       refresh: "fresh-cli-refresh-token",
       expires: Date.now() + 30 * 60_000,
     });
+<<<<<<< HEAD
     mocks.readExternalCliBootstrapCredential.mockReturnValue(imported);
+=======
+    mocks.readManagedExternalCliCredential.mockReturnValue(imported);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(
       resolveEffectiveOAuthCredential({
@@ -58,7 +74,11 @@ describe("resolveEffectiveOAuthCredential", () => {
       refresh: "healthy-local-refresh-token",
       expires: Date.now() + 30 * 60_000,
     });
+<<<<<<< HEAD
     mocks.readExternalCliBootstrapCredential.mockReturnValue(imported);
+=======
+    mocks.readManagedExternalCliCredential.mockReturnValue(imported);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(
       resolveEffectiveOAuthCredential({
@@ -75,7 +95,11 @@ describe("resolveEffectiveOAuthCredential", () => {
       expires: Date.now() + 30 * 60_000,
       accountId: "acct-external",
     });
+<<<<<<< HEAD
     mocks.readExternalCliBootstrapCredential.mockReturnValue(imported);
+=======
+    mocks.readManagedExternalCliCredential.mockReturnValue(imported);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(
       resolveEffectiveOAuthCredential({

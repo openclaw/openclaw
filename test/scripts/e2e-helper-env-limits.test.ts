@@ -4,7 +4,10 @@ import fs from "node:fs";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
+<<<<<<< HEAD
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { describe, expect, it } from "vitest";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
@@ -211,6 +214,7 @@ describe("e2e helper numeric env limits", () => {
       server.close();
     }
   });
+<<<<<<< HEAD
 
   it("cancels Open WebUI HTTP probe response bodies", async () => {
     const { probeHttpStatus } = await import("../../scripts/e2e/lib/openwebui/http-probe.mjs");
@@ -263,4 +267,6 @@ describe("e2e helper numeric env limits", () => {
       }),
     ).resolves.toBe(true);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

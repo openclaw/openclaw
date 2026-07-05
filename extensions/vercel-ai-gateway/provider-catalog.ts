@@ -3,6 +3,7 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 import {
   discoverVercelAiGatewayModels,
   getStaticVercelAiGatewayModelCatalog,
+<<<<<<< HEAD
   resolveVercelAiGatewayDynamicModel,
   VERCEL_AI_GATEWAY_BASE_URL,
   VERCEL_AI_GATEWAY_PROVIDER_ID,
@@ -40,6 +41,10 @@ export function resolveVercelAiGatewayModel(modelId: string) {
     baseUrl: VERCEL_AI_GATEWAY_BASE_URL,
   };
 }
+=======
+  VERCEL_AI_GATEWAY_BASE_URL,
+} from "./models.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export function buildStaticVercelAiGatewayProvider(): ModelProviderConfig {
   return {

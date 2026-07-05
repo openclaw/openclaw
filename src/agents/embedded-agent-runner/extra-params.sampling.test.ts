@@ -478,6 +478,7 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
     expect(callOptions?.frequencyPenalty).toBe(0.9);
     expect(callOptions?.presencePenalty).toBe(0.7);
   });
+<<<<<<< HEAD
 
   it("keeps dynamic fast mode overrides out of prepared extra params cache", () => {
     const prepareProviderExtraParams = vi.fn((params) => ({
@@ -511,4 +512,6 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
     expect(first.fastMode).toBe(firstFastMode);
     expect(second.fastMode).toBe(secondFastMode);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

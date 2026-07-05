@@ -1,10 +1,17 @@
 // Covers sanitized provider-error observation fields for embedded-agent runs.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as loggingConfigModule from "../logging/config.js";
+<<<<<<< HEAD
 import { sanitizeForConsole } from "./console-sanitize.js";
 import {
   buildApiErrorObservationFields,
   buildTextObservationFields,
+=======
+import {
+  buildApiErrorObservationFields,
+  buildTextObservationFields,
+  sanitizeForConsole,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   shouldSuppressRawErrorConsoleSuffix,
 } from "./embedded-agent-error-observation.js";
 

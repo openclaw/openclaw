@@ -31,6 +31,7 @@ export const InstallRecordShape = {
   clawhubChannel: z
     .union([z.literal("official"), z.literal("community"), z.literal("private")])
     .optional(),
+<<<<<<< HEAD
   clawhubTrustDisposition: z
     .union([
       z.literal("clean"),
@@ -46,6 +47,8 @@ export const InstallRecordShape = {
   clawhubTrustStale: z.boolean().optional(),
   clawhubTrustCheckedAt: z.string().optional(),
   clawhubTrustAcknowledgedAt: z.string().optional(),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   artifactKind: z.union([z.literal("legacy-zip"), z.literal("npm-pack")]).optional(),
   artifactFormat: z.union([z.literal("zip"), z.literal("tgz")]).optional(),
   npmIntegrity: z.string().optional(),

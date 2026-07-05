@@ -24,7 +24,10 @@ describe("detectLinuxSdBackedStateDir", () => {
     const result = detectLinuxSdBackedStateDir("/home/pi/.openclaw", {
       platform: "linux",
       mountInfo,
+<<<<<<< HEAD
       resolveRealPath: (statePath) => statePath,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     expect(result).toEqual({
@@ -52,7 +55,10 @@ describe("detectLinuxSdBackedStateDir", () => {
     const result = detectLinuxSdBackedStateDir("/home/user/.openclaw", {
       platform: "linux",
       mountInfo,
+<<<<<<< HEAD
       resolveRealPath: (statePath) => statePath,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       resolveDeviceRealPath: (devicePath) => {
         if (devicePath === "/dev/disk/by-uuid/abcd-1234") {
           return "/dev/mmcblk0p2";

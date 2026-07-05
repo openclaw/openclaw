@@ -20,7 +20,10 @@ const LAZY_LOCALES: readonly LazyLocale[] = [
   "ja-JP",
   "ko",
   "fr",
+<<<<<<< HEAD
   "hi",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "ar",
   "it",
   "tr",
@@ -31,7 +34,10 @@ const LAZY_LOCALES: readonly LazyLocale[] = [
   "vi",
   "nl",
   "fa",
+<<<<<<< HEAD
   "ru",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ];
 
 const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
@@ -67,10 +73,13 @@ const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
     exportName: "fr",
     loader: () => import("../locales/fr.ts"),
   },
+<<<<<<< HEAD
   hi: {
     exportName: "hi",
     loader: () => import("../locales/hi.ts"),
   },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ar: {
     exportName: "ar",
     loader: () => import("../locales/ar.ts"),
@@ -111,10 +120,13 @@ const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
     exportName: "fa",
     loader: () => import("../locales/fa.ts"),
   },
+<<<<<<< HEAD
   ru: {
     exportName: "ru",
     loader: () => import("../locales/ru.ts"),
   },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = [DEFAULT_LOCALE, ...LAZY_LOCALES];
@@ -149,9 +161,12 @@ export function resolveNavigatorLocale(navLang: string): Locale {
   if (navLang.startsWith("fr")) {
     return "fr";
   }
+<<<<<<< HEAD
   if (navLang.startsWith("hi")) {
     return "hi";
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (navLang.startsWith("ar")) {
     return "ar";
   }
@@ -182,9 +197,12 @@ export function resolveNavigatorLocale(navLang: string): Locale {
   if (navLang.startsWith("fa")) {
     return "fa";
   }
+<<<<<<< HEAD
   if (navLang.startsWith("ru")) {
     return "ru";
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return DEFAULT_LOCALE;
 }
 

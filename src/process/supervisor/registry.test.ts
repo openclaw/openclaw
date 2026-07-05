@@ -74,4 +74,35 @@ describe("process supervisor run registry", () => {
     expect(registry.get("r2")?.state).toBe("exited");
     expect(registry.get("r3")?.state).toBe("exited");
   });
+<<<<<<< HEAD
+=======
+
+  it("filters listByScope and returns detached copies", () => {
+    const registry = createRunRegistry();
+    addRunningRecord(registry, {
+      runId: "r1",
+      sessionId: "s1",
+      scopeKey: "scope:a",
+      startedAtMs: 1,
+    });
+    addRunningRecord(registry, {
+      runId: "r2",
+      sessionId: "s2",
+      scopeKey: "scope:b",
+      startedAtMs: 2,
+    });
+
+    expect(registry.listByScope("   ")).toStrictEqual([]);
+    const scoped = registry.listByScope("scope:a");
+    expect(scoped).toHaveLength(1);
+    const [firstScoped] = scoped;
+    expect(firstScoped?.runId).toBe("r1");
+
+    if (!firstScoped) {
+      throw new Error("missing scoped record");
+    }
+    firstScoped.state = "exited";
+    expect(registry.get("r1")?.state).toBe("running");
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

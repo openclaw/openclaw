@@ -104,12 +104,16 @@ function buildStoredAriaRefs(
     const key = `${role}:${name ?? ""}`;
     const nth = counts.get(key) ?? 0;
     counts.set(key, nth + 1);
+<<<<<<< HEAD
     const refsForKey = refsByKey.get(key);
     if (refsForKey) {
       refsForKey.push(node.ref);
     } else {
       refsByKey.set(key, [node.ref]);
     }
+=======
+    refsByKey.set(key, [...(refsByKey.get(key) ?? []), node.ref]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     refs[node.ref] = {
       role,
       ...(name ? { name } : {}),

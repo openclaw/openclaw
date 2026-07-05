@@ -1,7 +1,10 @@
 // Slack plugin module implements secret contract behavior.
 import {
   collectConditionalChannelFieldAssignments,
+<<<<<<< HEAD
   collectNestedChannelFieldAssignments,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   collectSimpleChannelFieldAssignments,
   getChannelSurface,
   hasOwnProperty,
@@ -23,6 +26,7 @@ export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-se
       includeInAudit: true,
     },
     {
+<<<<<<< HEAD
       id: "channels.slack.accounts.*.relay.authToken",
       targetType: "channels.slack.accounts.*.relay.authToken",
       configFile: "openclaw.json",
@@ -34,6 +38,8 @@ export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-se
       includeInAudit: true,
     },
     {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       id: "channels.slack.accounts.*.botToken",
       targetType: "channels.slack.accounts.*.botToken",
       configFile: "openclaw.json",
@@ -89,6 +95,7 @@ export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-se
       includeInAudit: true,
     },
     {
+<<<<<<< HEAD
       id: "channels.slack.relay.authToken",
       targetType: "channels.slack.relay.authToken",
       configFile: "openclaw.json",
@@ -100,6 +107,8 @@ export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-se
       includeInAudit: true,
     },
     {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       id: "channels.slack.signingSecret",
       targetType: "channels.slack.signingSecret",
       configFile: "openclaw.json",
@@ -133,9 +142,13 @@ export function collectRuntimeConfigAssignments(params: {
     return;
   }
   const { channel: slack, surface } = resolved;
+<<<<<<< HEAD
   const resolveMode = (value: unknown) =>
     value === "http" || value === "socket" || value === "relay" ? value : undefined;
   const baseMode = resolveMode(slack.mode) ?? "socket";
+=======
+  const baseMode = slack.mode === "http" || slack.mode === "socket" ? slack.mode : "socket";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const fields = ["botToken", "userToken"] as const;
   for (const field of fields) {
     collectSimpleChannelFieldAssignments({
@@ -150,6 +163,7 @@ export function collectRuntimeConfigAssignments(params: {
     });
   }
   const resolveAccountMode = (account: Record<string, unknown>) =>
+<<<<<<< HEAD
     resolveMode(account.mode) ?? baseMode;
   const hasNestedAuthTokenOverride = (account: Record<string, unknown>) => {
     const relay = account.relay;
@@ -160,6 +174,9 @@ export function collectRuntimeConfigAssignments(params: {
       hasOwnProperty(relay as Record<string, unknown>, "authToken")
     );
   };
+=======
+    account.mode === "http" || account.mode === "socket" ? account.mode : baseMode;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   collectConditionalChannelFieldAssignments({
     channelKey: "slack",
     field: "appToken",
@@ -167,10 +184,17 @@ export function collectRuntimeConfigAssignments(params: {
     surface,
     defaults: params.defaults,
     context: params.context,
+<<<<<<< HEAD
     topLevelActiveWithoutAccounts: baseMode === "socket",
     topLevelInheritedAccountActive: ({ account, enabled }) =>
       enabled && !hasOwnProperty(account, "appToken") && resolveAccountMode(account) === "socket",
     accountActive: ({ account, enabled }) => enabled && resolveAccountMode(account) === "socket",
+=======
+    topLevelActiveWithoutAccounts: baseMode !== "http",
+    topLevelInheritedAccountActive: ({ account, enabled }) =>
+      enabled && !hasOwnProperty(account, "appToken") && resolveAccountMode(account) !== "http",
+    accountActive: ({ account, enabled }) => enabled && resolveAccountMode(account) !== "http",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     topInactiveReason: "no enabled Slack socket-mode surface inherits this top-level appToken.",
     accountInactiveReason: "Slack account is disabled or not running in socket mode.",
   });
@@ -190,6 +214,7 @@ export function collectRuntimeConfigAssignments(params: {
     topInactiveReason: "no enabled Slack HTTP-mode surface inherits this top-level signingSecret.",
     accountInactiveReason: "Slack account is disabled or not running in HTTP mode.",
   });
+<<<<<<< HEAD
   collectNestedChannelFieldAssignments({
     channelKey: "slack",
     nestedKey: "relay",
@@ -212,6 +237,8 @@ export function collectRuntimeConfigAssignments(params: {
     accountActive: ({ account, enabled }) => enabled && resolveAccountMode(account) === "relay",
     accountInactiveReason: "Slack account is disabled or not running in relay mode.",
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export const channelSecrets = {

@@ -68,6 +68,7 @@ export type InstalledPluginInstallRecordInfo = Pick<
   | "clawhubPackage"
   | "clawhubFamily"
   | "clawhubChannel"
+<<<<<<< HEAD
   | "clawhubTrustDisposition"
   | "clawhubTrustScanStatus"
   | "clawhubTrustModerationState"
@@ -76,6 +77,8 @@ export type InstalledPluginInstallRecordInfo = Pick<
   | "clawhubTrustStale"
   | "clawhubTrustCheckedAt"
   | "clawhubTrustAcknowledgedAt"
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   | "artifactKind"
   | "artifactFormat"
   | "npmIntegrity"

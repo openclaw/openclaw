@@ -2,7 +2,10 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
+<<<<<<< HEAD
 import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type ExecFileAsync = (
   file: string,
@@ -40,8 +43,12 @@ export async function resolveQaNodeExecPath(params?: {
     return execPath;
   }
 
+<<<<<<< HEAD
   const locator =
     platform === "win32" ? resolveQaWindowsSystem32ExePath("where.exe", params?.env) : "which";
+=======
+  const locator = platform === "win32" ? "where" : "which";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const execFileImpl = params?.execFileImpl ?? execFileAsync;
   let stdout;
   try {

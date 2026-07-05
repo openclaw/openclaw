@@ -63,6 +63,7 @@ export function updateActiveTurnItemIds(
   activeItemIds.delete(itemId);
 }
 
+<<<<<<< HEAD
 export function updateActiveCompletionBlockerItemIds(
   notification: CodexServerNotification,
   activeItemIds: Set<string>,
@@ -102,6 +103,8 @@ function isCompletionBlockingItem(item: CodexThreadItem): boolean {
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isCompletedAssistantNotification(notification: CodexServerNotification): boolean {
   if (!isJsonObject(notification.params)) {
     return false;
@@ -228,6 +231,7 @@ export function isRawToolOutputCompletionNotification(
     return false;
   }
   const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+<<<<<<< HEAD
   switch (item ? readString(item, "type") : undefined) {
     case "custom_tool_call_output":
     case "function_call_output":
@@ -245,6 +249,9 @@ export function isRawFunctionToolOutputCompletionNotification(
   }
   const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
   return item ? readString(item, "type") === "function_call_output" : false;
+=======
+  return item ? readString(item, "type") === "custom_tool_call_output" : false;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /** Returns true for progress on Codex-native tool item types. */

@@ -668,6 +668,7 @@ describe("handleAssistantFailover", () => {
   });
 
   describe("fallback_model branch", () => {
+<<<<<<< HEAD
     it("throws timeout FailoverError for opencode-go provider-owned stalled streams", async () => {
       const logDecision = vi.fn();
       const outcome = await handleAssistantFailover(
@@ -707,6 +708,8 @@ describe("handleAssistantFailover", () => {
       expect(logDecision).toHaveBeenCalledWith("fallback_model", { status: 408 });
     });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     it("still throws a FailoverError after the surface_error refactor", async () => {
       const logDecision = vi.fn();
       const outcome = await handleAssistantFailover(

@@ -3,7 +3,10 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+<<<<<<< HEAD
 import type { ClawHubTrustErrorCode } from "../infra/clawhub-install-trust.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import { unscopedPackageName } from "../infra/install-safe-path.js";
@@ -29,9 +32,14 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { resolveBundledPluginSources } from "./bundled-sources.js";
+<<<<<<< HEAD
 import { CLAWHUB_INSTALL_ERROR_CODE } from "./clawhub-error-codes.js";
 import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import { installPluginFromClawHub, type ClawHubRiskAcknowledgementRequest } from "./clawhub.js";
+=======
+import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
+import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "./clawhub.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import {
   getExternalizedBundledPluginLegacyPathSuffix,
@@ -76,7 +84,10 @@ export type PluginUpdateLogger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
   error?: (message: string) => void;
+<<<<<<< HEAD
   terminalLinks?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 /** Outcome status for one plugin update attempt. */
@@ -91,12 +102,19 @@ export type PluginUpdateChannelFallback = {
   message: string;
 };
 
+<<<<<<< HEAD
 type BasePluginUpdateOutcome = {
   pluginId: string;
+=======
+export type PluginUpdateOutcome = {
+  pluginId: string;
+  status: PluginUpdateStatus;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   message: string;
   currentVersion?: string;
   nextVersion?: string;
   channelFallback?: PluginUpdateChannelFallback;
+<<<<<<< HEAD
   warning?: string;
 };
 
@@ -110,6 +128,10 @@ export type PluginUpdateOutcome =
       code?: string;
     });
 
+=======
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type PluginUpdateSummary = {
   config: OpenClawConfig;
   changed: boolean;
@@ -211,6 +233,7 @@ function formatClawHubInstallFailure(params: {
   return `Failed to ${params.phase} ${params.pluginId}: ${params.error} (ClawHub ${params.spec}).`;
 }
 
+<<<<<<< HEAD
 function isClawHubRiskAcknowledgementRequired(result: { ok: false; code?: string }): boolean {
   return result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED;
 }
@@ -281,6 +304,8 @@ export function isClawHubTrustSkippedOutcome(outcome: { status: string; code?: s
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function formatGitInstallFailure(params: {
   pluginId: string;
   spec: string;
@@ -576,7 +601,11 @@ function resolveRecordedExtensionsDir(params: {
   const parentDir = path.dirname(params.installPath);
   try {
     const canonicalInstallPath = resolvePluginInstallDir(params.pluginId, parentDir);
+<<<<<<< HEAD
     return pathsEqual(canonicalInstallPath, params.installPath) ? parentDir : undefined;
+=======
+    return canonicalInstallPath === params.installPath ? parentDir : undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } catch {
     return undefined;
   }
@@ -1321,12 +1350,18 @@ export async function updateNpmInstalledPlugins(params: {
   timeoutMs?: number;
   dryRun?: boolean;
   updateChannel?: UpdateChannel;
+<<<<<<< HEAD
   officialPluginUpdateChannel?: UpdateChannel;
   dangerouslyForceUnsafeInstall?: boolean;
   specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+=======
+  dangerouslyForceUnsafeInstall?: boolean;
+  specOverrides?: Record<string, string>;
+  onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }): Promise<PluginUpdateSummary> {
   const logger = params.logger ?? {};
   const installs = params.config.plugins?.installs ?? {};
@@ -1345,10 +1380,13 @@ export async function updateNpmInstalledPlugins(params: {
     ranNpmInstaller = true;
     return await installPluginFromNpmSpec(installParams);
   };
+<<<<<<< HEAD
   const clawHubRiskAcknowledgementOptions = {
     ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
     ...(!params.dryRun && params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
   };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const recordFailure = (
     pluginId: string,
@@ -1404,7 +1442,10 @@ export async function updateNpmInstalledPlugins(params: {
     const officialClawHubSpec = params.syncOfficialPluginInstalls
       ? resolveTrustedSourceLinkedOfficialClawHubSpec({ pluginId, record })
       : undefined;
+<<<<<<< HEAD
     const officialSyncUpdateChannel = params.officialPluginUpdateChannel ?? params.updateChannel;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     if (normalizedPluginConfig) {
       const enableState = resolveEffectiveEnableState({
@@ -1438,7 +1479,11 @@ export async function updateNpmInstalledPlugins(params: {
             record,
             specOverride: params.specOverrides?.[pluginId],
             officialSpecOverride: officialNpmSpec,
+<<<<<<< HEAD
             updateChannel: officialNpmSpec ? officialSyncUpdateChannel : params.updateChannel,
+=======
+            updateChannel: params.updateChannel,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           })
         : undefined;
     const clawhubSpecs =
@@ -1446,7 +1491,11 @@ export async function updateNpmInstalledPlugins(params: {
         ? resolveClawHubUpdateSpecs({
             record,
             officialSpecOverride: officialClawHubSpec,
+<<<<<<< HEAD
             updateChannel: officialClawHubSpec ? officialSyncUpdateChannel : params.updateChannel,
+=======
+            updateChannel: params.updateChannel,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           })
         : undefined;
     const effectiveSpec =
@@ -1468,9 +1517,13 @@ export async function updateNpmInstalledPlugins(params: {
             record,
             effectiveClawHubSpec: effectiveSpec,
             recordClawHubSpec: recordSpec,
+<<<<<<< HEAD
             updateChannel: params.syncOfficialPluginInstalls
               ? officialSyncUpdateChannel
               : params.updateChannel,
+=======
+            updateChannel: params.updateChannel,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           })
         : null;
     let officialNpmFallbackInstallSpec = officialNpmFallbackSpecs?.installSpec;
@@ -1673,10 +1726,13 @@ export async function updateNpmInstalledPlugins(params: {
           continue;
         }
       } else {
+<<<<<<< HEAD
         if (!parseRegistryNpmSpec(effectiveSpec!)) {
           recordFailure(pluginId, `Failed to check ${pluginId}: ${metadataResult.error}`);
           continue;
         }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         logger.warn?.(
           `Could not check ${pluginId} before update; falling back to installer path: ${metadataResult.error}`,
         );
@@ -1722,7 +1778,10 @@ export async function updateNpmInstalledPlugins(params: {
                   dryRun: true,
                   dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                   expectedPluginId: pluginId,
+<<<<<<< HEAD
                   ...clawHubRiskAcknowledgementOptions,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                   logger,
                 })
               : record.source === "git"
@@ -1823,7 +1882,10 @@ export async function updateNpmInstalledPlugins(params: {
           dryRun: true,
           dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
           expectedPluginId: pluginId,
+<<<<<<< HEAD
           ...clawHubRiskAcknowledgementOptions,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           logger,
         });
         activeClawHubInstallSpec = clawhubSpecs.fallbackSpec;
@@ -1860,6 +1922,7 @@ export async function updateNpmInstalledPlugins(params: {
         });
       }
       if (!probe.ok) {
+<<<<<<< HEAD
         if (
           record.source === "clawhub" &&
           shouldSkipClawHubTrustFailureForExistingInstall({
@@ -1883,6 +1946,8 @@ export async function updateNpmInstalledPlugins(params: {
           );
           continue;
         }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         recordFailure(
           pluginId,
           record.source === "npm" || usedOfficialNpmFallback
@@ -2008,7 +2073,10 @@ export async function updateNpmInstalledPlugins(params: {
                 timeoutMs: params.timeoutMs,
                 dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                 expectedPluginId: pluginId,
+<<<<<<< HEAD
                 ...clawHubRiskAcknowledgementOptions,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 logger,
               })
             : record.source === "git"
@@ -2106,7 +2174,10 @@ export async function updateNpmInstalledPlugins(params: {
         timeoutMs: params.timeoutMs,
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         expectedPluginId: pluginId,
+<<<<<<< HEAD
         ...clawHubRiskAcknowledgementOptions,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         logger,
       });
       activeClawHubInstallSpec = clawhubSpecs.fallbackSpec;
@@ -2144,6 +2215,7 @@ export async function updateNpmInstalledPlugins(params: {
       });
     }
     if (!result.ok) {
+<<<<<<< HEAD
       if (
         record.source === "clawhub" &&
         shouldSkipClawHubTrustFailureForExistingInstall({
@@ -2167,6 +2239,8 @@ export async function updateNpmInstalledPlugins(params: {
         );
         continue;
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       recordFailure(
         pluginId,
         resultSource === "npm"
@@ -2322,8 +2396,11 @@ export async function syncPluginsForUpdateChannel(params: {
   env?: NodeJS.ProcessEnv;
   logger?: PluginUpdateLogger;
   externalizedBundledPluginBridges?: readonly ExternalizedBundledPluginBridge[];
+<<<<<<< HEAD
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }): Promise<PluginChannelSyncResult> {
   const env = params.env ?? process.env;
   const logger = params.logger ?? {};
@@ -2343,10 +2420,13 @@ export async function syncPluginsForUpdateChannel(params: {
   const loadHelpers = buildLoadPathHelpers(next.plugins?.load?.paths ?? [], env);
   let installs = next.plugins?.installs ?? {};
   let changed = false;
+<<<<<<< HEAD
   const clawHubRiskAcknowledgementOptions = {
     ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
     ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
   };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   if (params.channel === "dev") {
     for (const [pluginId, record] of Object.entries(installs)) {
@@ -2460,7 +2540,10 @@ export async function syncPluginsForUpdateChannel(params: {
           ...(bridge.clawhubUrl ? { baseUrl: bridge.clawhubUrl } : {}),
           mode: "update",
           expectedPluginId: targetPluginId,
+<<<<<<< HEAD
           ...clawHubRiskAcknowledgementOptions,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           logger,
         });
         if (!result.ok && npmSpec && shouldFallbackClawHubBridgeToNpm({ result, npmSpec })) {
@@ -2490,6 +2573,7 @@ export async function syncPluginsForUpdateChannel(params: {
       }
 
       if (!result.ok) {
+<<<<<<< HEAD
         const clawHubTrustWarning =
           installSource === "clawhub" &&
           "warning" in result &&
@@ -2500,6 +2584,8 @@ export async function syncPluginsForUpdateChannel(params: {
         if (clawHubTrustWarning) {
           summary.warnings.push(clawHubTrustWarning);
         }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const message =
           installSource === "clawhub"
             ? formatClawHubInstallFailure({

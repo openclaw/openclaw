@@ -15,6 +15,7 @@ import { parseInlineDirectives } from "../../../../src/utils/directive-tags.js";
 import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
 export { isToolResultMessage, normalizeRoleForGrouping } from "./role-normalizer.ts";
 
+<<<<<<< HEAD
 function isTextContentBlock(
   item: Record<string, unknown>,
   role: string,
@@ -27,6 +28,8 @@ function isTextContentBlock(
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function coerceCanvasPreview(
   value: unknown,
 ):
@@ -418,6 +421,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
           },
         ];
       }
+<<<<<<< HEAD
       if (isTextContentBlock(item, role)) {
         if (isAssistantMessage) {
           const expanded = expandTextContent(item.text);
@@ -437,6 +441,17 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
             args: undefined,
           },
         ];
+=======
+      if (item.type === "text" && typeof item.text === "string" && isAssistantMessage) {
+        const expanded = expandTextContent(item.text);
+        audioAsVoice = audioAsVoice || expanded.audioAsVoice;
+        if (expanded.replyTarget?.kind === "id") {
+          replyTarget = expanded.replyTarget;
+        } else if (expanded.replyTarget?.kind === "current" && replyTarget === null) {
+          replyTarget = expanded.replyTarget;
+        }
+        return expanded.content;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
       return [
         {

@@ -9,7 +9,10 @@ import {
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
+<<<<<<< HEAD
 import { toErrorObject } from "../infra/errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -227,9 +230,14 @@ async function probeHealth(
   timeout.unref?.();
   const onAbort = () => controller.abort(toAbortError(signal));
   signal?.addEventListener("abort", onAbort, { once: true });
+<<<<<<< HEAD
   let response: Response | undefined;
   try {
     response = await fetch(url, { headers, signal: controller.signal });
+=======
+  try {
+    const response = await fetch(url, { headers, signal: controller.signal });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return response.ok;
   } catch {
     if (signal?.aborted) {
@@ -239,7 +247,10 @@ async function probeHealth(
   } finally {
     clearTimeout(timeout);
     signal?.removeEventListener("abort", onAbort);
+<<<<<<< HEAD
     await response?.body?.cancel?.().catch(() => undefined);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 
@@ -431,7 +442,11 @@ function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal | null): Prom
       },
       (error: unknown) => {
         cleanup();
+<<<<<<< HEAD
         reject(toErrorObject(error, "Non-Error rejection"));
+=======
+        reject(toLintErrorObject(error, "Non-Error rejection"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     );
   });
@@ -524,3 +539,20 @@ export function hasLocalServiceProcessExited(
 ): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

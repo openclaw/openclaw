@@ -495,6 +495,7 @@ describe("tui session actions", () => {
     expect(listSessions).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("renders a fresh session total as 0 (not '?') when totalTokensFresh is set", async () => {
     const listSessions = vi.fn().mockResolvedValue({ sessions: [] });
     const loadHistory = vi.fn().mockResolvedValue({
@@ -533,6 +534,8 @@ describe("tui session actions", () => {
     expect(state.sessionInfo.totalTokensFresh).toBe(true);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("restores an in-flight run reported by chat.history on switch-back", async () => {
     const loadHistory = vi.fn().mockResolvedValue({
       sessionId: "session-bg",

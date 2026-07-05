@@ -1,10 +1,18 @@
 // Proxy capture SQLite store tests cover persisted capture reads and writes.
 import fs from "node:fs";
+<<<<<<< HEAD
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+=======
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   acquireDebugProxyCaptureStore,
   closeDebugProxyCaptureStore,
@@ -17,6 +25,7 @@ const cleanupDirs: string[] = [];
 
 afterEach(() => {
   closeDebugProxyCaptureStore();
+<<<<<<< HEAD
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   cleanupTempDirs(cleanupDirs);
@@ -30,6 +39,21 @@ function makeStore() {
 function makeStateEnv(prefix: string): NodeJS.ProcessEnv {
   const root = makeTempDir(cleanupDirs, prefix);
   return { OPENCLAW_STATE_DIR: root };
+=======
+  vi.restoreAllMocks();
+  while (cleanupDirs.length > 0) {
+    const dir = cleanupDirs.pop();
+    if (dir) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+function makeStore() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-"));
+  cleanupDirs.push(root);
+  return new DebugProxyCaptureStore(path.join(root, "capture.sqlite"), path.join(root, "blobs"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function readMode(target: string): number {
@@ -37,11 +61,59 @@ function readMode(target: string): number {
 }
 
 describe("DebugProxyCaptureStore", () => {
+<<<<<<< HEAD
   it("keeps the cached store open until the last lease releases", () => {
     const options = { env: makeStateEnv("openclaw-proxy-capture-lease-") };
 
     const first = acquireDebugProxyCaptureStore(options);
     const second = acquireDebugProxyCaptureStore(options);
+=======
+  it.each([
+    ":memory:",
+    "file::memory:?cache=shared",
+    "file:%3Amemory:?cache=shared",
+    "file:proxy-capture?mode=memory&cache=shared",
+    "file:proxy-capture?mode=memory#ignored",
+  ])(
+    "keeps SQLite memory path %s off the filesystem",
+    (dbPath) => {
+      const mkdirSync = vi.spyOn(fs, "mkdirSync");
+      const openSync = vi.spyOn(fs, "openSync");
+      const existsSync = vi.spyOn(fs, "existsSync");
+
+      const store = new DebugProxyCaptureStore(dbPath, "unused");
+      try {
+        expect(store.db.prepare("PRAGMA database_list").get()).toMatchObject({ file: "" });
+        expect(mkdirSync).not.toHaveBeenCalled();
+        expect(openSync).not.toHaveBeenCalled();
+        expect(existsSync).not.toHaveBeenCalled();
+      } finally {
+        store.close();
+      }
+    },
+  );
+
+  it.runIf(process.platform === "linux")("closes the database when initialization fails", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-failed-open-"));
+    cleanupDirs.push(root);
+    const dbPath = path.join(root, "capture.sqlite");
+    fs.writeFileSync(dbPath, "not a sqlite database");
+
+    expect(() => new DebugProxyCaptureStore(dbPath, path.join(root, "blobs"))).toThrow(
+      "file is not a database",
+    );
+    expect(listOpenFileDescriptorsForPath(dbPath)).toEqual([]);
+  });
+
+  it("keeps the cached store open until the last lease releases", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-lease-"));
+    cleanupDirs.push(root);
+    const dbPath = path.join(root, "capture.sqlite");
+    const blobDir = path.join(root, "blobs");
+
+    const first = acquireDebugProxyCaptureStore(dbPath, blobDir);
+    const second = acquireDebugProxyCaptureStore(dbPath, blobDir);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(second.store).toBe(first.store);
     first.release();
@@ -50,18 +122,35 @@ describe("DebugProxyCaptureStore", () => {
     second.release();
     expect(first.store.isClosed).toBe(true);
 
+<<<<<<< HEAD
     const reopened = getDebugProxyCaptureStore(options);
+=======
+    const reopened = getDebugProxyCaptureStore(dbPath, blobDir);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(Object.is(reopened, first.store)).toBe(false);
     expect(reopened.isClosed).toBe(false);
   });
 
   it("tracks and closes cached stores independently across paths", () => {
+<<<<<<< HEAD
     const first = acquireDebugProxyCaptureStore({
       env: makeStateEnv("openclaw-proxy-capture-first-"),
     });
     const second = acquireDebugProxyCaptureStore({
       env: makeStateEnv("openclaw-proxy-capture-second-"),
     });
+=======
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-paths-"));
+    cleanupDirs.push(root);
+    const first = acquireDebugProxyCaptureStore(
+      path.join(root, "first.sqlite"),
+      path.join(root, "first-blobs"),
+    );
+    const second = acquireDebugProxyCaptureStore(
+      path.join(root, "second.sqlite"),
+      path.join(root, "second-blobs"),
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     first.release();
     expect(first.store.isClosed).toBe(true);
@@ -72,6 +161,7 @@ describe("DebugProxyCaptureStore", () => {
     second.release();
   });
 
+<<<<<<< HEAD
   it("preserves the shipped path-based Plugin SDK overloads", () => {
     const root = makeTempDir(cleanupDirs, "openclaw-proxy-capture-legacy-sdk-");
     const dbPath = path.join(root, "capture.sqlite");
@@ -128,6 +218,11 @@ describe("DebugProxyCaptureStore", () => {
   });
 
   it("uses rollback journaling for captures on NFS-backed volumes", () => {
+=======
+  it("uses rollback journaling for captures on NFS-backed volumes", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-nfs-"));
+    cleanupDirs.push(root);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     vi.spyOn(fs, "statfsSync").mockReturnValue({
       type: 0x6969,
       bsize: 1024,
@@ -138,9 +233,16 @@ describe("DebugProxyCaptureStore", () => {
       ffree: 0,
     });
 
+<<<<<<< HEAD
     const store = new DebugProxyCaptureStore({
       env: makeStateEnv("openclaw-proxy-capture-nfs-"),
     });
+=======
+    const store = new DebugProxyCaptureStore(
+      path.join(root, "capture.sqlite"),
+      path.join(root, "blobs"),
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     try {
       expect(store.db.prepare("PRAGMA journal_mode").get()).toMatchObject({
         journal_mode: "delete",
@@ -150,6 +252,7 @@ describe("DebugProxyCaptureStore", () => {
     }
   });
 
+<<<<<<< HEAD
   it.runIf(process.platform !== "win32")(
     "stores capture blobs in the private shared state database",
     () => {
@@ -184,6 +287,33 @@ describe("DebugProxyCaptureStore", () => {
       }
     },
   );
+=======
+  it.runIf(process.platform !== "win32")("keeps capture databases and blobs private", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-permissions-"));
+    cleanupDirs.push(root);
+    const dbDir = path.join(root, "db");
+    const dbPath = path.join(dbDir, "capture.sqlite");
+    const blobDir = path.join(root, "blobs");
+    const store = new DebugProxyCaptureStore(dbPath, blobDir);
+    const blob = store.persistPayload(Buffer.from("authorization: Bearer secret"));
+
+    expect(readMode(dbDir)).toBe(0o700);
+    expect(readMode(blobDir)).toBe(0o700);
+    for (const databaseFile of resolveSqliteDatabaseFilePaths(dbPath).filter(fs.existsSync)) {
+      expect(readMode(databaseFile)).toBe(0o600);
+    }
+    expect(readMode(blob.path)).toBe(0o600);
+
+    store.close();
+    fs.chmodSync(dbPath, 0o644);
+    fs.chmodSync(blob.path, 0o644);
+    const reopened = new DebugProxyCaptureStore(dbPath, blobDir);
+    reopened.persistPayload(Buffer.from("authorization: Bearer secret"));
+    expect(readMode(dbPath)).toBe(0o600);
+    expect(readMode(blob.path)).toBe(0o600);
+    reopened.close();
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   it("ignores duplicate close calls", () => {
     const store = makeStore();
@@ -201,6 +331,11 @@ describe("DebugProxyCaptureStore", () => {
       mode: "proxy-run",
       sourceScope: "openclaw",
       sourceProcess: "openclaw",
+<<<<<<< HEAD
+=======
+      dbPath: store.dbPath,
+      blobDir: store.blobDir,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     const firstPayload = persistEventPayload(store, {
       data: '{"ok":true}',
@@ -245,6 +380,7 @@ describe("DebugProxyCaptureStore", () => {
     expect(store.readBlob(firstPayload.dataBlobId ?? "")).toContain('"ok":true');
   });
 
+<<<<<<< HEAD
   it("creates and later upgrades an implicit session for direct event capture", () => {
     const store = makeStore();
     store.recordEvent({
@@ -282,6 +418,8 @@ describe("DebugProxyCaptureStore", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps shared blobs when deleting one of multiple referencing sessions", () => {
     const store = makeStore();
     const sharedPayload = persistEventPayload(store, {
@@ -296,6 +434,11 @@ describe("DebugProxyCaptureStore", () => {
         mode: "proxy-run",
         sourceScope: "openclaw",
         sourceProcess: "openclaw",
+<<<<<<< HEAD
+=======
+        dbPath: store.dbPath,
+        blobDir: store.blobDir,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
       store.recordEvent({
         sessionId,
@@ -320,6 +463,7 @@ describe("DebugProxyCaptureStore", () => {
     expect(result.blobs).toBe(0);
     expect(store.readBlob(sharedPayload.dataBlobId ?? "")).toContain('"shared":true');
     expect(store.listSessions(10).map((session) => session.id)).toEqual(["session-b"]);
+<<<<<<< HEAD
 
     expect(store.deleteSessions(["session-b"])).toEqual({
       sessions: 1,
@@ -327,5 +471,7 @@ describe("DebugProxyCaptureStore", () => {
       blobs: 1,
     });
     expect(store.readBlob(sharedPayload.dataBlobId ?? "")).toBeNull();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

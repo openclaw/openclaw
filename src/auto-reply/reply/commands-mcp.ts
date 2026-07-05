@@ -5,7 +5,10 @@ import {
   unsetConfiguredMcpServer,
 } from "../../config/mcp-config.js";
 import {
+<<<<<<< HEAD
   rejectNonOwnerCommand,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
   requireGatewayClientScope,
@@ -30,10 +33,13 @@ export const handleMcpCommand: CommandHandler = async (params, allowTextCommands
   if (unauthorized) {
     return unauthorized;
   }
+<<<<<<< HEAD
   const nonOwner = rejectNonOwnerCommand(params, "/mcp");
   if (nonOwner) {
     return nonOwner;
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const disabled = requireCommandFlagEnabled(params.cfg, {
     label: "/mcp",
     configKey: "mcp",

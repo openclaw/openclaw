@@ -50,7 +50,10 @@ import {
   CROSS_OS_DISCORD_FETCH_TIMEOUT_MS,
   CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   CROSS_OS_COMMAND_HEARTBEAT_SECONDS,
+<<<<<<< HEAD
   deleteDiscordMessage,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   isImmutableReleaseRef,
   isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   isRecoverableWindowsPackagedUpgradeTimeoutError,
@@ -167,6 +170,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(CROSS_OS_FETCH_BODY_MAX_CHARS).toBeGreaterThan(1024);
   });
 
+<<<<<<< HEAD
   it("keeps cross-OS fetch timeouts active while reading response bodies", async () => {
     let canceled = false;
     const abortController = new AbortController();
@@ -192,6 +196,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(canceled).toBe(true);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("requires dashboard root markers and same-origin asset URLs", () => {
     const html = [
       "<title>OpenClaw Control</title>",
@@ -1161,6 +1167,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     });
   });
 
+<<<<<<< HEAD
   it("does not trust ambient ComSpec when wrapping Windows cmd shims", () => {
     const originalComSpec = process.env.ComSpec;
     const originalSystemRoot = process.env.SystemRoot;
@@ -1187,6 +1194,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("wraps installed Windows CLI cmd fallbacks without Node shell argv", () => {
     expect(
       resolveInstalledCliInvocation(
@@ -1370,7 +1379,11 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
           cwd: process.cwd(),
           env: {
             ...process.env,
+<<<<<<< HEAD
             OPENCLAW_CROSS_OS_PROCESS_TREE_KILL_AFTER_MS: "200",
+=======
+            OPENCLAW_CROSS_OS_PROCESS_TREE_KILL_AFTER_MS: "25",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             OPENCLAW_TEST_CHILD_PID: childPidPath,
           },
           stdio: ["ignore", "ignore", "pipe"],
@@ -1384,6 +1397,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       const result = await waitForExit(runner, 5_000);
 
       expect(result).toEqual({ signal: null, status: 143 });
+<<<<<<< HEAD
       await waitForDead(childPid, 10_000);
     } finally {
       if (runnerPid !== undefined && isProcessAlive(runnerPid)) {
@@ -1455,6 +1469,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       expect(result).toEqual({ signal: null, status: 143 });
       expect(elapsedMs).toBeLessThan(2_000);
       expect(readFileSync(logPath, "utf8")).toContain("signal cleanup log sentinel");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       await waitForDead(childPid, 2_000);
     } finally {
       if (runnerPid !== undefined && isProcessAlive(runnerPid)) {
@@ -1510,10 +1526,13 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("detects whether a managed gateway listener is still reachable on loopback", async () => {
+<<<<<<< HEAD
     expect(await canConnectToLoopbackPort(0)).toBe(false);
     expect(await canConnectToLoopbackPort(65536)).toBe(false);
     expect(await canConnectToLoopbackPort(1234.5)).toBe(false);
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const server = createNetServer();
     await new Promise((resolvePromise) => {
       server.listen(0, "127.0.0.1", resolvePromise);
@@ -1568,6 +1587,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
+<<<<<<< HEAD
   it("cancels Discord delete response bodies", async () => {
     let canceled = false;
     const originalFetch = globalThis.fetch;
@@ -1593,6 +1613,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(canceled).toBe(true);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps the dev-update lane for main only", () => {
     expect(shouldRunMainChannelDevUpdate("main")).toBe(true);
     expect(shouldRunMainChannelDevUpdate("08753a1d793c040b101c8a26c43445dbbab14995")).toBe(false);

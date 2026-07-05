@@ -43,6 +43,7 @@ afterAll(() => {
   vi.resetModules();
 });
 
+<<<<<<< HEAD
 function jsonResponse(payload: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(payload), {
     status: 200,
@@ -76,6 +77,25 @@ function installBraveLlmContextFetch() {
       },
       sources: [],
     });
+=======
+function installBraveLlmContextFetch() {
+  const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+    return {
+      ok: true,
+      json: async () => ({
+        grounding: {
+          generic: [
+            {
+              url: "https://example.com/context",
+              title: "Context",
+              snippets: ["snippet"],
+            },
+          ],
+        },
+        sources: [],
+      }),
+    } as unknown as Response;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
   global.fetch = mockFetch as typeof global.fetch;
   return mockFetch;
@@ -270,7 +290,14 @@ describe("brave web search provider", () => {
   it("uses configured Brave baseUrl for web search requests", async () => {
     vi.stubEnv("BRAVE_API_KEY", "");
     const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+<<<<<<< HEAD
       return emptyWebSearchResponse();
+=======
+      return {
+        ok: true,
+        json: async () => ({ web: { results: [] } }),
+      } as unknown as Response;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     global.fetch = mockFetch as typeof global.fetch;
 
@@ -323,7 +350,16 @@ describe("brave web search provider", () => {
   it("reports malformed Brave web search JSON as a provider error", async () => {
     vi.stubEnv("BRAVE_API_KEY", "");
     const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+<<<<<<< HEAD
       return malformedJsonResponse();
+=======
+      return {
+        ok: true,
+        json: async () => {
+          throw new SyntaxError("Unexpected token");
+        },
+      } as unknown as Response;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     global.fetch = mockFetch as typeof global.fetch;
 
@@ -347,7 +383,16 @@ describe("brave web search provider", () => {
   it("reports malformed Brave llm-context JSON as a provider error", async () => {
     vi.stubEnv("BRAVE_API_KEY", "");
     const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+<<<<<<< HEAD
       return malformedJsonResponse();
+=======
+      return {
+        ok: true,
+        json: async () => {
+          throw new SyntaxError("Unexpected token");
+        },
+      } as unknown as Response;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     global.fetch = mockFetch as typeof global.fetch;
 
@@ -431,7 +476,14 @@ describe("brave web search provider", () => {
   it("keeps Brave cache entries isolated by baseUrl", async () => {
     vi.stubEnv("BRAVE_API_KEY", "");
     const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+<<<<<<< HEAD
       return emptyWebSearchResponse();
+=======
+      return {
+        ok: true,
+        json: async () => ({ web: { results: [] } }),
+      } as unknown as Response;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     global.fetch = mockFetch as typeof global.fetch;
 
@@ -573,7 +625,14 @@ describe("brave web search provider", () => {
   it("sends Brave web auth in the X-Subscription-Token header", async () => {
     vi.stubEnv("BRAVE_API_KEY", "");
     const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+<<<<<<< HEAD
       return emptyWebSearchResponse();
+=======
+      return {
+        ok: true,
+        json: async () => ({ web: { results: [] } }),
+      } as unknown as Response;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     global.fetch = mockFetch as typeof global.fetch;
 
@@ -729,7 +788,14 @@ describe("brave web search provider", () => {
   it("falls back unsupported country values before calling Brave", async () => {
     vi.stubEnv("BRAVE_API_KEY", "test-key");
     const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+<<<<<<< HEAD
       return emptyWebSearchResponse();
+=======
+      return {
+        ok: true,
+        json: async () => ({ web: { results: [] } }),
+      } as unknown as Response;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     global.fetch = mockFetch as typeof global.fetch;
 
@@ -757,6 +823,7 @@ describe("brave web search provider", () => {
   it("emits brave.http diagnostics for requests, responses, and cache events", async () => {
     vi.stubEnv("BRAVE_API_KEY", "");
     const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+<<<<<<< HEAD
       return jsonResponse({
         web: {
           results: [
@@ -768,6 +835,23 @@ describe("brave web search provider", () => {
           ],
         },
       });
+=======
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          web: {
+            results: [
+              {
+                title: "Diagnostics",
+                url: "https://example.com/diagnostics",
+                description: "debug details",
+              },
+            ],
+          },
+        }),
+      } as unknown as Response;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     global.fetch = mockFetch as typeof global.fetch;
 

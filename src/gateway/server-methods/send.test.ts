@@ -8,7 +8,10 @@ import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+<<<<<<< HEAD
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { GatewayRequestContext } from "./types.js";
 
 type ResolveOutboundTarget = typeof import("../../infra/outbound/targets.js").resolveOutboundTarget;
@@ -214,6 +217,7 @@ async function runMessageActionRequest(
 }
 
 async function withTempOpenClawStateDir<T>(test: (stateDir: string) => Promise<T>): Promise<T> {
+<<<<<<< HEAD
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-send-state-"));
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
@@ -221,6 +225,19 @@ async function withTempOpenClawStateDir<T>(test: (stateDir: string) => Promise<T
     return await test(stateDir);
   } finally {
     envSnapshot.restore();
+=======
+  const previous = process.env.OPENCLAW_STATE_DIR;
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-send-state-"));
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  try {
+    return await test(stateDir);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previous;
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await fs.rm(stateDir, { recursive: true, force: true });
   }
 }
@@ -923,6 +940,7 @@ describe("gateway send mirroring", () => {
     expect(response?.[2]?.message).toContain("Use `chat.send`");
   });
 
+<<<<<<< HEAD
   it("accepts bundled channels before plugin registry normalization for message actions", async () => {
     const { respond } = await runMessageActionRequest({
       channel: "TELEGRAM",
@@ -954,6 +972,8 @@ describe("gateway send mirroring", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("auto-picks the single configured channel for send", async () => {
     mockDeliverySuccess("m-single-send");
 
@@ -1562,11 +1582,18 @@ describe("gateway send mirroring", () => {
       actions: {
         describeMessageTool: () => ({ actions: ["react"] }),
         supportsAction: ({ action }) => action === "react",
+<<<<<<< HEAD
         handleAction: async ({ params, requesterAccountId, requesterSenderId, toolContext }) =>
           jsonResult({
             ok: true,
             messageId: params.messageId,
             requesterAccountId,
+=======
+        handleAction: async ({ params, requesterSenderId, toolContext }) =>
+          jsonResult({
+            ok: true,
+            messageId: params.messageId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             requesterSenderId,
             currentMessageId: toolContext?.currentMessageId,
             currentMessagingTarget: toolContext?.currentMessagingTarget,
@@ -1593,7 +1620,10 @@ describe("gateway send mirroring", () => {
       jsonResult({
         ok: true,
         messageId: "wamid.1",
+<<<<<<< HEAD
         requesterAccountId: "default",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         requesterSenderId: "trusted-user",
         currentMessageId: "wamid.1",
         currentMessagingTarget: "user:15551234567",
@@ -1613,7 +1643,10 @@ describe("gateway send mirroring", () => {
         messageId: "wamid.1",
         emoji: "✅",
       },
+<<<<<<< HEAD
       requesterAccountId: "default",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       requesterSenderId: "trusted-user",
       inboundTurnKind: "room_event",
       toolContext: {
@@ -1634,7 +1667,10 @@ describe("gateway send mirroring", () => {
       {
         ok: true,
         messageId: "wamid.1",
+<<<<<<< HEAD
         requesterAccountId: "default",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         requesterSenderId: "trusted-user",
         currentMessageId: "wamid.1",
         currentMessagingTarget: "user:15551234567",
@@ -1648,10 +1684,14 @@ describe("gateway send mirroring", () => {
       { channel: "whatsapp" },
     );
     expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
+<<<<<<< HEAD
       expect.objectContaining({
         inboundEventKind: "room_event",
         requesterAccountId: "default",
       }),
+=======
+      expect.objectContaining({ inboundEventKind: "room_event" }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     );
   });
 

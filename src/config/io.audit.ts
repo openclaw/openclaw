@@ -54,7 +54,14 @@ const SECRET_FLAG_NAMES = new Set([
 const SECRET_FLAG_SUFFIX_PATTERN =
   /^--(?:[a-z0-9]+(?:-[a-z0-9]+)*-)?(?:token|secret|password|passwd|api[-_]?key|api[-_]?secret|webhook|credential|bearer|pat|private[-_]?key|recovery[-_]?key|signing[-_]?key|encryption[-_]?key|master[-_]?key|session[-_]?key|gateway[-_]?key|service[-_]?key|hook[-_]?key)$/;
 
+<<<<<<< HEAD
 function isSecretFlagName(flagName: string): boolean {
+=======
+function isSecretFlagName(flagName: string | null): boolean {
+  if (flagName === null) {
+    return false;
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (SECRET_FLAG_NAMES.has(flagName)) {
     return true;
   }
@@ -62,7 +69,11 @@ function isSecretFlagName(flagName: string): boolean {
 }
 
 function parseFlagName(arg: string): string | null {
+<<<<<<< HEAD
   if (!arg.startsWith("--")) {
+=======
+  if (typeof arg !== "string" || !arg.startsWith("--")) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return null;
   }
   const eq = arg.indexOf("=");
@@ -85,6 +96,14 @@ export function redactConfigAuditArgv(argv: readonly string[]): string[] {
   const result: string[] = [];
   let redactNext = false;
   for (const current of argv) {
+<<<<<<< HEAD
+=======
+    if (typeof current !== "string") {
+      result.push(current);
+      redactNext = false;
+      continue;
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (redactNext) {
       redactNext = false;
       result.push("***");
@@ -430,7 +449,11 @@ function resolveConfigAuditAppendRecord(params: ConfigAuditAppendParams): Config
   return redactSecrets(record as ConfigAuditRecord);
 }
 
+<<<<<<< HEAD
 export type ConfigAuditScrubResult = {
+=======
+type ConfigAuditScrubResult = {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   scanned: number;
   rewritten: number;
   skipped: number;

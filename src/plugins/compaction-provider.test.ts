@@ -4,6 +4,10 @@ import {
   clearCompactionProviders,
   getCompactionProvider,
   getRegisteredCompactionProvider,
+<<<<<<< HEAD
+=======
+  listCompactionProviderIds,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   listRegisteredCompactionProviders,
   registerCompactionProvider,
   restoreRegisteredCompactionProviders,
@@ -36,6 +40,7 @@ function requireCompactionProvider(id: string): CompactionProvider {
   return provider;
 }
 
+<<<<<<< HEAD
 function listCompactionProviderIdsForTest(): string[] {
   return listRegisteredCompactionProviders().map((entry) => entry.provider.id);
 }
@@ -43,6 +48,11 @@ function listCompactionProviderIdsForTest(): string[] {
 describe("compaction provider registry", () => {
   it("starts empty", () => {
     expect(listCompactionProviderIdsForTest()).toStrictEqual([]);
+=======
+describe("compaction provider registry", () => {
+  it("starts empty", () => {
+    expect(listCompactionProviderIds()).toStrictEqual([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(listRegisteredCompactionProviders()).toStrictEqual([]);
   });
 
@@ -71,7 +81,11 @@ describe("compaction provider registry", () => {
     registerCompactionProvider(makeProvider("alpha"));
     registerCompactionProvider(makeProvider("beta"));
 
+<<<<<<< HEAD
     expect(listCompactionProviderIdsForTest()).toEqual(["alpha", "beta"]);
+=======
+    expect(listCompactionProviderIds()).toEqual(["alpha", "beta"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("lists registered entries with owner metadata", () => {
@@ -94,7 +108,11 @@ describe("compaction provider registry", () => {
     expect(getCompactionProvider("a")?.id).toBe("a");
     expect(getCompactionProvider("b")?.id).toBe("b");
     expect(getCompactionProvider("c")?.id).toBe("c");
+<<<<<<< HEAD
     expect(listCompactionProviderIdsForTest()).toHaveLength(3);
+=======
+    expect(listCompactionProviderIds()).toHaveLength(3);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("calls summarize and returns expected result", async () => {
@@ -115,17 +133,28 @@ describe("compaction provider registry", () => {
 
     expect(getCompactionProvider("dup")).toBe(second);
     expect(getCompactionProvider("dup")?.label).toBe("second-label");
+<<<<<<< HEAD
     expect(listCompactionProviderIdsForTest()).toEqual(["dup"]);
+=======
+    expect(listCompactionProviderIds()).toEqual(["dup"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   describe("lifecycle (clear / restore)", () => {
     it("clear removes all providers", () => {
       registerCompactionProvider(makeProvider("a"));
       registerCompactionProvider(makeProvider("b"));
+<<<<<<< HEAD
       expect(listCompactionProviderIdsForTest()).toHaveLength(2);
 
       clearCompactionProviders();
       expect(listCompactionProviderIdsForTest()).toStrictEqual([]);
+=======
+      expect(listCompactionProviderIds()).toHaveLength(2);
+
+      clearCompactionProviders();
+      expect(listCompactionProviderIds()).toStrictEqual([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(getCompactionProvider("a")).toBeUndefined();
     });
 
@@ -139,11 +168,19 @@ describe("compaction provider registry", () => {
 
       // Register a third provider to change state
       registerCompactionProvider(makeProvider("c"));
+<<<<<<< HEAD
       expect(listCompactionProviderIdsForTest()).toHaveLength(3);
 
       // Restore from snapshot — should have only a and b
       restoreRegisteredCompactionProviders(snapshot);
       expect(listCompactionProviderIdsForTest()).toEqual(["a", "b"]);
+=======
+      expect(listCompactionProviderIds()).toHaveLength(3);
+
+      // Restore from snapshot — should have only a and b
+      restoreRegisteredCompactionProviders(snapshot);
+      expect(listCompactionProviderIds()).toEqual(["a", "b"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(getCompactionProvider("c")).toBeUndefined();
       expect(getRegisteredCompactionProvider("a")?.ownerPluginId).toBe("p-a");
     });
@@ -151,7 +188,11 @@ describe("compaction provider registry", () => {
     it("restore with empty array clears everything", () => {
       registerCompactionProvider(makeProvider("x"));
       restoreRegisteredCompactionProviders([]);
+<<<<<<< HEAD
       expect(listCompactionProviderIdsForTest()).toStrictEqual([]);
+=======
+      expect(listCompactionProviderIds()).toStrictEqual([]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   });
 });

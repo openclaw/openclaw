@@ -1,7 +1,10 @@
 // Gateway-first agent CLI implementation with embedded fallback for local/runtime failures.
 import { randomUUID } from "node:crypto";
+<<<<<<< HEAD
 import { readFile } from "node:fs/promises";
 import { TextDecoder } from "node:util";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -66,8 +69,12 @@ const GATEWAY_TIMEOUT_FALLBACK_SESSION_PREFIX = "gateway-fallback-";
 const GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 15_000] as const;
 
 type AgentCliOpts = {
+<<<<<<< HEAD
   message?: string;
   messageFile?: string;
+=======
+  message: string;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   agent?: string;
   model?: string;
   to?: string;
@@ -88,9 +95,12 @@ type AgentCliOpts = {
   extraSystemPrompt?: string;
   local?: boolean;
 };
+<<<<<<< HEAD
 type AgentDispatchOpts = Omit<AgentCliOpts, "messageFile"> & {
   message: string;
 };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type AgentCliSignal = "SIGINT" | "SIGTERM";
 type AgentCliProcessLike = {
@@ -116,7 +126,10 @@ const AGENT_CLI_SIGNAL_EXIT_CODES: Record<AgentCliSignal, number> = {
   SIGINT: 130,
   SIGTERM: 143,
 };
+<<<<<<< HEAD
 const MESSAGE_FILE_DECODER = new TextDecoder("utf-8", { fatal: true });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 let embeddedAgentCommandPromise: Promise<EmbeddedAgentCommandModule["agentCommand"]> | undefined;
 let agentSessionModulePromise: Promise<AgentSessionModule> | undefined;
@@ -179,6 +192,7 @@ function protectJsonStdout(opts: Pick<AgentCliOpts, "json">): void {
   }
 }
 
+<<<<<<< HEAD
 function missingAgentMessageError(): Error {
   return new Error(
     `Missing message. Use ${formatCliCommand('openclaw agent --message "..." --agent <id>')} or ${formatCliCommand("openclaw agent --message-file <path> --agent <id>")}.`,
@@ -236,6 +250,8 @@ async function resolveAgentMessageOpts(opts: AgentCliOpts): Promise<AgentDispatc
   return { ...rest, message };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
   const raw =
     opts.timeout !== undefined
@@ -295,8 +311,14 @@ function isGatewayAgentTimeoutError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("gateway request timeout for agent");
 }
 
+<<<<<<< HEAD
 function isCompactControlCommand(message: string): boolean {
   return /^\/compact(?:\s|:|$)/iu.test(message.trim());
+=======
+function isControlCommandThatMustNotFallback(opts: Pick<AgentCliOpts, "message">): boolean {
+  const normalized = opts.message.trim().toLowerCase();
+  return normalized === "/compact" || normalized.startsWith("/compact ");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function isSessionResetCommand(message: string): boolean {
@@ -351,9 +373,13 @@ function validateExplicitSessionKeyForDispatch(
   }
 }
 
+<<<<<<< HEAD
 async function normalizeSessionKeyOptsForDispatch(
   opts: AgentDispatchOpts,
 ): Promise<AgentDispatchOpts> {
+=======
+async function normalizeSessionKeyOptsForDispatch(opts: AgentCliOpts): Promise<AgentCliOpts> {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const rawSessionKey = opts.sessionKey?.trim();
   const rawTo = opts.to?.trim();
   if (!rawSessionKey && !opts.sessionId?.trim() && classifySessionKeyShape(rawTo) === "agent") {
@@ -633,7 +659,11 @@ function createGatewayTimeoutFallbackSession(agentId?: string): {
 }
 
 async function resolveAgentIdForGatewayTimeoutFallback(
+<<<<<<< HEAD
   opts: AgentDispatchOpts,
+=======
+  opts: AgentCliOpts,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ): Promise<string | undefined> {
   const explicitSessionKey = opts.sessionKey?.trim();
   if (classifySessionKeyShape(explicitSessionKey) === "agent") {
@@ -685,15 +715,28 @@ function formatInFlightGatewayAgentMessage(response: GatewayAgentResponse): stri
 }
 
 async function agentViaGatewayCommand(
+<<<<<<< HEAD
   opts: AgentDispatchOpts,
+=======
+  opts: AgentCliOpts,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   runtime: RuntimeEnv,
   signalBridge: ReturnType<typeof createAgentCliSignalBridge>,
 ) {
   protectJsonStdout(opts);
+<<<<<<< HEAD
   const body = opts.message;
   const explicitSessionKey = opts.sessionKey?.trim();
   if (!body.trim()) {
     throw missingAgentMessageError();
+=======
+  const body = (opts.message ?? "").trim();
+  const explicitSessionKey = opts.sessionKey?.trim();
+  if (!body) {
+    throw new Error(
+      `Missing message. Use ${formatCliCommand('openclaw agent --message "..." --agent <id>')} or pass --to/--session-key/--session-id for an existing conversation.`,
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   if (!opts.to && !opts.sessionId && !opts.agent && !explicitSessionKey) {
     throw new Error(
@@ -869,7 +912,11 @@ async function agentViaGatewayCommand(
 }
 
 async function agentViaGatewayCommandWithTransientRetries(
+<<<<<<< HEAD
   opts: AgentDispatchOpts,
+=======
+  opts: AgentCliOpts,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   runtime: RuntimeEnv,
   signalBridge: ReturnType<typeof createAgentCliSignalBridge>,
 ) {
@@ -902,6 +949,7 @@ export async function agentCliCommand(
   deps?: AgentCliDeps,
 ) {
   protectJsonStdout(opts);
+<<<<<<< HEAD
   const messageOpts = await resolveAgentMessageOpts(opts);
   // `/compact` cannot run as a plain CLI agent turn: the slash-command handler
   // rejects CLI-originated senders, so the message would fall through to a
@@ -915,6 +963,9 @@ export async function agentCliCommand(
     return undefined;
   }
   const dispatchOpts = await normalizeSessionKeyOptsForDispatch(messageOpts);
+=======
+  const dispatchOpts = await normalizeSessionKeyOptsForDispatch(opts);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   validateExplicitSessionKeyForDispatch(dispatchOpts);
   const gatewayDispatchOpts = dispatchOpts.runId
     ? dispatchOpts
@@ -951,6 +1002,12 @@ export async function agentCliCommand(
         throw err;
       }
       if (isGatewayAgentTimeoutError(err)) {
+<<<<<<< HEAD
+=======
+        if (isControlCommandThatMustNotFallback(dispatchOpts)) {
+          throw err;
+        }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const fallbackAgentId = await resolveAgentIdForGatewayTimeoutFallback(dispatchOpts);
         const fallbackSession = createGatewayTimeoutFallbackSession(fallbackAgentId);
         runtime.error?.(

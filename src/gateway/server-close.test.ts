@@ -70,7 +70,11 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 const { createGatewayCloseHandler } = await import("./server-close.js");
+<<<<<<< HEAD
 const { createChatRunState, isChatAbortMarkerCurrent } = await import("./server-chat-state.js");
+=======
+const { createChatRunState } = await import("./server-chat-state.js");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const {
   finishGatewayRestartTrace,
   recordGatewayRestartTraceSpan,
@@ -548,12 +552,16 @@ describe("createGatewayCloseHandler", () => {
         nodeSendToSession,
         chatRunState,
         chatAbortControllers,
+<<<<<<< HEAD
         removeChatRun: vi.fn(() => ({
           sessionKey: "session-1",
           clientRunId: "run-1",
           registeredAtMs: 1_000,
           registeredSequence: 1,
         })),
+=======
+        removeChatRun: vi.fn(() => ({ sessionKey: "session-1", clientRunId: "run-1" })),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }),
     );
 
@@ -751,24 +759,34 @@ describe("createGatewayCloseHandler", () => {
         },
       ],
     ]);
+<<<<<<< HEAD
     const chatRunState = createTestChatRunState();
     const abortedRunsSet = vi.spyOn(chatRunState.abortedRuns, "set");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>(async () => {
       events.push("marker");
     });
     const removeChatRun = vi.fn(() => {
       events.push("abort");
+<<<<<<< HEAD
       return {
         sessionKey: "agent:main:main",
         clientRunId: "run-1",
         registeredAtMs: 1_000,
         registeredSequence: 1,
       };
+=======
+      return { sessionKey: "agent:main:main", clientRunId: "run-1" };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     const close = createGatewayCloseHandler(
       createGatewayCloseTestDeps({
         chatAbortControllers,
+<<<<<<< HEAD
         chatRunState,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         markMainSessionsAbortedForRestart,
         removeChatRun,
         resolveActiveSessionIdForKey: (sessionKey) => {
@@ -820,6 +838,7 @@ describe("createGatewayCloseHandler", () => {
     expect(agentController.signal.aborted).toBe(true);
     expect(completedController.signal.aborted).toBe(true);
     expect(hiddenController.signal.aborted).toBe(true);
+<<<<<<< HEAD
     const completedMarker = abortedRunsSet.mock.calls.find(
       ([runId]) => runId === "completed-run",
     )?.[1];
@@ -834,6 +853,8 @@ describe("createGatewayCloseHandler", () => {
     expect(
       isChatAbortMarkerCurrent(completedMarker, chatRunState.registry.peek("completed-run")),
     ).toBe(false);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("keeps post-terminal caller work in restart drain and recovery", async () => {

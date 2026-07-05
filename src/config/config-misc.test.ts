@@ -422,6 +422,7 @@ describe("crestodian.rescue", () => {
 });
 
 describe("diagnostics.otel.captureContent", () => {
+<<<<<<< HEAD
   it("accepts supported OTEL log exporters and rejects unknown values", () => {
     for (const logsExporter of ["otlp", "stdout", "both"]) {
       const result = OpenClawSchema.safeParse({
@@ -446,6 +447,8 @@ describe("diagnostics.otel.captureContent", () => {
     expect(invalid.success).toBe(false);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("accepts boolean and granular OTEL content capture config", () => {
     for (const captureContent of [
       true,

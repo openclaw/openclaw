@@ -9,7 +9,10 @@ const mocks = vi.hoisted(() => ({
   sessionsCommand: vi.fn(),
   sessionsCleanupCommand: vi.fn(),
   sessionsTailCommand: vi.fn(),
+<<<<<<< HEAD
   sessionsCompactCommand: vi.fn(),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   exportTrajectoryCommand: vi.fn(),
   commitmentsListCommand: vi.fn(),
   commitmentsDismissCommand: vi.fn(),
@@ -35,7 +38,10 @@ const healthCommand = mocks.healthCommand;
 const sessionsCommand = mocks.sessionsCommand;
 const sessionsCleanupCommand = mocks.sessionsCleanupCommand;
 const sessionsTailCommand = mocks.sessionsTailCommand;
+<<<<<<< HEAD
 const sessionsCompactCommand = mocks.sessionsCompactCommand;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const exportTrajectoryCommand = mocks.exportTrajectoryCommand;
 const commitmentsListCommand = mocks.commitmentsListCommand;
 const commitmentsDismissCommand = mocks.commitmentsDismissCommand;
@@ -97,10 +103,13 @@ vi.mock("../../commands/sessions-tail.js", () => ({
   sessionsTailCommand: mocks.sessionsTailCommand,
 }));
 
+<<<<<<< HEAD
 vi.mock("../../commands/sessions-compact.js", () => ({
   sessionsCompactCommand: mocks.sessionsCompactCommand,
 }));
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.mock("../../commands/export-trajectory.js", () => ({
   exportTrajectoryCommand: mocks.exportTrajectoryCommand,
 }));
@@ -148,7 +157,10 @@ describe("registerStatusHealthSessionsCommands", () => {
     sessionsCommand.mockResolvedValue(undefined);
     sessionsCleanupCommand.mockResolvedValue(undefined);
     sessionsTailCommand.mockResolvedValue(undefined);
+<<<<<<< HEAD
     sessionsCompactCommand.mockResolvedValue(undefined);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     exportTrajectoryCommand.mockResolvedValue(undefined);
     commitmentsListCommand.mockResolvedValue(undefined);
     commitmentsDismissCommand.mockResolvedValue(undefined);
@@ -296,6 +308,7 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
+<<<<<<< HEAD
   it("inherits the parent sessions --agent for compact (regression #91378: wrong-agent compaction)", async () => {
     await runCli(["sessions", "--agent", "work", "compact", "agent:work:main"]);
 
@@ -348,6 +361,8 @@ describe("registerStatusHealthSessionsCommands", () => {
     expect(sessionsCompactCommand).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("forwards sessions list-side options", async () => {
     await runCli([
       "sessions",

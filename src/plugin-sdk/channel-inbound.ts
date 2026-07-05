@@ -36,11 +36,14 @@ export {
   resolveEnvelopeFormatOptions,
 } from "../auto-reply/envelope.js";
 export type { EnvelopeFormatOptions } from "../auto-reply/envelope.js";
+<<<<<<< HEAD
 export type {
   PluginHookChannelChatContext,
   PluginHookChannelContext,
   PluginHookChannelSenderContext,
 } from "../plugins/hook-types.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export {
   buildMentionRegexes,
   matchesMentionPatterns,

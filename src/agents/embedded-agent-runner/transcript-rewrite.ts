@@ -36,6 +36,7 @@ function estimateMessageBytes(message: AgentMessage): number {
   return Buffer.byteLength(JSON.stringify(message), "utf8");
 }
 
+<<<<<<< HEAD
 function findTranscriptRewriteMatches(
   branch: readonly SessionBranchEntry[],
   replacementsById: ReadonlyMap<string, AgentMessage>,
@@ -61,6 +62,8 @@ function findTranscriptRewriteMatches(
   return { matchedIndices, bytesFreed };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function remapEntryId(
   entryId: string | null | undefined,
   rewrittenEntryIds: ReadonlyMap<string, string>,
@@ -211,7 +214,27 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
     };
   }
 
+<<<<<<< HEAD
   const { matchedIndices, bytesFreed } = findTranscriptRewriteMatches(branch, replacementsById);
+=======
+  const matchedIndices: number[] = [];
+  let bytesFreed = 0;
+
+  for (let index = 0; index < branch.length; index++) {
+    const entry = branch[index];
+    if (entry.type !== "message") {
+      continue;
+    }
+    const replacement = replacementsById.get(entry.id);
+    if (!replacement) {
+      continue;
+    }
+    const originalBytes = estimateMessageBytes(entry.message);
+    const replacementBytes = estimateMessageBytes(replacement);
+    matchedIndices.push(index);
+    bytesFreed += Math.max(0, originalBytes - replacementBytes);
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   if (matchedIndices.length === 0) {
     return {
@@ -349,7 +372,27 @@ export function rewriteTranscriptEntriesInState(params: {
     };
   }
 
+<<<<<<< HEAD
   const { matchedIndices, bytesFreed } = findTranscriptRewriteMatches(branch, replacementsById);
+=======
+  const matchedIndices: number[] = [];
+  let bytesFreed = 0;
+
+  for (let index = 0; index < branch.length; index++) {
+    const entry = branch[index];
+    if (entry.type !== "message") {
+      continue;
+    }
+    const replacement = replacementsById.get(entry.id);
+    if (!replacement) {
+      continue;
+    }
+    const originalBytes = estimateMessageBytes(entry.message);
+    const replacementBytes = estimateMessageBytes(replacement);
+    matchedIndices.push(index);
+    bytesFreed += Math.max(0, originalBytes - replacementBytes);
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   if (matchedIndices.length === 0) {
     return {
@@ -464,11 +507,14 @@ export async function rewriteTranscriptEntriesInRuntimeTranscript(params: {
         sessionFile: target.sessionFile,
         sessionKey: target.sessionKey,
         agentId: target.agentId,
+<<<<<<< HEAD
         target: {
           agentId: target.agentId,
           sessionId: target.sessionId,
           sessionKey: target.sessionKey,
         },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
       log.info(
         `[transcript-rewrite] rewrote ${result.rewrittenEntries} entr` +
@@ -528,6 +574,7 @@ export async function rewriteTranscriptEntriesInSessionFile(params: {
         sessionFile: params.sessionFile,
         sessionKey: params.sessionKey,
         ...(params.agentId ? { agentId: params.agentId } : {}),
+<<<<<<< HEAD
         ...(params.sessionId && params.sessionKey && params.agentId
           ? {
               target: {
@@ -537,6 +584,8 @@ export async function rewriteTranscriptEntriesInSessionFile(params: {
               },
             }
           : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
       log.info(
         `[transcript-rewrite] rewrote ${result.rewrittenEntries} entr` +

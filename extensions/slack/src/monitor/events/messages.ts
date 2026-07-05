@@ -1,12 +1,16 @@
 // Slack plugin module implements messages behavior.
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+<<<<<<< HEAD
 import {
   createSubsystemLogger,
   danger,
   logVerbose,
   shouldLogVerbose,
 } from "openclaw/plugin-sdk/runtime-env";
+=======
+import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   asOptionalRecord as asRecord,
   normalizeOptionalString as asString,
@@ -20,6 +24,7 @@ import type { SlackMessageChangedEvent } from "../types.js";
 import { resolveSlackMessageSubtypeHandler } from "./message-subtype-handlers.js";
 import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
 
+<<<<<<< HEAD
 // Mirrors the Telegram `[telegram]` inbound logger so cross-channel journal-grep
 // workflows are uniform; the `gateway/channels/slack` subsystem renders as `[slack]`.
 const slackInboundLog = createSubsystemLogger("gateway/channels/slack").child("inbound");
@@ -36,6 +41,8 @@ export function formatSlackInboundLogLine(params: {
   return `Inbound app_mention ${from} -> bot:${params.botUserId} (${params.channelType}, ${params.bodyChars} chars)`;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type SlackAssistantMessageRecord = {
   bot_id?: unknown;
   user?: unknown;
@@ -238,6 +245,7 @@ export function registerSlackMessageEvents(params: {
         return;
       }
 
+<<<<<<< HEAD
       // Emit a per-inbound receipt before dispatch so a silently-dropped mention
       // (e.g. router consumes it without a tool call) still leaves journal evidence,
       // matching the Telegram inbound log. Runs after the DM drop above, so duplicate
@@ -253,6 +261,8 @@ export function registerSlackMessageEvents(params: {
         }),
       );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       await handleSlackMessage(mention as unknown as SlackMessageEvent, {
         source: "app_mention",
         wasMentioned: true,

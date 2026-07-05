@@ -30,17 +30,21 @@ export interface SessionLike {
     ): (() => void) | void;
     (eventType: string, handler: (event: SessionEvent) => void): (() => void) | void;
   };
+<<<<<<< HEAD
   rpc?: {
     history?: {
       cancelBackgroundCompaction?: () => Promise<unknown>;
     };
   };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sendAndWait(options: MessageOptions, timeout?: number): Promise<SessionEvent | undefined>;
   sessionId?: string;
 }
 
 export interface EventBridgeOptions {
   onAssistantDelta?: (payload: OnAssistantDeltaPayload) => void | Promise<void>;
+<<<<<<< HEAD
   onAgentEvent?: (event: {
     stream: "item" | "plan";
     data: Record<string, unknown>;
@@ -56,6 +60,8 @@ export interface EventBridgeOptions {
     success: boolean;
   }) => void | Promise<void>;
   onCompactionStart?: () => void | Promise<void>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   getSdkSessionId: () => string | undefined;
   isAborted: () => boolean;
 }
@@ -77,6 +83,7 @@ export interface BuildAssistantMessageArgs {
 
 export interface EventBridgeController {
   recordSendResult(result: SessionEvent | undefined): boolean;
+<<<<<<< HEAD
   awaitCompactionChain(): Promise<void>;
   awaitCompactionCompletion(): Promise<void>;
   awaitSessionIdle(): Promise<void>;
@@ -86,6 +93,9 @@ export interface EventBridgeController {
   hasObservedCompaction(): boolean;
   hasObservedSessionIdle(): boolean;
   isCompacting(): boolean;
+=======
+  awaitDeltaChain(): Promise<void>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   snapshot(): EventBridgeSnapshot;
   buildAssistantMessage(args: BuildAssistantMessageArgs): AssistantMessage | undefined;
   finalizeAssistantTexts(): string[];
@@ -110,6 +120,7 @@ export function attachEventBridge(
   const toolNamesByCallId = new Map<string, string>();
   let startedCount = 0;
   let completedCount = 0;
+<<<<<<< HEAD
   let activeCompactionCount = 0;
   let observedCompaction = false;
   let deltaQueue = Promise.resolve();
@@ -123,14 +134,21 @@ export function attachEventBridge(
   const sessionIdle = new Promise<void>((resolve) => {
     resolveSessionIdle = resolve;
   });
+=======
+  let deltaQueue = Promise.resolve();
+  let deltaChain = Promise.resolve();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let firstDeltaError: unknown;
   let detached = false;
   const unsubscribeFns: Array<() => void> = [];
 
   registerListener(session, unsubscribeFns, "assistant.message_delta", (event) => {
+<<<<<<< HEAD
     if (!isRootSessionEvent(event)) {
       return;
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const messageId = readString(event.data.messageId) ?? "assistant-message";
     const delta = event.data.deltaContent;
     if (!delta) {
@@ -165,9 +183,12 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "assistant.reasoning_delta", (event) => {
+<<<<<<< HEAD
     if (!isRootSessionEvent(event)) {
       return;
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const reasoningId = readString(event.data.reasoningId) ?? "assistant-reasoning";
     const delta = event.data.deltaContent;
     if (!delta) {
@@ -181,9 +202,12 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "assistant.message", (event) => {
+<<<<<<< HEAD
     if (!isRootSessionEvent(event)) {
       return;
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     lastAssistantEvent = event;
     const entry = ensureMessageAccumulator(messagesById, messageOrder, event.data.messageId);
     if (typeof event.data.content === "string" && event.data.content.length >= entry.text.length) {
@@ -192,24 +216,35 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "assistant.usage", (event) => {
+<<<<<<< HEAD
     if (!isRootSessionEvent(event)) {
       return;
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     usage = normalizeCopilotUsage(event.data);
   });
 
   registerListener(session, unsubscribeFns, "tool.execution_start", (event) => {
+<<<<<<< HEAD
     if (isRootSessionEvent(event)) {
       startedCount += 1;
     }
+=======
+    startedCount += 1;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     toolNamesByCallId.set(event.data.toolCallId, event.data.toolName);
     toolMetas.push({ toolName: event.data.toolName });
   });
 
   registerListener(session, unsubscribeFns, "tool.execution_complete", (event) => {
+<<<<<<< HEAD
     if (isRootSessionEvent(event)) {
       completedCount += 1;
     }
+=======
+    completedCount += 1;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const toolName = toolNamesByCallId.get(event.data.toolCallId);
     const meta = event.data.success
       ? (event.data.result?.detailedContent ?? event.data.result?.content)
@@ -219,6 +254,7 @@ export function attachEventBridge(
     }
   });
 
+<<<<<<< HEAD
   registerListener(session, unsubscribeFns, "session.plan_changed", (event) => {
     enqueueAgentEvent({
       stream: "plan",
@@ -325,6 +361,8 @@ export function attachEventBridge(
     resolveSessionIdle = undefined;
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   registerListener(session, unsubscribeFns, "session.error", (event) => {
     if (!options.isAborted()) {
       streamError = createPromptError(
@@ -351,6 +389,7 @@ export function attachEventBridge(
       lastAssistantEvent = result;
       return true;
     },
+<<<<<<< HEAD
     awaitCompactionChain() {
       return compactionChain;
     },
@@ -380,6 +419,11 @@ export function attachEventBridge(
     isCompacting() {
       return activeCompactionCount > 0;
     },
+=======
+    awaitDeltaChain() {
+      return deltaChain;
+    },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     snapshot() {
       return {
         assistantTexts: finalizeAssistantTexts(messageOrder, messagesById, lastAssistantEvent),
@@ -420,6 +464,7 @@ export function attachEventBridge(
       unsubscribeFns.length = 0;
     },
   };
+<<<<<<< HEAD
 
   function enqueueCompactionCallback(callback: (() => void | Promise<void>) | undefined): void {
     if (!callback) {
@@ -467,6 +512,8 @@ export function attachEventBridge(
       await awaitStableCompaction();
     }
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function buildAssistantMessage(params: {
@@ -566,6 +613,7 @@ function isAssistantMessageEvent(
   return event?.type === "assistant.message";
 }
 
+<<<<<<< HEAD
 function isRootSessionEvent(event: { agentId?: string }): boolean {
   return event.agentId === undefined;
 }
@@ -576,10 +624,13 @@ function isRootCompactionEvent(event: { agentId?: string }): boolean {
   return isRootSessionEvent(event);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function joinReasoning(order: string[], reasoningById: Map<string, string>): string {
   return order.map((reasoningId) => reasoningById.get(reasoningId) ?? "").join("");
 }
 
+<<<<<<< HEAD
 function splitPlanText(text: string | undefined): string[] {
   return (text ?? "")
     .split(/\r?\n/)
@@ -587,6 +638,8 @@ function splitPlanText(text: string | undefined): string[] {
     .filter((line) => line.length > 0);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }

@@ -1,7 +1,10 @@
 // Signal plugin module implements channel behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
+<<<<<<< HEAD
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
@@ -41,12 +44,18 @@ import {
 } from "./shared.js";
 type SignalSendFn = typeof import("./send.runtime.js").sendMessageSignal;
 type SignalProbe = import("./probe.js").SignalProbe;
+<<<<<<< HEAD
 type SignalApprovalReactionsModule = typeof import("./approval-reactions.js");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 let signalMonitorModulePromise: Promise<typeof import("./monitor.js")> | null = null;
 let signalProbeModulePromise: Promise<typeof import("./probe.js")> | null = null;
 let signalSendRuntimePromise: Promise<typeof import("./send.runtime.js")> | null = null;
+<<<<<<< HEAD
 let signalApprovalReactionsModulePromise: Promise<SignalApprovalReactionsModule> | null = null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 async function loadSignalMonitorModule() {
   signalMonitorModulePromise ??= import("./monitor.js");
@@ -63,11 +72,14 @@ async function loadSignalSendRuntime() {
   return await signalSendRuntimePromise;
 }
 
+<<<<<<< HEAD
 async function loadSignalApprovalReactionsModule() {
   signalApprovalReactionsModulePromise ??= import("./approval-reactions.js");
   return await signalApprovalReactionsModulePromise;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function resolveSignalSendContext(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
   accountId?: string;
@@ -110,6 +122,7 @@ type SignalMessageContextExtras = {
   deps?: { [channelId: string]: unknown };
 };
 
+<<<<<<< HEAD
 function attachSignalVisibleText<T extends object>(result: T, visibleText: string) {
   const meta =
     "meta" in result && result.meta && typeof result.meta === "object"
@@ -124,6 +137,8 @@ function attachSignalVisibleText<T extends object>(result: T, visibleText: strin
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const signalMessageAdapter = defineChannelMessageAdapter({
   id: "signal",
   durableFinal: {
@@ -246,7 +261,11 @@ async function sendFormattedSignalText(ctx: {
       textMode: "plain",
       textStyles: chunk.styles,
     });
+<<<<<<< HEAD
     results.push(attachSignalVisibleText(result, chunk.text));
+=======
+    results.push(result);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   return attachChannelToResults("signal", results);
 }
@@ -289,6 +308,7 @@ async function sendFormattedSignalMedia(ctx: {
     textMode: "plain",
     textStyles: formatted.styles,
   });
+<<<<<<< HEAD
   return attachChannelToResult("signal", attachSignalVisibleText(result, formatted.text));
 }
 
@@ -332,6 +352,9 @@ async function renderSignalApprovalPayloadForReactions(
     payload: params.payload,
     targetAuthor: account.config.account,
   });
+=======
+  return attachChannelToResult("signal", result);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
@@ -468,9 +491,12 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             payload,
             hint,
           }),
+<<<<<<< HEAD
         afterDeliverPayload: async (params) =>
           await registerDeliveredSignalApprovalPayloadForReactions(params),
         renderPresentation: async (params) => await renderSignalApprovalPayloadForReactions(params),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         sendFormattedText: async ({ cfg, to, text, accountId, deps, abortSignal }) =>
           await sendFormattedSignalText({
             cfg,

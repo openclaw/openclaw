@@ -1,7 +1,10 @@
 // Discord API module exposes the plugin public contract.
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+<<<<<<< HEAD
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   resolveRetryConfig,
   retryAsync,
@@ -18,7 +21,10 @@ const DISCORD_API_RETRY_DEFAULTS = {
   jitter: 0.1,
 };
 const DISCORD_API_429_FALLBACK_RETRY_AFTER_SECONDS = 60;
+<<<<<<< HEAD
 const DISCORD_API_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type DiscordApiErrorPayload = {
   message?: string;
@@ -175,10 +181,15 @@ export async function requestDiscord<T>(
         body,
         signal: resolveDiscordRequestSignal(options ?? {}),
       });
+<<<<<<< HEAD
       if (!res.ok) {
         const text = await readResponseTextLimited(res, DISCORD_API_ERROR_BODY_LIMIT_BYTES).catch(
           () => "",
         );
+=======
+      const text = await res.text().catch(() => "");
+      if (!res.ok) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const detail = formatDiscordApiErrorText(text, res);
         const suffix = detail ? `: ${detail}` : "";
         const retryAfter =
@@ -191,7 +202,10 @@ export async function requestDiscord<T>(
           retryAfter,
         );
       }
+<<<<<<< HEAD
       const text = await res.text().catch(() => "");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (!text.trim()) {
         return undefined as T;
       }

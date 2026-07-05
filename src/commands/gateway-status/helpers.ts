@@ -10,6 +10,10 @@ import { isLoopbackHost } from "../../gateway/net.js";
 import type { GatewayProbeCapability, GatewayProbeResult } from "../../gateway/probe.js";
 import { inspectBestEffortPrimaryTailnetIPv4 } from "../../infra/network-discovery-display.js";
 import { parseStrictInteger } from "../../infra/parse-finite-number.js";
+<<<<<<< HEAD
+=======
+import { pickGatewaySelfPresence } from "../gateway-presence.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
 
@@ -86,11 +90,15 @@ function normalizeWsUrl(value: string): string | null {
 }
 
 /** Builds the deduplicated ordered gateway probe targets from CLI input and config. */
+<<<<<<< HEAD
 export function resolveTargets(
   cfg: OpenClawConfig,
   explicitUrl?: string,
   localPortOverride?: number,
 ): GatewayStatusTarget[] {
+=======
+export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): GatewayStatusTarget[] {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const targets: GatewayStatusTarget[] = [];
   const add = (t: GatewayStatusTarget) => {
     if (!targets.some((x) => x.url === t.url)) {
@@ -103,6 +111,7 @@ export function resolveTargets(
     add({ id: "explicit", kind: "explicit", url: explicit, active: true });
   }
 
+<<<<<<< HEAD
   const port = localPortOverride ?? resolveGatewayPort(cfg);
   const localScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
   const localLoopbackTarget: GatewayStatusTarget = {
@@ -116,6 +125,8 @@ export function resolveTargets(
     return targets;
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const remoteUrl =
     typeof cfg.gateway?.remote?.url === "string" ? normalizeWsUrl(cfg.gateway.remote.url) : null;
   if (remoteUrl) {
@@ -127,7 +138,18 @@ export function resolveTargets(
     });
   }
 
+<<<<<<< HEAD
   add(localLoopbackTarget);
+=======
+  const port = resolveGatewayPort(cfg);
+  const localScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
+  add({
+    id: "localLoopback",
+    kind: "localLoopback",
+    url: `${localScheme}://127.0.0.1:${port}`,
+    active: cfg.gateway?.mode !== "remote",
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   return targets;
 }
@@ -150,6 +172,7 @@ export function resolveProbeBudgetMs(
   if (target.kind === "sshTunnel") {
     return Math.min(2000, overallMs);
   }
+<<<<<<< HEAD
   if (target.active) {
     return overallMs;
   }
@@ -159,6 +182,17 @@ export function resolveProbeBudgetMs(
   if (!isLoopbackProbeTarget(target)) {
     return Math.min(1500, overallMs);
   }
+=======
+  if (!isLoopbackProbeTarget(target)) {
+    return Math.min(1500, overallMs);
+  }
+  if (target.kind === "localLoopback" && !target.active) {
+    return Math.min(800, overallMs);
+  }
+  // Active/discovered loopback probes and explicit loopback URLs should honor
+  // the caller budget because healthy local detail RPCs can legitimately take
+  // longer than the legacy short caps.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return overallMs;
 }
 
@@ -192,6 +226,11 @@ export async function resolveAuthForTarget(
   });
 }
 
+<<<<<<< HEAD
+=======
+export { pickGatewaySelfPresence };
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Extracts the config fields displayed by `openclaw gateway status --deep`. */
 export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSummary {
   const snap = snapshotUnknown as Partial<ConfigFileSnapshot> | null;
@@ -259,10 +298,17 @@ export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSum
   };
 }
 
+<<<<<<< HEAD
 /** Builds local and tailnet gateway URL hints for the selected gateway port. */
 export function buildNetworkHints(cfg: OpenClawConfig, localPortOverride?: number) {
   const { tailnetIPv4 } = inspectBestEffortPrimaryTailnetIPv4();
   const port = localPortOverride ?? resolveGatewayPort(cfg);
+=======
+/** Builds local and tailnet gateway URL hints for the configured gateway port. */
+export function buildNetworkHints(cfg: OpenClawConfig) {
+  const { tailnetIPv4 } = inspectBestEffortPrimaryTailnetIPv4();
+  const port = resolveGatewayPort(cfg);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const localScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
   return {
     localLoopbackUrl: `${localScheme}://127.0.0.1:${port}`,

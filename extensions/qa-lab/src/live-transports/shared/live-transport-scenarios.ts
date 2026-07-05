@@ -76,8 +76,11 @@ export const LIVE_TRANSPORT_COVERAGE_LANES: readonly LiveTransportCoverageLane[]
       { standardId: "top-level-reply-shape", scenarioId: "whatsapp-top-level-reply-shape" },
       { standardId: "restart-resume", scenarioId: "whatsapp-restart-resume" },
       { standardId: "help-command", scenarioId: "whatsapp-help-command" },
+<<<<<<< HEAD
       { standardId: "quote-reply", scenarioId: "whatsapp-reply-to-message" },
       { standardId: "quote-reply", scenarioId: "whatsapp-group-reply-to-message" },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       { standardId: "reaction-observation", scenarioId: "whatsapp-status-reactions" },
       { standardId: "allowlist-block", scenarioId: "whatsapp-group-allowlist-block" },
     ],

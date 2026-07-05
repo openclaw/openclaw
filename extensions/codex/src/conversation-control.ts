@@ -192,7 +192,11 @@ export async function setCodexConversationModel(params: {
       modelProvider: response.modelProvider ?? modelSelection.modelProvider,
       approvalPolicy: binding.approvalPolicy,
       sandbox: binding.sandbox,
+<<<<<<< HEAD
       serviceTier: binding.serviceTier ?? runtime.serviceTier ?? undefined,
+=======
+      serviceTier: binding.serviceTier ?? runtime.serviceTier,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
     lookup,
   );

@@ -10,7 +10,10 @@ import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.
 import { parseModelRef } from "../agents/model-selection.js";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+<<<<<<< HEAD
 import { setTestEnvValue } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   applyCliBackendLiveEnv,
   createBootstrapWorkspace,
@@ -286,7 +289,11 @@ describeLive("gateway live (cli backend)", () => {
       applyCliBackendLiveEnv(preservedEnv);
 
       const token = `test-${randomUUID()}`;
+<<<<<<< HEAD
       setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
+=======
+      process.env.OPENCLAW_GATEWAY_TOKEN = token;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const port = await getFreeGatewayPort();
       logCliBackendLiveStep("env-ready", { port });
 
@@ -370,7 +377,11 @@ describeLive("gateway live (cli backend)", () => {
         ? await createMcpSchemaProbePlugin(tempDir)
         : undefined;
       const useMinimalToolsProfile = providerId === "codex-cli" && !schemaProbePluginPath;
+<<<<<<< HEAD
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+=======
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const bundleMcp = backendResolved?.bundleMcp === true;
       const bootstrapWorkspace = await createBootstrapWorkspace(tempDir);
       const disableMcpConfig = process.env.OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG !== "0";
@@ -474,7 +485,11 @@ describeLive("gateway live (cli backend)", () => {
       };
       const tempConfigPath = path.join(tempDir, "openclaw.json");
       await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
+<<<<<<< HEAD
       setTestEnvValue("OPENCLAW_CONFIG_PATH", tempConfigPath);
+=======
+      process.env.OPENCLAW_CONFIG_PATH = tempConfigPath;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const deviceIdentity = await ensurePairedTestGatewayClientIdentity();
       let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
       let client: Awaited<ReturnType<typeof connectTestGatewayClient>> | undefined;

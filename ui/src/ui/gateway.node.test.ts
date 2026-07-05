@@ -682,6 +682,7 @@ describe("GatewayBrowserClient", () => {
     client.stop();
   });
 
+<<<<<<< HEAD
   it("keeps hello callback errors inside connect dispatch", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const onHello = vi.fn(() => {
@@ -836,6 +837,8 @@ describe("GatewayBrowserClient", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("prefers explicit shared auth over cached device tokens", async () => {
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",

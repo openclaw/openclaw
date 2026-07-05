@@ -1,8 +1,11 @@
 /**
  * Claude CLI argument helpers for OpenClaw-managed bundle MCP config.
  */
+<<<<<<< HEAD
 import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 /** Find an existing Claude `--mcp-config` argument value. */
@@ -45,6 +48,7 @@ export function injectClaudeMcpConfigArgs(
   next.push("--strict-mcp-config", "--mcp-config", mcpConfigPath);
   return next;
 }
+<<<<<<< HEAD
 
 /** Writes the active per-attempt capture token into OpenClaw's generated Claude MCP config. */
 export async function writeClaudeMcpCaptureConfig(params: {
@@ -83,3 +87,5 @@ export async function writeClaudeMcpCaptureConfig(params: {
     "utf-8",
   );
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

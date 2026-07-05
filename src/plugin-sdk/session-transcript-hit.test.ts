@@ -1,13 +1,19 @@
 // Session transcript hit tests cover transcript match formatting and path resolution.
+<<<<<<< HEAD
 import fs from "node:fs";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
   extractTranscriptStemFromSessionsMemoryHit,
+<<<<<<< HEAD
   formatSessionTranscriptMemoryHitKey,
   parseSessionTranscriptMemoryHitKey,
   resolveSessionTranscriptMemoryHitKeyToSessionKeys,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveTranscriptStemToSessionKeys,
 } from "./session-transcript-hit.js";
 
@@ -277,6 +283,7 @@ describe("resolveTranscriptStemToSessionKeys", () => {
     ).toEqual([]);
   });
 });
+<<<<<<< HEAD
 
 describe("session transcript memory hit key compatibility exports", () => {
   it("keeps hit-subpath memory helpers off the runtime writer import path", () => {
@@ -308,3 +315,5 @@ describe("session transcript memory hit key compatibility exports", () => {
     ]);
   });
 });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

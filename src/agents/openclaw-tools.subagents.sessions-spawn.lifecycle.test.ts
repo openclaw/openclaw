@@ -35,6 +35,13 @@ const hookRunnerMocks = vi.hoisted(() => ({
   runSubagentEnded: vi.fn(async () => {}),
 }));
 
+<<<<<<< HEAD
+=======
+vi.mock("./tools/agent-step.js", () => ({
+  readLatestAssistantReply: async () => "done",
+}));
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const callGatewayMock = getCallGatewayMock();
 const RUN_TIMEOUT_SECONDS = 1;
 

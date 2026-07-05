@@ -167,11 +167,15 @@ export type TelegramAccountConfig = {
   textChunkLimit?: number;
   /**
    * Use Telegram Bot API 10.1 rich messages for text sends and edits.
+<<<<<<< HEAD
    * When false (default), falls back to HTML/plain text formatting via sendMessage.
    * Set to true to enable native tables, details, and rich media via sendRichMessage.
    * Note: Some Telegram clients (Web, Desktop, older mobile) do NOT support
    * sendRichMessage and will show "This message is not supported" errors.
    * Default: false.
+=======
+   * Default: false until Telegram clients render rich messages consistently.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
    */
   richMessages?: boolean;
   /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */

@@ -22,8 +22,11 @@ const {
     sent: string[] = [];
     closed = false;
     terminated = false;
+<<<<<<< HEAD
     deferClose = false;
     deferredClose: (() => void) | undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     args: unknown[];
 
     constructor(...args: unknown[]) {
@@ -51,24 +54,31 @@ const {
     close(code?: number, reason?: string): void {
       this.closed = true;
       this.readyState = MockWebSocket.CLOSED;
+<<<<<<< HEAD
       const emitClose = () => this.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
       if (this.deferClose) {
         this.deferredClose = emitClose;
         return;
       }
       emitClose();
+=======
+      this.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
 
     terminate(): void {
       this.terminated = true;
       this.close(1006, "terminated");
     }
+<<<<<<< HEAD
 
     emitDeferredClose(): void {
       const emitClose = this.deferredClose;
       this.deferredClose = undefined;
       emitClose?.();
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   return {
@@ -937,13 +947,19 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   it("treats pre-ready auth errors as a single startup failure", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const onError = vi.fn();
+<<<<<<< HEAD
     const onClose = vi.fn();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const bridge = provider.createBridge({
       providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
       onError,
+<<<<<<< HEAD
       onClose,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     const connecting = bridge.connect();
     const socket = FakeWebSocket.instances[0];
@@ -974,11 +990,15 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     await expect(connecting).rejects.toThrow("Incorrect API key provided");
     expect(onError).not.toHaveBeenCalled();
+<<<<<<< HEAD
     expect(onClose).not.toHaveBeenCalled();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(socket.closed).toBe(true);
     expect(bridge.isConnected()).toBe(false);
   });
 
+<<<<<<< HEAD
   it("keeps a retried connection ready after delayed startup failure close", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const onClose = vi.fn();
@@ -1026,6 +1046,8 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects connection when the socket closes before session readiness", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridge = provider.createBridge({
@@ -1047,6 +1069,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(bridge.isConnected()).toBe(false);
   });
 
+<<<<<<< HEAD
   it("does not report startup timeout shutdown as a clean close", async () => {
     vi.useFakeTimers();
     const provider = buildOpenAIRealtimeVoiceProvider();
@@ -1074,6 +1097,8 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(bridge.isConnected()).toBe(false);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("can disable automatic audio turn responses for agent-routed voice loops", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridge = provider.createBridge({

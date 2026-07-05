@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { renderQaMarkdownReport } from "openclaw/plugin-sdk/qa-runtime";
+<<<<<<< HEAD
 import { createQaArtifactRunId } from "./artifact-run-id.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { QaBusState } from "./bus-state.js";
 import { createQaTransportAdapter, type QaTransportId } from "./qa-transport-registry.js";
 import { runQaScenario, type QaScenarioResult } from "./scenario.js";
@@ -28,7 +31,11 @@ export function resolveQaSelfCheckOutputPath(params?: { outputPath?: string; rep
     return params.outputPath;
   }
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
+<<<<<<< HEAD
   return path.join(repoRoot, ".artifacts", "qa-e2e", `self-check-${createQaArtifactRunId()}.md`);
+=======
+  return path.join(repoRoot, ".artifacts", "qa-e2e", "self-check.md");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export async function runQaSelfCheckAgainstState(params: {

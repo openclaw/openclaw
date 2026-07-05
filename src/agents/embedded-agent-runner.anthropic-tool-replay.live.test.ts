@@ -3,8 +3,16 @@ import type { Message, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { wrapStreamFnSanitizeMalformedToolCalls } from "./embedded-agent-runner/run/attempt.tool-call-normalization.js";
 import { OMITTED_ASSISTANT_REASONING_TEXT } from "./embedded-agent-runner/thinking.js";
+<<<<<<< HEAD
 import { extractAssistantText } from "./embedded-agent-utils.js";
 import { completeSimpleWithLiveTimeout, logLiveCache } from "./live-cache-test-support.js";
+=======
+import {
+  completeSimpleWithLiveTimeout,
+  extractAssistantText,
+  logLiveCache,
+} from "./live-cache-test-support.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 import { buildAssistantMessageWithZeroUsage } from "./stream-message-shared.js";
 

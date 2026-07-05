@@ -6,7 +6,11 @@ import {
   isLiveTestEnabled,
 } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { BYTEPLUS_CODING_BASE_URL } from "./models.js";
+=======
+import { BYTEPLUS_CODING_BASE_URL, BYTEPLUS_DEFAULT_COST } from "./models.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const BYTEPLUS_KEY = process.env.BYTEPLUS_API_KEY ?? "";
 const BYTEPLUS_CODING_MODEL = process.env.BYTEPLUS_CODING_MODEL?.trim() || "ark-code-latest";
@@ -33,7 +37,11 @@ describeLive("byteplus coding plan live", () => {
       baseUrl: BYTEPLUS_CODING_BASE_URL,
       reasoning: false,
       input: ["text"],
+<<<<<<< HEAD
       cost: { input: 0.0001, output: 0.0002, cacheRead: 0, cacheWrite: 0 },
+=======
+      cost: BYTEPLUS_DEFAULT_COST,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       contextWindow: 256000,
       maxTokens: 4096,
     };

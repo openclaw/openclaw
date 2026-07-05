@@ -931,6 +931,7 @@ describe("setup-registry module loader", () => {
     expect(loadSetupModule).toHaveBeenCalledTimes(1);
     expect(registerSetup).toHaveBeenCalledTimes(7);
   });
+<<<<<<< HEAD
 
   describe("result cache (ambient process.env)", () => {
     function mockOpenAiProviderPlugin(): void {
@@ -1134,3 +1135,6 @@ describe("setup-registry module loader", () => {
     });
   });
 });
+=======
+});
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

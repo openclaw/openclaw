@@ -1,10 +1,14 @@
 // Progress draft compositor tests cover streamed draft composition for channel progress updates.
 import { describe, expect, it, vi } from "vitest";
 import { createChannelProgressDraftCompositor } from "./progress-draft-compositor.js";
+<<<<<<< HEAD
 import {
   DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS,
   mergeChannelProgressDraftLine,
 } from "./streaming.js";
+=======
+import { DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS } from "./streaming.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("createChannelProgressDraftCompositor", () => {
   it("keeps the progress label visible when tool lines are hidden", async () => {
@@ -24,6 +28,7 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(update).toHaveBeenCalledWith("Shelling", { flush: true, lines: [] });
   });
 
+<<<<<<< HEAD
   it("materializes a label-only progress draft after upstream answer activity", async () => {
     vi.useFakeTimers();
     try {
@@ -88,6 +93,8 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(update).toHaveBeenCalledWith("Shelling", { flush: true, lines: [] });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("passes structured progress lines to draft updates", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
@@ -296,6 +303,7 @@ describe("createChannelProgressDraftCompositor", () => {
     );
   });
 
+<<<<<<< HEAD
   it("preserves repeated plain progress lines when separated by another event", () => {
     const lines = mergeChannelProgressDraftLine(["Starting", "Finished"], "Starting", {
       maxLines: 4,
@@ -304,6 +312,8 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(lines).toEqual(["Starting", "Finished", "Starting"]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("logs a timer-fired start failure via the gate's default boundary logger", async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

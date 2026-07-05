@@ -126,9 +126,14 @@ describe("embedded gateway stub", () => {
     expect(runtime.readSessionMessagesAsync).toHaveBeenCalledWith(
       {
         agentId: "main",
+<<<<<<< HEAD
         sessionEntry: { sessionId: "sess-main" },
         sessionId: "sess-main",
         sessionKey: "agent:main:main",
+=======
+        sessionFile: undefined,
+        sessionId: "sess-main",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         storePath: "/tmp/openclaw-sessions.json",
       },
       {
@@ -193,9 +198,14 @@ describe("embedded gateway stub", () => {
     expect(runtime.readSessionMessagesAsync).toHaveBeenCalledWith(
       {
         agentId: "main",
+<<<<<<< HEAD
         sessionEntry: { sessionId: "sess-main" },
         sessionId: "sess-main",
         sessionKey: "agent:main:main",
+=======
+        sessionFile: undefined,
+        sessionId: "sess-main",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         storePath: "/tmp/openclaw-sessions.json",
       },
       {
@@ -227,9 +237,14 @@ describe("embedded gateway stub", () => {
     expect(runtime.readSessionMessagesAsync).toHaveBeenCalledWith(
       {
         agentId: "main",
+<<<<<<< HEAD
         sessionEntry: { sessionId: "sess-main" },
         sessionId: "sess-main",
         sessionKey: "agent:main:main",
+=======
+        sessionFile: undefined,
+        sessionId: "sess-main",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         storePath: "/tmp/openclaw-sessions.json",
       },
       {

@@ -1,11 +1,14 @@
 // Covers gateway process discovery across platform process listings.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+<<<<<<< HEAD
 import {
   getWindowsPowerShellExePath,
   getWindowsSystem32ExePath,
   getWindowsWmicExePath,
 } from "./windows-install-roots.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const readFileSyncMock = vi.hoisted(() => vi.fn());
@@ -135,6 +138,7 @@ describe("gateway-processes", () => {
     parseCmdScriptCommandLineMock.mockReturnValue(["node.exe", "gateway", "run"]);
 
     expect(readGatewayProcessArgsSync(77)).toEqual(["node.exe", "gateway", "run"]);
+<<<<<<< HEAD
     expect(spawnSyncMock.mock.calls[0]?.[0]).toBe(getWindowsPowerShellExePath());
     expect(spawnSyncMock.mock.calls[1]?.[0]).toBe(getWindowsWmicExePath());
     expect(parseCmdScriptCommandLineMock).toHaveBeenCalledWith("node.exe gateway run");
@@ -157,6 +161,8 @@ describe("gateway-processes", () => {
 
     expect(readGatewayProcessArgsSync(77)).toEqual(["node.exe", "gateway", "run"]);
     expect(spawnSyncMock.mock.calls[1]?.[0]).toBe(getWindowsWmicExePath());
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(parseCmdScriptCommandLineMock).toHaveBeenCalledWith("node.exe gateway run");
   });
 
@@ -204,6 +210,7 @@ describe("gateway-processes", () => {
     expect(findVerifiedGatewayListenerPidsOnPortSync(18789)).toEqual([200]);
   });
 
+<<<<<<< HEAD
   it("falls back from powershell to trusted netstat for windows listener pids", () => {
     setPlatform("win32");
     spawnSyncMock
@@ -234,6 +241,8 @@ describe("gateway-processes", () => {
     expect(spawnSyncMock.mock.calls[2]?.[0]).toBe(getWindowsPowerShellExePath());
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("formats pid lists as comma-separated output", () => {
     expect(formatGatewayPidList([1, 2, 3])).toBe("1, 2, 3");
   });

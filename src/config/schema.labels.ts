@@ -55,7 +55,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "diagnostics.otel.traces": "OpenTelemetry Traces Enabled",
   "diagnostics.otel.metrics": "OpenTelemetry Metrics Enabled",
   "diagnostics.otel.logs": "OpenTelemetry Logs Enabled",
+<<<<<<< HEAD
   "diagnostics.otel.logsExporter": "OpenTelemetry Logs Exporter",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "diagnostics.otel.sampleRate": "OpenTelemetry Trace Sample Rate",
   "diagnostics.otel.flushIntervalMs": "OpenTelemetry Flush Interval (ms)",
   "diagnostics.otel.captureContent": "OpenTelemetry Content Capture",
@@ -481,6 +484,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.fallback": "Memory Search Fallback",
   "agents.defaults.memorySearch.local.modelPath": "Local Embedding Model Path",
   "agents.defaults.memorySearch.local.contextSize": "Local Embedding Context Size",
+<<<<<<< HEAD
+=======
+  "agents.defaults.memorySearch.store.path": "Memory Search Index Path",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "agents.defaults.memorySearch.store.vector.enabled": "Memory Search Vector Index",
   "agents.defaults.memorySearch.store.vector.extensionPath": "Memory Search Vector Extension Path",
   "agents.defaults.memorySearch.chunking.tokens": "Memory Chunk Tokens",
@@ -968,7 +975,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "messages.visibleReplies": "Visible Replies",
   "messages.responsePrefix": "Outbound Response Prefix",
   "messages.usageTemplate": "Usage Footer Template",
+<<<<<<< HEAD
   "messages.responseUsage": "Default Usage Footer Mode",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "messages.groupChat": "Group Chat Rules",
   "messages.groupChat.mentionPatterns": "Group Mention Patterns",
   "messages.groupChat.historyLimit": "Group History Limit",

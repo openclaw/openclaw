@@ -15,7 +15,10 @@ import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runt
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import { SqliteBackedMatrixSyncStore } from "./src/matrix/client/file-sync-store.js";
+<<<<<<< HEAD
 import { openMatrixStorageMetaStoreOptions } from "./src/matrix/client/storage.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   readMatrixIdbSnapshotJson,
   readMatrixLegacyCryptoMigrationState,
@@ -113,6 +116,7 @@ describe("matrix doctor contract state migrations", () => {
     expect(fs.existsSync(path.join(storageRootDir, "bot-storage.json"))).toBe(false);
   });
 
+<<<<<<< HEAD
   it("migrates Matrix storage metadata JSON to SQLite plugin state", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-doctor-"));
     tempDirs.push(stateDir);
@@ -161,6 +165,8 @@ describe("matrix doctor contract state migrations", () => {
     expect(fs.existsSync(path.join(storageRootDir, "storage-meta.json"))).toBe(false);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not archive the legacy flat sync cache into an unread SQLite root", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-doctor-"));
     tempDirs.push(stateDir);

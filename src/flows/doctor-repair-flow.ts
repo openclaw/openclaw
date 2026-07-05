@@ -4,12 +4,18 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
 import { listHealthChecks } from "./health-check-registry.js";
+<<<<<<< HEAD
 import type {
   HealthCheckInput,
   HealthCheckRunResult,
   RegisteredHealthCheck,
 } from "./health-check-runner-types.js";
 import type {
+=======
+import type { HealthCheckRunResult, RegisteredHealthCheck } from "./health-check-runner-types.js";
+import type {
+  HealthCheck,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   HealthFinding,
   HealthRepairContext,
   HealthRepairDiff,
@@ -19,7 +25,11 @@ import type {
 
 // Repair runner for structured doctor health checks; carries config between checks.
 export interface DoctorRepairRunOptions {
+<<<<<<< HEAD
   readonly checks?: readonly HealthCheckInput[];
+=======
+  readonly checks?: readonly HealthCheck[];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   readonly dryRun?: boolean;
   readonly diff?: boolean;
 }

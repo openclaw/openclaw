@@ -5,7 +5,11 @@ import type {
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { whatsappApprovalCapability } from "./approval-native.js";
+=======
+import { whatsappApprovalCapability, whatsappNativeApprovalAdapter } from "./approval-native.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type WhatsAppConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["whatsapp"]>;
 
@@ -87,7 +91,11 @@ describe("whatsapp approval capability", () => {
     const pluginRequest = buildPluginRequest("+15551230000");
 
     expect(
+<<<<<<< HEAD
       whatsappApprovalCapability?.getActionAvailabilityState?.({
+=======
+      whatsappNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         action: "approve",
@@ -95,7 +103,11 @@ describe("whatsapp approval capability", () => {
       }),
     ).toEqual({ kind: "disabled" });
     expect(
+<<<<<<< HEAD
       whatsappApprovalCapability?.getActionAvailabilityState?.({
+=======
+      whatsappNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         action: "approve",
@@ -182,7 +194,11 @@ describe("whatsapp approval capability", () => {
     const request = buildExecRequest("+15551230000");
 
     expect(
+<<<<<<< HEAD
       whatsappApprovalCapability?.getActionAvailabilityState?.({
+=======
+      whatsappNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         action: "approve",
@@ -288,7 +304,11 @@ describe("whatsapp approval capability", () => {
     });
 
     expect(
+<<<<<<< HEAD
       whatsappApprovalCapability?.getActionAvailabilityState?.({
+=======
+      whatsappNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         action: "approve",
@@ -330,7 +350,11 @@ describe("whatsapp approval capability", () => {
     });
 
     expect(
+<<<<<<< HEAD
       whatsappApprovalCapability?.getActionAvailabilityState?.({
+=======
+      whatsappNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "default",
         action: "approve",
@@ -338,7 +362,11 @@ describe("whatsapp approval capability", () => {
       }),
     ).toEqual({ kind: "disabled" });
     expect(
+<<<<<<< HEAD
       whatsappApprovalCapability?.getActionAvailabilityState?.({
+=======
+      whatsappNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         cfg,
         accountId: "work",
         action: "approve",

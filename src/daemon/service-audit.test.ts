@@ -7,6 +7,10 @@ import { VERSION } from "../version.js";
 import {
   auditGatewayServiceConfig,
   checkTokenDrift,
+<<<<<<< HEAD
+=======
+  readGatewayServiceCommandPort,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   SERVICE_AUDIT_CODES,
 } from "./service-audit.js";
 import { buildMinimalServicePath } from "./service-env.js";
@@ -343,6 +347,25 @@ describe("auditGatewayServiceConfig", () => {
     ).toBe(false);
   });
 
+<<<<<<< HEAD
+=======
+  it("reads gateway service ports from split and equals-form arguments", () => {
+    expect(
+      readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway", "--port", "18888"]),
+    ).toBe(18888);
+    expect(
+      readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway", "--port=18889"]),
+    ).toBe(18889);
+    expect(readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway"])).toBe(undefined);
+    expect(
+      readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway", "--port=0"]),
+    ).toBe(undefined);
+    expect(
+      readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway", "--port=65536"]),
+    ).toBe(undefined);
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("flags gateway service port drift from the expected config port", async () => {
     const audit = await auditGatewayServiceConfig({
       env: { HOME: "/tmp" },

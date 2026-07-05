@@ -4,6 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isXaiToolEnabled,
   resolveFallbackXaiAuth,
+<<<<<<< HEAD
+=======
+  resolveFallbackXaiApiKey,
+  resolveXaiToolApiKey,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveXaiToolApiKeyWithAuth,
 } from "./tool-auth-shared.js";
 
@@ -14,7 +19,11 @@ describe("xai tool auth helpers", () => {
 
   it("prefers plugin web search keys over legacy grok keys", () => {
     expect(
+<<<<<<< HEAD
       resolveFallbackXaiAuth({
+=======
+      resolveFallbackXaiApiKey({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         plugins: {
           entries: {
             xai: {
@@ -36,10 +45,14 @@ describe("xai tool auth helpers", () => {
           },
         },
       }),
+<<<<<<< HEAD
     ).toEqual({
       apiKey: "plugin-key",
       source: "plugins.entries.xai.config.webSearch.apiKey",
     });
+=======
+    ).toBe("plugin-key");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("returns source metadata and managed markers for fallback auth", () => {
@@ -80,11 +93,19 @@ describe("xai tool auth helpers", () => {
     });
   });
 
+<<<<<<< HEAD
   it("falls back to runtime, then source config, then env for tool auth", async () => {
     vi.stubEnv("XAI_API_KEY", "env-key");
 
     await expect(
       resolveXaiToolApiKeyWithAuth({
+=======
+  it("falls back to runtime, then source config, then env for tool auth", () => {
+    vi.stubEnv("XAI_API_KEY", "env-key");
+
+    expect(
+      resolveXaiToolApiKey({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         runtimeConfig: {
           plugins: {
             entries: {
@@ -112,10 +133,17 @@ describe("xai tool auth helpers", () => {
           },
         },
       }),
+<<<<<<< HEAD
     ).resolves.toBe("runtime-key");
 
     await expect(
       resolveXaiToolApiKeyWithAuth({
+=======
+    ).toBe("runtime-key");
+
+    expect(
+      resolveXaiToolApiKey({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         sourceConfig: {
           plugins: {
             entries: {
@@ -130,9 +158,15 @@ describe("xai tool auth helpers", () => {
           },
         },
       }),
+<<<<<<< HEAD
     ).resolves.toBe("source-key");
 
     await expect(resolveXaiToolApiKeyWithAuth({})).resolves.toBe("env-key");
+=======
+    ).toBe("source-key");
+
+    expect(resolveXaiToolApiKey({})).toBe("env-key");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("honors explicit disabled flags before auth fallback", () => {
@@ -152,11 +186,19 @@ describe("xai tool auth helpers", () => {
     await expect(resolveXaiToolApiKeyWithAuth({ auth })).resolves.toBe("profile-key");
   });
 
+<<<<<<< HEAD
   it("does not use env fallback when a non-env SecretRef is configured but unavailable", async () => {
     vi.stubEnv("XAI_API_KEY", "env-key");
 
     await expect(
       resolveXaiToolApiKeyWithAuth({
+=======
+  it("does not use env fallback when a non-env SecretRef is configured but unavailable", () => {
+    vi.stubEnv("XAI_API_KEY", "env-key");
+
+    expect(
+      resolveXaiToolApiKey({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         sourceConfig: {
           plugins: {
             entries: {
@@ -175,7 +217,11 @@ describe("xai tool auth helpers", () => {
           },
         },
       }),
+<<<<<<< HEAD
     ).resolves.toBeUndefined();
+=======
+    ).toBeUndefined();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("does not bypass blocked explicit tool config with auth profiles", async () => {
@@ -206,11 +252,19 @@ describe("xai tool auth helpers", () => {
     await expect(resolveXaiToolApiKeyWithAuth({ sourceConfig, auth })).resolves.toBeUndefined();
   });
 
+<<<<<<< HEAD
   it("resolves env SecretRefs from source config when runtime snapshot is unavailable", async () => {
     vi.stubEnv("XAI_API_KEY", "xai-secretref-key");
 
     await expect(
       resolveXaiToolApiKeyWithAuth({
+=======
+  it("resolves env SecretRefs from source config when runtime snapshot is unavailable", () => {
+    vi.stubEnv("XAI_API_KEY", "xai-secretref-key");
+
+    expect(
+      resolveXaiToolApiKey({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         sourceConfig: {
           plugins: {
             entries: {
@@ -229,6 +283,7 @@ describe("xai tool auth helpers", () => {
           },
         },
       }),
+<<<<<<< HEAD
     ).resolves.toBe("xai-secretref-key");
   });
 
@@ -237,6 +292,16 @@ describe("xai tool auth helpers", () => {
 
     await expect(
       resolveXaiToolApiKeyWithAuth({
+=======
+    ).toBe("xai-secretref-key");
+  });
+
+  it("does not read arbitrary env SecretRef ids for xAI tool auth", () => {
+    vi.stubEnv("UNRELATED_SECRET", "should-not-be-read");
+
+    expect(
+      resolveXaiToolApiKey({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         sourceConfig: {
           plugins: {
             entries: {
@@ -255,6 +320,7 @@ describe("xai tool auth helpers", () => {
           },
         },
       }),
+<<<<<<< HEAD
     ).resolves.toBeUndefined();
   });
 
@@ -263,6 +329,16 @@ describe("xai tool auth helpers", () => {
 
     await expect(
       resolveXaiToolApiKeyWithAuth({
+=======
+    ).toBeUndefined();
+  });
+
+  it("does not resolve env SecretRefs when provider allowlist excludes XAI_API_KEY", () => {
+    vi.stubEnv("XAI_API_KEY", "xai-secretref-key");
+
+    expect(
+      resolveXaiToolApiKey({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         sourceConfig: {
           secrets: {
             providers: {
@@ -289,6 +365,7 @@ describe("xai tool auth helpers", () => {
           },
         },
       }),
+<<<<<<< HEAD
     ).resolves.toBeUndefined();
   });
 
@@ -297,6 +374,16 @@ describe("xai tool auth helpers", () => {
 
     await expect(
       resolveXaiToolApiKeyWithAuth({
+=======
+    ).toBeUndefined();
+  });
+
+  it("does not resolve env SecretRefs when provider source is not env", () => {
+    vi.stubEnv("XAI_API_KEY", "xai-secretref-key");
+
+    expect(
+      resolveXaiToolApiKey({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         sourceConfig: {
           secrets: {
             providers: {
@@ -323,6 +410,10 @@ describe("xai tool auth helpers", () => {
           },
         },
       }),
+<<<<<<< HEAD
     ).resolves.toBeUndefined();
+=======
+    ).toBeUndefined();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

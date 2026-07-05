@@ -1,6 +1,11 @@
 /**
  * Resolves memory-search source, sync, and ranking configuration.
  */
+<<<<<<< HEAD
+=======
+import os from "node:os";
+import path from "node:path";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -14,6 +19,10 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
+<<<<<<< HEAD
+=======
+import { resolveStateDir } from "../config/paths.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { SecretInput } from "../config/types.secrets.js";
 import {
   isMemoryMultimodalEnabled,
@@ -22,8 +31,12 @@ import {
 } from "../memory-host-sdk/multimodal.js";
 import { getEmbeddingProvider } from "../plugins/embedding-provider-runtime.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
+<<<<<<< HEAD
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { clampInt, clampNumber } from "../utils.js";
+=======
+import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveAgentConfig } from "./agent-scope.js";
 
 export type ResolvedMemorySearchConfig = {
@@ -61,7 +74,11 @@ export type ResolvedMemorySearchConfig = {
   };
   store: {
     driver: "sqlite";
+<<<<<<< HEAD
     databasePath: string;
+=======
+    path: string;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     fts: {
       tokenizer: "unicode61" | "trigram";
     };
@@ -175,6 +192,19 @@ function normalizeSources(
   return Array.from(normalized);
 }
 
+<<<<<<< HEAD
+=======
+function resolveStorePath(agentId: string, raw?: string): string {
+  const stateDir = resolveStateDir(process.env, os.homedir);
+  const fallback = path.join(stateDir, "memory", `${agentId}.sqlite`);
+  if (!raw) {
+    return fallback;
+  }
+  const withToken = raw.includes("{agentId}") ? raw.replaceAll("{agentId}", agentId) : raw;
+  return resolveUserPath(withToken);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function getConfiguredMemoryEmbeddingProvider(
   providerId: string,
   cfg: OpenClawConfig,
@@ -292,7 +322,11 @@ function mergeConfig(
   };
   const store = {
     driver: overrides?.store?.driver ?? defaults?.store?.driver ?? "sqlite",
+<<<<<<< HEAD
     databasePath: resolveOpenClawAgentSqlitePath({ agentId, env: process.env }),
+=======
+    path: resolveStorePath(agentId, overrides?.store?.path ?? defaults?.store?.path),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     fts,
     vector,
   };

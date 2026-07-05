@@ -2,7 +2,10 @@
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 import { redactSnapshotTestHints as mainSchemaHints } from "../../test/helpers/config/redact-snapshot-test-hints.js";
+<<<<<<< HEAD
 import { materializeRuntimeConfig } from "./materialize.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { REDACTED_SENTINEL, redactConfigSnapshot } from "./redact-snapshot.js";
 import {
   makeSnapshot,
@@ -10,7 +13,11 @@ import {
   type TestSnapshot,
 } from "./redact-snapshot.test-helpers.js";
 import { buildConfigSchema, type ConfigUiHints } from "./schema.js";
+<<<<<<< HEAD
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.openclaw.js";
+=======
+import type { ConfigFileSnapshot } from "./types.openclaw.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function expectNestedLevelPairValue(
   source: Record<string, Record<string, Record<string, unknown>>>,
@@ -604,6 +611,7 @@ describe("redactConfigSnapshot", () => {
     expect(result.raw).toContain(REDACTED_SENTINEL);
   });
 
+<<<<<<< HEAD
   it("keeps raw text when runtime materialization adds undefined safe-bin fields", () => {
     const sourceConfig = {
       tools: {
@@ -625,6 +633,8 @@ describe("redactConfigSnapshot", () => {
     expect(redactConfigSnapshot(snapshot).raw).toBe(raw);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("drops raw text when overlap fallback triggers", () => {
     const config = {
       gateway: {

@@ -11,6 +11,10 @@ import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime
 export const VERCEL_AI_GATEWAY_PROVIDER_ID = "vercel-ai-gateway";
 export const VERCEL_AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh";
 export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_ID = "anthropic/claude-opus-4.6";
+<<<<<<< HEAD
+=======
+export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = `${VERCEL_AI_GATEWAY_PROVIDER_ID}/${VERCEL_AI_GATEWAY_DEFAULT_MODEL_ID}`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export const VERCEL_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW = 200_000;
 export const VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS = 128_000;
 export const VERCEL_AI_GATEWAY_DEFAULT_COST = {
@@ -142,6 +146,7 @@ function getStaticFallbackModel(id: string): ModelDefinitionConfig | undefined {
   return fallback ? buildStaticModelDefinition(fallback) : undefined;
 }
 
+<<<<<<< HEAD
 /** Builds runtime metadata for models returned by the live gateway catalog. */
 export function resolveVercelAiGatewayDynamicModel(modelId: string): ModelDefinitionConfig {
   return (
@@ -157,6 +162,8 @@ export function resolveVercelAiGatewayDynamicModel(modelId: string): ModelDefini
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function getStaticVercelAiGatewayModelCatalog(): ModelDefinitionConfig[] {
   return STATIC_VERCEL_AI_GATEWAY_MODEL_CATALOG.map(buildStaticModelDefinition);
 }

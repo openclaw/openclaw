@@ -2,6 +2,10 @@
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { AgentEventPayload, AgentEventStream } from "../infra/agent-events.js";
 import type {
+<<<<<<< HEAD
+=======
+  PluginHookAgentContext,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookToolContext,
@@ -66,6 +70,17 @@ export type PluginSessionExtensionProjection = {
   value: PluginJsonValue;
 };
 
+<<<<<<< HEAD
+=======
+export type PluginSessionExtensionPatchParams = {
+  key: string;
+  pluginId: string;
+  namespace: string;
+  value?: PluginJsonValue;
+  unset?: boolean;
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type PluginToolPolicyDecision =
   | PluginHookBeforeToolCallResult
   | {
@@ -90,6 +105,13 @@ export type PluginToolMetadataRegistration = {
   tags?: string[];
 };
 
+<<<<<<< HEAD
+=======
+export type PluginCommandContinuation = {
+  continueAgent?: boolean;
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type PluginControlUiDescriptor = {
   id: string;
   surface: "session" | "tool" | "run" | "settings";
@@ -318,3 +340,8 @@ export function buildPluginAgentTurnPrepareContext(params: {
     ...(append.length > 0 ? { appendContext: append.join("\n\n") } : {}),
   };
 }
+<<<<<<< HEAD
+=======
+
+export type PluginHostHookRunContext = PluginHookAgentContext;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

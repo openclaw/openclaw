@@ -73,7 +73,10 @@ function cleanedLockForPath(lockPath: string): SessionLockInspection {
     ageMs: 1_000,
     stale: true,
     staleReasons: ["dead-pid"],
+<<<<<<< HEAD
     removable: true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     removed: true,
   };
 }
@@ -411,6 +414,7 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.restartRecoveryRuns).toBeUndefined();
   });
 
+<<<<<<< HEAD
   it("does not reopen a completed session via current-generation maintenance-expired abort controller", async () => {
     const sessionsDir = await makeSessionsDir();
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -444,6 +448,8 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.restartRecoveryRuns).toBeUndefined();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves current-generation markers across repeated restart marking", async () => {
     const sessionsDir = await makeSessionsDir();
     const lifecycleGeneration = getAgentEventLifecycleGeneration();

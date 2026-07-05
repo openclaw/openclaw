@@ -8,6 +8,7 @@ import {
   verifyChannelMessageAdapterCapabilityProofs,
   verifyDurableFinalCapabilityProofs,
 } from "openclaw/plugin-sdk/channel-outbound";
+<<<<<<< HEAD
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { whatsappMessageAdapter } from "./channel-outbound.js";
 import { whatsappOutbound } from "./outbound-adapter.js";
@@ -22,6 +23,12 @@ vi.mock("./send.js", () => ({
   sendPollWhatsApp: hoisted.sendPollWhatsApp,
 }));
 
+=======
+import { describe, expect, it, vi } from "vitest";
+import { whatsappMessageAdapter } from "./channel-outbound.js";
+import { whatsappOutbound } from "./outbound-adapter.js";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function createWhatsAppHarness(params: OutboundPayloadHarnessParams) {
   const sendWhatsApp = vi.fn();
   primeChannelOutboundSendMock(sendWhatsApp, { messageId: "wa-1" }, params.sendResults);
@@ -42,10 +49,13 @@ function createWhatsAppHarness(params: OutboundPayloadHarnessParams) {
 }
 
 describe("WhatsApp outbound payload contract", () => {
+<<<<<<< HEAD
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   installChannelOutboundPayloadContractSuite({
     channel: "whatsapp",
     chunking: { mode: "split", longTextLength: 5000, maxChunkLength: 4000 },
@@ -110,12 +120,16 @@ describe("WhatsApp outbound payload contract", () => {
         replyToId: "msg-1",
         deps: { whatsapp: sendWhatsApp },
       });
+<<<<<<< HEAD
       expect(sendWhatsApp).not.toHaveBeenCalledWith(
         "5511999999999@c.us",
         "reply",
         expect.anything(),
       );
       expect(hoisted.sendMessageWhatsApp).toHaveBeenLastCalledWith("5511999999999@c.us", "reply", {
+=======
+      expect(sendWhatsApp).toHaveBeenLastCalledWith("5511999999999@c.us", "reply", {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         verbose: false,
         cfg: {},
         accountId: undefined,
@@ -179,6 +193,7 @@ describe("WhatsApp outbound payload contract", () => {
           } as Parameters<NonNullable<typeof whatsappMessageAdapter.send.text>>[0] & {
             deps: { whatsapp: typeof sendWhatsApp };
           });
+<<<<<<< HEAD
           expect(sendWhatsApp).not.toHaveBeenCalledWith(
             "5511999999999@c.us",
             "reply",
@@ -203,6 +218,22 @@ describe("WhatsApp outbound payload contract", () => {
             },
           );
           expect(result?.receipt.platformMessageIds).toEqual(["wa-live-1"]);
+=======
+          expect(sendWhatsApp).toHaveBeenLastCalledWith("5511999999999@c.us", "reply", {
+            verbose: false,
+            cfg: {},
+            accountId: undefined,
+            gifPlayback: undefined,
+            quotedMessageKey: {
+              id: "msg-1",
+              remoteJid: "5511999999999@c.us",
+              fromMe: false,
+              participant: undefined,
+              messageText: undefined,
+            },
+          });
+          expect(result?.receipt.platformMessageIds).toEqual(["wa-1"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
         messageSendingHooks: () => {
           expect(whatsappMessageAdapter.send.text).toBeTypeOf("function");

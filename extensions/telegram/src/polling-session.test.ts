@@ -418,7 +418,11 @@ type TestTelegramUpdate = {
   update_id: number;
   message: {
     text: string;
+<<<<<<< HEAD
     chat: { id: number; type: "private" | "supergroup" };
+=======
+    chat: { id: number; type: "supergroup" };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     message_thread_id?: number;
     is_topic_message?: boolean;
   };
@@ -436,6 +440,7 @@ function topicUpdate(updateId: number, threadId: number, text: string): TestTele
   };
 }
 
+<<<<<<< HEAD
 function directUpdate(updateId: number, chatId: number, text: string): TestTelegramUpdate {
   return {
     update_id: updateId,
@@ -446,6 +451,8 @@ function directUpdate(updateId: number, chatId: number, text: string): TestTeleg
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function waitForAbortSignal(signal: AbortSignal): Promise<void> {
   if (signal.aborted) {
     return;
@@ -486,6 +493,7 @@ async function pendingUpdateIds(spoolDir: string, limit: number | "all" = 100): 
   return (await listTelegramSpooledUpdates({ spoolDir, limit })).map((update) => update.updateId);
 }
 
+<<<<<<< HEAD
 async function claimedAtForUpdate(spoolDir: string, updateId: number): Promise<number> {
   const claim = (await listTelegramSpooledUpdateClaims({ spoolDir })).find(
     (entry) => entry.updateId === updateId,
@@ -529,6 +537,8 @@ function installSpooledClaimRefreshHarness(): {
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function normalizeTelegramTestAccountId(spoolDir: string): string {
   const trimmed = path.basename(spoolDir).trim();
   return trimmed ? trimmed.replace(/[^a-z0-9._-]+/gi, "_") : "default";
@@ -562,6 +572,7 @@ async function failedUpdateIds(spoolDir: string): Promise<number[]> {
   return rows.map((row) => Number(row.event_id));
 }
 
+<<<<<<< HEAD
 async function failedUpdateReasons(
   spoolDir: string,
 ): Promise<Array<{ id: number; reason: string }>> {
@@ -578,6 +589,8 @@ async function failedUpdateReasons(
   return rows.map((row) => ({ id: Number(row.event_id), reason: String(row.failed_reason) }));
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function adoptClaimOwner(params: {
   spoolDir: string;
   updateId: number;
@@ -972,6 +985,7 @@ describe("TelegramPollingSession", () => {
     }
   });
 
+<<<<<<< HEAD
   it("drains worker-spooled updates without waiting for the next drain interval", async () => {
     const abort = new AbortController();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
@@ -1170,6 +1184,8 @@ describe("TelegramPollingSession", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("drains existing isolated ingress spool entries below the persisted offset", async () => {
     const abort = new AbortController();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
@@ -1618,6 +1634,7 @@ describe("TelegramPollingSession", () => {
     });
   });
 
+<<<<<<< HEAD
   it("refreshes active spooled claims while the handler is still running", async () => {
     const refreshHarness = installSpooledClaimRefreshHarness();
     await withTempSpool(async (tempDir) => {
@@ -1661,6 +1678,8 @@ describe("TelegramPollingSession", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("holds buffered spooled claims until deferred processing settles without blocking same-lane buffering", async () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
@@ -1711,6 +1730,7 @@ describe("TelegramPollingSession", () => {
     });
   });
 
+<<<<<<< HEAD
   it("refreshes deferred spooled claims after the active handler hands off", async () => {
     const refreshHarness = installSpooledClaimRefreshHarness();
     await withTempSpool(async (tempDir) => {
@@ -1755,6 +1775,8 @@ describe("TelegramPollingSession", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("releases buffered spooled claims for retry when deferred processing fails", async () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
@@ -1935,6 +1957,7 @@ describe("TelegramPollingSession", () => {
     });
   });
 
+<<<<<<< HEAD
   for (const scenario of [
     {
       name: "topic",
@@ -2022,6 +2045,8 @@ describe("TelegramPollingSession", () => {
     });
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("dead-letters wrapped missing harness failures", async () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
@@ -2203,6 +2228,7 @@ describe("TelegramPollingSession", () => {
     });
   });
 
+<<<<<<< HEAD
   it("fails timed-out current-process claims before draining later same-lane updates", async () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
@@ -2255,6 +2281,8 @@ describe("TelegramPollingSession", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("scans past active-lane backlogs to start unrelated lanes", async () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
@@ -3715,6 +3743,7 @@ describe("TelegramPollingSession", () => {
     }
   });
 
+<<<<<<< HEAD
   it("marks isolated ingress unhealthy when a spooled backlog stalls before handler timeout", async () => {
     vi.useFakeTimers({ now: 1_000, shouldAdvanceTime: true });
     const abort = new AbortController();
@@ -3815,6 +3844,8 @@ describe("TelegramPollingSession", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("marks isolated ingress unhealthy when a spooled backlog handler times out", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const abort = new AbortController();

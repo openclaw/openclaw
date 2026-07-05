@@ -1,7 +1,13 @@
 // Slack tests cover actions.blocks plugin behavior.
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { createSlackEditTestClient } from "./blocks.test-helpers.js";
 
+=======
+import { createSlackEditTestClient, installSlackBlockTestMocks } from "./blocks.test-helpers.js";
+
+installSlackBlockTestMocks();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const { editSlackMessage } = await import("./actions.js");
 const SLACK_TEXT_LIMIT = 8000;
 

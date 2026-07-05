@@ -17,7 +17,10 @@ import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
 import { defaultRuntime } from "../runtime.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { isRecord } from "../utils.js";
+<<<<<<< HEAD
 import { VERSION } from "../version.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type JsonObject = Record<string, unknown>;
 
@@ -36,22 +39,30 @@ export type PluginsInitOptions = {
   directory?: string;
   force?: boolean;
   name?: string;
+<<<<<<< HEAD
   type?: string;
 };
 
 type PluginScaffoldType = "tool" | "provider";
 
+=======
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type LoadedToolPlugin = {
   entry: unknown;
   metadata: ToolPluginMetadata;
 };
 
+<<<<<<< HEAD
 const SUPPORTED_PLUGIN_SCAFFOLD_TYPES = [
   "tool",
   "provider",
 ] as const satisfies readonly PluginScaffoldType[];
 const CLAWHUB_PACKAGE_PUBLISH_WORKFLOW_REF = "9d49df109d4ad3dc8a6ecf05d26b39f46d294721";
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const toolPluginEntryModuleLoaders = createPluginModuleLoaderCache();
 
 function readJsonFile(filePath: string): JsonObject {
@@ -346,6 +357,7 @@ function assertCanCreate(filePath: string, force: boolean): void {
   }
 }
 
+<<<<<<< HEAD
 function resolveScaffoldType(input: string | undefined): PluginScaffoldType {
   const type = input ?? "tool";
   if (SUPPORTED_PLUGIN_SCAFFOLD_TYPES.includes(type as PluginScaffoldType)) {
@@ -374,6 +386,8 @@ function normalizePluginId(input: string): string {
   return id;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function titleFromId(id: string): string {
   return id
     .split(/[-_]/u)
@@ -382,6 +396,7 @@ function titleFromId(id: string): string {
     .join(" ");
 }
 
+<<<<<<< HEAD
 function upperSnakeFromId(id: string): string {
   return id
     .replace(/[^a-z0-9]+/giu, "_")
@@ -437,6 +452,17 @@ export default defineConfig({
 function writeToolPluginScaffold(params: { rootDir: string; id: string; name: string }): void {
   const packageManifest = {
     name: `openclaw-plugin-${params.id}`,
+=======
+export async function runPluginsInitCommand(id: string, opts: PluginsInitOptions): Promise<void> {
+  const rootDir = path.resolve(opts.directory ?? id);
+  const force = opts.force === true;
+  const name = opts.name ?? titleFromId(id);
+  assertCanCreate(rootDir, force);
+  fs.mkdirSync(path.join(rootDir, "src"), { recursive: true });
+
+  const packageManifest = {
+    name: `openclaw-plugin-${id}`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     version: "0.1.0",
     type: "module",
     private: true,
@@ -444,7 +470,11 @@ function writeToolPluginScaffold(params: { rootDir: string; id: string; name: st
       build: "tsc -p tsconfig.json",
       "plugin:build": "npm run build && openclaw plugins build --entry ./dist/index.js",
       "plugin:validate": "npm run build && openclaw plugins validate --entry ./dist/index.js",
+<<<<<<< HEAD
       test: "vitest run --config ./vitest.config.ts",
+=======
+      test: "vitest run",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
     files: ["dist", "openclaw.plugin.json", "README.md"],
     peerDependencies: {
@@ -462,10 +492,16 @@ function writeToolPluginScaffold(params: { rootDir: string; id: string; name: st
       extensions: ["./dist/index.js"],
     },
   };
+<<<<<<< HEAD
   const idLiteral = jsStringLiteral(params.id);
   const nameLiteral = jsStringLiteral(params.name);
   const description = `Add ${params.name} tools to OpenClaw.`;
   const descriptionLiteral = jsStringLiteral(description);
+=======
+  const idLiteral = jsStringLiteral(id);
+  const nameLiteral = jsStringLiteral(name);
+  const descriptionLiteral = jsStringLiteral(`Add ${name} tools to OpenClaw.`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const indexSource = `import { Type } from "typebox";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 
@@ -495,7 +531,11 @@ describe(${idLiteral}, () => {
   });
 });
 `;
+<<<<<<< HEAD
   const readmeSource = `# ${params.name}
+=======
+  const readmeSource = `# ${name}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 Simple OpenClaw tool plugin.
 
@@ -508,6 +548,7 @@ npm run plugin:validate
 npm test
 \`\`\`
 `;
+<<<<<<< HEAD
 
   writeJsonFile(path.join(params.rootDir, "package.json"), packageManifest);
   fs.writeFileSync(path.join(params.rootDir, "src/index.ts"), indexSource);
@@ -808,5 +849,38 @@ export async function runPluginsInitCommand(
   }
   writeJsonFile(path.join(rootDir, "tsconfig.json"), tsconfig);
   writeScaffoldVitestConfig(rootDir);
+=======
+  const tsconfig = {
+    compilerOptions: {
+      target: "ES2022",
+      module: "NodeNext",
+      moduleResolution: "NodeNext",
+      strict: true,
+      declaration: true,
+      outDir: "dist",
+      skipLibCheck: true,
+    },
+    include: ["src/**/*.ts"],
+  };
+
+  writeJsonFile(path.join(rootDir, "package.json"), packageManifest);
+  fs.writeFileSync(path.join(rootDir, "src/index.ts"), indexSource);
+  fs.writeFileSync(path.join(rootDir, "src/index.test.ts"), testSource);
+  fs.writeFileSync(path.join(rootDir, "README.md"), readmeSource);
+  writeJsonFile(path.join(rootDir, "tsconfig.json"), tsconfig);
+  writeJsonFile(path.join(rootDir, PLUGIN_MANIFEST_FILENAME), {
+    id,
+    name,
+    description: `Add ${name} tools to OpenClaw.`,
+    version: packageManifest.version,
+    configSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+    },
+    activation: { onStartup: true },
+    contracts: { tools: ["echo"] },
+  });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   defaultRuntime.log(`Created ${path.relative(process.cwd(), rootDir) || "."}`);
 }

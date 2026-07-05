@@ -26,8 +26,13 @@ import { log } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
 import {
+<<<<<<< HEAD
   readExternalCliBootstrapCredential,
   readExternalCliFallbackCredential,
+=======
+  readExternalCliFallbackCredential,
+  readManagedExternalCliCredential,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./external-cli-sync.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
 import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
@@ -232,7 +237,11 @@ const oauthManager = createOAuthManager({
   buildApiKey: buildOAuthApiKey,
   refreshCredential: refreshOAuthCredential,
   readBootstrapCredential: ({ profileId, credential }) =>
+<<<<<<< HEAD
     readExternalCliBootstrapCredential({
+=======
+    readManagedExternalCliCredential({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       profileId,
       credential,
     }),

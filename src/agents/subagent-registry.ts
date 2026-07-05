@@ -50,6 +50,10 @@ import {
   reconcileOrphanedRestoredRuns,
   reconcileOrphanedRun,
   resolveAnnounceRetryDelayMs,
+<<<<<<< HEAD
+=======
+  resolveSubagentRunOrphanReason,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
@@ -84,7 +88,10 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   loadSubagentSessionEntry,
   resolveCompletionFromSessionEntry,
+<<<<<<< HEAD
   resolveSubagentRunOrphanReason,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveSubagentSessionCompletion,
   resolveSubagentSessionStartedAt,
   type SubagentSessionStoreCache,
@@ -626,9 +633,13 @@ function resumeSubagentRun(runId: string) {
   if (typeof entry.endedAt === "number" && isDeliverySuspended(entry)) {
     return;
   }
+<<<<<<< HEAD
   // Yielded runs stay paused until explicitly steered, except orchestrators
   // waiting on descendants: their settle retry must reach the wake path.
   if (entry.pauseReason === "sessions_yield" && entry.wakeOnDescendantSettle !== true) {
+=======
+  if (entry.pauseReason === "sessions_yield") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return;
   }
   // Skip entries that have exhausted their retry budget or expired (#18264).
@@ -914,6 +925,10 @@ async function sweepSubagentRuns() {
         if (!hasLiveRunContext && activeAgeMs >= STALE_ACTIVE_SUBAGENT_GRACE_MS) {
           const orphanReason = resolveSubagentRunOrphanReason({
             entry,
+<<<<<<< HEAD
+=======
+            storeCache,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           });
           if (orphanReason) {
             if (

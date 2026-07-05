@@ -25,7 +25,11 @@ const TRANSIENT_PATTERNS: Record<CronRetryOn, RegExp> = {
     /\b529\b|\boverloaded(?:_error)?\b|high demand|temporar(?:ily|y) overloaded|capacity exceeded/i,
   network:
     /(network|fetch failed|socket|econnreset|econnrefused|eai_again|enetdown|ehostunreach|ehostdown|enetreset|enetunreach|epipe)/i,
+<<<<<<< HEAD
   timeout: /(timeout|timed out|stalled before execution start|etimedout)/i,
+=======
+  timeout: /(timeout|etimedout)/i,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   server_error: SERVER_ERROR_PATTERN,
 };
 

@@ -379,9 +379,17 @@ describe("gateway server models + voicewake", () => {
         expect(after.ok).toBe(true);
         expect(after.payload?.triggers).toEqual(["hi", "there"]);
 
+<<<<<<< HEAD
         await expect(
           fs.readFile(path.join(homeDir, ".openclaw", "settings", "voicewake.json"), "utf8"),
         ).rejects.toThrow(/ENOENT/u);
+=======
+        const onDisk = JSON.parse(
+          await fs.readFile(path.join(homeDir, ".openclaw", "settings", "voicewake.json"), "utf8"),
+        ) as { triggers?: unknown; updatedAtMs?: unknown };
+        expect(onDisk.triggers).toEqual(["hi", "there"]);
+        expect(typeof onDisk.updatedAtMs).toBe("number");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
     },
   );
@@ -457,9 +465,19 @@ describe("gateway server models + voicewake", () => {
         { trigger: "robot wake", target: { agentId: "main" } },
       ]);
 
+<<<<<<< HEAD
       await expect(
         fs.readFile(path.join(homeDir, ".openclaw", "settings", "voicewake-routing.json"), "utf8"),
       ).rejects.toThrow(/ENOENT/u);
+=======
+      const onDisk = JSON.parse(
+        await fs.readFile(
+          path.join(homeDir, ".openclaw", "settings", "voicewake-routing.json"),
+          "utf8",
+        ),
+      ) as { routes?: unknown };
+      expect(onDisk.routes).toEqual([{ trigger: "robot wake", target: { agentId: "main" } }]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       const invalid = await rpcReq(ws, "voicewake.routing.set", { config: null });
       expect(invalid.ok).toBe(false);

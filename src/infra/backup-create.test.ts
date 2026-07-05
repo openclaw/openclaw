@@ -802,6 +802,7 @@ describe("createBackupArchive", () => {
           state.statePath("memory", "main.sqlite.reindex-lock.sqlite"),
           state.statePath("memory", "main.sqlite.tmp-11111111-2222-3333-4444-555555555555"),
           state.statePath("memory", "main.sqlite.backup-66666666-7777-8888-9999-aaaaaaaaaaaa"),
+<<<<<<< HEAD
           state.statePath(
             "agents",
             "main",
@@ -811,6 +812,12 @@ describe("createBackupArchive", () => {
         await fs.mkdir(outputDir, { recursive: true });
         for (const transientPath of transientPaths) {
           await fs.mkdir(path.dirname(transientPath), { recursive: true });
+=======
+        ];
+        await fs.mkdir(path.dirname(transientPaths[0]), { recursive: true });
+        await fs.mkdir(outputDir, { recursive: true });
+        for (const transientPath of transientPaths) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           for (const suffix of ["", "-wal", "-shm", "-journal"]) {
             await fs.writeFile(`${transientPath}${suffix}`, "transient reindex database");
           }
@@ -823,6 +830,7 @@ describe("createBackupArchive", () => {
         });
         const entries = await listArchiveEntries(result.archivePath);
         for (const transientPath of transientPaths) {
+<<<<<<< HEAD
           const relativeTransientPath = path
             .relative(state.stateDir, transientPath)
             .split(path.sep)
@@ -831,6 +839,14 @@ describe("createBackupArchive", () => {
             expect(
               entries.some((entry) => entry.endsWith(`/state/${relativeTransientPath}${suffix}`)),
               `${relativeTransientPath}${suffix}`,
+=======
+          for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+            expect(
+              entries.some((entry) =>
+                entry.endsWith(`/state/memory/${path.basename(transientPath)}${suffix}`),
+              ),
+              `${path.basename(transientPath)}${suffix}`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             ).toBe(false);
           }
         }

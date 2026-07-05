@@ -55,6 +55,7 @@ async function formatDeprecatedProviderChoiceError(
     config: params.config,
     env: params.env,
   });
+<<<<<<< HEAD
   if (deprecatedChoice) {
     return `Auth choice ${JSON.stringify(authChoice)} is no longer supported. Use ${JSON.stringify(deprecatedChoice.choiceId)} instead, or run ${formatCliCommand("openclaw onboard")} to choose interactively.`;
   }
@@ -69,6 +70,12 @@ async function formatDeprecatedProviderChoiceError(
     return undefined;
   }
   return `Auth choice ${JSON.stringify(authChoice)} is no longer supported. Use ${JSON.stringify(externalDeprecatedChoice.choiceId)} instead, or run ${formatCliCommand("openclaw onboard")} to choose interactively.`;
+=======
+  if (!deprecatedChoice) {
+    return undefined;
+  }
+  return `Auth choice ${JSON.stringify(authChoice)} is no longer supported. Use ${JSON.stringify(deprecatedChoice.choiceId)} instead, or run ${formatCliCommand("openclaw onboard")} to choose interactively.`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /** Apply a selected auth choice, returning the mutated config or retry/model override signals. */

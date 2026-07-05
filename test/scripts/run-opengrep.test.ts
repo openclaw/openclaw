@@ -68,6 +68,7 @@ describe("run-opengrep.sh", () => {
     expect(args).toContain("security/opengrep/precise.yml");
   });
 
+<<<<<<< HEAD
   it("writes empty SARIF when a changed scan has no first-party paths", () => {
     const repo = createTempDir("openclaw-run-opengrep-empty-sarif-");
     git(repo, "init", "-q");
@@ -115,6 +116,8 @@ describe("run-opengrep.sh", () => {
     expect(fs.existsSync(argsPath)).toBe(false);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("scans PR files instead of main-only files when the payload base is stale", () => {
     const repo = createTempDir("openclaw-run-opengrep-merge-");
     git(repo, "init", "-q", "--initial-branch=main");

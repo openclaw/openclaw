@@ -1,18 +1,26 @@
 // Release Beta Verifier tests cover release beta verifier script behavior.
+<<<<<<< HEAD
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchStatusWithRetry,
+=======
+import { describe, expect, it } from "vitest";
+import {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   parseNpmViewFields,
   parseReleaseVerifyBetaArgs,
   readBoundedJsonResponse,
   runNpmViewWithRetry,
 } from "../../scripts/lib/release-beta-verifier.ts";
 
+<<<<<<< HEAD
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("parseReleaseVerifyBetaArgs", () => {
   it("defaults beta verification to the matching tag and repo", () => {
     expect(parseReleaseVerifyBetaArgs(["2026.5.10-beta.3"])).toEqual({
@@ -158,6 +166,7 @@ describe("runNpmViewWithRetry", () => {
   });
 });
 
+<<<<<<< HEAD
 describe("fetchStatusWithRetry", () => {
   it("cancels retryable and returned GET response bodies", async () => {
     vi.useFakeTimers();
@@ -198,6 +207,8 @@ describe("fetchStatusWithRetry", () => {
   });
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("readBoundedJsonResponse", () => {
   it("parses JSON bodies within the release verifier limit", async () => {
     await expect(
@@ -220,6 +231,7 @@ describe("readBoundedJsonResponse", () => {
       readBoundedJsonResponse(new Response('{"padding":"too-large"}'), "ClawHub package", 8),
     ).rejects.toThrow("ClawHub package response body exceeded 8 bytes.");
   });
+<<<<<<< HEAD
 
   it("keeps ClawHub request timeouts active while reading JSON bodies", async () => {
     let canceled = false;
@@ -247,4 +259,6 @@ describe("readBoundedJsonResponse", () => {
     await expect(json).rejects.toThrow("ClawHub body timed out");
     expect(canceled).toBe(true);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

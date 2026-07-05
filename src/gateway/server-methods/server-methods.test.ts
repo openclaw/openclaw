@@ -8,7 +8,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { validateExecApprovalRequestParams } from "../../../packages/gateway-protocol/src/index.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../../agents/stream-message-shared.js";
 import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
@@ -941,6 +944,7 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it.each([
     ["output_text", ""],
     ["output_text", "NO_REPLY"],
@@ -978,6 +982,8 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("projects thinking-only assistant errors as a generic safe failure", () => {
     const result = projectRecentChatDisplayMessages([
       {
@@ -2404,6 +2410,7 @@ describe("exec approval handlers", () => {
     timeoutMs: 2000,
   } as const;
 
+<<<<<<< HEAD
   function createExecApprovalClient(params: {
     connId: string;
     clientId: string;
@@ -2422,6 +2429,8 @@ describe("exec approval handlers", () => {
     } as unknown as ExecApprovalRequestArgs["client"];
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   function toExecApprovalRequestContext(context: {
     broadcast: (event: string, payload: unknown) => void;
     hasExecApprovalClients?: () => boolean;
@@ -2927,6 +2936,7 @@ describe("exec approval handlers", () => {
     expect(otherRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
+<<<<<<< HEAD
   it("ignores approval reviewer devices from non-runtime approval request clients", async () => {
     const { manager, handlers, respond, context } = createExecApprovalFixture();
     const requesterClient = createExecApprovalClient({
@@ -3201,6 +3211,8 @@ describe("exec approval handlers", () => {
     await requestPromise;
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("returns not found for stale exec.approval.get ids", async () => {
     const { handlers, respond, context } = createExecApprovalFixture();
 

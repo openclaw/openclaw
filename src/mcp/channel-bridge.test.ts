@@ -1,7 +1,10 @@
 // Channel MCP bridge tests cover request bridging between MCP and channel APIs.
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { OpenClawChannelBridge } from "./channel-bridge.js";
+<<<<<<< HEAD
 import type { QueueEvent, WaitFilter } from "./channel-shared.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const ONE_MINUTE_MS = 60 * 1_000;
 const ONE_HOUR_MS = 60 * ONE_MINUTE_MS;
@@ -12,6 +15,7 @@ const APPROVAL_DEFAULT_TTL_MS = 30 * ONE_MINUTE_MS;
 // exercise. Defined as a standalone shape (not an intersection with the class)
 // because mixing public/private constituents collapses to `never` under tsgo.
 type BridgeInternals = {
+<<<<<<< HEAD
   queue: QueueEvent[];
   pendingClaudePermissions: Map<string, unknown>;
   pendingApprovals: Map<string, unknown>;
@@ -21,6 +25,11 @@ type BridgeInternals = {
     nextCursor: number;
   };
   waitForEvent: (filter: WaitFilter, timeoutMs?: number) => Promise<QueueEvent | null>;
+=======
+  pendingClaudePermissions: Map<string, unknown>;
+  pendingApprovals: Map<string, unknown>;
+  pendingSweepInterval: NodeJS.Timeout | null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   handleClaudePermissionRequest: (params: {
     requestId: string;
     toolName: string;
@@ -269,6 +278,7 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
       await bridge.close();
     }
   });
+<<<<<<< HEAD
 
   test("pollEvents clamps direct caller limits to the public MCP event window", async () => {
     const bridge = makeBridge();
@@ -312,4 +322,6 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
       await bridge.close();
     }
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

@@ -187,6 +187,7 @@ describe("shared Codex app-server client", () => {
     startSpy.mockRestore();
   });
 
+<<<<<<< HEAD
   it("falls back to the next managed app-server when desktop initialize is unsupported", async () => {
     const desktop = createClientHarness();
     const pluginLocal = createClientHarness();
@@ -222,6 +223,8 @@ describe("shared Codex app-server client", () => {
     expect(startSpy.mock.calls[1]?.[0]).not.toHaveProperty("managedFallbackCommandPaths");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("closes and clears a shared app-server when initialize times out", async () => {
     const first = createClientHarness();
     const second = createClientHarness();

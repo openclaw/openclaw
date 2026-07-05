@@ -4,17 +4,24 @@ import { uniqueSortedStrings } from "../../plugin-sdk/test-helpers/string-utils.
 import { resolveManifestContractPluginIds } from "../plugin-registry.js";
 import { testing as providerTesting } from "../providers.js";
 import { resolveBundledContractSnapshotPluginIds } from "./inventory/bundled-capability-metadata.js";
+<<<<<<< HEAD
 import { providerContractPluginIds } from "./registry.js";
+=======
+import { providerContractCompatPluginIds } from "./registry.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function resolveBundledManifestProviderPluginIds() {
   return uniqueSortedStrings(resolveBundledContractSnapshotPluginIds("providerIds"));
 }
 
+<<<<<<< HEAD
 const ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS = ["codex", "qa-lab"] as const;
 const ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_ID_SET = new Set<string>(
   ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS,
 );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function expectPluginAllowlistEquals(
   allow: string[] | undefined,
   pluginIds: string[],
@@ -31,7 +38,11 @@ describe("plugin loader contract", () => {
   let bundledWebSearchPluginIds: string[] = [];
 
   beforeAll(() => {
+<<<<<<< HEAD
     providerPluginIds = uniqueSortedStrings(providerContractPluginIds);
+=======
+    providerPluginIds = uniqueSortedStrings(providerContractCompatPluginIds);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     manifestProviderPluginIds = resolveBundledManifestProviderPluginIds();
     vitestCompatConfig = providerTesting.withBundledProviderVitestCompat({
       config: undefined,
@@ -64,6 +75,7 @@ describe("plugin loader contract", () => {
   });
 
   it("keeps bundled web search loading scoped to the web search registry", () => {
+<<<<<<< HEAD
     const loaderScopedPluginIds = bundledWebSearchPluginIds.filter(
       (pluginId) => !ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_ID_SET.has(pluginId),
     );
@@ -76,5 +88,8 @@ describe("plugin loader contract", () => {
     expect(
       webSearchPluginIds.filter((pluginId) => !loaderScopedPluginIds.includes(pluginId)),
     ).toEqual([...ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS]);
+=======
+    expect(bundledWebSearchPluginIds).toEqual(webSearchPluginIds);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

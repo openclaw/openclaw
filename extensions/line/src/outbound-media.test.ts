@@ -15,6 +15,10 @@ afterAll(() => {
 });
 
 import {
+<<<<<<< HEAD
+=======
+  detectLineMediaKind,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveLineOutboundMedia,
   validateLineMediaUrl,
 } from "./outbound-media.js";
@@ -70,6 +74,31 @@ describe("validateLineMediaUrl", () => {
   });
 });
 
+<<<<<<< HEAD
+=======
+describe("detectLineMediaKind", () => {
+  it("maps image MIME to image", () => {
+    expect(detectLineMediaKind("image/jpeg")).toBe("image");
+  });
+
+  it("maps uppercase image MIME to image", () => {
+    expect(detectLineMediaKind("IMAGE/JPEG")).toBe("image");
+  });
+
+  it("maps video MIME to video", () => {
+    expect(detectLineMediaKind("video/mp4")).toBe("video");
+  });
+
+  it("maps audio MIME to audio", () => {
+    expect(detectLineMediaKind("audio/mpeg")).toBe("audio");
+  });
+
+  it("falls back unknown MIME to image", () => {
+    expect(detectLineMediaKind("application/octet-stream")).toBe("image");
+  });
+});
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("resolveLineOutboundMedia", () => {
   beforeEach(() => {
     ssrfMocks.resolvePinnedHostnameWithPolicy.mockReset();

@@ -6,7 +6,10 @@ import { probeGatewayUrl, probeLocalCommand } from "./probes.js";
 describe("crestodian probes", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+<<<<<<< HEAD
     vi.unstubAllGlobals();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("bounds noisy local command probe output", async () => {
@@ -55,6 +58,7 @@ describe("crestodian probes", () => {
 
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
+<<<<<<< HEAD
 
   it("cancels gateway health response bodies", async () => {
     const cancel = vi.fn(async () => undefined);
@@ -77,4 +81,6 @@ describe("crestodian probes", () => {
     });
     expect(cancel).toHaveBeenCalledTimes(1);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

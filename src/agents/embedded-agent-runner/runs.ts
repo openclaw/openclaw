@@ -1,6 +1,10 @@
 /**
  * Manages active embedded-agent run handles, queues, aborts, and waiters.
  */
+<<<<<<< HEAD
+=======
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   abortActiveReplyRuns,
   abortReplyRunBySessionId,
@@ -30,12 +34,20 @@ import {
   ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID,
   ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
   ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
+<<<<<<< HEAD
+=======
+  EMBEDDED_RUN_MODEL_SWITCH_REQUESTS,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   EMBEDDED_RUN_WAITERS,
   getActiveEmbeddedRunCount,
   type ActiveEmbeddedRunSnapshot,
   type AbandonedEmbeddedRun,
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
+<<<<<<< HEAD
+=======
+  type EmbeddedRunModelSwitchRequest,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type EmbeddedRunWaiter,
 } from "./run-state.js";
 import { resolveEmbeddedSessionFileKey } from "./session-file-key.js";
@@ -48,6 +60,10 @@ export {
   type ActiveEmbeddedRunSnapshot,
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
+<<<<<<< HEAD
+=======
+  type EmbeddedRunModelSwitchRequest,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./run-state.js";
 
 export type EmbeddedAgentQueueFailureReason =
@@ -565,6 +581,47 @@ export function getActiveEmbeddedRunSnapshot(
   return ACTIVE_EMBEDDED_RUN_SNAPSHOTS.get(sessionId);
 }
 
+<<<<<<< HEAD
+=======
+export function requestEmbeddedRunModelSwitch(
+  sessionId: string,
+  request: EmbeddedRunModelSwitchRequest,
+): boolean {
+  const normalizedSessionId = sessionId.trim();
+  const provider = request.provider.trim();
+  const model = request.model.trim();
+  if (!normalizedSessionId || !provider || !model) {
+    return false;
+  }
+  EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.set(normalizedSessionId, {
+    provider,
+    model,
+    authProfileId: normalizeOptionalString(request.authProfileId),
+    authProfileIdSource: normalizeOptionalString(request.authProfileId)
+      ? request.authProfileIdSource
+      : undefined,
+  });
+  diag.debug(
+    `model switch requested: sessionId=${normalizedSessionId} provider=${provider} model=${model}`,
+  );
+  return true;
+}
+
+export function consumeEmbeddedRunModelSwitch(
+  sessionId: string,
+): EmbeddedRunModelSwitchRequest | undefined {
+  const normalizedSessionId = sessionId.trim();
+  if (!normalizedSessionId) {
+    return undefined;
+  }
+  const request = EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.get(normalizedSessionId);
+  if (request) {
+    EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.delete(normalizedSessionId);
+  }
+  return request;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Wait for active embedded runs to drain.
  *
@@ -739,6 +796,10 @@ export function clearActiveEmbeddedRun(
   if (activeHandle === handle) {
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
+<<<<<<< HEAD
+=======
+    EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.delete(sessionId);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     clearActiveRunSessionKeys(sessionId, sessionKey);
     clearActiveRunSessionFiles(sessionId, sessionFile);
     logSessionStateChange({
@@ -767,6 +828,10 @@ export function forceClearEmbeddedAgentRun(
   if (ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
+<<<<<<< HEAD
+=======
+    EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.delete(sessionId);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     clearActiveRunSessionKeys(sessionId, sessionKey);
     clearActiveRunSessionFiles(sessionId);
     logSessionStateChange({ sessionId, sessionKey, state: "idle", reason });
@@ -794,6 +859,10 @@ export const testing = {
     ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.clear();
     ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
     ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
+<<<<<<< HEAD
+=======
+    EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.clear();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
 };
 export { testing as __testing };

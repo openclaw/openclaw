@@ -18,6 +18,11 @@ function resolveMaxExitedRecords(value?: number): number {
 export type RunRegistry = {
   add: (record: RunRecord) => void;
   get: (runId: string) => RunRecord | undefined;
+<<<<<<< HEAD
+=======
+  list: () => RunRecord[];
+  listByScope: (scopeKey: string) => RunRecord[];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   updateState: (
     runId: string,
     state: RunState,
@@ -32,6 +37,10 @@ export type RunRegistry = {
       exitSignal: NodeJS.Signals | number | null;
     },
   ) => { record: RunRecord; firstFinalize: boolean } | null;
+<<<<<<< HEAD
+=======
+  delete: (runId: string) => void;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 /**
@@ -78,6 +87,22 @@ export function createRunRegistry(options?: { maxExitedRecords?: number }): RunR
     return record ? { ...record } : undefined;
   };
 
+<<<<<<< HEAD
+=======
+  const list: RunRegistry["list"] = () => {
+    return Array.from(records.values()).map((record) => Object.assign({}, record));
+  };
+
+  const listByScope: RunRegistry["listByScope"] = (scopeKey) => {
+    if (!scopeKey.trim()) {
+      return [];
+    }
+    return Array.from(records.values())
+      .filter((record) => record.scopeKey === scopeKey)
+      .map((record) => Object.assign({}, record));
+  };
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const updateState: RunRegistry["updateState"] = (runId, state, patch) => {
     const current = records.get(runId);
     if (!current) {
@@ -130,11 +155,27 @@ export function createRunRegistry(options?: { maxExitedRecords?: number }): RunR
     return { record: { ...next }, firstFinalize };
   };
 
+<<<<<<< HEAD
   return {
     add,
     get,
     updateState,
     touchOutput,
     finalize,
+=======
+  const del: RunRegistry["delete"] = (runId) => {
+    records.delete(runId);
+  };
+
+  return {
+    add,
+    get,
+    list,
+    listByScope,
+    updateState,
+    touchOutput,
+    finalize,
+    delete: del,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }

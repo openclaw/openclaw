@@ -16,8 +16,13 @@ vi.mock("../infra/outbound/message.js", () => ({
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+<<<<<<< HEAD
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
+=======
+import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { sendMessage } from "../infra/outbound/message.js";
 import {
   buildExecApprovalFollowupPrompt,
@@ -298,6 +303,7 @@ describe("exec approval followup", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("preserves the originating routing target for non-built-in plugin channels", async () => {
     await sendExecApprovalFollowup({
       approvalId: "req-plugin",
@@ -322,6 +328,8 @@ describe("exec approval followup", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("waits for accepted agent followups without direct fallback", async () => {
     vi.mocked(callGatewayTool)
       .mockResolvedValueOnce({

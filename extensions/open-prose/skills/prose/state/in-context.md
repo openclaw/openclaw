@@ -210,8 +210,11 @@ For variable resolution across scopes:
 
 ```
 [Import] Importing: @alice/research
+<<<<<<< HEAD
    Remote dependency requires approval: https://p.prose.md/@alice/research
    Operator approved: approve remote prose imports
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
    Fetching from: https://p.prose.md/@alice/research
    Inputs expected: [topic, depth]
    Outputs provided: [findings, sources]

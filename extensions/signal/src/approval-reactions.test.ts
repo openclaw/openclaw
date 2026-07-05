@@ -1,16 +1,27 @@
+<<<<<<< HEAD
 import {
   buildExecApprovalPendingReplyPayload,
   buildPluginApprovalPendingReplyPayload,
 } from "openclaw/plugin-sdk/approval-reply-runtime";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // Signal tests cover approval reactions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addSignalApprovalReactionHintToText,
+<<<<<<< HEAD
   addSignalApprovalReactionHintToStructuredPayload,
   buildSignalApprovalReactionHint,
   clearSignalApprovalReactionTargetsForTest,
   maybeResolveSignalApprovalReaction,
   registerSignalApprovalReactionTargetForDeliveredPayload,
+=======
+  appendSignalApprovalReactionHintForOutboundMessage,
+  buildSignalApprovalReactionHint,
+  clearSignalApprovalReactionTargetsForTest,
+  maybeResolveSignalApprovalReaction,
+  registerSignalApprovalReactionTargetForOutboundMessage,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   registerSignalApprovalReactionTarget,
   resolveSignalApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
@@ -82,6 +93,7 @@ describe("Signal approval reactions", () => {
     ).toBe(prompt);
   });
 
+<<<<<<< HEAD
   it("registers delivered structured approval payloads for reactions", async () => {
     const cfg = {
       channels: {
@@ -296,6 +308,9 @@ describe("Signal approval reactions", () => {
   });
 
   it("registers delivered structured plugin approval payloads using metadata kind", async () => {
+=======
+  it("registers target-mode outbound approval prompts for reactions", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const cfg = {
       channels: {
         signal: {
@@ -310,6 +325,7 @@ describe("Signal approval reactions", () => {
         },
       },
     };
+<<<<<<< HEAD
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {
         id: "plugin-structured-approval",
@@ -346,10 +362,31 @@ describe("Signal approval reactions", () => {
             messageId: "1700000000013",
           },
         ],
+=======
+    const text =
+      "Plugin approval required\nID: plugin:abc\n\nReply with: /approve plugin:abc allow-once|deny";
+    const textWithHint = appendSignalApprovalReactionHintForOutboundMessage({
+      cfg,
+      accountId: "default",
+      to: "+15551230000",
+      text,
+      targetAuthor: "+15550009999",
+    });
+
+    expect(textWithHint).toContain("React with:\n\n👍 Allow Once\n👎 Deny");
+    expect(
+      registerSignalApprovalReactionTargetForOutboundMessage({
+        cfg,
+        accountId: "default",
+        to: "+15551230000",
+        messageId: "1700000000009",
+        text: textWithHint,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         targetAuthor: "+15550009999",
       }),
     ).toBe(true);
 
+<<<<<<< HEAD
     await expect(
       resolveSignalApprovalReactionTargetWithPersistence({
         accountId: "default",
@@ -390,11 +427,45 @@ describe("Signal approval reactions", () => {
           approvals: {
             exec: {
               enabled: true,
+=======
+    const handled = await maybeResolveSignalApprovalReaction({
+      cfg,
+      accountId: "default",
+      conversationKey: "+15551230000",
+      messageId: "1700000000009",
+      reactionKey: "👍",
+      actorId: "+15551230000",
+      targetAuthor: "+15550009999",
+    });
+
+    expect(handled).toBe(true);
+    expect(resolverMocks.resolveSignalApproval).toHaveBeenCalledWith({
+      cfg,
+      approvalId: "plugin:abc",
+      decision: "allow-once",
+      senderId: "+15551230000",
+      gatewayUrl: undefined,
+    });
+  });
+
+  it("keeps target-mode outbound prompts manual when the target route is disabled", () => {
+    const text =
+      "Plugin approval required\nID: plugin:abc\n\nReply with: /approve plugin:abc allow-once|deny";
+
+    expect(
+      appendSignalApprovalReactionHintForOutboundMessage({
+        cfg: {
+          channels: { signal: { allowFrom: ["+15551230000"] } },
+          approvals: {
+            plugin: {
+              enabled: false,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               mode: "targets",
               targets: [{ channel: "signal", to: "+15551230000" }],
             },
           },
         },
+<<<<<<< HEAD
         target: {
           channel: "signal",
           to: "+15551230000",
@@ -410,6 +481,14 @@ describe("Signal approval reactions", () => {
         targetAuthor: "+15550009999",
       }),
     ).toBe(false);
+=======
+        accountId: "default",
+        to: "+15551230000",
+        text,
+        targetAuthor: "+15550009999",
+      }),
+    ).toBe(text);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("registers reaction state when only allow-always is available", async () => {

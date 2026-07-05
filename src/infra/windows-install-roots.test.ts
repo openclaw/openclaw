@@ -3,12 +3,17 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   privateTestApi,
   resetWindowsInstallRootsForTests,
+<<<<<<< HEAD
   getWindowsCmdExePath,
   getWindowsInstallRoots,
   getWindowsPowerShellExePath,
   getWindowsProgramFilesRoots,
   getWindowsSystem32ExePath,
   getWindowsWmicExePath,
+=======
+  getWindowsInstallRoots,
+  getWindowsProgramFilesRoots,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   normalizeWindowsInstallRoot,
 } from "./windows-install-roots.js";
 
@@ -175,6 +180,7 @@ describe("getWindowsProgramFilesRoots", () => {
   });
 });
 
+<<<<<<< HEAD
 describe("Windows system executable helpers", () => {
   it("resolves cmd.exe from the trusted Windows system root", () => {
     expect(getWindowsCmdExePath({ SystemRoot: "D:\\Windows" })).toBe(
@@ -204,6 +210,8 @@ describe("Windows system executable helpers", () => {
   });
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("locateWindowsRegExe", () => {
   it("uses the fixed Windows system reg.exe candidate", () => {
     expect(privateTestApi.getWindowsRegExeCandidates()).toEqual(["C:\\Windows\\System32\\reg.exe"]);

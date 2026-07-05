@@ -1,7 +1,10 @@
 /** Builds plugin hook agent context snapshots from active session and model state. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseRawSessionConversationRef } from "../sessions/session-key-utils.js";
+<<<<<<< HEAD
 import type { PluginHookChannelContext } from "./hook-channel-context.types.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { PluginHookAgentContext } from "./hook-types.js";
 
 const TARGET_PREFIXES = new Set(["channel", "chat", "direct", "dm", "group", "thread", "user"]);
@@ -121,6 +124,7 @@ export function buildAgentHookContextChannelFields(params: {
     senderId: normalizeOptionalString(params.senderId),
   };
 }
+<<<<<<< HEAD
 
 export function buildAgentHookContextIdentityFields(params: {
   trigger?: string | null;
@@ -156,3 +160,5 @@ export function buildAgentHookContextIdentityFields(params: {
     ...(channelContext ? { channelContext } : {}),
   };
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

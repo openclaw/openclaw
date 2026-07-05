@@ -1,0 +1,73 @@
+{
+  "scenarios": [
+    {
+      "name": "Config patch skill disable",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "disables a workspace skill after config.patch restart",
+          "status": "pass",
+          "details": "restartDelayMs=\nmarker=HOT-PATCH-DISABLED-OK\npre={\"name\":\"qa-hot-disable-skill\",\"description\":\"Hot disable QA marker\",\"source\":\"openclaw-workspace\",\"bundled\":false,\"filePath\":\"/tmp/openclaw/openclaw-qa-suite-S9BdPc/workspace/skills/qa-hot-disable-skill/SKILL.md\",\"baseDir\":\"/tmp/openclaw/openclaw-qa-suite-S9BdPc/workspace/skills/qa-hot-disable-skill\",\"skillKey\":\"qa-hot-disable-skill\",\"always\":false,\"disabled\":false,\"blockedByAllowlist\":false,\"blockedByAgentFilter\":false,\"eligible\":true,\"platformIncompatible\":false,\"modelVisible\":true,\"userInvocable\":true,\"commandVisible\":true,\"requirements\":{\"bins\":[],\"anyBins\":[],\"env\":[],\"config\":[],\"os\":[]},\"missing\":{\"bins\":[],\"anyBins\":[],\"env\":[],\"config\":[],\"os\":[]},\"configChecks\":[],\"install\":[]}\npost={\"name\":\"qa-hot-disable-skill\",\"description\":\"Hot disable QA marker\",\"source\":\"openclaw-workspace\",\"bundled\":false,\"filePath\":\"/tmp/openclaw/openclaw-qa-suite-S9BdPc/workspace/skills/qa-hot-disable-skill/SKILL.md\",\"baseDir\":\"/tmp/openclaw/openclaw-qa-suite-S9BdPc/workspace/skills/qa-hot-disable-skill\",\"skillKey\":\"qa-hot-disable-skill\",\"always\":false,\"disabled\":true,\"blockedByAllowlist\":false,\"blockedByAgentFilter\":false,\"eligible\":false,\"platformIncompatible\":false,\"modelVisible\":false,\"userInvocable\":true,\"commandVisible\":false,\"requirements\":{\"bins\":[],\"anyBins\":[],\"env\":[],\"config\":[],\"os\":[]},\"missing\":{\"bins\":[],\"anyBins\":[],\"env\":[],\"config\":[],\"os\":[]},\"configChecks\":[],\"install\":[]}"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 53809,
+    "gatewayProcessCpuMs": 2000,
+    "gatewayCpuCoreRatio": 0.037,
+    "gatewayProcessRssStartBytes": 891727872,
+    "gatewayProcessRssEndBytes": 1011453952,
+    "gatewayProcessRssDeltaBytes": 119726080,
+    "gatewayProcessRssPeakBytes": 1011453952,
+    "gatewayProcessRssPeakDeltaBytes": 119726080,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:16:25.695Z",
+        "gatewayProcessRssBytes": 891727872
+      },
+      {
+        "label": "scenario:config-patch-hot-apply:start",
+        "at": "2026-07-03T13:16:25.740Z",
+        "gatewayProcessRssBytes": 895934464
+      },
+      {
+        "label": "scenario:config-patch-hot-apply:finish",
+        "at": "2026-07-03T13:16:36.567Z",
+        "gatewayProcessRssBytes": 1011453952
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:16:36.606Z",
+        "gatewayProcessRssBytes": 1011453952
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:15:42.758Z",
+    "finishedAt": "2026-07-03T13:16:36.567Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "config-patch-hot-apply"
+    ],
+    "runtimePair": null
+  }
+}

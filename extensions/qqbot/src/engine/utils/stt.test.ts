@@ -1,8 +1,14 @@
 // Qqbot tests cover stt plugin behavior.
 import * as fs from "node:fs";
+<<<<<<< HEAD
 import * as path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
+=======
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const ssrfRuntimeMocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(),
@@ -19,6 +25,7 @@ afterAll(() => {
 
 import { resolveSTTConfig, transcribeAudio } from "./stt.js";
 
+<<<<<<< HEAD
 function cancelTrackedResponse(
   text: string,
   init: ResponseInit,
@@ -41,6 +48,8 @@ function cancelTrackedResponse(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function requireFirstSsrfRequest(): {
   url?: unknown;
   auditContext?: unknown;
@@ -132,6 +141,7 @@ describe("engine/utils/stt", () => {
   });
 
   it("posts audio to OpenAI-compatible transcription endpoint", async () => {
+<<<<<<< HEAD
     await withTempDir("openclaw-qqbot-stt-", async (tmpDir) => {
       const audioPath = path.join(tmpDir, "voice.wav");
       fs.writeFileSync(audioPath, Buffer.from([1, 2, 3, 4]));
@@ -217,5 +227,49 @@ describe("engine/utils/stt", () => {
       expect(textSpy).not.toHaveBeenCalled();
       expect(release).toHaveBeenCalledTimes(1);
     });
+=======
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-qqbot-stt-"));
+    const audioPath = path.join(tmpDir, "voice.wav");
+    fs.writeFileSync(audioPath, Buffer.from([1, 2, 3, 4]));
+
+    const release = vi.fn(async () => {});
+    ssrfRuntimeMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: Response.json({
+        text: "hello from audio",
+      }),
+      release,
+    });
+
+    const transcript = await transcribeAudio(audioPath, {
+      channels: {
+        qqbot: {
+          stt: {
+            baseUrl: "https://api.example.test/v1/",
+            apiKey: "secret",
+            model: "whisper-1",
+          },
+        },
+      },
+    });
+
+    expect(transcript).toBe("hello from audio");
+    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+    const request = requireFirstSsrfRequest();
+    expect(request.url).toBe("https://api.example.test/v1/audio/transcriptions");
+    expect(request.auditContext).toBe("qqbot-stt");
+    expect(request.init?.method).toBe("POST");
+    expect(request.init?.headers).toEqual({ Authorization: "Bearer secret" });
+    expect(request.init?.body).toBeInstanceOf(FormData);
+    const body = request.init?.body as FormData;
+    expect(body.get("model")).toBe("whisper-1");
+    const file = body.get("file");
+    expect(file).toBeInstanceOf(File);
+    expect((file as File).name).toBe("voice.wav");
+    expect((file as File).type).toBe("audio/wav");
+    expect(new Uint8Array(await (file as File).arrayBuffer())).toEqual(
+      new Uint8Array([1, 2, 3, 4]),
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

@@ -11,7 +11,15 @@ import type {
   PluginHookInboundClaimEvent,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+<<<<<<< HEAD
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+=======
+import {
+  loadSessionStore,
+  resolveSessionStoreEntry,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveCodexAppServerForModelProvider } from "./app-server/app-server-policy.js";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
@@ -507,7 +515,11 @@ async function writeThreadBindingFromResponse(
       sandbox: resolved.execPolicy?.touched
         ? resolved.runtime.sandbox
         : (params.sandbox ?? resolved.runtime.sandbox),
+<<<<<<< HEAD
       serviceTier: params.serviceTier ?? resolved.runtime.serviceTier ?? undefined,
+=======
+      serviceTier: params.serviceTier ?? resolved.runtime.serviceTier,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       networkProxyProfileName: resolved.runtime.networkProxy?.profileName,
       networkProxyConfigFingerprint: resolved.runtime.networkProxy?.configFingerprint,
     },
@@ -685,7 +697,11 @@ async function runBoundTurn(params: {
           }),
           approvalPolicy: typeof approvalPolicy === "string" ? approvalPolicy : undefined,
           sandbox,
+<<<<<<< HEAD
           serviceTier: serviceTier ?? undefined,
+=======
+          serviceTier,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           networkProxyProfileName: modelScopedRuntime.networkProxy?.profileName,
           networkProxyConfigFingerprint: modelScopedRuntime.networkProxy?.configFingerprint,
         },
@@ -877,11 +893,18 @@ function readSessionExecOverrides(params: {
     return undefined;
   }
   const storePath = resolveStorePath(params.config.session?.store, { agentId: params.agentId });
+<<<<<<< HEAD
   const entry = getSessionEntry({
     storePath,
     sessionKey,
     readConsistency: "latest",
   });
+=======
+  const entry = resolveSessionStoreEntry({
+    store: loadSessionStore(storePath, { skipCache: true }),
+    sessionKey,
+  }).existing;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!entry?.execSecurity && !entry?.execAsk) {
     return undefined;
   }

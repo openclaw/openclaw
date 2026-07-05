@@ -5,7 +5,10 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
+<<<<<<< HEAD
 import type { Model } from "openclaw/plugin-sdk/llm";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import type { CompactEmbeddedAgentSessionParams } from "../embedded-agent-runner/compact.types.js";
@@ -63,6 +66,7 @@ function resolveHarnessCompactIdentity(params: CompactEmbeddedAgentSessionParams
 async function resolveHarnessCompactApiKey(params: {
   agentDir: string;
   compactParams: CompactEmbeddedAgentSessionParams;
+<<<<<<< HEAD
 }): Promise<{ apiKey?: string; runtimeModel?: Model }> {
   const { agentDir, compactParams } = params;
   const existing = compactParams.resolvedApiKey?.trim();
@@ -70,6 +74,21 @@ async function resolveHarnessCompactApiKey(params: {
     return existing ? { apiKey: existing } : {};
   }
   const authProfileId = compactParams.authProfileId?.trim() || undefined;
+=======
+}): Promise<string | undefined> {
+  const { agentDir, compactParams } = params;
+  const existing = compactParams.resolvedApiKey?.trim();
+  if (existing) {
+    return existing;
+  }
+  if (
+    !compactParams.authProfileId?.trim() ||
+    !compactParams.provider?.trim() ||
+    !compactParams.model?.trim()
+  ) {
+    return undefined;
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const workspaceDir = resolveUserPath(compactParams.workspaceDir);
   const { model } = await resolveModelAsync(
     compactParams.provider,
@@ -77,11 +96,16 @@ async function resolveHarnessCompactApiKey(params: {
     agentDir,
     compactParams.config,
     {
+<<<<<<< HEAD
       authProfileId,
+=======
+      authProfileId: compactParams.authProfileId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       workspaceDir,
     },
   );
   if (!model) {
+<<<<<<< HEAD
     return existing ? { apiKey: existing } : {};
   }
   if (existing) {
@@ -105,6 +129,18 @@ async function resolveHarnessCompactApiKey(params: {
     });
     return { runtimeModel: model };
   }
+=======
+    return undefined;
+  }
+  const apiKeyInfo = await getApiKeyForModel({
+    model,
+    cfg: compactParams.config,
+    profileId: compactParams.authProfileId,
+    agentDir,
+    workspaceDir,
+  });
+  return apiKeyInfo.apiKey?.trim() || undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /** Runs harness-provided compaction when the selected runtime supports it. */
@@ -177,6 +213,7 @@ export async function maybeCompactAgentHarnessSession(
     agentDir: compactIdentity.agentDir,
     agentId: compactIdentity.agentId,
   };
+<<<<<<< HEAD
   let resolvedApiKey = compactParams.resolvedApiKey?.trim() || undefined;
   let runtimeModel: Model | undefined;
   try {
@@ -186,11 +223,20 @@ export async function maybeCompactAgentHarnessSession(
     });
     resolvedApiKey = resolved.apiKey;
     runtimeModel = resolved.runtimeModel;
+=======
+  let resolvedApiKey: string | undefined;
+  try {
+    resolvedApiKey = await resolveHarnessCompactApiKey({
+      agentDir: compactIdentity.agentDir,
+      compactParams,
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } catch (err) {
     log.debug("agent harness compaction credential lookup failed", {
       error: formatErrorMessage(err),
     });
   }
+<<<<<<< HEAD
   const resolvedCompactParams =
     resolvedApiKey || runtimeModel
       ? {
@@ -199,6 +245,11 @@ export async function maybeCompactAgentHarnessSession(
           ...(runtimeModel ? { runtimeModel } : {}),
         }
       : compactParams;
+=======
+  const resolvedCompactParams = resolvedApiKey
+    ? { ...compactParams, resolvedApiKey }
+    : compactParams;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (shouldCompactAfterContextEngine) {
     return internalHarness.compactAfterContextEngine?.(resolvedCompactParams);
   }

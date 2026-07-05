@@ -43,10 +43,16 @@ type InlineSessionHistoryAppend = {
 
 type SessionHistoryTranscriptTarget = {
   agentId?: string;
+<<<<<<< HEAD
   sessionEntry?: { sessionFile?: string; sessionId?: string };
   sessionId: string;
   sessionKey: string;
   storePath?: string;
+=======
+  sessionId: string;
+  storePath?: string;
+  sessionFile?: string;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 type SessionHistoryRawSnapshot = {
@@ -365,9 +371,14 @@ export class SessionHistorySseState {
       const snapshot = await readRecentSessionMessagesWithStatsAsync(
         {
           agentId: this.target.agentId,
+<<<<<<< HEAD
           sessionEntry: this.target.sessionEntry,
           sessionId: this.target.sessionId,
           sessionKey: this.target.sessionKey,
+=======
+          sessionFile: this.target.sessionFile,
+          sessionId: this.target.sessionId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           storePath: this.target.storePath,
         },
         {
@@ -385,9 +396,14 @@ export class SessionHistorySseState {
     const snapshot = await readSessionMessagesWithSourceAsync(
       {
         agentId: this.target.agentId,
+<<<<<<< HEAD
         sessionEntry: this.target.sessionEntry,
         sessionId: this.target.sessionId,
         sessionKey: this.target.sessionKey,
+=======
+        sessionFile: this.target.sessionFile,
+        sessionId: this.target.sessionId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         storePath: this.target.storePath,
       },
       {

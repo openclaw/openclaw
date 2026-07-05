@@ -2,10 +2,14 @@
  * Azure Speech REST helpers. They normalize endpoints, build SSML, list voices,
  * and synthesize speech with response-size and SSRF guards.
  */
+<<<<<<< HEAD
 import {
   assertOkOrThrowProviderError,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
+=======
+import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech-core";
 import { trimToUndefined } from "openclaw/plugin-sdk/speech-core";
@@ -163,10 +167,14 @@ export async function listAzureSpeechVoices(params: {
 
   try {
     await assertOkOrThrowProviderError(response, "Azure Speech voices API error");
+<<<<<<< HEAD
     const voices = await readProviderJsonResponse<AzureSpeechVoiceEntry[]>(
       response,
       "azure-speech.voices",
     );
+=======
+    const voices = (await response.json()) as AzureSpeechVoiceEntry[];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return Array.isArray(voices)
       ? voices
           .filter((voice) => !isDeprecatedVoice(voice))

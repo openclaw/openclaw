@@ -287,6 +287,7 @@ function tryResolveRealPath(targetPath: string): string | null {
   }
 }
 
+<<<<<<< HEAD
 function resolvePathThroughExistingAncestor(
   targetPath: string,
   resolveRealPath: (targetPath: string) => string | null,
@@ -308,6 +309,8 @@ function resolvePathThroughExistingAncestor(
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function decodeMountInfoPath(value: string): string {
   return value.replace(/\\([0-7]{3})/g, (_, octal: string) =>
     String.fromCharCode(Number.parseInt(octal, 8)),
@@ -457,9 +460,13 @@ export function detectLinuxSdBackedStateDir(
   const linuxPath = path.posix;
 
   const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
+<<<<<<< HEAD
   const resolvedStatePath =
     resolvePathThroughExistingAncestor(stateDir, resolveRealPath, linuxPath) ??
     linuxPath.resolve(stateDir);
+=======
+  const resolvedStatePath = resolveRealPath(stateDir) ?? linuxPath.resolve(stateDir);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const mountInfo = deps?.mountInfo ?? tryReadLinuxMountInfo();
   if (!mountInfo) {
     return null;
@@ -514,6 +521,7 @@ export function formatLinuxSdBackedStateDirWarning(
   ].join("\n");
 }
 
+<<<<<<< HEAD
 type LinuxVolatileStateDir = {
   path: string;
   mountPoint: string;
@@ -580,6 +588,8 @@ export function formatLinuxVolatileStateDirWarning(
   ].join("\n");
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Detects macOS state directories under iCloud Drive or CloudStorage providers. */
 export function detectMacCloudSyncedStateDir(
   stateDir: string,
@@ -731,7 +741,10 @@ export async function noteStateIntegrity(
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
   const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
+<<<<<<< HEAD
   const linuxVolatileStateDir = detectLinuxVolatileStateDir(stateDir);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const suppressOrphanTranscriptWarning = shouldSuppressOrphanTranscriptWarning(cfg, agentId);
 
   if (cloudSyncedStateDir) {
@@ -747,9 +760,12 @@ export async function noteStateIntegrity(
   if (linuxSdBackedStateDir) {
     warnings.push(formatLinuxSdBackedStateDirWarning(displayStateDir, linuxSdBackedStateDir));
   }
+<<<<<<< HEAD
   if (linuxVolatileStateDir) {
     warnings.push(formatLinuxVolatileStateDirWarning(displayStateDir, linuxVolatileStateDir));
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   let stateDirExists = existsDir(stateDir);
   if (!stateDirExists) {

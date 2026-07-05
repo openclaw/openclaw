@@ -40,6 +40,7 @@ export function unknownTargetError(provider: string, raw: string, hint?: string)
   return new Error(unknownTargetMessage(provider, raw, hint));
 }
 
+<<<<<<< HEAD
 export function reservedTargetLiteralMessage(provider: string, raw: string, hint?: string): string {
   return `Reserved target "${raw}" for ${provider} cannot be used as a literal destination. Provide an explicit id or handle.${formatTargetHint(hint, true)}`;
 }
@@ -52,6 +53,8 @@ export function isReservedTargetLiteralError(error: Error): boolean {
   return error.message.includes("Reserved target");
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function formatTargetHint(hint?: string, withLabel = false): string {
   const normalized = hint?.trim();
   if (!normalized) {

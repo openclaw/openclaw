@@ -149,6 +149,10 @@ import {
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   canonicalizeSpawnedByForAgent,
+<<<<<<< HEAD
+=======
+  loadGatewaySessionRow,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   resolveGatewaySessionStoreTarget,
@@ -165,7 +169,10 @@ import {
   waitForTerminalGatewayDedupe,
 } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
+<<<<<<< HEAD
 import { emitSessionsChanged } from "./session-change-event.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -571,6 +578,95 @@ function requestGroupMatchesTrusted(params: {
   return Boolean(params.trustedGroupId && requestGroupId === params.trustedGroupId);
 }
 
+<<<<<<< HEAD
+=======
+function emitSessionsChanged(
+  context: Pick<
+    GatewayRequestHandlerOptions["context"],
+    "broadcastToConnIds" | "getSessionEventSubscriberConnIds"
+  >,
+  payload: { sessionKey?: string; agentId?: string; reason: string },
+) {
+  const connIds = context.getSessionEventSubscriberConnIds();
+  if (connIds.size === 0) {
+    return;
+  }
+  const sessionRow = payload.sessionKey
+    ? loadGatewaySessionRow(
+        payload.sessionKey,
+        payload.sessionKey === "global" && payload.agentId
+          ? { agentId: payload.agentId }
+          : undefined,
+      )
+    : null;
+  // Unscoped global updates must not leak one agent's goal into another agent's UI row.
+  const omitUnscopedGlobalGoal = payload.sessionKey === "global" && !payload.agentId;
+  context.broadcastToConnIds(
+    "sessions.changed",
+    {
+      ...payload,
+      ts: Date.now(),
+      ...(sessionRow
+        ? {
+            updatedAt: sessionRow.updatedAt ?? undefined,
+            sessionId: sessionRow.sessionId,
+            kind: sessionRow.kind,
+            channel: sessionRow.channel,
+            subject: sessionRow.subject,
+            groupChannel: sessionRow.groupChannel,
+            space: sessionRow.space,
+            chatType: sessionRow.chatType,
+            origin: sessionRow.origin,
+            spawnedBy: sessionRow.spawnedBy,
+            spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
+            spawnedCwd: sessionRow.spawnedCwd,
+            forkedFromParent: sessionRow.forkedFromParent,
+            spawnDepth: sessionRow.spawnDepth,
+            subagentRole: sessionRow.subagentRole,
+            subagentControlScope: sessionRow.subagentControlScope,
+            label: sessionRow.label,
+            displayName: sessionRow.displayName,
+            deliveryContext: sessionRow.deliveryContext,
+            parentSessionKey: sessionRow.parentSessionKey,
+            childSessions: sessionRow.childSessions,
+            thinkingLevel: sessionRow.thinkingLevel,
+            fastMode: sessionRow.fastMode,
+            verboseLevel: sessionRow.verboseLevel,
+            traceLevel: sessionRow.traceLevel,
+            reasoningLevel: sessionRow.reasoningLevel,
+            elevatedLevel: sessionRow.elevatedLevel,
+            sendPolicy: sessionRow.sendPolicy,
+            systemSent: sessionRow.systemSent,
+            abortedLastRun: sessionRow.abortedLastRun,
+            inputTokens: sessionRow.inputTokens,
+            outputTokens: sessionRow.outputTokens,
+            lastChannel: sessionRow.lastChannel,
+            lastTo: sessionRow.lastTo,
+            lastAccountId: sessionRow.lastAccountId,
+            lastThreadId: sessionRow.lastThreadId,
+            totalTokens: sessionRow.totalTokens,
+            totalTokensFresh: sessionRow.totalTokensFresh,
+            ...(omitUnscopedGlobalGoal ? {} : { goal: sessionRow.goal ?? null }),
+            contextTokens: sessionRow.contextTokens,
+            estimatedCostUsd: sessionRow.estimatedCostUsd,
+            responseUsage: sessionRow.responseUsage,
+            modelProvider: sessionRow.modelProvider,
+            model: sessionRow.model,
+            status: sessionRow.status,
+            startedAt: sessionRow.startedAt,
+            endedAt: sessionRow.endedAt,
+            runtimeMs: sessionRow.runtimeMs,
+            compactionCheckpointCount: sessionRow.compactionCheckpointCount,
+            latestCompactionCheckpoint: sessionRow.latestCompactionCheckpoint,
+          }
+        : {}),
+    },
+    connIds,
+    { dropIfSlow: true },
+  );
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type GatewayAgentTaskTerminalStatus = Extract<
   TaskStatus,
   "succeeded" | "failed" | "timed_out" | "cancelled"
@@ -2300,7 +2396,11 @@ export const agentHandlers: GatewayRequestHandlers = {
       let resolvedTo = deliveryPlan.resolvedTo;
       let effectivePlan = deliveryPlan;
       let deliveryDowngradeReason: string | null = null;
+<<<<<<< HEAD
       let deliveryTargetResolutionError: Error | undefined = deliveryPlan.targetResolutionError;
+=======
+      let deliveryTargetResolutionError: Error | undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
         const cfgResolved = cfgForAgent ?? cfg;
@@ -2328,6 +2428,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         }
       }
 
+<<<<<<< HEAD
       if (wantsDelivery && deliveryTargetResolutionError) {
         if (!bestEffortDeliver) {
           respond(
@@ -2349,6 +2450,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         };
       }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (!resolvedTo && isDeliverableMessageChannel(resolvedChannel)) {
         const cfgResolved = cfgForAgent ?? cfg;
         const fallback = resolveAgentOutboundTarget({
@@ -2705,7 +2808,10 @@ export const agentHandlers: GatewayRequestHandlers = {
               acpTurnSource: request.acpTurnSource,
               internalEvents: request.internalEvents,
               inputProvenance,
+<<<<<<< HEAD
               senderIsOwner: clientHasAdminScope(client),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               sessionEffects,
               skipInitialSessionTouch: skipAgentInitialSessionTouch,
               preserveUserFacingSessionModelState,

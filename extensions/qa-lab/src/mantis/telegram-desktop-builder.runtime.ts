@@ -8,8 +8,11 @@ import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../live-transports/shared/credential-lease.runtime.js";
+<<<<<<< HEAD
 import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
 import { createPhaseTimer, type MantisPhaseTimings } from "../mantis-phase-timer.runtime.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   type CommandRunner,
   type CrabboxInspect,
@@ -97,6 +100,22 @@ type MantisTelegramDesktopBuilderSummary = {
   timings: MantisPhaseTimings;
 };
 
+<<<<<<< HEAD
+=======
+type MantisPhaseTiming = {
+  durationMs: number;
+  finishedAt: string;
+  name: string;
+  startedAt: string;
+  status: "accepted" | "fail" | "pass";
+};
+
+type MantisPhaseTimings = {
+  phases: MantisPhaseTiming[];
+  totalMs: number;
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type TelegramDesktopRemoteMetadata = {
   gatewayAlive?: boolean;
   gatewayPid?: string;
@@ -127,6 +146,19 @@ const TELEGRAM_PROFILE_ARCHIVE_ENV_NAME_ENV =
   "OPENCLAW_MANTIS_TELEGRAM_DESKTOP_PROFILE_ARCHIVE_ENV";
 const TELEGRAM_PROFILE_DIR_ENV = "OPENCLAW_MANTIS_TELEGRAM_DESKTOP_PROFILE_DIR";
 
+<<<<<<< HEAD
+=======
+function trimToValue(value: string | undefined) {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+function isTruthyOptIn(value: string | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function normalizeHydrateMode(
   value: string | undefined,
 ): MantisTelegramDesktopHydrateMode | undefined {
@@ -140,6 +172,48 @@ function normalizeHydrateMode(
   throw new Error(`Unsupported Mantis Telegram desktop hydrate mode: ${value}`);
 }
 
+<<<<<<< HEAD
+=======
+function createPhaseTimer(startedAt: Date) {
+  const phases: MantisPhaseTiming[] = [];
+  const origin = startedAt.getTime();
+  function recordPhase(name: string, phaseStarted: Date, status: MantisPhaseTiming["status"]) {
+    const phaseFinished = new Date();
+    phases.push({
+      durationMs: phaseFinished.getTime() - phaseStarted.getTime(),
+      finishedAt: phaseFinished.toISOString(),
+      name,
+      startedAt: phaseStarted.toISOString(),
+      status,
+    });
+  }
+  async function timePhase<T>(name: string, run: () => Promise<T>): Promise<T> {
+    const phaseStarted = new Date();
+    try {
+      const result = await run();
+      recordPhase(name, phaseStarted, "pass");
+      return result;
+    } catch (error) {
+      recordPhase(name, phaseStarted, "fail");
+      throw error;
+    }
+  }
+  function snapshot(now = new Date()): MantisPhaseTimings {
+    return {
+      phases: [...phases],
+      totalMs: now.getTime() - origin,
+    };
+  }
+  function updatePhaseStatus(name: string, status: MantisPhaseTiming["status"]) {
+    const phase = phases.findLast((entry) => entry.name === name);
+    if (phase) {
+      phase.status = status;
+    }
+  }
+  return { recordPhase, snapshot, timePhase, updatePhaseStatus };
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function defaultOutputDir(repoRoot: string, startedAt: Date) {
   const stamp = startedAt.toISOString().replace(/[:.]/gu, "-");
   return path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", `telegram-desktop-${stamp}`);

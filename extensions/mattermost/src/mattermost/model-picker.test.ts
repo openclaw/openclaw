@@ -214,6 +214,7 @@ describe("Mattermost model picker", () => {
       fs.rmSync(testDir, { recursive: true, force: true });
     }
   });
+<<<<<<< HEAD
 
   it("resolves current and parent model overrides from targeted session entries", () => {
     const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "mm-model-picker-"));
@@ -276,4 +277,6 @@ describe("Mattermost model picker", () => {
       fs.rmSync(testDir, { recursive: true, force: true });
     }
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

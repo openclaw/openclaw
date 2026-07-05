@@ -93,6 +93,7 @@ function createClawHubInstallResult(params: {
   packageName: string;
   version: string;
   channel: string;
+<<<<<<< HEAD
   trust?: {
     disposition: "clean" | "review-recommended" | "review-required";
     scanStatus?: string;
@@ -103,6 +104,8 @@ function createClawHubInstallResult(params: {
     checkedAt?: string;
     acknowledgedAt?: string;
   };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }): Awaited<ReturnType<typeof installPluginFromClawHub>> {
   return {
     ok: true,
@@ -123,6 +126,7 @@ function createClawHubInstallResult(params: {
       clawpackSpecVersion: 1,
       clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       clawpackSize: 4096,
+<<<<<<< HEAD
       ...(params.trust
         ? {
             clawhubTrustDisposition: params.trust.disposition,
@@ -139,6 +143,8 @@ function createClawHubInstallResult(params: {
               : {}),
           }
         : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
   };
 }
@@ -1295,6 +1301,7 @@ describe("plugins cli install", () => {
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("passes ClawHub risk acknowledgement to explicit ClawHub installs", async () => {
     loadConfig.mockReturnValue(createEmptyPluginConfig());
     parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
@@ -1370,6 +1377,8 @@ describe("plugins cli install", () => {
     expect(runtimeErrors.at(-1)).toContain("ClawHub blocked artifact download");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("passes the active profile extensions dir to ClawHub installs", async () => {
     const extensionsDir = useProfileExtensionsDir();
     const cfg = createEmptyPluginConfig();

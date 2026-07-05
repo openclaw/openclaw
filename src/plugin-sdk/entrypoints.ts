@@ -99,6 +99,16 @@ export function buildPluginSdkEntrySources(entries: readonly string[] = pluginSd
   return Object.fromEntries(entries.map((entry) => [entry, `src/plugin-sdk/${entry}.ts`]));
 }
 
+<<<<<<< HEAD
+=======
+/** List the public package specifiers that should resolve to plugin SDK entrypoints. */
+export function buildPluginSdkSpecifiers() {
+  return publicPluginSdkEntrypoints.map((entry) =>
+    entry === "index" ? "openclaw/plugin-sdk" : `openclaw/plugin-sdk/${entry}`,
+  );
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Build the package.json exports map for public plugin SDK subpaths. */
 export function buildPluginSdkPackageExports() {
   return Object.fromEntries(

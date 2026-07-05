@@ -16,10 +16,21 @@ import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
+<<<<<<< HEAD
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+=======
+import {
+  type ExecAsk,
+  type ExecMode,
+  type ExecSecurity,
+  resolveExecPolicyForMode,
+} from "../infra/exec-approvals.js";
+import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
+import { logWarn } from "../logger.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { SkillSnapshot } from "../skills/types.js";
@@ -35,6 +46,10 @@ import {
 import { applyDeferredFollowupToolDescriptions } from "./agent-tools.deferred-followup.js";
 import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
 import {
+<<<<<<< HEAD
+=======
+  isToolAllowedByPolicies,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
   resolveInheritedToolPolicyForSession,
@@ -54,7 +69,11 @@ import {
   wrapToolWorkspaceRootGuardWithOptions,
   wrapToolParamValidation,
 } from "./agent-tools.read.js";
+<<<<<<< HEAD
 import { normalizeToolParameters } from "./agent-tools.schema.js";
+=======
+import { cleanToolSchemaForGemini, normalizeToolParameters } from "./agent-tools.schema.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -88,7 +107,10 @@ import {
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
+<<<<<<< HEAD
 import { isToolAllowedByPolicies } from "./tool-policy-match.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
@@ -335,6 +357,38 @@ function isApplyPatchAllowedForModel(params: {
   });
 }
 
+<<<<<<< HEAD
+=======
+type ExecPolicyLayer = {
+  mode?: ExecMode;
+  security?: ExecSecurity;
+  ask?: ExecAsk;
+};
+
+function hasLegacyExecPolicy(exec?: ExecPolicyLayer): boolean {
+  return exec?.security !== undefined || exec?.ask !== undefined;
+}
+
+function applyExecPolicyLayer(base: ExecPolicyLayer, layer?: ExecPolicyLayer): ExecPolicyLayer {
+  if (!layer) {
+    return base;
+  }
+  if (layer.mode) {
+    return {
+      mode: layer.mode,
+      ...resolveExecPolicyForMode(layer.mode),
+    };
+  }
+  if (hasLegacyExecPolicy(layer)) {
+    return {
+      security: layer.security ?? base.security,
+      ask: layer.ask ?? base.ask,
+    };
+  }
+  return base;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
   const cfg = params.cfg;
   const globalExec = cfg?.tools?.exec;
@@ -376,6 +430,10 @@ export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js"
 
 /** Test-only access to internal tool assembly helpers. */
 export const testing = {
+<<<<<<< HEAD
+=======
+  cleanToolSchemaForGemini,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   getToolParamsRecord,
   wrapToolParamValidation,
   assertRequiredParams,
@@ -395,8 +453,11 @@ export function createOpenClawCodingTools(options?: {
   agentId?: string;
   exec?: ExecToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
+<<<<<<< HEAD
   /** Canonical transport channel when tool-policy provider differs from delivery channel. */
   messageChannel?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /** Specific ingress provider used only for transport tool availability. */
   toolPolicyMessageProvider?: string;
   agentAccountId?: string;
@@ -419,8 +480,11 @@ export function createOpenClawCodingTools(options?: {
   oneShotCliRun?: boolean;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
+<<<<<<< HEAD
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /** Diagnostic trace context for hook/log correlation during this run. */
   trace?: DiagnosticTraceContext;
   /** What initiated this run (for trigger-specific tool restrictions). */
@@ -470,8 +534,11 @@ export function createOpenClawCodingTools(options?: {
   currentMessagingTarget?: string;
   /** Normalized conversation id exposed to tool hooks. Defaults to currentChannelId. */
   hookChannelId?: string;
+<<<<<<< HEAD
   /** Channel-owned sender/chat metadata exposed to subprocess environments. */
   channelContext?: PluginHookChannelContext;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /** Current thread timestamp for auto-threading (Slack). */
   currentThreadTs?: string;
   /** Current inbound message id for action fallbacks (e.g. Telegram react). */
@@ -839,9 +906,13 @@ export function createOpenClawCodingTools(options?: {
         messageProvider: options?.messageProvider,
         currentChannelId: options?.currentChannelId,
         currentThreadTs: options?.currentThreadTs,
+<<<<<<< HEAD
         channelContext: options?.channelContext,
         accountId: options?.agentAccountId,
         approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
+=======
+        accountId: options?.agentAccountId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         backgroundMs: options?.exec?.backgroundMs ?? execConfig.backgroundMs,
         timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSec,
         approvalRunningNoticeMs:
@@ -854,12 +925,15 @@ export function createOpenClawCodingTools(options?: {
               containerName: sandbox.containerName,
               workspaceDir: sandbox.workspaceDir,
               containerWorkdir: sandbox.containerWorkdir,
+<<<<<<< HEAD
               workdirValidation: sandbox.backend?.workdirValidation,
               validateWorkdir: sandbox.backend?.validateWorkdir?.bind(sandbox.backend),
               discardPreparedWorkdir: sandbox.backend?.discardPreparedWorkdir?.bind(
                 sandbox.backend,
               ),
               workdirRoots: sandbox.backend?.workdirRoots,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               env: sandbox.backend?.env ?? sandbox.docker.env,
               buildExecSpec: sandbox.backend?.buildExecSpec.bind(sandbox.backend),
               finalizeExec: sandbox.backend?.finalizeExec?.bind(sandbox.backend),
@@ -1192,8 +1266,11 @@ export function createOpenClawCodingTools(options?: {
     }),
   );
   options?.recordToolPrepStage?.("schema-normalization");
+<<<<<<< HEAD
   const turnSourceChannel = options?.messageChannel ?? options?.messageProvider;
   const turnSourceTo = options?.currentMessagingTarget ?? options?.currentChannelId;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const hookContext = {
     agentId,
     ...(options?.config ? { config: options.config } : {}),
@@ -1207,10 +1284,13 @@ export function createOpenClawCodingTools(options?: {
     sessionId: options?.sessionId,
     runId: options?.runId,
     channelId: options?.hookChannelId ?? options?.currentChannelId,
+<<<<<<< HEAD
     ...(turnSourceChannel ? { turnSourceChannel } : {}),
     ...(turnSourceTo ? { turnSourceTo } : {}),
     ...(options?.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
     ...(options?.currentThreadTs ? { turnSourceThreadId: options.currentThreadTs } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ...(options?.trace ? { trace: options.trace } : {}),
     loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
     onToolOutcome: options?.onToolOutcome,

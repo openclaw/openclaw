@@ -1,6 +1,9 @@
 // Discord plugin module implements native command.options behavior.
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
+<<<<<<< HEAD
 import { loadModelCatalog } from "openclaw/plugin-sdk/agent-runtime";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveCommandArgChoices,
@@ -118,17 +121,23 @@ export function buildDiscordCommandOptions(params: {
               ? await resolveChoiceContext(interaction)
               : null;
           const currentCfg = resolveConfig?.() ?? cfg;
+<<<<<<< HEAD
           // Autocomplete cannot defer beyond Discord's three-second deadline.
           // Cache-only catalog reads never start discovery or filesystem work.
           const choiceCatalog =
             command.key === "think" ? await loadModelCatalog({ cacheOnly: true }) : undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           const choices = resolveCommandArgChoices({
             command,
             arg,
             cfg: currentCfg,
             provider: context?.provider,
             model: context?.model,
+<<<<<<< HEAD
             ...(choiceCatalog?.length ? { catalog: choiceCatalog } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           });
           const filtered = focusValue
             ? choices.filter((choice) =>
@@ -138,11 +147,14 @@ export function buildDiscordCommandOptions(params: {
           await interaction.respond(
             filtered.slice(0, 25).map((choice) => ({ name: choice.label, value: choice.value })),
           );
+<<<<<<< HEAD
           if (command.key === "think" && !choiceCatalog?.length) {
             // The interaction is acknowledged now, so a failed startup warmup can retry
             // discovery without risking Discord's response deadline.
             void loadModelCatalog({ config: currentCfg });
           }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }
       : undefined;
     const choices =

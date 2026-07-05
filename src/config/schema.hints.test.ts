@@ -158,6 +158,7 @@ describe("mapSensitivePaths", () => {
     expect(result["env.*"]?.sensitive).toBe(undefined);
   });
 
+<<<<<<< HEAD
   it("returns a new hints map without mutating caller-owned entries", () => {
     const schema = z.object({
       apiKey: z.string().register(sensitive),
@@ -178,6 +179,8 @@ describe("mapSensitivePaths", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("main schema yields correct hints (samples)", () => {
     const schema = OpenClawSchema.toJSONSchema({
       target: "draft-07",

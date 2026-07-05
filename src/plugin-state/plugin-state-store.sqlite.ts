@@ -8,7 +8,10 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+<<<<<<< HEAD
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -57,6 +60,16 @@ type PluginStateSeedEntryForTests = {
 
 let cachedDatabase: PluginStateDatabase | null = null;
 
+<<<<<<< HEAD
+=======
+function normalizeNumber(value: number | bigint | null): number | undefined {
+  if (typeof value === "bigint") {
+    return Number(value);
+  }
+  return typeof value === "number" ? value : undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function createPluginStateError(params: {
   code: PluginStateStoreErrorCode;
   operation: PluginStateStoreOperation;
@@ -130,11 +143,19 @@ function rowToEntry(
   row: PluginStateRow,
   operation: PluginStateStoreOperation,
 ): PluginStateEntry<unknown> {
+<<<<<<< HEAD
   const expiresAt = normalizeSqliteNumber(row.expires_at);
   return {
     key: row.entry_key,
     value: parseStoredJson(row.value_json, operation),
     createdAt: normalizeSqliteNumber(row.created_at) ?? 0,
+=======
+  const expiresAt = normalizeNumber(row.expires_at);
+  return {
+    key: row.entry_key,
+    value: parseStoredJson(row.value_json, operation),
+    createdAt: normalizeNumber(row.created_at) ?? 0,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ...(expiresAt != null ? { expiresAt } : {}),
   };
 }
@@ -913,3 +934,8 @@ export function closePluginStateDatabase(): void {
   cachedDatabase = null;
   closeOpenClawStateDatabase();
 }
+<<<<<<< HEAD
+=======
+
+export const closePluginStateSqliteStore = closePluginStateDatabase;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

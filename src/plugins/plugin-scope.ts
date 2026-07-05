@@ -1,6 +1,12 @@
 // Normalizes plugin scope identifiers and scope lists.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 
+<<<<<<< HEAD
+=======
+/** Optional scoped plugin id list; undefined means unscoped. */
+export type PluginIdScope = readonly string[] | undefined;
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Normalizes plugin id scope input into a sorted unique string list. */
 export function normalizePluginIdScope(ids?: readonly unknown[]): string[] | undefined {
   if (ids === undefined) {

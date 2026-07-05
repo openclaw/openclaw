@@ -15,7 +15,10 @@ export interface DoctorLintRunOptions {
   readonly checks?: readonly HealthCheck[];
   readonly skipIds?: ReadonlySet<string> | readonly string[];
   readonly onlyIds?: ReadonlySet<string> | readonly string[];
+<<<<<<< HEAD
   readonly includeAllChecks?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export interface DoctorLintRunResult {
@@ -33,15 +36,21 @@ export async function runDoctorLintChecks(
   const skip = opts.skipIds instanceof Set ? opts.skipIds : new Set(opts.skipIds ?? []);
   const only = opts.onlyIds instanceof Set ? opts.onlyIds : new Set(opts.onlyIds ?? []);
   const allIds = new Set(all.map((check) => check.id));
+<<<<<<< HEAD
   const includeDefaultDisabled = opts.includeAllChecks === true;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const selected = all.filter((c) => {
     if (only.size > 0 && !only.has(c.id)) {
       return false;
     }
+<<<<<<< HEAD
     if (only.size === 0 && !includeDefaultDisabled && isDefaultDisabled(c)) {
       return false;
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (skip.has(c.id)) {
       return false;
     }
@@ -83,10 +92,13 @@ export async function runDoctorLintChecks(
   };
 }
 
+<<<<<<< HEAD
 function isDefaultDisabled(check: HealthCheck): boolean {
   return "defaultEnabled" in check && check.defaultEnabled === false;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // Stable ordering keeps CLI output and tests deterministic across registry order changes.
 function compareFindings(a: HealthFinding, b: HealthFinding): number {
   const sevDelta =

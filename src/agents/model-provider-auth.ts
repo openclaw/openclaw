@@ -8,7 +8,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+<<<<<<< HEAD
 import { toErrorObject } from "../infra/errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   listAgentIds,
   resolveAgentDir,
@@ -583,7 +586,11 @@ function runProviderAuthWarmWorker(params: {
           resolve({ agents: [] });
           return;
         }
+<<<<<<< HEAD
         reject(toErrorObject(error, "Non-Error rejection"));
+=======
+        reject(toLintErrorObject(error, "Non-Error rejection"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
     });
     worker.once("exit", (code) => {
@@ -639,3 +646,20 @@ export async function warmCurrentProviderAuthStateOffMainThread(
   }
   publishProviderAuthWarmSnapshot(snapshot);
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

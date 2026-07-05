@@ -40,9 +40,12 @@ const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const staggerOffsetCache = new Map<string, number>();
 
+<<<<<<< HEAD
 type CronAgentTurnPayload = Extract<CronPayload, { kind: "agentTurn" }>;
 type CronAgentTurnPayloadPatch = Extract<CronPayloadPatch, { kind: "agentTurn" }>;
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Default retry delays applied after consecutive cron execution errors. */
 export const DEFAULT_ERROR_BACKOFF_SCHEDULE_MS = [
   30_000,
@@ -900,6 +903,7 @@ export function applyJobPatch(
   }
 }
 
+<<<<<<< HEAD
 function applyAgentTurnToolsAllowPatch(
   payload: CronAgentTurnPayload,
   patch: CronAgentTurnPayloadPatch,
@@ -936,6 +940,8 @@ function toolsAllowEqual(
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronPayload {
   if (patch.kind !== existing.kind) {
     return buildPayloadFromPatch(patch);
@@ -982,7 +988,11 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
     return buildPayloadFromPatch(patch);
   }
 
+<<<<<<< HEAD
   const next: CronAgentTurnPayload = { ...existing };
+=======
+  const next: Extract<CronPayload, { kind: "agentTurn" }> = { ...existing };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (typeof patch.message === "string") {
     next.message = patch.message;
   }
@@ -993,10 +1003,19 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   }
   if (Array.isArray(patch.fallbacks)) {
     next.fallbacks = patch.fallbacks;
+<<<<<<< HEAD
   } else if (patch.fallbacks === null) {
     delete next.fallbacks;
   }
   applyAgentTurnToolsAllowPatch(next, patch, existing);
+=======
+  }
+  if (Array.isArray(patch.toolsAllow)) {
+    next.toolsAllow = patch.toolsAllow;
+  } else if (patch.toolsAllow === null) {
+    delete next.toolsAllow;
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (typeof patch.thinking === "string") {
     next.thinking = patch.thinking;
   }
@@ -1040,18 +1059,30 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     throw new Error('cron.update payload.kind="agentTurn" requires message');
   }
 
+<<<<<<< HEAD
   const next: CronAgentTurnPayload = {
     kind: "agentTurn",
     message: patch.message,
     model: typeof patch.model === "string" ? patch.model : undefined,
     fallbacks: Array.isArray(patch.fallbacks) ? patch.fallbacks : undefined,
+=======
+  return {
+    kind: "agentTurn",
+    message: patch.message,
+    model: typeof patch.model === "string" ? patch.model : undefined,
+    fallbacks: patch.fallbacks,
+    toolsAllow: Array.isArray(patch.toolsAllow) ? patch.toolsAllow : undefined,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     thinking: patch.thinking,
     timeoutSeconds: patch.timeoutSeconds,
     lightContext: patch.lightContext,
     allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
   };
+<<<<<<< HEAD
   applyAgentTurnToolsAllowPatch(next, patch);
   return next;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function mergeCronDelivery(

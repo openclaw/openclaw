@@ -30,7 +30,10 @@ scenario:
     kind: flow
     summary: Verify fake personal replies stay routed to the requested QA conversation and thread.
     config:
+<<<<<<< HEAD
       requiredChannelDriver: qa-channel
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       dmUserId: qa-alice
       dmUserName: QA Alice
       dmMarker: PERSONAL-DM-OK

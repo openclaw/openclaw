@@ -1,8 +1,11 @@
 // Control UI controller manages skills gateway state.
+<<<<<<< HEAD
 import {
   ClawHubTrustErrorCodes,
   readClawHubTrustErrorDetails,
 } from "../../../../packages/gateway-protocol/src/clawhub-trust-error-details.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
   AgentsListResult,
@@ -26,8 +29,11 @@ export type ClawHubSkillDetail = {
     displayName: string;
     summary?: string;
     tags?: Record<string, string>;
+<<<<<<< HEAD
     channel?: string | null;
     isOfficial?: boolean | null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     createdAt: number;
     updatedAt: number;
   } | null;
@@ -44,9 +50,12 @@ export type ClawHubSkillDetail = {
     handle?: string | null;
     displayName?: string | null;
     image?: string | null;
+<<<<<<< HEAD
     official?: boolean | null;
     channel?: string | null;
     isOfficial?: boolean | null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } | null;
 };
 
@@ -96,6 +105,7 @@ export type SkillsState = {
   clawhubDetailLoading: boolean;
   clawhubDetailError: string | null;
   clawhubInstallSlug: string | null;
+<<<<<<< HEAD
   clawhubInstallMessage: {
     kind: "success" | "error";
     text: string;
@@ -103,6 +113,9 @@ export type SkillsState = {
     acknowledgeVersion?: string;
     acknowledgeLabel?: string;
   } | null;
+=======
+  clawhubInstallMessage: { kind: "success" | "error"; text: string } | null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   clawhubVerdicts: Record<string, ClawHubSkillSecurityVerdict>;
   clawhubVerdictsLoading: boolean;
   clawhubVerdictsError: string | null;
@@ -128,6 +141,7 @@ function setSkillMessage(state: SkillsState, key: string, message: SkillMessage)
 
 const getErrorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
+<<<<<<< HEAD
 function getClawHubTrustWarningFromError(err: unknown): string | undefined {
   if (!err || typeof err !== "object" || !("details" in err)) {
     return undefined;
@@ -160,6 +174,8 @@ function formatClawHubAcknowledgementMessage(warning?: string): string {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function clawhubVerdictKey(target: {
   registry: string;
   slug: string;
@@ -602,12 +618,16 @@ export function closeClawHubDetail(state: SkillsState) {
   state.clawhubDetailLoading = false;
 }
 
+<<<<<<< HEAD
 export async function installFromClawHub(
   state: SkillsState,
   slug: string,
   acknowledgeClawHubRisk = false,
   version?: string,
 ) {
+=======
+export async function installFromClawHub(state: SkillsState, slug: string) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!state.client || !state.connected) {
     return;
   }
@@ -615,6 +635,7 @@ export async function installFromClawHub(
   state.clawhubInstallSlug = slug;
   state.clawhubInstallMessage = null;
   try {
+<<<<<<< HEAD
     const result = await state.client.request<{ message?: string; warning?: string }>(
       "skills.install",
       {
@@ -625,6 +646,13 @@ export async function installFromClawHub(
         ...(acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
       },
     );
+=======
+    await state.client.request("skills.install", {
+      ...skillsAgentParams(state),
+      source: "clawhub",
+      slug,
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (!isSkillsAgentScopeCurrent(state, agentScope)) {
       return;
     }
@@ -632,6 +660,7 @@ export async function installFromClawHub(
     if (!isSkillsAgentScopeCurrent(state, agentScope)) {
       return;
     }
+<<<<<<< HEAD
     state.clawhubInstallMessage = {
       kind: "success",
       text: formatClawHubInstallMessage(result?.message ?? `Installed ${slug}`, result?.warning),
@@ -650,6 +679,12 @@ export async function installFromClawHub(
         ...(needsAcknowledgement && acknowledgeVersion ? { acknowledgeVersion } : {}),
         ...(needsAcknowledgement ? { acknowledgeLabel: "Acknowledge risk and install" } : {}),
       };
+=======
+    state.clawhubInstallMessage = { kind: "success", text: `Installed ${slug}` };
+  } catch (err) {
+    if (isSkillsAgentScopeCurrent(state, agentScope)) {
+      state.clawhubInstallMessage = { kind: "error", text: getErrorMessage(err) };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   } finally {
     if (isSkillsAgentScopeCurrent(state, agentScope) && state.clawhubInstallSlug === slug) {

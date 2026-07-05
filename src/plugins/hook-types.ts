@@ -19,7 +19,10 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "./hook-before-agent-start.types.js";
 import type { PluginHookBeforeToolCallResult } from "./hook-before-tool-call-result.js";
+<<<<<<< HEAD
 import type { PluginHookChannelContext } from "./hook-channel-context.types.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { InputGateDecision } from "./hook-decision-types.js";
 import type {
   PluginHookInboundClaimContext,
@@ -48,11 +51,14 @@ export type {
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
 } from "./hook-before-agent-start.types.js";
+<<<<<<< HEAD
 export type {
   PluginHookChannelChatContext,
   PluginHookChannelContext,
   PluginHookChannelSenderContext,
 } from "./hook-channel-context.types.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export {
   PLUGIN_PROMPT_MUTATION_RESULT_FIELDS,
   stripPromptMutationFieldsFromLegacyHookResult,
@@ -265,6 +271,7 @@ export type PluginHookAgentContext = {
   contextWindowSource?: PluginHookContextWindowSource;
   /** Native/configured reference window when a lower cap wins. */
   contextWindowReferenceTokens?: number;
+<<<<<<< HEAD
   /**
    * @deprecated Core does not populate cross-app sender ids. Channel plugins
    * should expose channel-specific identities by augmenting `channelContext.sender`.
@@ -272,6 +279,8 @@ export type PluginHookAgentContext = {
   senderExternalId?: string;
   /** Channel-owned sender/chat details. Plugins may augment the nested interfaces. */
   channelContext?: PluginHookChannelContext;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 export type PluginHookContextWindowSource =

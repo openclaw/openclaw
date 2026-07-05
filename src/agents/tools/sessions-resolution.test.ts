@@ -3,29 +3,50 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
+<<<<<<< HEAD
 import { looksLikeSessionId } from "../../sessions/session-id.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const callGatewayMock = vi.fn();
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
+<<<<<<< HEAD
+=======
+let isResolvedSessionVisibleToRequester: typeof import("./sessions-resolution.js").isResolvedSessionVisibleToRequester;
+let looksLikeSessionId: typeof import("./sessions-resolution.js").looksLikeSessionId;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 let looksLikeSessionKey: typeof import("./sessions-resolution.js").looksLikeSessionKey;
 let resolveCurrentSessionClientAlias: typeof import("./sessions-resolution.js").resolveCurrentSessionClientAlias;
 let resolveDisplaySessionKey: typeof import("./sessions-resolution.js").resolveDisplaySessionKey;
 let resolveInternalSessionKey: typeof import("./sessions-resolution.js").resolveInternalSessionKey;
 let resolveMainSessionAlias: typeof import("./sessions-resolution.js").resolveMainSessionAlias;
 let resolveSessionReference: typeof import("./sessions-resolution.js").resolveSessionReference;
+<<<<<<< HEAD
 let resolveVisibleSessionReference: typeof import("./sessions-resolution.js").resolveVisibleSessionReference;
+=======
+let shouldVerifyRequesterSpawnedSessionVisibility: typeof import("./sessions-resolution.js").shouldVerifyRequesterSpawnedSessionVisibility;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 let shouldResolveSessionIdInput: typeof import("./sessions-resolution.js").shouldResolveSessionIdInput;
 
 beforeAll(async () => {
   ({
+<<<<<<< HEAD
+=======
+    isResolvedSessionVisibleToRequester,
+    looksLikeSessionId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     looksLikeSessionKey,
     resolveCurrentSessionClientAlias,
     resolveDisplaySessionKey,
     resolveInternalSessionKey,
     resolveMainSessionAlias,
     resolveSessionReference,
+<<<<<<< HEAD
     resolveVisibleSessionReference,
+=======
+    shouldVerifyRequesterSpawnedSessionVisibility,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     shouldResolveSessionIdInput,
   } = await import("./sessions-resolution.js"));
 });
@@ -163,34 +184,62 @@ describe("session reference shape detection", () => {
 });
 
 describe("resolved session visibility checks", () => {
+<<<<<<< HEAD
   it("requires spawned-session verification only for sandboxed key-based cross-session access", async () => {
     const cases = [
       {
+=======
+  it("requires spawned-session verification only for sandboxed key-based cross-session access", () => {
+    expect(
+      shouldVerifyRequesterSpawnedSessionVisibility({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         requesterSessionKey: "agent:main:main",
         targetSessionKey: "agent:main:worker",
         restrictToSpawned: true,
         resolvedViaSessionId: false,
+<<<<<<< HEAD
         expectsGateway: true,
       },
       {
+=======
+      }),
+    ).toBe(true);
+    expect(
+      shouldVerifyRequesterSpawnedSessionVisibility({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         requesterSessionKey: "agent:main:main",
         targetSessionKey: "agent:main:worker",
         restrictToSpawned: false,
         resolvedViaSessionId: false,
+<<<<<<< HEAD
         expectsGateway: false,
       },
       {
+=======
+      }),
+    ).toBe(false);
+    expect(
+      shouldVerifyRequesterSpawnedSessionVisibility({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         requesterSessionKey: "agent:main:main",
         targetSessionKey: "agent:main:worker",
         restrictToSpawned: true,
         resolvedViaSessionId: true,
+<<<<<<< HEAD
         expectsGateway: false,
       },
       {
+=======
+      }),
+    ).toBe(false);
+    expect(
+      shouldVerifyRequesterSpawnedSessionVisibility({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         requesterSessionKey: "agent:main:main",
         targetSessionKey: "agent:main:main",
         restrictToSpawned: true,
         resolvedViaSessionId: false,
+<<<<<<< HEAD
         expectsGateway: false,
       },
     ];
@@ -217,6 +266,29 @@ describe("resolved session visibility checks", () => {
       expect(callGatewayMock).toHaveBeenCalledTimes(testCase.expectsGateway ? 1 : 0);
       callGatewayMock.mockReset();
     }
+=======
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true immediately when spawned-session verification is not required", async () => {
+    await expect(
+      isResolvedSessionVisibleToRequester({
+        requesterSessionKey: "agent:main:main",
+        targetSessionKey: "agent:main:main",
+        restrictToSpawned: true,
+        resolvedViaSessionId: false,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      isResolvedSessionVisibleToRequester({
+        requesterSessionKey: "agent:main:main",
+        targetSessionKey: "agent:main:other",
+        restrictToSpawned: false,
+        resolvedViaSessionId: false,
+      }),
+    ).resolves.toBe(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("does not hide an exact spawned target behind the sessions.list visibility cap", async () => {
@@ -239,6 +311,7 @@ describe("resolved session visibility checks", () => {
     );
 
     await expect(
+<<<<<<< HEAD
       resolveVisibleSessionReference({
         resolvedSession: {
           ok: true,
@@ -255,6 +328,15 @@ describe("resolved session visibility checks", () => {
       key: "agent:main:subagent:worker-999",
       displayKey: "agent:main:subagent:worker-999",
     });
+=======
+      isResolvedSessionVisibleToRequester({
+        requesterSessionKey: "agent:main:main",
+        targetSessionKey: "agent:main:subagent:worker-999",
+        restrictToSpawned: true,
+        resolvedViaSessionId: false,
+      }),
+    ).resolves.toBe(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });
 

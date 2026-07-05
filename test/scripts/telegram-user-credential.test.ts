@@ -4,26 +4,37 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path, { win32 } from "node:path";
+<<<<<<< HEAD
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchJsonWithTimeout,
   runCommand,
   signalChildProcessTree,
 } from "../../scripts/e2e/telegram-user-credential-io.ts";
+=======
+import { afterEach, describe, expect, it } from "vitest";
+import { fetchJsonWithTimeout, runCommand } from "../../scripts/e2e/telegram-user-credential-io.ts";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   expandHome,
   resolvePrivateJsonDirectory,
   writePrivateJson,
 } from "../../scripts/e2e/telegram-user-credential-paths.ts";
+<<<<<<< HEAD
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const tempDirs: string[] = [];
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
 
+<<<<<<< HEAD
 function expectedTaskkillPath(): string {
   return resolveWindowsTaskkillPath();
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function makeTempDir(prefix: string) {
   const dir = mkdtempSync(path.join(tmpdir(), prefix));
   tempDirs.push(dir);
@@ -84,8 +95,11 @@ async function waitForExit(
 }
 
 afterEach(() => {
+<<<<<<< HEAD
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { force: true, recursive: true });
   }
@@ -144,6 +158,7 @@ describe("telegram user credential IO", () => {
     );
   });
 
+<<<<<<< HEAD
   it("rejects loose and unsafe credential timeout env values", async () => {
     const previous = process.env.OPENCLAW_TELEGRAM_USER_CREDENTIAL_COMMAND_TIMEOUT_MS;
     try {
@@ -166,6 +181,8 @@ describe("telegram user credential IO", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects oversized chunked lease payload markers before hydration", async () => {
     const credentialModule = (await import(
       `${new URL("../../scripts/e2e/telegram-user-credential.ts", import.meta.url).href}?case=chunk-marker-${Date.now()}`
@@ -189,6 +206,7 @@ describe("telegram user credential IO", () => {
     ).toThrow("Chunked payload marker exceeds 67108864 bytes.");
   });
 
+<<<<<<< HEAD
   it("hydrates chunked lease payloads using utf8 byte lengths", async () => {
     const credentialModule = (await import(
       `${new URL("../../scripts/e2e/telegram-user-credential.ts", import.meta.url).href}?case=utf8-chunk-${Date.now()}`
@@ -292,6 +310,8 @@ describe("telegram user credential IO", () => {
     ).toThrow("Usage:");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("fails hung child processes instead of waiting for the outer proof timeout", async () => {
     await expect(
       runCommand(process.execPath, ["-e", "setInterval(() => {}, 1000)"], undefined, {
@@ -342,6 +362,7 @@ setInterval(() => {}, 1000);
     },
   );
 
+<<<<<<< HEAD
   it.runIf(process.platform !== "win32")(
     "rejects timed-out commands when descendant processes exit cleanly",
     async () => {
@@ -395,6 +416,8 @@ setInterval(() => {}, 1000);
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.runIf(process.platform !== "win32")("kills timed-out child process groups", async () => {
     const dir = makeTempDir("openclaw-telegram-credential-tree-timeout-");
     const childPidPath = path.join(dir, "child.pid");
@@ -430,6 +453,7 @@ setInterval(() => {}, 1000);
     }
   });
 
+<<<<<<< HEAD
   it("signals Windows credential helper process trees with taskkill", () => {
     const child = {
       kill: vi.fn(),
@@ -499,6 +523,8 @@ setInterval(() => {}, 1000);
     expect(child.kill).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.runIf(process.platform !== "win32")(
     "exits promptly after forwarded SIGTERM children exit cleanly",
     async () => {

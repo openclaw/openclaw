@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+<<<<<<< HEAD
 import { createQaArtifactRunId } from "./artifact-run-id.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isQaFastModeModelRef, type QaProviderMode } from "./model-selection.js";
 import {
   QA_FRONTIER_CHARACTER_EVAL_MODELS,
@@ -521,7 +524,11 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
 
   const outputDir =
     params.outputDir ??
+<<<<<<< HEAD
     path.join(repoRoot, ".artifacts", "qa-e2e", `character-eval-${createQaArtifactRunId()}`);
+=======
+    path.join(repoRoot, ".artifacts", "qa-e2e", `character-eval-${Date.now().toString(36)}`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const runsDir = path.join(outputDir, "runs");
   await fs.mkdir(runsDir, { recursive: true });
 

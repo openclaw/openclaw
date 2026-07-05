@@ -29,13 +29,18 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./config.js", () => ({
   resolveVoiceCallSessionKey: (params: {
+<<<<<<< HEAD
     config: Pick<VoiceCallConfig, "agentId" | "sessionScope">;
+=======
+    config: Pick<VoiceCallConfig, "sessionScope">;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     callId: string;
     phone?: string;
     explicitSessionKey?: string;
   }) => {
     const explicit = params.explicitSessionKey?.trim();
     if (explicit) {
+<<<<<<< HEAD
       const lower = explicit.toLowerCase();
       return lower === "global" || lower === "unknown" || lower.startsWith("agent:")
         ? explicit
@@ -65,6 +70,17 @@ vi.mock("./config.js", () => ({
     const route = numberRouteKey ? config.numbers[numberRouteKey] : undefined;
     return route ? { config: { ...config, ...route }, numberRouteKey } : { config };
   },
+=======
+      return explicit;
+    }
+    if (params.config.sessionScope === "per-call") {
+      return `voice:call:${params.callId}`;
+    }
+    const normalizedPhone = params.phone?.replace(/\D/g, "");
+    return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${params.callId}`;
+  },
+  resolveVoiceCallEffectiveConfig: (config: VoiceCallConfig) => ({ config }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveVoiceCallConfig: mocks.resolveVoiceCallConfig,
   resolveTwilioAuthToken: mocks.resolveTwilioAuthToken,
   validateProviderConfig: mocks.validateProviderConfig,
@@ -398,6 +414,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     await runtime.stop();
   });
 
+<<<<<<< HEAD
   it("wires realtime consults and keeps outbound calls off inbound number routes", async () => {
     const config = createBaseConfig();
     config.inboundPolicy = "allowlist";
@@ -405,6 +422,11 @@ describe("createVoiceCallRuntime lifecycle", () => {
       agentId: "inbound-route",
       responseModel: "openai/gpt-5.5",
     };
+=======
+  it("wires the shared realtime agent consult tool and handler", async () => {
+    const config = createBaseConfig();
+    config.inboundPolicy = "allowlist";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     config.realtime.enabled = true;
     config.realtime.tools = [
       {
@@ -470,7 +492,11 @@ describe("createVoiceCallRuntime lifecycle", () => {
       firstCallParam(runEmbeddedAgent.mock.calls as unknown[][], "embedded OpenClaw consult"),
       "embedded OpenClaw consult params",
     );
+<<<<<<< HEAD
     expect(consultParams.sessionKey).toBe("agent:main:voice:15550009999");
+=======
+    expect(consultParams.sessionKey).toBe("voice:15550009999");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(consultParams.spawnedBy).toBe("agent:main:discord:channel:general");
     expect(consultParams.messageProvider).toBe("voice");
     expect(consultParams.lane).toBe("voice");
@@ -489,7 +515,11 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(consultParams.prompt).toContain("Caller: Also check the ETA.");
   });
 
+<<<<<<< HEAD
   it("canonicalizes restored legacy per-call keys for realtime consults", async () => {
+=======
+  it("uses persisted per-call session keys for realtime consults", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const config = createBaseConfig();
     config.inboundPolicy = "allowlist";
     config.realtime.enabled = true;
@@ -537,7 +567,11 @@ describe("createVoiceCallRuntime lifecycle", () => {
       ),
       "per-call embedded OpenClaw consult params",
     );
+<<<<<<< HEAD
     expect(consultParams.sessionKey).toBe("agent:main:voice:call:call-1");
+=======
+    expect(consultParams.sessionKey).toBe("voice:call:call-1");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("answers realtime consults from fast memory context before starting the full agent", async () => {
@@ -606,7 +640,11 @@ describe("createVoiceCallRuntime lifecycle", () => {
         error: console.error,
         debug: console.debug,
       },
+<<<<<<< HEAD
       sessionKey: "agent:main:voice:15550001234",
+=======
+      sessionKey: "voice:15550001234",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });

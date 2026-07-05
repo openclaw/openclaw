@@ -7,10 +7,13 @@ export type CommandQueueEnqueueOptions = {
   onWait?: (waitMs: number, queuedAhead: number) => void;
   taskTimeoutMs?: number;
   taskTimeoutProgressAtMs?: () => number | undefined;
+<<<<<<< HEAD
   taskTimeoutAbortSignal?: AbortSignal;
   taskTimeoutAbortGraceMs?: number;
   /** Ends the task after a caller-owned timeout cleanup grace has already elapsed. */
   taskTimeoutReleaseSignal?: AbortSignal;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   priority?: "foreground" | "normal" | "background";
 };
 

@@ -1,6 +1,9 @@
 // Control UI controller manages chat gateway state.
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
+<<<<<<< HEAD
 import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { getChatAttachmentDataUrl } from "../chat/attachment-payload-store.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
@@ -20,7 +23,10 @@ import {
   hasVisibleStreamParts,
   historyReplacedVisibleStream,
   materializeVisibleStreamState,
+<<<<<<< HEAD
   messageTimestampMs,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   maybeResetToolStream,
   persistedCurrentToolStreamIds,
   prunePersistedToolStreamMessages,
@@ -33,7 +39,10 @@ import {
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
 } from "../control-ui-performance.ts";
+<<<<<<< HEAD
 import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { GatewayRequestError, type GatewayBrowserClient, type GatewayHelloOk } from "../gateway.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -55,8 +64,11 @@ import {
   isMissingOperatorReadScopeError,
 } from "./scope-errors.ts";
 
+<<<<<<< HEAD
 export { isGatewayMethodAdvertised } from "../gateway-methods.ts";
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
@@ -246,6 +258,21 @@ function messageDisplaySignature(message: unknown): string | null {
   }
 }
 
+<<<<<<< HEAD
+=======
+function messageTimestampMs(message: unknown): number | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const timestamp = (message as { timestamp?: unknown; ts?: unknown }).timestamp;
+  if (typeof timestamp === "number" && Number.isFinite(timestamp)) {
+    return timestamp;
+  }
+  const ts = (message as { timestamp?: unknown; ts?: unknown }).ts;
+  return typeof ts === "number" && Number.isFinite(ts) ? ts : null;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function historyHasSameOrNewerDisplayMessage(
   historyMessages: unknown[],
   signature: string,
@@ -368,6 +395,17 @@ function isUnknownGatewayMethodError(err: unknown, method: string): err is Gatew
   );
 }
 
+<<<<<<< HEAD
+=======
+export function isGatewayMethodAdvertised(state: ChatState, method: string): boolean | null {
+  const methods = state.hello?.features?.methods;
+  if (!Array.isArray(methods)) {
+    return null;
+  }
+  return methods.includes(method);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveStartupRetryDelayMs(err: GatewayRequestError): number {
   const retryAfterMs =
     typeof err.retryAfterMs === "number" ? err.retryAfterMs : STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS;
@@ -385,7 +423,10 @@ export type ChatState = {
   connected: boolean;
   sessionKey: string;
   currentSessionId?: string | null;
+<<<<<<< HEAD
   reconnectResumeSessionId?: string | null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   chatLoading: boolean;
   chatMessages: unknown[];
   chatMessagesBySession?: ChatMessageCache;
@@ -755,12 +796,15 @@ async function loadChatHistoryUncached(
         : typeof res.sessionId === "string" && res.sessionId.trim()
           ? res.sessionId
           : null;
+<<<<<<< HEAD
     if (
       state.reconnectResumeSessionId &&
       state.reconnectResumeSessionId !== state.currentSessionId
     ) {
       state.reconnectResumeSessionId = null;
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     state.chatThinkingLevel = res.sessionInfo?.thinkingLevel ?? res.thinkingLevel ?? null;
     const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
     if (resetStream) {
@@ -899,7 +943,11 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
     : undefined;
 }
 
+<<<<<<< HEAD
 export type ChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
+=======
+export type ChatSendAckStatus = "started" | "in_flight" | "ok";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type ChatSendAckServerTiming = {
   receivedToAckMs?: number;
@@ -944,10 +992,14 @@ function normalizeChatSendAck(payload: unknown, fallbackRunId: string): ChatSend
   const serverTiming = normalizeChatSendAckServerTiming(record.serverTiming);
   return {
     runId,
+<<<<<<< HEAD
     status:
       status === "in_flight" || status === "ok" || status === "timeout" || status === "error"
         ? status
         : "started",
+=======
+    status: status === "in_flight" || status === "ok" ? status : "started",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ...(serverTiming ? { serverTiming } : {}),
   };
 }
@@ -963,24 +1015,33 @@ export async function requestChatSend(
   },
 ): Promise<ChatSendAck> {
   const routing = resolveChatSendRouting(state, params);
+<<<<<<< HEAD
   const controlUiReconnectResume = Boolean(
     routing.sessionId && state.reconnectResumeSessionId === routing.sessionId,
   );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const payload = await state.client!.request("chat.send", {
     sessionKey: routing.sessionKey,
     ...(isGlobalSessionKey(routing.sessionKey) && routing.selectedAgentId
       ? { agentId: routing.selectedAgentId }
       : {}),
     ...(routing.sessionId ? { sessionId: routing.sessionId } : {}),
+<<<<<<< HEAD
     ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     message: params.message,
     deliver: false,
     idempotencyKey: params.runId,
     attachments: buildApiAttachments(params.attachments),
   });
+<<<<<<< HEAD
   if (controlUiReconnectResume) {
     state.reconnectResumeSessionId = null;
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return normalizeChatSendAck(payload, params.runId);
 }
 
@@ -1126,7 +1187,11 @@ export async function sendChatMessage(
   }
 
   const now = Date.now();
+<<<<<<< HEAD
   const optimisticMessage = appendUserChatMessage(state, msg, attachments, now);
+=======
+  appendUserChatMessage(state, msg, attachments, now);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   state.chatSending = true;
   setChatError(state, null);
@@ -1153,6 +1218,7 @@ export async function sendChatMessage(
           armLocalTerminalReconcile: true,
         },
       );
+<<<<<<< HEAD
     } else if (isNonTerminalAgentRunStatus(ack.status)) {
       state.chatRunId = ack.runId;
     } else {
@@ -1180,6 +1246,12 @@ export async function sendChatMessage(
       return null;
     }
     return ack.runId;
+=======
+    } else {
+      state.chatRunId = ack.runId;
+    }
+    return ack.status === "ok" ? ack.runId : runId;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } catch (err) {
     const error = formatConnectError(err);
     reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
@@ -1211,6 +1283,7 @@ export function appendUserChatMessage(
   attachments?: ChatAttachment[],
   timestamp = Date.now(),
 ) {
+<<<<<<< HEAD
   const entry = {
     role: "user" as const,
     content: buildUserChatMessageContentBlocks(message, attachments),
@@ -1218,13 +1291,27 @@ export function appendUserChatMessage(
   };
   state.chatMessages = [...state.chatMessages, entry];
   return entry;
+=======
+  state.chatMessages = [
+    ...state.chatMessages,
+    {
+      role: "user",
+      content: buildUserChatMessageContentBlocks(message, attachments),
+      timestamp,
+    },
+  ];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function sendChatMessageWithGeneratedRunId(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
+<<<<<<< HEAD
 ): Promise<ChatSendAck | null> {
+=======
+): Promise<string | null> {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (!state.client || !state.connected) {
     return null;
   }
@@ -1236,7 +1323,12 @@ async function sendChatMessageWithGeneratedRunId(
   setChatError(state, null);
   const runId = generateUUID();
   try {
+<<<<<<< HEAD
     return await requestChatSend(state, { message: msg, attachments, runId });
+=======
+    const ack = await requestChatSend(state, { message: msg, attachments, runId });
+    return ack.runId;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } catch (err) {
     setChatError(state, formatConnectError(err));
     return null;
@@ -1247,7 +1339,11 @@ export async function sendDetachedChatMessage(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
+<<<<<<< HEAD
 ): Promise<ChatSendAck | null> {
+=======
+): Promise<string | null> {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return sendChatMessageWithGeneratedRunId(state, message, attachments);
 }
 
@@ -1255,7 +1351,11 @@ export async function sendSteerChatMessage(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
+<<<<<<< HEAD
 ): Promise<ChatSendAck | null> {
+=======
+): Promise<string | null> {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return sendChatMessageWithGeneratedRunId(state, message, attachments);
 }
 

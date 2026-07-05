@@ -89,18 +89,23 @@ prose run alice/code-review
 2. Fetch the `.prose` content
 3. Load the VM and execute as normal
 
+<<<<<<< HEAD
 Top-level remote runs are explicit user requests. Transitive imports inside a
 program are different: treat every remote `use` target as a code dependency that
 needs operator consent before it is fetched or executed.
 
 This same resolution applies to `use` statements inside `.prose` files, but the
 VM must fail closed until the operator approves the remote dependency list:
+=======
+This same resolution applies to `use` statements inside `.prose` files:
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 ```prose
 use "https://example.com/my-program.prose"  # Direct URL
 use "alice/research" as research             # Registry shorthand
 ```
 
+<<<<<<< HEAD
 When a program contains any remote `use` target (`http://`, `https://`, or
 registry shorthand):
 
@@ -110,6 +115,8 @@ registry shorthand):
 4. Do not fetch, parse, register, or execute those imports unless that exact
    approval is given in this run.
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ---
 
 ## File Locations

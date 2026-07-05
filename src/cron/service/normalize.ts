@@ -1,5 +1,10 @@
 /** Name, agent id, and payload text normalization helpers for cron service ops. */
+<<<<<<< HEAD
 import { normalizeOptionalAgentId } from "../../routing/session-key.js";
+=======
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeAgentId } from "../../routing/session-key.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { truncateUtf16Safe } from "../../utils.js";
 import type { CronPayload } from "../types.js";
 
@@ -23,7 +28,17 @@ function truncateText(input: string, maxLen: number) {
 }
 
 /** Normalizes optional cron agent ids through the canonical session-key agent id rules. */
+<<<<<<< HEAD
 export { normalizeOptionalAgentId };
+=======
+export function normalizeOptionalAgentId(raw: unknown) {
+  const trimmed = normalizeOptionalString(raw);
+  if (!trimmed) {
+    return undefined;
+  }
+  return normalizeAgentId(trimmed);
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Infers a compact cron job name from payload text first, then schedule shape. */
 export function inferCronJobName(job: {

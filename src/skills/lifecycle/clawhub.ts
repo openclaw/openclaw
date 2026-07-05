@@ -5,11 +5,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+<<<<<<< HEAD
   type ClawHubTrustErrorCode,
   ensureClawHubPackageTrustAcknowledged,
   type ClawHubRiskAcknowledgementRequest,
 } from "../../infra/clawhub-install-trust.js";
 import {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   downloadClawHubGitHubSkillArchive,
   downloadClawHubSkillArchive,
   downloadClawHubSkillArchiveUrl,
@@ -144,9 +147,14 @@ type InstallClawHubSkillResult =
       version: string;
       targetDir: string;
       detail?: ClawHubSkillDetail;
+<<<<<<< HEAD
       warning?: string;
     }
   | { ok: false; error: string; code?: ClawHubTrustErrorCode; version?: string; warning?: string };
+=======
+    }
+  | { ok: false; error: string };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type UpdateClawHubSkillResult =
   | {
@@ -156,6 +164,7 @@ type UpdateClawHubSkillResult =
       version: string;
       changed: boolean;
       targetDir: string;
+<<<<<<< HEAD
       warning?: string;
     }
   | { ok: false; error: string; code?: ClawHubTrustErrorCode; version?: string; warning?: string };
@@ -164,6 +173,13 @@ type Logger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
   terminalLinks?: boolean;
+=======
+    }
+  | { ok: false; error: string };
+
+type Logger = {
+  info?: (message: string) => void;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 type ClawHubSkillRef = {
@@ -238,12 +254,16 @@ type ClawHubInstallParams = {
   baseUrl?: string;
   force?: boolean;
   forceInstall?: boolean;
+<<<<<<< HEAD
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   logger?: Logger;
   config?: OpenClawConfig;
 };
 
+<<<<<<< HEAD
 type ClawHubOfficialFlagContainer = {
   channel?: unknown;
   official?: unknown;
@@ -293,6 +313,8 @@ async function fetchDefaultClawHubSkillDetailIfOfficial(params: {
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type TrackedUpdateTarget =
   | {
       ok: true;
@@ -1016,8 +1038,12 @@ export async function resolveClawHubSkillVerificationTarget(params: {
       return { ok: false, error: "Use either --version or --tag." };
     }
 
+<<<<<<< HEAD
     const requestedRef = parseRequestedClawHubSkillRef(params.slug);
     const trackedSlug = requestedRef.slug;
+=======
+    const trackedSlug = normalizeTrackedSkillSlug(params.slug);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const skillDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, trackedSlug);
     const originRead = await readClawHubSkillOriginStrict(skillDir);
     if (originRead.kind === "malformed") {
@@ -1058,6 +1084,7 @@ export async function resolveClawHubSkillVerificationTarget(params: {
           error: `Skill "${trackedSlug}" ClawHub origin metadata does not match the workspace ClawHub lockfile. Reinstall it from ClawHub before verifying it as an installed ClawHub skill.`,
         };
       }
+<<<<<<< HEAD
       if (requestedRef.ownerHandle && lockedOwnerHandle !== requestedRef.ownerHandle) {
         const trackedRef = lockedOwnerHandle ? `@${lockedOwnerHandle}/${trackedSlug}` : trackedSlug;
         return {
@@ -1065,6 +1092,8 @@ export async function resolveClawHubSkillVerificationTarget(params: {
           error: `Skill "${trackedSlug}" is tracked as ${trackedRef}, not @${requestedRef.ownerHandle}/${trackedSlug}.`,
         };
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const selector: ClawHubSkillVerificationSelector = version
         ? "version"
         : tag
@@ -1101,12 +1130,20 @@ export async function resolveClawHubSkillVerificationTarget(params: {
       };
     }
 
+<<<<<<< HEAD
+=======
+    const slug = validateRequestedSkillSlug(params.slug);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const registry = resolveClawHubBaseUrl(params.baseUrl);
     const selector: ClawHubSkillVerificationSelector = version ? "version" : tag ? "tag" : "latest";
     return {
       ok: true,
+<<<<<<< HEAD
       slug: requestedRef.slug,
       ...(requestedRef.ownerHandle ? { ownerHandle: requestedRef.ownerHandle } : {}),
+=======
+      slug,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       baseUrl: registry,
       version,
       tag,
@@ -1167,7 +1204,11 @@ async function installArchiveResolution(params: {
   version: string;
   archivePath: string;
   registry: string;
+<<<<<<< HEAD
   authority: "official" | "openclaw" | "third-party";
+=======
+  authority: "openclaw" | "third-party";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   force?: boolean;
   logger?: Logger;
   config?: OpenClawConfig;
@@ -1214,7 +1255,10 @@ async function installGitHubResolution(params: {
   sourcePath: string;
   archivePath: string;
   registry: string;
+<<<<<<< HEAD
   authority: "official" | "third-party";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   repo: string;
   commit: string;
   force?: boolean;
@@ -1247,7 +1291,11 @@ async function installGitHubResolution(params: {
           },
           source: {
             kind: "git",
+<<<<<<< HEAD
             authority: params.authority,
+=======
+            authority: "third-party",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             mutable: false,
             network: true,
           },
@@ -1273,6 +1321,7 @@ function assertInstallResolutionAllowed(
   throw new Error(resolution.message || `Skill "${resolution.slug}" is not installable.`);
 }
 
+<<<<<<< HEAD
 async function ensureClawHubSkillTrustAcknowledged(
   params: ClawHubInstallParams & {
     version: string;
@@ -1308,6 +1357,8 @@ async function ensureClawHubSkillTrustAcknowledged(
       };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function performClawHubSkillInstall(
   params: ClawHubInstallParams,
 ): Promise<InstallClawHubSkillResult> {
@@ -1326,6 +1377,7 @@ async function performClawHubSkillInstall(
     let detail: ClawHubSkillDetail | undefined;
     let latestResolution: Extract<ClawHubSkillInstallResolutionResponse, { ok: true }> | undefined;
     let install: Awaited<ReturnType<typeof installArchiveResolution>>;
+<<<<<<< HEAD
     let trustWarning: string | undefined;
     let officialClawHubSkill = false;
 
@@ -1416,6 +1468,51 @@ async function performClawHubSkillInstall(
         });
       }
     }
+=======
+
+    const archive = params.version
+      ? await (async () => {
+          const resolved = await resolveInstallVersion({
+            slug: params.slug,
+            ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+            version: params.version,
+            baseUrl: params.baseUrl,
+          });
+          detail = resolved.detail;
+          version = resolved.version;
+          params.logger?.info?.(`Downloading ${params.slug}@${version} from ClawHub…`);
+          return await downloadClawHubSkillArchive({
+            slug: params.slug,
+            ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+            version,
+            baseUrl: params.baseUrl,
+          });
+        })()
+      : await (async () => {
+          latestResolution = assertInstallResolutionAllowed(
+            await fetchClawHubSkillInstallResolution({
+              slug: params.slug,
+              ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+              baseUrl: params.baseUrl,
+              ...(params.forceInstall ? { forceInstall: true } : {}),
+            }),
+          );
+          if (latestResolution.installKind === "github") {
+            version = latestResolution.github.commit;
+            params.logger?.info?.(`Downloading ${params.slug}@${version} from GitHub…`);
+            return await downloadClawHubGitHubSkillArchive({
+              repo: latestResolution.github.repo,
+              commit: latestResolution.github.commit,
+            });
+          }
+          version = latestResolution.archive.version;
+          params.logger?.info?.(`Downloading ${params.slug}@${version} from ClawHub…`);
+          return await downloadClawHubSkillArchiveUrl({
+            url: latestResolution.archive.downloadUrl,
+            baseUrl: params.baseUrl,
+          });
+        })();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     try {
       if (!params.version) {
         if (!latestResolution) {
@@ -1430,7 +1527,10 @@ async function performClawHubSkillInstall(
                 sourcePath: latestResolution.github.path,
                 archivePath: archive.archivePath,
                 registry,
+<<<<<<< HEAD
                 authority: officialClawHubSkill ? "official" : "third-party",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 repo: latestResolution.github.repo,
                 commit: latestResolution.github.commit,
                 force: params.force,
@@ -1444,7 +1544,11 @@ async function performClawHubSkillInstall(
                 version,
                 archivePath: archive.archivePath,
                 registry,
+<<<<<<< HEAD
                 authority: officialClawHubSkill ? "official" : clawhubAuthority,
+=======
+                authority: clawhubAuthority,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                 force: params.force,
                 logger: params.logger,
                 config: params.config,
@@ -1457,7 +1561,11 @@ async function performClawHubSkillInstall(
           version,
           archivePath: archive.archivePath,
           registry,
+<<<<<<< HEAD
           authority: officialClawHubSkill ? "official" : clawhubAuthority,
+=======
+          authority: clawhubAuthority,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           force: params.force,
           logger: params.logger,
           config: params.config,
@@ -1518,7 +1626,10 @@ async function performClawHubSkillInstall(
         version,
         targetDir: install.targetDir,
         ...(detail ? { detail } : {}),
+<<<<<<< HEAD
         ...(trustWarning ? { warning: trustWarning } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       };
     } finally {
       await archive.cleanup().catch(() => undefined);
@@ -1598,8 +1709,11 @@ export async function installSkillFromClawHub(params: {
   baseUrl?: string;
   force?: boolean;
   forceInstall?: boolean;
+<<<<<<< HEAD
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   logger?: Logger;
   config?: OpenClawConfig;
 }): Promise<InstallClawHubSkillResult> {
@@ -1611,8 +1725,11 @@ export async function updateSkillsFromClawHub(params: {
   slug?: string;
   baseUrl?: string;
   forceInstall?: boolean;
+<<<<<<< HEAD
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   logger?: Logger;
   config?: OpenClawConfig;
 }): Promise<UpdateClawHubSkillResult[]> {
@@ -1648,8 +1765,11 @@ export async function updateSkillsFromClawHub(params: {
       baseUrl: tracked.baseUrl,
       force: true,
       forceInstall: params.forceInstall,
+<<<<<<< HEAD
       acknowledgeClawHubRisk: params.acknowledgeClawHubRisk,
       onClawHubRisk: params.onClawHubRisk,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       logger: params.logger,
       config: params.config,
     });
@@ -1664,7 +1784,10 @@ export async function updateSkillsFromClawHub(params: {
       version: install.version,
       changed: tracked.previousVersion !== install.version,
       targetDir: install.targetDir,
+<<<<<<< HEAD
       ...(install.warning ? { warning: install.warning } : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   }
   return results;

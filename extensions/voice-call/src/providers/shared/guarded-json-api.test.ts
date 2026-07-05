@@ -11,6 +11,7 @@ vi.mock("../../../api.js", () => ({
 
 import { guardedJsonApiRequest } from "./guarded-json-api.js";
 
+<<<<<<< HEAD
 function cancelTrackedTextResponse(
   text: string,
   init?: ResponseInit,
@@ -33,6 +34,8 @@ function cancelTrackedTextResponse(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("guardedJsonApiRequest", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -88,9 +91,14 @@ describe("guardedJsonApiRequest", () => {
       }),
     ).resolves.toBeUndefined();
 
+<<<<<<< HEAD
     const missing = cancelTrackedTextResponse("missing", { status: 404 });
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: missing.response,
+=======
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response("missing", { status: 404 }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       release,
     });
 
@@ -105,9 +113,12 @@ describe("guardedJsonApiRequest", () => {
         errorPrefix: "request failed",
       }),
     ).resolves.toBeUndefined();
+<<<<<<< HEAD
 
     expect(missing.wasCanceled()).toBe(true);
     expect(release).toHaveBeenCalledTimes(2);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("throws prefixed errors and still releases the response handle", async () => {
@@ -131,6 +142,7 @@ describe("guardedJsonApiRequest", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+<<<<<<< HEAD
   it("bounds provider error bodies and cancels unread overflow", async () => {
     const release = vi.fn(async () => {});
     const tracked = cancelTrackedTextResponse("x".repeat(9 * 1024), { status: 500 });
@@ -160,6 +172,8 @@ describe("guardedJsonApiRequest", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("throws prefixed errors for malformed json success responses", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
@@ -180,6 +194,7 @@ describe("guardedJsonApiRequest", () => {
 
     expect(release).toHaveBeenCalledTimes(1);
   });
+<<<<<<< HEAD
 
   it("rejects oversized json success bodies and cancels unread overflow", async () => {
     const release = vi.fn(async () => {});
@@ -203,4 +218,6 @@ describe("guardedJsonApiRequest", () => {
     expect(tracked.wasCanceled()).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

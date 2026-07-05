@@ -20,6 +20,7 @@ function shouldSkipMissingA2uiAssets(env = process.env) {
   return env.OPENCLAW_A2UI_SKIP_MISSING === "1" || Boolean(env.OPENCLAW_SPARSE_PROFILE);
 }
 
+<<<<<<< HEAD
 function isRelativeWithin(relPath) {
   return (
     relPath === "" ||
@@ -41,6 +42,10 @@ export async function copyA2uiAssets({ srcDir, outDir }) {
     throw new Error("A2UI source and output directories must not overlap.");
   }
 
+=======
+/** Copies A2UI assets, optionally tolerating missing bundles in sparse builds. */
+export async function copyA2uiAssets({ srcDir, outDir }) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const skipMissing = shouldSkipMissingA2uiAssets(process.env);
   try {
     await fs.stat(path.join(srcDir, "index.html"));
@@ -56,7 +61,10 @@ export async function copyA2uiAssets({ srcDir, outDir }) {
     throw new Error(message, { cause: err });
   }
   await fs.mkdir(path.dirname(outDir), { recursive: true });
+<<<<<<< HEAD
   await fs.rm(outDir, { recursive: true, force: true });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   await fs.cp(srcDir, outDir, { recursive: true });
 }
 

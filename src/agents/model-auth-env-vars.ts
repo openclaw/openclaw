@@ -5,6 +5,11 @@
  */
 import {
   listKnownProviderAuthEnvVarNames,
+<<<<<<< HEAD
+=======
+  resolveProviderAuthEvidence,
+  resolveProviderAuthEnvVarCandidates,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveProviderAuthLookupMaps,
 } from "../secrets/provider-env-vars.js";
 import type {
@@ -13,6 +18,23 @@ import type {
   ProviderEnvVarLookupParams,
 } from "../secrets/provider-env-vars.js";
 
+<<<<<<< HEAD
+=======
+/** Returns provider-to-env-var candidates for API-key style auth lookup. */
+export function resolveProviderEnvApiKeyCandidates(
+  params?: ProviderEnvVarLookupParams,
+): Record<string, readonly string[]> {
+  return resolveProviderAuthEnvVarCandidates(params);
+}
+
+/** Returns provider auth evidence that may come from env vars, files, or plugin manifests. */
+export function resolveProviderEnvAuthEvidence(
+  params?: ProviderEnvVarLookupParams,
+): Record<string, readonly ProviderAuthEvidence[]> {
+  return resolveProviderAuthEvidence(params);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Resolves both env-var candidates and richer auth evidence from one manifest snapshot. */
 export function resolveProviderEnvAuthLookupMaps(
   params?: ProviderEnvVarLookupParams,

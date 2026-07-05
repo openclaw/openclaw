@@ -92,6 +92,7 @@ export function expectChannelSurfaceContract(params: {
         expect(typeof messaging.targetResolver.hint).toBe("string");
         expect(messaging.targetResolver.hint.trim()).not.toBe("");
       }
+<<<<<<< HEAD
       if (messaging.targetResolver.reservedLiterals !== undefined) {
         expect(Array.isArray(messaging.targetResolver.reservedLiterals)).toBe(true);
         expect(
@@ -100,6 +101,8 @@ export function expectChannelSurfaceContract(params: {
           ),
         ).toBe(true);
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (messaging.targetResolver.resolveTarget) {
         expect(typeof messaging.targetResolver.resolveTarget).toBe("function");
       }

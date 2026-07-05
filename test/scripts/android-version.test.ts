@@ -1,5 +1,8 @@
 // Android Version tests cover android version script behavior.
+<<<<<<< HEAD
 import { spawnSync } from "node:child_process";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -21,6 +24,7 @@ import {
 installAndroidFixtureCleanup();
 
 describe("resolveAndroidVersion", () => {
+<<<<<<< HEAD
   it("rejects missing CLI option values before reading version files", () => {
     const result = spawnSync(
       process.execPath,
@@ -100,6 +104,8 @@ describe("resolveAndroidVersion", () => {
     expect(shortFlagResult.stderr).toBe("Missing value for --root.\n");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("parses pinned release versions and Android version codes", () => {
     const rootDir = writeAndroidFixture({
       version: "2026.6.2",

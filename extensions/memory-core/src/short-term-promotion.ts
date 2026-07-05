@@ -63,6 +63,14 @@ export const SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH = path.join(
   ".dreams",
   "phase-signals.json",
 );
+<<<<<<< HEAD
+=======
+export const SHORT_TERM_LOCK_RELATIVE_PATH = path.join(
+  "memory",
+  ".dreams",
+  "short-term-promotion.lock",
+);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const SHORT_TERM_LOCK_WAIT_TIMEOUT_MS = 10_000;
 const SHORT_TERM_LOCK_STALE_MS = 60_000;
 const SHORT_TERM_LOCK_RETRY_DELAY_MS = 40;
@@ -834,6 +842,20 @@ function isProcessLikelyAlive(pid: number): boolean {
   }
 }
 
+<<<<<<< HEAD
+=======
+async function canStealStaleLock(lockPath: string): Promise<boolean> {
+  const ownerPid = await fs
+    .readFile(lockPath, "utf-8")
+    .then((raw) => parseLockOwnerPid(raw))
+    .catch(() => null);
+  if (ownerPid === null) {
+    return true;
+  }
+  return !isProcessLikelyAlive(ownerPid);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function sleep(ms: number): Promise<void> {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
@@ -1302,6 +1324,7 @@ export async function loadShortTermPromotionDreamingStats(params: {
   };
 }
 
+<<<<<<< HEAD
 async function shortTermRecallSourceIsFile(sourcePath: string): Promise<boolean> {
   try {
     const stat = await fs.stat(sourcePath);
@@ -1312,12 +1335,37 @@ async function shortTermRecallSourceIsFile(sourcePath: string): Promise<boolean>
     }
     throw err;
   }
+=======
+async function shortTermRecallSourceExists(params: {
+  workspaceDir: string;
+  entry: Pick<ShortTermRecallEntry, "path">;
+}): Promise<boolean> {
+  const workspaceDir = params.workspaceDir.trim();
+  if (!workspaceDir) {
+    return false;
+  }
+  for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, params.entry.path)) {
+    try {
+      const stat = await fs.stat(sourcePath);
+      if (stat.isFile()) {
+        return true;
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        continue;
+      }
+      throw err;
+    }
+  }
+  return false;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export async function filterLiveShortTermRecallEntries(params: {
   workspaceDir: string;
   entries: ShortTermRecallEntry[];
 }): Promise<ShortTermRecallEntry[]> {
+<<<<<<< HEAD
   const workspaceDir = params.workspaceDir.trim();
   if (!workspaceDir) {
     return [];
@@ -1343,6 +1391,13 @@ export async function filterLiveShortTermRecallEntries(params: {
       }
       return { entry, exists };
     }),
+=======
+  const results = await Promise.all(
+    params.entries.map(async (entry) => ({
+      entry,
+      exists: await shortTermRecallSourceExists({ workspaceDir: params.workspaceDir, entry }),
+    })),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
   return results.filter((result) => result.exists).map((result) => result.entry);
 }
@@ -2810,6 +2865,10 @@ export async function removeGroundedShortTermCandidates(params: {
 
 export const testing = {
   parseLockOwnerPid,
+<<<<<<< HEAD
+=======
+  canStealStaleLock,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   isProcessLikelyAlive,
   readRecallStore: readStore,
   readPhaseSignalStore,

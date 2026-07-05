@@ -42,7 +42,10 @@ export function createReadinessChecker(deps: {
   startedAt: number;
   getStartupPending?: () => boolean;
   getStartupPendingReason?: () => string | undefined;
+<<<<<<< HEAD
   getGatewayDraining?: () => boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   shouldSkipChannelReadiness?: () => boolean;
   cacheTtlMs?: number;
@@ -62,12 +65,15 @@ export function createReadinessChecker(deps: {
         deps.getEventLoopHealth,
       );
     }
+<<<<<<< HEAD
     if (deps.getGatewayDraining?.()) {
       return withEventLoopHealth(
         { ready: false, failing: ["gateway-draining"], uptimeMs },
         deps.getEventLoopHealth,
       );
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (deps.shouldSkipChannelReadiness?.()) {
       return withEventLoopHealth({ ready: true, failing: [], uptimeMs }, deps.getEventLoopHealth);
     }

@@ -44,6 +44,7 @@ describe("extractTextCached", () => {
     expect(extractTextCached(message)).toBe("Final user answer");
   });
 
+<<<<<<< HEAD
   it("extracts text from persisted Responses content blocks", () => {
     expect(
       extractText({
@@ -74,6 +75,8 @@ describe("extractTextCached", () => {
     ).toBe("User-only block");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("prefers final_answer assistant text over commentary text", () => {
     const message = {
       role: "assistant",

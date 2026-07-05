@@ -1,0 +1,324 @@
+{
+  "scenarios": [
+    {
+      "name": "Model switch follow-up",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "runs on the default configured model",
+          "status": "pass",
+          "details": "gpt-5.5"
+        },
+        {
+          "name": "switches to the alternate model and continues",
+          "status": "pass",
+          "details": "Protocol note: model switch acknowledged. Continuing on gpt-5.5-alt."
+        }
+      ]
+    },
+    {
+      "name": "Codex auth profile mixed profiles",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "validates mixed-profile Codex auth selection",
+          "status": "pass",
+          "details": "selected=openai:qa-oauth rejected=openai:media-api"
+        }
+      ]
+    },
+    {
+      "name": "Personal no-fake-progress",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "gates completion claims on local proof",
+          "status": "pass",
+          "details": "Artifact: personal-progress-proof.txt\nStatus: local proof artifact written\nExternal status: not sent, not published, not uploaded, not merged\nPERSONAL-NO-FAKE-PROGRESS-OK"
+        }
+      ]
+    },
+    {
+      "name": "Late-night deploy helper chat",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "completes the full natural character chat and records the transcript",
+          "status": "pass",
+          "details": "ASSISTANT OpenClaw QA: <b>Reefing</b>\n<b>📖 Read</b> <code>from personal-progress-proof.txt</code> <i>running</i>\n\nASSISTANT OpenClaw QA: Protocol note: I reviewed the requested material. Evidence snippet: Personal no-fake-progress Status: local proof artifact written External status: not sent; not published; not uploaded; not merged Evidence: <code>PROGRESS_REQUEST.md</code> and <code>PROGRESS_EVIDENCE.md</code> were read before this artifact was\n\nASSISTANT OpenClaw QA: <b>Reefing</b>\n<b>📖 Read</b> <code>from PROGRESS_REQUEST.md</code> <i>running</i>\n\nASSISTANT OpenClaw QA: Protocol note: I reviewed the requested material. Evidence snippet: # Progress request Prepare a local proof note for a personal assistant handoff. Required contract: 1. Read <code>PROGRESS_REQUEST.md</code>. 2. Read <code>PROGRESS_EVIDENCE.md</code>. 3. Write ./personal-progress-proof.txt. 4. Include these exact"
+        }
+      ]
+    },
+    {
+      "name": "Compaction retry after mutating tool",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "keeps replay-unsafety explicit after a mutating write under compaction pressure",
+          "status": "pass",
+          "details": "Protocol note: replay unsafe after write.\ncompactionCount=0\nstatus=done"
+        }
+      ]
+    },
+    {
+      "name": "Reasoning-only recovery after replay-safe read",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "retries a replay-safe read into a visible answer",
+          "status": "pass",
+          "details": "REASONING-RECOVERED-OK\nrequests=3"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — fs.read",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises fs.read happy and failure paths",
+          "status": "pass",
+          "details": "read mock provider happy planned args (diagnostic only): {\"path\":\"QA_KICKOFF_TASK.md\"}\nread mock provider failure planned args (diagnostic only): {\"__qaFailureMode\":\"denied-input\"}"
+        }
+      ]
+    },
+    {
+      "name": "Long-running release audit",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "completes the sustained release audit with verified artifacts",
+          "status": "pass",
+          "details": "RELEASE-AUDIT-COMPLETE\n{\n  \"verified\": false,\n  \"findings\": [\n    {\n      \"id\": \"REL-GATEWAY-417\",\n      \"source\": \"src/gateway/reconnect.ts\",\n      \"status\": \"retry jitter verified, resume token fallback still needs manual spot check\",\n      \"verified\": true\n    },\n    {\n      \"id\": \"REL-CHANNEL-238\",\n      \"source\": \"src/channels/delivery.ts\",\n      \"status\": \"thread replies preserve ordering, root-channel fallback needs handoff note\",\n      \"verified\": true\n    },\n    {\n      \"id\": \"REL-CRON-904\",\n      \"source\": \"src/scheduling/cron.ts\",\n      \"status\": \"single-run lock verified for restart wakeups\",\n      \"verified\": true\n    },\n    {\n      \"id\": \"REL-MEMORY-552\",\n      \"source\": \"src/memory/recall.ts\",\n      \"status\": \"fallback summary survives empty memory search; ranking sample needs second reviewer\",\n      \"verified\": true\n    },\n    {\n      \"id\": \"REL-PLUGIN-319\",\n      \"source\": \"src/plugins/runtime.ts\",\n      \"status\": \"bundled runtime manifest loads cleanly after restart\",\n      \"verified\": true\n    },\n    {\n      \"id\": \"REL-INSTALL-846\",\n      \"source\": \"install/update.ts\",\n      \"status\": \"update smoke passed from previous stable tag\",\n      \"verified\": true\n    },\n    {\n      \"id\": \"REL-DOCS-611\",\n      \"source\": \"docs/operator-notes.md\",\n      \"status\": \"docs mention reconnect, cron, memory, plugin, and installer checks; channel ordering and UI notes need maintainer handoff\",\n      \"verified\": true\n    },\n    {\n      \"id\": \"REL-UI-BLOCKED\",\n      \"source\": \"ui/control-panel.ts\",\n      \"status\": \"blocked: source file was referenced by checklist but missing from the fixture\",\n      \"verified\": false\n    }\n  ]\n}\n\n\n# Release Handoff\n\nReady:\n- REL-GATEWAY-417: gateway reconnect handling checked in `src/gateway/reconnect.ts`.\n- REL-CRON-904: cron duplicate prevention checked in `src/scheduling/cron.ts`.\n- REL-PLUGIN-319: plugin runtime loading checked in `src/plugins/runtime.ts`.\n- REL-INSTALL-846: installer update path checked in `install/update.ts`.\n\nFollow-up:\n- REL-CHANNEL-238: channel delivery ordering needs maintainer handoff.\n- REL-MEMORY-552: memory recall fallback ranking sample needs a second reviewer.\n- REL-DOCS-611: docs update status needs channel ordering and UI notes.\n- `ui/control-panel.ts` is blocked/not found in the fixture.\n"
+        }
+      ]
+    },
+    {
+      "name": "Channel baseline conversation",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "ignores unmentioned channel chatter",
+          "status": "pass"
+        },
+        {
+          "name": "replies when mentioned in channel",
+          "status": "pass",
+          "details": "QA-CHANNEL-BASELINE-OK"
+        }
+      ]
+    },
+    {
+      "name": "Crestodian ring-zero setup",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "bootstraps config through Crestodian CLI",
+          "status": "pass",
+          "details": "stateDir=/tmp/openclaw/openclaw-qa-suite-r8kJ7b/crestodian-ring-zero-state\nconfigPath=/tmp/openclaw/openclaw-qa-suite-r8kJ7b/crestodian-ring-zero-state/openclaw.json\nagent={\"id\":\"reef\",\"name\":\"reef\",\"workspace\":\"/tmp/openclaw/openclaw-qa-suite-r8kJ7b/crestodian-reef-workspace\",\"agentDir\":\"/tmp/openclaw/openclaw-qa-suite-r8kJ7b/crestodian-ring-zero-state/agents/reef/agent\",\"model\":\"openai/gpt-5.2\"}\nDiscord SecretRef={\"source\":\"env\",\"provider\":\"default\",\"id\":\"DISCORD_BOT_TOKEN\"}"
+        }
+      ]
+    },
+    {
+      "name": "Bundled plugin skill runtime",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "loads a bundled plugin skill from dist-runtime",
+          "status": "pass",
+          "details": "{\n  \"exitCode\": 0,\n  \"signal\": null,\n  \"parseError\": null,\n  \"skill\": {\n    \"name\": \"prose\",\n    \"description\": \"OpenProse VM skill pack. Activate on any `prose` command, .prose files, or OpenProse mentions; orchestrates multi-agent workflows.\",\n    \"emoji\": \"🪶\",\n    \"eligible\": true,\n    \"disabled\": false,\n    \"blockedByAllowlist\": false,\n    \"blockedByAgentFilter\": false,\n    \"modelVisible\": true,\n    \"userInvocable\": true,\n    \"commandVisible\": true,\n    \"source\": \"openclaw-extra\",\n    \"bundled\": false,\n    \"homepage\": \"https://www.prose.md\",\n    \"missing\": {\n      \"bins\": [],\n      \"anyBins\": [],\n      \"env\": [],\n      \"config\": [],\n      \"os\": []\n    }\n  },\n  \"skillNames\": [\n    \"clawhub\",\n    \"diagram-maker\",\n    \"gh-issues\",\n    \"github\",\n    \"healthcheck\",\n    \"meme-maker\",\n    \"node-connect\",\n    \"node-inspect-debugger\",\n    \"notion\",\n    \"prose\",\n    \"python-debugpy\",\n    \"session-logs\",\n    \"skill-creator\",\n    \"spike\",\n    \"taskflow\",\n    \"taskflow-inbox-triage\",\n    \"tmux\",\n    \"weather\"\n  ],\n  \"skillPath\": \"dist-runtime/extensions/open-prose/skills/prose/SKILL.md\",\n  \"skillMdSymlink\": false,\n  \"stderr\": \"\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "Codex plugin install race",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "validates deterministic install-race gate",
+          "status": "pass",
+          "details": "expected=QA_CODEX_PLUGIN_TURN_OK count=1"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 12,
+    "passed": 12,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 89358,
+    "gatewayProcessCpuMs": 13000,
+    "gatewayCpuCoreRatio": 0.145,
+    "gatewayProcessRssStartBytes": 916467712,
+    "gatewayProcessRssEndBytes": 1013858304,
+    "gatewayProcessRssDeltaBytes": 97390592,
+    "gatewayProcessRssPeakBytes": 1068642304,
+    "gatewayProcessRssPeakDeltaBytes": 152174592,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:12:17.668Z",
+        "gatewayProcessRssBytes": 916467712
+      },
+      {
+        "label": "scenario:model-switch-follow-up:start",
+        "at": "2026-07-03T13:12:17.698Z",
+        "gatewayProcessRssBytes": 916467712
+      },
+      {
+        "label": "scenario:model-switch-follow-up:finish",
+        "at": "2026-07-03T13:12:23.236Z",
+        "gatewayProcessRssBytes": 1065459712
+      },
+      {
+        "label": "scenario:auth-profile-codex-mixed-profiles:start",
+        "at": "2026-07-03T13:12:23.244Z",
+        "gatewayProcessRssBytes": 1065459712
+      },
+      {
+        "label": "scenario:auth-profile-codex-mixed-profiles:finish",
+        "at": "2026-07-03T13:12:23.279Z",
+        "gatewayProcessRssBytes": 1065459712
+      },
+      {
+        "label": "scenario:personal-no-fake-progress:start",
+        "at": "2026-07-03T13:12:23.296Z",
+        "gatewayProcessRssBytes": 1065459712
+      },
+      {
+        "label": "scenario:personal-no-fake-progress:finish",
+        "at": "2026-07-03T13:12:25.928Z",
+        "gatewayProcessRssBytes": 1068642304
+      },
+      {
+        "label": "scenario:character-vibes-gollum:start",
+        "at": "2026-07-03T13:12:25.952Z",
+        "gatewayProcessRssBytes": 1068642304
+      },
+      {
+        "label": "scenario:character-vibes-gollum:finish",
+        "at": "2026-07-03T13:12:30.909Z",
+        "gatewayProcessRssBytes": 918802432
+      },
+      {
+        "label": "scenario:compaction-retry-mutating-tool:start",
+        "at": "2026-07-03T13:12:30.917Z",
+        "gatewayProcessRssBytes": 918802432
+      },
+      {
+        "label": "scenario:compaction-retry-mutating-tool:finish",
+        "at": "2026-07-03T13:12:36.596Z",
+        "gatewayProcessRssBytes": 935305216
+      },
+      {
+        "label": "scenario:reasoning-only-recovery-replay-safe-read:start",
+        "at": "2026-07-03T13:12:36.614Z",
+        "gatewayProcessRssBytes": 935305216
+      },
+      {
+        "label": "scenario:reasoning-only-recovery-replay-safe-read:finish",
+        "at": "2026-07-03T13:12:41.962Z",
+        "gatewayProcessRssBytes": 946237440
+      },
+      {
+        "label": "scenario:runtime-tool-fs-read:start",
+        "at": "2026-07-03T13:12:41.978Z",
+        "gatewayProcessRssBytes": 946237440
+      },
+      {
+        "label": "scenario:runtime-tool-fs-read:finish",
+        "at": "2026-07-03T13:12:46.254Z",
+        "gatewayProcessRssBytes": 963309568
+      },
+      {
+        "label": "scenario:long-running-release-audit:start",
+        "at": "2026-07-03T13:12:46.272Z",
+        "gatewayProcessRssBytes": 963313664
+      },
+      {
+        "label": "scenario:long-running-release-audit:finish",
+        "at": "2026-07-03T13:12:48.620Z",
+        "gatewayProcessRssBytes": 967958528
+      },
+      {
+        "label": "scenario:channel-chat-baseline:start",
+        "at": "2026-07-03T13:12:48.634Z",
+        "gatewayProcessRssBytes": 967958528
+      },
+      {
+        "label": "scenario:channel-chat-baseline:finish",
+        "at": "2026-07-03T13:12:52.447Z",
+        "gatewayProcessRssBytes": 974123008
+      },
+      {
+        "label": "scenario:crestodian-ring-zero-setup:start",
+        "at": "2026-07-03T13:12:52.460Z",
+        "gatewayProcessRssBytes": 974123008
+      },
+      {
+        "label": "scenario:crestodian-ring-zero-setup:finish",
+        "at": "2026-07-03T13:13:14.853Z",
+        "gatewayProcessRssBytes": 1013813248
+      },
+      {
+        "label": "scenario:bundled-plugin-skill-runtime:start",
+        "at": "2026-07-03T13:13:14.866Z",
+        "gatewayProcessRssBytes": 1013813248
+      },
+      {
+        "label": "scenario:bundled-plugin-skill-runtime:finish",
+        "at": "2026-07-03T13:13:19.486Z",
+        "gatewayProcessRssBytes": 1013858304
+      },
+      {
+        "label": "scenario:codex-plugin-install-race:start",
+        "at": "2026-07-03T13:13:19.493Z",
+        "gatewayProcessRssBytes": 1013858304
+      },
+      {
+        "label": "scenario:codex-plugin-install-race:finish",
+        "at": "2026-07-03T13:13:19.498Z",
+        "gatewayProcessRssBytes": 1013858304
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:13:19.509Z",
+        "gatewayProcessRssBytes": 1013858304
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:11:50.140Z",
+    "finishedAt": "2026-07-03T13:13:19.498Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "model-switch-follow-up",
+      "auth-profile-codex-mixed-profiles",
+      "personal-no-fake-progress",
+      "character-vibes-gollum",
+      "compaction-retry-mutating-tool",
+      "reasoning-only-recovery-replay-safe-read",
+      "runtime-tool-fs-read",
+      "long-running-release-audit",
+      "channel-chat-baseline",
+      "crestodian-ring-zero-setup",
+      "bundled-plugin-skill-runtime",
+      "codex-plugin-install-race"
+    ],
+    "runtimePair": null
+  }
+}

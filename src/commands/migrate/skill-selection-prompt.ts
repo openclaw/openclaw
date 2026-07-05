@@ -255,3 +255,13 @@ export function promptMigrationSkillSelectionValues(
 
   return prompt.prompt();
 }
+<<<<<<< HEAD
+=======
+
+/**
+ * Compatibility alias for plugin selection prompts that share the same picker.
+ *
+ * @deprecated Use promptMigrationSkillSelectionValues.
+ */
+export const promptMigrationSelectionValues = promptMigrationSkillSelectionValues;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

@@ -10,11 +10,17 @@ import {
   collectQaSuitePluginIds,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
+<<<<<<< HEAD
   resolveQaSuiteScenarioChannel,
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
   scenarioRequiresIsolatedQaSuiteWorker,
+=======
+  resolveQaSuiteWorkerStartStaggerMs,
+  resolveQaSuiteOutputDir,
+  scenarioRequiresControlUi,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   selectQaFlowSuiteScenarios,
   shouldUseIsolatedQaSuiteScenarioWorkers,
 } from "./suite-planning.js";
@@ -86,6 +92,7 @@ describe("qa suite planning helpers", () => {
     }
   });
 
+<<<<<<< HEAD
   it("creates unique default suite output dirs inside the repo root", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-suite-default-root-"));
     try {
@@ -102,6 +109,8 @@ describe("qa suite planning helpers", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects symlinked suite output dirs that escape the repo root", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-suite-root-"));
     const outsideRoot = await mkdtemp(path.join(os.tmpdir(), "qa-suite-outside-"));
@@ -219,6 +228,7 @@ describe("qa suite planning helpers", () => {
         }),
       ).toBe(1500);
     }
+<<<<<<< HEAD
     expect(resolveQaSuiteWorkerStartStaggerMs(4, {}, 500)).toBe(500);
     expect(
       resolveQaSuiteWorkerStartStaggerMs(
@@ -229,6 +239,8 @@ describe("qa suite planning helpers", () => {
         500,
       ),
     ).toBe(25);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("keeps explicitly requested provider-specific scenarios", () => {
@@ -269,6 +281,7 @@ describe("qa suite planning helpers", () => {
     ).toEqual(["third", "first"]);
   });
 
+<<<<<<< HEAD
   it("resolves driver channels from scenario execution with explicit and default fallbacks", () => {
     expect(
       resolveQaSuiteScenarioChannel({
@@ -319,6 +332,8 @@ describe("qa suite planning helpers", () => {
     expect(scenarioRequiresIsolatedQaSuiteWorker(makeQaSuiteTestScenario("plain"))).toBe(false);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("collects unique scenario-declared bundled plugins in encounter order", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic", { plugins: ["active-memory", "memory-wiki"] }),
@@ -408,15 +423,21 @@ describe("qa suite planning helpers", () => {
         plugins: ["browser"],
         gatewayRuntime: { forwardHostHome: true },
       }),
+<<<<<<< HEAD
       makeQaSuiteTestScenario("otel-stdout", {
         plugins: ["diagnostics-otel"],
         gatewayRuntime: { preserveDebugArtifacts: true },
       }),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ];
 
     expect(collectQaSuiteGatewayRuntimeOptions(scenarios)).toEqual({
       forwardHostHome: true,
+<<<<<<< HEAD
       preserveDebugArtifacts: true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   });
 
@@ -564,6 +585,7 @@ describe("qa suite planning helpers", () => {
     ).toEqual(["generic", "live-only"]);
   });
 
+<<<<<<< HEAD
   it("filters channel-driver-specific scenarios from implicit suite selections", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic"),
@@ -612,6 +634,8 @@ describe("qa suite planning helpers", () => {
     ).toEqual(["qa-channel-only"]);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps live-only runtime parity scenarios out of implicit mock selections", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic"),

@@ -19,7 +19,12 @@ vi.mock("./server-context.js", () => ({
   listKnownProfileNames: listKnownProfileNamesMock,
 }));
 
+<<<<<<< HEAD
 const { stopKnownBrowserProfiles } = await import("./server-lifecycle.js");
+=======
+const { ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } =
+  await import("./server-lifecycle.js");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 beforeEach(() => {
   createBrowserRouteContextMock.mockClear();
@@ -27,6 +32,20 @@ beforeEach(() => {
   stopOpenClawChromeMock.mockClear();
 });
 
+<<<<<<< HEAD
+=======
+describe("ensureExtensionRelayForProfiles", () => {
+  it("is a no-op after removing the Chrome extension relay path", async () => {
+    await expect(
+      ensureExtensionRelayForProfiles({
+        resolved: { profiles: {} } as never,
+        onWarn: vi.fn(),
+      }),
+    ).resolves.toBeUndefined();
+  });
+});
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("stopKnownBrowserProfiles", () => {
   it("stops all known profiles and ignores per-profile failures", async () => {
     listKnownProfileNamesMock.mockReturnValue(["openclaw", "user"]);

@@ -1,6 +1,11 @@
 // Control UI tests cover chat flow behavior.
+<<<<<<< HEAD
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+=======
+import { chromium, type Browser, type Page } from "playwright";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -15,9 +20,14 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 
+<<<<<<< HEAD
 let server: ControlUiE2eServer;
 const contextBrowsers = new WeakMap<BrowserContext, Browser>();
 const openBrowserContexts = new Set<BrowserContext>();
+=======
+let browser: Browser;
+let server: ControlUiE2eServer;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function requireRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -90,6 +100,7 @@ async function scrollChatThreadToTop(page: Page): Promise<void> {
   });
 }
 
+<<<<<<< HEAD
 async function newBrowserContext(options: Parameters<Browser["newContext"]>[0]) {
   const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   let context: BrowserContext | undefined;
@@ -136,6 +147,8 @@ async function visibleChatBubbleTexts(page: Page): Promise<string[]> {
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function controlUiEventPayloads(
   page: Page,
   event: string,
@@ -220,6 +233,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       );
     }
     server = await startControlUiE2eServer();
+<<<<<<< HEAD
   });
 
   afterAll(async () => {
@@ -233,6 +247,18 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
   it("sends a chat turn through the GUI and renders the final Gateway event", async () => {
     const context = await newBrowserContext({
+=======
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+  });
+
+  afterAll(async () => {
+    await browser?.close();
+    await server?.close();
+  });
+
+  it("sends a chat turn through the GUI and renders the final Gateway event", async () => {
+    const context = await browser.newContext({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -267,6 +293,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await page.getByText("Harness verified.").waitFor({ timeout: 10_000 });
     } finally {
+<<<<<<< HEAD
       await closeBrowserContext(context);
     }
   });
@@ -319,11 +346,18 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(await composer.inputValue()).toBe(prompt);
     } finally {
       await closeBrowserContext(context);
+=======
+      await context.close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
   it("copies a code block over a non-secure context via the execCommand fallback", async () => {
+<<<<<<< HEAD
     const context = await newBrowserContext({
+=======
+    const context = await browser.newContext({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -376,12 +410,20 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(copied).toContain(code);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     } finally {
+<<<<<<< HEAD
       await closeBrowserContext(context);
+=======
+      await context.close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
   it("starts the workspace files panel collapsed and toggles it open", async () => {
+<<<<<<< HEAD
     const context = await newBrowserContext({
+=======
+    const context = await browser.newContext({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -473,12 +515,20 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.setViewportSize({ height: 900, width: 1000 });
       expect(await page.locator(".chat-workspace-rail").isHidden()).toBe(true);
     } finally {
+<<<<<<< HEAD
       await closeBrowserContext(context);
+=======
+      await context.close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
   it("renders stable markdown during a streaming chat turn and finalizes the tail", async () => {
+<<<<<<< HEAD
     const context = await newBrowserContext({
+=======
+    const context = await browser.newContext({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -537,12 +587,20 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.locator(".chat-thread strong").getByText("tail").waitFor({ timeout: 10_000 });
       expect(await page.locator(".markdown-plain-text-fallback").count()).toBe(0);
     } finally {
+<<<<<<< HEAD
       await closeBrowserContext(context);
+=======
+      await context.close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
   it("keeps chat usable while sessions are still loading", async () => {
+<<<<<<< HEAD
     const context = await newBrowserContext({
+=======
+    const context = await browser.newContext({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -584,12 +642,20 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         timeout: 10_000,
       });
     } finally {
+<<<<<<< HEAD
       await closeBrowserContext(context);
+=======
+      await context.close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
   it("sends the first chat turn while agents startup loading is still pending", async () => {
+<<<<<<< HEAD
     const context = await newBrowserContext({
+=======
+    const context = await browser.newContext({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -751,12 +817,20 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await gateway.waitForRequest("commands.list");
       expect(await gateway.getRequests("agents.list")).toHaveLength(0);
     } finally {
+<<<<<<< HEAD
       await closeBrowserContext(context);
+=======
+      await context.close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
   it("keeps streamed text visible when a chat error terminates the turn", async () => {
+<<<<<<< HEAD
     const context = await newBrowserContext({
+=======
+    const context = await browser.newContext({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -798,12 +872,20 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.getByText(partialText).waitFor({ timeout: 10_000 });
       await page.getByText("Error: gateway disconnected").waitFor({ timeout: 10_000 });
     } finally {
+<<<<<<< HEAD
       await closeBrowserContext(context);
+=======
+      await context.close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
   it("keeps a delayed chat.send ACK visible as pending until the ACK resolves", async () => {
+<<<<<<< HEAD
     const context = await newBrowserContext({
+=======
+    const context = await browser.newContext({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -837,12 +919,20 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.locator(".chat-queue").waitFor({ state: "detached", timeout: 10_000 });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
     } finally {
+<<<<<<< HEAD
       await closeBrowserContext(context);
+=======
+      await context.close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
   it("scrolls a delayed pending send into view before the ACK resolves", async () => {
+<<<<<<< HEAD
     const context = await newBrowserContext({
+=======
+    const context = await browser.newContext({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -893,6 +983,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
     } finally {
+<<<<<<< HEAD
       await closeBrowserContext(context);
     }
   });
@@ -1003,11 +1094,18 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .toBe(true);
     } finally {
       await closeBrowserContext(context);
+=======
+      await context.close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
   it("keeps rejected pre-ACK sends visible and restores the draft", async () => {
+<<<<<<< HEAD
     const context = await newBrowserContext({
+=======
+    const context = await browser.newContext({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -1034,12 +1132,20 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.locator(".chat-queue").getByText(prompt).waitFor({ timeout: 10_000 });
       expect(await composer.inputValue()).toBe(prompt);
     } finally {
+<<<<<<< HEAD
       await closeBrowserContext(context);
+=======
+      await context.close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
   it("retries an ACK-lost send after reconnect with the same idempotency key", async () => {
+<<<<<<< HEAD
     const context = await newBrowserContext({
+=======
+    const context = await browser.newContext({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -1067,12 +1173,20 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(secondParams.message).toBe(prompt);
       await page.locator(".chat-queue").waitFor({ state: "detached", timeout: 10_000 });
     } finally {
+<<<<<<< HEAD
       await closeBrowserContext(context);
+=======
+      await context.close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
   it("keeps a session model override selected after switching away and back", async () => {
+<<<<<<< HEAD
     const context = await newBrowserContext({
+=======
+    const context = await browser.newContext({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -1139,12 +1253,20 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         "bedrock/claude-opus-4.5",
       );
     } finally {
+<<<<<<< HEAD
       await closeBrowserContext(context);
+=======
+      await context.close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
   it("shows a pending send while a model override save is still pending", async () => {
+<<<<<<< HEAD
     const context = await newBrowserContext({
+=======
+    const context = await browser.newContext({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -1186,12 +1308,20 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(params.message).toBe(prompt);
       expect(params.sessionKey).toBe("agent:main:session-a");
     } finally {
+<<<<<<< HEAD
       await closeBrowserContext(context);
+=======
+      await context.close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
   it("refreshes history after a tool-call window disconnects and reconnects", async () => {
+<<<<<<< HEAD
     const context = await newBrowserContext({
+=======
+    const context = await browser.newContext({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -1242,7 +1372,11 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.getByText("Recovered from refreshed history.").waitFor({ timeout: 15_000 });
       expect(await page.locator(".chat-queue").count()).toBe(0);
     } finally {
+<<<<<<< HEAD
       await closeBrowserContext(context);
+=======
+      await context.close();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 });

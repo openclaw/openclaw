@@ -85,9 +85,13 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   if (typeof verbose === "string" && verbose.length > 0) {
     flags.push(`verbose:${verbose}`);
   }
+<<<<<<< HEAD
   if (entry?.fastMode === "auto") {
     flags.push("fast:auto");
   } else if (typeof entry?.fastMode === "boolean") {
+=======
+  if (typeof entry?.fastMode === "boolean") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     flags.push(entry.fastMode ? "fast" : "fast:off");
   }
   const reasoning = entry?.reasoningLevel;
@@ -180,6 +184,7 @@ function compareSessionCandidatesByUpdatedAt(left: SessionCandidate, right: Sess
   return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
 }
 
+<<<<<<< HEAD
 function selectRecentSessionCandidates(
   candidates: SessionCandidate[],
   limit: number,
@@ -201,6 +206,8 @@ function selectRecentSessionCandidates(
   return selected;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function listSessionCandidates(storePath: string, agentId?: string) {
   return (
     listSessionEntries({
@@ -214,6 +221,10 @@ function listSessionCandidates(storePath: string, agentId?: string) {
         entry,
         updatedAt: entry?.updatedAt ?? null,
       }))
+<<<<<<< HEAD
+=======
+      .toSorted(compareSessionCandidatesByUpdatedAt)
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
 }
 
@@ -491,10 +502,16 @@ export async function getStatusSummary(
     agentList.agents.map(async (agent) => {
       const storePath = resolveStorePath(cfg.session?.store, { agentId: agent.id });
       const candidates = loadSessionCandidates(storePath, agent.id);
+<<<<<<< HEAD
       const sessions = await buildSessionRows(
         selectRecentSessionCandidates(candidates, RECENT_SESSION_LIMIT),
         { agentIdOverride: agent.id },
       );
+=======
+      const sessions = await buildSessionRows(candidates.slice(0, RECENT_SESSION_LIMIT), {
+        agentIdOverride: agent.id,
+      });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return {
         agentId: agent.id,
         path: storePath,
@@ -513,10 +530,16 @@ export async function getStatusSummary(
         source.storePath,
         pathCounts.get(source.storePath) === 1 ? source.agentId : undefined,
       ),
+<<<<<<< HEAD
     );
   const recent = await buildSessionRows(
     selectRecentSessionCandidates(allSessions, RECENT_SESSION_LIMIT),
   );
+=======
+    )
+    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  const recent = await buildSessionRows(allSessions.slice(0, RECENT_SESSION_LIMIT));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const totalSessions = allSessions.length;
 
   const summary: StatusSummary = {

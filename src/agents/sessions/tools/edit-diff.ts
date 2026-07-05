@@ -79,6 +79,7 @@ export interface Edit {
   newText: string;
 }
 
+<<<<<<< HEAD
 export class EditNoChangeError extends Error {
   constructor(message: string) {
     super(message);
@@ -86,6 +87,8 @@ export class EditNoChangeError extends Error {
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 interface MatchedEdit {
   editIndex: number;
   matchIndex: number;
@@ -186,6 +189,7 @@ function getEmptyOldTextError(path: string, editIndex: number, totalEdits: numbe
   return new Error(`edits[${editIndex}].oldText must not be empty in ${path}.`);
 }
 
+<<<<<<< HEAD
 function getNoChangeError(path: string, totalEdits: number): EditNoChangeError {
   if (totalEdits === 1) {
     return new EditNoChangeError(
@@ -195,6 +199,15 @@ function getNoChangeError(path: string, totalEdits: number): EditNoChangeError {
   return new EditNoChangeError(
     `No changes made to ${path}. The replacements produced identical content.`,
   );
+=======
+function getNoChangeError(path: string, totalEdits: number): Error {
+  if (totalEdits === 1) {
+    return new Error(
+      `No changes made to ${path}. The replacement produced identical content. This might indicate an issue with special characters or the text not existing as expected.`,
+    );
+  }
+  return new Error(`No changes made to ${path}. The replacements produced identical content.`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /**
@@ -427,6 +440,7 @@ export interface EditDiffError {
   error: string;
 }
 
+<<<<<<< HEAD
 export function validateNoOpEditTargets(
   normalizedContent: string,
   noOpEdits: Edit[],
@@ -478,6 +492,8 @@ export function splitNoOpEdits(
   return { noOpEdits, realEdits };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Compute the diff for one or more edit operations without applying them.
  * Used for preview rendering in the TUI before the tool executes.
@@ -519,6 +535,7 @@ export async function computeEditsDiff(
     // Strip BOM before matching (LLM won't include invisible BOM in oldText)
     const { text: content } = stripBom(rawContent);
     const normalizedContent = normalizeToLF(content);
+<<<<<<< HEAD
     const { noOpEdits, realEdits } = splitNoOpEdits(normalizedContent, edits, path);
     validateNoOpEditTargets(normalizedContent, noOpEdits, realEdits, path);
     if (realEdits.length === 0) {
@@ -527,15 +544,23 @@ export async function computeEditsDiff(
     const { baseContent, newContent } = applyEditsToNormalizedContent(
       normalizedContent,
       realEdits,
+=======
+    const { baseContent, newContent } = applyEditsToNormalizedContent(
+      normalizedContent,
+      edits,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       path,
     );
 
     // Generate the diff
     return generateDiffString(baseContent, newContent);
   } catch (err) {
+<<<<<<< HEAD
     if (err instanceof EditNoChangeError) {
       return { diff: "", firstChangedLine: undefined };
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return { error: err instanceof Error ? err.message : String(err) };
   }
 }

@@ -35,7 +35,10 @@ scenario:
     kind: flow
     summary: Verify message_tool visible replies degrade to automatic delivery when the active group policy removes message.
     config:
+<<<<<<< HEAD
       requiredChannelDriver: qa-channel
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       conversationId: qa-fallback-room
       promptSnippet: qa group message unavailable fallback check
       prompt: "@openclaw qa group message unavailable fallback check. exact marker: `QA-GROUP-FALLBACK-OK`"

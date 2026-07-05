@@ -1,5 +1,9 @@
 /** Tests Chutes OAuth token exchange and refresh HTTP flows. */
+<<<<<<< HEAD
 import { describe, expect, it, vi } from "vitest";
+=======
+import { describe, expect, it } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import {
   CHUTES_TOKEN_ENDPOINT,
@@ -116,6 +120,7 @@ describe("chutes-oauth", () => {
     ).rejects.toThrow("Chutes token exchange returned invalid expires_in");
   });
 
+<<<<<<< HEAD
   it("cancels failed userinfo response bodies during token exchange", async () => {
     const userInfoResponse = new Response("temporarily unavailable", { status: 503 });
     const cancel = vi.spyOn(userInfoResponse.body!, "cancel").mockResolvedValue(undefined);
@@ -155,6 +160,8 @@ describe("chutes-oauth", () => {
     expect((creds as unknown as { accountId?: string }).accountId).toBeUndefined();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("refreshes tokens using stored client id and falls back to old refresh token", async () => {
     const fetchFn = withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = urlToString(input);

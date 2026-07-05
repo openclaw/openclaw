@@ -29,7 +29,10 @@ const cliMocks = vi.hoisted(() => ({
 
 let createOpenShellSandboxBackendManager: typeof import("./backend.js").createOpenShellSandboxBackendManager;
 let createOpenShellSandboxBackendFactory: typeof import("./backend.js").createOpenShellSandboxBackendFactory;
+<<<<<<< HEAD
 let buildOpenShellDirectoryUploadArgs: typeof import("./backend.js").buildOpenShellDirectoryUploadArgs;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 let ensureOpenShellRemoteRealDirectoryScript: typeof import("./backend.js").ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT;
 
 describe("openshell cli helpers", () => {
@@ -173,7 +176,10 @@ describe("openshell backend manager", () => {
       };
     });
     ({
+<<<<<<< HEAD
       buildOpenShellDirectoryUploadArgs,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT: ensureOpenShellRemoteRealDirectoryScript,
       createOpenShellSandboxBackendFactory,
       createOpenShellSandboxBackendManager,
@@ -189,6 +195,7 @@ describe("openshell backend manager", () => {
     vi.clearAllMocks();
   });
 
+<<<<<<< HEAD
   it("uploads staged directory snapshots to the managed remote directory itself", () => {
     expect(
       buildOpenShellDirectoryUploadArgs({
@@ -213,6 +220,8 @@ describe("openshell backend manager", () => {
     ).toBe("/sandbox/project");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.runIf(process.platform !== "win32")(
     "preserves caller positional args after OpenShell remote directory validation",
     async () => {
@@ -733,6 +742,7 @@ describe("openshell fs bridges", () => {
     expect(backend["runRemoteShellScript"]).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("rejects cross-root mirror renames before the remote backend commit", async () => {
     const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
     const agentWorkspaceDir = await makeTempDir("openclaw-openshell-agent-fs-");
@@ -817,6 +827,8 @@ describe("openshell fs bridges", () => {
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("removes remote mirror paths through the pinned backend operation", async () => {
     const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
     await fs.writeFile(path.join(workspaceDir, "target.txt"), "payload", "utf8");
@@ -843,6 +855,7 @@ describe("openshell fs bridges", () => {
     expect(backend["runRemoteShellScript"]).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("removes recursive local mirror directories without raw path deletion", async () => {
     const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
     await fs.mkdir(path.join(workspaceDir, "nested", "child"), { recursive: true });
@@ -1024,6 +1037,8 @@ describe("openshell fs bridges", () => {
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps local mirror state unchanged when remote pinned mkdir is rejected", async () => {
     const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
     const backend = createMirrorBackendMock();

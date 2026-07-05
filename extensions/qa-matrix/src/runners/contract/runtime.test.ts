@@ -1,5 +1,8 @@
 // Qa Matrix tests cover runtime plugin behavior.
+<<<<<<< HEAD
 import path from "node:path";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { renderQaMarkdownReport } from "openclaw/plugin-sdk/qa-runtime";
@@ -78,6 +81,7 @@ function buildMatrixQaSummaryInput(
 }
 
 describe("matrix live qa runtime", () => {
+<<<<<<< HEAD
   it("uses unique default artifact directories", () => {
     const repoRoot = "/repo";
     const firstOutputDir = liveTesting.resolveMatrixQaOutputDir({ repoRoot });
@@ -91,6 +95,8 @@ describe("matrix live qa runtime", () => {
     ).toBe(".artifacts/custom");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("prints Matrix QA progress by default for non-interactive runs", () => {
     const previous = process.env.OPENCLAW_QA_MATRIX_PROGRESS;
     delete process.env.OPENCLAW_QA_MATRIX_PROGRESS;
@@ -107,6 +113,7 @@ describe("matrix live qa runtime", () => {
     }
   });
 
+<<<<<<< HEAD
   it("summarizes relevant gateway stderr lines for Matrix QA failures", () => {
     const summary = liveTesting.summarizeMatrixQaGatewayStderrLog(
       [
@@ -129,6 +136,8 @@ describe("matrix live qa runtime", () => {
     expect(liveTesting.summarizeMatrixQaGatewayStderrLog("\n\n")).toBeUndefined();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("normalizes the Matrix QA hard timeout env", () => {
     const previous = process.env.OPENCLAW_QA_MATRIX_TIMEOUT_MS;
     try {

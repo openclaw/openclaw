@@ -1,14 +1,24 @@
 {
   "name": "@openclaw/pixverse-provider",
+<<<<<<< HEAD
   "version": "2026.6.10",
+=======
+  "version": "2026.6.8",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/pixverse-provider",
+<<<<<<< HEAD
       "version": "2026.6.10",
       "peerDependencies": {
         "openclaw": ">=2026.6.10"
+=======
+      "version": "2026.6.8",
+      "peerDependencies": {
+        "openclaw": ">=2026.6.8"
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
       "peerDependenciesMeta": {
         "openclaw": {

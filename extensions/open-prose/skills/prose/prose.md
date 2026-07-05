@@ -63,6 +63,7 @@ use "https://example.com/my-program.prose"  # Direct URL
 use "alice/research" as research             # Registry shorthand
 ```
 
+<<<<<<< HEAD
 Top-level remote runs are explicit user requests. Remote `use` statements are
 transitive code dependencies. Before fetching any remote `use` target, collect
 the exact resolved targets, show them to the operator, and require the operator
@@ -70,6 +71,8 @@ to reply exactly `approve remote prose imports` for this run. If approval is not
 given, abort the run before fetching, parsing, registering, or executing the
 remote imports.
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 ---
 
 ## Why This Is a VM
@@ -120,6 +123,7 @@ When you execute a `.prose` program, you ARE the virtual machine. This is not a 
 
 Traditional dependency injection containers wire up components from configuration. You do the same—but with understanding:
 
+<<<<<<< HEAD
 | Declared Primitive          | Your Responsibility                                                     |
 | --------------------------- | ----------------------------------------------------------------------- |
 | `use "handle/slug" as name` | Resolve import, require approval if remote, register in Import Registry |
@@ -132,6 +136,20 @@ Traditional dependency injection containers wire up components from configuratio
 | `parallel:` branches        | Coordinate concurrent execution, collect results                        |
 | `block review(topic):`      | Store this reusable component, invoke when called                       |
 | `name(input: value)`        | Invoke imported program with inputs, receive outputs                    |
+=======
+| Declared Primitive          | Your Responsibility                                        |
+| --------------------------- | ---------------------------------------------------------- |
+| `use "handle/slug" as name` | Fetch program from p.prose.md, register in Import Registry |
+| `input topic: "..."`        | Bind value from caller, make available as variable         |
+| `output findings = ...`     | Mark value as output, return to caller on completion       |
+| `agent researcher:`         | Register this agent template for later use                 |
+| `session: researcher`       | Resolve the agent, merge properties, spawn the session     |
+| `resume: captain`           | Load agent memory, spawn session with memory context       |
+| `context: { a, b }`         | Wire the outputs of `a` and `b` into this session's input  |
+| `parallel:` branches        | Coordinate concurrent execution, collect results           |
+| `block review(topic):`      | Store this reusable component, invoke when called          |
+| `name(input: value)`        | Invoke imported program with inputs, receive outputs       |
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 You are the container that holds these declarations and wires them together at runtime. The program declares _what_; you determine _how_ to connect them.
 
@@ -705,9 +723,13 @@ Query the database to access the content.
 
 ## Program Composition
 
+<<<<<<< HEAD
 Programs can import and invoke other programs, enabling modular workflows.
 Registry and direct-URL imports are remote code dependencies and require
 operator approval before fetching.
+=======
+Programs can import and invoke other programs, enabling modular workflows. Programs are fetched from the registry at `p.prose.md`.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 ### Importing Programs
 
@@ -718,13 +740,18 @@ use "alice/research"
 use "bob/critique" as critic
 ```
 
+<<<<<<< HEAD
 The import path can be a registry reference (`handle/slug`) or a direct HTTP(S)
 URL. An optional alias (`as name`) allows referencing by a shorter name.
+=======
+The import path follows the format `handle/slug`. An optional alias (`as name`) allows referencing by a shorter name.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 ### Program URL Resolution
 
 When the VM encounters a `use` statement:
 
+<<<<<<< HEAD
 1. Resolve the import target.
 2. If the target is remote (`http://`, `https://`, or registry shorthand), pause
    before fetching and require the operator to approve the full remote import
@@ -732,6 +759,11 @@ When the VM encounters a `use` statement:
 3. Fetch the program only after approval.
 4. Parse the program to extract its contract (inputs/outputs).
 5. Register the program in the Import Registry.
+=======
+1. Fetch the program from `https://p.prose.md/handle/slug`
+2. Parse the program to extract its contract (inputs/outputs)
+3. Register the program in the Import Registry
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 ### Input Declarations
 
@@ -1170,6 +1202,7 @@ Before spawning, substitute `{varname}` with variable values.
 
 ```
 function execute(program, inputs?):
+<<<<<<< HEAD
   1. Collect all use statements, resolve import targets
   2. If remote imports are present, require operator approval before fetch
   3. Fetch approved imports and register them
@@ -1177,6 +1210,13 @@ function execute(program, inputs?):
   5. Collect all agent definitions
   6. Collect all block definitions
   7. For each statement in order:
+=======
+  1. Collect all use statements, fetch and register imports
+  2. Collect all input declarations, bind values from caller
+  3. Collect all agent definitions
+  4. Collect all block definitions
+  5. For each statement in order:
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
      - If session: spawn via Task, await result
      - If resume: load memory, spawn via Task, await result
      - If let/const: execute RHS, bind result
@@ -1235,7 +1275,11 @@ When passing context to sessions:
 
 The OpenProse VM:
 
+<<<<<<< HEAD
 1. **Imports** approved programs via `use` statements
+=======
+1. **Imports** programs from `p.prose.md` via `use` statements
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 2. **Binds** inputs from caller to program variables
 3. **Parses** the program structure
 4. **Collects** definitions (agents, blocks)

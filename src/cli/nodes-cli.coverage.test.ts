@@ -15,7 +15,11 @@ type NodeInvokeCall = {
 
 let lastNodeInvokeCall: NodeInvokeCall | null = null;
 
+<<<<<<< HEAD
 const callGateway = vi.fn(async (opts: NodeInvokeCall): Promise<unknown> => {
+=======
+const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (opts.method === "node.list") {
     return {
       nodes: [
@@ -123,6 +127,7 @@ describe("nodes-cli coverage", () => {
     });
   });
 
+<<<<<<< HEAD
   it("explains unknown nodes approve request ids with the current pending requests", async () => {
     callGateway.mockResolvedValueOnce({
       pending: [{ requestId: "current-request", nodeId: "n1", ts: Date.now() }],
@@ -199,6 +204,8 @@ describe("nodes-cli coverage", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ approved: true });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("blocks system.run on nodes invoke", async () => {
     await expect(
       sharedProgram.parseAsync(["nodes", "invoke", "--node", "mac-1", "--command", "system.run"], {

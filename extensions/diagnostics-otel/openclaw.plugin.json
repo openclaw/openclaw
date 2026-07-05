@@ -1,7 +1,11 @@
 {
   "id": "diagnostics-otel",
   "name": "Diagnostics OpenTelemetry",
+<<<<<<< HEAD
   "description": "OpenClaw diagnostics OpenTelemetry exporter for metrics, traces, and logs.",
+=======
+  "description": "OpenClaw diagnostics OpenTelemetry exporter for metrics and traces.",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "activation": {
     "onStartup": true
   },

@@ -44,6 +44,7 @@ describe("route-args", () => {
     expect(parseStatusRouteArgs(["node", "openclaw", "status", "--timeout"])).toBeNull();
   });
 
+<<<<<<< HEAD
   it("defers status/health --timeout with a present-but-invalid value to Commander", () => {
     // Regression: the route-first fast path used to silently accept invalid
     // --timeout values (0, negative, non-numeric, unit-suffixed) and run with
@@ -86,6 +87,8 @@ describe("route-args", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("parses gateway status route args and rejects probe-only ssh flags", () => {
     expect(
       parseGatewayStatusRouteArgs([

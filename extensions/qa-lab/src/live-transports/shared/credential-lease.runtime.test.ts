@@ -165,6 +165,7 @@ describe("credential lease runtime", () => {
     expect(chunkRequest.leaseToken).toBe("lease-chunked");
   });
 
+<<<<<<< HEAD
   it("validates chunked convex payload length as utf8 bytes", async () => {
     const serialized = JSON.stringify({
       groupId: "-100123",
@@ -327,6 +328,8 @@ describe("credential lease runtime", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("defaults convex credential role to maintainer outside CI", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
       jsonResponse({

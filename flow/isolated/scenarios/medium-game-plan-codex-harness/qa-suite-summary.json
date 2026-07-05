@@ -1,0 +1,78 @@
+{
+  "scenarios": [
+    {
+      "name": "Medium game plan Codex harness",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "confirms GPT-5.5 Codex harness target",
+          "status": "pass",
+          "details": "mock mode: parsed medium-game-plan-codex-harness"
+        },
+        {
+          "name": "builds the medium game artifact",
+          "status": "pass",
+          "details": "mock mode: skipped live medium-game build"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 50174,
+    "gatewayProcessCpuMs": 0,
+    "gatewayCpuCoreRatio": 0,
+    "gatewayProcessRssStartBytes": 821768192,
+    "gatewayProcessRssEndBytes": 834535424,
+    "gatewayProcessRssDeltaBytes": 12767232,
+    "gatewayProcessRssPeakBytes": 834535424,
+    "gatewayProcessRssPeakDeltaBytes": 12767232,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:16:57.323Z",
+        "gatewayProcessRssBytes": 821768192
+      },
+      {
+        "label": "scenario:medium-game-plan-codex-harness:start",
+        "at": "2026-07-03T13:16:57.349Z",
+        "gatewayProcessRssBytes": 823345152
+      },
+      {
+        "label": "scenario:medium-game-plan-codex-harness:finish",
+        "at": "2026-07-03T13:16:57.380Z",
+        "gatewayProcessRssBytes": 828874752
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:16:57.438Z",
+        "gatewayProcessRssBytes": 834535424
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:16:07.206Z",
+    "finishedAt": "2026-07-03T13:16:57.380Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "medium-game-plan-codex-harness"
+    ],
+    "runtimePair": null
+  }
+}

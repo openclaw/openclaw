@@ -107,6 +107,10 @@ vi.mock("../process/supervisor/index.js", () => ({
     },
     cancel: vi.fn(),
     cancelScope: vi.fn(),
+<<<<<<< HEAD
+=======
+    reconcileOrphans: vi.fn(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     getRecord: vi.fn(),
   }),
 }));
@@ -216,6 +220,7 @@ describe("exec PATH login shell merge", () => {
     }
   });
 
+<<<<<<< HEAD
   it("fails without running when an explicit workdir is unavailable", async () => {
     const missingWorkdir = path.join(
       os.tmpdir(),
@@ -239,6 +244,8 @@ describe("exec PATH login shell merge", () => {
     expect(value).not.toMatch(/^ok/);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("merges login-shell PATH for host=gateway", async () => {
     if (isWin) {
       return;

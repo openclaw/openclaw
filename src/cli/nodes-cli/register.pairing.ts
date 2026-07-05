@@ -6,7 +6,11 @@ import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
+<<<<<<< HEAD
 import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./cli-utils.js";
+=======
+import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import {
@@ -44,8 +48,12 @@ function normalizeNodePairApproveScopes(scopes: unknown): OperatorScope[] {
 async function resolveApproveScopesForRequest(
   opts: NodesRpcOpts,
   requestId: string,
+<<<<<<< HEAD
 ): Promise<{ scopes: OperatorScope[] }> {
   let pending: PendingRequest[];
+=======
+): Promise<OperatorScope[]> {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   try {
     const result = await callNodePairApprovalGatewayCli(
       "node.pair.list",
@@ -53,6 +61,7 @@ async function resolveApproveScopesForRequest(
       {},
       { scopes: DEFAULT_NODE_PAIR_APPROVE_SCOPES },
     );
+<<<<<<< HEAD
     pending = parsePairingList(result).pending;
   } catch {
     return { scopes: [...DEFAULT_NODE_PAIR_APPROVE_SCOPES] };
@@ -105,6 +114,19 @@ function buildUnknownNodePairRequestIdMessage(
     lines.push(connectionReminder);
   }
   return lines.join("\n");
+=======
+    const { pending } = parsePairingList(result);
+    const request = pending.find((candidate: PendingRequest) => candidate.requestId === requestId);
+    const scopes = normalizeNodePairApproveScopes(request?.requiredApproveScopes);
+    if (scopes.length > DEFAULT_NODE_PAIR_APPROVE_SCOPES.length) {
+      return scopes;
+    }
+    // Older pending requests only list requested commands; derive approval scopes from them.
+    return resolveNodePairApprovalScopes(request?.commands) as OperatorScope[];
+  } catch {
+    return [...DEFAULT_NODE_PAIR_APPROVE_SCOPES];
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 /** Register node pairing management commands. */
@@ -148,6 +170,7 @@ export function registerNodesPairingCommands(nodes: Command) {
       .argument("<requestId>", "Pending request id")
       .action(async (requestId: string, opts: NodesRpcOpts) => {
         await runNodesCommand("approve", async () => {
+<<<<<<< HEAD
           const { scopes } = await resolveApproveScopesForRequest(opts, requestId);
           let result: unknown;
           try {
@@ -170,6 +193,19 @@ export function registerNodesPairingCommands(nodes: Command) {
             error.message = buildUnknownNodePairRequestIdMessage(requestId, opts);
             throw error;
           }
+=======
+          const scopes = await resolveApproveScopesForRequest(opts, requestId);
+          const result = await callNodePairApprovalGatewayCli(
+            "node.pair.approve",
+            opts,
+            {
+              requestId,
+            },
+            {
+              scopes,
+            },
+          );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           defaultRuntime.writeJson(result);
         });
       }),

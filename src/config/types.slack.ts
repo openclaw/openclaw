@@ -21,7 +21,10 @@ import type {
   MentionPatternsPolicyConfig,
   ProviderCommandsConfig,
 } from "./types.messages.js";
+<<<<<<< HEAD
 import type { SecretInput } from "./types.secrets.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type SlackDmConfig = {
@@ -140,6 +143,7 @@ export type SlackSocketModeConfig = {
   pingPongLoggingEnabled?: boolean;
 };
 
+<<<<<<< HEAD
 export type SlackRelayConfig = {
   /** Full relay websocket URL, including the route path. */
   url?: string;
@@ -160,6 +164,17 @@ export type SlackAccountConfig = {
   relay?: SlackRelayConfig;
   /** Slack signing secret (required for HTTP mode). */
   signingSecret?: SecretInput;
+=======
+export type SlackAccountConfig = {
+  /** Optional display name for this account (used in CLI/UI lists). */
+  name?: string;
+  /** Slack connection mode (socket|http). Default: socket. */
+  mode?: "socket" | "http";
+  /** Slack SDK Socket Mode transport options. Ignored in HTTP mode. */
+  socketMode?: SlackSocketModeConfig;
+  /** Slack signing secret (required for HTTP mode). */
+  signingSecret?: string;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /** Slack Events API webhook path (default: /slack/events). */
   webhookPath?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */
@@ -174,9 +189,15 @@ export type SlackAccountConfig = {
   configWrites?: boolean;
   /** If false, do not start this Slack account. Default: true. */
   enabled?: boolean;
+<<<<<<< HEAD
   botToken?: SecretInput;
   appToken?: SecretInput;
   userToken?: SecretInput;
+=======
+  botToken?: string;
+  appToken?: string;
+  userToken?: string;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /** If true, restrict user token to read operations only. Default: true. */
   userTokenReadOnly?: boolean;
   /** Allow bot-authored messages to trigger replies (default: false). Set to "mentions" to only allow bot messages that @mention this bot. */

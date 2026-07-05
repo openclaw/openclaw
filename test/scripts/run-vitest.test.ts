@@ -14,7 +14,10 @@ import {
   resolveDirectNodeVitestArgs,
   resolveExplicitTestFileNoPassArgs,
   resolveImplicitVitestArgs,
+<<<<<<< HEAD
   resolveLinkedSourceBundledPluginsEnv,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveMissingVitestDependencyMessage,
   resolveMissingExplicitTestFiles,
   resolveRunVitestSpawnEnv,
@@ -26,12 +29,16 @@ import {
   resolveVitestNodeArgs,
   resolveVitestNoOutputTimeoutMs,
   resolveVitestSpawnParams,
+<<<<<<< HEAD
   spawnWatchedVitestProcess,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   shouldSuppressVitestStderrLine,
 } from "../../scripts/run-vitest.mjs";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 
+<<<<<<< HEAD
 function createRunVitestFs(params: { nodeModulesSymlink: boolean; bundledPlugin: boolean }) {
   return {
     existsSync: (filePath: string) => {
@@ -60,6 +67,8 @@ function createRunVitestFs(params: { nodeModulesSymlink: boolean; bundledPlugin:
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("scripts/run-vitest", () => {
   it("adds --no-maglev to vitest child processes by default", () => {
     expect(resolveVitestNodeArgs({ PATH: "/usr/bin" })).toEqual(["--no-maglev"]);
@@ -294,6 +303,7 @@ describe("scripts/run-vitest", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("delegates bare explicit directories and globs to the project router", () => {
     expect(resolveTestProjectsDelegationArgs(["test/scripts"])).toEqual(["test/scripts"]);
     expect(
@@ -307,6 +317,8 @@ describe("scripts/run-vitest", () => {
     expect(resolveTestProjectsDelegationArgs(["./src"])).toBeNull();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("delegates mixed filters when an explicit file target is present", () => {
     expect(
       resolveTestProjectsDelegationArgs(["src/agents", "test/scripts/run-vitest.test.ts"]),
@@ -616,6 +628,7 @@ describe("scripts/run-vitest", () => {
     });
   });
 
+<<<<<<< HEAD
   it("points symlinked source worktree Vitest runs at local bundled plugins", () => {
     expect(
       resolveLinkedSourceBundledPluginsEnv(
@@ -655,6 +668,8 @@ describe("scripts/run-vitest", () => {
     ).toEqual({});
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not default explicit watch runs to the stall watchdog", () => {
     expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--watch"])).toEqual({
       PATH: "/usr/bin",
@@ -717,14 +732,18 @@ describe("scripts/run-vitest", () => {
       os.tmpdir(),
       `openclaw-run-vitest-delegated-child-${process.pid}-${Date.now()}.pid`,
     );
+<<<<<<< HEAD
     const descendantPidPath = nodePath.join(
       os.tmpdir(),
       `openclaw-run-vitest-delegated-descendant-${process.pid}-${Date.now()}.pid`,
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     fs.writeFileSync(
       fixturePath,
       [
+<<<<<<< HEAD
         'import { spawn } from "node:child_process";',
         'import fs from "node:fs";',
         'import { it } from "vitest";',
@@ -732,6 +751,12 @@ describe("scripts/run-vitest", () => {
         '  const child = spawn(process.execPath, ["-e", "process.on(\\\'SIGTERM\\\', () => {}); setInterval(() => {}, 1000);"], { stdio: "ignore" });',
         "  fs.writeFileSync(process.env.OPENCLAW_DELEGATED_SIGNAL_CHILD_PID!, String(process.pid));",
         "  fs.writeFileSync(process.env.OPENCLAW_DELEGATED_SIGNAL_DESCENDANT_PID!, String(child.pid));",
+=======
+        'import fs from "node:fs";',
+        'import { it } from "vitest";',
+        'it("waits for wrapper termination", async () => {',
+        "  fs.writeFileSync(process.env.OPENCLAW_DELEGATED_SIGNAL_CHILD_PID!, String(process.pid));",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         "  await new Promise(() => {});",
         "});",
         "",
@@ -745,12 +770,16 @@ describe("scripts/run-vitest", () => {
         env: {
           ...process.env,
           OPENCLAW_DELEGATED_SIGNAL_CHILD_PID: childPidPath,
+<<<<<<< HEAD
           OPENCLAW_DELEGATED_SIGNAL_DESCENDANT_PID: descendantPidPath,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
         stdio: "ignore",
       },
     );
     let childPid = 0;
+<<<<<<< HEAD
     let descendantPid = 0;
 
     try {
@@ -762,14 +791,27 @@ describe("scripts/run-vitest", () => {
       expect(Number.isInteger(descendantPid)).toBe(true);
       expect(isProcessAlive(childPid)).toBe(true);
       expect(isProcessAlive(descendantPid)).toBe(true);
+=======
+
+    try {
+      await waitFor(() => fs.existsSync(childPidPath), 10_000);
+      childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+      expect(Number.isInteger(childPid)).toBe(true);
+      expect(isProcessAlive(childPid)).toBe(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       expect(runner.pid).toBeGreaterThan(0);
       process.kill(runner.pid!, "SIGTERM");
       const result = await waitForClose(runner);
 
+<<<<<<< HEAD
       expect(result).toEqual({ code: null, signal: "SIGTERM" });
       await waitFor(() => !isProcessAlive(childPid), 5_000);
       await waitFor(() => !isProcessAlive(descendantPid), 5_000);
+=======
+      expect(result).toEqual({ code: 143, signal: null });
+      await waitFor(() => !isProcessAlive(childPid), 5_000);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } finally {
       if (runner.pid && isProcessAlive(runner.pid)) {
         process.kill(runner.pid, "SIGKILL");
@@ -777,12 +819,17 @@ describe("scripts/run-vitest", () => {
       if (childPid && isProcessAlive(childPid)) {
         process.kill(childPid, "SIGKILL");
       }
+<<<<<<< HEAD
       if (descendantPid && isProcessAlive(descendantPid)) {
         process.kill(descendantPid, "SIGKILL");
       }
       fs.rmSync(fixturePath, { force: true });
       fs.rmSync(childPidPath, { force: true });
       fs.rmSync(descendantPidPath, { force: true });
+=======
+      fs.rmSync(fixturePath, { force: true });
+      fs.rmSync(childPidPath, { force: true });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 
@@ -799,6 +846,7 @@ describe("scripts/run-vitest", () => {
     });
   });
 
+<<<<<<< HEAD
   posixIt("terminates a silent Vitest child through the watchdog", async () => {
     const watched = spawnWatchedVitestProcess({
       pnpmArgs: ["exec", "node", "-e", "setInterval(() => {}, 1000)"],
@@ -819,6 +867,8 @@ describe("scripts/run-vitest", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("reenables local check policy for local Vitest children", () => {
     expect(
       resolveVitestSpawnParams(
@@ -964,6 +1014,7 @@ describe("scripts/run-vitest", () => {
     }
   });
 
+<<<<<<< HEAD
   it("keeps force-kill scheduled when output arrives after the idle timeout", () => {
     vi.useFakeTimers();
     try {
@@ -994,6 +1045,8 @@ describe("scripts/run-vitest", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("prints bounded heartbeats before killing silent vitest runs", () => {
     vi.useFakeTimers();
     try {

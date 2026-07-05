@@ -33,7 +33,10 @@ import {
   readImageMetadataFromHeader,
   readImageProbeFromHeader,
 } from "./media-services.js";
+<<<<<<< HEAD
 import { extractOriginalFilename, getMediaDir } from "./store.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export { getDefaultLocalRoots, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
@@ -285,6 +288,7 @@ function isPathInsideRoot(filePath: string | undefined, root: string): boolean {
   );
 }
 
+<<<<<<< HEAD
 function resolveLocalMediaFileName(filePath: string): string | undefined {
   const fileName = basenameFromAnyPath(filePath) || undefined;
   return fileName && isPathInsideRoot(filePath, getMediaDir())
@@ -292,6 +296,8 @@ function resolveLocalMediaFileName(filePath: string): string | undefined {
     : fileName;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function hasHtmlDocumentShape(text: string): boolean {
   const sample = text.trimStart().slice(0, 8192);
   return /^(?:<!doctype\s+html\b|<html\b)/iu.test(sample) || /<\/(?:html|body)>/iu.test(sample);
@@ -1082,7 +1088,11 @@ async function loadWebMediaInternal(
       trustedGeneratedHtmlPath,
     });
   }
+<<<<<<< HEAD
   let fileName = resolveLocalMediaFileName(mediaUrl);
+=======
+  let fileName = basenameFromAnyPath(mediaUrl) || undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (fileName && !extnameFromAnyPath(fileName) && mime) {
     const ext = extensionForMime(mime);
     if (ext) {

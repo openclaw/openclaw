@@ -1,0 +1,73 @@
+{
+  "scenarios": [
+    {
+      "name": "Skill visibility and invocation",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "reports visible skill and applies its marker on the next turn",
+          "status": "pass",
+          "details": "VISIBLE-SKILL-OK"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 53724,
+    "gatewayProcessCpuMs": 4000,
+    "gatewayCpuCoreRatio": 0.074,
+    "gatewayProcessRssStartBytes": 859820032,
+    "gatewayProcessRssEndBytes": 981266432,
+    "gatewayProcessRssDeltaBytes": 121446400,
+    "gatewayProcessRssPeakBytes": 983363584,
+    "gatewayProcessRssPeakDeltaBytes": 123543552,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:15:25.741Z",
+        "gatewayProcessRssBytes": 859820032
+      },
+      {
+        "label": "scenario:skill-visibility-invocation:start",
+        "at": "2026-07-03T13:15:25.969Z",
+        "gatewayProcessRssBytes": 854192128
+      },
+      {
+        "label": "scenario:skill-visibility-invocation:finish",
+        "at": "2026-07-03T13:15:40.860Z",
+        "gatewayProcessRssBytes": 983363584
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:15:40.920Z",
+        "gatewayProcessRssBytes": 981266432
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:14:47.136Z",
+    "finishedAt": "2026-07-03T13:15:40.860Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "skill-visibility-invocation"
+    ],
+    "runtimePair": null
+  }
+}

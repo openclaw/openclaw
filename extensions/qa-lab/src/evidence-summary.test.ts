@@ -1,5 +1,8 @@
 // Qa Lab tests cover QA evidence summary behavior.
+<<<<<<< HEAD
 import { execFileSync } from "node:child_process";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { describe, expect, it } from "vitest";
 import {
   QA_EVIDENCE_SUMMARY_KIND,
@@ -124,6 +127,7 @@ describe("evidence summary", () => {
     });
   });
 
+<<<<<<< HEAD
   it("prefers the checked-out ref over an inherited GitHub event SHA", () => {
     const repoRoot = process.cwd();
     const checkedOutRef = execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
@@ -147,6 +151,8 @@ describe("evidence summary", () => {
     expect(evidence.entries[0]?.execution?.environment.ref).toBe(checkedOutRef);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("builds Telegram live transport evidence entries", () => {
     const evidence = buildLiveTransportEvidenceSummary({
       artifactPaths: [
@@ -370,7 +376,11 @@ describe("evidence summary", () => {
           id: "control-ui.browser-run",
           title: "Control UI browser workflow",
           sourcePath: "ui/control-ui.e2e.test.ts",
+<<<<<<< HEAD
           primaryCoverageIds: ["ui.control"],
+=======
+          primaryCoverageIds: ["control-ui.browser"],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           docsRefs: ["docs/concepts/qa-e2e-automation.md"],
           codeRefs: ["ui/"],
         },
@@ -398,7 +408,11 @@ describe("evidence summary", () => {
       },
       coverage: [
         {
+<<<<<<< HEAD
           id: "ui.control",
+=======
+          id: "control-ui.browser",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           role: "primary",
         },
       ],

@@ -1647,10 +1647,14 @@ export function registerMatrixCli(params: { program: Command }): void {
     .description("Enable Matrix E2EE, bootstrap verification, and print next steps")
     .option("--account <id>", "Account ID (for multi-account setups)")
     .option("--recovery-key <key>", "Recovery key to apply before bootstrap")
+<<<<<<< HEAD
     .option(
       "--force-reset-cross-signing",
       "Force reset cross-signing identity before bootstrap (requires active recovery key)",
     )
+=======
+    .option("--force-reset-cross-signing", "Force reset cross-signing identity before bootstrap")
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(
@@ -2124,10 +2128,14 @@ export function registerMatrixCli(params: { program: Command }): void {
       "Recovery key to apply before bootstrap (prefer --recovery-key-stdin)",
     )
     .option("--recovery-key-stdin", "Read the Matrix recovery key from stdin")
+<<<<<<< HEAD
     .option(
       "--force-reset-cross-signing",
       "Force reset cross-signing identity before bootstrap (requires active recovery key)",
     )
+=======
+    .option("--force-reset-cross-signing", "Force reset cross-signing identity before bootstrap")
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(

@@ -3,9 +3,13 @@
  * Converts OpenClaw contexts/tools into Anthropic payloads, streams SSE events
  * back into runtime output blocks, and applies provider request policy.
  */
+<<<<<<< HEAD
 import { readResponseTextSnippet } from "@openclaw/media-core/read-response-with-limit";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { toErrorObject } from "../infra/errors.js";
+=======
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { getEnvApiKey } from "../llm/env-api-keys.js";
 import { calculateCost, clampThinkingLevel } from "../llm/model-utils.js";
 import {
@@ -22,10 +26,13 @@ import type {
 } from "../llm/types.js";
 import { parseStreamingJson } from "../llm/utils/json-parse.js";
 import {
+<<<<<<< HEAD
   omitFoundryBearerCredentialHeaders,
   usesFoundryBearerAuth,
 } from "../shared/anthropic-auth-headers.js";
 import {
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveClaudeNativeThinkingLevelMap,
   requiresClaudeAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
@@ -66,9 +73,12 @@ import {
 } from "./transport-stream-shared.js";
 
 const CLAUDE_CODE_VERSION = "2.1.75";
+<<<<<<< HEAD
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_CHARS = 400;
 const ANTHROPIC_MESSAGES_ERROR_BODY_READ_IDLE_TIMEOUT_MS = 10_000;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const CLAUDE_CODE_TOOLS = [
   "Read",
   "Write",
@@ -260,6 +270,42 @@ function isAnthropicOAuthToken(apiKey: string): boolean {
   return apiKey.includes("sk-ant-oat");
 }
 
+<<<<<<< HEAD
+=======
+function hasBearerAuthorizationHeader(headers?: Record<string, string>): boolean {
+  if (!headers) {
+    return false;
+  }
+  return Object.entries(headers).some(
+    ([key, value]) => key.toLowerCase() === "authorization" && /^bearer\s+\S+/i.test(value.trim()),
+  );
+}
+
+function usesFoundryBearerAuth(model: AnthropicTransportModel): boolean {
+  return (
+    model.provider === "microsoft-foundry" &&
+    (model.authHeader === true || hasBearerAuthorizationHeader(model.headers))
+  );
+}
+
+function omitFoundryBearerCredentialHeaders(
+  headers?: Record<string, string>,
+): Record<string, string> | undefined {
+  if (!headers) {
+    return undefined;
+  }
+  const next: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    const lower = key.toLowerCase();
+    if (lower === "authorization" || lower === "x-api-key" || lower === "api-key") {
+      continue;
+    }
+    next[key] = value;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isDirectAnthropicModel(model: Pick<AnthropicTransportModel, "provider" | "baseUrl">) {
   if (normalizeLowercaseStringOrEmpty(model.provider) !== "anthropic") {
     return false;
@@ -653,7 +699,11 @@ function readAnthropicSseChunk(
         }
         settled = true;
         signal.removeEventListener("abort", onAbort);
+<<<<<<< HEAD
         reject(toErrorObject(error, "Non-Error rejection"));
+=======
+        reject(toLintErrorObject(error, "Non-Error rejection"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     );
   });
@@ -747,7 +797,11 @@ function createAnthropicMessagesClient(params: {
           signal: options?.signal,
         });
         if (!response.ok) {
+<<<<<<< HEAD
           const detail = await readAnthropicMessagesErrorBodySnippet(response);
+=======
+          const detail = await response.text().catch(() => "");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           throw new Error(
             detail || `Anthropic Messages request failed with HTTP ${response.status}`,
           );
@@ -761,6 +815,7 @@ function createAnthropicMessagesClient(params: {
   };
 }
 
+<<<<<<< HEAD
 async function readAnthropicMessagesErrorBodySnippet(response: Response): Promise<string> {
   try {
     return (
@@ -785,6 +840,8 @@ async function readAnthropicMessagesErrorBodySnippet(response: Response): Promis
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function createAnthropicTransportClient(params: {
   model: AnthropicTransportModel;
   context: Context;
@@ -1116,7 +1173,10 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           transportOptions.signal ? { signal: transportOptions.signal } : undefined,
         );
         const blocks = output.content;
+<<<<<<< HEAD
         const blockIndexes = new Map<number, number>();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const signatureDeltaIndexes = new Set<number>();
         const allowReasoningContentReplay = supportsReasoningContentReplay(model);
         const reasoningContentThinkingBlocks = new Map<number, number>();
@@ -1277,7 +1337,10 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               const block: TransportContentBlock = { type: "text", text, index };
               output.content.push(block);
               const contentIndex = output.content.length - 1;
+<<<<<<< HEAD
               blockIndexes.set(index, contentIndex);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               eventSink.push({
                 type: "text_start",
                 contentIndex,
@@ -1305,7 +1368,10 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               };
               output.content.push(block);
               const contentIndex = output.content.length - 1;
+<<<<<<< HEAD
               blockIndexes.set(index, contentIndex);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               eventSink.push({
                 type: "thinking_start",
                 contentIndex,
@@ -1330,7 +1396,10 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 index,
               };
               output.content.push(block);
+<<<<<<< HEAD
               blockIndexes.set(index, output.content.length - 1);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               eventSink.push({
                 type: "thinking_start",
                 contentIndex: output.content.length - 1,
@@ -1356,7 +1425,10 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 index,
               };
               output.content.push(block);
+<<<<<<< HEAD
               blockIndexes.set(index, output.content.length - 1);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               eventSink.push({
                 type: "toolcall_start",
                 contentIndex: output.content.length - 1,
@@ -1367,9 +1439,14 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           }
           if (event.type === "content_block_delta") {
             const delta = event.delta as Record<string, unknown> | undefined;
+<<<<<<< HEAD
             const eventIndex = typeof event.index === "number" ? event.index : undefined;
             let index = eventIndex === undefined ? undefined : blockIndexes.get(eventIndex);
             let block = index === undefined ? undefined : blocks[index];
+=======
+            let index = blocks.findIndex((block) => block.index === event.index);
+            let block = blocks[index];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             if (allowReasoningContentReplay) {
               const appendedThinking = appendReasoningContentThinkingDelta(
                 event.index,
@@ -1411,9 +1488,12 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               block = { type: "text", text: "", index: recoveredIndex };
               output.content.push(block);
               index = output.content.length - 1;
+<<<<<<< HEAD
               if (typeof event.index === "number") {
                 blockIndexes.set(event.index, index);
               }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               eventSink.push({
                 type: "text_start",
                 contentIndex: index,
@@ -1479,6 +1559,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             continue;
           }
           if (event.type === "content_block_stop") {
+<<<<<<< HEAD
             const eventIndex = typeof event.index === "number" ? event.index : undefined;
             const index = eventIndex === undefined ? undefined : blockIndexes.get(eventIndex);
             const block = index === undefined ? undefined : blocks[index];
@@ -1487,6 +1568,14 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               continue;
             }
             blockIndexes.delete(eventIndex);
+=======
+            const index = blocks.findIndex((block) => block.index === event.index);
+            const block = blocks[index];
+            if (!block) {
+              finishReasoningContentSidecars(event.index);
+              continue;
+            }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             delete block.index;
             if (block.type === "text") {
               eventSink.push({
@@ -1587,3 +1676,20 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
     return eventStream as ReturnType<StreamFn>;
   };
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

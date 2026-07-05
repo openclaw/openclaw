@@ -735,6 +735,7 @@ describe("message tool secret scoping", () => {
     expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual(["channels.telegram.botToken"]);
   });
 
+<<<<<<< HEAD
   it("preserves empty opaque target segments in inferred session delivery", async () => {
     mockSendResult();
 
@@ -798,6 +799,8 @@ describe("message tool secret scoping", () => {
     expect(input?.toolContext?.currentChannelId).toBeUndefined();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves direct session keys as explicit user targets when ambient channel drifted to webchat", async () => {
     mockSendResult({ channel: "discord", to: "user:123456789" });
 

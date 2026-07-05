@@ -186,6 +186,7 @@ export async function projectSessionsPatchEntry(params: {
     delete next.displayName;
   }
 
+<<<<<<< HEAD
   type PatchError = ReturnType<typeof invalid> | null;
   const checkSpawnLineage = (field: string): PatchError =>
     supportsSpawnLineage(storeKey)
@@ -261,6 +262,68 @@ export async function projectSessionsPatchEntry(params: {
     const result = applyImmutableString(fieldParams.field, fieldParams.checkLineageBeforeEmpty);
     if (result) {
       return result;
+=======
+  if ("spawnedBy" in patch) {
+    const raw = patch.spawnedBy;
+    if (raw === null) {
+      if (existing?.spawnedBy) {
+        return invalid("spawnedBy cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      const trimmed = normalizeOptionalString(raw) ?? "";
+      if (!trimmed) {
+        return invalid("invalid spawnedBy: empty");
+      }
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("spawnedBy is only supported for subagent:* or acp:* sessions");
+      }
+      if (existing?.spawnedBy && existing.spawnedBy !== trimmed) {
+        return invalid("spawnedBy cannot be changed once set");
+      }
+      next.spawnedBy = trimmed;
+    }
+  }
+
+  if ("spawnedWorkspaceDir" in patch) {
+    const raw = patch.spawnedWorkspaceDir;
+    if (raw === null) {
+      if (existing?.spawnedWorkspaceDir) {
+        return invalid("spawnedWorkspaceDir cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("spawnedWorkspaceDir is only supported for subagent:* or acp:* sessions");
+      }
+      const trimmed = normalizeOptionalString(raw) ?? "";
+      if (!trimmed) {
+        return invalid("invalid spawnedWorkspaceDir: empty");
+      }
+      if (existing?.spawnedWorkspaceDir && existing.spawnedWorkspaceDir !== trimmed) {
+        return invalid("spawnedWorkspaceDir cannot be changed once set");
+      }
+      next.spawnedWorkspaceDir = trimmed;
+    }
+  }
+
+  if ("spawnedCwd" in patch) {
+    const raw = patch.spawnedCwd;
+    if (raw === null) {
+      if (existing?.spawnedCwd) {
+        return invalid("spawnedCwd cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("spawnedCwd is only supported for subagent:* or acp:* sessions");
+      }
+      const trimmed = normalizeOptionalString(raw) ?? "";
+      if (!trimmed) {
+        return invalid("invalid spawnedCwd: empty");
+      }
+      if (existing?.spawnedCwd && existing.spawnedCwd !== trimmed) {
+        return invalid("spawnedCwd cannot be changed once set");
+      }
+      next.spawnedCwd = trimmed;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   }
 
@@ -286,6 +349,7 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
+<<<<<<< HEAD
   for (const fieldParams of [
     {
       field: "subagentRole" as const,
@@ -305,6 +369,47 @@ export async function projectSessionsPatchEntry(params: {
     );
     if (result) {
       return result;
+=======
+  if ("subagentRole" in patch) {
+    const raw = patch.subagentRole;
+    if (raw === null) {
+      if (existing?.subagentRole) {
+        return invalid("subagentRole cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("subagentRole is only supported for subagent:* or acp:* sessions");
+      }
+      const normalized = normalizeSubagentRole(raw);
+      if (!normalized) {
+        return invalid('invalid subagentRole (use "orchestrator" or "leaf")');
+      }
+      if (existing?.subagentRole && existing.subagentRole !== normalized) {
+        return invalid("subagentRole cannot be changed once set");
+      }
+      next.subagentRole = normalized;
+    }
+  }
+
+  if ("subagentControlScope" in patch) {
+    const raw = patch.subagentControlScope;
+    if (raw === null) {
+      if (existing?.subagentControlScope) {
+        return invalid("subagentControlScope cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("subagentControlScope is only supported for subagent:* or acp:* sessions");
+      }
+      const normalized = normalizeSubagentControlScope(raw);
+      if (!normalized) {
+        return invalid('invalid subagentControlScope (use "children" or "none")');
+      }
+      if (existing?.subagentControlScope && existing.subagentControlScope !== normalized) {
+        return invalid("subagentControlScope cannot be changed once set");
+      }
+      next.subagentControlScope = normalized;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   }
 
@@ -396,7 +501,11 @@ export async function projectSessionsPatchEntry(params: {
     } else if (raw !== undefined) {
       const normalized = normalizeFastMode(raw);
       if (normalized === undefined) {
+<<<<<<< HEAD
         return invalid('invalid fastMode (use true, false, or "auto")');
+=======
+        return invalid("invalid fastMode (use true or false)");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
       next.fastMode = normalized;
     }
@@ -444,7 +553,15 @@ export async function projectSessionsPatchEntry(params: {
       if (!normalized) {
         return invalid('invalid responseUsage (use "off"|"tokens"|"full")');
       }
+<<<<<<< HEAD
       next.responseUsage = normalized;
+=======
+      if (normalized === "off") {
+        delete next.responseUsage;
+      } else {
+        next.responseUsage = normalized;
+      }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   }
 

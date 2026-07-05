@@ -50,7 +50,10 @@ type PromptDecisionParams = {
   failoverFailure: boolean;
   failoverReason: FailoverReason | null;
   harnessOwnsTransport?: boolean;
+<<<<<<< HEAD
   promptTimeoutFallbackSafe?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   profileRotated: boolean;
 };
 
@@ -180,6 +183,7 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
       };
     }
     if (params.harnessOwnsTransport && params.failoverReason === "timeout") {
+<<<<<<< HEAD
       // Plugin harness lifecycle timeouts must stay inside the harness boundary;
       // only prompt request timeouts proven replay-safe may enter model fallback.
       if (params.promptTimeoutFallbackSafe === true && params.fallbackConfigured) {
@@ -188,6 +192,8 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
           reason: "timeout",
         };
       }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return {
         action: "surface_error",
         reason: params.failoverReason,

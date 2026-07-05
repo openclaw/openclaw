@@ -8,7 +8,10 @@ export type GatewayServiceEnv = Record<string, string | undefined>;
 export type GatewayServiceInstallArgs = {
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
+<<<<<<< HEAD
   warn?: (message: string) => void;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   programArguments: string[];
   workingDirectory?: string;
   environment?: GatewayServiceEnv;
@@ -27,7 +30,10 @@ export type GatewayServiceControlArgs = {
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
   disable?: boolean;
+<<<<<<< HEAD
   warn?: (message: string) => void;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 export type GatewayServiceRestartResult = { outcome: "completed" } | { outcome: "scheduled" };

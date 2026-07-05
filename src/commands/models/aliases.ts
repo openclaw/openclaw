@@ -2,9 +2,19 @@
 import { formatCliCommand } from "../../cli/command-format.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+<<<<<<< HEAD
 import { normalizeAlias } from "./alias-name.js";
 import { loadModelsConfig } from "./load-config.js";
 import { ensureFlagCompatibility, resolveModelTarget, updateConfig } from "./shared.js";
+=======
+import { loadModelsConfig } from "./load-config.js";
+import {
+  ensureFlagCompatibility,
+  normalizeAlias,
+  resolveModelTarget,
+  updateConfig,
+} from "./shared.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Lists configured model aliases as JSON, plain pairs, or human-readable rows. */
 export async function modelsAliasesListCommand(

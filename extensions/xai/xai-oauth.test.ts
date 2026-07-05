@@ -211,6 +211,7 @@ describe("xAI OAuth", () => {
     expect(refreshed.expires).toBe(121_000);
   });
 
+<<<<<<< HEAD
   it("rediscovers the current token endpoint for stale xAI OAuth credentials", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
       if (requestUrl(url) === XAI_OAUTH_DISCOVERY_URL) {
@@ -272,6 +273,8 @@ describe("xAI OAuth", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not coerce partial xAI expires_in values", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       jsonResponse({

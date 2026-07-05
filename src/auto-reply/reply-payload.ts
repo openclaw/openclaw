@@ -62,6 +62,7 @@ export type ReplyPayload = {
   channelData?: Record<string, unknown>;
 };
 
+<<<<<<< HEAD
 /** Metadata for fast-auto progress notices. */
 export const FAST_MODE_AUTO_PROGRESS_KIND = "fast-mode-auto";
 
@@ -69,6 +70,8 @@ export function isFastModeAutoProgressPayload(payload: Pick<ReplyPayload, "chann
   return payload.channelData?.openclawProgressKind === FAST_MODE_AUTO_PROGRESS_KIND;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Metadata for audio-only media that supplements already-visible assistant text. */
 export type ReplyPayloadTtsSupplement = {
   spokenText: string;
@@ -81,7 +84,11 @@ export type ReplyDeliveryContext = {
   replyToMode: ReplyToMode;
 };
 
+<<<<<<< HEAD
 const REPLY_MEDIA_FAILURE_WARNING = "⚠️ Media failed.";
+=======
+export const REPLY_MEDIA_FAILURE_WARNING = "⚠️ Media failed.";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /** Appends the standard media failure warning without duplicating it. */
 export function appendReplyMediaFailureWarning(text: string | undefined): string {

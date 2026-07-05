@@ -11,7 +11,10 @@ import {
   writeQaLabServerError,
   type QaLabServerStartParams,
 } from "./lab-server.js";
+<<<<<<< HEAD
 import { resolveUiAssetVersion } from "./lab-server-ui.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const qaChannelMock = vi.hoisted(() => ({
   resolveAccount: vi.fn(),
@@ -151,6 +154,11 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
   }),
   getDebugProxyCaptureStore: () => captureMock.store,
   resolveDebugProxySettings: () => ({
+<<<<<<< HEAD
+=======
+    dbPath: process.env.OPENCLAW_DEBUG_PROXY_DB_PATH ?? "",
+    blobDir: process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR ?? "",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     proxyUrl: process.env.OPENCLAW_DEBUG_PROXY_URL ?? "",
     sessionId: "qa-lab-test",
   }),
@@ -355,9 +363,17 @@ describe("qa-lab server", () => {
             reject(new Error("gateway stop failed"));
             return;
           }
+<<<<<<< HEAD
           abortSignal.addEventListener("abort", () => reject(new Error("gateway stop failed")), {
             once: true,
           });
+=======
+          abortSignal.addEventListener(
+            "abort",
+            () => reject(new Error("gateway stop failed")),
+            { once: true },
+          );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }),
     );
 
@@ -385,8 +401,12 @@ describe("qa-lab server", () => {
       port: 0,
       outputPath,
       repoRoot,
+<<<<<<< HEAD
       controlUiUrl:
         "https://gateway.example.test/?token=qa-token&api_key=qa-api-key&id_token=qa-id-token&panel=chat#token=fragment-token",
+=======
+      controlUiUrl: "http://127.0.0.1:18789/?token=qa-token&panel=chat#token=fragment-token",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       embeddedGateway: "disabled",
     });
     cleanups.push(async () => {
@@ -405,8 +425,13 @@ describe("qa-lab server", () => {
     };
     expect(bootstrap.defaults.conversationId).toBe("qa-operator");
     expect(bootstrap.defaults.senderId).toBe("qa-operator");
+<<<<<<< HEAD
     expect(bootstrap.controlUiUrl).toBe("https://gateway.example.test/?panel=chat");
     expect(bootstrap.controlUiEmbeddedUrl).toBe("https://gateway.example.test/?panel=chat");
+=======
+    expect(bootstrap.controlUiUrl).toBe("http://127.0.0.1:18789/?panel=chat");
+    expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/?panel=chat");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(bootstrap.kickoffTask).toContain("Lobster Invaders");
     expect(bootstrap.scenarios.length).toBeGreaterThanOrEqual(10);
     expect(bootstrap.scenarios.map((scenario) => scenario.id)).toContain("dm-chat-baseline");
@@ -424,6 +449,7 @@ describe("qa-lab server", () => {
     ).json()) as {
       status: { gateway: { url: string } };
     };
+<<<<<<< HEAD
     expect(startupStatus.status.gateway.url).toBe("https://gateway.example.test/?panel=chat");
 
     lab.setControlUi({
@@ -438,6 +464,9 @@ describe("qa-lab server", () => {
     };
     expect(relativeBootstrap.controlUiUrl).toBe("/control-ui/?panel=chat");
     expect(relativeBootstrap.controlUiEmbeddedUrl).toBe("/control-ui/?panel=chat");
+=======
+    expect(startupStatus.status.gateway.url).toBe("http://127.0.0.1:18789/?panel=chat");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const messageResponse = await fetch(`${lab.baseUrl}/api/inbound/message`, {
       method: "POST",
@@ -463,6 +492,7 @@ describe("qa-lab server", () => {
     await expectFileMissing(outputPath);
   });
 
+<<<<<<< HEAD
   it("serves evidence artifact HEAD metadata and streams GET bodies", async () => {
     const repoRoot = await createQaLabRepoRootFixture();
     const evidenceDir = path.join(repoRoot, ".artifacts", "qa-e2e", "server");
@@ -607,6 +637,8 @@ describe("qa-lab server", () => {
     expect(outsideResponse.status).toBe(404);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("returns controlled errors for oversized JSON body reads", async () => {
     const req = {
       headers: { "content-length": String(1024 * 1024 + 1) },
@@ -657,8 +689,12 @@ describe("qa-lab server", () => {
     });
 
     const result = await lab.runSelfCheck();
+<<<<<<< HEAD
     expect(path.dirname(result.outputPath)).toBe(path.join(repoRoot, ".artifacts", "qa-e2e"));
     expect(path.basename(result.outputPath)).toMatch(/^self-check-[a-z0-9]+-[a-f0-9]{8}\.md$/u);
+=======
+    expect(result.outputPath).toBe(path.join(repoRoot, ".artifacts", "qa-e2e", "self-check.md"));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(await readFile(result.outputPath, "utf8")).toContain("Synthetic Slack-class roundtrip");
   });
 
@@ -821,12 +857,15 @@ describe("qa-lab server", () => {
     expect(rootResponse.status).toBe(200);
     expect(await rootResponse.text()).toContain("repo-root-ui");
 
+<<<<<<< HEAD
     const versionResponse = await fetchWithRetry(`${lab.baseUrl}/api/ui-version`);
     expect(versionResponse.status).toBe(200);
     const versionPayload = (await versionResponse.json()) as { version?: string | null };
     expect(versionPayload.version).toBe(resolveUiAssetVersion(null, repoRoot));
     expect(versionPayload.version).toMatch(/^[0-9a-f]{12}$/);
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const runnerCatalog = await waitForRunnerCatalog(lab.baseUrl);
     expect(runnerCatalog.status).toBe("ready");
     const tempModel = runnerCatalog.real.find((model) => model.key === "anthropic/qa-temp-model");
@@ -1038,6 +1077,11 @@ describe("qa-lab server", () => {
     cleanups.push(async () => {
       await rm(tempDir, { recursive: true, force: true });
     });
+<<<<<<< HEAD
+=======
+    process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
+    process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const store = captureMock.store;
     store.upsertSession({
       id: "qa-capture-session",
@@ -1045,6 +1089,11 @@ describe("qa-lab server", () => {
       mode: "proxy-run",
       sourceScope: "openclaw",
       sourceProcess: "openclaw",
+<<<<<<< HEAD
+=======
+      dbPath: process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+      blobDir: process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
     store.recordEvent({
       sessionId: "qa-capture-session",
@@ -1112,6 +1161,11 @@ describe("qa-lab server", () => {
       port: 0,
     });
     cleanups.push(async () => {
+<<<<<<< HEAD
+=======
+      delete process.env.OPENCLAW_DEBUG_PROXY_DB_PATH;
+      delete process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       await lab.stop();
     });
 

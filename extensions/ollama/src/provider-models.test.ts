@@ -2,12 +2,18 @@
 import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+<<<<<<< HEAD
   buildOllamaProvider,
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
   parseOllamaNumCtxParameter,
   queryOllamaModelShowInfo,
+=======
+  buildOllamaModelDefinition,
+  enrichOllamaModelsWithContext,
+  parseOllamaNumCtxParameter,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resetOllamaModelShowInfoCacheForTest,
   resolveOllamaApiBase,
   type OllamaTagModel,
@@ -54,6 +60,7 @@ describe("ollama provider models", () => {
     ).toBe(true);
   });
 
+<<<<<<< HEAD
   it("forwards remote auth to model listing and show probes", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer cloud-key");
@@ -123,6 +130,8 @@ describe("ollama provider models", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses Modelfile num_ctx when it expands the discovered context window", async () => {
     const models: OllamaTagModel[] = [{ name: "llama3-32k:latest" }];
     const fetchMock = vi.fn(async () =>
@@ -382,6 +391,7 @@ describe("ollama provider models", () => {
     expect(parseOllamaNumCtxParameter('stop "<|eot_id|>"')).toBeUndefined();
     expect(parseOllamaNumCtxParameter({ num_ctx: 8192 })).toBeUndefined();
   });
+<<<<<<< HEAD
 
   it("fails soft and stops reading when discovery streams exceed the JSON byte cap", async () => {
     // Larger than the shared 16 MiB readProviderJsonResponse cap so the bounded reader cancels
@@ -435,4 +445,6 @@ describe("ollama provider models", () => {
     expect(canceled).toBe(true);
     expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

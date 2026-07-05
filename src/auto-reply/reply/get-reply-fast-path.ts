@@ -19,7 +19,10 @@ import { isFormattedGoalContinuationPrompt } from "./commands-goal.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { CommandContext } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+<<<<<<< HEAD
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { SessionInitResult } from "./session.js";
 
 const COMPLETE_REPLY_CONFIG_SYMBOL = Symbol.for("openclaw.reply.complete-config");
@@ -259,7 +262,11 @@ export function initFastReplySessionState(params: {
     verboseLevel: resetTriggered ? existingEntry?.verboseLevel : existingEntry?.verboseLevel,
     reasoningLevel: resetTriggered ? existingEntry?.reasoningLevel : existingEntry?.reasoningLevel,
     ttsAuto: resetTriggered ? existingEntry?.ttsAuto : existingEntry?.ttsAuto,
+<<<<<<< HEAD
     responseUsage: existingEntry?.responseUsage,
+=======
+    responseUsage: !resetTriggered ? existingEntry?.responseUsage : undefined,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     modelOverride: resetTriggered ? existingEntry?.modelOverride : existingEntry?.modelOverride,
     providerOverride: resetTriggered
       ? existingEntry?.providerOverride
@@ -285,11 +292,14 @@ export function initFastReplySessionState(params: {
       : {}),
   };
   sessionStore[sessionKey] = sessionEntry;
+<<<<<<< HEAD
   const sessionEntryHandle = createReplySessionEntryHandle({
     sessionEntry,
     sessionKey,
     sessionStore,
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const sessionCtx: TemplateContext = {
     ...ctx,
     SessionKey: sessionKey,
@@ -300,7 +310,10 @@ export function initFastReplySessionState(params: {
   return {
     sessionCtx,
     sessionEntry,
+<<<<<<< HEAD
     sessionEntryHandle,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sessionStore,
     sessionKey,
     sessionId,

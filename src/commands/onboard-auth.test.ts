@@ -9,7 +9,10 @@ import {
   upsertApiKeyProfile,
   writeOAuthCredentials,
 } from "../plugins/provider-auth-helpers.js";
+<<<<<<< HEAD
 import { setTestEnvValue } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   createAuthTestLifecycle,
   readAuthProfilesForAgent,
@@ -163,8 +166,12 @@ describe("writeOAuthCredentials", () => {
 
   it("writes OAuth credentials to all sibling agent dirs when syncSiblingAgents=true", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-sync-"));
+<<<<<<< HEAD
     lifecycle.setStateDir(tempStateDir);
     setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+=======
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const mainAgentDir = path.join(tempStateDir, "agents", "main", "agent");
     const kidAgentDir = path.join(tempStateDir, "agents", "kid", "agent");
@@ -173,7 +180,11 @@ describe("writeOAuthCredentials", () => {
     await fs.mkdir(kidAgentDir, { recursive: true });
     await fs.mkdir(workerAgentDir, { recursive: true });
 
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_AGENT_DIR", kidAgentDir);
+=======
+    process.env.OPENCLAW_AGENT_DIR = kidAgentDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const creds = {
       refresh: "refresh-sync",
@@ -200,15 +211,23 @@ describe("writeOAuthCredentials", () => {
 
   it("writes OAuth credentials only to target dir by default", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-nosync-"));
+<<<<<<< HEAD
     lifecycle.setStateDir(tempStateDir);
     setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+=======
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const mainAgentDir = path.join(tempStateDir, "agents", "main", "agent");
     const kidAgentDir = path.join(tempStateDir, "agents", "kid", "agent");
     await fs.mkdir(mainAgentDir, { recursive: true });
     await fs.mkdir(kidAgentDir, { recursive: true });
 
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_AGENT_DIR", kidAgentDir);
+=======
+    process.env.OPENCLAW_AGENT_DIR = kidAgentDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const creds = {
       refresh: "refresh-kid",
@@ -232,8 +251,12 @@ describe("writeOAuthCredentials", () => {
 
   it("syncs siblings from explicit agentDir outside OPENCLAW_STATE_DIR", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-external-"));
+<<<<<<< HEAD
     lifecycle.setStateDir(tempStateDir);
     setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+=======
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     // Create standard-layout agents tree *outside* OPENCLAW_STATE_DIR
     const externalRoot = path.join(tempStateDir, "external", "agents");

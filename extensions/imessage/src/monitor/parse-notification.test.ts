@@ -68,6 +68,31 @@ describe("parseIMessageNotification", () => {
     expect(parsed?.reacted_to_guid).toBe("target-guid");
   });
 
+<<<<<<< HEAD
+=======
+  it("preserves imsg balloon bundle metadata when present", () => {
+    const parsed = parseIMessageNotification({
+      message: {
+        id: 1,
+        guid: "link-preview-guid",
+        chat_id: 2,
+        sender: "+10000000000",
+        is_from_me: false,
+        text: "https://example.com/article",
+        balloon_bundle_id: "com.apple.messages.URLBalloonProvider",
+        attachments: null,
+        chat_identifier: null,
+        chat_guid: null,
+        chat_name: null,
+        participants: null,
+        is_group: false,
+      },
+    });
+
+    expect(parsed?.balloon_bundle_id).toBe("com.apple.messages.URLBalloonProvider");
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("accepts iMessage attachment transfer_name and uti metadata", () => {
     const parsed = parseIMessageNotification({
       message: {
@@ -100,6 +125,7 @@ describe("parseIMessageNotification", () => {
       uti: "com.apple.messages.pluginPayloadAttachment",
     });
   });
+<<<<<<< HEAD
 
   it("preserves imsg balloon bundle metadata when present", () => {
     const parsed = parseIMessageNotification({
@@ -123,4 +149,6 @@ describe("parseIMessageNotification", () => {
 
     expect(parsed?.balloon_bundle_id).toBe("com.apple.messages.URLBalloonProvider");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

@@ -310,11 +310,20 @@ export function createTelegramBotCore(
       `agent:${agentId}:telegram:group:${buildTelegramGroupPeerId(params.chatId, params.messageThreadId)}`;
     const storePath = telegramDeps.resolveStorePath(cfg.session?.store, { agentId });
     try {
+<<<<<<< HEAD
       const getSessionEntry = telegramDeps.getSessionEntry;
       if (!getSessionEntry) {
         return undefined;
       }
       const entry = getSessionEntry({ storePath, sessionKey });
+=======
+      const loadSessionStore = telegramDeps.loadSessionStore;
+      if (!loadSessionStore) {
+        return undefined;
+      }
+      const store = loadSessionStore(storePath);
+      const entry = store[sessionKey];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (entry?.groupActivation === "always") {
         return false;
       }

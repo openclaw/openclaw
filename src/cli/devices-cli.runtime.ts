@@ -41,7 +41,10 @@ import {
 import { formatCliCommand } from "./command-format.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { withProgress } from "./progress.js";
+<<<<<<< HEAD
 import { quoteCliArg } from "./quote-cli-arg.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type DevicesRpcOpts = {
   url?: string;
@@ -636,6 +639,16 @@ function lookupPairedDevice(
   return paired;
 }
 
+<<<<<<< HEAD
+=======
+function quoteCliArg(value: string): string {
+  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) {
+    return value;
+  }
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function buildExplicitApproveCommand(opts: DevicesRpcOpts, requestId: string): string {
   const args = ["openclaw", "devices", "approve", requestId];
   const url = normalizeOptionalString(opts.url);

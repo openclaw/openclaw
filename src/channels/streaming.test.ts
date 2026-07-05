@@ -24,7 +24,11 @@ describe("buildChannelProgressDraftLine", () => {
     });
   });
 
+<<<<<<< HEAD
   it("uses the tool label when successful command output has no title", () => {
+=======
+  it("uses completed status when successful command output has no title", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const line = buildChannelProgressDraftLine({
       event: "command-output",
       phase: "end",
@@ -34,10 +38,17 @@ describe("buildChannelProgressDraftLine", () => {
 
     expect(line).toMatchObject({
       kind: "command-output",
+<<<<<<< HEAD
       text: "🛠️ Exec",
       status: "completed",
     });
     expect(line?.detail).toBeUndefined();
+=======
+      text: "🛠️ completed",
+      detail: "completed",
+      status: "completed",
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("keeps command status and title in raw command progress lines", () => {

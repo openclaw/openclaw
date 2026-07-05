@@ -5,7 +5,10 @@
  * Handles urgent commands, normal slash commands, and file delivery.
  */
 
+<<<<<<< HEAD
 import { resolveGroupCommandLevelFromAccountConfig } from "../config/group.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { QueuedMessage } from "../gateway/message-queue.js";
 import type { GatewayAccount, EngineLogger } from "../gateway/types.js";
 import { sendDocument } from "../messaging/outbound.js";
@@ -59,6 +62,7 @@ export async function trySlashCommand(
     return "enqueue";
   }
 
+<<<<<<< HEAD
   const isGroup = msg.type === "group" || msg.type === "guild";
   const groupCommandLevel = isGroup
     ? resolveGroupCommandLevelFromAccountConfig(
@@ -66,6 +70,22 @@ export async function trySlashCommand(
         msg.groupOpenid ?? msg.channelId ?? null,
       )
     : undefined;
+=======
+  // Urgent command detection — bypass queue and execute immediately.
+  const contentLower = content.toLowerCase();
+  const isUrgentCommand = URGENT_COMMANDS.some(
+    (cmd) => contentLower === cmd.toLowerCase() || contentLower.startsWith(cmd.toLowerCase() + " "),
+  );
+  if (isUrgentCommand) {
+    log?.info(`Urgent command detected: ${content.slice(0, 20)}`);
+    return "urgent";
+  }
+
+  // Normal slash command — try to match and execute.
+  const receivedAt = Date.now();
+  const peerId = ctx.getMessagePeerId(msg);
+  const isGroup = msg.type === "group" || msg.type === "guild";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const commandsAllowFrom = resolveQQBotCommandsAllowFrom(ctx.cfg);
   const commandAuthorized = ctx.resolveCommandAuthorized
     ? await ctx.resolveCommandAuthorized({
@@ -83,6 +103,7 @@ export async function trySlashCommand(
         groupAllowFrom: account.config?.groupAllowFrom,
         commandsAllowFrom,
       });
+<<<<<<< HEAD
 
   // Urgent command detection — bypass queue and execute immediately.
   const contentLower = content.toLowerCase();
@@ -100,6 +121,8 @@ export async function trySlashCommand(
   // Normal slash command — try to match and execute.
   const receivedAt = Date.now();
   const peerId = ctx.getMessagePeerId(msg);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const cmdCtx: SlashCommandContext = {
     type: msg.type,
     senderId: msg.senderId,
@@ -115,7 +138,10 @@ export async function trySlashCommand(
     appId: account.appId,
     accountConfig: account.config,
     commandAuthorized,
+<<<<<<< HEAD
     groupCommandLevel,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     queueSnapshot: ctx.getQueueSnapshot(peerId),
   };
 

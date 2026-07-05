@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 import { loadModelCatalog } from "openclaw/plugin-sdk/agent-runtime";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // Discord provider module implements model/runtime integration.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import {
@@ -91,6 +94,11 @@ let discordProviderSessionRuntimePromise: Promise<DiscordProviderSessionRuntimeM
 let fetchDiscordApplicationIdForTesting: typeof fetchDiscordApplicationId | undefined;
 let createDiscordNativeCommandForTesting: typeof createDiscordNativeCommand | undefined;
 let runDiscordGatewayLifecycleForTesting: typeof runDiscordGatewayLifecycle | undefined;
+<<<<<<< HEAD
+=======
+let createDiscordGatewayPluginForTesting: typeof createDiscordGatewayPlugin | undefined;
+let createDiscordGatewaySupervisorForTesting: typeof createDiscordGatewaySupervisor | undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 let loadDiscordVoiceRuntimeForTesting: (() => Promise<DiscordVoiceRuntimeModule>) | undefined;
 let loadDiscordProviderSessionRuntimeForTesting:
   | (() => Promise<DiscordProviderSessionRuntimeModule>)
@@ -396,11 +404,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   let earlyGatewayEmitter = gatewaySupervisor?.emitter;
   let onEarlyGatewayDebug: ((msg: unknown) => void) | undefined;
   try {
+<<<<<<< HEAD
     if (nativeEnabled && commandSpecs.some((command) => command.name === "think")) {
       // Autocomplete cannot defer. Warm opportunistically before interactions begin,
       // but never let provider discovery block Discord startup.
       void loadModelCatalog({ config: cfg });
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const { commands, components, modals } = createDiscordProviderInteractionSurface({
       cfg,
       discordConfig: discordCfg,
@@ -441,8 +452,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       discordConfig: discordCfg,
       runtime,
       createClient: createClientForTesting ?? ((...args) => new Client(...args)),
+<<<<<<< HEAD
       createGatewayPlugin: createDiscordGatewayPlugin,
       createGatewaySupervisor: createDiscordGatewaySupervisor,
+=======
+      createGatewayPlugin: createDiscordGatewayPluginForTesting ?? createDiscordGatewayPlugin,
+      createGatewaySupervisor:
+        createDiscordGatewaySupervisorForTesting ?? createDiscordGatewaySupervisor,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       createAutoPresenceController: createDiscordAutoPresenceController,
       isDisallowedIntentsError: isDiscordDisallowedIntentsError,
     });
@@ -646,6 +663,15 @@ export const testing = {
   setRunDiscordGatewayLifecycle(mock?: typeof runDiscordGatewayLifecycle) {
     runDiscordGatewayLifecycleForTesting = mock;
   },
+<<<<<<< HEAD
+=======
+  setCreateDiscordGatewayPlugin(mock?: typeof createDiscordGatewayPlugin) {
+    createDiscordGatewayPluginForTesting = mock;
+  },
+  setCreateDiscordGatewaySupervisor(mock?: typeof createDiscordGatewaySupervisor) {
+    createDiscordGatewaySupervisorForTesting = mock;
+  },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   setLoadDiscordVoiceRuntime(mock?: () => Promise<DiscordVoiceRuntimeModule>) {
     loadDiscordVoiceRuntimeForTesting = mock;
   },

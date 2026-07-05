@@ -170,6 +170,7 @@ describe("config io write prepare", () => {
     });
   });
 
+<<<<<<< HEAD
   it("does not reintroduce legacy openai-codex model params after doctor route repair", () => {
     const sourceConfig: OpenClawConfig = {
       agents: {
@@ -209,6 +210,8 @@ describe("config io write prepare", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("normalizes retired Google model refs during unrelated config writes", () => {
     const sourceConfig: OpenClawConfig = {
       agents: {

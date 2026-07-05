@@ -4,7 +4,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { withEnvAsync } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   augmentChatHistoryWithCliSessionImports,
   mergeImportedChatHistoryMessages,
@@ -14,6 +17,11 @@ import {
 } from "./cli-session-history.js";
 import { expectRecordFields, requireRecord } from "./test-helpers.assertions.js";
 
+<<<<<<< HEAD
+=======
+const ORIGINAL_HOME = process.env.HOME;
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type ClaudeCliFallbackSeed = NonNullable<ReturnType<typeof readClaudeCliFallbackSeed>>;
 type AugmentCliHistoryParams = Parameters<typeof augmentChatHistoryWithCliSessionImports>[0];
 
@@ -149,14 +157,37 @@ async function withClaudeProjectsDir<T>(
   const filePath = path.join(projectsDir, `${sessionId}.jsonl`);
   await fs.mkdir(projectsDir, { recursive: true });
   await fs.writeFile(filePath, createClaudeHistoryLines(sessionId), "utf-8");
+<<<<<<< HEAD
   try {
     return await withEnvAsync({ HOME: homeDir }, () => run({ homeDir, sessionId, filePath }));
   } finally {
+=======
+  process.env.HOME = homeDir;
+  try {
+    return await run({ homeDir, sessionId, filePath });
+  } finally {
+    if (ORIGINAL_HOME === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = ORIGINAL_HOME;
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await fs.rm(root, { recursive: true, force: true });
   }
 }
 
 describe("cli session history", () => {
+<<<<<<< HEAD
+=======
+  afterEach(() => {
+    if (ORIGINAL_HOME === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = ORIGINAL_HOME;
+    }
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("reads claude-cli session messages from the Claude projects store", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       expect(resolveClaudeCliSessionFilePath({ cliSessionId: sessionId, homeDir })).toBe(filePath);
@@ -445,6 +476,7 @@ describe("readClaudeCliFallbackSeed", () => {
     homeDir = path.join(tmpRoot, "home");
     projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
     await fs.mkdir(projectsDir, { recursive: true });
+<<<<<<< HEAD
   });
 
   afterEach(async () => {
@@ -463,17 +495,39 @@ describe("readClaudeCliFallbackSeed", () => {
     return withEnvAsync({ HOME: homeDir }, async () => readClaudeCliFallbackSeed({ cliSessionId }));
   }
 
+=======
+    process.env.HOME = homeDir;
+  });
+
+  afterEach(async () => {
+    if (ORIGINAL_HOME === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = ORIGINAL_HOME;
+    }
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  });
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   async function writeJsonl(lines: ReadonlyArray<Record<string, unknown>>): Promise<void> {
     const file = path.join(projectsDir, `${SESSION_ID}.jsonl`);
     await fs.writeFile(file, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`, "utf-8");
   }
 
   it("returns undefined when the Claude session file does not exist", () => {
+<<<<<<< HEAD
     const seed = readFallbackSeed();
     expect(seed).toBeUndefined();
   });
 
   it("collects user/assistant turns through the HOME-resolved session store", async () => {
+=======
+    const seed = readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID });
+    expect(seed).toBeUndefined();
+  });
+
+  it("collects user/assistant turns when the session has never been compacted", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await writeJsonl([
       {
         type: "user",
@@ -496,7 +550,11 @@ describe("readClaudeCliFallbackSeed", () => {
       },
     ]);
 
+<<<<<<< HEAD
     const seed = await readFallbackSeedFromHome();
+=======
+    const seed = readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const fallbackSeed = requireFallbackSeed(seed, "uncompacted session");
     expect(fallbackSeed.summaryText).toBeUndefined();
     expect(fallbackSeed.recentTurns).toHaveLength(3);
@@ -546,7 +604,11 @@ describe("readClaudeCliFallbackSeed", () => {
       },
     ]);
 
+<<<<<<< HEAD
     const seed = readFallbackSeed();
+=======
+    const seed = readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const fallbackSeed = requireFallbackSeed(seed, "compacted session");
     expect(fallbackSeed.summaryText).toBe(
       "User asked about deployment; agent recommended a blue-green strategy.",
@@ -578,7 +640,11 @@ describe("readClaudeCliFallbackSeed", () => {
       },
     ]);
 
+<<<<<<< HEAD
     const seed = readFallbackSeed();
+=======
+    const seed = readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const fallbackSeed = requireFallbackSeed(seed, "compact boundary session");
     // Falls back to the boundary's content so the seed at least labels
     // that compaction happened, instead of replaying nothing.
@@ -623,7 +689,11 @@ describe("readClaudeCliFallbackSeed", () => {
       },
     ]);
 
+<<<<<<< HEAD
     const seed = readFallbackSeed();
+=======
+    const seed = readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(seed?.summaryText).toBe("LATER summary that must win.");
     expect(seed?.recentTurns).toHaveLength(1);
     expect(JSON.stringify(seed?.recentTurns)).toContain("tail turn");
@@ -640,12 +710,20 @@ describe("readClaudeCliFallbackSeed", () => {
         message: { role: "user", content: "sidechain user turn" },
       },
     ]);
+<<<<<<< HEAD
     const seed = readFallbackSeed();
+=======
+    const seed = readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(seed).toBeUndefined();
   });
 
   it("rejects path-like session ids instead of escaping the Claude projects tree", () => {
+<<<<<<< HEAD
     const seed = readFallbackSeed("../escape");
+=======
+    const seed = readClaudeCliFallbackSeed({ cliSessionId: "../escape" });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(seed).toBeUndefined();
   });
 
@@ -676,7 +754,11 @@ describe("readClaudeCliFallbackSeed", () => {
       },
     ]);
 
+<<<<<<< HEAD
     const seed = readFallbackSeed();
+=======
+    const seed = readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const fallbackSeed = requireFallbackSeed(seed, "latest boundary session");
     expect(fallbackSeed.summaryText).toBe("Conversation compacted (2)");
     expect(fallbackSeed.summaryText).not.toBe("FIRST compact summary");
@@ -699,7 +781,11 @@ describe("readClaudeCliFallbackSeed", () => {
       },
     ]);
 
+<<<<<<< HEAD
     const seed = readFallbackSeed();
+=======
+    const seed = readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(seed?.summaryText).toBe("trailing summary without boundary");
   });
 });

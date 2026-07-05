@@ -1,5 +1,10 @@
+<<<<<<< HEAD
 // Shared web helper tests cover timeout normalization, process-local cache
 // expiry guards, and bounded response body cleanup.
+=======
+// Shared web helper tests cover timeout normalization and process-local cache
+// expiry guards.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   MAX_TIMER_TIMEOUT_MS,
   MAX_TIMER_TIMEOUT_SECONDS,
@@ -7,7 +12,10 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readCache,
+<<<<<<< HEAD
   readResponseText,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolvePositiveTimeoutSeconds,
   resolveTimeoutSeconds,
   withTimeout,
@@ -19,6 +27,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+<<<<<<< HEAD
 function responseFromReader(params: {
   chunks: string[];
   cancel: () => Promise<void>;
@@ -41,6 +50,8 @@ function responseFromReader(params: {
   } as Response;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("web shared timeout seconds", () => {
   it("caps timeoutSeconds at the shared timer-safe ceiling", () => {
     expect(resolveTimeoutSeconds(Number.MAX_SAFE_INTEGER, 30)).toBe(MAX_TIMER_TIMEOUT_SECONDS);
@@ -109,6 +120,7 @@ describe("web shared withTimeout", () => {
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 });
+<<<<<<< HEAD
 
 describe("readResponseText", () => {
   it("releases bounded response readers after complete reads", async () => {
@@ -147,3 +159,5 @@ describe("readResponseText", () => {
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

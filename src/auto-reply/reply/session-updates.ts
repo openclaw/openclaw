@@ -3,7 +3,14 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { canExecRequestNode } from "../../agents/exec-defaults.js";
+<<<<<<< HEAD
 import { resolveCompactionSessionFile, type SessionEntry } from "../../config/sessions.js";
+=======
+import {
+  resolveCompactionSessionFile,
+  type SessionEntry,
+} from "../../config/sessions.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { patchSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -16,18 +23,25 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
+<<<<<<< HEAD
 import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 export { drainFormattedSystemEvents } from "./session-system-events.js";
 export { resetResolvedSkillsCacheForTests } from "../../skills/runtime/session-snapshot.js";
 
 async function persistSessionEntryUpdate(params: {
+<<<<<<< HEAD
   sessionEntryHandle?: ReplySessionEntryHandle;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
   nextEntry: SessionEntry;
 }) {
+<<<<<<< HEAD
   if (params.sessionEntryHandle) {
     params.sessionEntryHandle.replaceCurrent(params.nextEntry);
   } else if (params.sessionStore && params.sessionKey) {
@@ -39,6 +53,16 @@ async function persistSessionEntryUpdate(params: {
     return;
   }
   if (!params.storePath || !params.sessionKey) {
+=======
+  if (!params.sessionStore || !params.sessionKey) {
+    return;
+  }
+  params.sessionStore[params.sessionKey] = {
+    ...params.sessionStore[params.sessionKey],
+    ...params.nextEntry,
+  };
+  if (!params.storePath) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return;
   }
   await upsertSessionEntry(
@@ -118,7 +142,10 @@ function resolveNonNegativeTokenCount(value: number | undefined): number | undef
 /** Ensures a session entry has the reusable skill snapshot needed for reply runs. */
 export async function ensureSkillSnapshot(params: {
   sessionEntry?: SessionEntry;
+<<<<<<< HEAD
   sessionEntryHandle?: ReplySessionEntryHandle;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
@@ -145,7 +172,10 @@ export async function ensureSkillSnapshot(params: {
 
   const {
     sessionEntry,
+<<<<<<< HEAD
     sessionEntryHandle,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sessionStore,
     sessionKey,
     storePath,
@@ -156,7 +186,11 @@ export async function ensureSkillSnapshot(params: {
     skillFilter,
   } = params;
 
+<<<<<<< HEAD
   let nextEntry = sessionEntryHandle?.getCurrent() ?? sessionEntry;
+=======
+  let nextEntry = sessionEntry;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   let systemSent = sessionEntry?.systemSent ?? false;
   const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
   const remoteEligibility = getRemoteSkillEligibility({
@@ -180,10 +214,16 @@ export async function ensureSkillSnapshot(params: {
   const initialSnapshotState = resolveSnapshot(existingSnapshot);
   const shouldRefreshSnapshot = initialSnapshotState.shouldRefresh;
 
+<<<<<<< HEAD
   if (isFirstTurnInSession && (sessionEntryHandle || sessionStore) && sessionKey) {
     const current = nextEntry ??
       sessionEntryHandle?.get(sessionKey) ??
       sessionStore?.[sessionKey] ?? {
+=======
+  if (isFirstTurnInSession && sessionStore && sessionKey) {
+    const current = nextEntry ??
+      sessionStore[sessionKey] ?? {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         sessionId: sessionId ?? crypto.randomUUID(),
         updatedAt: Date.now(),
       };
@@ -198,6 +238,7 @@ export async function ensureSkillSnapshot(params: {
       systemSent: true,
       skillsSnapshot: skillSnapshot,
     };
+<<<<<<< HEAD
     await persistSessionEntryUpdate({
       sessionEntryHandle,
       sessionStore,
@@ -205,6 +246,9 @@ export async function ensureSkillSnapshot(params: {
       storePath,
       nextEntry,
     });
+=======
+    await persistSessionEntryUpdate({ sessionStore, sessionKey, storePath, nextEntry });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     systemSent = true;
   }
 
@@ -219,7 +263,11 @@ export async function ensureSkillSnapshot(params: {
         : resolveSnapshot(nextEntry.skillsSnapshot).snapshot;
   if (
     skillsSnapshot &&
+<<<<<<< HEAD
     (sessionEntryHandle || sessionStore) &&
+=======
+    sessionStore &&
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sessionKey &&
     !isFirstTurnInSession &&
     (!nextEntry?.skillsSnapshot || shouldRefreshSnapshot)
@@ -234,6 +282,7 @@ export async function ensureSkillSnapshot(params: {
       updatedAt: Date.now(),
       skillsSnapshot,
     };
+<<<<<<< HEAD
     await persistSessionEntryUpdate({
       sessionEntryHandle,
       sessionStore,
@@ -241,6 +290,9 @@ export async function ensureSkillSnapshot(params: {
       storePath,
       nextEntry,
     });
+=======
+    await persistSessionEntryUpdate({ sessionStore, sessionKey, storePath, nextEntry });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 
   return { sessionEntry: nextEntry, skillsSnapshot, systemSent };

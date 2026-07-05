@@ -19,13 +19,26 @@ import type {
 import { formatCliCommand } from "../../cli/command-format.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
+<<<<<<< HEAD
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
+=======
+import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
+import {
+  readConfigFileSnapshot,
+  replaceConfigFile,
+  type OpenClawConfig,
+} from "../../config/config.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { danger } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
+<<<<<<< HEAD
 import { persistResolvedChannelPluginConfig } from "./plugin-config-persistence.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
 
 export type ChannelsCapabilitiesOptions = {
@@ -49,6 +62,7 @@ type ChannelCapabilitiesReport = {
   diagnostics?: ChannelCapabilitiesDiagnostics;
 };
 
+<<<<<<< HEAD
 const CHANNEL_CAPABILITIES_TIMEOUT_MAX_MS = 30_000;
 
 type ChannelCapabilitiesStepResult<T> =
@@ -136,6 +150,8 @@ async function runChannelCapabilitiesDiagnostics(params: {
   return undefined;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function formatSupport(capabilities?: ChannelCapabilities) {
   if (!capabilities) {
     return "unknown";
@@ -240,6 +256,7 @@ async function resolveChannelReports(params: {
       : (resolvedAccount as { enabled?: boolean }).enabled !== false;
     let probe: unknown;
     if (configured && enabled && plugin.status?.probeAccount) {
+<<<<<<< HEAD
       probe = await runChannelCapabilitiesProbe({
         timeoutMs,
         run: () =>
@@ -263,6 +280,27 @@ async function resolveChannelReports(params: {
                 probe,
                 target: params.target,
               }),
+=======
+      try {
+        probe = await plugin.status.probeAccount({
+          account: resolvedAccount,
+          timeoutMs,
+          cfg,
+        });
+      } catch (err) {
+        probe = { ok: false, error: formatErrorMessage(err) };
+      }
+    }
+
+    const diagnostics =
+      configured && enabled
+        ? await plugin.status?.buildCapabilitiesDiagnostics?.({
+            account: resolvedAccount,
+            timeoutMs,
+            cfg,
+            probe,
+            target: params.target,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           })
         : undefined;
     const discoveredActions = resolveMessageActionDiscoveryForPlugin({
@@ -308,9 +346,13 @@ export async function channelsCapabilitiesCommand(
     return;
   }
   let cfg = loadedCfg;
+<<<<<<< HEAD
   const timeoutMs = resolveChannelCapabilitiesTimeoutMs(
     parseTimeoutMsWithFallback(opts.timeout, 10_000),
   );
+=======
+  const timeoutMs = parseTimeoutMsWithFallback(opts.timeout, 10_000);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const rawChannel = normalizeLowercaseStringOrEmpty(opts.channel);
   const rawTarget = normalizeOptionalString(opts.target) ?? "";
 
@@ -347,11 +389,43 @@ export async function channelsCapabilitiesCommand(
             allowInstall: true,
           });
           if (resolved.configChanged) {
+<<<<<<< HEAD
             cfg = await persistResolvedChannelPluginConfig({
               resolved,
               baseHash: (await sourceSnapshotPromise)?.hash,
               runtime,
             });
+=======
+            cfg = resolved.cfg;
+            const shouldMovePluginInstalls = Boolean(
+              cfg.plugins?.installs && Object.keys(cfg.plugins.installs).length > 0,
+            );
+            if (shouldMovePluginInstalls) {
+              const committed = await commitConfigWithPendingPluginInstalls({
+                nextConfig: cfg,
+                baseHash: (await sourceSnapshotPromise)?.hash,
+              });
+              cfg = committed.config;
+              await refreshPluginRegistryAfterConfigMutation({
+                config: cfg,
+                reason: "source-changed",
+                installRecords: committed.installRecords,
+                logger: { warn: (message) => runtime.log(message) },
+              });
+            } else {
+              await replaceConfigFile({
+                nextConfig: cfg,
+                baseHash: (await sourceSnapshotPromise)?.hash,
+              });
+              if (resolved.pluginInstalled) {
+                await refreshPluginRegistryAfterConfigMutation({
+                  config: cfg,
+                  reason: "source-changed",
+                  logger: { warn: (message) => runtime.log(message) },
+                });
+              }
+            }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           }
           return resolved.plugin ? [resolved.plugin] : null;
         })();
@@ -415,12 +489,19 @@ export async function channelsCapabilitiesCommand(
       const enabledLabel = report.enabled === false ? "disabled" : "enabled";
       lines.push(`Status: ${configuredLabel}, ${enabledLabel}`);
     }
+<<<<<<< HEAD
     const formattedProbeLines = report.plugin.status?.formatCapabilitiesProbe?.({
       probe: report.probe,
     });
     const probeLines = formattedProbeLines?.length
       ? formattedProbeLines
       : formatGenericProbeLines(report.probe);
+=======
+    const probeLines =
+      report.plugin.status?.formatCapabilitiesProbe?.({
+        probe: report.probe,
+      }) ?? formatGenericProbeLines(report.probe);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (probeLines.length > 0) {
       lines.push(...probeLines.map(renderDisplayLine));
     } else if (report.configured && report.enabled) {

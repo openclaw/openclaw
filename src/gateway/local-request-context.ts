@@ -11,7 +11,10 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
+<<<<<<< HEAD
 import { createChatRunEntry, type ChatRunEntry } from "./server-chat-state.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 // Embedded/local agent calls need enough GatewayRequestContext to reuse server
@@ -53,7 +56,11 @@ export function createLocalGatewayRequestContext(
 ): GatewayRequestContext {
   const logGateway = createSubsystemLogger("gateway/local");
   const sessionEvents = new Set<string>();
+<<<<<<< HEAD
   const chatRuns = new Map<string, ChatRunEntry>();
+=======
+  const chatRuns = new Map<string, { sessionKey: string; agentId?: string; clientRunId: string }>();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const chatRunBuffers: GatewayRequestContext["chatRunBuffers"] = new Map();
   const chatDeltaSentAt: GatewayRequestContext["chatDeltaSentAt"] = new Map();
   const chatDeltaLastBroadcastLen: GatewayRequestContext["chatDeltaLastBroadcastLen"] = new Map();
@@ -106,7 +113,11 @@ export function createLocalGatewayRequestContext(
     bufferedAgentEvents,
     clearChatRunState,
     addChatRun: (sessionId, entry) => {
+<<<<<<< HEAD
       chatRuns.set(sessionId, createChatRunEntry(entry));
+=======
+      chatRuns.set(sessionId, entry);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
     removeChatRun: (sessionId, clientRunId, sessionKey) => {
       const entry = chatRuns.get(sessionId);

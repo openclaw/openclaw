@@ -18,6 +18,7 @@ import {
   createChangedCheckPlan,
   createPnpmManagedCommand,
   createTargetedCoreLintCommand,
+<<<<<<< HEAD
   createTargetedExtensionLintCommand,
   createTargetedScriptLintCommand,
   shouldDelegateChangedCheckToCrabbox,
@@ -26,6 +27,9 @@ import {
   shouldRunPromptSnapshotCheck,
   shouldRunPromptSnapshotOwnerTest,
   shouldRunRuntimeSidecarBaselineCheck,
+=======
+  shouldDelegateChangedCheckToCrabbox,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   shouldRunShrinkwrapGuard,
   shouldRunTestTempCreationReport,
   createShrinkwrapGuardCommand,
@@ -202,6 +206,7 @@ describe("scripts/changed-lanes", () => {
     expect(result.stdout).not.toContain("[check:changed]");
   });
 
+<<<<<<< HEAD
   it("rejects unknown changed lane options before treating them as paths", () => {
     const result = spawnSync(process.execPath, ["scripts/changed-lanes.mjs", "--jsno"], {
       cwd: repoRoot,
@@ -275,6 +280,8 @@ describe("scripts/changed-lanes", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("includes untracked worktree files in the default local diff", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-");
     git(dir, ["init", "-q", "--initial-branch=main"]);
@@ -599,6 +606,7 @@ describe("scripts/changed-lanes", () => {
     expect(command).toBeNull();
   });
 
+<<<<<<< HEAD
   it("falls back to full extension lint for broad extension diffs", () => {
     const targets = Array.from(
       { length: 9 },
@@ -609,6 +617,8 @@ describe("scripts/changed-lanes", () => {
     expect(command).toBeNull();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("falls back to full core lint when a changed core target was deleted", () => {
     expect(
       createTargetedCoreLintCommand(
@@ -661,6 +671,7 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
+<<<<<<< HEAD
   it("targets small extension lint diffs", () => {
     expect(
       createTargetedExtensionLintCommand(
@@ -705,6 +716,8 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("reenables local-check policy for changed typecheck commands", () => {
     const result = detectChangedLanes(["packages/normalization-core/src/string-normalization.ts"]);
     const plan = createChangedCheckPlan(result, {
@@ -870,11 +883,17 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("runs changed-check lint lanes under the parent heavy-check lock", () => {
+<<<<<<< HEAD
     const result = detectChangedLanes(["extensions/lmstudio/src/api.ts"]);
     const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
     const lintCommand = plan.commands.find(
       (command) => command.name === "lint extension changed file",
     );
+=======
+    const result = detectChangedLanes(["extensions/discord/src/index.ts"]);
+    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+    const lintCommand = plan.commands.find((command) => command.args[0] === "lint:extensions");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(lintCommand?.env).toEqual({
       OPENCLAW_OXLINT_SKIP_LOCK: "1",
@@ -884,6 +903,7 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
+<<<<<<< HEAD
   it("runs changed-check app tests under the parent heavy-check lock", () => {
     const result = detectChangedLanes([
       "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
@@ -899,6 +919,8 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("routes core test-only changes to core test lanes only", () => {
     const result = detectChangedLanes([
       "packages/normalization-core/src/string-normalization.test.ts",
@@ -916,7 +938,11 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("routes extension production changes to extension prod and extension test lanes", () => {
+<<<<<<< HEAD
     const result = detectChangedLanes(["extensions/lmstudio/src/api.ts"]);
+=======
+    const result = detectChangedLanes(["extensions/discord/src/index.ts"]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expectLanes(result.lanes, {
       extensions: true,
@@ -1391,6 +1417,7 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("deps:shrinkwrap:check");
   });
 
+<<<<<<< HEAD
   it("runs prompt snapshot drift checks for prompt snapshot generator surfaces", () => {
     expect(
       shouldRunPromptSnapshotCheck([
@@ -1459,6 +1486,8 @@ describe("scripts/changed-lanes", () => {
     );
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("guards release metadata package changes to the top-level version field", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-release-metadata-");
     git(dir, ["init", "-q", "--initial-branch=main"]);
@@ -1548,6 +1577,7 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
   });
 
+<<<<<<< HEAD
   it("runs macOS app CI tests for macOS app dependency changes", () => {
     for (const changedPath of [
       "apps/macos/Sources/OpenClawMac/AppDelegate.swift",
@@ -1625,6 +1655,28 @@ describe("scripts/changed-lanes", () => {
       }),
     );
     expect(plan.commands.map((command) => command.name)).not.toContain("macOS app CI tests");
+=======
+  it("keeps app lint explicit when non-macOS hosts lack SwiftLint", () => {
+    const result = detectChangedLanes([
+      "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+    ]);
+    const plan = createChangedCheckPlan(result, {
+      env: { PATH: "/usr/bin" },
+      platform: "linux",
+      swiftlintAvailable: false,
+    });
+
+    expectLanes(result.lanes, {
+      apps: true,
+    });
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:apps");
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        name: "lint apps (swiftlint unavailable on this host)",
+        bin: "node",
+      }),
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("runs app lint when SwiftLint is available in Testbox", () => {
@@ -1638,6 +1690,7 @@ describe("scripts/changed-lanes", () => {
     });
 
     expect(plan.commands.map((command) => command.args[0])).toContain("lint:apps");
+<<<<<<< HEAD
     expect(plan.commands).toContainEqual(
       expect.objectContaining({
         name: "macOS app CI tests",
@@ -1658,6 +1711,8 @@ describe("scripts/changed-lanes", () => {
       apps: true,
     });
     expect(plan.commands.map((command) => command.name)).not.toContain("macOS app CI tests");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("routes legacy root asset deletions as tooling during root cleanup", () => {
@@ -1687,6 +1742,7 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+<<<<<<< HEAD
     expect(plan.commands).toContainEqual(
       expect.objectContaining({
         name: "Canvas A2UI native resource sync",
@@ -1732,6 +1788,8 @@ describe("scripts/changed-lanes", () => {
         args: ["scripts/sync-native-a2ui.mjs", "--check"],
       }),
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("keeps shared Vitest wiring changes out of check test execution", () => {

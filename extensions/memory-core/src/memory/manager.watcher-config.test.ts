@@ -121,6 +121,7 @@ const {
 
 const CHOKIDAR_FACTORY_KEY = Symbol.for("openclaw.test.memoryWatchFactory");
 const NATIVE_FACTORY_KEY = Symbol.for("openclaw.test.memoryNativeWatchFactory");
+<<<<<<< HEAD
 const originalWatcherStateDir = process.env.OPENCLAW_STATE_DIR;
 
 function setWatcherStateDir(stateDir: string): void {
@@ -134,6 +135,8 @@ function restoreWatcherStateDir(): void {
     Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalWatcherStateDir);
   }
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async (importOriginal) => {
   const actual =
@@ -167,12 +170,23 @@ vi.mock("./embeddings.js", () => ({
   }),
 }));
 
+<<<<<<< HEAD
 import { clearMemoryEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+=======
+import {
+  clearMemoryEmbeddingProviders as clearRegistry,
+  registerMemoryEmbeddingProvider as registerAdapter,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   closeAllMemorySearchManagers,
   getMemorySearchManager,
   type MemoryIndexManager,
 } from "./index.js";
+<<<<<<< HEAD
+=======
+import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("memory watcher config", () => {
   let manager: MemoryIndexManager | null = null;
@@ -185,6 +199,10 @@ describe("memory watcher config", () => {
     Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
     vi.clearAllMocks();
     clearRegistry();
+<<<<<<< HEAD
+=======
+    registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     nativeWatchMockFailingDir.current = null;
   });
 
@@ -207,7 +225,10 @@ describe("memory watcher config", () => {
     }
     await closeAllMemorySearchManagers();
     clearRegistry();
+<<<<<<< HEAD
     restoreWatcherStateDir();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (workspaceDir) {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       workspaceDir = "";
@@ -217,7 +238,10 @@ describe("memory watcher config", () => {
 
   async function setupWatcherWorkspace(seedFile: { name: string; contents: string }) {
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-watch-"));
+<<<<<<< HEAD
     setWatcherStateDir(path.join(workspaceDir, "state"));
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     extraDir = path.join(workspaceDir, "extra");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.mkdir(extraDir, { recursive: true });
@@ -230,7 +254,11 @@ describe("memory watcher config", () => {
       memorySearch: {
         provider: "openai",
         model: "mock-embed",
+<<<<<<< HEAD
         store: { vector: { enabled: false } },
+=======
+        store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
         query: { minScore: 0, hybrid: { enabled: false } },
         extraPaths: [extraDir],

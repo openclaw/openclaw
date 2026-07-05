@@ -843,6 +843,7 @@ describe("googlechatPlugin security", () => {
     );
   });
 });
+<<<<<<< HEAD
 
 describe("googlechatPlugin outbound sanitizeText", () => {
   const sanitizeText = googlechatOutboundAdapter.base.sanitizeText;
@@ -861,3 +862,5 @@ describe("googlechatPlugin outbound sanitizeText", () => {
     expect(sanitizeText({ text })).toBe(text);
   });
 });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

@@ -69,6 +69,7 @@ function is401Error(error: unknown): boolean {
   if (!error) {
     return false;
   }
+<<<<<<< HEAD
   // When a structured Telegram error_code is present, trust it exclusively.
   // A 429 with retry_after=401 renders as "(429: Too Many Requests: retry after 401)"
   // whose message contains the substring "401" — that must NOT trigger the 401
@@ -87,6 +88,12 @@ function is401Error(error: unknown): boolean {
   // substring matching — that was the root cause of #94787.
   const message = error instanceof Error ? error.message : JSON.stringify(error);
   return normalizeLowercaseStringOrEmpty(message).includes("unauthorized");
+=======
+  const message = error instanceof Error ? error.message : JSON.stringify(error);
+  return (
+    message.includes("401") || normalizeLowercaseStringOrEmpty(message).includes("unauthorized")
+  );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 class TelegramSendChatActionTransientCooldownError extends Error {

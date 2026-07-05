@@ -8,7 +8,10 @@ import type { ResourceDiagnostic } from "../../agents/sessions/diagnostics.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "../../agents/sessions/source-info.js";
 import { parseFrontmatter } from "../../agents/utils/frontmatter.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
+<<<<<<< HEAD
 import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ignore-rules.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatSkillsForPrompt as formatSkillContractForPrompt } from "./skill-contract.js";
 import { computeSkillPromptVersion } from "./skill-version.js";
 
@@ -18,6 +21,66 @@ const MAX_NAME_LENGTH = 64;
 /** Max description length per spec */
 const MAX_DESCRIPTION_LENGTH = 1024;
 
+<<<<<<< HEAD
+=======
+const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
+
+type IgnoreMatcher = ReturnType<typeof ignore>;
+
+function toPosixPath(p: string): string {
+  return p.split(sep).join("/");
+}
+
+function prefixIgnorePattern(line: string, prefix: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.startsWith("#") && !trimmed.startsWith("\\#")) {
+    return null;
+  }
+
+  let pattern = line;
+  let negated = false;
+
+  if (pattern.startsWith("!")) {
+    negated = true;
+    pattern = pattern.slice(1);
+  } else if (pattern.startsWith("\\!")) {
+    pattern = pattern.slice(1);
+  }
+
+  if (pattern.startsWith("/")) {
+    pattern = pattern.slice(1);
+  }
+
+  const prefixed = prefix ? `${prefix}${pattern}` : pattern;
+  return negated ? `!${prefixed}` : prefixed;
+}
+
+function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string): void {
+  const relativeDir = relative(rootDir, dir);
+  const prefix = relativeDir ? `${toPosixPath(relativeDir)}/` : "";
+
+  for (const filename of IGNORE_FILE_NAMES) {
+    const ignorePath = join(dir, filename);
+    if (!existsSync(ignorePath)) {
+      continue;
+    }
+    try {
+      const content = readFileSync(ignorePath, "utf-8");
+      const patterns = content
+        .split(/\r?\n/)
+        .map((line) => prefixIgnorePattern(line, prefix))
+        .filter((line): line is string => Boolean(line));
+      if (patterns.length > 0) {
+        ig.add(patterns);
+      }
+    } catch {}
+  }
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export interface SkillFrontmatter {
   name?: string;
   description?: string;

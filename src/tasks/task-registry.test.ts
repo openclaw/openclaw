@@ -2,7 +2,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
+<<<<<<< HEAD
 import { resetCronActiveJobs } from "../cron/active-jobs.js";
+=======
+import { resetCronActiveJobsForTests } from "../cron/active-jobs.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   emitAgentEvent,
   registerAgentRunContext,
@@ -29,10 +33,18 @@ import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   cancelTaskById,
   createTaskRecord as createTaskRecordOrNull,
+<<<<<<< HEAD
   finalizeTaskRunByRunId,
   findLatestTaskForRelatedSessionKey,
   findTaskByRunId,
   getTaskById,
+=======
+  findLatestTaskForOwnerKey,
+  findLatestTaskForRelatedSessionKey,
+  findTaskByRunId,
+  getTaskById,
+  getTaskRegistrySummary,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   isParentFlowLinkError,
   listTasksForAgentId,
   listTasksForOwnerKey,
@@ -42,6 +54,10 @@ import {
   maybeDeliverTaskTerminalUpdate,
   markTaskRunningByRunId,
   markTaskTerminalById,
+<<<<<<< HEAD
+=======
+  markTaskTerminalByRunId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   recordTaskProgressByRunId,
   reloadTaskRegistryFromStore,
   resetTaskRegistryControlRuntimeForTests,
@@ -50,6 +66,11 @@ import {
   resolveTaskForLookupToken,
   setTaskRegistryControlRuntimeForTests,
   setTaskRegistryDeliveryRuntimeForTests,
+<<<<<<< HEAD
+=======
+  setTaskProgressById,
+  setTaskTimingById,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
 import {
@@ -63,11 +84,18 @@ import {
   runTaskRegistryMaintenance,
   setTaskRegistryMaintenanceRuntimeForTests,
   startTaskRegistryMaintenance,
+<<<<<<< HEAD
   stopTaskRegistryMaintenance,
   sweepTaskRegistry,
 } from "./task-registry.maintenance.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
+=======
+  stopTaskRegistryMaintenanceForTests,
+  sweepTaskRegistry,
+} from "./task-registry.maintenance.js";
+import { configureTaskRegistryRuntime } from "./task-registry.store.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
 const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
@@ -134,7 +162,11 @@ vi.mock("../agents/subagent-control.js", () => ({
 
 vi.mock("../utils/message-channel.js", () => ({
   isDeliverableMessageChannel: (channel: string) =>
+<<<<<<< HEAD
     channel === "notifychat" || channel === "guildchat" || channel === "discord",
+=======
+    channel === "notifychat" || channel === "guildchat",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 function configureTaskRegistryMaintenanceRuntimeForTest(params: {
@@ -429,7 +461,11 @@ function resetTaskRegistryMemoryForTest(opts?: { persist?: boolean }) {
 }
 
 async function withTaskRegistryTempDir<T>(
+<<<<<<< HEAD
   run: (root: string) => Promise<T>,
+=======
+  run: () => Promise<T>,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   options?: { durableStore?: boolean },
 ): Promise<T> {
   return await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
@@ -440,7 +476,11 @@ async function withTaskRegistryTempDir<T>(
         configureInMemoryTaskStoresForTests();
       }
       try {
+<<<<<<< HEAD
         return await run(root);
+=======
+        return await run();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       } finally {
         // Close both sqlite-backed registries before Windows temp-dir cleanup tries to remove them.
         resetTaskRegistryForTests({ persist: false });
@@ -472,7 +512,11 @@ describe("task-registry", () => {
     resetSystemEventsForTest();
     resetHeartbeatWakeStateForTests();
     resetAgentRunContextForTest();
+<<<<<<< HEAD
     resetCronActiveJobs();
+=======
+    resetCronActiveJobsForTests();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resetActiveCronTaskRunsForTests();
     resetTaskRegistryControlRuntimeForTests();
     resetTaskRegistryDeliveryRuntimeForTests();
@@ -598,7 +642,11 @@ describe("task-registry", () => {
           aborted: true,
         },
       });
+<<<<<<< HEAD
       finalizeTaskRunByRunId({
+=======
+      markTaskTerminalByRunId({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         runId: "run-timeout-then-success",
         runtime: "cli",
         status: "succeeded",
@@ -769,14 +817,22 @@ describe("task-registry", () => {
         startedAt: 100,
       });
 
+<<<<<<< HEAD
       finalizeTaskRunByRunId({
+=======
+      markTaskTerminalByRunId({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         runId: "run-fail-then-success",
         runtime: "cli",
         status: "failed",
         endedAt: 200,
         error: "delivery failed",
       });
+<<<<<<< HEAD
       finalizeTaskRunByRunId({
+=======
+      markTaskTerminalByRunId({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         runId: "run-fail-then-success",
         runtime: "cli",
         status: "succeeded",
@@ -816,7 +872,11 @@ describe("task-registry", () => {
           endedAt: 200,
         },
       });
+<<<<<<< HEAD
       finalizeTaskRunByRunId({
+=======
+      markTaskTerminalByRunId({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         runId: "run-success-then-fail",
         runtime: "cli",
         status: "failed",
@@ -864,7 +924,11 @@ describe("task-registry", () => {
         deliveryStatus: "session_queued",
       });
 
+<<<<<<< HEAD
       expect(summarizeTaskRecords(listTaskRecords())).toEqual({
+=======
+      expect(getTaskRegistrySummary()).toEqual({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         total: 3,
         active: 2,
         terminal: 1,
@@ -1320,6 +1384,7 @@ describe("task-registry", () => {
     });
   });
 
+<<<<<<< HEAD
   it("delivers delegated ACP completion directly to an explicitly bound Discord thread", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
@@ -1462,6 +1527,8 @@ describe("task-registry", () => {
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.each([
     {
       id: "channel",
@@ -1723,8 +1790,13 @@ describe("task-registry", () => {
         startedAt: 100,
       });
 
+<<<<<<< HEAD
       recordTaskProgressByRunId({
         runId: "run-detail-leak",
+=======
+      setTaskProgressById({
+        taskId: findTaskByRunId("run-detail-leak")!.taskId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         progressSummary:
           "I am loading the local session context and checking helper command availability before writing the file.",
       });
@@ -2202,7 +2274,11 @@ describe("task-registry", () => {
       });
       nowSpy.mockRestore();
 
+<<<<<<< HEAD
       expect(listTasksForOwnerKey("agent:main:main")[0]?.taskId).toBe(latest.taskId);
+=======
+      expect(findLatestTaskForOwnerKey("agent:main:main")?.taskId).toBe(latest.taskId);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(listTasksForOwnerKey("agent:main:main").map((task) => task.taskId)).toEqual([
         latest.taskId,
         older.taskId,
@@ -2270,6 +2346,12 @@ describe("task-registry", () => {
         task: "Missing child",
         status: "running",
         deliveryStatus: "pending",
+<<<<<<< HEAD
+=======
+      });
+      setTaskTimingById({
+        taskId: task.taskId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         lastEventAt: Date.now() - 10 * 60_000,
       });
 
@@ -2332,6 +2414,12 @@ describe("task-registry", () => {
         task: "Missing child",
         status: "running",
         deliveryStatus: "pending",
+<<<<<<< HEAD
+=======
+      });
+      setTaskTimingById({
+        taskId: task.taskId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         lastEventAt: now - 10 * 60_000,
       });
 
@@ -2373,6 +2461,12 @@ describe("task-registry", () => {
         status: "running",
         deliveryStatus: "not_applicable",
         notifyPolicy: "silent",
+<<<<<<< HEAD
+=======
+      });
+      setTaskTimingById({
+        taskId: task.taskId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         lastEventAt: now - 10 * 60_000,
       });
 
@@ -2405,6 +2499,12 @@ describe("task-registry", () => {
         status: "running",
         deliveryStatus: "not_applicable",
         notifyPolicy: "silent",
+<<<<<<< HEAD
+=======
+      });
+      setTaskTimingById({
+        taskId: task.taskId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         lastEventAt: now - 31 * 60_000,
       });
 
@@ -2421,6 +2521,7 @@ describe("task-registry", () => {
     });
   });
 
+<<<<<<< HEAD
   it("keeps fresh childless copilot-native subagent tasks live", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryForTests();
@@ -2485,6 +2586,8 @@ describe("task-registry", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not mark unrelated childless subagent tasks lost", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryForTests();
@@ -2501,6 +2604,12 @@ describe("task-registry", () => {
         status: "running",
         deliveryStatus: "not_applicable",
         notifyPolicy: "silent",
+<<<<<<< HEAD
+=======
+      });
+      setTaskTimingById({
+        taskId: task.taskId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         lastEventAt: now - 31 * 60_000,
       });
 
@@ -2533,12 +2642,18 @@ describe("task-registry", () => {
         task: "Old ACP task",
         status: "succeeded",
         deliveryStatus: "delivered",
+<<<<<<< HEAD
         lastEventAt: now - 60_000,
       });
       finalizeTaskRunByRunId({
         runId: "run-terminal-acp-oneshot",
         runtime: "acp",
         status: "succeeded",
+=======
+      });
+      setTaskTimingById({
+        taskId: task.taskId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         endedAt: now - 60_000,
         lastEventAt: now - 60_000,
       });
@@ -2686,12 +2801,18 @@ describe("task-registry", () => {
         task: "Old persistent ACP task",
         status: "failed",
         deliveryStatus: "failed",
+<<<<<<< HEAD
         lastEventAt: now - 60_000,
       });
       finalizeTaskRunByRunId({
         runId: "run-terminal-acp-persistent",
         runtime: "acp",
         status: "failed",
+=======
+      });
+      setTaskTimingById({
+        taskId: task.taskId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         endedAt: now - 60_000,
         lastEventAt: now - 60_000,
       });
@@ -2741,12 +2862,18 @@ describe("task-registry", () => {
         task: "Thread-bound ACP session",
         status: "succeeded",
         deliveryStatus: "delivered",
+<<<<<<< HEAD
         lastEventAt: now - 60_000,
       });
       finalizeTaskRunByRunId({
         runId: "run-terminal-acp-bound",
         runtime: "acp",
         status: "succeeded",
+=======
+      });
+      setTaskTimingById({
+        taskId: task.taskId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         endedAt: now - 60_000,
         lastEventAt: now - 60_000,
       });
@@ -2880,7 +3007,11 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
 
+<<<<<<< HEAD
       createTaskRecord({
+=======
+      const task = createTaskRecord({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         runtime: "cli",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -2890,12 +3021,18 @@ describe("task-registry", () => {
         status: "succeeded",
         deliveryStatus: "not_applicable",
         startedAt: Date.now() - 9 * 24 * 60 * 60_000,
+<<<<<<< HEAD
         lastEventAt: Date.now() - 8 * 24 * 60 * 60_000,
       });
       finalizeTaskRunByRunId({
         runId: "run-prune",
         runtime: "cli",
         status: "succeeded",
+=======
+      });
+      setTaskTimingById({
+        taskId: task.taskId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         endedAt: Date.now() - 8 * 24 * 60 * 60_000,
         lastEventAt: Date.now() - 8 * 24 * 60 * 60_000,
       });
@@ -2975,11 +3112,21 @@ describe("task-registry", () => {
         task: "Missing child",
         status: "running",
         deliveryStatus: "pending",
+<<<<<<< HEAD
+=======
+      });
+      setTaskTimingById({
+        taskId: task.taskId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         lastEventAt: now - 10 * 60_000,
       });
 
       startTaskRegistryMaintenance();
+<<<<<<< HEAD
       stopTaskRegistryMaintenance();
+=======
+      stopTaskRegistryMaintenanceForTests();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       await vi.advanceTimersByTimeAsync(5_000);
       await flushAsyncWork();
@@ -3203,8 +3350,13 @@ describe("task-registry", () => {
       });
 
       nowSpy.mockReturnValue(1_700_000_001_000);
+<<<<<<< HEAD
       markTaskRunningByRunId({
         runId: "run-backdated-update",
+=======
+      setTaskTimingById({
+        taskId: task.taskId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         startedAt: 1_699_999_998_000,
         lastEventAt: 1_699_999_998_500,
       });
@@ -3276,7 +3428,11 @@ describe("task-registry", () => {
         },
       });
 
+<<<<<<< HEAD
       createTaskRecord({
+=======
+      const staleTask = createTaskRecord({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         runtime: "cli",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -3286,10 +3442,20 @@ describe("task-registry", () => {
         status: "running",
         deliveryStatus: "pending",
         notifyPolicy: "silent",
+<<<<<<< HEAD
         startedAt: now - 60_000,
         lastEventAt: now - 60_000,
       });
       expect(summarizeTaskRecords(listTaskRecords()).active).toBe(1);
+=======
+      });
+      setTaskTimingById({
+        taskId: staleTask.taskId,
+        startedAt: now - 60_000,
+        lastEventAt: now - 60_000,
+      });
+      expect(getTaskRegistrySummary().active).toBe(1);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       durableTasks = new Map([
         [
@@ -3320,7 +3486,11 @@ describe("task-registry", () => {
         taskId: "task-durable",
         status: "cancelled",
       });
+<<<<<<< HEAD
       expect(summarizeTaskRecords(listTaskRecords()).active).toBe(0);
+=======
+      expect(getTaskRegistrySummary().active).toBe(0);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   });
 
@@ -3858,6 +4028,7 @@ describe("task-registry", () => {
     });
   });
 
+<<<<<<< HEAD
   it("cancels childless copilot-native tasks without routing through OpenClaw subagent sessions", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryForTests();
@@ -3895,6 +4066,8 @@ describe("task-registry", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("does not cancel unrelated childless subagent tasks", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryForTests();

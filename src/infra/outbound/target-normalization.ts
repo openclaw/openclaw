@@ -32,6 +32,7 @@ function resolveChannelPluginForTargetRead(channelId: ChannelId): ChannelPlugin 
   return getLoadedChannelPluginForRead(channelId) ?? getChannelPlugin(channelId);
 }
 
+<<<<<<< HEAD
 function normalizeTargetLiteral(value: string): string | undefined {
   return normalizeOptionalLowercaseString(value);
 }
@@ -78,6 +79,8 @@ export function resolveReservedTargetLiteral(params: {
   return reserved.has(normalized) ? normalized : undefined;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resetTargetNormalizerCacheForTests(): void {
   targetNormalizerCacheByChannelId.clear();
 }
@@ -270,6 +273,7 @@ export function buildTargetResolverSignature(
     : "pinned";
   const resolver = plugin?.messaging?.targetResolver;
   const hint = resolver?.hint ?? "";
+<<<<<<< HEAD
   const reserved = (resolver?.reservedLiterals ?? [])
     .map(normalizeTargetLiteral)
     .filter((literal): literal is string => Boolean(literal))
@@ -279,6 +283,12 @@ export function buildTargetResolverSignature(
   // Function source is only a cheap invalidation hint; resolver behavior still belongs to the plugin.
   const source = looksLike ? looksLike.toString() : "";
   return hashSignature(`${registryScope}|${hint}|${reserved}|${source}`);
+=======
+  const looksLike = resolver?.looksLikeId;
+  // Function source is only a cheap invalidation hint; resolver behavior still belongs to the plugin.
+  const source = looksLike ? looksLike.toString() : "";
+  return hashSignature(`${registryScope}|${hint}|${source}`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function hashSignature(value: string): string {

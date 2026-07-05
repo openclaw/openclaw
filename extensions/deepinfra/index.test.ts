@@ -49,6 +49,7 @@ function makeAgentModelEntry(id = "profile/live-model") {
   };
 }
 
+<<<<<<< HEAD
 function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(payload), {
     status: 200,
@@ -57,6 +58,8 @@ function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function withLiveDiscoveryTestEnv(
   mockFetch: ReturnType<typeof vi.fn>,
   runAssertions: () => Promise<void>,
@@ -130,9 +133,16 @@ describe("deepinfra augmentModelCatalog", () => {
 
   it("uses config-backed API keys to enable live model catalog augmentation", async () => {
     resetDeepInfraModelCacheForTest();
+<<<<<<< HEAD
     const mockFetch = vi
       .fn()
       .mockResolvedValue(jsonResponse({ data: [makeAgentModelEntry("config/live-model")] }));
+=======
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [makeAgentModelEntry("config/live-model")] }),
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const provider = await registerSingleProviderPlugin(deepinfraPlugin);
 
     await withLiveDiscoveryTestEnv(mockFetch, async () => {
@@ -158,9 +168,16 @@ describe("deepinfra augmentModelCatalog", () => {
 
   it("still runs live discovery when ctx.entries includes custom DeepInfra rows", async () => {
     resetDeepInfraModelCacheForTest();
+<<<<<<< HEAD
     const mockFetch = vi
       .fn()
       .mockResolvedValue(jsonResponse({ data: [makeAgentModelEntry("custom/live-model")] }));
+=======
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [makeAgentModelEntry("custom/live-model")] }),
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const provider = await registerSingleProviderPlugin(deepinfraPlugin);
 
     const seededDeepInfraCount = DEEPINFRA_MODEL_CATALOG.length + 5;
@@ -236,7 +253,14 @@ describe("deepinfra capability registration", () => {
 
   it("uses profile-resolved API keys for live text catalog discovery", async () => {
     resetDeepInfraModelCacheForTest();
+<<<<<<< HEAD
     const mockFetch = vi.fn().mockResolvedValue(jsonResponse({ data: [makeAgentModelEntry()] }));
+=======
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [makeAgentModelEntry()] }),
+    });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const captured = createCapturedPluginRegistration();
     deepinfraPlugin.register(captured.api);
     const provider = captured.providers[0];

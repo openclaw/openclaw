@@ -185,7 +185,13 @@ async function readSessionBranch(filePath: string): Promise<{
     (entry): entry is SessionEntry =>
       entry.type !== "session" &&
       isCanonicalSessionTranscriptEntry(entry) &&
+<<<<<<< HEAD
       typeof (entry as { id?: unknown }).id === "string",
+=======
+      typeof (entry as { id?: unknown }).id === "string" &&
+      (typeof (entry as { timestamp?: unknown }).timestamp === "string" ||
+        typeof (entry as { timestamp?: unknown }).timestamp === "number"),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
   const tree = scanSessionTranscriptTree(fileEntries);
   if (!tree.hasLeafUpdate) {

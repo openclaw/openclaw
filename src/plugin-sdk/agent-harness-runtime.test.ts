@@ -1,6 +1,7 @@
 /**
  * Tests agent harness runtime helpers and task dispatch behavior.
  */
+<<<<<<< HEAD
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   attachModelProviderRequestTransport,
@@ -23,6 +24,14 @@ vi.mock("../skills/research/autocapture.js", () => {
   };
 });
 
+=======
+import { describe, expect, it } from "vitest";
+import {
+  classifyAgentHarnessTerminalOutcome,
+  type AgentHarnessTerminalOutcomeClassification,
+} from "./agent-harness-runtime.js";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("classifyAgentHarnessTerminalOutcome", () => {
   it("does not classify an in-flight turn", () => {
     expect(
@@ -145,6 +154,7 @@ describe("classifyAgentHarnessTerminalOutcome", () => {
     expect(classification).toBe("empty");
   });
 });
+<<<<<<< HEAD
 
 describe("agent harness runtime SDK facade", () => {
   beforeEach(() => {
@@ -242,3 +252,5 @@ describe("agent harness user input helpers", () => {
     ).toContain("a &lt; b");
   });
 });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

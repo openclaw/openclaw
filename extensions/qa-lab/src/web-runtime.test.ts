@@ -1,13 +1,20 @@
 // Qa Lab tests cover web runtime plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+<<<<<<< HEAD
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+=======
+import { beforeEach, describe, expect, it, vi } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const {
   bodyLocator,
   browserClose,
   contextClose,
   contextNewPage,
+<<<<<<< HEAD
   existsSync,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   goto,
   launch,
   locatorFill,
@@ -18,7 +25,10 @@ const {
   pageUrl,
   pageWaitForFunction,
   pageWaitForSelector,
+<<<<<<< HEAD
   spawnSync,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } = vi.hoisted(() => ({
   bodyLocator: {
     waitFor: vi.fn(async () => undefined),
@@ -27,7 +37,10 @@ const {
   browserClose: vi.fn(async () => undefined),
   contextClose: vi.fn(async () => undefined),
   contextNewPage: vi.fn(),
+<<<<<<< HEAD
   existsSync: vi.fn((_candidate: unknown) => false),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   goto: vi.fn(async () => undefined),
   launch: vi.fn(),
   locatorFill: vi.fn(async () => undefined),
@@ -38,6 +51,7 @@ const {
   pageUrl: vi.fn(() => "http://127.0.0.1:3000/chat"),
   pageWaitForFunction: vi.fn(async () => undefined),
   pageWaitForSelector: vi.fn(async () => undefined),
+<<<<<<< HEAD
   spawnSync: vi.fn(() => ({ status: 0 })),
 }));
 
@@ -48,6 +62,8 @@ vi.mock("node:child_process", () => ({
 vi.mock("node:fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs")>()),
   existsSync,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }));
 
 vi.mock("playwright-core", () => ({
@@ -57,6 +73,10 @@ vi.mock("playwright-core", () => ({
 }));
 
 import {
+<<<<<<< HEAD
+=======
+  closeAllQaWebSessions,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   closeQaWebSessions,
   qaWebEvaluate,
   qaWebOpenPage,
@@ -98,12 +118,15 @@ beforeEach(async () => {
   contextNewPage.mockResolvedValue(page);
   launch.mockResolvedValue(browser);
   vi.clearAllMocks();
+<<<<<<< HEAD
   existsSync.mockReturnValue(false);
   spawnSync.mockReturnValue({ status: 0 });
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 function requireLaunchOptions() {
@@ -132,6 +155,7 @@ describe("qa web runtime", () => {
     });
     const snapshot = await qaWebSnapshot({ pageId: opened.pageId, maxChars: 5 });
     const evaluated = await qaWebEvaluate({ pageId: opened.pageId, expression: "'ok'" });
+<<<<<<< HEAD
     await closeQaWebSessions();
 
     const launchOptions = requireLaunchOptions();
@@ -142,6 +166,12 @@ describe("qa web runtime", () => {
     );
     expect(launchOptions?.channel).toBeUndefined();
     expect(launchOptions?.executablePath).toBeUndefined();
+=======
+    await closeAllQaWebSessions();
+
+    const launchOptions = requireLaunchOptions();
+    expect(launchOptions?.channel).toBe("chrome");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(launchOptions?.headless).toBe(true);
     expect(goto).toHaveBeenCalledWith("http://127.0.0.1:3000/chat", {
       waitUntil: "domcontentloaded",
@@ -157,6 +187,7 @@ describe("qa web runtime", () => {
     expect(browserClose).toHaveBeenCalledTimes(1);
   });
 
+<<<<<<< HEAD
   it("launches an explicit Chromium executable override when configured", async () => {
     vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", "/custom/chromium");
     existsSync.mockImplementation((candidate) => candidate === "/custom/chromium");
@@ -196,6 +227,8 @@ describe("qa web runtime", () => {
     await closeQaWebSessions();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("can close only selected page sessions", async () => {
     const first = await qaWebOpenPage({ url: "http://127.0.0.1:3000/one" });
     const second = await qaWebOpenPage({ url: "http://127.0.0.1:3000/two" });
@@ -207,7 +240,11 @@ describe("qa web runtime", () => {
     );
     const snapshot = await qaWebSnapshot({ pageId: second.pageId });
     expect(snapshot.text).toBe("hello from body");
+<<<<<<< HEAD
     await closeQaWebSessions();
+=======
+    await closeAllQaWebSessions();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("caps oversized web runtime timeouts", async () => {
@@ -229,7 +266,11 @@ describe("qa web runtime", () => {
         expression: "'ok'",
         timeoutMs: Number.MAX_SAFE_INTEGER,
       });
+<<<<<<< HEAD
       await closeQaWebSessions();
+=======
+      await closeAllQaWebSessions();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       expect(goto).toHaveBeenCalledWith("http://127.0.0.1:3000/chat", {
         waitUntil: "domcontentloaded",

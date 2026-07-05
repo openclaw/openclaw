@@ -11,7 +11,10 @@ import {
   waitForLocalOAuthCallback,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+<<<<<<< HEAD
 import { readGoogleApiErrorDetail } from "./google-api-errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const GOOGLE_MEET_REDIRECT_URI = "http://localhost:8085/oauth2callback";
 const GOOGLE_MEET_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -86,7 +89,11 @@ async function executeGoogleTokenRequest(body: URLSearchParams): Promise<GoogleM
   });
   try {
     if (!response.ok) {
+<<<<<<< HEAD
       const detail = await readGoogleApiErrorDetail(response);
+=======
+      const detail = await response.text();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       throw new Error(`Google OAuth token request failed (${response.status}): ${detail}`);
     }
     const payload = (await response.json()) as {

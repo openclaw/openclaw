@@ -129,7 +129,10 @@ export type ChannelSetupInput = {
   deviceName?: string;
   avatarUrl?: string;
   initialSyncLimit?: number;
+<<<<<<< HEAD
   profile?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ship?: string;
   url?: string;
   baseUrl?: string;
@@ -608,8 +611,11 @@ export type ChannelMessagingAdapter = {
   targetResolver?: {
     looksLikeId?: (raw: string, normalized?: string) => boolean;
     hint?: string;
+<<<<<<< HEAD
     /** Bare words that are command/session references for this channel, not literal destinations. */
     reservedLiterals?: readonly string[];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     /**
      * Plugin-owned fallback for explicit/native targets or post-directory-miss
      * resolution. This should complement directory lookup, not duplicate it.
@@ -695,8 +701,11 @@ export type ChannelMessageActionContext = {
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   accountId?: string | null;
+<<<<<<< HEAD
   /** Trusted originating account id paired with requesterSenderId. */
   requesterAccountId?: string | null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /**
    * Trusted sender id from inbound context. This is server-injected and must
    * never be sourced from tool/model-controlled params.

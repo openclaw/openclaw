@@ -1,12 +1,16 @@
 // Qa E2E tests cover qa e2e script behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { QaSelfCheckResult } from "../../extensions/qa-lab/api.js";
+<<<<<<< HEAD
 import {
   enablePrivateQaScriptEnv,
   main,
   parseQaE2eArgs,
   resolveQaE2eOutputPath,
 } from "../../scripts/qa-e2e.js";
+=======
+import { enablePrivateQaScriptEnv, main, resolveQaE2eOutputPath } from "../../scripts/qa-e2e.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function makeSelfCheckResult(status: "pass" | "fail"): QaSelfCheckResult {
   return {
@@ -47,6 +51,7 @@ describe("qa-e2e script", () => {
   });
 
   it("resolves the default self-check report path", () => {
+<<<<<<< HEAD
     expect(resolveQaE2eOutputPath([])).toBeUndefined();
     expect(resolveQaE2eOutputPath([".artifacts/custom.md"])).toBe(".artifacts/custom.md");
     expect(resolveQaE2eOutputPath(["--output", ".artifacts/custom.md"])).toBe(
@@ -110,6 +115,10 @@ describe("qa-e2e script", () => {
 
     expect(loadRuntime).not.toHaveBeenCalled();
     expect(env.OPENCLAW_BUILD_PRIVATE_QA).toBeUndefined();
+=======
+    expect(resolveQaE2eOutputPath([])).toBe(".artifacts/qa-e2e/self-check.md");
+    expect(resolveQaE2eOutputPath([".artifacts/custom.md"])).toBe(".artifacts/custom.md");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it.each([
@@ -138,6 +147,7 @@ describe("qa-e2e script", () => {
     expect(writeStdout).toHaveBeenCalledWith("QA self-check report: /tmp/qa-self-check.md\n");
     expect(env.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
   });
+<<<<<<< HEAD
 
   it("lets QA Lab choose the default self-check output path", async () => {
     const result = makeSelfCheckResult("pass");
@@ -156,4 +166,6 @@ describe("qa-e2e script", () => {
 
     expect(runQaE2eSelfCheck.mock.calls[0]).toEqual([]);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

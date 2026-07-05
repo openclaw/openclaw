@@ -266,7 +266,11 @@ export async function pollAppRegistration(params: {
  * otherwise the pattern is corrupted and cannot be scanned.
  */
 export async function printQrCode(url: string): Promise<void> {
+<<<<<<< HEAD
   const output = await renderQrTerminal(url, { small: true });
+=======
+  const output = await renderQrTerminal(url);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   process.stdout.write(output.endsWith("\n") ? output : `${output}\n`);
 }
 

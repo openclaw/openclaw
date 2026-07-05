@@ -10,28 +10,52 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import * as jsonFiles from "../infra/json-files.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+<<<<<<< HEAD
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { runPluginHostCleanup } from "./host-hook-cleanup.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 
 describe("plugin host cleanup session stores", () => {
   let stateDir: string | undefined;
+<<<<<<< HEAD
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 
   afterEach(async () => {
     clearSessionStoreCacheForTest();
     envSnapshot.restore();
+=======
+  let previousStateDir: string | undefined;
+
+  afterEach(async () => {
+    clearSessionStoreCacheForTest();
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (stateDir) {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
     stateDir = undefined;
+<<<<<<< HEAD
+=======
+    previousStateDir = undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("does not rewrite session stores when cleanup scans find no plugin-owned state", async () => {
     stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-cleanup-noop-"),
     );
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+=======
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const storePath = path.join(stateDir, "sessions.json");
     await saveSessionStore(
       storePath,
@@ -60,7 +84,12 @@ describe("plugin host cleanup session stores", () => {
     stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-cleanup-deferred-"),
     );
+<<<<<<< HEAD
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+=======
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const storePath = path.join(stateDir, "sessions.json");
     await saveSessionStore(
       storePath,
@@ -95,6 +124,7 @@ describe("plugin host cleanup session stores", () => {
       },
     });
   });
+<<<<<<< HEAD
 
   it("clears plugin-owned session state across resolved stores without touching unrelated rows", async () => {
     stateDir = await fs.mkdtemp(
@@ -175,4 +205,6 @@ describe("plugin host cleanup session stores", () => {
     expect(secondStore["agent:b:other"]?.pluginExtensions).toBeUndefined();
     expect(secondStore["agent:b:other"]?.updatedAt).toBeGreaterThan(beforeUpdatedAt);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

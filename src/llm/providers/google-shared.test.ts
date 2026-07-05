@@ -1,7 +1,10 @@
 // Google shared provider tests cover response conversion and finish reasons.
 import { FinishReason, type GenerateContentResponse } from "@google/genai";
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { AssistantMessage, Model } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
@@ -135,6 +138,7 @@ describe("consumeGoogleGenerateContentStream", () => {
     });
     expect(output.usage.cost.total).toBeGreaterThan(0);
   });
+<<<<<<< HEAD
 
   it("generates a new id when Google repeats a streamed tool-call id", async () => {
     const output = createOutput();
@@ -191,6 +195,8 @@ describe("consumeGoogleGenerateContentStream", () => {
       },
     ]);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("buildGoogleGenerateContentParams", () => {
@@ -203,6 +209,7 @@ describe("buildGoogleGenerateContentParams", () => {
 
     expect(params.config?.stopSequences).toEqual(["STOP"]);
   });
+<<<<<<< HEAD
 
   it("strips the internal cache boundary marker from systemInstruction", () => {
     const params = buildGoogleGenerateContentParams(model, {
@@ -213,4 +220,6 @@ describe("buildGoogleGenerateContentParams", () => {
     expect(params.config?.systemInstruction).toBe("Stable\nDynamic");
     expect(JSON.stringify(params)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

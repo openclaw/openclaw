@@ -3,7 +3,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
+<<<<<<< HEAD
 import { QaSuiteInfraError, toQaErrorObject } from "./errors.js";
+=======
+import { QaSuiteInfraError } from "./errors.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { applyQaMergePatch } from "./suite-merge-patch.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaConfigSnapshot, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
@@ -302,7 +306,11 @@ async function runConfigMutation(params: {
       continue;
     }
   }
+<<<<<<< HEAD
   throw toQaErrorObject(
+=======
+  throw toLintErrorObject(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     lastConflict ?? new Error(`${params.action} failed after retrying config hash conflicts`),
     "Non-Error thrown",
   );
@@ -372,3 +380,20 @@ export {
   waitForQaChannelReady,
   waitForTransportReady,
 };
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

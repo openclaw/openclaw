@@ -182,6 +182,7 @@ describe("createNextcloudTalkWebhookServer replay handling", () => {
 });
 
 describe("createNextcloudTalkWebhookServer payload validation", () => {
+<<<<<<< HEAD
   it("acknowledges signed non-message Create events instead of rejecting them", async () => {
     const payload = {
       type: "Create",
@@ -253,6 +254,8 @@ describe("createNextcloudTalkWebhookServer payload validation", () => {
     expect(onMessage).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects malformed webhook payloads after signature verification", async () => {
     const payload = {
       type: "Create",

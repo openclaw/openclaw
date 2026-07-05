@@ -16,6 +16,10 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+<<<<<<< HEAD
+=======
+import { resolveAgentIdentity } from "../../agents/identity.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
@@ -39,6 +43,10 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+<<<<<<< HEAD
+=======
+import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -63,9 +71,18 @@ import {
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
+<<<<<<< HEAD
 import type { VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+=======
+import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { buildUsageContract } from "../usage-bar/contract.js";
+import { loadUsageBarTemplate } from "../usage-bar/template.js";
+import { renderUsageBar } from "../usage-bar/translator.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   buildKnownAgentRunFailureReplyPayload,
   runAgentTurnWithFallback,
@@ -84,7 +101,11 @@ import {
   hasUnbackedReminderCommitment,
 } from "./agent-runner-reminder-guard.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
+<<<<<<< HEAD
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
+=======
+import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-usage-line.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
@@ -121,7 +142,11 @@ import {
 } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
+<<<<<<< HEAD
 import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state.js";
+=======
+import { recordReplyUsageState } from "./reply-usage-state.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
@@ -129,6 +154,7 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+<<<<<<< HEAD
 const RESTART_LIFECYCLE_REPLY_TEXT =
   "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
 
@@ -151,6 +177,8 @@ function scheduleFollowupDrainAfterReplyOperationClear(params: {
     scheduleFollowupDrain(params.queueKey, runFollowupAfterClear);
   });
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): ReplyPayload[] {
   return payloads.map((payload) =>
@@ -1243,15 +1271,22 @@ export async function runReplyAgent(params: {
     isHeartbeat,
   });
 
+<<<<<<< HEAD
   const baseShouldEmitToolResult = createShouldEmitToolResult({
+=======
+  const shouldEmitToolResult = createShouldEmitToolResult({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     sessionKey,
     storePath,
     resolvedVerboseLevel,
   });
+<<<<<<< HEAD
   const channelProgressCanConsumeToolResults =
     Boolean(opts?.forceToolResultProgress) && Boolean(opts?.onToolResult);
   const shouldEmitToolResult = () =>
     channelProgressCanConsumeToolResults || baseShouldEmitToolResult();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const shouldEmitToolOutput = createShouldEmitToolOutput({
     sessionKey,
     storePath,
@@ -1338,6 +1373,7 @@ export async function runReplyAgent(params: {
       typing.cleanup();
       return undefined;
     }
+<<<<<<< HEAD
     // The queue must stay dormant while the active owner can still collect
     // messages. Registering after enqueue closes the owner-clear race.
     const activeReplyOperation = replyRunRegistry.get(queueKey);
@@ -1351,6 +1387,14 @@ export async function runReplyAgent(params: {
       scheduleFollowupDrain(queueKey, queuedRunFollowupTurn);
     }
     const queuedBehindActiveRun = isRunActive?.() === true;
+=======
+    // Re-check liveness after enqueue so a stale active snapshot cannot leave
+    // the followup queue idle if the original run already finished.
+    const queuedBehindActiveRun = isRunActive?.() === true;
+    if (!queuedBehindActiveRun) {
+      scheduleFollowupDrain(queueKey, queuedRunFollowupTurn);
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await touchActiveSessionEntry();
     if (queuedBehindActiveRun) {
       await typingSignals.signalToolStart();
@@ -1492,6 +1536,22 @@ export async function runReplyAgent(params: {
     shouldDrainQueuedFollowupsAfterClear = true;
     return value;
   };
+<<<<<<< HEAD
+=======
+  const drainQueuedFollowupsAfterClear = (admissionSessionId: string) => {
+    const completedSessionId = replyOperation.sessionId;
+    const runFollowupAfterClear =
+      admissionSessionId === completedSessionId
+        ? runFollowupTurn
+        : (queued: FollowupRun) =>
+            runFollowupTurn(
+              queued.run.sessionId === completedSessionId
+                ? { ...queued, admissionSessionId }
+                : queued,
+            );
+    scheduleFollowupDrain(queueKey, runFollowupAfterClear);
+  };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const restartRecoveryDeliveryRunId = crypto.randomUUID();
   let trackedRestartRecoveryDeliveryContext = false;
   const persistRestartRecoveryDeliveryContext = async (): Promise<void> => {
@@ -1563,6 +1623,7 @@ export async function runReplyAgent(params: {
       }
     }
   };
+<<<<<<< HEAD
   const isRestartRecoveryArmed = (): boolean => {
     if (!trackedRestartRecoveryDeliveryContext || !sessionKey || !storePath) {
       return false;
@@ -1575,6 +1636,8 @@ export async function runReplyAgent(params: {
     });
     return persisted?.abortedLastRun === true || activeSessionEntry?.abortedLastRun === true;
   };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
   let preflightCompactionApplied;
 
@@ -1678,6 +1741,10 @@ export async function runReplyAgent(params: {
       toolProgressDetail,
     });
 
+<<<<<<< HEAD
+=======
+    let responseUsageLine: string | undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     type SessionResetOptions = {
       failureLabel: string;
       buildLogMessage: (nextSessionId: string) => string;
@@ -1748,7 +1815,10 @@ export async function runReplyAgent(params: {
         resolvedVerboseLevel,
         toolProgressDetail,
         replyMediaContext,
+<<<<<<< HEAD
         isRestartRecoveryArmed,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }),
     );
 
@@ -1823,6 +1893,7 @@ export async function runReplyAgent(params: {
     const providerUsed =
       runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
 
+<<<<<<< HEAD
     const winnerProvider = fallbackExhausted
       ? undefined
       : (runResult.meta?.executionTrace?.winnerProvider ?? providerUsed);
@@ -1869,6 +1940,82 @@ export async function runReplyAgent(params: {
       lastCallUsage,
     });
     recordReplyUsageState(runId, replyUsageState);
+=======
+    let replyUsageState: PluginHookReplyUsageState | undefined;
+    {
+      const winnerProvider = fallbackExhausted
+        ? undefined
+        : (runResult.meta?.executionTrace?.winnerProvider ?? providerUsed);
+      const winnerModel = fallbackExhausted
+        ? undefined
+        : (runResult.meta?.executionTrace?.winnerModel ?? modelUsed);
+      const ctxTokens = runResult.meta?.agentMeta?.contextTokens;
+      const compactions = runResult.meta?.agentMeta?.compactionCount;
+      const lastCallUsage = runResult.meta?.agentMeta?.lastCallUsage;
+      replyUsageState = {
+        provider: providerUsed,
+        model: modelUsed,
+        resolvedRef: winnerProvider && winnerModel ? `${winnerProvider}/${winnerModel}` : undefined,
+        reasoningEffort:
+          typeof followupRun.run.thinkLevel === "string" ? followupRun.run.thinkLevel : undefined,
+        fastMode: resolveFastModeState({
+          cfg,
+          provider: providerUsed ?? "",
+          model: modelUsed ?? "",
+          agentId: followupRun.run.agentId,
+          sessionEntry: activeSessionEntry,
+        }).enabled,
+        fallbackUsed: runResult.meta?.executionTrace?.fallbackUsed === true,
+        agentId: followupRun.run.agentId,
+        sessionId: followupRun.run.sessionId,
+        chatType: typeof sessionCtx.ChatType === "string" ? sessionCtx.ChatType : undefined,
+        authMode: runResult.meta?.requestShaping?.authMode ?? undefined,
+        overrideSource: activeSessionEntry?.modelOverrideSource ?? undefined,
+        requested:
+          followupRun.run.provider && followupRun.run.model
+            ? `${followupRun.run.provider}/${followupRun.run.model}`
+            : undefined,
+        turnUsd: hasBillableUsageBuckets
+          ? estimateUsageCost({
+              usage,
+              cost: resolveModelCostConfig({
+                provider: providerUsed,
+                model: modelUsed,
+                config: cfg,
+              }),
+            })
+          : undefined,
+        durationMs: Date.now() - runStartedAt,
+        identity: resolveAgentIdentity(cfg, followupRun.run.agentId),
+        compactionCount: typeof compactions === "number" ? compactions : undefined,
+        contextTokenBudget:
+          typeof ctxTokens === "number" && Number.isFinite(ctxTokens) ? ctxTokens : undefined,
+        contextUsedTokens:
+          typeof promptTokens === "number" && Number.isFinite(promptTokens)
+            ? promptTokens
+            : undefined,
+        usage: usage
+          ? {
+              input: usage.input,
+              output: usage.output,
+              cacheRead: usage.cacheRead,
+              cacheWrite: usage.cacheWrite,
+              total: usage.total,
+            }
+          : undefined,
+        lastUsage: lastCallUsage
+          ? {
+              input: lastCallUsage.input,
+              output: lastCallUsage.output,
+              cacheRead: lastCallUsage.cacheRead,
+              cacheWrite: lastCallUsage.cacheWrite,
+              total: lastCallUsage.total,
+            }
+          : undefined,
+      };
+      recordReplyUsageState(runId, replyUsageState);
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const verboseEnabled = resolvedVerboseLevel !== "off";
     const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
       followupRun.run.inputProvenance,
@@ -2236,6 +2383,7 @@ export async function runReplyAgent(params: {
       });
     }
 
+<<<<<<< HEAD
     const responseUsageSessionRaw =
       activeSessionEntry?.responseUsage ??
       (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
@@ -2249,6 +2397,41 @@ export async function runReplyAgent(params: {
       preserveUserFacingSessionState,
       replyUsageState,
     });
+=======
+    const responseUsageRaw =
+      activeSessionEntry?.responseUsage ??
+      (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
+    const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
+    if (responseUsageMode !== "off" && hasNonzeroUsage(usage) && !preserveUserFacingSessionState) {
+      const costConfig = resolveModelCostConfig({
+        provider: providerUsed,
+        model: modelUsed,
+        config: cfg,
+        allowPluginNormalization: false,
+      });
+      const showCost = responseUsageMode === "full" && costConfig !== undefined;
+      let formatted = formatResponseUsageLine({
+        usage,
+        showCost,
+        costConfig,
+      });
+      const usageTemplate =
+        responseUsageMode === "full" && replyUsageState
+          ? loadUsageBarTemplate(cfg.messages?.usageTemplate)
+          : undefined;
+      const renderedUsageLine = usageTemplate
+        ? renderUsageBar(usageTemplate, buildUsageContract(replyUsageState, replyToChannel))
+        : undefined;
+      if (renderedUsageLine) {
+        formatted = renderedUsageLine;
+      } else if (formatted && responseUsageMode === "full" && sessionKey) {
+        formatted = `${formatted} · session \`${sessionKey}\``;
+      }
+      if (formatted) {
+        responseUsageLine = formatted;
+      }
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     if (verboseEnabled) {
       activeSessionEntry = refreshSessionEntryFromStore({
@@ -2549,6 +2732,7 @@ export async function runReplyAgent(params: {
 
     return result;
   } catch (error) {
+<<<<<<< HEAD
     // Drain/restart aborts stay silent and defer to post-restart main-session
     // recovery, which resumes the interrupted turn (or emits its own genuine
     // non-resumable notice). Surfacing a generic "try again" here is a false
@@ -2561,10 +2745,13 @@ export async function runReplyAgent(params: {
     ) {
       return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (
       replyOperation.result?.kind === "aborted" &&
       replyOperation.result.code === "aborted_for_restart"
     ) {
+<<<<<<< HEAD
       if (isRestartRecoveryArmed()) {
         return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
       }
@@ -2574,11 +2761,26 @@ export async function runReplyAgent(params: {
         }),
       );
     }
+=======
+      return returnWithQueuedFollowupDrain(
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+        }),
+      );
+    }
+    if (replyOperation.result?.kind === "aborted") {
+      return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
+    }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (error instanceof GatewayDrainingError) {
       replyOperation.fail("gateway_draining", error);
       return returnWithQueuedFollowupDrain(
         markReplyPayloadForSourceSuppressionDelivery({
+<<<<<<< HEAD
           text: RESTART_LIFECYCLE_REPLY_TEXT,
+=======
+          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }),
       );
     }
@@ -2586,7 +2788,11 @@ export async function runReplyAgent(params: {
       replyOperation.fail("command_lane_cleared", error);
       return returnWithQueuedFollowupDrain(
         markReplyPayloadForSourceSuppressionDelivery({
+<<<<<<< HEAD
           text: RESTART_LIFECYCLE_REPLY_TEXT,
+=======
+          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }),
       );
     }
@@ -2616,6 +2822,7 @@ export async function runReplyAgent(params: {
       );
     }
     if (shouldDrainQueuedFollowupsAfterClear) {
+<<<<<<< HEAD
       scheduleFollowupDrainAfterReplyOperationClear({
         operation: replyOperation,
         queueKey,
@@ -2623,6 +2830,12 @@ export async function runReplyAgent(params: {
       });
       if (!providedReplyOperation) {
         replyOperation.complete();
+=======
+      if (providedReplyOperation) {
+        runAfterReplyOperationClear(replyOperation, drainQueuedFollowupsAfterClear);
+      } else {
+        replyOperation.completeThen(() => drainQueuedFollowupsAfterClear(replyOperation.sessionId));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     } else if (!providedReplyOperation) {
       replyOperation.complete();

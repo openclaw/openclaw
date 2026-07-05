@@ -1,6 +1,9 @@
 /** CLI entrypoint for `openclaw gateway status`. */
 import { isRich } from "../../packages/terminal-core/src/theme.js";
+<<<<<<< HEAD
 import { parseGatewayPortOption } from "../cli/gateway-port-option.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { withProgress } from "../cli/progress.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
@@ -43,7 +46,10 @@ export async function gatewayStatusCommand(
     url?: string;
     token?: string;
     password?: string;
+<<<<<<< HEAD
     port?: unknown;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     timeout?: unknown;
     json?: boolean;
     ssh?: string;
@@ -57,6 +63,7 @@ export async function gatewayStatusCommand(
   const rich = isRich() && opts.json !== true;
   const defaultTimeoutMs = Math.max(3000, cfg.gateway?.handshakeTimeoutMs ?? 0);
   const overallTimeoutMs = parseTimeoutMs(opts.timeout, defaultTimeoutMs);
+<<<<<<< HEAD
   const portOverride = parseGatewayPortOption(opts.port);
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({
     configDomain: cfg.discovery?.wideArea?.domain,
@@ -76,6 +83,21 @@ export async function gatewayStatusCommand(
     (useConfiguredRemoteTargets ? sanitizeSshTarget(cfg.gateway?.remote?.sshIdentity) : null);
 
   if (!sshTarget && useConfiguredRemoteTargets) {
+=======
+  const wideAreaDomain = resolveWideAreaDiscoveryDomain({
+    configDomain: cfg.discovery?.wideArea?.domain,
+  });
+  const baseTargets = resolveTargets(cfg, opts.url);
+  const network = buildNetworkHints(cfg);
+  const remotePort = resolveGatewayPort(cfg);
+  const discoveryTimeoutMs = Math.min(1200, overallTimeoutMs);
+
+  let sshTarget = sanitizeSshTarget(opts.ssh) ?? sanitizeSshTarget(cfg.gateway?.remote?.sshTarget);
+  let sshIdentity =
+    sanitizeSshTarget(opts.sshIdentity) ?? sanitizeSshTarget(cfg.gateway?.remote?.sshIdentity);
+
+  if (!sshTarget) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     // Remote URL inference gives users a useful SSH default without requiring
     // gateway.remote.sshTarget when the host already appears in config.
     sshTarget = inferSshTargetFromRemoteUrl(cfg.gateway?.remote?.url);

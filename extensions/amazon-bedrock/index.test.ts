@@ -9,9 +9,20 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { supportsBedrockPromptCaching } from "./bedrock-options.js";
 import { resetBedrockDiscoveryCacheForTest } from "./discovery.js";
 import amazonBedrockPlugin from "./index.js";
+=======
+import { setAwsSharedIniFileLoaderForTest } from "./aws-credential-refresh.js";
+import { supportsBedrockPromptCaching } from "./bedrock-options.js";
+import { resetBedrockDiscoveryCacheForTest } from "./discovery.js";
+import amazonBedrockPlugin from "./index.js";
+import {
+  resetBedrockAppProfileCacheEligibilityForTest,
+  setBedrockAppProfileControlPlaneForTest,
+} from "./register.sync.runtime.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type BedrockClientResult =
   | {
@@ -91,10 +102,13 @@ vi.mock("@aws-sdk/client-bedrock", () => {
   };
 });
 
+<<<<<<< HEAD
 vi.mock("@smithy/shared-ini-file-loader", () => ({
   loadSharedConfigFiles: refreshSharedConfigCache,
 }));
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type RegisteredProviderPlugin = Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
 
 /** Register the amazon-bedrock plugin with an optional pluginConfig override. */
@@ -148,8 +162,11 @@ const ANTHROPIC_MODEL_DESCRIPTOR = {
 
 const APP_INFERENCE_PROFILE_ARN =
   "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-claude-profile";
+<<<<<<< HEAD
 const OPUS_APP_INFERENCE_PROFILE_ARN =
   "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/opus-temperature-profile";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const APP_INFERENCE_PROFILE_DESCRIPTOR = {
   api: "openai-completions",
   provider: "amazon-bedrock",
@@ -268,12 +285,35 @@ describe("amazon-bedrock provider plugin", () => {
     inferenceProfileGetResults.length = 0;
     bedrockClientConfigs.length = 0;
     refreshSharedConfigCache.mockClear();
+<<<<<<< HEAD
     sendBedrockCommand.mockClear();
     resetBedrockDiscoveryCacheForTest();
   });
 
   afterEach(() => {
     resetBedrockDiscoveryCacheForTest();
+=======
+    setAwsSharedIniFileLoaderForTest({ loadSharedConfigFiles: refreshSharedConfigCache });
+    sendBedrockCommand.mockClear();
+    resetBedrockDiscoveryCacheForTest();
+    resetBedrockAppProfileCacheEligibilityForTest();
+    setBedrockAppProfileControlPlaneForTest((region) => ({
+      async getInferenceProfile(input) {
+        class GetInferenceProfileCommand {
+          constructor(readonly inputLocal: Record<string, unknown> = {}) {}
+        }
+        bedrockClientConfigs.push(region ? { region } : {});
+        return await sendBedrockCommand(new GetInferenceProfileCommand(input));
+      },
+    }));
+  });
+
+  afterEach(() => {
+    setBedrockAppProfileControlPlaneForTest(undefined);
+    setAwsSharedIniFileLoaderForTest(undefined);
+    resetBedrockDiscoveryCacheForTest();
+    resetBedrockAppProfileCacheEligibilityForTest();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   afterAll(() => {
@@ -1488,8 +1528,13 @@ describe("amazon-bedrock provider plugin", () => {
 
       await callWrappedStreamWithPayload(
         provider,
+<<<<<<< HEAD
         OPUS_APP_INFERENCE_PROFILE_ARN,
         makeAppInferenceProfileDescriptor(OPUS_APP_INFERENCE_PROFILE_ARN),
+=======
+        APP_INFERENCE_PROFILE_ARN,
+        APP_INFERENCE_PROFILE_DESCRIPTOR,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         { temperature: 0.3, maxTokens: 10, cacheRetention: "short" },
         payload,
       );

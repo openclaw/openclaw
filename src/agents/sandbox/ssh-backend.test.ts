@@ -33,8 +33,12 @@ vi.mock("./ssh.js", async () => {
   };
 });
 
+<<<<<<< HEAD
 const { createSshSandboxBackend, resolveSshRuntimePaths, sshSandboxBackendManager } =
   await import("./ssh-backend.js");
+=======
+const { createSshSandboxBackend, sshSandboxBackendManager } = await import("./ssh-backend.js");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const tempDirs: string[] = [];
 
 async function createTempDir(prefix: string): Promise<string> {
@@ -342,6 +346,7 @@ describe("ssh sandbox backend", () => {
     expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(2);
   });
 
+<<<<<<< HEAD
   it("validates remote workdirs before exec accepts backend-owned cwd", async () => {
     sshMocks.runSshSandboxCommand
       .mockResolvedValueOnce({
@@ -509,6 +514,8 @@ describe("ssh sandbox backend", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("refreshes materialized skills before each exec and remote fs command", async () => {
     const skillsWorkspaceDir = await createTempDir("openclaw-ssh-skills-");
     await fs.mkdir(path.join(skillsWorkspaceDir, "skills"), { recursive: true });

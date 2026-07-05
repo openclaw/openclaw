@@ -550,6 +550,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     expect(sanitized.originalSizeBytes ?? 0).toBeGreaterThan(100_000);
   });
 
+<<<<<<< HEAD
   it("snapshots confirmed delivery before oversized details are collapsed", async () => {
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       () => {
@@ -614,6 +615,8 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("accepts well-formed middleware results", async () => {
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       (eventValue, ctx) => ({

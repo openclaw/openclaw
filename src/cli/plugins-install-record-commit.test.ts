@@ -1,4 +1,5 @@
 // Plugin install record commit tests cover install record persistence after CLI installs.
+<<<<<<< HEAD
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +11,11 @@ import {
   markRetainedManagedNpmInstall,
 } from "../plugins/managed-npm-retention.js";
 import { withEnvAsync } from "../test-utils/env.js";
+=======
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const mocks = vi.hoisted(() => ({
   loadInstalledPluginIndexInstallRecords: vi.fn(),
@@ -35,7 +41,10 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
 import {
   commitConfigWithPendingPluginInstalls,
   commitConfigWriteWithPendingPluginInstalls,
+<<<<<<< HEAD
   commitPluginInstallRecordsWithConfig,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   stripPendingPluginInstallRecords,
   unchangedPendingPluginInstallRecordIds,
 } from "./plugins-install-record-commit.js";
@@ -187,6 +196,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     });
   });
 
+<<<<<<< HEAD
   it("marks replaced managed npm generations when install records are committed", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
     const previousInstallPath = path.join(
@@ -562,6 +572,8 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rolls back plugin index writes when the config write fails", async () => {
     const existingRecords: Record<string, PluginInstallRecord> = {
       existing: {

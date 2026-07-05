@@ -31,6 +31,7 @@ function requireFirstFetchGuardRequest(): FetchGuardRequest {
   return request as FetchGuardRequest;
 }
 
+<<<<<<< HEAD
 function cancelTrackedTextResponse(
   text: string,
   init?: ResponseInit,
@@ -53,6 +54,8 @@ function cancelTrackedTextResponse(
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("twilioApiRequest", () => {
   afterEach(() => {
     fetchWithSsrFGuardMock.mockReset();
@@ -99,8 +102,15 @@ describe("twilioApiRequest", () => {
   });
 
   it("passes through URLSearchParams, allows 404s, and returns undefined for empty bodies", async () => {
+<<<<<<< HEAD
     const missing = cancelTrackedTextResponse("missing", { status: 404 });
     const responses = [new Response(null, { status: 204 }), missing.response];
+=======
+    const responses = [
+      new Response(null, { status: 204 }),
+      new Response("missing", { status: 404 }),
+    ];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockImplementation(async () => ({
       response: responses.shift()!,
@@ -127,7 +137,10 @@ describe("twilioApiRequest", () => {
         allowNotFound: true,
       }),
     ).resolves.toBeUndefined();
+<<<<<<< HEAD
     expect(missing.wasCanceled()).toBe(true);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(release).toHaveBeenCalledTimes(2);
   });
 
@@ -150,6 +163,7 @@ describe("twilioApiRequest", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+<<<<<<< HEAD
   it("bounds twilio error bodies and cancels unread overflow", async () => {
     const release = vi.fn(async () => {});
     const tracked = cancelTrackedTextResponse("x".repeat(9 * 1024), { status: 400 });
@@ -178,6 +192,8 @@ describe("twilioApiRequest", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("wraps malformed json success responses with an owned error", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({

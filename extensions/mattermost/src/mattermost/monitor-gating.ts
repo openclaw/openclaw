@@ -43,9 +43,12 @@ export type MattermostMentionGateInput = {
   requireMentionOverride?: boolean;
   resolveRequireMention: (params: MattermostRequireMentionResolverInput) => boolean;
   wasMentioned: boolean;
+<<<<<<< HEAD
   // Bot has already replied in this thread; treat follow-ups as addressed so the
   // user need not re-mention on every turn (parity with Slack thread participation).
   threadAlreadyEngaged?: boolean;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   isControlCommand: boolean;
   commandAuthorized: boolean;
   oncharEnabled: boolean;
@@ -78,16 +81,24 @@ export function evaluateMattermostMentionGate(
     !params.wasMentioned &&
     params.commandAuthorized;
   const effectiveWasMentioned =
+<<<<<<< HEAD
     params.wasMentioned ||
     shouldBypassMention ||
     params.oncharTriggered ||
     params.threadAlreadyEngaged === true;
+=======
+    params.wasMentioned || shouldBypassMention || params.oncharTriggered;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (
     params.oncharEnabled &&
     !params.oncharTriggered &&
     !params.wasMentioned &&
+<<<<<<< HEAD
     !params.isControlCommand &&
     params.threadAlreadyEngaged !== true
+=======
+    !params.isControlCommand
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   ) {
     return {
       shouldRequireMention,

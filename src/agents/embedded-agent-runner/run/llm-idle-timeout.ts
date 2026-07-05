@@ -7,7 +7,10 @@ import {
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+<<<<<<< HEAD
 import { toErrorObject } from "../../../infra/errors.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { onLlmRequestActivity } from "../../../shared/llm-request-activity.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
@@ -18,6 +21,7 @@ import type { EmbeddedRunTrigger } from "./params.js";
  * Default idle timeout for LLM streaming responses in milliseconds.
  */
 const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
+<<<<<<< HEAD
 // Cron has its own outer watchdog; stream stalls must fail early enough for
 // the existing model fallback chain to try the next configured candidate.
 const CRON_LLM_IDLE_TIMEOUT_MS = 60_000;
@@ -28,6 +32,8 @@ type IdleTimeoutProviderConfig = {
   apiKey?: unknown;
   localService?: unknown;
 };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 /**
  * Detects loopback / private-network / `.local` base URLs. Local providers
@@ -47,9 +53,17 @@ type IdleTimeoutProviderConfig = {
  *    matched, mirroring the SSRF-policy helper in
  *    `src/cron/isolated-agent/model-preflight.runtime.ts`.
  *  - DNS-resolved local aliases (e.g. an `/etc/hosts` entry mapping a custom
+<<<<<<< HEAD
  *    hostname to a private IP) are not detected for the implicit watchdog opt-out:
  *    classification keys on `URL.hostname` so resolution would have to happen
  *    here, and adding sync/async DNS to the watchdog hot path is disproportionate.
+=======
+ *    hostname to a private IP) are not detected: classification keys on
+ *    `URL.hostname` so resolution would have to happen here, and adding
+ *    sync/async DNS to the watchdog hot path is disproportionate. Affected
+ *    users can use the IP directly or set
+ *    `models.providers.<id>.timeoutSeconds` explicitly.
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
  */
 function isLocalProviderBaseUrl(baseUrl: string): boolean {
   let host: string;
@@ -103,6 +117,7 @@ function isLocalProviderBaseUrl(baseUrl: string): boolean {
   );
 }
 
+<<<<<<< HEAD
 function isExplicitLocalHostnameBaseUrl(baseUrl: string): boolean {
   let host: string;
   try {
@@ -179,6 +194,8 @@ function hasConfiguredLocalProviderSignal(params: {
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isOllamaCloudModel(model: { id?: string; provider?: string } | undefined): boolean {
   const rawModelId = model?.id;
   if (typeof rawModelId !== "string") {
@@ -218,6 +235,7 @@ export function resolveLlmIdleTimeoutMs(params?: {
   const hasExplicitRunTimeout =
     typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0;
   const runTimeoutIsNoTimeout = hasExplicitRunTimeout && runTimeoutMs >= MAX_TIMER_TIMEOUT_MS;
+<<<<<<< HEAD
   const baseUrl = params?.model?.baseUrl;
   const isLocalProvider =
     typeof baseUrl === "string" && baseUrl.length > 0 && isLocalProviderBaseUrl(baseUrl);
@@ -234,6 +252,8 @@ export function resolveLlmIdleTimeoutMs(params?: {
     (isSelfHostedProviderId(params?.model?.provider) ||
       hasConfiguredLocalProviderSignal({ cfg: params?.cfg, provider: params?.model?.provider })) &&
     !isOllamaCloudModel(params?.model);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const timeoutBounds = [
     runTimeoutIsNoTimeout ? undefined : runTimeoutMs,
     hasExplicitRunTimeout ? undefined : agentTimeoutMs,
@@ -274,6 +294,7 @@ export function resolveLlmIdleTimeoutMs(params?: {
       return 0;
     }
     if (params?.trigger === "cron") {
+<<<<<<< HEAD
       if (
         isLocalRuntimeModel ||
         isExplicitLocalHostnameRuntimeModel ||
@@ -282,6 +303,9 @@ export function resolveLlmIdleTimeoutMs(params?: {
         return clampTimeoutMs(runTimeoutMs);
       }
       return clampTimeoutMs(Math.min(runTimeoutMs, CRON_LLM_IDLE_TIMEOUT_MS));
+=======
+      return clampTimeoutMs(runTimeoutMs);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     return clampImplicitTimeoutMs(runTimeoutMs);
   }
@@ -290,6 +314,13 @@ export function resolveLlmIdleTimeoutMs(params?: {
     return clampImplicitTimeoutMs(agentTimeoutMs);
   }
 
+<<<<<<< HEAD
+=======
+  if (params?.trigger === "cron") {
+    return 0;
+  }
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   // The default watchdog is a network-silence-as-hang guard for cloud providers.
   // Local providers can legitimately stream nothing for many minutes during
   // prompt evaluation or thinking, so falling back to the default would abort
@@ -297,7 +328,14 @@ export function resolveLlmIdleTimeoutMs(params?: {
   // baseUrl pointing at loopback / private-network / `.local`. Ollama cloud
   // models are still hosted remotely even when proxied through local Ollama, so
   // keep the cloud watchdog for `*:cloud` model ids.
+<<<<<<< HEAD
   if (isLocalRuntimeModel) {
+=======
+  const baseUrl = params?.model?.baseUrl;
+  const isLocalProvider =
+    typeof baseUrl === "string" && baseUrl.length > 0 && isLocalProviderBaseUrl(baseUrl);
+  if (isLocalProvider && !isOllamaCloudModel(params?.model)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return 0;
   }
 
@@ -433,7 +471,11 @@ export function streamWithIdleTimeout(
               cleanupIterator();
               return (
                 streamIterator.throw?.(error) ??
+<<<<<<< HEAD
                 Promise.reject(toErrorObject(error, "Non-Error rejection"))
+=======
+                Promise.reject(toLintErrorObject(error, "Non-Error rejection"))
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               );
             },
           });
@@ -473,3 +515,20 @@ export function streamWithIdleTimeout(
     return wrapStream(maybeStream);
   };
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

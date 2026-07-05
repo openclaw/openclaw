@@ -314,10 +314,14 @@ export function createCronToolSchema(): TSchema {
       patch: createCronPatchObjectSchema(),
       text: Type.Optional(Type.String()),
       mode: optionalStringEnum(CRON_WAKE_MODES),
+<<<<<<< HEAD
       runMode: optionalStringEnum(CRON_RUN_MODES, {
         description:
           'Run mode for action="run": omitted defaults to "due"; use "force" to trigger now.',
       }),
+=======
+      runMode: optionalStringEnum(CRON_RUN_MODES),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       contextMessages: Type.Optional(
         Type.Integer({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
       ),
@@ -338,6 +342,11 @@ export function createCronToolSchema(): TSchema {
   );
 }
 
+<<<<<<< HEAD
+=======
+export const CronToolSchema = createCronToolSchema();
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type CronToolOptions = {
   agentSessionKey?: string;
   currentDeliveryContext?: DeliveryContext;
@@ -466,7 +475,10 @@ function capCronAgentTurnToolsAllow(params: {
     : params.defaultToolsAllow;
   if (!Array.isArray(requestedRaw)) {
     params.payload.toolsAllow = creatorToolNames;
+<<<<<<< HEAD
     params.payload.toolsAllowIsDefault = true;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return;
   }
   const requestedToolsAllow = normalizeCronToolsAllow(
@@ -474,12 +486,18 @@ function capCronAgentTurnToolsAllow(params: {
   );
   if (requestedToolsAllow.length === 0) {
     params.payload.toolsAllow = [];
+<<<<<<< HEAD
     delete params.payload.toolsAllowIsDefault;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return;
   }
   if (requestedToolsAllow.includes("*")) {
     params.payload.toolsAllow = creatorToolNames;
+<<<<<<< HEAD
     params.payload.toolsAllowIsDefault = true;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return;
   }
   const pluginGroups = buildPluginToolGroups({
@@ -493,7 +511,10 @@ function capCronAgentTurnToolsAllow(params: {
   params.payload.toolsAllow = creatorToolNames.filter((toolName) =>
     isToolAllowedByPolicyName(toolName, requestedPolicy),
   );
+<<<<<<< HEAD
   delete params.payload.toolsAllowIsDefault;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function capCronAgentTurnJobToolsAllow(
@@ -553,12 +574,17 @@ async function capCronAgentTurnUpdatePatchToolsAllow(params: {
   capCronAgentTurnToolsAllow({
     payload: nextPayload,
     creatorToolAllowlist: params.creatorToolAllowlist,
+<<<<<<< HEAD
     // Flagged defaults are re-derived so normal updates do not turn them into
     // explicit restrictions or lose the marker needed after restart.
     defaultToolsAllow:
       existingPayloadKind === "agentTurn" &&
       isRecord(existingPayload) &&
       existingPayload.toolsAllowIsDefault !== true
+=======
+    defaultToolsAllow:
+      existingPayloadKind === "agentTurn" && isRecord(existingPayload)
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         ? existingPayload.toolsAllow
         : undefined,
   });
@@ -783,7 +809,11 @@ ACTIONS:
 - add: create job; needs job object
 - update: patch job; needs jobId + patch
 - remove: delete job; needs jobId
+<<<<<<< HEAD
 - run: run only if due by default; needs jobId; pass runMode="force" to trigger now
+=======
+- run: trigger now; needs jobId
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 - runs: run history; needs jobId
 - wake: send wake event; needs text, optional mode; defaults the target to the calling session/agent. Pass top-level sessionKey/agentId to wake a different lane.
 
@@ -1095,7 +1125,11 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
           const runMode =
+<<<<<<< HEAD
             params.runMode === "due" || params.runMode === "force" ? params.runMode : "due";
+=======
+            params.runMode === "due" || params.runMode === "force" ? params.runMode : "force";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           return jsonResult(await callGateway("cron.run", gatewayOpts, { id, mode: runMode }));
         }
         case "runs": {

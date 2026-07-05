@@ -654,6 +654,7 @@ test("sessions.reset directly unbinds thread bindings when hooks are unavailable
     reason: "session-reset",
   });
 });
+<<<<<<< HEAD
 
 test("sessions.reset preserves explicit responseUsage preference across session rollover", async () => {
   // Regression: a full session reset must carry the user's display preference forward
@@ -675,3 +676,5 @@ test("sessions.reset preserves explicit responseUsage preference across session 
   expect(reset.ok).toBe(true);
   expect(reset.payload?.entry.responseUsage).toBe("tokens");
 });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

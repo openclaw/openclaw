@@ -8,6 +8,7 @@ type CreateFeishuWSClient = typeof import("./client.js").createFeishuWSClient;
 type ClearClientCache = typeof import("./client.js").clearClientCache;
 type SetFeishuClientRuntimeForTest = typeof import("./client.js").setFeishuClientRuntimeForTest;
 
+<<<<<<< HEAD
 const requestInterceptorState = vi.hoisted(() => {
   let registered: ((req: unknown) => unknown) | undefined;
   return {
@@ -19,6 +20,8 @@ const requestInterceptorState = vi.hoisted(() => {
     }),
   };
 });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const clientCtorMock = vi.hoisted(() =>
   vi.fn(function clientCtor() {
     return { connected: true };
@@ -34,6 +37,7 @@ const proxyAgentCtorMock = vi.hoisted(() =>
     return { proxied: true };
   }),
 );
+<<<<<<< HEAD
 const mockBaseHttpInstance = vi.hoisted(() => {
   const requestInterceptors = { use: requestInterceptorState.use };
   Object.defineProperty(requestInterceptors, "handlers", {
@@ -59,6 +63,18 @@ const mockBaseHttpInstance = vi.hoisted(() => {
     },
   };
 });
+=======
+const mockBaseHttpInstance = vi.hoisted(() => ({
+  request: vi.fn().mockResolvedValue({}),
+  get: vi.fn().mockResolvedValue({}),
+  post: vi.fn().mockResolvedValue({}),
+  put: vi.fn().mockResolvedValue({}),
+  patch: vi.fn().mockResolvedValue({}),
+  delete: vi.fn().mockResolvedValue({}),
+  head: vi.fn().mockResolvedValue({}),
+  options: vi.fn().mockResolvedValue({}),
+}));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const proxyEnvKeys = ["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"] as const;
 type ProxyEnvKey = (typeof proxyEnvKeys)[number];
 const registerFeishuDocToolsMock = vi.hoisted(() => vi.fn());
@@ -78,11 +94,15 @@ let setFeishuClientRuntimeForTest: SetFeishuClientRuntimeForTest;
 let FEISHU_HTTP_TIMEOUT_MS: number;
 let FEISHU_HTTP_TIMEOUT_MAX_MS: number;
 let FEISHU_HTTP_TIMEOUT_ENV_VAR: string;
+<<<<<<< HEAD
 let FEISHU_USER_AGENT: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 let priorProxyEnv: Partial<Record<ProxyEnvKey, string | undefined>> = {};
 let priorFeishuTimeoutEnv: string | undefined;
 
+<<<<<<< HEAD
 function setFeishuTestEnvValue(key: string, value: string | undefined): void {
   if (value === undefined) {
     Reflect.deleteProperty(process.env, key);
@@ -91,6 +111,8 @@ function setFeishuTestEnvValue(key: string, value: string | undefined): void {
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.mock("./channel.js", () => ({
   feishuPlugin: feishuPluginMock,
 }));
@@ -214,17 +236,27 @@ beforeAll(async () => {
     FEISHU_HTTP_TIMEOUT_MS,
     FEISHU_HTTP_TIMEOUT_MAX_MS,
     FEISHU_HTTP_TIMEOUT_ENV_VAR,
+<<<<<<< HEAD
     FEISHU_USER_AGENT,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   } = await import("./client.js"));
 });
 
 beforeEach(() => {
   priorProxyEnv = {};
   priorFeishuTimeoutEnv = process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
+<<<<<<< HEAD
   setFeishuTestEnvValue(FEISHU_HTTP_TIMEOUT_ENV_VAR, undefined);
   for (const key of proxyEnvKeys) {
     priorProxyEnv[key] = process.env[key];
     setFeishuTestEnvValue(key, undefined);
+=======
+  delete process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
+  for (const key of proxyEnvKeys) {
+    priorProxyEnv[key] = process.env[key];
+    delete process.env[key];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   vi.clearAllMocks();
   clearClientCache();
@@ -246,9 +278,24 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const key of proxyEnvKeys) {
+<<<<<<< HEAD
     setFeishuTestEnvValue(key, priorProxyEnv[key]);
   }
   setFeishuTestEnvValue(FEISHU_HTTP_TIMEOUT_ENV_VAR, priorFeishuTimeoutEnv);
+=======
+    const value = priorProxyEnv[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  if (priorFeishuTimeoutEnv === undefined) {
+    delete process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
+  } else {
+    process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR] = priorFeishuTimeoutEnv;
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   setFeishuClientRuntimeForTest();
 });
 
@@ -267,6 +314,7 @@ afterAll(() => {
   vi.resetModules();
 });
 
+<<<<<<< HEAD
 describe("Feishu default User-Agent interceptor", () => {
   it("registers through the public interceptor API and overrides the SDK User-Agent", () => {
     expect(requestInterceptorState.registered).toBeTypeOf("function");
@@ -287,6 +335,8 @@ describe("Feishu default User-Agent interceptor", () => {
   });
 });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("createFeishuClient HTTP timeout", () => {
   const readLastClientHttpInstance = (): HttpInstanceLike =>
     requireHttpInstance(readCallOptions(clientCtorMock).httpInstance);
@@ -358,7 +408,11 @@ describe("createFeishuClient HTTP timeout", () => {
   });
 
   it("uses env timeout override when provided and no direct timeout is set", async () => {
+<<<<<<< HEAD
     setFeishuTestEnvValue(FEISHU_HTTP_TIMEOUT_ENV_VAR, "60000");
+=======
+    process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR] = "60000";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     createFeishuClient({
       appId: "app_8",
@@ -372,7 +426,11 @@ describe("createFeishuClient HTTP timeout", () => {
 
   it("ignores non-decimal env timeout overrides", async () => {
     for (const value of ["0x10", "1e3", "10.5"]) {
+<<<<<<< HEAD
       setFeishuTestEnvValue(FEISHU_HTTP_TIMEOUT_ENV_VAR, value);
+=======
+      process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR] = value;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
       createFeishuClient({
         appId: `app-${value}`,
@@ -386,7 +444,11 @@ describe("createFeishuClient HTTP timeout", () => {
   });
 
   it("prefers direct timeout over env override", async () => {
+<<<<<<< HEAD
     setFeishuTestEnvValue(FEISHU_HTTP_TIMEOUT_ENV_VAR, "60000");
+=======
+    process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR] = "60000";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     createFeishuClient({
       appId: "app_10",
@@ -400,10 +462,14 @@ describe("createFeishuClient HTTP timeout", () => {
   });
 
   it("clamps env timeout override to max bound", async () => {
+<<<<<<< HEAD
     setFeishuTestEnvValue(
       FEISHU_HTTP_TIMEOUT_ENV_VAR,
       String(FEISHU_HTTP_TIMEOUT_MAX_MS + 123_456),
     );
+=======
+    process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR] = String(FEISHU_HTTP_TIMEOUT_MAX_MS + 123_456);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     createFeishuClient({
       appId: "app_9",
@@ -507,7 +573,11 @@ describe("createFeishuWSClient proxy handling", () => {
   });
 
   it("creates a ws proxy agent when lowercase https_proxy is set", async () => {
+<<<<<<< HEAD
     setFeishuTestEnvValue("https_proxy", "http://lower-https:8001");
+=======
+    process.env.https_proxy = "http://lower-https:8001";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await createFeishuWSClient(baseAccount);
 
@@ -517,7 +587,11 @@ describe("createFeishuWSClient proxy handling", () => {
   });
 
   it("creates a ws proxy agent when uppercase HTTPS_PROXY is set", async () => {
+<<<<<<< HEAD
     setFeishuTestEnvValue("HTTPS_PROXY", "http://upper-https:8002");
+=======
+    process.env.HTTPS_PROXY = "http://upper-https:8002";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await createFeishuWSClient(baseAccount);
 
@@ -527,7 +601,11 @@ describe("createFeishuWSClient proxy handling", () => {
   });
 
   it("falls back to HTTP_PROXY for ws proxy agent creation", async () => {
+<<<<<<< HEAD
     setFeishuTestEnvValue("HTTP_PROXY", "http://upper-http:8999");
+=======
+    process.env.HTTP_PROXY = "http://upper-http:8999";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await createFeishuWSClient(baseAccount);
 

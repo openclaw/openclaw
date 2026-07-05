@@ -5,6 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { closeQaHttpServer } from "../../bus-server.js";
+<<<<<<< HEAD
 import { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "../../qa-web-search-provider.js";
 import { writeJson } from "../shared/http-json.js";
 
@@ -12,6 +13,11 @@ type ResponsesInputItem = Record<string, unknown>;
 
 let mockFunctionCallSequence = 0;
 
+=======
+
+type ResponsesInputItem = Record<string, unknown>;
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type StreamEvent =
   | { type: "response.output_item.added"; item: Record<string, unknown> }
   | {
@@ -222,7 +228,11 @@ function subagentFanoutTaskForProvider(
 
 const MOCK_OPENAI_MAX_BODY_BYTES = 16 * 1024 * 1024;
 const MOCK_OPENAI_BODY_TIMEOUT_MS = 30_000;
+<<<<<<< HEAD
 const MOCK_OPENAI_DEBUG_REQUEST_LIMIT = 2_000;
+=======
+const MOCK_OPENAI_DEBUG_REQUEST_LIMIT = 200;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function readBody(req: IncomingMessage): Promise<string> {
   return readRequestBodyWithLimit(req, {
@@ -231,6 +241,7 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
+<<<<<<< HEAD
 function parseJsonObjectBody(raw: string): Record<string, unknown> | null {
   try {
     const parsed = raw ? (JSON.parse(raw) as unknown) : {};
@@ -251,6 +262,8 @@ function writeOpenAiMalformedJsonError(res: ServerResponse, label: string) {
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function transcriptionTextForAudioRequest(rawBody: string) {
   if (rawBody.length >= QA_GROUP_AUDIO_MIN_MULTIPART_BODY_CHARS) {
     return QA_GROUP_AUDIO_TRANSCRIPTION_TEXT;
@@ -258,6 +271,19 @@ function transcriptionTextForAudioRequest(rawBody: string) {
   return QA_AUDIO_TRANSCRIPTION_TEXT;
 }
 
+<<<<<<< HEAD
+=======
+function writeJson(res: ServerResponse, status: number, body: unknown) {
+  const text = JSON.stringify(body);
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(text),
+    "cache-control": "no-store",
+  });
+  res.end(text);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function writeSse(res: ServerResponse, events: StreamEvent[]) {
   const body = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`;
   res.writeHead(200, {
@@ -743,6 +769,7 @@ function readTargetFromPrompt(prompt: string) {
     return repoScoped;
   }
 
+<<<<<<< HEAD
   const loosePath = /\b[A-Za-z0-9._-]+\.(?:md|json|ts|tsx|js|mjs|cjs|txt|yaml|yml)\b/i
     .exec(prompt)?.[0]
     ?.trim();
@@ -750,6 +777,8 @@ function readTargetFromPrompt(prompt: string) {
     return loosePath;
   }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (/\bdocs?\b/i.test(prompt)) {
     return "repo/docs/help/testing.md";
   }
@@ -775,10 +804,15 @@ function buildMockFunctionCall(name: string, args: Record<string, unknown>) {
     .update(serialized)
     .digest("hex")
     .slice(0, 10);
+<<<<<<< HEAD
   const sequence = ++mockFunctionCallSequence;
   const uniqueSuffix = `${callSuffix}_${sequence}`;
   const callId = `call_mock_${name}_${uniqueSuffix}`;
   const itemId = `fc_mock_${name}_${uniqueSuffix}`;
+=======
+  const callId = `call_mock_${name}_${callSuffix}`;
+  const itemId = `fc_mock_${name}_${callSuffix}`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const item = {
     type: "function_call",
     id: itemId,
@@ -790,7 +824,11 @@ function buildMockFunctionCall(name: string, args: Record<string, unknown>) {
     callId,
     item,
     itemId,
+<<<<<<< HEAD
     responseId: `resp_mock_${name}_${uniqueSuffix}`,
+=======
+    responseId: `resp_mock_${name}_${callSuffix}`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     serialized,
   };
 }
@@ -865,9 +903,12 @@ function extractToolSearchTarget(text: string): string | null {
 }
 
 function buildQaToolSearchArgs(targetTool: string, failureMode: boolean): Record<string, unknown> {
+<<<<<<< HEAD
   if (failureMode && targetTool === "web_search") {
     return { query: QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY };
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (failureMode) {
     return { __qaFailureMode: "denied-input" };
   }
@@ -921,6 +962,10 @@ function buildQaToolSearchArgs(targetTool: string, failureMode: boolean): Record
       label: "runtime-tool-fixture",
       mode: "run",
       thread: false,
+<<<<<<< HEAD
+=======
+      runTimeoutSeconds: 30,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     };
   }
   if (targetTool === "memory_recall") {
@@ -973,10 +1018,14 @@ function extractExactReplyDirective(text: string) {
   if (backtickedMatch) {
     return backtickedMatch;
   }
+<<<<<<< HEAD
   return (
     extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i) ??
     extractLastCapture(text, /reply(?: with)? exactly\s+(?!with\b)([^\s`.,;:!?]+)/i)
   );
+=======
+  return extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function extractFinishExactlyDirective(text: string) {
@@ -1124,12 +1173,24 @@ function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> |
   const label = extractQuotedToolArg(text, "label") ?? extractBareToolArg(text, "label");
   const mode = extractBareToolArg(text, "mode")?.toLowerCase();
   const context = extractBareToolArg(text, "context")?.toLowerCase();
+<<<<<<< HEAD
+=======
+  const runTimeoutSecondsRaw = extractBareToolArg(text, "runTimeoutSeconds");
+  const runTimeoutSeconds =
+    runTimeoutSecondsRaw && /^\d+$/.test(runTimeoutSecondsRaw)
+      ? Number(runTimeoutSecondsRaw)
+      : undefined;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return {
     task,
     ...(label ? { label } : {}),
     ...(extractBareToolArg(text, "thread")?.toLowerCase() === "true" ? { thread: true } : {}),
     ...(mode === "session" || mode === "run" ? { mode } : {}),
     ...(context === "fork" || context === "isolated" ? { context } : {}),
+<<<<<<< HEAD
+=======
+    ...(runTimeoutSeconds !== undefined ? { runTimeoutSeconds } : {}),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 }
 
@@ -1262,10 +1323,16 @@ function buildAssistantText(
       ? readFirstMediaPath((toolJson.details as { media?: unknown }).media)
       : "";
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
+<<<<<<< HEAD
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
     promptExactMarkerDirective ?? extractExactMarkerDirective(allInputText);
+=======
+  const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
+  const exactMarkerDirective =
+    extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
     ? extractWhatsAppLocationMarkerDirective(allInputText)
     : "";
@@ -1325,6 +1392,7 @@ function buildAssistantText(
   if (whatsAppStickerMarker) {
     return whatsAppStickerMarker;
   }
+<<<<<<< HEAD
   if (/\bmarker\b/i.test(prompt) && promptExactMarkerDirective) {
     return promptExactMarkerDirective;
   }
@@ -1333,13 +1401,20 @@ function buildAssistantText(
   }
   if (/\bmarker\b/i.test(allInputText) && promptExactReplyDirective) {
     return promptExactReplyDirective;
+=======
+  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
+    return exactReplyDirective;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
     return exactMarkerDirective;
   }
+<<<<<<< HEAD
   if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
     return exactReplyDirective;
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (promptExactReplyDirective) {
     return promptExactReplyDirective;
   }
@@ -1358,6 +1433,7 @@ function buildAssistantText(
   if (/silent snack recall check/i.test(prompt)) {
     return "Protocol note: I do not have enough context to say what you usually want for QA movie night.";
   }
+<<<<<<< HEAD
   if (/qa private final reply warning check/i.test(prompt)) {
     return [
       "QA-STRANDED-85714 confirms this is a substantive private final reply that intentionally stays outside the message tool path for the warning check.",
@@ -1370,6 +1446,11 @@ function buildAssistantText(
   if (toolOutput && promptExactReplyDirective) {
     return promptExactReplyDirective;
   }
+=======
+  if (/tool continuity check/i.test(prompt) && toolOutput) {
+    return `Protocol note: model switch handoff confirmed on ${model || "the requested model"}. QA mission from QA_KICKOFF_TASK.md still applies: understand this OpenClaw repo from source + docs before acting.`;
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if ((toolOutput || allInputText) && /repo contract followthrough check/i.test(allInputText)) {
     const repoEvidenceText = [scenarioToolOutput, allInputText].filter(Boolean).join("\n");
     if (
@@ -1512,6 +1593,7 @@ function buildAssistantText(
       "- Re-run with a real model for qualitative coverage.",
     ].join("\n");
   }
+<<<<<<< HEAD
   if (
     toolOutput &&
     (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
@@ -1522,6 +1604,8 @@ function buildAssistantText(
       return `FAKE_PLUGIN_OK ${targetTool}`;
     }
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (toolOutput) {
     const snippet = toolOutput.replace(/\s+/g, " ").trim().slice(0, 220);
     return `Protocol note: I reviewed the requested material. Evidence snippet: ${snippet || "no content"}`;
@@ -1543,57 +1627,85 @@ function buildToolCallEvents(prompt: string): StreamEvent[] {
 function buildReleaseAuditJson() {
   return `${JSON.stringify(
     {
+<<<<<<< HEAD
       verified: false,
+=======
+      verified: true,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       findings: [
         {
           id: "REL-GATEWAY-417",
           source: "src/gateway/reconnect.ts",
           status: "retry jitter verified, resume token fallback still needs manual spot check",
+<<<<<<< HEAD
           verified: true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
         {
           id: "REL-CHANNEL-238",
           source: "src/channels/delivery.ts",
           status: "thread replies preserve ordering, root-channel fallback needs handoff note",
+<<<<<<< HEAD
           verified: true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
         {
           id: "REL-CRON-904",
           source: "src/scheduling/cron.ts",
           status: "single-run lock verified for restart wakeups",
+<<<<<<< HEAD
           verified: true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
         {
           id: "REL-MEMORY-552",
           source: "src/memory/recall.ts",
           status:
             "fallback summary survives empty memory search; ranking sample needs second reviewer",
+<<<<<<< HEAD
           verified: true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
         {
           id: "REL-PLUGIN-319",
           source: "src/plugins/runtime.ts",
           status: "bundled runtime manifest loads cleanly after restart",
+<<<<<<< HEAD
           verified: true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
         {
           id: "REL-INSTALL-846",
           source: "install/update.ts",
           status: "update smoke passed from previous stable tag",
+<<<<<<< HEAD
           verified: true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
         {
           id: "REL-DOCS-611",
           source: "docs/operator-notes.md",
           status:
             "docs mention reconnect, cron, memory, plugin, and installer checks; channel ordering and UI notes need maintainer handoff",
+<<<<<<< HEAD
           verified: true,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
         {
           id: "REL-UI-BLOCKED",
           source: "ui/control-panel.ts",
           status: "blocked: source file was referenced by checklist but missing from the fixture",
+<<<<<<< HEAD
           verified: false,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         },
       ],
     },
@@ -1966,11 +2078,18 @@ async function buildResponsesPayload(
       ? extractLatestToolOutput(input)
       : "");
   const toolJson = parseToolOutputJson(scenarioToolOutput);
+<<<<<<< HEAD
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
     promptExactMarkerDirective ?? extractExactMarkerDirective(allInputText);
+=======
+  const exactReplyDirective =
+    extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
+  const exactMarkerDirective =
+    extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
     ? extractWhatsAppLocationMarkerDirective(allInputText)
     : "";
@@ -2114,6 +2233,10 @@ async function buildResponsesPayload(
         label: "qa-direct-fallback-worker",
         thread: false,
         mode: "run",
+<<<<<<< HEAD
+=======
+        runTimeoutSeconds: 30,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
     }
     if (toolOutput && canCallSessionsYield && !/\byielded\b/i.test(toolOutput)) {
@@ -2334,11 +2457,19 @@ async function buildResponsesPayload(
   if (whatsAppStickerMarker) {
     return buildAssistantEvents(whatsAppStickerMarker);
   }
+<<<<<<< HEAD
   if (/\bmarker\b/i.test(prompt) && promptExactMarkerDirective) {
     return buildAssistantEvents(promptExactMarkerDirective);
   }
   if (/\bmarker\b/i.test(prompt) && promptExactReplyDirective) {
     return buildAssistantEvents(promptExactReplyDirective);
+=======
+  if (/\bmarker\b/i.test(prompt) && exactReplyDirective) {
+    return buildAssistantEvents(exactReplyDirective);
+  }
+  if (/\bmarker\b/i.test(prompt) && exactMarkerDirective) {
+    return buildAssistantEvents(exactMarkerDirective);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   const isTelegramCurrentSessionStatusTurn =
     QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(prompt) ||
@@ -2354,15 +2485,23 @@ async function buildResponsesPayload(
         : `QA-TELEGRAM-CURRENT-SESSION-BAD ${sessionKey || "missing-session-key"}`,
     );
   }
+<<<<<<< HEAD
   if (/\bmarker\b/i.test(allInputText) && promptExactReplyDirective) {
     return buildAssistantEvents(promptExactReplyDirective);
+=======
+  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
+    return buildAssistantEvents(exactReplyDirective);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
     return buildAssistantEvents(exactMarkerDirective);
   }
+<<<<<<< HEAD
   if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
     return buildAssistantEvents(exactReplyDirective);
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE.test(allInputText)) {
     return buildAssistantEvents(
       JSON.stringify({
@@ -2612,8 +2751,13 @@ async function buildResponsesPayload(
       });
     }
   }
+<<<<<<< HEAD
   if (/memory tools check/i.test(allInputText)) {
     if (!scenarioToolOutput) {
+=======
+  if (/memory tools check/i.test(prompt)) {
+    if (!toolOutput) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return buildToolCallEventsWithArgs("memory_search", {
         query: "project codename ORBIT-9",
         maxResults: 3,
@@ -2623,7 +2767,14 @@ async function buildResponsesPayload(
       ? (toolJson.results as Array<Record<string, unknown>>)
       : [];
     const first = results[0];
+<<<<<<< HEAD
     if (typeof first?.path === "string") {
+=======
+    if (
+      typeof first?.path === "string" &&
+      (typeof first.startLine === "number" || typeof first.endLine === "number")
+    ) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const from =
         typeof first.startLine === "number"
           ? Math.max(1, first.startLine)
@@ -3486,11 +3637,15 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       }
       if (req.method === "POST" && url.pathname === "/v1/images/generations") {
         const raw = await readBody(req);
+<<<<<<< HEAD
         const body = parseJsonObjectBody(raw);
         if (!body) {
           writeOpenAiMalformedJsonError(res, "OpenAI Images");
           return;
         }
+=======
+        const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         imageGenerationRequests.push(body);
         if (imageGenerationRequests.length > 20) {
           imageGenerationRequests.splice(0, imageGenerationRequests.length - 20);
@@ -3514,11 +3669,15 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       }
       if (req.method === "POST" && url.pathname === "/v1/embeddings") {
         const raw = await readBody(req);
+<<<<<<< HEAD
         const body = parseJsonObjectBody(raw);
         if (!body) {
           writeOpenAiMalformedJsonError(res, "OpenAI Embeddings");
           return;
         }
+=======
+        const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const inputs = extractEmbeddingInputTexts(body.input);
         writeJson(res, 200, {
           object: "list",
@@ -3540,11 +3699,15 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       }
       if (req.method === "POST" && url.pathname === "/v1/responses") {
         const raw = await readBody(req);
+<<<<<<< HEAD
         const body = parseJsonObjectBody(raw);
         if (!body) {
           writeOpenAiMalformedJsonError(res, "OpenAI Responses");
           return;
         }
+=======
+        const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
         const events = await buildResponsesPayload(body, scenarioState);
         const resolvedModel = typeof body.model === "string" ? body.model : "";
@@ -3582,8 +3745,15 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       }
       if (req.method === "POST" && url.pathname === "/v1/messages") {
         const raw = await readBody(req);
+<<<<<<< HEAD
         const body = parseJsonObjectBody(raw) as AnthropicMessagesRequest | null;
         if (!body) {
+=======
+        let body: AnthropicMessagesRequest;
+        try {
+          body = raw ? (JSON.parse(raw) as AnthropicMessagesRequest) : {};
+        } catch {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           writeJson(res, 400, {
             type: "error",
             error: {

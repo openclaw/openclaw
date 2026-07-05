@@ -7,7 +7,11 @@ import type { HandleCommandsParams } from "./commands-types.js";
 type ScheduleGatewayRestartArgs = Parameters<typeof scheduleGatewaySigusr1Restart>[0];
 
 const mocks = vi.hoisted(() => ({
+<<<<<<< HEAD
   clearRestartSentinel: vi.fn(async () => undefined),
+=======
+  unlink: vi.fn(async (_path: string) => undefined),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   isRestartEnabled: vi.fn(() => true),
   extractDeliveryInfo: vi.fn(() => ({
     deliveryContext: {
@@ -21,13 +25,27 @@ const mocks = vi.hoisted(() => ({
     () =>
       "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
   ),
+<<<<<<< HEAD
   writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => undefined),
+=======
+  writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => "/tmp/sentinel.json"),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   scheduleGatewaySigusr1Restart: vi.fn((_opts?: ScheduleGatewayRestartArgs) => ({
     scheduled: true,
   })),
   triggerOpenClawRestart: vi.fn(() => ({ ok: true, method: "launchctl" })),
 }));
 
+<<<<<<< HEAD
+=======
+vi.mock("node:fs/promises", () => ({
+  default: {
+    unlink: mocks.unlink,
+  },
+  unlink: mocks.unlink,
+}));
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 vi.mock("../../config/commands.flags.js", () => ({
   isRestartEnabled: mocks.isRestartEnabled,
 }));
@@ -60,7 +78,10 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
   );
   return {
     ...actual,
+<<<<<<< HEAD
     clearRestartSentinel: mocks.clearRestartSentinel,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     formatDoctorNonInteractiveHint: mocks.formatDoctorNonInteractiveHint,
     writeRestartSentinel: mocks.writeRestartSentinel,
   };
@@ -113,7 +134,11 @@ describe("handleRestartCommand", () => {
   beforeEach(() => {
     mocks.isRestartEnabled.mockReset();
     mocks.isRestartEnabled.mockReturnValue(true);
+<<<<<<< HEAD
     mocks.clearRestartSentinel.mockClear();
+=======
+    mocks.unlink.mockClear();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mocks.extractDeliveryInfo.mockClear();
     mocks.formatDoctorNonInteractiveHint.mockClear();
     mocks.writeRestartSentinel.mockClear();
@@ -212,7 +237,11 @@ describe("handleRestartCommand", () => {
     expect(mocks.triggerOpenClawRestart).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("clears the success sentinel when fallback restart fails", async () => {
+=======
+  it("removes the success sentinel when fallback restart fails", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     mocks.triggerOpenClawRestart.mockReturnValueOnce({
       ok: false,
       method: "launchctl",
@@ -221,6 +250,10 @@ describe("handleRestartCommand", () => {
     const result = await handleRestartCommand(restartCommandParams(), true);
 
     expect(result?.reply?.text).toContain("Restart failed");
+<<<<<<< HEAD
     expect(mocks.clearRestartSentinel).toHaveBeenCalledOnce();
+=======
+    expect(mocks.unlink).toHaveBeenCalledWith("/tmp/sentinel.json");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

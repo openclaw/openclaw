@@ -161,6 +161,7 @@ describe("qa run config", () => {
     expect(outputDir.startsWith(path.join(repoRoot, ".artifacts", "qa-e2e", "lab-"))).toBe(true);
   });
 
+<<<<<<< HEAD
   it("keeps generated run output dirs unique within the same millisecond", () => {
     vi.useFakeTimers();
     try {
@@ -177,6 +178,8 @@ describe("qa run config", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("prefers the Codex OAuth default when the runtime resolver says it is available", () => {
     defaultQaRuntimeModelForMode.mockImplementation((mode, options) =>
       mode === "live-frontier"

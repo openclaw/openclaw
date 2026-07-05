@@ -155,6 +155,7 @@ describe("entry precomputed command help fast path", () => {
     expect(outputPrecomputedNodesHelpTextCalls).toBe(1);
   });
 
+<<<<<<< HEAD
   it.each(["doctor", "sessions", "tasks"])(
     "renders precomputed %s help from startup metadata without importing the full program",
     async (commandName) => {
@@ -217,6 +218,8 @@ describe("entry precomputed command help fast path", () => {
     expect(outputPrecomputedSubcommandHelpTextCalls).toBe(0);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("defers nodes help when plugin config can change command metadata", async () => {
     let outputPrecomputedNodesHelpTextCalls = 0;
     let liveConfigChecks = 0;
@@ -350,6 +353,7 @@ describe("entry precomputed command help fast path", () => {
     expect(handled).toBe(false);
     expect(outputPrecomputedSecretsHelpTextCalls).toBe(0);
   });
+<<<<<<< HEAD
 
   it("skips the host command help fast path when a container target comes from env", async () => {
     let outputPrecomputedBrowserHelpTextCalls = 0;
@@ -368,4 +372,6 @@ describe("entry precomputed command help fast path", () => {
     expect(handled).toBe(false);
     expect(outputPrecomputedBrowserHelpTextCalls).toBe(0);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

@@ -1184,7 +1184,10 @@ function createConfigEphemeralState(): ConfigEphemeralState {
 
 const cvs = createConfigEphemeralState();
 let lastConfigContextKey: string | null = null;
+<<<<<<< HEAD
 let lastFormModeForScroll: ConfigProps["formMode"] | null = null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function resetConfigEphemeralState() {
   Object.assign(cvs, createConfigEphemeralState());
@@ -1223,7 +1226,10 @@ function toggleSensitivePathReveal(path: Array<string | number>) {
 export function resetConfigViewStateForTests() {
   resetConfigEphemeralState();
   lastConfigContextKey = null;
+<<<<<<< HEAD
   lastFormModeForScroll = null;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function renderConfig(props: ConfigProps) {
@@ -1239,6 +1245,7 @@ export function renderConfig(props: ConfigProps) {
   const rawAvailable = props.rawAvailable ?? true;
   const formMode = showModeToggle && rawAvailable ? props.formMode : "form";
   const requestUpdate = props.onRequestUpdate ?? (() => {});
+<<<<<<< HEAD
   // Scroll helper: target-based (nav clicks) with global fallback (form/raw toggle)
   const resetContentScroll = (target: EventTarget | null) => {
     queueMicrotask(() => {
@@ -1264,6 +1271,8 @@ export function renderConfig(props: ConfigProps) {
   }
   lastFormModeForScroll = formMode;
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const currentContextKey = configContextKey(props);
   if (lastConfigContextKey !== currentContextKey) {
     resetConfigEphemeralState();
@@ -1328,6 +1337,27 @@ export function renderConfig(props: ConfigProps) {
   const settingsLayout = props.settingsLayout ?? "tabs";
   const allCategories = [...visibleCategories, ...(otherCategory ? [otherCategory] : [])];
 
+<<<<<<< HEAD
+=======
+  const resetContentScroll = (target: EventTarget | null) => {
+    queueMicrotask(() => {
+      const origin = target instanceof Element ? target : null;
+      const content = origin
+        ?.closest(".config-main")
+        ?.querySelector<HTMLElement>(".config-content");
+      if (!content) {
+        return;
+      }
+      if (typeof content.scrollTo === "function") {
+        content.scrollTo({ top: 0, left: 0, behavior: "auto" });
+        return;
+      }
+      content.scrollTop = 0;
+      content.scrollLeft = 0;
+    });
+  };
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   function renderAccordionNav() {
     return html`
       <div class="config-accordion-nav">

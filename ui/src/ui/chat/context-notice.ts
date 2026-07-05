@@ -2,7 +2,10 @@
 import { html, nothing } from "lit";
 import { icons } from "../icons.ts";
 import type { GatewaySessionRow } from "../types.ts";
+<<<<<<< HEAD
 import { formatCompactTokenCount } from "./token-format.ts";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const CONTEXT_NOTICE_RATIO = 0.85;
 const CONTEXT_COMPACT_RATIO = 0.9;
@@ -78,7 +81,11 @@ export function getContextNoticeViewModel(
   if (!warning) {
     return {
       pct,
+<<<<<<< HEAD
       detail: `${formatCompactTokenCount(used)} / ${formatCompactTokenCount(limit)}`,
+=======
+      detail: `${formatTokensCompact(used)} / ${formatTokensCompact(limit)}`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       color: "var(--muted)",
       bg: "color-mix(in srgb, var(--muted) 8%, transparent)",
       warning,
@@ -98,7 +105,11 @@ export function getContextNoticeViewModel(
   const bg = `rgba(${r}, ${g}, ${b}, ${bgOpacity})`;
   return {
     pct,
+<<<<<<< HEAD
     detail: `${formatCompactTokenCount(used)} / ${formatCompactTokenCount(limit)}`,
+=======
+    detail: `${formatTokensCompact(used)} / ${formatTokensCompact(limit)}`,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     color,
     bg,
     warning,
@@ -176,3 +187,17 @@ export function renderContextNotice(
     </div>
   `;
 }
+<<<<<<< HEAD
+=======
+
+/** Format token count compactly (e.g. 128000 -> "128k"). */
+function formatTokensCompact(n: number): string {
+  if (n >= 1_000_000) {
+    return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  }
+  if (n >= 1_000) {
+    return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+  }
+  return String(n);
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

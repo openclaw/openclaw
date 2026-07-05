@@ -7,13 +7,19 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+<<<<<<< HEAD
   validatePluginsUiDescriptorsResult,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   validatePluginsUiDescriptorsParams,
   validateSessionsPluginPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { loadSessionStore, updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../../gateway/operator-scopes.js";
+<<<<<<< HEAD
 import { pluginHostHookHandlers } from "../../gateway/server-methods/plugin-host-hooks.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { buildGatewaySessionRow } from "../../gateway/session-utils.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
@@ -1894,6 +1900,7 @@ describe("host-hook fixture plugin contract", () => {
     ).toBe(false);
     expect(validatePluginsUiDescriptorsParams({})).toBe(true);
     expect(validatePluginsUiDescriptorsParams({ pluginId: "host-hook-fixture" })).toBe(false);
+<<<<<<< HEAD
     expect(
       validatePluginsUiDescriptorsResult({
         ok: true,
@@ -1972,6 +1979,8 @@ describe("host-hook fixture plugin contract", () => {
         },
       ],
     });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("enforces command requiredScopes for gateway clients and command owners", async () => {

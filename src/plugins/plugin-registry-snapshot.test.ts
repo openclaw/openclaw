@@ -9,17 +9,23 @@ import {
   setCurrentPluginMetadataSnapshot,
 } from "./current-plugin-metadata-snapshot.js";
 import type { PluginCandidate } from "./discovery.js";
+<<<<<<< HEAD
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import {
   loadInstalledPluginIndex,
   resolveInstalledPluginIndexPolicyHash,
   type InstalledPluginIndex,
 } from "./installed-plugin-index.js";
+<<<<<<< HEAD
 import {
   markRetainedManagedNpmInstall,
   RETAINED_MANAGED_NPM_INSTALL_MARKER,
 } from "./managed-npm-retention.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -442,6 +448,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(whatsappPlugin.origin).toBe("global");
   });
 
+<<<<<<< HEAD
   it("does not recover retained managed npm generations as install records", async () => {
     const tempRoot = makeTempDir();
     const stateDir = path.join(tempRoot, "state");
@@ -505,6 +512,8 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(loadInstalledPluginIndexInstallRecordsSync({ env, stateDir }).codex).toBeDefined();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps vanished recovered install records on the persisted fast path", () => {
     const tempRoot = makeTempDir();
     const stateDir = path.join(tempRoot, "state");

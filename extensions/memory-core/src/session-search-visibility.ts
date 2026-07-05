@@ -5,7 +5,10 @@ import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
   loadCombinedSessionStoreForGateway,
+<<<<<<< HEAD
   resolveSessionTranscriptMemoryHitKeyToSessionKeys,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveTranscriptStemToSessionKeys,
 } from "openclaw/plugin-sdk/session-transcript-hit";
 import {
@@ -13,7 +16,10 @@ import {
   createSessionVisibilityGuard,
   resolveEffectiveSessionToolsVisibility,
 } from "openclaw/plugin-sdk/session-visibility";
+<<<<<<< HEAD
 import { readQmdSessionArtifactIdentity } from "./qmd-session-artifacts.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function normalizeAgentIdForCompare(value: string | undefined): string | undefined {
   return value?.trim().toLowerCase() || undefined;
@@ -86,6 +92,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     if (!params.requesterSessionKey || !guard) {
       continue;
     }
+<<<<<<< HEAD
     const artifactIdentity = readQmdSessionArtifactIdentity(hit);
     if (artifactIdentity) {
       const normalizedScopedAgentId = normalizeAgentIdForCompare(scopedAgentId);
@@ -118,6 +125,8 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     }
     // Deprecated migration compatibility for older QMD/session rows that were
     // indexed before memory-core stored artifact-to-transcript identity.
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const identity = extractTranscriptIdentityFromSessionsMemoryHit(hit.path);
     if (!identity) {
       continue;

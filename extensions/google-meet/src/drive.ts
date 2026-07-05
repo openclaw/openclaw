@@ -58,8 +58,15 @@ export async function exportGoogleDriveDocumentText(params: {
   });
   try {
     if (!response.ok) {
+<<<<<<< HEAD
       throw await googleApiError({
         response,
+=======
+      const detail = await response.text();
+      throw await googleApiError({
+        response,
+        detail,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         prefix: "Google Drive files.export",
         scopes: [GOOGLE_DRIVE_MEET_SCOPE],
       });

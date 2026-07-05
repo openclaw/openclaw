@@ -957,7 +957,11 @@ describe("resolveTelegramFetch", () => {
     expect(eighthDispatcher).toBe(firstDispatcher);
     expect(ninthDispatcher).toBe(firstDispatcher);
     expectPinnedFallbackIpDispatcher(3);
+<<<<<<< HEAD
     expectLoggerMessageContaining(loggerWarn, "fetch fallback: primary connection path failed");
+=======
+    expectLoggerMessageContaining(loggerWarn, "fetch fallback: DNS-resolved IP unreachable");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expectLoggerMessageContaining(
       loggerDebug,
       "fetch fallback: recovered from attempt 2 to attempt 0",
@@ -1193,6 +1197,7 @@ describe("resolveTelegramFetch", () => {
     expect(undiciFetch).toHaveBeenCalledTimes(1);
   });
 
+<<<<<<< HEAD
   it("does not automatically retry structured EADDRNOTAVAIL fetch failures", async () => {
     const fetchError = buildFetchFallbackError("EADDRNOTAVAIL");
     undiciFetch.mockRejectedValue(fetchError);
@@ -1218,6 +1223,8 @@ describe("resolveTelegramFetch", () => {
     expectNoLoggerMessageContaining(loggerWarn, "DNS-resolved IP unreachable");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("retries sticky fallback when the local network is down during connect", async () => {
     undiciFetch
       .mockRejectedValueOnce(buildFetchFallbackError("ENETDOWN"))

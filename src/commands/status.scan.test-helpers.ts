@@ -9,7 +9,11 @@ type ResolveConfigPathMock = Mock<() => string>;
 
 type StatusScanSharedMocks = {
   resolveConfigPath: ResolveConfigPathMock;
+<<<<<<< HEAD
   hasConfiguredChannels: UnknownMock;
+=======
+  hasPotentialConfiguredChannels: UnknownMock;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   hasConfiguredChannelsForReadOnlyScope: UnknownMock;
   readBestEffortConfig: UnknownMock;
   resolveCommandSecretRefsViaGateway: UnknownMock;
@@ -28,7 +32,11 @@ type StatusScanSharedMocks = {
 export function createStatusScanSharedMocks(configPathLabel: string): StatusScanSharedMocks {
   return {
     resolveConfigPath: vi.fn(() => `/tmp/openclaw-${configPathLabel}-missing-${process.pid}.json`),
+<<<<<<< HEAD
     hasConfiguredChannels: vi.fn(),
+=======
+    hasPotentialConfiguredChannels: vi.fn(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     hasConfiguredChannelsForReadOnlyScope: vi.fn(),
     readBestEffortConfig: vi.fn(),
     resolveCommandSecretRefsViaGateway: vi.fn(),
@@ -74,6 +82,10 @@ function createStatusScanDepsRuntimeModuleMock(
 }
 
 type StatusGatewayProbeModuleMock = {
+<<<<<<< HEAD
+=======
+  pickGatewaySelfPresence: Mock<() => null>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveGatewayProbeAuthResolution: StatusScanSharedMocks["resolveGatewayProbeAuthResolution"];
 };
 
@@ -81,6 +93,10 @@ function createStatusGatewayProbeModuleMock(
   mocks: Pick<StatusScanSharedMocks, "resolveGatewayProbeAuthResolution">,
 ): StatusGatewayProbeModuleMock {
   return {
+<<<<<<< HEAD
+=======
+    pickGatewaySelfPresence: vi.fn(() => null),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     resolveGatewayProbeAuthResolution: mocks.resolveGatewayProbeAuthResolution,
   };
 }
@@ -179,9 +195,17 @@ export async function loadStatusScanModuleForTest(
   vi.resetModules();
   const getStatusCommandSecretTargetIds = mocks.getStatusCommandSecretTargetIds ?? vi.fn(() => []);
   const resolveMemorySearchConfig =
+<<<<<<< HEAD
     mocks.resolveMemorySearchConfig ??
     vi.fn(() => ({ store: { databasePath: "/tmp/main.sqlite" } }));
 
+=======
+    mocks.resolveMemorySearchConfig ?? vi.fn(() => ({ store: { path: "/tmp/main.sqlite" } }));
+
+  vi.doMock("../channels/config-presence.js", () => ({
+    hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
+  }));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   vi.doMock("../plugins/channel-plugin-ids.js", () => ({
     hasConfiguredChannelsForReadOnlyScope: (params: {
       config: OpenClawConfig;
@@ -193,7 +217,11 @@ export async function loadStatusScanModuleForTest(
       env?: NodeJS.ProcessEnv;
       includePersistedAuthState?: boolean;
     }) =>
+<<<<<<< HEAD
       mocks.hasConfiguredChannels(
+=======
+      mocks.hasPotentialConfiguredChannels(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         params.config,
         params.env,
         params.includePersistedAuthState === undefined
@@ -405,7 +433,11 @@ export function applyStatusScanDefaults(
   const sourceConfig = options.sourceConfig ?? createStatusScanConfig();
   const resolvedConfig = options.resolvedConfig ?? sourceConfig;
 
+<<<<<<< HEAD
   mocks.hasConfiguredChannels.mockReturnValue(options.hasConfiguredChannels ?? false);
+=======
+  mocks.hasPotentialConfiguredChannels.mockReturnValue(options.hasConfiguredChannels ?? false);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   mocks.hasConfiguredChannelsForReadOnlyScope.mockImplementation((rawParams: unknown) => {
     const params = rawParams as {
       config: OpenClawConfig;
@@ -413,7 +445,11 @@ export function applyStatusScanDefaults(
       includePersistedAuthState?: boolean;
     };
     return Boolean(
+<<<<<<< HEAD
       mocks.hasConfiguredChannels(
+=======
+      mocks.hasPotentialConfiguredChannels(
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         params.config,
         params.env,
         params.includePersistedAuthState === undefined

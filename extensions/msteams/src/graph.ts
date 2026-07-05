@@ -4,13 +4,20 @@ import { fetchWithSsrFGuard, type MSTeamsConfig } from "../runtime-api.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import { createMSTeamsHttpError } from "./http-error.js";
+<<<<<<< HEAD
 import { responseWithRelease } from "./response-with-release.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
 import { resolveDelegatedAccessToken, resolveMSTeamsCredentials } from "./token.js";
 import { buildUserAgent } from "./user-agent.js";
 
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
+<<<<<<< HEAD
+=======
+const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 export type GraphUser = {
   id?: string;
@@ -66,7 +73,10 @@ async function requestGraph(params: {
     },
     auditContext: "msteams.graph",
   });
+<<<<<<< HEAD
   let releaseInFinally = true;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   try {
     if (!response.ok) {
       throw await createMSTeamsHttpError(
@@ -74,12 +84,23 @@ async function requestGraph(params: {
         `${params.errorPrefix ?? "Graph"} ${params.path} failed`,
       );
     }
+<<<<<<< HEAD
     releaseInFinally = false;
     return responseWithRelease(response, release);
   } finally {
     if (releaseInFinally) {
       await release();
     }
+=======
+    const body = NULL_BODY_STATUSES.has(response.status) ? null : await response.arrayBuffer();
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: new Headers(response.headers),
+    });
+  } finally {
+    await release();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 

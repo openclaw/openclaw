@@ -5,7 +5,10 @@ import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeTelegramBotInfo, type TelegramBotInfo } from "./bot-info.js";
 import { getTelegramRuntime } from "./runtime.js";
+<<<<<<< HEAD
 import { normalizeTelegramStateAccountId } from "./state-account-id.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 
 const LEGACY_STORE_VERSION = 1;
@@ -32,6 +35,17 @@ type TelegramBotInfoCacheStore = {
 
 let botInfoCacheStoreForTest: TelegramBotInfoCacheStore | undefined;
 
+<<<<<<< HEAD
+=======
+function normalizeAccountId(accountId?: string) {
+  const trimmed = accountId?.trim();
+  if (!trimmed) {
+    return "default";
+  }
+  return trimmed.replace(/[^a-z0-9._-]+/gi, "_");
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function fingerprintFromToken(botToken?: string): string | null {
   const trimmed = botToken?.trim();
   if (!trimmed) {
@@ -45,11 +59,15 @@ export function resolveTelegramBotInfoCachePath(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   const stateDir = resolveStateDir(env, os.homedir);
+<<<<<<< HEAD
   return path.join(
     stateDir,
     "telegram",
     `bot-info-${normalizeTelegramStateAccountId(accountId)}.json`,
   );
+=======
+  return path.join(stateDir, "telegram", `bot-info-${normalizeAccountId(accountId)}.json`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function openBotInfoCacheStore(): TelegramBotInfoCacheStore {
@@ -107,7 +125,11 @@ export async function readCachedTelegramBotInfo(params: {
     return null;
   }
   const parsed = parseCachedTelegramBotInfo(
+<<<<<<< HEAD
     await openBotInfoCacheStore().lookup(normalizeTelegramStateAccountId(params.accountId)),
+=======
+    await openBotInfoCacheStore().lookup(normalizeAccountId(params.accountId)),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   );
   if (!parsed || parsed.tokenFingerprint !== tokenFingerprint) {
     return null;
@@ -133,7 +155,11 @@ export async function writeCachedTelegramBotInfo(params: {
   if (!botInfo) {
     return;
   }
+<<<<<<< HEAD
   await openBotInfoCacheStore().register(normalizeTelegramStateAccountId(params.accountId), {
+=======
+  await openBotInfoCacheStore().register(normalizeAccountId(params.accountId), {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     tokenFingerprint,
     fetchedAt: new Date().toISOString(),
     botInfo,
@@ -141,7 +167,11 @@ export async function writeCachedTelegramBotInfo(params: {
 }
 
 export async function deleteCachedTelegramBotInfo(params: { accountId?: string }): Promise<void> {
+<<<<<<< HEAD
   await openBotInfoCacheStore().delete(normalizeTelegramStateAccountId(params.accountId));
+=======
+  await openBotInfoCacheStore().delete(normalizeAccountId(params.accountId));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 export function setTelegramBotInfoCacheStoreForTest(
@@ -159,5 +189,9 @@ export async function listTelegramLegacyBotInfoCacheEntries(params: {
   if (!parsed) {
     return [];
   }
+<<<<<<< HEAD
   return [{ key: normalizeTelegramStateAccountId(params.accountId), value: parsed }];
+=======
+  return [{ key: normalizeAccountId(params.accountId), value: parsed }];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }

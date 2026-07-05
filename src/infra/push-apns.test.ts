@@ -106,17 +106,27 @@ function createRelayApnsSendFixture(params: {
   nodeId: string;
   relayHandle?: string;
   tokenDebugSuffix?: string;
+<<<<<<< HEAD
   environment?: "sandbox" | "production";
   sendResult: {
     ok: boolean;
     status: number;
     environment: "sandbox" | "production";
+=======
+  sendResult: {
+    ok: boolean;
+    status: number;
+    environment: "production";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     apnsId?: string;
     reason?: string;
     tokenSuffix?: string;
   };
 }) {
+<<<<<<< HEAD
   const environment = params.environment ?? "production";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   return {
     send: vi.fn().mockResolvedValue(params.sendResult),
     registration: {
@@ -126,7 +136,11 @@ function createRelayApnsSendFixture(params: {
       sendGrant: "send-grant-123",
       installationId: "install-123",
       topic: "ai.openclaw.ios",
+<<<<<<< HEAD
       environment,
+=======
+      environment: "production" as const,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       distribution: "official" as const,
       updatedAtMs: 1,
       tokenDebugSuffix: params.tokenDebugSuffix,

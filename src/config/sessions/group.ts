@@ -35,10 +35,13 @@ function normalizeGroupLabel(raw?: string) {
   return normalizeHyphenSlug(raw);
 }
 
+<<<<<<< HEAD
 function joinOpaqueTail(parts: string[], start: number): string | null {
   return normalizeOptionalString(parts[start]) ? parts.slice(start).join(":") : null;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveOriginatingGroupTargetId(params: {
   ctx: MsgContext;
   provider: string;
@@ -47,7 +50,11 @@ function resolveOriginatingGroupTargetId(params: {
   if (!target) {
     return null;
   }
+<<<<<<< HEAD
   const parts = target.split(":");
+=======
+  const parts = target.split(":").filter(Boolean);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (parts.length < 2) {
     return null;
   }
@@ -58,6 +65,7 @@ function resolveOriginatingGroupTargetId(params: {
   const second = normalizeOptionalLowercaseString(parts[1]);
   const secondIsKind = second === "group" || second === "channel";
   if (secondIsKind && (head === params.provider || getGroupSurfaces().has(head))) {
+<<<<<<< HEAD
     return joinOpaqueTail(parts, 2);
   }
   if (head === params.provider || head === "chat" || head === "room" || head === "group") {
@@ -65,6 +73,15 @@ function resolveOriginatingGroupTargetId(params: {
   }
   if (head === "channel") {
     return joinOpaqueTail(parts, 1);
+=======
+    return parts.slice(2).join(":") || null;
+  }
+  if (head === params.provider || head === "chat" || head === "room" || head === "group") {
+    return parts.slice(1).join(":") || null;
+  }
+  if (head === "channel") {
+    return parts.slice(1).join(":") || null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   return null;
 }
@@ -138,7 +155,11 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
 
   const providerHint = normalizeOptionalLowercaseString(ctx.Provider);
 
+<<<<<<< HEAD
   const parts = from.split(":");
+=======
+  const parts = from.split(":").filter(Boolean);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const head = normalizeLowercaseStringOrEmpty(parts[0]);
   const headIsSurface = head ? getGroupSurfaces().has(head) : false;
 
@@ -168,12 +189,18 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
     ? originatingGroupTargetId
     : headIsSurface
       ? secondIsKind
+<<<<<<< HEAD
         ? joinOpaqueTail(parts, 2)
         : joinOpaqueTail(parts, 1)
       : from;
   if (!id) {
     return null;
   }
+=======
+        ? parts.slice(2).join(":")
+        : parts.slice(1).join(":")
+      : from;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const finalId = normalizeSessionPeerId({ channel: provider, peerKind: kind, peerId: id });
   if (!finalId) {
     return null;

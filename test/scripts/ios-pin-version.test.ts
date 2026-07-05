@@ -17,6 +17,7 @@ describe("parseArgs", () => {
       "Choose exactly one of --from-gateway or --version <YYYY.M.PATCH>",
     );
   });
+<<<<<<< HEAD
 
   it("rejects flags where option values are required", () => {
     for (const { args, message } of [
@@ -29,6 +30,8 @@ describe("parseArgs", () => {
       expect(() => parseArgs(args)).toThrow(message);
     }
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("pinIosVersion", () => {

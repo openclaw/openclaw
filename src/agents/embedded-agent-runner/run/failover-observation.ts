@@ -3,9 +3,15 @@
  */
 import { redactIdentifier } from "../../../logging/redact-identifier.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
+<<<<<<< HEAD
 import { sanitizeForConsole } from "../../console-sanitize.js";
 import {
   buildApiErrorObservationFields,
+=======
+import {
+  buildApiErrorObservationFields,
+  sanitizeForConsole,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   shouldSuppressRawErrorConsoleSuffix,
 } from "../../embedded-agent-error-observation.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";

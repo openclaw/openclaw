@@ -1,6 +1,9 @@
 // Control-plane rate limiting bounds write-side RPC attempts per device/IP and
 // caps bucket growth against unique-key memory pressure.
+<<<<<<< HEAD
 import { normalizeControlPlaneIdentityPart } from "./control-plane-identity.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { GatewayClient } from "./server-methods/types.js";
 
 const CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS = 3;
@@ -17,6 +20,7 @@ type Bucket = {
 
 const controlPlaneBuckets = new Map<string, Bucket>();
 
+<<<<<<< HEAD
 /** Builds a stable throttle key while avoiding shared fallback buckets for anonymous clients. */
 export function resolveControlPlaneRateLimitKey(client: GatewayClient | null): string {
   const deviceId = normalizeControlPlaneIdentityPart(client?.connect?.device?.id, "unknown-device");
@@ -24,6 +28,23 @@ export function resolveControlPlaneRateLimitKey(client: GatewayClient | null): s
   if (deviceId === "unknown-device" && clientIp === "unknown-ip") {
     // Last-resort fallback: avoid cross-client contention when upstream identity is missing.
     const connId = normalizeControlPlaneIdentityPart(client?.connId, "");
+=======
+function normalizePart(value: unknown, fallback: string): string {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : fallback;
+}
+
+/** Builds a stable throttle key while avoiding shared fallback buckets for anonymous clients. */
+export function resolveControlPlaneRateLimitKey(client: GatewayClient | null): string {
+  const deviceId = normalizePart(client?.connect?.device?.id, "unknown-device");
+  const clientIp = normalizePart(client?.clientIp, "unknown-ip");
+  if (deviceId === "unknown-device" && clientIp === "unknown-ip") {
+    // Last-resort fallback: avoid cross-client contention when upstream identity is missing.
+    const connId = normalizePart(client?.connId, "");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (connId) {
       return `${deviceId}|${clientIp}|conn=${connId}`;
     }

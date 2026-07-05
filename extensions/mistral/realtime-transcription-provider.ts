@@ -7,10 +7,14 @@ import {
   type RealtimeTranscriptionSessionCreateRequest,
   type RealtimeTranscriptionWebSocketTransport,
 } from "openclaw/plugin-sdk/realtime-transcription";
+<<<<<<< HEAD
 import {
   normalizeResolvedSecretInputString,
   normalizeSecretInput,
 } from "openclaw/plugin-sdk/secret-input";
+=======
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   asOptionalRecord as readRecord,
   normalizeOptionalString,
@@ -128,7 +132,14 @@ function normalizeProviderConfig(
 ): MistralRealtimeTranscriptionProviderConfig {
   const raw = readNestedMistralConfig(config);
   return {
+<<<<<<< HEAD
     apiKey: normalizeMistralApiKey(raw.apiKey),
+=======
+    apiKey: normalizeResolvedSecretInputString({
+      value: raw.apiKey,
+      path: "plugins.entries.voice-call.config.streaming.providers.mistral.apiKey",
+    }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     baseUrl: normalizeOptionalString(raw.baseUrl),
     model: normalizeOptionalString(raw.model ?? raw.sttModel),
     sampleRate: readFiniteNumber(raw.sampleRate ?? raw.sample_rate),
@@ -139,6 +150,7 @@ function normalizeProviderConfig(
   };
 }
 
+<<<<<<< HEAD
 function normalizeMistralApiKey(value: unknown): string | undefined {
   const resolved = normalizeResolvedSecretInputString({
     value,
@@ -147,6 +159,8 @@ function normalizeMistralApiKey(value: unknown): string | undefined {
   return normalizeSecretInput(resolved) || undefined;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function readErrorDetail(event: MistralRealtimeTranscriptionEvent): string {
   const message = event.error?.message;
   if (typeof message === "string") {
@@ -249,6 +263,7 @@ export function buildMistralRealtimeTranscriptionProvider(): RealtimeTranscripti
     autoSelectOrder: 45,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>
+<<<<<<< HEAD
       Boolean(
         normalizeProviderConfig(providerConfig).apiKey ||
         normalizeMistralApiKey(process.env.MISTRAL_API_KEY),
@@ -256,6 +271,12 @@ export function buildMistralRealtimeTranscriptionProvider(): RealtimeTranscripti
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
       const apiKey = config.apiKey || normalizeMistralApiKey(process.env.MISTRAL_API_KEY);
+=======
+      Boolean(normalizeProviderConfig(providerConfig).apiKey || process.env.MISTRAL_API_KEY),
+    createSession: (req) => {
+      const config = normalizeProviderConfig(req.providerConfig);
+      const apiKey = config.apiKey || process.env.MISTRAL_API_KEY;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       if (!apiKey) {
         throw new Error("Mistral API key missing");
       }

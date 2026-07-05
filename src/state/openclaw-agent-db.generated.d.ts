@@ -31,6 +31,7 @@ export interface CacheEntries {
   value_json: string | null;
 }
 
+<<<<<<< HEAD
 export interface MemoryEmbeddingCache {
   dims: number | null;
   embedding: string;
@@ -72,6 +73,8 @@ export interface MemoryIndexState {
   revision: number;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export interface SchemaMeta {
   agent_id: string | null;
   app_version: string | null;
@@ -86,10 +89,13 @@ export interface DB {
   auth_profile_state: AuthProfileState;
   auth_profile_store: AuthProfileStore;
   cache_entries: CacheEntries;
+<<<<<<< HEAD
   memory_embedding_cache: MemoryEmbeddingCache;
   memory_index_chunks: MemoryIndexChunks;
   memory_index_meta: MemoryIndexMeta;
   memory_index_sources: MemoryIndexSources;
   memory_index_state: MemoryIndexState;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   schema_meta: SchemaMeta;
 }

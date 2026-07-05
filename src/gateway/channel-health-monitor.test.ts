@@ -456,6 +456,7 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+<<<<<<< HEAD
   it("continues pending recovery on the next check without waiting for cooldown", async () => {
     const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
     const manager = createSnapshotManager(
@@ -484,6 +485,8 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("caps at 3 health-monitor restarts per channel per hour", async () => {
     const manager = createSnapshotManager({
       discord: {

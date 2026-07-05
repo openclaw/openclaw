@@ -7,8 +7,12 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+<<<<<<< HEAD
 const { loadModelCatalogMock, logVerboseMock } = vi.hoisted(() => ({
   loadModelCatalogMock: vi.fn(),
+=======
+const { logVerboseMock } = vi.hoisted(() => ({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   logVerboseMock: vi.fn(),
 }));
 const { loggerWarnMock } = vi.hoisted(() => ({
@@ -33,7 +37,10 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
 });
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+<<<<<<< HEAD
   loadModelCatalog: loadModelCatalogMock,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveHumanDelayConfig: () => undefined,
 }));
 
@@ -229,7 +236,10 @@ describe("createDiscordNativeCommand option wiring", () => {
 
   beforeEach(() => {
     clearRuntimeConfigSnapshot();
+<<<<<<< HEAD
     loadModelCatalogMock.mockReset().mockResolvedValue([]);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     logVerboseMock.mockReset();
     loggerWarnMock.mockReset();
   });
@@ -260,6 +270,7 @@ describe("createDiscordNativeCommand option wiring", () => {
     ]);
   });
 
+<<<<<<< HEAD
   it("uses the provider-startup catalog snapshot for /think autocomplete", async () => {
     const cfg = {
       channels: {
@@ -284,6 +295,8 @@ describe("createDiscordNativeCommand option wiring", () => {
     expect(loadModelCatalogMock).toHaveBeenCalledWith({ config: cfg });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("keeps static choices for non-acp string action arguments", () => {
     const command = createNativeCommand("config");
     const action = requireOption(command, "action");

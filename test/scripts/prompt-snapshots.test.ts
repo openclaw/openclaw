@@ -4,10 +4,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { createFormattedPromptSnapshotFiles } from "../../scripts/generate-prompt-snapshots.js";
 import { deleteStalePromptSnapshotFiles } from "../../scripts/prompt-snapshot-files.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR as SYNC_CODEX_MODEL_PROMPT_FIXTURE_DIR,
+=======
+import { deleteStalePromptSnapshotFiles } from "../../scripts/prompt-snapshot-files.js";
+import {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   defaultCatalogPathCandidates,
   findDefaultCatalogPath,
   renderCodexModelInstructions,
@@ -106,10 +111,13 @@ function listFindCommittedPromptSnapshotFiles(): string[] | null {
 }
 
 describe("happy path prompt snapshots", () => {
+<<<<<<< HEAD
   it("loads the generator entrypoint used by the prompt snapshot check", () => {
     expect(createFormattedPromptSnapshotFiles).toEqual(expect.any(Function));
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("lists committed Codex prompt snapshot artifacts without scanning directories in-process", () => {
     expectNoReaddirSyncDuring(() => {
       const committed = listCommittedPromptSnapshotFiles();
@@ -219,7 +227,10 @@ describe("happy path prompt snapshots", () => {
   });
 
   it("keeps the Codex model prompt fixture next to its source metadata", () => {
+<<<<<<< HEAD
     expect(SYNC_CODEX_MODEL_PROMPT_FIXTURE_DIR).toBe(CODEX_MODEL_PROMPT_FIXTURE_DIR);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(
       fs.existsSync(path.join(CODEX_MODEL_PROMPT_FIXTURE_DIR, "gpt-5.5.pragmatic.instructions.md")),
     ).toBe(true);
@@ -302,6 +313,7 @@ describe("happy path prompt snapshots", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+<<<<<<< HEAD
 
   it("writes Codex model prompt fixtures from an explicit catalog", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-catalog-write-"));
@@ -357,4 +369,6 @@ describe("happy path prompt snapshots", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

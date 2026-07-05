@@ -63,7 +63,11 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   const optionParts = [
     "/think <level|default>",
     "/model <id>",
+<<<<<<< HEAD
     "/fast status|auto|on|off|default",
+=======
+    "/fast status|on|off|default",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     "/verbose on|off|full",
     "/trace on|off|raw",
   ];

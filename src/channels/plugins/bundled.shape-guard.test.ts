@@ -197,7 +197,11 @@ afterEach(() => {
 describe("bundled channel entry shape guards", () => {
   const bundledPluginRoots = listSourceBundledPluginRoots();
   let realBundledSourceTreeProbe: {
+<<<<<<< HEAD
     hasAccountInspector: boolean;
+=======
+    hasAccountInspect: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     pluginIds: readonly string[];
   };
 
@@ -221,7 +225,11 @@ describe("bundled channel entry shape guards", () => {
       "./bundled.js?scope=real-bundled-source-tree-preload",
     );
     realBundledSourceTreeProbe = {
+<<<<<<< HEAD
       hasAccountInspector: typeof bundled.getBundledChannelAccountInspector("slack") === "function",
+=======
+      hasAccountInspect: bundled.hasBundledChannelEntryFeature("slack", "accountInspect"),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       pluginIds: [...bundled.listBundledChannelPluginIds()],
     };
   });
@@ -256,7 +264,11 @@ describe("bundled channel entry shape guards", () => {
 
   it("loads real bundled channel entry contracts from the source tree", async () => {
     expect(realBundledSourceTreeProbe.pluginIds).toEqual(["slack"]);
+<<<<<<< HEAD
     expect(realBundledSourceTreeProbe.hasAccountInspector).toBe(true);
+=======
+    expect(realBundledSourceTreeProbe.hasAccountInspect).toBe(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("fills sparse bundled channel plugin metadata from package metadata", async () => {
@@ -316,12 +328,21 @@ describe("bundled channel entry shape guards", () => {
         "./bundled.js?scope=bundled-package-metadata",
       );
 
+<<<<<<< HEAD
       const plugin = bundled.getBundledChannelPlugin("alpha");
       expect(plugin?.meta.id).toBe("alpha");
       expect(plugin?.meta.label).toBe("Alpha");
       expect(plugin?.meta.selectionLabel).toBe("Use Alpha");
       expect(plugin?.meta.docsPath).toBe("/channels/alpha");
       expect(plugin?.meta.blurb).toBe("Alpha channel metadata.");
+=======
+      const plugin = bundled.requireBundledChannelPlugin("alpha");
+      expect(plugin.meta.id).toBe("alpha");
+      expect(plugin.meta.label).toBe("Alpha");
+      expect(plugin.meta.selectionLabel).toBe("Use Alpha");
+      expect(plugin.meta.docsPath).toBe("/channels/alpha");
+      expect(plugin.meta.blurb).toBe("Alpha channel metadata.");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -392,7 +413,11 @@ describe("bundled channel entry shape guards", () => {
       expect(metadataRootDir).toBe(tempRoot);
       expect(generatedRootDir).toBe(tempRoot);
       expect(testGlobal["__bundledOverrideRuntime"]).toBe("ok");
+<<<<<<< HEAD
       expect(bundled.getBundledChannelPlugin("alpha")?.id).toBe("alpha");
+=======
+      expect(bundled.requireBundledChannelPlugin("alpha").id).toBe("alpha");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -459,7 +484,11 @@ describe("bundled channel entry shape guards", () => {
         "./bundled.js?scope=bundled-package-local-dist-sdk-alias",
       );
 
+<<<<<<< HEAD
       expect(bundled.getBundledChannelPlugin("alpha")?.meta.label).toBe("Package dist Alpha");
+=======
+      expect(bundled.requireBundledChannelPlugin("alpha").meta.label).toBe("Package dist Alpha");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -514,7 +543,11 @@ describe("bundled channel entry shape guards", () => {
         "./bundled.js?scope=bundled-direct-dist-sdk-alias",
       );
 
+<<<<<<< HEAD
       expect(bundled.getBundledChannelPlugin("alpha")?.meta.label).toBe("Direct dist Alpha");
+=======
+      expect(bundled.requireBundledChannelPlugin("alpha").meta.label).toBe("Direct dist Alpha");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       fs.rmSync(root, { recursive: true, force: true });
@@ -588,7 +621,11 @@ describe("bundled channel entry shape guards", () => {
       expect(generatedRootDir).toBe(pluginsRoot);
       expect(generatedScanDir).toBe(pluginsRoot);
       expect(testGlobal["__bundledOverrideRuntime"]).toBe("ok");
+<<<<<<< HEAD
       expect(bundled.getBundledChannelPlugin("alpha")?.id).toBe("alpha");
+=======
+      expect(bundled.requireBundledChannelPlugin("alpha").id).toBe("alpha");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -673,7 +710,11 @@ describe("bundled channel entry shape guards", () => {
       );
 
       process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(rootA, "dist", "extensions");
+<<<<<<< HEAD
       expect(bundled.getBundledChannelPlugin("alpha")?.meta.label).toBe("Alpha A");
+=======
+      expect(bundled.requireBundledChannelPlugin("alpha").meta.label).toBe("Alpha A");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(bundled.getBundledChannelSetupPlugin("alpha")?.meta.label).toBe("Setup A");
       expect(bundled.getBundledChannelSecrets("alpha")?.secretTargetRegistryEntries?.[0]?.id).toBe(
         "channels.alpha.A.entry-token",
@@ -684,7 +725,11 @@ describe("bundled channel entry shape guards", () => {
       bundled.setBundledChannelRuntime("alpha", { marker: "first" } as never);
 
       process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(rootB, "dist", "extensions");
+<<<<<<< HEAD
       expect(bundled.getBundledChannelPlugin("alpha")?.meta.label).toBe("Alpha B");
+=======
+      expect(bundled.requireBundledChannelPlugin("alpha").meta.label).toBe("Alpha B");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(bundled.getBundledChannelSetupPlugin("alpha")?.meta.label).toBe("Setup B");
       expect(bundled.getBundledChannelSecrets("alpha")?.secretTargetRegistryEntries?.[0]?.id).toBe(
         "channels.alpha.B.entry-token",

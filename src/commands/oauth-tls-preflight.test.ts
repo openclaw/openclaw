@@ -1,12 +1,19 @@
 // OAuth TLS preflight tests cover timeout handling, TLS diagnostics, and suggested fixes.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
+=======
+import { withEnv } from "../test-utils/env.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   formatOpenAIOAuthTlsPreflightFix,
   runOpenAIOAuthTlsPreflight,
   shouldRunOpenAIOAuthTlsPrerequisites,
 } from "../plugins/provider-openai-chatgpt-oauth-tls.js";
+<<<<<<< HEAD
 import { withEnv } from "../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("runOpenAIOAuthTlsPreflight", () => {
   beforeEach(() => {
@@ -14,12 +21,20 @@ describe("runOpenAIOAuthTlsPreflight", () => {
   });
 
   it("returns ok when OpenAI auth endpoint is reachable", async () => {
+<<<<<<< HEAD
     const response = new Response("reachable", { status: 400 });
     const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
     const fetchImpl = vi.fn(async () => response) as unknown as typeof fetch;
     const result = await runOpenAIOAuthTlsPreflight({ fetchImpl, timeoutMs: 20 });
     expect(result).toEqual({ ok: true });
     expect(cancel).toHaveBeenCalledOnce();
+=======
+    const fetchImpl = vi.fn(
+      async () => new Response("", { status: 400 }),
+    ) as unknown as typeof fetch;
+    const result = await runOpenAIOAuthTlsPreflight({ fetchImpl, timeoutMs: 20 });
+    expect(result).toEqual({ ok: true });
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("caps oversized probe timeouts before creating abort signals", async () => {

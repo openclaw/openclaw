@@ -6,8 +6,13 @@ import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { enqueueCommandInLane, resetCommandQueueStateForTest } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
+<<<<<<< HEAD
 import { createDeferred } from "../test-utils/deferred.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
+=======
+import { applyGatewayLaneConcurrency } from "./server-lanes.js";
+import { createDeferred } from "./test-helpers.deferred.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("applyGatewayLaneConcurrency", () => {
   afterEach(() => {

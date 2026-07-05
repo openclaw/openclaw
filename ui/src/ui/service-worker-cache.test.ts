@@ -2,22 +2,35 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+<<<<<<< HEAD
 import vm from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const serviceWorkerPath = path.join(here, "../../public/sw.js");
+=======
+import { describe, expect, it } from "vitest";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("Control UI service worker cache versioning", () => {
   it("registers the service worker with a build id and bounds prior build caches", () => {
     const mainSource = fs.readFileSync(path.join(here, "../main.ts"), "utf8");
+<<<<<<< HEAD
     const serviceWorkerSource = fs.readFileSync(serviceWorkerPath, "utf8");
+=======
+    const serviceWorkerSource = fs.readFileSync(path.join(here, "../../public/sw.js"), "utf8");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const viteConfigSource = fs.readFileSync(path.join(here, "../../vite.config.ts"), "utf8");
 
     expect(mainSource).toContain('swUrl.searchParams.set("v"');
     expect(mainSource).toContain('updateViaCache: "none"');
+<<<<<<< HEAD
     expect(mainSource).toContain('navigator.serviceWorker.addEventListener("message"');
     expect(mainSource).toContain("event.data.version !== currentControlUiBuildId");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(serviceWorkerSource).toContain(
       'const EMBEDDED_CACHE_VERSION = "__OPENCLAW_CONTROL_UI_BUILD_ID__"',
     );
@@ -25,6 +38,7 @@ describe("Control UI service worker cache versioning", () => {
     expect(serviceWorkerSource).toContain("CONTROL_CACHE_LIMIT = 3");
     expect(serviceWorkerSource).toContain("slice(-priorCacheLimit)");
     expect(serviceWorkerSource).toContain("caches.delete");
+<<<<<<< HEAD
     expect(serviceWorkerSource).toContain("includeUncontrolled: true");
     expect(serviceWorkerSource).not.toContain(
       'postMessage({ type: "sw-updated", version: CACHE_VERSION },',
@@ -115,3 +129,9 @@ function createDeferred<T>() {
   });
   return { promise, resolve };
 }
+=======
+    expect(viteConfigSource).toContain("source.replace(placeholder, JSON.stringify(buildId))");
+    expect(serviceWorkerSource).not.toContain('const CACHE_NAME = "openclaw-control-v1"');
+  });
+});
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

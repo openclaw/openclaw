@@ -6,7 +6,11 @@ import { assertNoImportTimeSideEffects } from "../../plugin-sdk/test-helpers/imp
 const listChannelPlugins = vi.hoisted(() =>
   vi.fn(() => [
     {
+<<<<<<< HEAD
       id: "telegram",
+=======
+      id: "signal",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       messaging: {
         defaultMarkdownTableMode: "bullets",
       },
@@ -36,6 +40,7 @@ const HOT_RUNTIME_IMPORT_CASES = [
 ] as const;
 
 function mockChannelRegistry() {
+<<<<<<< HEAD
   vi.doMock("../../channels/plugins/index.js", async () => {
     const actual = await vi.importActual<typeof import("../../channels/plugins/index.js")>(
       "../../channels/plugins/index.js",
@@ -45,6 +50,8 @@ function mockChannelRegistry() {
       normalizeChannelId: (raw?: string | null) => raw ?? null,
     };
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   vi.doMock("../../channels/plugins/registry.js", async () => {
     const actual = await vi.importActual<typeof import("../../channels/plugins/registry.js")>(
       "../../channels/plugins/registry.js",
@@ -79,7 +86,10 @@ function expectNoChannelRegistryDuringImport(moduleId: string) {
 afterEach(() => {
   vi.resetModules();
   vi.restoreAllMocks();
+<<<<<<< HEAD
   vi.doUnmock("../../channels/plugins/index.js");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   vi.doUnmock("../../channels/plugins/registry.js");
   vi.doUnmock("../../plugins/runtime.js");
 });
@@ -96,6 +106,7 @@ describe("runtime import side-effect contracts", () => {
 
     expectNoChannelRegistryDuringImport("src/config/markdown-tables.ts");
 
+<<<<<<< HEAD
     expect(
       markdownTables.resolveMarkdownTableMode({
         channel: "telegram",
@@ -110,6 +121,12 @@ describe("runtime import side-effect contracts", () => {
         supportsBlockTables: true,
       }),
     ).toBe("bullets");
+=======
+    expect(markdownTables.DEFAULT_TABLE_MODES.get("signal")).toBe("bullets");
+    expect(getActivePluginChannelRegistryVersion).toHaveBeenCalled();
+    expect(listChannelPlugins).toHaveBeenCalledTimes(1);
+    expect(markdownTables.DEFAULT_TABLE_MODES.has("signal")).toBe(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(getActivePluginChannelRegistryVersion).toHaveBeenCalled();
     expect(listChannelPlugins).toHaveBeenCalledTimes(1);
   });

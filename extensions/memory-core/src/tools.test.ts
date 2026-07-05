@@ -1,5 +1,8 @@
 // Memory Core tests cover tools plugin behavior.
+<<<<<<< HEAD
 import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getMemoryCloseMockCalls,
@@ -12,6 +15,7 @@ import {
   setMemoryCustomStatus,
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
+<<<<<<< HEAD
 } from "./memory-tool-manager.test-mocks.js";
 import { createMemorySearchTool, testing as memoryToolsTesting } from "./tools.js";
 import {
@@ -19,6 +23,11 @@ import {
   MemoryGetSchema,
   MemorySearchSchema,
 } from "./tools.shared.js";
+=======
+} from "./memory-tool-manager-mock.js";
+import { createMemorySearchTool, testing as memoryToolsTesting } from "./tools.js";
+import { MemoryGetSchema, MemorySearchSchema } from "./tools.shared.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   asOpenClawConfig,
   createMemorySearchToolOrThrow,
@@ -125,6 +134,7 @@ describe("memory_search unavailable payloads", () => {
     });
   });
 
+<<<<<<< HEAD
   it("returns explicit unavailable metadata for missing node:sqlite failures", async () => {
     const error =
       "SQLite support is unavailable in this Node runtime (missing node:sqlite). No such built-in module: node:sqlite";
@@ -156,6 +166,8 @@ describe("memory_search unavailable payloads", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("returns explicit unavailable metadata for non-quota failures", async () => {
     setMemorySearchImpl(async () => {
       throw new Error("embedding provider timeout");
@@ -382,6 +394,7 @@ describe("memory_search unavailable payloads", () => {
     expect(searchCalls).toBe(2);
   });
 
+<<<<<<< HEAD
   it("merges qmd runtime debug across zero-hit retry attempts", async () => {
     setMemoryBackend("qmd");
     let searchCalls = 0;
@@ -471,6 +484,8 @@ describe("memory_search unavailable payloads", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("returns unavailable metadata when the index identity is paused", async () => {
     let searchCalls = 0;
     setMemorySearchImpl(async () => {
@@ -512,6 +527,7 @@ describe("memory_search unavailable payloads", () => {
         configuredMode: opts.qmdSearchModeOverride ?? "query",
         effectiveMode: "query",
         fallback: "unsupported-search-flags",
+<<<<<<< HEAD
         qmd: {
           searchPlan: {
             command: "query",
@@ -520,6 +536,8 @@ describe("memory_search unavailable payloads", () => {
             sources: ["memory", "sessions"],
           },
         },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
       return [
         {
@@ -568,6 +586,7 @@ describe("memory_search unavailable payloads", () => {
         fallback?: unknown;
         hits?: unknown;
         searchMs?: number;
+<<<<<<< HEAD
         toolMs?: number;
         managerMs?: number;
         outsideSearchMs?: number;
@@ -580,6 +599,8 @@ describe("memory_search unavailable payloads", () => {
             sources?: unknown;
           };
         };
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       };
     };
     expect(details.mode).toBe("query");
@@ -589,6 +610,7 @@ describe("memory_search unavailable payloads", () => {
     expect(details.debug?.fallback).toBe("unsupported-search-flags");
     expect(details.debug?.hits).toBe(1);
     expect(details.debug?.searchMs).toBeGreaterThanOrEqual(0);
+<<<<<<< HEAD
     expect(details.debug?.toolMs).toBeGreaterThanOrEqual(details.debug?.searchMs ?? 0);
     expect(details.debug?.outsideSearchMs).toBeGreaterThanOrEqual(0);
     expect(details.debug?.managerMs).toBeGreaterThanOrEqual(0);
@@ -677,6 +699,8 @@ describe("memory_search unavailable payloads", () => {
     expect(details.debug?.toolMs).toBeGreaterThanOrEqual(details.debug?.searchMs ?? 0);
     expect(details.debug?.outsideSearchMs).toBeGreaterThanOrEqual(0);
     expect(details.debug?.managerCacheState).toBe("cached-full-hit");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });
 

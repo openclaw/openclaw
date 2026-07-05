@@ -1,5 +1,9 @@
 // Docker All Scheduler tests cover docker all scheduler script behavior.
+<<<<<<< HEAD
 import { spawn, spawnSync } from "node:child_process";
+=======
+import { spawnSync } from "node:child_process";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -15,12 +19,18 @@ import {
   LOG_TAIL_MAX_BYTES,
   parseDockerAllCliArgs,
   resolveDockerPreflightPlatform,
+<<<<<<< HEAD
   runShellCaptureCommand,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   runShellCommand,
   SHELL_CAPTURE_MAX_CHARS,
   tailFile,
 } from "../../scripts/test-docker-all.mjs";
+<<<<<<< HEAD
 import { createScriptTestHarness } from "./test-helpers.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const limits = {
   resourceLimits: {
@@ -30,7 +40,10 @@ const limits = {
   weightLimit: 2,
 };
 const posixIt = process.platform === "win32" ? it.skip : it;
+<<<<<<< HEAD
 const { createTempDir } = createScriptTestHarness();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function activePool({
   count = 0,
@@ -68,6 +81,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
   throw new Error("condition was not met before timeout");
 }
 
+<<<<<<< HEAD
 async function waitForChildClose(child: ReturnType<typeof spawn>, timeoutMs = 5_000) {
   return await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
     (resolve, reject) => {
@@ -82,6 +96,8 @@ async function waitForChildClose(child: ReturnType<typeof spawn>, timeoutMs = 5_
   );
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("scripts/test-docker-all scheduler", () => {
   it("parses the supported CLI options", () => {
     expect(parseDockerAllCliArgs([])).toEqual({
@@ -476,6 +492,7 @@ postgres Created
     }
   });
 
+<<<<<<< HEAD
   posixIt("clamps oversized shell command timers before scheduling", async () => {
     const result = await runShellCommand({
       command: `exec ${JSON.stringify(process.execPath)} -e ${JSON.stringify(
@@ -529,6 +546,8 @@ postgres Created
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   posixIt("kills timed-out shell command groups when the leader exits first", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-docker-all-timeout-"));
     const scriptPath = path.join(root, "leader-exits.mjs");
@@ -559,7 +578,10 @@ setInterval(() => {}, 1000);
         )} ${JSON.stringify(grandchildPidPath)}`,
         env: process.env,
         label: "timeout-leader-exits",
+<<<<<<< HEAD
         timeoutKillGraceMs: 25,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         timeoutMs: 1_000,
       });
 
@@ -578,6 +600,7 @@ setInterval(() => {}, 1000);
     }
   });
 
+<<<<<<< HEAD
   posixIt("clamps oversized shell command kill grace before scheduling", async () => {
     const root = createTempDir("openclaw-docker-all-oversized-grace-");
     const scriptPath = path.join(root, "leader-exits.mjs");
@@ -807,6 +830,8 @@ await runShellCommand({
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("describes effective scheduler limits for operator errors", () => {
     expect(describeDockerSchedulerLimits(2, limits)).toBe(
       "parallelism=2 weightLimit=2 resources=docker=2 npm=2",

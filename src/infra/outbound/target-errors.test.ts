@@ -3,10 +3,15 @@ import { describe, expect, it } from "vitest";
 import {
   ambiguousTargetError,
   ambiguousTargetMessage,
+<<<<<<< HEAD
   isReservedTargetLiteralError,
   missingTargetError,
   missingTargetMessage,
   reservedTargetLiteralError,
+=======
+  missingTargetError,
+  missingTargetMessage,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   unknownTargetError,
   unknownTargetMessage,
 } from "./target-errors.js";
@@ -71,6 +76,7 @@ describe("target error helpers", () => {
       "Hint: Use channel:123",
     );
   });
+<<<<<<< HEAD
 
   it("identifies reserved target literal errors", () => {
     expect(isReservedTargetLiteralError(reservedTargetLiteralError("Telegram", "current"))).toBe(
@@ -80,4 +86,6 @@ describe("target error helpers", () => {
       false,
     );
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

@@ -1,6 +1,9 @@
 // Message channel constants define internal channel ids shared across routing.
 export const INTERNAL_MESSAGE_CHANNEL = "webchat" as const;
+<<<<<<< HEAD
 export type InternalMessageChannel = typeof INTERNAL_MESSAGE_CHANNEL;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 // Internal, non-delivery sources that may surface as a `channel` hint when an
 // agent run is triggered by something other than a chat message — heartbeat
@@ -21,6 +24,7 @@ export function isInternalNonDeliveryChannel(
 ): value is (typeof INTERNAL_NON_DELIVERY_CHANNELS)[number] {
   return (INTERNAL_NON_DELIVERY_CHANNELS as readonly string[]).includes(value);
 }
+<<<<<<< HEAD
 
 // Channels that ship a native chat exec approval client (in-chat `/approve`
 // flow backed by an `approval-handler.runtime` adapter). When the originating
@@ -54,3 +58,5 @@ export function isNativeApprovalChannel(
   }
   return (NATIVE_APPROVAL_CHANNELS as readonly string[]).includes(value);
 }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

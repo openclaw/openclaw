@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { runQaDockerUp } from "./docker-up.runtime.js";
+<<<<<<< HEAD
 import { shellQuote } from "./shell-quote.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type QaDockerUpDeps = NonNullable<Parameters<typeof runQaDockerUp>[1]>;
 
@@ -69,12 +72,17 @@ describe("runQaDockerUp", () => {
       expect(result.qaLabUrl).toBe("http://127.0.0.1:43124");
       expect(result.gatewayUrl).toBe("http://127.0.0.1:18889/");
       expect(result.composeFile).toBe(composeFile);
+<<<<<<< HEAD
       expect(result.stopCommand).toBe(`docker compose -f ${shellQuote(composeFile)} down`);
+=======
+      expect(result.stopCommand).toBe(`docker compose -f ${composeFile} down`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
   });
 
+<<<<<<< HEAD
   it("quotes the printed stop command when the compose path is shell-sensitive", async () => {
     const calls: string[] = [];
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-docker-up-"));
@@ -102,6 +110,8 @@ describe("runQaDockerUp", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("skips UI build and compose --build for prebuilt images", async () => {
     const calls: string[] = [];
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "qa-docker-up-"));
@@ -133,6 +143,7 @@ describe("runQaDockerUp", () => {
     }
   });
 
+<<<<<<< HEAD
   it("falls back to Corepack for the QA UI build when pnpm is unavailable", async () => {
     const calls: string[] = [];
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "qa-docker-up-"));
@@ -204,6 +215,8 @@ describe("runQaDockerUp", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("uses a repo-root-relative default output dir when none is provided", async () => {
     const calls: string[] = [];
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-docker-root-"));
@@ -279,6 +292,7 @@ describe("runQaDockerUp", () => {
     }
   });
 
+<<<<<<< HEAD
   it("rejects explicit host port collisions before touching Docker", async () => {
     const calls: string[] = [];
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "qa-docker-up-"));
@@ -340,6 +354,11 @@ describe("runQaDockerUp", () => {
     const calls: string[] = [];
     const fetchCalls: string[] = [];
     const hostGatewayCancel = vi.fn(async () => {});
+=======
+  it("falls back to the container IP when the host gateway port is unreachable", async () => {
+    const calls: string[] = [];
+    const fetchCalls: string[] = [];
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "qa-docker-up-"));
     const repoRoot = path.resolve("/repo/openclaw");
     const composeFile = path.join(outputDir, "docker-compose.qa.yml");
@@ -371,9 +390,12 @@ describe("runQaDockerUp", () => {
           },
           fetchImpl: vi.fn(async (input: string) => {
             fetchCalls.push(input);
+<<<<<<< HEAD
             if (input === "http://127.0.0.1:18889/healthz") {
               return { ok: false, body: { cancel: hostGatewayCancel } };
             }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             return {
               ok:
                 input === "http://127.0.0.1:43124/healthz" ||
@@ -397,7 +419,10 @@ describe("runQaDockerUp", () => {
         "http://192.168.165.4:18789/healthz",
       ]);
       expect(result.gatewayUrl).toBe("http://192.168.165.4:18789/");
+<<<<<<< HEAD
       expect(hostGatewayCancel).toHaveBeenCalledTimes(1);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }

@@ -153,17 +153,23 @@ export const SessionSchema = z
   .strict()
   .optional();
 
+<<<<<<< HEAD
 const ResponseUsageModeSchema = z.enum(["on", "off", "tokens", "full"]);
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export const MessagesSchema = z
   .object({
     messagePrefix: z.string().optional(),
     visibleReplies: VisibleRepliesSchema.optional(),
     responsePrefix: z.string().optional(),
     usageTemplate: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
+<<<<<<< HEAD
     responseUsage: z
       .union([ResponseUsageModeSchema, z.record(z.string(), ResponseUsageModeSchema)])
       .optional(),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     groupChat: GroupChatSchema,
     queue: QueueSchema,
     inbound: InboundDebounceSchema,

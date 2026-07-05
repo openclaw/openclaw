@@ -146,7 +146,10 @@ describe("runCliAgent cron before_agent_reply seam", () => {
         ...baseRunParams,
         trigger: "cron",
         jobId: "cron-job-123",
+<<<<<<< HEAD
         chatId: "native-chat-123",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         onExecutionPhase,
       });
 
@@ -165,8 +168,11 @@ describe("runCliAgent cron before_agent_reply seam", () => {
       expect(hookContext?.sessionKey).toBe(baseRunParams.sessionKey);
       expect(hookContext?.workspaceDir).toBe(baseRunParams.workspaceDir);
       expect(hookContext?.trigger).toBe("cron");
+<<<<<<< HEAD
       expect(hookContext?.chatId).toBeUndefined();
       expect(hookContext?.channel).toBeUndefined();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(executePreparedCliRunMock).not.toHaveBeenCalled();
       expect(result.payloads?.[0]?.text).toBe("dreaming claimed via cli runner");
 

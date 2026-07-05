@@ -44,13 +44,17 @@ type MemorySearchToolResult =
   | MemoryCorpusSearchResult;
 type MemoryManagerContext = Awaited<ReturnType<typeof getMemoryManagerContextWithPurpose>>;
 type ActiveMemoryManagerContext = Extract<MemoryManagerContext, { manager: unknown }>;
+<<<<<<< HEAD
 type QmdRuntimeDebug = NonNullable<MemorySearchRuntimeDebug["qmd"]>;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const MEMORY_SEARCH_TOOL_TIMEOUT_MS = 15_000;
 const MEMORY_SEARCH_TOOL_COOLDOWN_MS = 60_000;
 
 const memorySearchToolCooldowns = new Map<string, { until: number; error: string }>();
 
+<<<<<<< HEAD
 function mergeQmdRuntimeDebug(
   entries: readonly MemorySearchRuntimeDebug[],
 ): MemorySearchRuntimeDebug["qmd"] | undefined {
@@ -73,6 +77,8 @@ function mergeQmdRuntimeDebug(
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function resolveMemorySearchToolCooldownKey(options: {
   agentId?: string;
   agentSessionKey?: string;
@@ -438,7 +444,10 @@ export function createMemorySearchTool(options: {
         const outcome = await runMemorySearchToolWithDeadline({
           timeoutMs: MEMORY_SEARCH_TOOL_TIMEOUT_MS,
           run: async (deadlineSignal) => {
+<<<<<<< HEAD
             const toolStartedAt = Date.now();
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
             const shouldQuerySupplements = requestedCorpus === "wiki" || requestedCorpus === "all";
             const shouldQueryMemory = requestedCorpus !== "wiki" && !cooldown;
@@ -495,20 +504,27 @@ export function createMemorySearchTool(options: {
               let fallback: unknown;
               let searchMode: string | undefined;
               let pausedIndexIdentityReason: string | undefined;
+<<<<<<< HEAD
               let managerMs: number | undefined;
               let managerCacheState: string | undefined;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               let searchDebug:
                 | {
                     backend: string;
                     configuredMode?: string;
                     effectiveMode?: string;
                     fallback?: string;
+<<<<<<< HEAD
                     toolMs?: number;
                     managerMs?: number;
                     outsideSearchMs?: number;
                     searchMs: number;
                     managerCacheState?: string;
                     qmd?: MemorySearchRuntimeDebug["qmd"];
+=======
+                    searchMs: number;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                     hits: number;
                   }
                 | undefined;
@@ -537,8 +553,11 @@ export function createMemorySearchTool(options: {
                     },
                     ...(searchSources ? { sources: searchSources } : {}),
                   };
+<<<<<<< HEAD
                   managerMs = memory.debug?.managerMs;
                   managerCacheState = memory.debug?.managerCacheState;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                   try {
                     rawResults = await activeMemory.manager.search(query, searchOptions);
                   } catch (error) {
@@ -555,8 +574,11 @@ export function createMemorySearchTool(options: {
                     if ("error" in refreshed) {
                       throw error;
                     }
+<<<<<<< HEAD
                     managerMs = refreshed.debug?.managerMs;
                     managerCacheState = refreshed.debug?.managerCacheState;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                     activeMemory = refreshed;
                     rawResults = await activeMemory.manager.search(query, searchOptions);
                   }
@@ -615,9 +637,13 @@ export function createMemorySearchTool(options: {
                   model = status.model;
                   fallback = status.fallback;
                   const latestDebug = runtimeDebug.at(-1);
+<<<<<<< HEAD
                   const qmdDebug = mergeQmdRuntimeDebug(runtimeDebug);
                   searchMode = latestDebug?.effectiveMode;
                   const searchMs = Math.max(0, Date.now() - searchStartedAt);
+=======
+                  searchMode = latestDebug?.effectiveMode;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                   searchDebug = {
                     backend: status.backend,
                     configuredMode: latestDebug?.configuredMode,
@@ -626,10 +652,14 @@ export function createMemorySearchTool(options: {
                         ? (latestDebug?.effectiveMode ?? latestDebug?.configuredMode)
                         : "n/a",
                     fallback: latestDebug?.fallback,
+<<<<<<< HEAD
                     managerMs,
                     searchMs,
                     managerCacheState,
                     qmd: qmdDebug,
+=======
+                    searchMs: Math.max(0, Date.now() - searchStartedAt),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
                     hits: rawResults.length,
                   };
                 });
@@ -660,6 +690,7 @@ export function createMemorySearchTool(options: {
                 maxResults: effectiveMax,
                 balanceCorpora: requestedCorpus === "all",
               });
+<<<<<<< HEAD
               if (searchDebug) {
                 const finalToolMs = Math.max(0, Date.now() - toolStartedAt);
                 searchDebug = {
@@ -668,6 +699,8 @@ export function createMemorySearchTool(options: {
                   outsideSearchMs: Math.max(0, finalToolMs - searchDebug.searchMs),
                 };
               }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               return jsonResult({
                 results,
                 provider,

@@ -470,7 +470,11 @@ type StateSqliteBackupPlan = {
 const SQLITE_BACKUP_SOURCE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 const SQLITE_BACKUP_EXCLUDED_SUFFIXES = [".reindex-lock.sqlite"] as const;
 const SQLITE_BACKUP_REINDEX_TRANSIENT_PATTERN =
+<<<<<<< HEAD
   /\.sqlite\.(?:backup|memory-reindex|tmp)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+=======
+  /\.sqlite\.(?:backup|tmp)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function isStatePackageContentPath(sourcePath: string, stateDir: string): boolean {
   const resolvedStateDir = path.resolve(stateDir);

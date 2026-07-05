@@ -102,7 +102,10 @@ describe("helpText", () => {
     const output = helpText();
     expect(output).toContain("/elevated <on|off|ask|full>");
     expect(output).toContain("/elev <on|off|ask|full>");
+<<<<<<< HEAD
     expect(output).toContain("/fast <status|auto|on|off>");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(output).toContain("/gateway-status");
     expect(output).toContain("/gwstatus");
     expect(output).toContain("/crestodian [request]");

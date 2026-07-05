@@ -4,6 +4,10 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveGatewayConnectionAuth,
+<<<<<<< HEAD
+=======
+  resolveGatewayConnectionAuthFromConfig,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   type GatewayConnectionAuthOptions,
 } from "./connection-auth.js";
 
@@ -191,7 +195,17 @@ describe("resolveGatewayConnectionAuth", () => {
       env,
       ...options,
     });
+<<<<<<< HEAD
     expect(asyncResolved).toEqual(expected);
+=======
+    const syncResolved = resolveGatewayConnectionAuthFromConfig({
+      cfg: cfgLocal,
+      env,
+      ...options,
+    });
+    expect(asyncResolved).toEqual(expected);
+    expect(syncResolved).toEqual(expected);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("resolves local SecretRef token when OPENCLAW env is absent", async () => {
@@ -308,6 +322,16 @@ describe("resolveGatewayConnectionAuth", () => {
         localTokenPrecedence: "config-first",
       }),
     ).rejects.toThrow("gateway.auth.token");
+<<<<<<< HEAD
+=======
+    expect(() =>
+      resolveGatewayConnectionAuthFromConfig({
+        cfg: config,
+        env,
+        localTokenPrecedence: "config-first",
+      }),
+    ).toThrow("gateway.auth.token");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("throws when config-first password SecretRef cannot resolve even if env password exists", async () => {
@@ -336,5 +360,15 @@ describe("resolveGatewayConnectionAuth", () => {
         localPasswordPrecedence: "config-first", // pragma: allowlist secret
       }),
     ).rejects.toThrow("gateway.auth.password");
+<<<<<<< HEAD
+=======
+    expect(() =>
+      resolveGatewayConnectionAuthFromConfig({
+        cfg: config,
+        env,
+        localPasswordPrecedence: "config-first", // pragma: allowlist secret
+      }),
+    ).toThrow("gateway.auth.password");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

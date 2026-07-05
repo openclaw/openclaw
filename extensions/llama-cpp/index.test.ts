@@ -22,6 +22,10 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
 import llamaCppPlugin from "./index.js";
 import {
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+<<<<<<< HEAD
+=======
+  createLlamaCppEmbeddingProvider,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   createLlamaCppMemoryEmbeddingProvider,
   formatLlamaCppSetupError,
   llamaCppEmbeddingProviderAdapter,
@@ -70,6 +74,7 @@ describe("llama.cpp provider plugin", () => {
     });
     const abortController = new AbortController();
 
+<<<<<<< HEAD
     const result = await llamaCppEmbeddingProviderAdapter.create({
       config: {},
       provider: "local",
@@ -80,6 +85,16 @@ describe("llama.cpp provider plugin", () => {
     if (!provider) {
       throw new Error("expected llama.cpp provider");
     }
+=======
+    const provider = await createLlamaCppEmbeddingProvider(
+      {
+        config: {},
+        provider: "local",
+        model: "text-embedding-3-small",
+      },
+      { nodeLlamaCppImportUrl: "file:///plugin/node-llama-cpp.js" },
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await expect(provider.embed("hello")).resolves.toEqual([0.6, 0.8]);
     await expect(
@@ -101,7 +116,11 @@ describe("llama.cpp provider plugin", () => {
         },
       },
       {
+<<<<<<< HEAD
         nodeLlamaCppImportUrl: expect.stringContaining("node-llama-cpp"),
+=======
+        nodeLlamaCppImportUrl: "file:///plugin/node-llama-cpp.js",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       },
     );
     const workerProvider =

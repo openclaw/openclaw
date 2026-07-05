@@ -22,7 +22,10 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTelegramRuntime } from "./runtime.js";
+<<<<<<< HEAD
 import { loadTelegramSendModule } from "./send-runtime.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveTelegramToken } from "./token.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
@@ -32,8 +35,19 @@ const STORE_VERSION = 1;
 export const TELEGRAM_THREAD_BINDINGS_NAMESPACE = "telegram.thread-bindings";
 export const TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES = 5_000;
 
+<<<<<<< HEAD
 let threadBindingStoreForTest: PluginStateSyncKeyedStore<TelegramThreadBindingRecord> | undefined;
 
+=======
+let telegramSendModulePromise: Promise<typeof import("./send.js")> | undefined;
+let threadBindingStoreForTest: PluginStateSyncKeyedStore<TelegramThreadBindingRecord> | undefined;
+
+async function loadTelegramSendModule() {
+  telegramSendModulePromise ??= import("./send.js");
+  return await telegramSendModulePromise;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type TelegramBindingTargetKind = "subagent" | "acp";
 
 type TelegramThreadBindingRecord = {

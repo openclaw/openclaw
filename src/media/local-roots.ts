@@ -1,5 +1,9 @@
 // Local media root helpers normalize and match allowed local media roots.
 import path from "node:path";
+<<<<<<< HEAD
+=======
+import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
@@ -9,15 +13,26 @@ import {
 } from "../agents/tool-fs-policy.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
+<<<<<<< HEAD
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveConfigDir } from "../utils.js";
 import { resolveLocalMediaPath } from "./local-media-path.js";
+=======
+import { safeFileURLToPath } from "../infra/local-file-access.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { resolveConfigDir, resolveUserPath } from "../utils.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type BuildMediaLocalRootsOptions = {
   preferredTmpDir?: string;
 };
 
 let cachedPreferredTmpDir: string | undefined;
+<<<<<<< HEAD
+=======
+const DATA_URL_RE = /^data:/i;
+const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 function resolveCachedPreferredTmpDir(): string {
   if (!cachedPreferredTmpDir) {
@@ -75,6 +90,30 @@ export function getAgentScopedMediaLocalRoots(
   return roots;
 }
 
+<<<<<<< HEAD
+=======
+function resolveLocalMediaPath(source: string): string | undefined {
+  const trimmed = source.trim();
+  if (!trimmed || isPassThroughRemoteMediaSource(trimmed) || DATA_URL_RE.test(trimmed)) {
+    return undefined;
+  }
+  if (trimmed.startsWith("file://")) {
+    try {
+      return safeFileURLToPath(trimmed);
+    } catch {
+      return undefined;
+    }
+  }
+  if (trimmed.startsWith("~")) {
+    return resolveUserPath(trimmed);
+  }
+  if (path.isAbsolute(trimmed) || WINDOWS_DRIVE_RE.test(trimmed)) {
+    return path.resolve(trimmed);
+  }
+  return undefined;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Adds only concrete local source parent directories to an existing root allowlist. */
 export function appendLocalMediaParentRoots(
   roots: readonly string[],

@@ -1,5 +1,9 @@
 // Observes and recovers config files that appear missing, corrupt, or clobbered.
 import crypto from "node:crypto";
+<<<<<<< HEAD
+=======
+import path from "node:path";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { isRecord } from "../utils.js";
 import {
   appendConfigAuditRecord,
@@ -11,6 +15,7 @@ import {
   persistBoundedClobberedConfigSnapshot,
   persistBoundedClobberedConfigSnapshotSync,
 } from "./io.clobber-snapshot.js";
+<<<<<<< HEAD
 import {
   readConfigHealthStateFromStore,
   writeConfigHealthStateToStore,
@@ -20,6 +25,11 @@ import {
 } from "./io.health-state.js";
 import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
 import { formatConfigIssueSummary } from "./issue-format.js";
+=======
+import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
+import { formatConfigIssueSummary } from "./issue-format.js";
+import { resolveStateDir } from "./paths.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   isPluginLocalInvalidConfigSnapshot,
   shouldAttemptLastKnownGoodRecovery,
@@ -95,6 +105,25 @@ export type ObserveRecoveryDeps = {
   logger: Pick<typeof console, "warn">;
 };
 
+<<<<<<< HEAD
+=======
+type ConfigHealthFingerprint = {
+  hash: string;
+  bytes: number;
+  mtimeMs: number | null;
+  ctimeMs: number | null;
+  dev: string | null;
+  ino: string | null;
+  mode: number | null;
+  nlink: number | null;
+  uid: number | null;
+  gid: number | null;
+  hasMeta: boolean;
+  gatewayMode: string | null;
+  observedAt: string;
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type ConfigStatMetadataSource =
   | ({
       mtimeMs?: number;
@@ -108,6 +137,19 @@ type ConfigStatMetadataSource =
     } & Record<string, unknown>)
   | null;
 
+<<<<<<< HEAD
+=======
+type ConfigHealthEntry = {
+  lastKnownGood?: ConfigHealthFingerprint;
+  lastPromotedGood?: ConfigHealthFingerprint;
+  lastObservedSuspiciousSignature?: string | null;
+};
+
+type ConfigHealthState = {
+  entries?: Record<string, ConfigHealthEntry>;
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type ConfigReadRecoveryParams = {
   deps: ObserveRecoveryDeps;
   configPath: string;
@@ -316,27 +358,91 @@ function parseConfigRawOrEmpty(deps: ObserveRecoveryDeps, raw: string): unknown 
   }
 }
 
+<<<<<<< HEAD
+=======
+function resolveConfigHealthStatePath(env: NodeJS.ProcessEnv, homedir: () => string): string {
+  return path.join(resolveStateDir(env, homedir), "logs", "config-health.json");
+}
+
+function formatObserveRecoveryError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function returnOriginalConfigRead(params: ConfigReadRecoveryParams): ConfigReadRecoveryResult {
   return { raw: params.raw, parsed: params.parsed };
 }
 
 async function readConfigHealthState(deps: ObserveRecoveryDeps): Promise<ConfigHealthState> {
+<<<<<<< HEAD
   return readConfigHealthStateFromStore(deps);
 }
 
 function readConfigHealthStateSync(deps: ObserveRecoveryDeps): ConfigHealthState {
   return readConfigHealthStateFromStore(deps);
+=======
+  try {
+    const raw = await deps.fs.promises.readFile(
+      resolveConfigHealthStatePath(deps.env, deps.homedir),
+      "utf-8",
+    );
+    const parsed = deps.json5.parse(raw);
+    return isRecord(parsed) ? (parsed as ConfigHealthState) : {};
+  } catch {
+    return {};
+  }
+}
+
+function readConfigHealthStateSync(deps: ObserveRecoveryDeps): ConfigHealthState {
+  try {
+    const raw = deps.fs.readFileSync(resolveConfigHealthStatePath(deps.env, deps.homedir), "utf-8");
+    const parsed = deps.json5.parse(raw);
+    return isRecord(parsed) ? (parsed as ConfigHealthState) : {};
+  } catch {
+    return {};
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function writeConfigHealthState(
   deps: ObserveRecoveryDeps,
   state: ConfigHealthState,
 ): Promise<void> {
+<<<<<<< HEAD
   writeConfigHealthStateToStore(deps, state);
 }
 
 function writeConfigHealthStateSync(deps: ObserveRecoveryDeps, state: ConfigHealthState): void {
   writeConfigHealthStateToStore(deps, state);
+=======
+  const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
+  try {
+    await deps.fs.promises.mkdir(path.dirname(healthPath), { recursive: true, mode: 0o700 });
+    await deps.fs.promises.writeFile(healthPath, `${JSON.stringify(state, null, 2)}\n`, {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
+  } catch (err) {
+    deps.logger.warn(
+      `Config health-state write failed: ${healthPath}: ${formatObserveRecoveryError(err)}`,
+    );
+  }
+}
+
+function writeConfigHealthStateSync(deps: ObserveRecoveryDeps, state: ConfigHealthState): void {
+  const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
+  try {
+    deps.fs.mkdirSync(path.dirname(healthPath), { recursive: true, mode: 0o700 });
+    deps.fs.writeFileSync(healthPath, `${JSON.stringify(state, null, 2)}\n`, {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
+  } catch (err) {
+    deps.logger.warn(
+      `Config health-state write failed: ${healthPath}: ${formatObserveRecoveryError(err)}`,
+    );
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function parseBackupConfigRaw(

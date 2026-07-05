@@ -50,3 +50,20 @@ export function mapVoiceToPolly(voice: string | undefined): string {
   // Map OpenAI voices to Polly equivalents
   return OPENAI_TO_POLLY_MAP[normalizeLowercaseStringOrEmpty(voice)] || DEFAULT_POLLY_VOICE;
 }
+<<<<<<< HEAD
+=======
+
+/**
+ * Check if a voice name is a known OpenAI voice.
+ */
+export function isOpenAiVoice(voice: string): boolean {
+  return normalizeLowercaseStringOrEmpty(voice) in OPENAI_TO_POLLY_MAP;
+}
+
+/**
+ * Get all supported OpenAI voice names.
+ */
+export function getOpenAiVoiceNames(): string[] {
+  return Object.keys(OPENAI_TO_POLLY_MAP);
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

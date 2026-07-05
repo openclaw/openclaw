@@ -1242,6 +1242,10 @@ vi.mock("./doctor/shared/preview-warnings.js", () => {
         warningNotes: await collectWarnings(params),
       };
     }),
+<<<<<<< HEAD
+=======
+    collectDoctorPreviewWarnings: vi.fn(collectWarnings),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   };
 });
 

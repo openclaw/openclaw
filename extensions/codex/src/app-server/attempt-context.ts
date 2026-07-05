@@ -78,6 +78,7 @@ type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
 };
 
 /** Reads mirrored Codex session history for harness hooks. */
+<<<<<<< HEAD
 export async function readMirroredSessionHistoryMessages(params: {
   agentId?: string;
   sessionFile: string;
@@ -88,6 +89,15 @@ export async function readMirroredSessionHistoryMessages(params: {
   if (!messages) {
     embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
       sessionFile: params.sessionFile,
+=======
+export async function readMirroredSessionHistoryMessages(
+  sessionFile: string,
+): Promise<AgentMessage[] | undefined> {
+  const messages = await readCodexMirroredSessionHistoryMessages(sessionFile);
+  if (!messages) {
+    embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
+      sessionFile,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   }
   return messages;
@@ -589,6 +599,7 @@ export function prependCodexOpenClawPromptContext(
   return [context?.trim(), deliverySection, promptSection].filter(Boolean).join("\n\n");
 }
 
+<<<<<<< HEAD
 /**
  * Maps the surviving user-request portion of an input range after delivery
  * metadata has been relocated before the request.
@@ -634,6 +645,8 @@ export function resolveCodexDeliveryHintPreservedInputRange(params: {
   };
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function splitLeadingCodexDeliveryHint(prompt: string): {
   deliveryHint?: string;
   prompt: string;
@@ -902,6 +915,14 @@ function renderCodexMemoryToolSearchBridge(toolNames: readonly string[]): string
   return `Codex may expose ${memoryToolNames.join(" and ")} as deferred tools. When the memory guidance above calls for memory recall, use an already-loaded memory tool directly. If the needed memory tool is deferred and not currently callable, use \`tool_search\` to load it, then call that memory tool.`;
 }
 
+<<<<<<< HEAD
+=======
+/** Returns whether the current dynamic tool list can serve workspace memory. */
+export function hasCodexWorkspaceMemoryTools(tools: readonly CodexDynamicToolSpec[]): boolean {
+  return getCodexWorkspaceMemoryToolNames(tools).length > 0;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Lists available memory tool names understood by Codex workspace memory routing. */
 export function getCodexWorkspaceMemoryToolNames(tools: readonly CodexDynamicToolSpec[]): string[] {
   const availableToolNames = new Set(

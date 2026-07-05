@@ -214,11 +214,17 @@ describe("qa cli registration", () => {
       "--qa-profile",
       "smoke-ci",
       "--surface",
+<<<<<<< HEAD
       "channel-framework",
       "--category",
       "channel-framework.conversation-routing-and-delivery",
       "--scenario",
       "dm-chat-baseline",
+=======
+      "agent-runtime-and-provider-execution",
+      "--category",
+      "agent-runtime-and-provider-execution.agent-turn-execution",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       "--evidence-mode",
       "slim",
       "--transport",
@@ -239,9 +245,14 @@ describe("qa cli registration", () => {
       repoRoot: "/tmp/openclaw-repo",
       outputDir: ".artifacts/qa-e2e/smoke-ci",
       profile: "smoke-ci",
+<<<<<<< HEAD
       surface: "channel-framework",
       category: "channel-framework.conversation-routing-and-delivery",
       scenarioIds: ["dm-chat-baseline"],
+=======
+      surface: "agent-runtime-and-provider-execution",
+      category: "agent-runtime-and-provider-execution.agent-turn-execution",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       evidenceMode: "slim",
       transportId: "qa-channel",
       providerMode: "mock-openai",
@@ -257,8 +268,12 @@ describe("qa cli registration", () => {
   it.each([
     ["--output-dir", [".artifacts/qa-e2e/smoke-ci"]],
     ["--surface", ["agent-runtime-and-provider-execution"]],
+<<<<<<< HEAD
     ["--category", ["channel-framework.conversation-routing-and-delivery"]],
     ["--scenario", ["dm-chat-baseline"]],
+=======
+    ["--category", ["agent-runtime-and-provider-execution.agent-turn-execution"]],
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ["--evidence-mode", ["slim"]],
     ["--exclude-test-execution-evidence", []],
     ["--transport", ["qa-channel"]],
@@ -800,6 +815,7 @@ describe("qa cli registration", () => {
     await expect(invalidProgram.parseAsync(["node", "openclaw", ...args])).rejects.toThrow(message);
   });
 
+<<<<<<< HEAD
   it.each([
     [["qa", "ui", "--port", "65536"], "--port must be a TCP port between 1 and 65535."],
     [
@@ -827,6 +843,8 @@ describe("qa cli registration", () => {
     await expect(invalidProgram.parseAsync(["node", "openclaw", ...args])).rejects.toThrow(message);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("shows an enable hint when a discovered runner plugin is installed but blocked", async () => {
     listQaRunnerCliContributions.mockReset().mockReturnValue([createBlockedQaRunnerContribution()]);
     const blockedProgram = new Command();

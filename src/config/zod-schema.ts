@@ -392,9 +392,13 @@ const McpServerSchema = z
     cwd: z.string().optional(),
     workingDirectory: z.string().optional(),
     url: HttpUrlSchema.optional(),
+<<<<<<< HEAD
     transport: z
       .union([z.literal("stdio"), z.literal("sse"), z.literal("streamable-http")])
       .optional(),
+=======
+    transport: z.union([z.literal("sse"), z.literal("streamable-http")]).optional(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     headers: z
       .record(
         z.string(),
@@ -447,6 +451,7 @@ const McpServerSchema = z
       .strict()
       .optional(),
   })
+<<<<<<< HEAD
   .superRefine((data, ctx) => {
     // transport "stdio" requires a non-empty command — URL-only servers must use "sse" or "streamable-http"
     if (
@@ -460,6 +465,8 @@ const McpServerSchema = z
       });
     }
   })
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   .catchall(z.unknown());
 
 const McpConfigSchema = z
@@ -562,9 +569,12 @@ export const OpenClawSchema = z
             traces: z.boolean().optional(),
             metrics: z.boolean().optional(),
             logs: z.boolean().optional(),
+<<<<<<< HEAD
             logsExporter: z
               .union([z.literal("otlp"), z.literal("stdout"), z.literal("both")])
               .optional(),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             sampleRate: z.number().min(0).max(1).optional(),
             flushIntervalMs: z.number().int().nonnegative().optional(),
             captureContent: z
@@ -1123,6 +1133,7 @@ export const OpenClawSchema = z
           .object({
             enabled: z.boolean().optional(),
             autoGenerate: z.boolean().optional(),
+<<<<<<< HEAD
             // Reject blank values without transforming the string. Trimming here would
             // silently rewrite a legitimate filesystem path that contains leading or
             // trailing spaces and persist the trimmed value into validated config;
@@ -1135,6 +1146,10 @@ export const OpenClawSchema = z
               .string()
               .optional()
               .refine((v) => v === undefined || v.trim().length > 0, "keyPath must not be blank"),
+=======
+            certPath: z.string().optional(),
+            keyPath: z.string().optional(),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             caPath: z.string().optional(),
           })
           .optional(),

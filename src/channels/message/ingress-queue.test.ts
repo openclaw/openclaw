@@ -9,7 +9,11 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+<<<<<<< HEAD
 import { createChannelIngressQueue, createStateDirEnv } from "./ingress-queue.js";
+=======
+import { createChannelIngressQueue } from "./ingress-queue.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 type ChannelIngressTestDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
 
@@ -28,6 +32,7 @@ describe("channel ingress queue", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
+<<<<<<< HEAD
   it("opens a custom state database without copying the full process env", async () => {
     const baseEnv: NodeJS.ProcessEnv = {
       HOME: "/home/openclaw",
@@ -55,6 +60,8 @@ describe("channel ingress queue", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("deduplicates pending and completed ingress events", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueue<
@@ -277,6 +284,7 @@ describe("channel ingress queue", () => {
     });
   });
 
+<<<<<<< HEAD
   it("refreshes claimed rows only with the active claim token", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueue<{ text: string }>({
@@ -376,6 +384,8 @@ describe("channel ingress queue", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("recovers stale claims and prunes completed or failed rows", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueue<{ text: string }>({
@@ -410,7 +420,11 @@ describe("channel ingress queue", () => {
       await queue.complete("retry", { completedAt: 27 });
 
       const database = openOpenClawStateDatabase({
+<<<<<<< HEAD
         env: createStateDirEnv(stateDir),
+=======
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       });
       const kysely = getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db);
       const rows = executeSqliteQuerySync(

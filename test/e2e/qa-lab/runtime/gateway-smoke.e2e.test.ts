@@ -1,5 +1,8 @@
 // Gateway Smoke tests cover QA Lab gateway smoke evidence.
+<<<<<<< HEAD
 import { spawnSync } from "node:child_process";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
@@ -164,6 +167,7 @@ describe("gateway-smoke", () => {
     };
   }
 
+<<<<<<< HEAD
   it("prints CLI help without connecting", () => {
     const result = spawnSync(
       process.execPath,
@@ -250,6 +254,8 @@ describe("gateway-smoke", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("passes against a loopback gateway websocket using the real client", async () => {
     const stdout: string[] = [];
     const stderr: string[] = [];

@@ -5,7 +5,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
+<<<<<<< HEAD
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+=======
+import { captureEnv } from "../test-utils/env.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import {
   writeBundleProbeMcpServer,
   writeClaudeBundle,
@@ -70,11 +74,19 @@ async function createBundleMcpFixture(params: {
     "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY",
   ]);
   const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), params.tempPrefix));
+<<<<<<< HEAD
   setTestEnvValue("HOME", tempHome);
   setTestEnvValue("USERPROFILE", tempHome);
   deleteTestEnvValue("OPENCLAW_HOME");
   deleteTestEnvValue("OPENCLAW_STATE_DIR");
   setTestEnvValue("OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY", "1");
+=======
+  process.env.HOME = tempHome;
+  process.env.USERPROFILE = tempHome;
+  delete process.env.OPENCLAW_HOME;
+  delete process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY = "1";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   const workspaceDir = path.join(tempHome, "workspace");
   const sessionFile = path.join(tempHome, "session.jsonl");

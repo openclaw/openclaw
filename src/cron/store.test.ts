@@ -7,12 +7,20 @@ import {
   archiveLegacyCronStoreForMigration,
   loadLegacyCronStoreForMigration,
 } from "../commands/doctor/cron/legacy-store-migration.js";
+<<<<<<< HEAD
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   loadCronJobsStoreWithConfigJobs,
   loadCronJobsStoreSync,
   loadCronQuarantineFile,
   loadCronStore,
+=======
+import {
+  loadCronJobsStoreWithConfigJobs,
+  loadCronQuarantineFile,
+  loadCronStore,
+  loadCronStoreSync,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveCronQuarantinePath,
   resolveCronStorePath,
   saveCronQuarantineFile,
@@ -80,6 +88,7 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 }
 
 describe("resolveCronStorePath", () => {
+<<<<<<< HEAD
   const envSnapshot = captureEnv(["OPENCLAW_HOME", "HOME"]);
 
   afterEach(() => {
@@ -89,6 +98,15 @@ describe("resolveCronStorePath", () => {
   it("uses OPENCLAW_HOME for tilde expansion", () => {
     setTestEnvValue("OPENCLAW_HOME", "/srv/openclaw-home");
     setTestEnvValue("HOME", "/home/other");
+=======
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("uses OPENCLAW_HOME for tilde expansion", () => {
+    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+    vi.stubEnv("HOME", "/home/other");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     const result = resolveCronStorePath("~/cron/jobs.json");
     expect(result).toBe(path.resolve("/srv/openclaw-home", "cron", "jobs.json"));
@@ -169,7 +187,11 @@ describe("cron store", () => {
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
     await fs.writeFile(store.storePath, JSON.stringify([job], null, 2), "utf-8");
 
+<<<<<<< HEAD
     const loaded = loadCronJobsStoreSync(store.storePath);
+=======
+    const loaded = loadCronStoreSync(store.storePath);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(loaded.jobs).toHaveLength(0);
   });
@@ -269,7 +291,11 @@ describe("cron store", () => {
       "utf-8",
     );
 
+<<<<<<< HEAD
     const loaded = loadCronJobsStoreSync(store.storePath);
+=======
+    const loaded = loadCronStoreSync(store.storePath);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(loaded.jobs.map((job) => job.id)).toEqual([]);
     expect(await fs.stat(store.storePath)).toBeTruthy();
@@ -319,7 +345,11 @@ describe("cron store", () => {
     const { storePath } = await makeStorePath();
     await saveCronStore(storePath, makeStore("job-sync", true));
 
+<<<<<<< HEAD
     const loaded = loadCronJobsStoreSync(storePath);
+=======
+    const loaded = loadCronStoreSync(storePath);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(loaded.jobs).toHaveLength(1);
     expect(loaded.jobs[0]?.id).toBe("job-sync");
@@ -525,6 +555,7 @@ describe("cron store", () => {
     });
   });
 
+<<<<<<< HEAD
   it("round-trips the toolsAllow default-cap flag through SQLite", async () => {
     // The flag must survive a gateway restart: without it, a CLI-resolved run
     // would re-hit the prepare.ts toolsAllow rejection after reload (#91499).
@@ -567,6 +598,8 @@ describe("cron store", () => {
     expect(reloaded && "toolsAllowIsDefault" in reloaded).toBe(false);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("round-trips command payloads through SQLite", async () => {
     const store = await makeStorePath();
     const payload = makeStore("command-job", true);
@@ -727,7 +760,11 @@ describe("cron store", () => {
       "utf-8",
     );
 
+<<<<<<< HEAD
     const loaded = loadCronJobsStoreSync(storePath);
+=======
+    const loaded = loadCronStoreSync(storePath);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(loaded.jobs).toEqual([]);
   });

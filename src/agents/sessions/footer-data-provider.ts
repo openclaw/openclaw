@@ -107,6 +107,10 @@ function resolveBranchWithGitAsync(repoDir: string): Promise<string | null> {
  * Token stats, model info available via ctx.sessionManager and ctx.model.
  */
 class FooterDataProvider {
+<<<<<<< HEAD
+=======
+  private cwd: string;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   private static readonly WATCH_DEBOUNCE_MS = 500;
 
   private extensionStatuses = new Map<string, string>();
@@ -125,6 +129,10 @@ class FooterDataProvider {
   private disposed = false;
 
   constructor(cwd: string) {
+<<<<<<< HEAD
+=======
+    this.cwd = cwd;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     this.gitPaths = findGitPaths(cwd);
     this.setupGitWatcher();
   }
@@ -157,6 +165,14 @@ class FooterDataProvider {
     }
   }
 
+<<<<<<< HEAD
+=======
+  /** Internal: clear extension statuses */
+  clearExtensionStatuses(): void {
+    this.extensionStatuses.clear();
+  }
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /** Number of unique providers with available models (for footer display) */
   getAvailableProviderCount(): number {
     return this.availableProviderCount;
@@ -167,6 +183,26 @@ class FooterDataProvider {
     this.availableProviderCount = count;
   }
 
+<<<<<<< HEAD
+=======
+  setCwd(cwd: string): void {
+    if (this.cwd === cwd) {
+      return;
+    }
+
+    this.cwd = cwd;
+    if (this.refreshTimer) {
+      clearTimeout(this.refreshTimer);
+      this.refreshTimer = null;
+    }
+    this.clearGitWatchers();
+    this.cachedBranch = undefined;
+    this.gitPaths = findGitPaths(cwd);
+    this.setupGitWatcher();
+    this.notifyBranchChange();
+  }
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   /** Internal: cleanup */
   dispose(): void {
     this.disposed = true;

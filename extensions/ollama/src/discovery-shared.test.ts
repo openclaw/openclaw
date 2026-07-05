@@ -1,4 +1,5 @@
 // Ollama tests cover discovery shared plugin behavior.
+<<<<<<< HEAD
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it } from "vitest";
 import {
@@ -6,6 +7,10 @@ import {
   isLocalOllamaBaseUrl,
   resolveOllamaDiscoveryResult,
 } from "./discovery-shared.js";
+=======
+import { describe, expect, it } from "vitest";
+import { isLocalOllamaBaseUrl } from "./discovery-shared.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("isLocalOllamaBaseUrl", () => {
   it.each([
@@ -45,6 +50,7 @@ describe("isLocalOllamaBaseUrl", () => {
     expect(isLocalOllamaBaseUrl(baseUrl)).toBe(false);
   });
 });
+<<<<<<< HEAD
 
 describe("isHostedOllamaCloud", () => {
   it.each([
@@ -234,3 +240,5 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
     expect(result).not.toBeNull();
   });
 });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

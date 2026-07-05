@@ -6,7 +6,10 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+<<<<<<< HEAD
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { updateSessionStoreEntry } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
@@ -23,8 +26,11 @@ import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
   readLatestAssistantTextFromSessionTranscript,
+<<<<<<< HEAD
   readRecentUserAssistantTextForSession,
   readRecentUserAssistantTextFromSessionTranscript,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   readTailAssistantTextFromSessionTranscript,
 } from "./transcript.js";
 
@@ -119,6 +125,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     return event;
   }
 
+<<<<<<< HEAD
   it("uses configured session.store when storePath is omitted", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-config-store-"));
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -228,6 +235,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("creates transcript file and appends message for valid session", async () => {
     writeTranscriptStore();
 
@@ -668,6 +677,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
+<<<<<<< HEAD
   it("reads bounded recent user and assistant text before the current turn", async () => {
     writeTranscriptStore();
     const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
@@ -836,6 +846,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("skips transcript-only OpenClaw assistant entries when reading latest assistant text", async () => {
     writeTranscriptStore();
 
@@ -1475,6 +1487,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
+<<<<<<< HEAD
   it("uses a reverse tail scan for modern parent-linked appends", async () => {
     const sessionFile = resolveSessionTranscriptPathInDir(
       "tail-scan-session",
@@ -1497,6 +1510,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("separates message and event appends from an unterminated transcript entry", async () => {
     const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
     fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
@@ -1863,6 +1878,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     ).toEqual([activeEntry.id, nextUser.messageId]);
   });
 
+<<<<<<< HEAD
   it("preserves a side append cursor when metadata follows its leaf control", async () => {
     const sessionFile = resolveSessionTranscriptPathInDir(
       "side-append-mode-with-trailing-metadata-transcript-session",
@@ -1944,6 +1960,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("ignores dangling leaf references when choosing the direct append parent", async () => {
     const sessionFile = resolveSessionTranscriptPathInDir(
       "invalid-leaf-append-parent-transcript-session",

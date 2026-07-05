@@ -74,11 +74,14 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Attach",
       detailKeys: ["path", "url", "fileName"],
     },
+<<<<<<< HEAD
     api: {
       emoji: "🌐",
       title: "API",
       detailKeys: ["url", "endpoint", "path", "method", "name"],
     },
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     browser: {
       emoji: "🌐",
       title: "Browser",

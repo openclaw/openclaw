@@ -9,6 +9,7 @@ export type ClawHubPluginInstallRecordFields = {
   clawhubPackage: string;
   clawhubFamily: Exclude<ClawHubPackageFamily, "skill">;
   clawhubChannel?: ClawHubPackageChannel;
+<<<<<<< HEAD
   clawhubTrustDisposition?: "clean" | "review-recommended" | "review-required" | "blocked";
   clawhubTrustScanStatus?: string;
   clawhubTrustModerationState?: string;
@@ -17,6 +18,8 @@ export type ClawHubPluginInstallRecordFields = {
   clawhubTrustStale?: boolean;
   clawhubTrustCheckedAt?: string;
   clawhubTrustAcknowledgedAt?: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   version?: string;
   integrity?: string;
   resolvedAt?: string;
@@ -42,6 +45,7 @@ export function buildClawHubPluginInstallRecordFields(
   | "clawhubPackage"
   | "clawhubFamily"
   | "clawhubChannel"
+<<<<<<< HEAD
   | "clawhubTrustDisposition"
   | "clawhubTrustScanStatus"
   | "clawhubTrustModerationState"
@@ -50,6 +54,8 @@ export function buildClawHubPluginInstallRecordFields(
   | "clawhubTrustStale"
   | "clawhubTrustCheckedAt"
   | "clawhubTrustAcknowledgedAt"
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   | "version"
   | "integrity"
   | "resolvedAt"
@@ -70,6 +76,7 @@ export function buildClawHubPluginInstallRecordFields(
     clawhubPackage: fields.clawhubPackage,
     clawhubFamily: fields.clawhubFamily,
     ...(fields.clawhubChannel ? { clawhubChannel: fields.clawhubChannel } : {}),
+<<<<<<< HEAD
     ...(fields.clawhubTrustDisposition
       ? { clawhubTrustDisposition: fields.clawhubTrustDisposition }
       : {}),
@@ -92,6 +99,8 @@ export function buildClawHubPluginInstallRecordFields(
     ...(fields.clawhubTrustAcknowledgedAt
       ? { clawhubTrustAcknowledgedAt: fields.clawhubTrustAcknowledgedAt }
       : {}),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ...(fields.version ? { version: fields.version } : {}),
     ...(fields.integrity ? { integrity: fields.integrity } : {}),
     ...(fields.resolvedAt ? { resolvedAt: fields.resolvedAt } : {}),

@@ -9,12 +9,15 @@ import type {
   ChannelMessageUnknownSendReconciliationResult,
 } from "../../channels/message/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+<<<<<<< HEAD
 import {
   claimRecoveryEntry as claimSharedRecoveryEntry,
   computeBackoffMs,
   getErrnoCode,
   releaseRecoveryEntry as releaseSharedRecoveryEntry,
 } from "../delivery-recovery.shared.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
@@ -32,8 +35,11 @@ import {
   type QueuedDeliveryPayload,
 } from "./delivery-queue-storage.js";
 
+<<<<<<< HEAD
 export { computeBackoffMs };
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type RecoverySummary = {
   recovered: number;
   failed: number;
@@ -69,6 +75,17 @@ export type ActiveDeliveryClaimResult<T> =
 
 const MAX_RETRIES = 5;
 
+<<<<<<< HEAD
+=======
+/** Backoff delays in milliseconds indexed by retry count (1-based). */
+const BACKOFF_MS: readonly number[] = [
+  5_000, // retry 1: 5s
+  25_000, // retry 2: 25s
+  120_000, // retry 3: 2m
+  600_000, // retry 4: 10m
+];
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /no conversation reference found/i,
   /chat not found/i,
@@ -97,6 +114,15 @@ function resolveRecoveryDeadlineMs(maxRecoveryMs: number | undefined): number {
   return resolveExpiresAtMsFromDurationMs(durationMs) ?? resolveDateTimestampMs(Date.now());
 }
 
+<<<<<<< HEAD
+=======
+function getErrnoCode(err: unknown): string | null {
+  return err && typeof err === "object" && "code" in err
+    ? String((err as { code?: unknown }).code)
+    : null;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function createEmptyRecoverySummary(): RecoverySummary {
   return {
     recovered: 0,
@@ -106,18 +132,41 @@ function createEmptyRecoverySummary(): RecoverySummary {
   };
 }
 
+<<<<<<< HEAD
+=======
+function claimRecoveryEntry(entryId: string): boolean {
+  if (entriesInProgress.has(entryId)) {
+    return false;
+  }
+  entriesInProgress.add(entryId);
+  return true;
+}
+
+function releaseRecoveryEntry(entryId: string): void {
+  entriesInProgress.delete(entryId);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function withActiveDeliveryClaim<T>(
   entryId: string,
   fn: () => Promise<T>,
 ): Promise<ActiveDeliveryClaimResult<T>> {
+<<<<<<< HEAD
   if (!claimSharedRecoveryEntry(entriesInProgress, entryId)) {
+=======
+  if (!claimRecoveryEntry(entryId)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return { status: "claimed-by-other-owner" };
   }
 
   try {
     return { status: "claimed", value: await fn() };
   } finally {
+<<<<<<< HEAD
     releaseSharedRecoveryEntry(entriesInProgress, entryId);
+=======
+    releaseRecoveryEntry(entryId);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 
@@ -308,6 +357,17 @@ async function moveEntryToFailedWithLogging(
   }
 }
 
+<<<<<<< HEAD
+=======
+/** Compute the backoff delay in ms for a given retry count. */
+export function computeBackoffMs(retryCount: number): number {
+  if (retryCount <= 0) {
+    return 0;
+  }
+  return BACKOFF_MS[Math.min(retryCount - 1, BACKOFF_MS.length - 1)] ?? BACKOFF_MS.at(-1) ?? 0;
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function isEntryEligibleForRecoveryRetry(
   entry: QueuedDelivery,
   now: number,
@@ -389,19 +449,30 @@ async function drainQueuedEntry(opts: {
         return "failed";
       }
     }
+<<<<<<< HEAD
     const reconciliationProvedPreSendFailure =
       reconciliation?.status === "not_sent" && entry.recoveryState === "send_attempt_started";
     if (reconciliationProvedPreSendFailure) {
+=======
+    if (reconciliation?.status === "not_sent") {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       opts.log.info(
         `Delivery entry ${entry.id} reconciled ${entry.recoveryState} as not sent; replaying`,
       );
     } else {
+<<<<<<< HEAD
       let errMsg = `delivery state is ${entry.recoveryState}; refusing blind replay without adapter reconciliation`;
       if (reconciliation?.status === "not_sent") {
         errMsg = `delivery state is ${entry.recoveryState}; refusing full replay after post-send evidence`;
       } else if (reconciliation?.status === "unresolved" && reconciliation.error) {
         errMsg = `delivery state is ${entry.recoveryState} and reconciliation is unresolved: ${reconciliation.error}`;
       }
+=======
+      const errMsg =
+        reconciliation?.status === "unresolved" && reconciliation.error
+          ? `delivery state is ${entry.recoveryState} and reconciliation is unresolved: ${reconciliation.error}`
+          : `delivery state is ${entry.recoveryState}; refusing blind replay without adapter reconciliation`;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       opts.log.warn(`Delivery entry ${entry.id} ${errMsg}`);
       opts.onFailed?.(entry, errMsg);
       if (reconciliation?.status === "unresolved" && reconciliation.retryable === true) {
@@ -491,7 +562,11 @@ export async function drainPendingDeliveries(opts: {
     );
 
     for (const entry of matchingEntries) {
+<<<<<<< HEAD
       if (!claimSharedRecoveryEntry(entriesInProgress, entry.id)) {
+=======
+      if (!claimRecoveryEntry(entry.id)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         opts.log.info(`${opts.logLabel}: entry ${entry.id} is already being recovered`);
         continue;
       }
@@ -560,7 +635,11 @@ export async function drainPendingDeliveries(opts: {
           );
         }
       } finally {
+<<<<<<< HEAD
         releaseSharedRecoveryEntry(entriesInProgress, entry.id);
+=======
+        releaseRecoveryEntry(entry.id);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     }
   } finally {
@@ -600,7 +679,11 @@ export async function recoverPendingDeliveries(opts: {
       break;
     }
 
+<<<<<<< HEAD
     if (!claimSharedRecoveryEntry(entriesInProgress, entry.id)) {
+=======
+    if (!claimRecoveryEntry(entry.id)) {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       opts.log.info(`Recovery skipped for delivery ${entry.id}: already being processed`);
       continue;
     }
@@ -655,7 +738,11 @@ export async function recoverPendingDeliveries(opts: {
         continue;
       }
     } finally {
+<<<<<<< HEAD
       releaseSharedRecoveryEntry(entriesInProgress, entry.id);
+=======
+      releaseRecoveryEntry(entry.id);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   }
 

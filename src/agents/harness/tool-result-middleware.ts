@@ -11,12 +11,15 @@ import type {
 } from "../../plugins/agent-tool-result-middleware-types.js";
 import { createLazyPromiseLoader } from "../../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../../utils.js";
+<<<<<<< HEAD
 import {
   hasMessagingDeliveryReceipt,
   isDeliveredMessagingToolResult,
 } from "../embedded-agent-message-tool-source-reply.js";
 import { isMessagingToolSendAction } from "../embedded-agent-messaging.js";
 import { isToolResultError } from "../tool-result-error.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const log = createSubsystemLogger("agents/harness");
 const MAX_MIDDLEWARE_CONTENT_BLOCKS = 200;
@@ -435,6 +438,7 @@ function buildMiddlewareFailureResult(): OpenClawAgentToolResult {
   };
 }
 
+<<<<<<< HEAD
 function buildDeliveredMessagingFailureFallback(
   event: AgentToolResultMiddlewareEvent,
   result: OpenClawAgentToolResult,
@@ -471,6 +475,8 @@ function reconcileDeliveredMessagingFailure(
     : result;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function createAgentToolResultMiddlewareRunner(
   ctx: AgentToolResultMiddlewareContext,
   handlers?: AgentToolResultMiddleware[],
@@ -503,12 +509,15 @@ export function createAgentToolResultMiddlewareRunner(
       if (handlersForRun.length === 0) {
         return event.result;
       }
+<<<<<<< HEAD
       // Snapshot the confirmed side effect before legacy middleware can mutate
       // or sanitization can collapse the receipt; never expose the raw result.
       const deliveredMessagingFallback = buildDeliveredMessagingFailureFallback(
         event,
         event.result,
       );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       let current = sanitizeToolResultForMiddleware(event.result);
       for (const handler of handlersForRun) {
         try {
@@ -527,10 +536,14 @@ export function createAgentToolResultMiddlewareRunner(
                 120,
               )}`,
             );
+<<<<<<< HEAD
             return reconcileDeliveredMessagingFailure(
               buildMiddlewareFailureResult(),
               deliveredMessagingFallback,
             );
+=======
+            return buildMiddlewareFailureResult();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           }
         } catch {
           log.warn(
@@ -539,6 +552,7 @@ export function createAgentToolResultMiddlewareRunner(
               120,
             )}`,
           );
+<<<<<<< HEAD
           return reconcileDeliveredMessagingFailure(
             buildMiddlewareFailureResult(),
             deliveredMessagingFallback,
@@ -546,6 +560,12 @@ export function createAgentToolResultMiddlewareRunner(
         }
       }
       return reconcileDeliveredMessagingFailure(current, deliveredMessagingFallback);
+=======
+          return buildMiddlewareFailureResult();
+        }
+      }
+      return current;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     },
   };
 }

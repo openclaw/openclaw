@@ -316,6 +316,7 @@ describe("gateway-status local target scheme", () => {
     const hints = buildNetworkHints(cfg as never);
     expect(hints.localLoopbackUrl).toBe("wss://127.0.0.1:18789");
   });
+<<<<<<< HEAD
 
   it("uses a local port override for loopback targets and network hints", () => {
     const cfg = {
@@ -382,6 +383,8 @@ describe("gateway-status local target scheme", () => {
       },
     ]);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("resolveProbeBudgetMs", () => {
@@ -436,20 +439,29 @@ describe("resolveProbeBudgetMs", () => {
     ).toBe(2_500);
   });
 
+<<<<<<< HEAD
   it("lets active remote probes use the full caller budget", () => {
+=======
+  it("keeps non-local probe caps unchanged", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(
       resolveProbeBudgetMs(15_000, {
         kind: "configRemote",
         active: true,
         url: "wss://gateway.example/ws",
       }),
+<<<<<<< HEAD
     ).toBe(15_000);
+=======
+    ).toBe(1500);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(
       resolveProbeBudgetMs(15_000, {
         kind: "explicit",
         active: true,
         url: "wss://gateway.example/ws",
       }),
+<<<<<<< HEAD
     ).toBe(15_000);
   });
 
@@ -460,6 +472,8 @@ describe("resolveProbeBudgetMs", () => {
         active: false,
         url: "wss://gateway.example/ws",
       }),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ).toBe(1500);
     expect(
       resolveProbeBudgetMs(15_000, {

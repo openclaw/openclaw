@@ -90,10 +90,15 @@ export function mergeTelegramAccountConfig(
     baseAllowFrom: base.allowFrom,
     accountAllowFrom: account.allowFrom,
   });
+<<<<<<< HEAD
   const capabilities =
     Array.isArray(account.capabilities) && account.capabilities.length === 0
       ? base.capabilities
       : (account.capabilities ?? base.capabilities);
 
   return { ...base, ...account, allowFrom, capabilities, groups };
+=======
+
+  return { ...base, ...account, allowFrom, groups };
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }

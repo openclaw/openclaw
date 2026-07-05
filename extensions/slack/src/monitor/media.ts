@@ -104,12 +104,15 @@ function resolveSlackFetchForRuntime(): typeof fetch {
   return isMockedFetch(globalThis.fetch) ? globalThis.fetch : fetchWithRuntimeDispatcher;
 }
 
+<<<<<<< HEAD
 async function cancelUnreadResponseBody(response: Response): Promise<void> {
   if (!response.bodyUsed) {
     await response.body?.cancel().catch(() => undefined);
   }
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /**
  * Fetches a URL with Authorization header while keeping same-origin redirects
  * authenticated and dropping auth once the redirect crosses origins.
@@ -142,7 +145,10 @@ export async function fetchWithSlackAuth(url: string, token: string): Promise<Re
   if (resolvedUrl.protocol !== "https:") {
     return initialRes;
   }
+<<<<<<< HEAD
   await cancelUnreadResponseBody(initialRes);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (resolvedUrl.origin === parsed.origin) {
     return fetchImpl(resolvedUrl.toString(), {
       headers: authHeaders,

@@ -23,7 +23,11 @@ let resolveTelegramNativeCommandDisableBlockStreaming: typeof import("./bot-nati
 
 type CommandBotHarness = ReturnType<typeof createCommandBot>;
 type TelegramInlineKeyboardReplyMarkup = {
+<<<<<<< HEAD
   inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>>;
+=======
+  inline_keyboard?: Array<Array<{ callback_data?: string }>>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 type PlugCommandHarnessParams = {
   botHarness?: CommandBotHarness;
@@ -386,6 +390,7 @@ describe("registerTelegramNativeCommands", () => {
 
   it("prefixes native command menu callback data so callback handlers can preserve native routing", async () => {
     const { bot, commandHandlers, sendMessage } = createCommandBot();
+<<<<<<< HEAD
     const cfg = {
       agents: {
         defaults: {
@@ -401,6 +406,11 @@ describe("registerTelegramNativeCommands", () => {
 
     registerTelegramNativeCommands({
       ...createNativeCommandTestParams(cfg, { bot, allowFrom: [200] }),
+=======
+
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams({}, { bot, allowFrom: [200] }),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
 
     const handler = commandHandlers.get("fast");
@@ -411,6 +421,7 @@ describe("registerTelegramNativeCommands", () => {
 
     const replyMarkup = (firstCall(sendMessage)[2] as { reply_markup?: unknown } | undefined)
       ?.reply_markup as TelegramInlineKeyboardReplyMarkup | undefined;
+<<<<<<< HEAD
     expect(firstCall(sendMessage)[1]).toContain(
       "Current fast mode: auto (30 sec) (default: model).\nOptions: on, off, auto (30 sec), default, status.",
     );
@@ -429,6 +440,17 @@ describe("registerTelegramNativeCommands", () => {
     expect(labels).toEqual(["on", "off", "auto (30 sec)", "default", "status"]);
     expect(parseTelegramNativeCommandCallbackData("tgcmd:/fast status")).toBe("/fast status");
     expect(parseTelegramNativeCommandCallbackData("tgcmd:/fast auto")).toBe("/fast auto");
+=======
+    const callbackData = collectCallbackData(replyMarkup);
+
+    expect(callbackData).toEqual([
+      "tgcmd:/fast status",
+      "tgcmd:/fast on",
+      "tgcmd:/fast off",
+      "tgcmd:/fast default",
+    ]);
+    expect(parseTelegramNativeCommandCallbackData("tgcmd:/fast status")).toBe("/fast status");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(parseTelegramNativeCommandCallbackData("tgcmd:/fast default")).toBe("/fast default");
     expect(parseTelegramNativeCommandCallbackData("tgcmd:fast status")).toBeNull();
   });

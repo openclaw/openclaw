@@ -12,18 +12,32 @@ import { dispatchAssembledChannelTurn } from "../channels/turn/kernel.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
+<<<<<<< HEAD
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
+=======
+import { formatErrorMessage } from "../infra/errors.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "../infra/outbound/delivery-queue.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
+<<<<<<< HEAD
   clearRestartSentinel,
   finalizeUpdateRestartSentinelRunningVersion,
   formatRestartSentinelMessage,
   readRestartSentinel,
   type RestartSentinelContinuation,
   type RestartSentinelPayload,
+=======
+  finalizeUpdateRestartSentinelRunningVersion,
+  formatRestartSentinelMessage,
+  readRestartSentinel,
+  removeRestartSentinelFile,
+  type RestartSentinelContinuation,
+  type RestartSentinelPayload,
+  resolveRestartSentinelPath,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   summarizeRestartSentinel,
 } from "../infra/restart-sentinel.js";
 import {
@@ -352,7 +366,11 @@ async function deliverQueuedSessionDelivery(params: {
     },
   });
   if (dispatchError) {
+<<<<<<< HEAD
     throw toErrorObject(dispatchError, "Non-Error thrown");
+=======
+    throw toLintErrorObject(dispatchError, "Non-Error thrown");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
 }
 
@@ -448,6 +466,10 @@ async function loadRestartSentinelStartupTask(params: {
   if (!sentinel) {
     return null;
   }
+<<<<<<< HEAD
+=======
+  const sentinelPath = resolveRestartSentinelPath();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const payload = sentinel.payload;
   if (payload.kind === "update") {
     recordLatestUpdateRestartSentinel(payload);
@@ -492,7 +514,11 @@ async function loadRestartSentinelStartupTask(params: {
           continuationKind: payload.continuation.kind,
         });
       }
+<<<<<<< HEAD
       await clearRestartSentinel();
+=======
+      await removeRestartSentinelFile(sentinelPath);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       return { status: "ran" as const };
     }
 
@@ -586,7 +612,11 @@ async function loadRestartSentinelStartupTask(params: {
       );
     }
 
+<<<<<<< HEAD
     await clearRestartSentinel();
+=======
+    await removeRestartSentinelFile(sentinelPath);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const routedAgentTurnContinuation =
       payload.continuation?.kind === "agentTurn" && continuationRoute !== undefined;
     if (!routedAgentTurnContinuation) {
@@ -644,6 +674,13 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   await scheduleRestartSentinelWakeAttempt({ ...params, attempt: 0 });
 }
 
+<<<<<<< HEAD
+=======
+export function shouldWakeFromRestartSentinel() {
+  return !process.env.VITEST && process.env.NODE_ENV !== "test";
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export async function refreshLatestUpdateRestartSentinel(): Promise<RestartSentinelPayload | null> {
   const current = await readRestartSentinel();
   if (
@@ -668,3 +705,20 @@ export function getLatestUpdateRestartSentinel(): RestartSentinelPayload | null 
 export function recordLatestUpdateRestartSentinel(payload: RestartSentinelPayload): void {
   latestUpdateRestartSentinel = cloneRestartSentinelPayload(payload);
 }
+<<<<<<< HEAD
+=======
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df

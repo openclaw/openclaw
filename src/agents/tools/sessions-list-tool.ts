@@ -5,7 +5,10 @@
  */
 import path from "node:path";
 import {
+<<<<<<< HEAD
   normalizeFastMode,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
@@ -22,7 +25,10 @@ import { callGateway } from "../../gateway/call.js";
 import { readSessionTitleFieldsFromTranscriptAsync } from "../../gateway/session-transcript-readers.js";
 import { deriveSessionTitle } from "../../gateway/session-utils.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+<<<<<<< HEAD
 import { normalizeFastModeAutoOnSeconds, normalizeFastModeSource } from "../../shared/fast-mode.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
   optionalNonNegativeIntegerSchema,
@@ -32,7 +38,10 @@ import {
   describeSessionsListTool,
   SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
+<<<<<<< HEAD
 import { stripToolMessages } from "./chat-history-text.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
@@ -52,6 +61,10 @@ import {
   resolveSandboxedSessionToolContext,
   type SessionListRow,
   type SessionRunStatus,
+<<<<<<< HEAD
+=======
+  stripToolMessages,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./sessions-helpers.js";
 
 const SessionsListToolSchema = Type.Object({
@@ -158,9 +171,14 @@ export function createSessionsListTool(opts?: {
       const titleTargets: Array<{
         row: SessionListRow;
         titleEntry: SessionEntry;
+<<<<<<< HEAD
         sessionEntry: { sessionFile?: string; sessionId: string };
         sessionId: string;
         sessionKey: string;
+=======
+        sessionId: string;
+        sessionFile?: string;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         agentId: string;
       }> = [];
 
@@ -266,9 +284,12 @@ export function createSessionsListTool(opts?: {
           }
         }
 
+<<<<<<< HEAD
         const effectiveFastMode = normalizeFastMode(entry.effectiveFastMode);
         const effectiveFastModeSource = normalizeFastModeSource(entry.effectiveFastModeSource);
         const fastAutoOnSeconds = normalizeFastModeAutoOnSeconds(entry.fastAutoOnSeconds);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         const row: SessionListRow = {
           key: displayKey,
           agentId: resolvedAgentId,
@@ -334,10 +355,14 @@ export function createSessionsListTool(opts?: {
                 )
             : undefined,
           thinkingLevel: readStringValue(entry.thinkingLevel),
+<<<<<<< HEAD
           fastMode: normalizeFastMode(entry.fastMode),
           ...(effectiveFastMode !== undefined ? { effectiveFastMode } : {}),
           ...(effectiveFastModeSource !== undefined ? { effectiveFastModeSource } : {}),
           ...(fastAutoOnSeconds !== undefined ? { fastAutoOnSeconds } : {}),
+=======
+          fastMode: typeof entry.fastMode === "boolean" ? entry.fastMode : undefined,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           verboseLevel: readStringValue(entry.verboseLevel),
           reasoningLevel: readStringValue(entry.reasoningLevel),
           elevatedLevel: readStringValue(entry.elevatedLevel),
@@ -365,6 +390,7 @@ export function createSessionsListTool(opts?: {
               subject: readStringValue((entry as { subject?: unknown }).subject),
               updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : 0,
             },
+<<<<<<< HEAD
             sessionEntry: {
               sessionId,
               ...(sessionFile ? { sessionFile } : {}),
@@ -375,6 +401,10 @@ export function createSessionsListTool(opts?: {
               alias,
               mainKey,
             }),
+=======
+            sessionId,
+            ...(sessionFile ? { sessionFile } : {}),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
             agentId: resolvedAgentId,
           });
         }
@@ -402,9 +432,14 @@ export function createSessionsListTool(opts?: {
             const target = titleTargets[next];
             const fields = await readSessionTitleFieldsFromTranscriptAsync({
               agentId: target.agentId,
+<<<<<<< HEAD
               sessionEntry: target.sessionEntry,
               sessionId: target.sessionId,
               sessionKey: target.sessionKey,
+=======
+              sessionFile: target.sessionFile,
+              sessionId: target.sessionId,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               storePath,
             });
             if (includeDerivedTitles && !target.row.derivedTitle) {

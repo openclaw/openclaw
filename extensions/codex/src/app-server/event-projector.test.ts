@@ -18,7 +18,10 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+<<<<<<< HEAD
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CodexAppServerEventProjector,
@@ -279,11 +282,14 @@ describe("CodexAppServerEventProjector", () => {
     const { onAssistantMessageStart, onPartialReply, projector } =
       await createProjectorWithAssistantHooks();
 
+<<<<<<< HEAD
     await projector.handleNotification(
       forCurrentTurn("item/started", {
         item: { type: "agentMessage", id: "msg-1", phase: "final_answer", text: "" },
       }),
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     await projector.handleNotification(agentMessageDelta("hel"));
     await projector.handleNotification(agentMessageDelta("lo"));
     await projector.handleNotification(
@@ -311,10 +317,14 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+<<<<<<< HEAD
     expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
       { text: "hel", delta: "hel" },
       { text: "hello", delta: "lo" },
     ]);
+=======
+    expect(onPartialReply).not.toHaveBeenCalled();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(result.assistantTexts).toEqual(["hello"]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "hello" }]);
@@ -330,6 +340,7 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("streams final-answer assistant deltas into partial replies", async () => {
+<<<<<<< HEAD
     const onAgentEvent = vi.fn();
     const onPartialReply = vi.fn();
     const projector = await createProjector({
@@ -337,6 +348,9 @@ describe("CodexAppServerEventProjector", () => {
       onAgentEvent,
       onPartialReply,
     });
+=======
+    const { onPartialReply, projector } = await createProjectorWithAssistantHooks();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
@@ -356,6 +370,7 @@ describe("CodexAppServerEventProjector", () => {
       { text: "hel", delta: "hel" },
       { text: "hello", delta: "lo" },
     ]);
+<<<<<<< HEAD
     expect(
       onAgentEvent.mock.calls
         .map((call) => call[0])
@@ -429,6 +444,8 @@ describe("CodexAppServerEventProjector", () => {
       },
       { stream: "assistant", data: { text: "final answer", delta: "answer", replaceable: true } },
     ]);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("suppresses mirrored user prompt when the inbound message was already persisted", async () => {
@@ -744,6 +761,7 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.toolMediaUrls?.[0]).not.toBe(savedPath);
   });
 
+<<<<<<< HEAD
   it("prefers gateway-managed image media when the typed event arrives first", async () => {
     await withTempDir("openclaw-codex-media-state-", async (stateDir) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -785,6 +803,8 @@ describe("CodexAppServerEventProjector", () => {
     });
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("preserves distinct raw image-generation items with identical image bytes", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-media-state-"));
     tempDirs.add(stateDir);
@@ -1170,8 +1190,11 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+<<<<<<< HEAD
     // Phase-less snapshots stay on the replaceable agent-event path so legacy
     // append-only channel previews do not render superseded coordination text.
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(result.assistantTexts).toEqual([
       "release fixes first. please drop affected PRs, failing checks, and blockers here.",

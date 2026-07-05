@@ -92,6 +92,7 @@ describe("resolveMemoryWikiStatus", () => {
     expect(status.warnings.map((warning) => warning.code)).toContain("bridge-artifacts-missing");
   });
 
+<<<<<<< HEAD
   it("discovers pages in nested subdirectories", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-nested-",
@@ -125,6 +126,8 @@ describe("resolveMemoryWikiStatus", () => {
     expect(status.sourceCounts.native).toBe(2);
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("counts source provenance from the vault", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-status-",

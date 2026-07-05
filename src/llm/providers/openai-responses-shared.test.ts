@@ -1,7 +1,10 @@
 // OpenAI Responses shared tests cover tool conversion and response item mapping.
 import type { Tool as OpenAIResponsesTool } from "openai/resources/responses/responses.js";
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
@@ -263,6 +266,7 @@ describe("convertResponsesMessages", () => {
     });
   });
 
+<<<<<<< HEAD
   it("strips the internal cache boundary marker from the system prompt message", () => {
     const input = convertResponsesMessages(
       nativeOpenAIModel,
@@ -281,6 +285,8 @@ describe("convertResponsesMessages", () => {
     expect(JSON.stringify(input)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("omits phase-tagged assistant replay ids without reasoning", () => {
     const input = convertResponsesMessages(
       nativeOpenAIModel,
@@ -606,6 +612,7 @@ describe("processResponsesStream", () => {
       "toolcall_end",
     ]);
   });
+<<<<<<< HEAD
 
   it("collapses cumulative message snapshot items into one text block (#91959)", async () => {
     const output = createAssistantOutput();
@@ -923,6 +930,8 @@ describe("processResponsesStream", () => {
       },
     ]);
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });
 
 describe("Azure OpenAI Responses content type support", () => {

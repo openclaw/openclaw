@@ -1,4 +1,5 @@
 // Native hook relay CLI tests cover relay command registration and runtime delegation.
+<<<<<<< HEAD
 import { PassThrough, Readable, Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { runNativeHookRelayCli } from "./native-hook-relay-cli.js";
@@ -19,6 +20,15 @@ function createWritableTextBuffer(): NodeJS.WritableStream & { text: () => strin
     text: () => Buffer.concat(chunks).toString("utf8"),
   });
 }
+=======
+import { PassThrough } from "node:stream";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createReadableTextStream,
+  createWritableTextBuffer,
+  runNativeHookRelayCli,
+} from "./native-hook-relay-cli.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 describe("native hook relay CLI", () => {
   it("reads Codex hook JSON from stdin and forwards it to the gateway relay", async () => {

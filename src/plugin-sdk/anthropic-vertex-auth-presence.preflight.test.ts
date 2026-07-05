@@ -1,7 +1,11 @@
 /**
  * Preflight tests for Anthropic Vertex auth presence helpers.
  */
+<<<<<<< HEAD
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+=======
+import { afterEach, describe, expect, it, vi } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const { existsSyncMock, readFileSyncMock } = vi.hoisted(() => ({
   existsSyncMock: vi.fn(),
@@ -28,20 +32,32 @@ vi.mock("node:fs", async () => {
   };
 });
 
+<<<<<<< HEAD
 describe("hasAnthropicVertexAvailableAuth ADC preflight", () => {
   beforeEach(() => {
     vi.resetModules();
   });
 
+=======
+import { hasAnthropicVertexAvailableAuth } from "./anthropic-vertex-auth-presence.js";
+
+describe("hasAnthropicVertexAvailableAuth ADC preflight", () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   afterEach(() => {
     existsSyncMock.mockClear();
     readFileSyncMock.mockClear();
   });
 
+<<<<<<< HEAD
   it("reads explicit ADC credentials without an existsSync preflight", async () => {
     existsSyncMock.mockClear();
     readFileSyncMock.mockClear();
     const { hasAnthropicVertexAvailableAuth } = await import("./anthropic-vertex-auth-presence.js");
+=======
+  it("reads explicit ADC credentials without an existsSync preflight", () => {
+    existsSyncMock.mockClear();
+    readFileSyncMock.mockClear();
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
     expect(
       hasAnthropicVertexAvailableAuth({

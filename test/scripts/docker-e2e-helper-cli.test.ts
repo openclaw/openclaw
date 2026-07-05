@@ -1,6 +1,10 @@
 // Docker E2E Helper Cli tests cover docker e2e helper cli script behavior.
 import { spawnSync } from "node:child_process";
+<<<<<<< HEAD
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+=======
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -23,6 +27,7 @@ function runHelper(script: string, ...args: Array<string | Record<string, string
   });
 }
 
+<<<<<<< HEAD
 function downloadedDir(stdout: string) {
   const match = stdout.match(/^Downloaded: (.+)$/mu);
   const dir = match?.[1];
@@ -32,6 +37,8 @@ function downloadedDir(stdout: string) {
   return dir;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("Docker E2E helper CLIs", () => {
   it("prints scheduler helper help without throwing a stack trace", () => {
     const result = runHelper("scripts/docker-e2e.mjs", "--help");
@@ -91,6 +98,7 @@ describe("Docker E2E helper CLIs", () => {
     expect(result.stderr).not.toContain("at file:");
   });
 
+<<<<<<< HEAD
   it("rejects unknown timings options without treating them as artifact paths", () => {
     const result = runHelper("scripts/docker-e2e-timings.mjs", "--wat");
 
@@ -105,6 +113,8 @@ describe("Docker E2E helper CLIs", () => {
     expect(result.stderr).not.toContain("at file:");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects oversized timing JSON artifacts without a Node stack trace", () => {
     const root = mkdtempSync(`${tmpdir()}/openclaw-docker-e2e-timings-`);
     try {
@@ -126,6 +136,7 @@ describe("Docker E2E helper CLIs", () => {
   });
 
   it("rejects missing timings limits without a Node stack trace", () => {
+<<<<<<< HEAD
     for (const limit of [undefined, "-h"]) {
       const args = ["scripts/docker-e2e-timings.mjs", "summary.json", "--limit"];
       const result = runHelper(...(limit === undefined ? args : [...args, limit]));
@@ -136,6 +147,15 @@ describe("Docker E2E helper CLIs", () => {
       expect(result.stderr).not.toContain("Error:");
       expect(result.stderr).not.toContain("at file:");
     }
+=======
+    const result = runHelper("scripts/docker-e2e-timings.mjs", "summary.json", "--limit");
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("--limit requires a value");
+    expect(result.stderr).not.toContain("Error:");
+    expect(result.stderr).not.toContain("at file:");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("prints rerun help without detecting the GitHub repository", () => {
@@ -213,6 +233,7 @@ describe("Docker E2E helper CLIs", () => {
       }
     },
   );
+<<<<<<< HEAD
 
   it("ignores artifact-provided GitHub rerun commands", () => {
     const root = mkdtempSync(`${tmpdir()}/openclaw-docker-e2e-rerun-command-`);
@@ -485,4 +506,6 @@ describe("Docker E2E helper CLIs", () => {
       rmSync(root, { force: true, recursive: true });
     }
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 });

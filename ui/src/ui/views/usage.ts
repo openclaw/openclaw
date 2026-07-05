@@ -163,8 +163,11 @@ export function renderUsage(props: UsageProps) {
   const isTokenMode = display.chartMode === "tokens";
   const hasQuery = filters.query.trim().length > 0;
   const hasDraftQuery = filters.queryDraft.trim().length > 0;
+<<<<<<< HEAD
   const selectedDaySet = new Set(filters.selectedDays);
   const selectedSessionSet = new Set(filters.selectedSessions);
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
   // Sort sessions by tokens or cost depending on mode
   const sortedSessions = [...data.sessions].toSorted((a, b) => {
@@ -181,17 +184,28 @@ export function renderUsage(props: UsageProps) {
 
   // Filter sessions by selected days
   const dayFilteredSessions =
+<<<<<<< HEAD
     selectedDaySet.size > 0
       ? agentScopedSessions.filter((s) => {
           if (s.usage?.activityDates?.length) {
             return s.usage.activityDates.some((d) => selectedDaySet.has(d));
+=======
+    filters.selectedDays.length > 0
+      ? agentScopedSessions.filter((s) => {
+          if (s.usage?.activityDates?.length) {
+            return s.usage.activityDates.some((d) => filters.selectedDays.includes(d));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           }
           if (!s.updatedAt) {
             return false;
           }
           const d = new Date(s.updatedAt);
           const sessionDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+<<<<<<< HEAD
           return selectedDaySet.has(sessionDate);
+=======
+          return filters.selectedDays.includes(sessionDate);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         })
       : agentScopedSessions;
 
@@ -263,8 +277,13 @@ export function renderUsage(props: UsageProps) {
   };
 
   // Compute totals from daily data for selected days (more accurate than session totals)
+<<<<<<< HEAD
   const computeDailyTotals = (days: ReadonlySet<string>): UsageTotals => {
     const matchingDays = data.costDaily.filter((d) => days.has(d.date));
+=======
+  const computeDailyTotals = (days: string[]): UsageTotals => {
+    const matchingDays = data.costDaily.filter((d) => days.includes(d.date));
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     return matchingDays.reduce((acc, day) => addUsageTotals(acc, day), createEmptyUsageTotals());
   };
 
@@ -275,12 +294,22 @@ export function renderUsage(props: UsageProps) {
 
   if (filters.selectedSessions.length > 0) {
     // Sessions selected - compute totals from selected sessions
+<<<<<<< HEAD
     const selectedSessionEntries = filteredSessions.filter((s) => selectedSessionSet.has(s.key));
+=======
+    const selectedSessionEntries = filteredSessions.filter((s) =>
+      filters.selectedSessions.includes(s.key),
+    );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     displayTotals = computeSessionTotals(selectedSessionEntries);
     displaySessionCount = selectedSessionEntries.length;
   } else if (filters.selectedDays.length > 0 && filters.selectedHours.length === 0) {
     // Days selected - use daily aggregates for accurate per-day totals
+<<<<<<< HEAD
     displayTotals = computeDailyTotals(selectedDaySet);
+=======
+    displayTotals = computeDailyTotals(filters.selectedDays);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     displaySessionCount = filteredSessions.length;
   } else if (filters.selectedHours.length > 0) {
     displayTotals = computeSessionTotals(filteredSessions);
@@ -299,7 +328,11 @@ export function renderUsage(props: UsageProps) {
 
   const aggregateSessions =
     filters.selectedSessions.length > 0
+<<<<<<< HEAD
       ? filteredSessions.filter((s) => selectedSessionSet.has(s.key))
+=======
+      ? filteredSessions.filter((s) => filters.selectedSessions.includes(s.key))
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       : hasQuery || filters.selectedHours.length > 0
         ? filteredSessions
         : filters.selectedDays.length > 0
@@ -326,7 +359,13 @@ export function renderUsage(props: UsageProps) {
   const filteredDaily =
     filters.selectedSessions.length > 0
       ? (() => {
+<<<<<<< HEAD
           const selectedEntries = filteredSessions.filter((s) => selectedSessionSet.has(s.key));
+=======
+          const selectedEntries = filteredSessions.filter((s) =>
+            filters.selectedSessions.includes(s.key),
+          );
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           const allActivityDates = new Set<string>();
           for (const entry of selectedEntries) {
             for (const date of entry.usage?.activityDates ?? []) {

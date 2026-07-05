@@ -108,6 +108,7 @@ async function captureHandlerResponse(
   return await captureHttpResponse(handler.handleHttpRequest, url, method);
 }
 
+<<<<<<< HEAD
 async function captureA2uiFixtureResponse(
   rootDir: string,
   url: string,
@@ -115,6 +116,11 @@ async function captureA2uiFixtureResponse(
 ): Promise<CapturedResponse> {
   const { createA2uiHttpRequestHandler } = await import("./a2ui.js");
   return await captureHttpResponse(createA2uiHttpRequestHandler({ rootDir }), url, method);
+=======
+async function captureA2uiResponse(url: string, method = "GET"): Promise<CapturedResponse> {
+  const { handleA2uiHttpRequest } = await import("./a2ui.js");
+  return await captureHttpResponse(handleA2uiHttpRequest, url, method);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 describe("canvas host", () => {
@@ -443,6 +449,7 @@ describe("canvas host", () => {
   });
 
   it("serves A2UI scaffold and blocks traversal/symlink escapes", async () => {
+<<<<<<< HEAD
     const a2uiRoot = await createCaseDir();
     const nestedAssetDir = path.join(a2uiRoot, "assets", "demo");
     const linkName = `test-link-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`;
@@ -461,11 +468,31 @@ describe("canvas host", () => {
 
     try {
       const res = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/`);
+=======
+    const a2uiRoot = path.resolve(process.cwd(), "extensions/canvas/src/host/a2ui");
+    const bundlePath = path.join(a2uiRoot, "a2ui.bundle.js");
+    const linkName = `test-link-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`;
+    const linkPath = path.join(a2uiRoot, linkName);
+    let createdBundle = false;
+
+    try {
+      await fs.stat(bundlePath);
+    } catch {
+      await fs.writeFile(bundlePath, "window.openclawA2UI = {};", "utf8");
+      createdBundle = true;
+    }
+
+    await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
+
+    try {
+      const res = await captureA2uiResponse(`${A2UI_PATH}/`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       const html = res.body;
       expect(res.status).toBe(200);
       expect(html).toContain("openclaw-a2ui-host");
       expect(html).toContain("openclawCanvasA2UIAction");
 
+<<<<<<< HEAD
       const bundleRes = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/a2ui.bundle.js`);
       const js = bundleRes.body;
       expect(bundleRes.status).toBe(200);
@@ -489,10 +516,42 @@ describe("canvas host", () => {
       expect(malformedRes.status).toBe(404);
       expect(malformedRes.body).toBe("not found");
       const symlinkRes = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/${linkName}`);
+=======
+      const bundleRes = await captureA2uiResponse(`${A2UI_PATH}/a2ui.bundle.js`);
+      const js = bundleRes.body;
+      expect(bundleRes.status).toBe(200);
+      expect(js).toContain("openclawA2UI");
+      const expectedPngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      for (const assetPath of [
+        "assets/providers/google.png",
+        "assets/providers/x.png",
+        "granola.png",
+      ]) {
+        const assetRes = await captureA2uiResponse(`${A2UI_PATH}/${assetPath}`);
+        expect(assetRes.status).toBe(200);
+        expect(assetRes.headers["content-type"]).toBe("image/png");
+        expect(assetRes.bodyBytes.subarray(0, expectedPngSignature.length)).toEqual(
+          expectedPngSignature,
+        );
+      }
+      const traversalRes = await captureA2uiResponse(`${A2UI_PATH}/%2e%2e%2fpackage.json`);
+      expect(traversalRes.status).toBe(404);
+      expect(traversalRes.body).toBe("not found");
+      const malformedRes = await captureA2uiResponse(`${A2UI_PATH}/%E0%A4%A`);
+      expect(malformedRes.status).toBe(404);
+      expect(malformedRes.body).toBe("not found");
+      const symlinkRes = await captureA2uiResponse(`${A2UI_PATH}/${linkName}`);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       expect(symlinkRes.status).toBe(404);
       expect(symlinkRes.body).toBe("not found");
     } finally {
       await fs.rm(linkPath, { force: true });
+<<<<<<< HEAD
+=======
+      if (createdBundle) {
+        await fs.rm(bundlePath, { force: true });
+      }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
   });
 });

@@ -1,10 +1,16 @@
 // Write Cli Startup Metadata tests cover write cli startup metadata script behavior.
+<<<<<<< HEAD
 import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
+=======
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { __testing, writeCliStartupMetadata } from "../../scripts/write-cli-startup-metadata.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -34,10 +40,13 @@ function writeStartupMetadataSourceSignatureFixture(rootDir: string): void {
     ["src/cli/models-cli.ts", "export const modelsHelp = 'models';\n"],
     ["src/cli/nodes-cli/register.ts", "export const nodesHelp = 'nodes';\n"],
     ["src/cli/program/register.maintenance.ts", "export const maintenanceHelp = 'maintenance';\n"],
+<<<<<<< HEAD
     [
       "src/cli/program/register.status-health-sessions.ts",
       "export const statusHealthSessionsHelp = 'sessions';\n",
     ],
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ["src/cli/program/context.ts", "export const context = 'context';\n"],
     ["src/cli/program/help.ts", "export const help = 'help';\n"],
     ["src/cli/plugins-cli.ts", "export const pluginsHelp = 'plugins';\n"],
@@ -63,10 +72,13 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
+<<<<<<< HEAD
 function expectedTaskkillPath(): string {
   return resolveWindowsTaskkillPath();
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 async function waitForProcessExit(pid: number, timeoutMs = 1_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -80,6 +92,7 @@ async function waitForProcessExit(pid: number, timeoutMs = 1_000): Promise<void>
   throw new Error(`process ${pid} was still alive after ${timeoutMs}ms`);
 }
 
+<<<<<<< HEAD
 async function waitForChildClose(
   child: ReturnType<typeof spawn>,
   timeoutMs = 2_000,
@@ -95,6 +108,8 @@ async function waitForChildClose(
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 describe("write-cli-startup-metadata", () => {
   const { createTempDir } = createScriptTestHarness();
 
@@ -129,6 +144,7 @@ describe("write-cli-startup-metadata", () => {
     ).rejects.toThrow("render failed: output exceeded 1024 bytes");
   });
 
+<<<<<<< HEAD
   it("signals Windows command help render process trees with taskkill", () => {
     const childKill = vi.fn(() => true);
     const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
@@ -182,6 +198,8 @@ describe("write-cli-startup-metadata", () => {
     expect(childKill).not.toHaveBeenCalled();
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it.runIf(process.platform !== "win32")(
     "kills descendant processes when command help rendering times out",
     async () => {
@@ -216,6 +234,7 @@ describe("write-cli-startup-metadata", () => {
     },
   );
 
+<<<<<<< HEAD
   it.runIf(process.platform !== "win32")(
     "waits for all command help descendants before re-raising parent signals",
     async () => {
@@ -330,6 +349,8 @@ describe("write-cli-startup-metadata", () => {
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("writes startup metadata with populated root help text when dist falls back to source rendering", async () => {
     const tempRoot = createTempDir("openclaw-startup-metadata-");
     const distDir = path.join(tempRoot, "dist");
@@ -368,8 +389,11 @@ describe("write-cli-startup-metadata", () => {
         gateway: "Usage: openclaw gateway\n",
         models: "Usage: openclaw models\n",
         plugins: "Usage: openclaw plugins\n",
+<<<<<<< HEAD
         sessions: "Usage: openclaw sessions\n",
         tasks: "Usage: openclaw tasks\n",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }),
     });
 
@@ -385,8 +409,11 @@ describe("write-cli-startup-metadata", () => {
         gateway: string;
         models: string;
         plugins: string;
+<<<<<<< HEAD
         sessions: string;
         tasks: string;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       };
     };
     expect(written.channelOptions).toContain("matrix");
@@ -403,8 +430,11 @@ describe("write-cli-startup-metadata", () => {
     expect(written.subcommandHelpText.gateway).toContain("openclaw gateway");
     expect(written.subcommandHelpText.models).toContain("openclaw models");
     expect(written.subcommandHelpText.plugins).toContain("openclaw plugins");
+<<<<<<< HEAD
     expect(written.subcommandHelpText.sessions).toContain("openclaw sessions");
     expect(written.subcommandHelpText.tasks).toContain("openclaw tasks");
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 
   it("renders independent startup help snapshots concurrently", async () => {
@@ -462,8 +492,11 @@ describe("write-cli-startup-metadata", () => {
           gateway: "Usage: openclaw gateway\n",
           models: "Usage: openclaw models\n",
           plugins: "Usage: openclaw plugins\n",
+<<<<<<< HEAD
           sessions: "Usage: openclaw sessions\n",
           tasks: "Usage: openclaw tasks\n",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         };
       },
     });
@@ -512,8 +545,11 @@ describe("write-cli-startup-metadata", () => {
           gateway: "Usage: openclaw gateway\n",
           models: "Usage: openclaw models\n",
           plugins: "Usage: openclaw plugins\n",
+<<<<<<< HEAD
           sessions: "Usage: openclaw sessions\n",
           tasks: "Usage: openclaw tasks\n",
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         }),
       });
     };

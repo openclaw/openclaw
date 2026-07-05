@@ -382,6 +382,7 @@ describe("renderSkills", () => {
     expect(onClawHubInstall).toHaveBeenCalledWith("github");
   });
 
+<<<<<<< HEAD
   it("renders ClawHub acknowledgement retry actions", async () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -414,6 +415,8 @@ describe("renderSkills", () => {
     expect(onClawHubInstall).toHaveBeenCalledWith("github", true, "1.2.3");
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("renders installed ClawHub verdicts and the local Skill Card tab", async () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -462,7 +465,11 @@ describe("renderSkills", () => {
               slug: "agentreceipt",
               version: "1.2.3",
               securityAuditUrl:
+<<<<<<< HEAD
                 "https://clawhub.ai/openclaw/skills/agentreceipt/security-audit?version=1.2.3",
+=======
+                "https://clawhub.ai/openclaw/agentreceipt/security-audit?version=1.2.3",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               securityStatus: "suspicious",
               securityPassed: false,
             },
@@ -497,7 +504,11 @@ describe("renderSkills", () => {
               requestedSlug: "agentreceipt",
               requestedVersion: "1.2.3",
               securityAuditUrl:
+<<<<<<< HEAD
                 "https://clawhub.ai/openclaw/skills/agentreceipt/security-audit?version=1.2.3",
+=======
+                "https://clawhub.ai/openclaw/agentreceipt/security-audit?version=1.2.3",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
               securityStatus: "suspicious",
               securityPassed: false,
             },

@@ -1,6 +1,10 @@
 {
   "name": "@openclaw/migrate-hermes",
+<<<<<<< HEAD
   "version": "2026.6.10",
+=======
+  "version": "2026.6.8",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   "private": true,
   "description": "Hermes to OpenClaw migration provider",
   "type": "module",
@@ -12,7 +16,11 @@
     "openclaw": "2026.5.28"
   },
   "peerDependencies": {
+<<<<<<< HEAD
     "openclaw": ">=2026.6.10"
+=======
+    "openclaw": ">=2026.6.8"
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   },
   "peerDependenciesMeta": {
     "openclaw": {

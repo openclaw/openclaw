@@ -34,6 +34,7 @@ const entries: RawCopyBaselineEntry[] = [
 ];
 
 describe("control-ui-i18n report helpers", () => {
+<<<<<<< HEAD
   it.each(["--surface", "--locale", "--top"])(
     "rejects option-shaped values for %s",
     (flag) => {
@@ -41,6 +42,8 @@ describe("control-ui-i18n report helpers", () => {
     },
   );
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("rejects invalid numeric limits", () => {
     expect(() => parseArgs(["--top", "3abc"])).toThrow("--top must be a positive integer");
     expect(() => parseArgs(["--top", "1.5"])).toThrow("--top must be a positive integer");

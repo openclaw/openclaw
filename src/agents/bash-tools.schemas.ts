@@ -12,12 +12,16 @@ const EXEC_TOOL_HOST_VALUES = ["auto", "sandbox", "gateway", "node"] as const;
 /** Parameters accepted by the exec tool. */
 export const execSchema = Type.Object({
   command: Type.String({ description: "Shell command to execute" }),
+<<<<<<< HEAD
   workdir: Type.Optional(
     Type.String({
       description:
         "Working directory. Blank/whitespace values are invalid; omit to use the default cwd.",
     }),
   ),
+=======
+  workdir: Type.Optional(Type.String({ description: "Working directory (defaults to cwd)" })),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   env: Type.Optional(Type.Record(Type.String(), Type.String())),
   yieldMs: Type.Optional(
     Type.Number({

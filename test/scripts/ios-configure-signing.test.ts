@@ -25,10 +25,17 @@ function runConfigureSigning(teamId: string, user = "localuser"): string {
       OPENCLAW_IOS_APP_BUNDLE_ID: "",
       OPENCLAW_IOS_BUNDLE_ID_BASE: "",
       OPENCLAW_IOS_BUNDLE_SUFFIX: "",
+<<<<<<< HEAD
       OPENCLAW_IOS_APP_GROUP_ID: "",
       OPENCLAW_IOS_SHARE_BUNDLE_ID: "",
       OPENCLAW_IOS_ACTIVITY_WIDGET_BUNDLE_ID: "",
       OPENCLAW_IOS_WATCH_APP_BUNDLE_ID: "",
+=======
+      OPENCLAW_IOS_SHARE_BUNDLE_ID: "",
+      OPENCLAW_IOS_ACTIVITY_WIDGET_BUNDLE_ID: "",
+      OPENCLAW_IOS_WATCH_APP_BUNDLE_ID: "",
+      OPENCLAW_IOS_WATCH_EXTENSION_BUNDLE_ID: "",
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       USER: user,
     },
     encoding: "utf8",
@@ -64,10 +71,15 @@ describe.sequential("scripts/ios-configure-signing.sh", () => {
 
     expect(stdout).toContain("team=FWJYW4S8P8 app=ai.openclawfoundation.app");
     expect(generated).toContain("OPENCLAW_DEVELOPMENT_TEAM = FWJYW4S8P8");
+<<<<<<< HEAD
     expect(generated).toContain("OPENCLAW_CODE_SIGN_ENTITLEMENTS = Sources/OpenClaw.entitlements");
     expect(generated).toContain("OPENCLAW_APP_BUNDLE_ID = ai.openclawfoundation.app");
     expect(generated).toContain("OPENCLAW_SHARE_BUNDLE_ID = ai.openclawfoundation.app.share");
     expect(generated).toContain("OPENCLAW_APP_GROUP_ID = group.ai.openclawfoundation.app.shared");
+=======
+    expect(generated).toContain("OPENCLAW_APP_BUNDLE_ID = ai.openclawfoundation.app");
+    expect(generated).toContain("OPENCLAW_SHARE_BUNDLE_ID = ai.openclawfoundation.app.share");
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     expect(generated).toContain("OPENCLAW_ACTIVITY_WIDGET_PROFILE = ");
   });
 
@@ -82,8 +94,11 @@ describe.sequential("scripts/ios-configure-signing.sh", () => {
     expect(generated).toContain(
       "OPENCLAW_APP_BUNDLE_ID = ai.openclawfoundation.app.test.localuser-y3yuzp442g",
     );
+<<<<<<< HEAD
     expect(generated).toContain(
       "OPENCLAW_APP_GROUP_ID = group.ai.openclawfoundation.app.test.localuser-y3yuzp442g.shared",
     );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

@@ -7,17 +7,24 @@ import {
   createProviderOperationDeadline,
   postJsonRequest,
   postMultipartRequest,
+<<<<<<< HEAD
   readProviderJsonResponse,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+<<<<<<< HEAD
 import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
 import {
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
 } from "./image-assets.js";
+=======
+import { parseOpenAiCompatibleImageResponse } from "./image-assets.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type {
   ImageGenerationProvider,
   ImageGenerationProviderCapabilities,
@@ -132,6 +139,7 @@ function resolveRequestTimeoutMs(params: {
   });
 }
 
+<<<<<<< HEAD
 function resolveResponseMaxImages(params: {
   count: number;
   mode: OpenAiCompatibleImageRequestMode;
@@ -142,6 +150,8 @@ function resolveResponseMaxImages(params: {
     : (params.options.capabilities.generate.maxCount ?? params.count);
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 /** Creates an image-generation provider backed by OpenAI-style image endpoints. */
 export function createOpenAiCompatibleImageGenerationProvider(
   options: OpenAiCompatibleImageProviderOptions,
@@ -284,6 +294,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
             ? (options.failureLabels?.edit ?? `${options.label} image edit failed`)
             : (options.failureLabels?.generate ?? `${options.label} image generation failed`),
         );
+<<<<<<< HEAD
         const payload = await readProviderJsonResponse(response, `${options.id}.image-generation`, {
           maxBytes: resolveInlineImageJsonResponseMaxBytes(
             resolveResponseMaxImages({ count, mode, options }),
@@ -291,6 +302,9 @@ export function createOpenAiCompatibleImageGenerationProvider(
           ),
         });
         const images = parseOpenAiCompatibleImageResponse(payload, {
+=======
+        const images = parseOpenAiCompatibleImageResponse(await response.json(), {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
           ...options.response,
           malformedResponseError:
             mode === "edit"

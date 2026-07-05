@@ -268,6 +268,7 @@ export function resolveSessionTranscriptPath(
   return resolveSessionTranscriptPathInDir(sessionId, resolveAgentSessionsDir(agentId), topicId);
 }
 
+<<<<<<< HEAD
 export function resolveExplicitSessionFilePath(
   sessionFile: string,
   opts?: SessionFilePathOptions,
@@ -277,6 +278,8 @@ export function resolveExplicitSessionFilePath(
   });
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export function resolveSessionFilePath(
   sessionId: string,
   entry?: { sessionFile?: string },

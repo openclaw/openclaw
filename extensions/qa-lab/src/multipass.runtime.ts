@@ -4,7 +4,10 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+<<<<<<< HEAD
 import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -80,8 +83,11 @@ type QaMultipassPlan = {
   fastMode?: boolean;
   thinkingDefault?: string;
   runtimePair?: [RuntimeId, RuntimeId];
+<<<<<<< HEAD
   channelDriverSelection?: OpenClawCrablineChannelDriverSelection;
   enabledPluginIds?: string[];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   scenarioIds: string[];
   forwardedEnv: Record<string, string>;
   hostCodexHomePath?: string;
@@ -245,8 +251,11 @@ export function createQaMultipassPlan(params: {
   scenarioIds?: string[];
   concurrency?: number;
   runtimePair?: [RuntimeId, RuntimeId];
+<<<<<<< HEAD
   channelDriverSelection?: OpenClawCrablineChannelDriverSelection;
   enabledPluginIds?: string[];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   image?: string;
   cpus?: number;
   memory?: string;
@@ -254,9 +263,12 @@ export function createQaMultipassPlan(params: {
 }) {
   const outputDir = params.outputDir ?? createQaMultipassOutputDir(params.repoRoot);
   const scenarioIds = uniqueStrings(params.scenarioIds ?? []);
+<<<<<<< HEAD
   const enabledPluginIds = uniqueStrings(
     (params.enabledPluginIds ?? []).map((pluginId) => pluginId.trim()).filter(Boolean),
   );
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const transportId = params.transportId?.trim() || "qa-channel";
   const providerMode = params.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE;
   const provider = getQaProvider(providerMode);
@@ -290,6 +302,7 @@ export function createQaMultipassPlan(params: {
       ...(params.allowFailures ? ["--allow-failures"] : []),
       ...(params.concurrency ? ["--concurrency", String(params.concurrency)] : []),
       ...(params.runtimePair ? ["--runtime-pair", params.runtimePair.join(",")] : []),
+<<<<<<< HEAD
       ...(params.channelDriverSelection
         ? [
             "--channel-driver",
@@ -299,6 +312,8 @@ export function createQaMultipassPlan(params: {
           ]
         : []),
       ...enabledPluginIds.flatMap((pluginId) => ["--enable-plugin", pluginId]),
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     ],
     scenarioIds,
   );
@@ -324,8 +339,11 @@ export function createQaMultipassPlan(params: {
     fastMode: params.fastMode,
     thinkingDefault: params.thinkingDefault,
     runtimePair: params.runtimePair,
+<<<<<<< HEAD
     channelDriverSelection: params.channelDriverSelection,
     enabledPluginIds,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     scenarioIds,
     forwardedEnv,
     hostCodexHomePath,
@@ -575,8 +593,11 @@ export async function runQaMultipass(params: {
   scenarioIds?: string[];
   concurrency?: number;
   runtimePair?: [RuntimeId, RuntimeId];
+<<<<<<< HEAD
   channelDriverSelection?: OpenClawCrablineChannelDriverSelection;
   enabledPluginIds?: string[];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   image?: string;
   cpus?: number;
   memory?: string;

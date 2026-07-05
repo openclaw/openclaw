@@ -327,7 +327,11 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--session-key <key>", "Session key to export")
     .option("--output <path>", "Output directory name inside .openclaw/trajectory-exports")
     .option("--workspace <path>", "Workspace root for the export (default: current directory)")
+<<<<<<< HEAD
     .option("--store <path>", "Path to session store (default: resolved from config)")
+=======
+    .option("--store <path>", "Path to session store (default: resolved from session key)")
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     .option("--agent <id>", "Agent id for resolving the default session store")
     .option("--request-json-base64 <payload>", "Base64url-encoded export request")
     .option("--json", "Output JSON", false)
@@ -356,6 +360,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       });
     });
 
+<<<<<<< HEAD
   sessionsCmd
     .command("compact <key>")
     .description("Compact a stored session transcript via the running gateway")
@@ -459,6 +464,8 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       });
     });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   const commitmentsCmd = program
     .command("commitments")
     .description("List and manage inferred follow-up commitments")

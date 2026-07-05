@@ -91,6 +91,7 @@ describe("google-meet node host bridge sessions", () => {
     }
   });
 
+<<<<<<< HEAD
   it("passes the Meet URL before Chrome profile args when launching a profiled browser", async () => {
     const originalPlatform = process.platform;
     children.length = 0;
@@ -126,6 +127,8 @@ describe("google-meet node host bridge sessions", () => {
     }
   });
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   it("clears output playback without closing the active bridge when the old output exits", async () => {
     const originalPlatform = process.platform;
     children.length = 0;

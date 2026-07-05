@@ -2,7 +2,10 @@
  * Cross-platform pnpm command resolver used by Canvas build scripts.
  */
 import { accessSync, closeSync, constants, openSync, readSync, statSync } from "node:fs";
+<<<<<<< HEAD
 import path from "node:path";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 
 const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>%\r\n]/;
 const PNPM_EXECUTABLE_RE = /^pnpm(?:-cli)?(?:\.(?:[cm]?js|cmd|exe))?$/;
@@ -49,6 +52,7 @@ function isExecutableFile(value) {
   }
 }
 
+<<<<<<< HEAD
 function isFile(value) {
   try {
     return statSync(value).isFile();
@@ -92,13 +96,19 @@ function findExecutableOnPath(command, envPath, platform, env, cwd) {
   return undefined;
 }
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function isNodeRunnablePnpmExecPath(value) {
   if (!isPnpmExecPath(value)) {
     return false;
   }
   const { extension } = inspectExecutablePath(value);
   if (NODE_RUNNABLE_EXTENSIONS.has(extension)) {
+<<<<<<< HEAD
     return isFile(value);
+=======
+    return true;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   }
   if (extension.length > 0) {
     return false;
@@ -173,6 +183,7 @@ export function resolvePnpmRunner(params = {}) {
 
   const pnpmArgs = params.pnpmArgs ?? [];
   const platform = params.platform ?? process.platform;
+<<<<<<< HEAD
   const env = params.env ?? process.env;
   const envPath = env[platform === "win32" ? resolvePathEnvKey(env) : "PATH"];
   const cwd = params.cwd ?? process.cwd();
@@ -189,6 +200,8 @@ export function resolvePnpmRunner(params = {}) {
       ? windowsCmdSpec(corepackPath, args, params.comSpec ?? process.env.ComSpec ?? "cmd.exe")
       : { args, command: corepackPath, shell: false };
   }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   if (platform === "win32") {
     return windowsCmdSpec("pnpm.cmd", pnpmArgs, params.comSpec ?? process.env.ComSpec ?? "cmd.exe");
   }

@@ -69,7 +69,10 @@ function createEnabledBundleProbeConfig(): OpenClawConfig {
 
 export async function prepareBundleProbeCliConfig(params?: {
   additionalConfig?: Parameters<typeof prepareCliBundleMcpConfig>[0]["additionalConfig"];
+<<<<<<< HEAD
   env?: Parameters<typeof prepareCliBundleMcpConfig>[0]["env"];
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }) {
   // Bundle discovery reads HOME for per-user plugin roots.
   return await withEnvAsync({ HOME: bundleProbeHomeDir }, async () => {
@@ -83,7 +86,10 @@ export async function prepareBundleProbeCliConfig(params?: {
       workspaceDir: bundleProbeWorkspaceDir,
       config: createEnabledBundleProbeConfig(),
       additionalConfig: params?.additionalConfig,
+<<<<<<< HEAD
       env: params?.env,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     });
   });
 }

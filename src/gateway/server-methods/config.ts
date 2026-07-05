@@ -594,7 +594,11 @@ async function respondWithConfigRestartWrite(params: {
   uiHints: ConfigRedactionHints;
 }): Promise<void> {
   clearConfigSchemaResponseCache();
+<<<<<<< HEAD
   const { payload, sentinelPersisted, restart } = await resolveGatewayConfigRestartWriteResult({
+=======
+  const { payload, sentinelPath, restart } = await resolveGatewayConfigRestartWriteResult({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     requestParams: params.requestParams,
     kind: params.kind,
     mode: params.mode,
@@ -612,7 +616,11 @@ async function respondWithConfigRestartWrite(params: {
       config: redactConfigObject(params.writeResult.config, params.uiHints),
       restart,
       sentinel: {
+<<<<<<< HEAD
         persisted: sentinelPersisted,
+=======
+        path: sentinelPath,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         payload,
       },
     },

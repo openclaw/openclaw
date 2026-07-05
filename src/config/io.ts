@@ -62,6 +62,7 @@ import {
   type ConfigWriteAuditResult,
 } from "./io.audit.js";
 import { persistBoundedClobberedConfigSnapshot } from "./io.clobber-snapshot.js";
+<<<<<<< HEAD
 import {
   readConfigHealthStateFromStore,
   writeConfigHealthStateToStore,
@@ -69,6 +70,8 @@ import {
   type ConfigHealthFingerprint,
   type ConfigHealthState,
 } from "./io.health-state.js";
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import { throwInvalidConfig } from "./io.invalid-config.js";
 import { stampConfigWriteMetadata } from "./io.meta.js";
 import {
@@ -166,9 +169,42 @@ type ShippedPluginInstallConfigReadMigration = {
   persistedRootRaw?: string;
 };
 
+<<<<<<< HEAD
 const loggedInvalidConfigs = new Set<string>();
 const warnedFutureTouchedVersions = new Set<string>();
 
+=======
+const CONFIG_HEALTH_STATE_FILENAME = "config-health.json";
+const loggedInvalidConfigs = new Set<string>();
+const warnedFutureTouchedVersions = new Set<string>();
+
+type ConfigHealthFingerprint = {
+  hash: string;
+  bytes: number;
+  mtimeMs: number | null;
+  ctimeMs: number | null;
+  dev: string | null;
+  ino: string | null;
+  mode: number | null;
+  nlink: number | null;
+  uid: number | null;
+  gid: number | null;
+  hasMeta: boolean;
+  gatewayMode: string | null;
+  observedAt: string;
+};
+
+type ConfigHealthEntry = {
+  lastKnownGood?: ConfigHealthFingerprint;
+  lastPromotedGood?: ConfigHealthFingerprint;
+  lastObservedSuspiciousSignature?: string | null;
+};
+
+type ConfigHealthState = {
+  entries?: Record<string, ConfigHealthEntry>;
+};
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
 export type ConfigWriteResult = { persistedHash: string; persistedConfig: OpenClawConfig };
 const configWritePostCommitRollback = Symbol("configWritePostCommitRollback");
@@ -474,6 +510,13 @@ function containsConfigIncludeDirective(value: unknown): boolean {
   return Object.values(value).some((item) => containsConfigIncludeDirective(item));
 }
 
+<<<<<<< HEAD
+=======
+function resolveConfigHealthStatePath(env: NodeJS.ProcessEnv, homedir: () => string): string {
+  return path.join(resolveStateDir(env, homedir), "logs", CONFIG_HEALTH_STATE_FILENAME);
+}
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 function normalizeStatNumber(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
@@ -542,22 +585,70 @@ function resolveConfigWriteBlockingReasons(
 }
 
 async function readConfigHealthState(deps: Required<ConfigIoDeps>): Promise<ConfigHealthState> {
+<<<<<<< HEAD
   return readConfigHealthStateFromStore(deps);
 }
 
 function readConfigHealthStateSync(deps: Required<ConfigIoDeps>): ConfigHealthState {
   return readConfigHealthStateFromStore(deps);
+=======
+  try {
+    const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
+    const raw = await deps.fs.promises.readFile(healthPath, "utf-8");
+    const parsed = JSON.parse(raw);
+    return isRecord(parsed) ? (parsed as ConfigHealthState) : {};
+  } catch {
+    return {};
+  }
+}
+
+function readConfigHealthStateSync(deps: Required<ConfigIoDeps>): ConfigHealthState {
+  try {
+    const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
+    const raw = deps.fs.readFileSync(healthPath, "utf-8");
+    const parsed = JSON.parse(raw);
+    return isRecord(parsed) ? (parsed as ConfigHealthState) : {};
+  } catch {
+    return {};
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 async function writeConfigHealthState(
   deps: Required<ConfigIoDeps>,
   state: ConfigHealthState,
 ): Promise<void> {
+<<<<<<< HEAD
   writeConfigHealthStateToStore(deps, state);
 }
 
 function writeConfigHealthStateSync(deps: Required<ConfigIoDeps>, state: ConfigHealthState): void {
   writeConfigHealthStateToStore(deps, state);
+=======
+  const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
+  try {
+    await deps.fs.promises.mkdir(path.dirname(healthPath), { recursive: true, mode: 0o700 });
+    await deps.fs.promises.writeFile(healthPath, `${JSON.stringify(state, null, 2)}\n`, {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
+  } catch (err) {
+    deps.logger.warn(`Config health-state write failed: ${healthPath}: ${formatErrorMessage(err)}`);
+  }
+}
+
+function writeConfigHealthStateSync(deps: Required<ConfigIoDeps>, state: ConfigHealthState): void {
+  const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
+  try {
+    deps.fs.mkdirSync(path.dirname(healthPath), { recursive: true, mode: 0o700 });
+    deps.fs.writeFileSync(healthPath, `${JSON.stringify(state, null, 2)}\n`, {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
+  } catch (err) {
+    deps.logger.warn(`Config health-state write failed: ${healthPath}: ${formatErrorMessage(err)}`);
+  }
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 }
 
 function getConfigHealthEntry(state: ConfigHealthState, configPath: string): ConfigHealthEntry {

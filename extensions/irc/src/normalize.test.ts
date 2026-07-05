@@ -4,6 +4,10 @@ import {
   buildIrcAllowlistCandidates,
   normalizeIrcAllowEntry,
   normalizeIrcMessagingTarget,
+<<<<<<< HEAD
+=======
+  resolveIrcAllowlistMatch,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 } from "./normalize.js";
 
 describe("irc normalize", () => {
@@ -32,5 +36,27 @@ describe("irc normalize", () => {
     expect(buildIrcAllowlistCandidates(message)).toContain("alice!ident@example.org");
     expect(buildIrcAllowlistCandidates(message)).not.toContain("alice");
     expect(buildIrcAllowlistCandidates(message, { allowNameMatching: true })).toContain("alice");
+<<<<<<< HEAD
+=======
+    expect(
+      resolveIrcAllowlistMatch({
+        allowFrom: ["alice!ident@example.org"],
+        message,
+      }).allowed,
+    ).toBe(true);
+    expect(
+      resolveIrcAllowlistMatch({
+        allowFrom: ["alice"],
+        message,
+      }).allowed,
+    ).toBe(false);
+    expect(
+      resolveIrcAllowlistMatch({
+        allowFrom: ["alice"],
+        message,
+        allowNameMatching: true,
+      }).allowed,
+    ).toBe(true);
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   });
 });

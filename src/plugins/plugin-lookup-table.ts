@@ -10,18 +10,46 @@ import {
   isPluginMetadataSnapshotCompatible,
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
+<<<<<<< HEAD
 } from "./plugin-metadata-snapshot.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
 
 export type PluginLookUpTableMetrics = PluginMetadataSnapshot["metrics"] & {
   startupPlanMs: number;
+=======
+  type PluginMetadataSnapshotOwnerMaps,
+} from "./plugin-metadata-snapshot.js";
+import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
+
+export type PluginLookUpTableOwnerMaps = PluginMetadataSnapshotOwnerMaps;
+
+export type PluginLookUpTableStartupPlan = GatewayStartupPluginPlan;
+
+export type PluginLookUpTableMetrics = {
+  registrySnapshotMs: number;
+  manifestRegistryMs: number;
+  startupPlanMs: number;
+  ownerMapsMs: number;
+  totalMs: number;
+  indexPluginCount: number;
+  manifestPluginCount: number;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   startupPluginCount: number;
   deferredChannelPluginCount: number;
 };
 
 export type PluginLookUpTable = PluginMetadataSnapshot & {
+<<<<<<< HEAD
   startup: GatewayStartupPluginPlan;
   metrics: PluginLookUpTableMetrics;
+=======
+  startup: PluginLookUpTableStartupPlan;
+  metrics: PluginMetadataSnapshot["metrics"] &
+    Pick<
+      PluginLookUpTableMetrics,
+      "startupPlanMs" | "startupPluginCount" | "deferredChannelPluginCount"
+    >;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 };
 
 export type LoadPluginLookUpTableParams = {

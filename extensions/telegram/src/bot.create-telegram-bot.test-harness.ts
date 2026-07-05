@@ -12,9 +12,12 @@ type AnyMock = ReturnType<typeof vi.fn>;
 type AnyAsyncMock = ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>>;
 type GetRuntimeConfigFn =
   typeof import("openclaw/plugin-sdk/runtime-config-snapshot").getRuntimeConfig;
+<<<<<<< HEAD
 type GetSessionEntryFn = typeof import("openclaw/plugin-sdk/session-store-runtime").getSessionEntry;
 type ListSessionEntriesFn =
   typeof import("openclaw/plugin-sdk/session-store-runtime").listSessionEntries;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 type LoadSessionStoreFn =
   typeof import("openclaw/plugin-sdk/session-store-runtime").loadSessionStore;
 type ResolveStorePathFn =
@@ -64,9 +67,13 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
 }));
 
 const {
+<<<<<<< HEAD
   getSessionEntryMock,
   getRuntimeConfig,
   listSessionEntriesMock,
+=======
+  getRuntimeConfig,
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   loadSessionStoreMock,
   readSessionUpdatedAtMock,
   recordInboundSessionMock,
@@ -74,9 +81,13 @@ const {
   sessionStoreEntries,
 } = vi.hoisted(
   (): {
+<<<<<<< HEAD
     getSessionEntryMock: MockFn<GetSessionEntryFn>;
     getRuntimeConfig: MockFn<GetRuntimeConfigFn>;
     listSessionEntriesMock: MockFn<ListSessionEntriesFn>;
+=======
+    getRuntimeConfig: MockFn<GetRuntimeConfigFn>;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     loadSessionStoreMock: MockFn<LoadSessionStoreFn>;
     readSessionUpdatedAtMock: MockFn<ReadSessionUpdatedAtFn>;
     recordInboundSessionMock: MockFn<NonNullable<TelegramBotDeps["recordInboundSession"]>>;
@@ -84,6 +95,7 @@ const {
     sessionStoreEntries: { value: SessionStore };
   } => ({
     getRuntimeConfig: vi.fn<GetRuntimeConfigFn>(() => ({})),
+<<<<<<< HEAD
     resolveStorePathMock: vi.fn<ResolveStorePathFn>(
       (storePath?: string) => storePath ?? sessionStorePath,
     ),
@@ -101,6 +113,14 @@ const {
         entry,
       }));
     }),
+=======
+    loadSessionStoreMock: vi.fn<LoadSessionStoreFn>(
+      (_storePath, _opts) => sessionStoreEntries.value,
+    ),
+    resolveStorePathMock: vi.fn<ResolveStorePathFn>(
+      (storePath?: string) => storePath ?? sessionStorePath,
+    ),
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     readSessionUpdatedAtMock: vi.fn<ReadSessionUpdatedAtFn>(() => undefined),
     recordInboundSessionMock: vi.fn(async () => undefined),
     sessionStoreEntries: { value: {} as SessionStore },
@@ -351,6 +371,10 @@ export const editMessageReplyMarkupSpy: AnyAsyncMock = grammySpies.editMessageRe
 export const deleteMessageSpy: AnyAsyncMock = grammySpies.deleteMessageSpy;
 export const setMessageReactionSpy: AnyAsyncMock = grammySpies.setMessageReactionSpy;
 export const setMyCommandsSpy: AnyAsyncMock = grammySpies.setMyCommandsSpy;
+<<<<<<< HEAD
+=======
+export const getMeSpy: AnyAsyncMock = grammySpies.getMeSpy;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export const getChatSpy: AnyAsyncMock = grammySpies.getChatSpy;
 export const sendMessageSpy: AnyAsyncMock = grammySpies.sendMessageSpy;
 export const sendAnimationSpy: AnyAsyncMock = grammySpies.sendAnimationSpy;
@@ -462,8 +486,11 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
 };
 export const telegramBotDepsForTest: TelegramBotDeps = {
   getRuntimeConfig,
+<<<<<<< HEAD
   getSessionEntry: getSessionEntryMock,
   listSessionEntries: listSessionEntriesMock,
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   loadSessionStore: loadSessionStoreMock as TelegramBotDeps["loadSessionStore"],
   resolveStorePath: resolveStorePathMock,
   readSessionUpdatedAt: readSessionUpdatedAtMock,
@@ -584,6 +611,7 @@ beforeEach(() => {
   loadSessionStoreMock.mockImplementation(() => sessionStoreEntries.value);
   resolveStorePathMock.mockReset();
   resolveStorePathMock.mockImplementation((storePath?: string) => storePath ?? sessionStorePath);
+<<<<<<< HEAD
   getSessionEntryMock.mockReset();
   getSessionEntryMock.mockImplementation(({ storePath, sessionKey, agentId }) => {
     const resolvedStorePath = storePath ?? resolveStorePathMock(undefined, { agentId });
@@ -597,6 +625,8 @@ beforeEach(() => {
       entry,
     }));
   });
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
   readSessionUpdatedAtMock.mockReset();
   readSessionUpdatedAtMock.mockReturnValue(undefined);
   recordInboundSessionMock.mockReset();
@@ -648,8 +678,13 @@ beforeEach(() => {
   setMyCommandsSpy.mockResolvedValue(undefined);
   getChatSpy.mockReset();
   getChatSpy.mockResolvedValue(undefined);
+<<<<<<< HEAD
   grammySpies.getMeSpy.mockReset();
   grammySpies.getMeSpy.mockResolvedValue({
+=======
+  getMeSpy.mockReset();
+  getMeSpy.mockResolvedValue({
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     username: "openclaw_bot",
     has_topics_enabled: true,
   });

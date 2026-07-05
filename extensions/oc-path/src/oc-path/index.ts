@@ -24,6 +24,18 @@
  * @module @openclaw/oc-path
  */
 
+<<<<<<< HEAD
+=======
+/**
+ * SDK version this build of `@openclaw/oc-path` exposes. Bumped on
+ * every breaking change to AST shape, OcPath syntax, or universal
+ * verbs (`resolveOcPath`, `setOcPath`, `findOcPaths`, `parseXxx`,
+ * `emitXxx`). Plugin packs that depend on the substrate declare the
+ * version they were authored against and the host warns on mismatch.
+ */
+export const SDK_VERSION = "0.1.0";
+
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // AST types
 export type { AstBlock, AstItem, Diagnostic, FrontmatterEntry, ParseResult, MdAst } from "./ast.js";
 export type { JsoncAst, JsoncEntry, JsoncValue } from "./jsonc/ast.js";
@@ -56,7 +68,11 @@ export {
 
 // `evaluatePredicate`, `getPathLayout`, `parseOrdinalSeg`,
 // `parsePredicateSeg`, `parseUnionSeg`, `quoteSeg`, `unquoteSeg`,
+<<<<<<< HEAD
 // `resolvePositionalSeg`, `splitRespectingBrackets`
+=======
+// `repackPath`, `resolvePositionalSeg`, `splitRespectingBrackets`
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 // were exported from earlier prototypes. They're substrate-internal
 // helpers — used by `find.ts`, the per-kind resolvers, and the parser
 // itself, but not part of the upstream-portable public surface.
@@ -73,7 +89,11 @@ export type { JsonlParseResult } from "./jsonl/parse.js";
 export type { YamlParseResult } from "./yaml/parse.js";
 
 export type { EmitOptions } from "./emit.js";
+<<<<<<< HEAD
 export { emitMd } from "./emit.js";
+=======
+export { emitMd, markDirty } from "./emit.js";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 export type { JsoncEmitOptions } from "./jsonc/emit.js";
 export { emitJsonc } from "./jsonc/emit.js";
 export type { JsonlEmitOptions } from "./jsonl/emit.js";

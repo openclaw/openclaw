@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+<<<<<<< HEAD
 async function probeFileSymlinkCapability(): Promise<boolean> {
   const probeDir = await fs.promises.mkdtemp(
     path.join(os.tmpdir(), "openclaw-qqbot-symlink-probe-"),
@@ -23,6 +24,8 @@ async function probeFileSymlinkCapability(): Promise<boolean> {
 
 const canCreateFileSymlinks = await probeFileSymlinkCapability();
 
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 const adapterMocks = vi.hoisted(() => ({
   fetchMedia: vi.fn(),
 }));
@@ -116,7 +119,11 @@ describe("qqbot file-utils downloadFile", () => {
     expect(adapterMocks.fetchMedia).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it.skipIf(!canCreateFileSymlinks)("rejects symlinked local media helpers", async () => {
+=======
+  it.skipIf(process.platform === "win32")("rejects symlinked local media helpers", async () => {
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     const targetPath = path.join(tempDir, "target.png");
     const linkPath = path.join(tempDir, "link.png");
     await fs.promises.writeFile(targetPath, "image-bytes");

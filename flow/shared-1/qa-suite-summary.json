@@ -1,0 +1,330 @@
+{
+  "scenarios": [
+    {
+      "name": "GPT-5.5 thinking visibility switch",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "enables reasoning display and disables thinking",
+          "status": "pass",
+          "details": "reasoning ack=⚙️ Reasoning visibility enabled.; thinking off=Thinking disabled.; off answer=THINKING-OFF-OK"
+        },
+        {
+          "name": "switches to medium thinking",
+          "status": "pass",
+          "details": "thinking medium=Thinking level set to medium."
+        },
+        {
+          "name": "verifies medium thinking reaches the provider",
+          "status": "pass",
+          "details": "answer=THINKING-MAX-OK; medium reasoning=medium; crabline suppresses reasoning delivery"
+        }
+      ]
+    },
+    {
+      "name": "Anthropic Opus setup-token smoke",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "confirms regular Anthropic setup-token lane",
+          "status": "pass",
+          "details": "mock-compatible provider=mock-openai"
+        },
+        {
+          "name": "talks through regular Anthropic Opus",
+          "status": "pass",
+          "details": "mock mode: skipped live Anthropic smoke"
+        }
+      ]
+    },
+    {
+      "name": "Personal failure recovery",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "reports partial failure with retry boundary",
+          "status": "pass",
+          "details": "Artifact: personal-failure-recovery.txt\nFailed step: external calendar update was not attempted\nRetry boundary: do not retry until approval is given\nPERSONAL-FAILURE-RECOVERY-OK"
+        }
+      ]
+    },
+    {
+      "name": "Nervous release protocol chat",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "completes the full natural C-3PO chat and records the transcript",
+          "status": "pass",
+          "details": "ASSISTANT OpenClaw QA: THINKING-MAX-OK\n\nASSISTANT OpenClaw QA: THINKING-MAX-OK\n\nASSISTANT OpenClaw QA: THINKING-MAX-OK\n\nASSISTANT OpenClaw QA: THINKING-MAX-OK"
+        }
+      ]
+    },
+    {
+      "name": "Approval turn tool followthrough",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "turns short approval into a real file read",
+          "status": "pass",
+          "details": "Protocol note: I reviewed the requested material. Evidence snippet: QA mission: Understand this OpenClaw repo from source + docs before acting. The repo is available in your workspace at <code>./repo/</code>. Use the seeded QA scenario plan as your baseline, then add more scenarios if the code/docs"
+        }
+      ]
+    },
+    {
+      "name": "Reasoning-only no-auto-retry after write",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "keeps replay-unsafety explicit after a mutating write",
+          "status": "pass",
+          "details": "requests=2 sideEffect=side effects already happened"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — fs.list",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises fs.list happy and failure paths",
+          "status": "pass",
+          "details": "read mock provider happy planned args (diagnostic only): {\"path\":\"QA_KICKOFF_TASK.md\"}\nread mock provider failure planned args (diagnostic only): {\"__qaFailureMode\":\"denied-input\"}"
+        }
+      ]
+    },
+    {
+      "name": "Build Lobster Invaders",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "creates the artifact after reading context",
+          "status": "pass",
+          "details": "lobster-invaders.html"
+        }
+      ]
+    },
+    {
+      "name": "Secret redaction tool logs",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "reads fake secret context without echoing it",
+          "status": "pass",
+          "details": "SECRET-REDACTION-OK"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — exec",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises exec happy and failure paths",
+          "status": "pass",
+          "details": "exec mock provider happy planned args (diagnostic only): {\"command\":\"echo runtime-tool-fixture\",\"timeout\":5}\nexec mock provider failure planned args (diagnostic only): {\"__qaFailureMode\":\"denied-input\"}"
+        }
+      ]
+    },
+    {
+      "name": "Runtime tool fixture — tts",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "exercises or records tts coverage",
+          "status": "pass",
+          "details": "expected-unavailable tts: this fixture is report-only for the current profile\navailable tools: apply_patch, create_goal, cron, edit, exec, get_goal, memory_get, memory_search, process, read, session_status, sessions_history, sessions_list, sessions_send, sessions_spawn, sessions_yield, skill_workshop, subagents, update_goal, update_plan, web_fetch, web_search, write"
+        }
+      ]
+    },
+    {
+      "name": "Codex plugin cold install",
+      "status": "pass",
+      "steps": [
+        {
+          "name": "validates cold-install repair routing",
+          "status": "pass",
+          "details": "missing=repair-required repaired=ready route=codex-oauth"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "total": 12,
+    "passed": 12,
+    "failed": 0
+  },
+  "metrics": {
+    "wallMs": 60784,
+    "gatewayProcessCpuMs": 11000,
+    "gatewayCpuCoreRatio": 0.181,
+    "gatewayProcessRssStartBytes": 927629312,
+    "gatewayProcessRssEndBytes": 1043771392,
+    "gatewayProcessRssDeltaBytes": 116142080,
+    "gatewayProcessRssPeakBytes": 1072197632,
+    "gatewayProcessRssPeakDeltaBytes": 144568320,
+    "gatewayProcessRssSamples": [
+      {
+        "label": "suite-start",
+        "at": "2026-07-03T13:12:16.432Z",
+        "gatewayProcessRssBytes": 927629312
+      },
+      {
+        "label": "scenario:gpt55-thinking-visibility-switch:start",
+        "at": "2026-07-03T13:12:16.453Z",
+        "gatewayProcessRssBytes": 929132544
+      },
+      {
+        "label": "scenario:gpt55-thinking-visibility-switch:finish",
+        "at": "2026-07-03T13:12:24.667Z",
+        "gatewayProcessRssBytes": 1064824832
+      },
+      {
+        "label": "scenario:anthropic-opus-setup-token-smoke:start",
+        "at": "2026-07-03T13:12:24.678Z",
+        "gatewayProcessRssBytes": 1064824832
+      },
+      {
+        "label": "scenario:anthropic-opus-setup-token-smoke:finish",
+        "at": "2026-07-03T13:12:24.701Z",
+        "gatewayProcessRssBytes": 1064824832
+      },
+      {
+        "label": "scenario:personal-failure-recovery:start",
+        "at": "2026-07-03T13:12:24.724Z",
+        "gatewayProcessRssBytes": 1064824832
+      },
+      {
+        "label": "scenario:personal-failure-recovery:finish",
+        "at": "2026-07-03T13:12:27.211Z",
+        "gatewayProcessRssBytes": 1072197632
+      },
+      {
+        "label": "scenario:character-vibes-c3po:start",
+        "at": "2026-07-03T13:12:27.232Z",
+        "gatewayProcessRssBytes": 1072197632
+      },
+      {
+        "label": "scenario:character-vibes-c3po:finish",
+        "at": "2026-07-03T13:12:31.747Z",
+        "gatewayProcessRssBytes": 933044224
+      },
+      {
+        "label": "scenario:approval-turn-tool-followthrough:start",
+        "at": "2026-07-03T13:12:31.778Z",
+        "gatewayProcessRssBytes": 933044224
+      },
+      {
+        "label": "scenario:approval-turn-tool-followthrough:finish",
+        "at": "2026-07-03T13:12:35.736Z",
+        "gatewayProcessRssBytes": 947007488
+      },
+      {
+        "label": "scenario:reasoning-only-no-auto-retry-after-write:start",
+        "at": "2026-07-03T13:12:35.747Z",
+        "gatewayProcessRssBytes": 947007488
+      },
+      {
+        "label": "scenario:reasoning-only-no-auto-retry-after-write:finish",
+        "at": "2026-07-03T13:12:38.108Z",
+        "gatewayProcessRssBytes": 948736000
+      },
+      {
+        "label": "scenario:runtime-tool-fs-list:start",
+        "at": "2026-07-03T13:12:38.143Z",
+        "gatewayProcessRssBytes": 948736000
+      },
+      {
+        "label": "scenario:runtime-tool-fs-list:finish",
+        "at": "2026-07-03T13:12:42.113Z",
+        "gatewayProcessRssBytes": 964214784
+      },
+      {
+        "label": "scenario:lobster-invaders-build:start",
+        "at": "2026-07-03T13:12:42.128Z",
+        "gatewayProcessRssBytes": 964214784
+      },
+      {
+        "label": "scenario:lobster-invaders-build:finish",
+        "at": "2026-07-03T13:12:44.402Z",
+        "gatewayProcessRssBytes": 966004736
+      },
+      {
+        "label": "scenario:secret-redaction-tool-logs:start",
+        "at": "2026-07-03T13:12:44.417Z",
+        "gatewayProcessRssBytes": 966004736
+      },
+      {
+        "label": "scenario:secret-redaction-tool-logs:finish",
+        "at": "2026-07-03T13:12:46.134Z",
+        "gatewayProcessRssBytes": 967024640
+      },
+      {
+        "label": "scenario:runtime-tool-exec:start",
+        "at": "2026-07-03T13:12:46.147Z",
+        "gatewayProcessRssBytes": 967024640
+      },
+      {
+        "label": "scenario:runtime-tool-exec:finish",
+        "at": "2026-07-03T13:12:50.244Z",
+        "gatewayProcessRssBytes": 1042087936
+      },
+      {
+        "label": "scenario:runtime-tool-tts:start",
+        "at": "2026-07-03T13:12:50.250Z",
+        "gatewayProcessRssBytes": 1042087936
+      },
+      {
+        "label": "scenario:runtime-tool-tts:finish",
+        "at": "2026-07-03T13:12:50.859Z",
+        "gatewayProcessRssBytes": 1043771392
+      },
+      {
+        "label": "scenario:codex-plugin-cold-install:start",
+        "at": "2026-07-03T13:12:50.866Z",
+        "gatewayProcessRssBytes": 1043771392
+      },
+      {
+        "label": "scenario:codex-plugin-cold-install:finish",
+        "at": "2026-07-03T13:12:50.923Z",
+        "gatewayProcessRssBytes": 1043771392
+      },
+      {
+        "label": "suite-finish",
+        "at": "2026-07-03T13:12:50.952Z",
+        "gatewayProcessRssBytes": 1043771392
+      }
+    ]
+  },
+  "run": {
+    "startedAt": "2026-07-03T13:11:50.140Z",
+    "finishedAt": "2026-07-03T13:12:50.924Z",
+    "providerMode": "mock-openai",
+    "primaryModel": "mock-openai/gpt-5.5",
+    "primaryProvider": "mock-openai",
+    "primaryModelName": "gpt-5.5",
+    "alternateModel": "mock-openai/gpt-5.5-alt",
+    "alternateProvider": "mock-openai",
+    "alternateModelName": "gpt-5.5-alt",
+    "fastMode": false,
+    "concurrency": 1,
+    "channelDriver": "crabline",
+    "channel": "telegram",
+    "channelCapabilityMatrixPath": "crabline-fake-provider-capabilities.json",
+    "channelDriverSmokePath": "crabline-fake-provider-smoke.json",
+    "scenarioIds": [
+      "gpt55-thinking-visibility-switch",
+      "anthropic-opus-setup-token-smoke",
+      "personal-failure-recovery",
+      "character-vibes-c3po",
+      "approval-turn-tool-followthrough",
+      "reasoning-only-no-auto-retry-after-write",
+      "runtime-tool-fs-list",
+      "lobster-invaders-build",
+      "secret-redaction-tool-logs",
+      "runtime-tool-exec",
+      "runtime-tool-tts",
+      "codex-plugin-cold-install"
+    ],
+    "runtimePair": null
+  }
+}

@@ -1,7 +1,11 @@
 // Implements TUI session actions such as switching, forking, and resuming.
 import type { TUI } from "@earendil-works/pi-tui";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+<<<<<<< HEAD
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
+=======
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
 import {
@@ -89,7 +93,10 @@ function sessionInfoUiEquals(left: SessionInfo, right: SessionInfo): boolean {
     left.outputTokens === right.outputTokens &&
     left.totalTokens === right.totalTokens &&
     left.responseUsage === right.responseUsage &&
+<<<<<<< HEAD
     left.effectiveResponseUsage === right.effectiveResponseUsage &&
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     left.displayName === right.displayName &&
     goalEquals(left.goal, right.goal)
   );
@@ -246,9 +253,12 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.responseUsage !== undefined) {
       next.responseUsage = entry.responseUsage;
     }
+<<<<<<< HEAD
     if (entry?.effectiveResponseUsage !== undefined) {
       next.effectiveResponseUsage = entry.effectiveResponseUsage;
     }
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     if (entry?.inputTokens !== undefined) {
       next.inputTokens = entry.inputTokens;
     }
@@ -257,6 +267,7 @@ export function createSessionActions(context: SessionActionContext) {
     }
     if (entry?.totalTokens !== undefined) {
       next.totalTokens = entry.totalTokens;
+<<<<<<< HEAD
       next.totalTokensFresh = entry.totalTokensFresh === true;
     } else if (entry?.totalTokensFresh === true) {
       // Fresh session: the total is known to be 0. The gateway strips the 0 via
@@ -264,6 +275,8 @@ export function createSessionActions(context: SessionActionContext) {
       // mirroring the /status fix in #93798. See followup to #93771.
       next.totalTokens = 0;
       next.totalTokensFresh = true;
+=======
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
     }
     if (params.clearMissingUsage) {
       if (entry?.inputTokens === undefined) {
@@ -272,9 +285,14 @@ export function createSessionActions(context: SessionActionContext) {
       if (entry?.outputTokens === undefined) {
         next.outputTokens = null;
       }
+<<<<<<< HEAD
       if (entry?.totalTokens === undefined && entry?.totalTokensFresh !== true) {
         next.totalTokens = null;
         next.totalTokensFresh = undefined;
+=======
+      if (entry?.totalTokens === undefined) {
+        next.totalTokens = null;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
       }
     }
     if (hasEntryUpdate) {
@@ -431,7 +449,11 @@ export function createSessionActions(context: SessionActionContext) {
         sessionInfo?: SessionInfoEntry;
         defaults?: SessionInfoDefaults;
         thinkingLevel?: string;
+<<<<<<< HEAD
         fastMode?: FastMode;
+=======
+        fastMode?: boolean;
+>>>>>>> e84b719c996d5700bd3163008a0f5d78ce2423df
         verboseLevel?: string;
         traceLevel?: string;
         inFlightRun?: { runId?: unknown; text?: unknown };
