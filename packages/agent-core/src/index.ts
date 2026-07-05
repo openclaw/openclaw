@@ -7,7 +7,11 @@ export * from "./runtime-deps.js";
 export * from "./types.js";
 export * from "./validation.js";
 export * from "./harness/agent-harness.js";
-export * from "./harness/env/kill-tree.js";
+export {
+  killProcessTree,
+  signalProcessTree,
+  type KillProcessTreeOptions,
+} from "./harness/env/kill-tree.js";
 export * from "./harness/messages.js";
 export * from "./harness/prompt-template-arguments.js";
 export * from "./harness/skills.js";

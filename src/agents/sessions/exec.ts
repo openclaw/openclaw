@@ -3,7 +3,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { killProcessTree } from "../../process/kill-tree.js";
+import { killProcessTreeAndWait } from "../../process/kill-tree.js";
 import { waitForChildProcess } from "../utils/child-process.js";
 
 const DEFAULT_OUTPUT_LIMIT_CHARS = 16 * 1024 * 1024;
@@ -93,6 +93,7 @@ export async function execCommand(
     let killed = false;
     let timeoutId: NodeJS.Timeout | undefined;
     let forceKillTimer: NodeJS.Timeout | undefined;
+    let cleanupPromise: Promise<void> | undefined;
     let settled = false;
     const maxOutputChars = clampMaxOutputChars(options?.maxOutputChars);
     const truncateOutput = options?.maxOutputChars !== undefined;
@@ -103,7 +104,7 @@ export async function execCommand(
         killProcess();
       }
     };
-    const finish = (code: number) => {
+    const finish = async (code: number) => {
       if (settled) {
         return;
       }
@@ -117,6 +118,7 @@ export async function execCommand(
       if (options?.signal) {
         options.signal.removeEventListener("abort", killProcess);
       }
+      await cleanupPromise;
       if (outputLimitExceeded) {
         stderr = appendCapturedOutput(
           stderr,
@@ -140,10 +142,10 @@ export async function execCommand(
       if (!killed) {
         killed = true;
         if (proc.pid) {
-          killProcessTree(proc.pid, {
+          cleanupPromise = killProcessTreeAndWait(proc.pid, {
             detached: process.platform !== "win32",
             graceMs: FORCE_KILL_GRACE_MS,
-          });
+          }).catch(() => undefined);
         } else {
           proc.kill("SIGTERM");
           forceKillTimer = setTimeout(() => {
@@ -192,10 +194,10 @@ export async function execCommand(
     // held open by detached descendants.
     waitForChildProcess(proc)
       .then((code) => {
-        finish(code ?? 0);
+        void finish(code ?? 0);
       })
       .catch(() => {
-        finish(1);
+        void finish(1);
       });
   });
 }
