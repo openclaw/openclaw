@@ -1304,6 +1304,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/ci-workflow-guards.test.ts",
         ],
       ],
+      [".github/workflows/mantis-web-ui-chat-proof.yml", packageAcceptanceTargets],
     ]);
 
     for (const [workflowPath, targets] of workflowTargets) {
