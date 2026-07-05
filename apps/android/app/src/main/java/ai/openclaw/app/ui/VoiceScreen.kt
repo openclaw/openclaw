@@ -773,7 +773,7 @@ private fun VoiceModeRow(
         )
         Text(
           text = subtitle,
-          style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+          style = ClawTheme.type.caption,
           color = ClawTheme.colors.textMuted,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
