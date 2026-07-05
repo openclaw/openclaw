@@ -57,6 +57,22 @@ already contain a strictly later calendar month's final version below patch
 `33`; maintenance patches stay eligible after `main` advances by more than one
 month.
 
+Before the first `.33` of a monthly line, download the immutable postpublish
+evidence JSON files for that month's regular `latest` releases into a local
+directory. Evidence must identify a full `all-publishable` plugin release and
+include exact package versions and npm integrities. Generate the scalar monthly
+compatibility cohort while preparing the release:
+
+```bash
+pnpm release:prep -- --cohort-evidence-dir /path/to/postpublish-evidence
+```
+
+The generator selects the greatest successful same-month patch below `33` and
+writes `release/extended-stable-plugin-cohort.json`. Later `.34+` maintenance
+releases verify the same immutable baseline against the supplied evidence; they
+must not advance it. Cohort packages are verified at that exact version but are
+never republished, tagged, or added to the protected selector transaction.
+
 Run the npm preflight and Full Release Validation from the exact
 extended-stable branch, then save both run IDs:
 

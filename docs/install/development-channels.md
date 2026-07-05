@@ -116,9 +116,11 @@ Switching channels with `openclaw update` also syncs plugin sources:
   their bundled (git checkout) source.
 - `stable` and `beta` restore npm-installed or ClawHub-installed plugin
   packages.
-- `extended-stable` currently uses the existing stable/latest plugin line
-  after the core package succeeds. Official plugin `@extended-stable`
-  selectors are not queried yet.
+- `extended-stable` uses two exact plugin targets after the core package
+  succeeds. Slack, Discord, and Codex follow the installed core version. Other
+  npm-publishable official plugins with bare or `latest` intent use the monthly
+  compatibility baseline packaged with that core release. Exact pins and
+  non-npm sources remain unchanged; neither track falls back to `latest`.
 - npm-installed plugins are updated after the core update completes.
 
 ## Checking current status
