@@ -5,6 +5,12 @@ import { getSlashCommands, helpText, parseCommand } from "./commands.js";
 describe("parseCommand", () => {
   it("normalizes aliases and keeps command args", () => {
     expect(parseCommand("/elev full")).toEqual({ name: "elevated", args: "full" });
+    expect(parseCommand("/t high")).toEqual({ name: "think", args: "high" });
+    expect(parseCommand("/side check this")).toEqual({ name: "btw", args: "check this" });
+    expect(parseCommand("/compact: focus on decisions")).toEqual({
+      name: "compact",
+      args: "focus on decisions",
+    });
   });
 
   it("normalizes gateway-status aliases", () => {
@@ -95,6 +101,15 @@ describe("getSlashCommands", () => {
       "Enable or disable memory dreaming.",
     );
   });
+
+  it("only advertises shared commands that local mode can route", () => {
+    const names = getSlashCommands({ local: true }).map((command) => command.name);
+
+    expect(names).toEqual(
+      expect.not.arrayContaining(["commands", "status", "compact", "context", "tools"]),
+    );
+    expect(names).toEqual(expect.arrayContaining(["goal", "btw", "side", "stop", "t"]));
+  });
 });
 
 describe("helpText", () => {
@@ -106,5 +121,12 @@ describe("helpText", () => {
     expect(output).toContain("/gateway-status");
     expect(output).toContain("/gwstatus");
     expect(output).toContain("/crestodian [request]");
+  });
+
+  it("does not advertise Gateway-owned commands in local mode", () => {
+    const output = helpText({ local: true });
+
+    expect(output).not.toContain("/commands");
+    expect(output).not.toContain("/status");
   });
 });

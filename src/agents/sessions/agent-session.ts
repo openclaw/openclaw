@@ -15,14 +15,16 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
-import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
   clampThinkingLevel,
+  cleanupSessionResources,
   getSupportedThinkingLevels,
+  isContextOverflow,
   modelsAreEqual,
-} from "../../llm/model-utils.js";
-import { resetApiProviders } from "../../llm/providers/register-builtins.js";
-import { cleanupSessionResources } from "../../llm/session-resources.js";
+  defaultApiRegistry,
+} from "@openclaw/ai/internal/runtime";
+import { resetApiProviders } from "@openclaw/ai/providers";
+import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import { streamSimple } from "../../llm/stream.js";
 import type {
   AssistantMessage,
@@ -31,7 +33,7 @@ import type {
   Model,
   TextContent,
 } from "../../llm/types.js";
-import { isContextOverflow } from "../../llm/utils/overflow.js";
+import { isRetryableAssistantError } from "../../llm/utils/retry.js";
 import type {
   Agent,
   AgentEvent,
@@ -47,6 +49,7 @@ import {
   collectEntriesForBranchSummaryFromBranches,
   compact,
   estimateContextTokens,
+  estimateTokens,
   generateBranchSummary,
   prepareCompaction,
   shouldCompact,
@@ -326,6 +329,10 @@ type CompactionWorkOutcome =
 
 /** Standard thinking levels */
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
+
+function estimateMessagesFromContent(messages: AgentMessage[]): number {
+  return messages.reduce((total, message) => total + estimateTokens(message), 0);
+}
 
 // ============================================================================
 // AgentSession Class
@@ -2091,6 +2098,12 @@ export class AgentSession {
         return false;
       }
       contextTokens = estimate.tokens;
+    } else if (assistantMessage.usage.contextUsage?.state === "unavailable") {
+      const estimatedContextTokens = this.getContextUsage()?.tokens;
+      if (estimatedContextTokens == null) {
+        return false;
+      }
+      contextTokens = estimatedContextTokens;
     } else {
       contextTokens = calculateContextTokens(assistantMessage.usage);
     }
@@ -2571,7 +2584,7 @@ export class AgentSession {
       reason: "reload",
     });
     await this.settingsManager.reload();
-    resetApiProviders();
+    resetApiProviders(defaultApiRegistry);
     await this.sessionResourceLoader.reload();
     this.buildRuntime({
       activeToolNames: this.getActiveToolNames(),
@@ -2609,11 +2622,7 @@ export class AgentSession {
       return false;
     }
 
-    const err = message.errorMessage;
-    // Match: overloaded_error, provider returned error, rate limit, 429, 500, 502, 503, 504, service unavailable, network/connection errors (including connection lost), WebSocket transport closes/errors, fetch failed, premature stream endings, HTTP/2 closed before response, terminated, retry delay exceeded
-    return /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|stream ended before message_stop|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i.test(
-      err,
-    );
+    return isRetryableAssistantError(message);
   }
 
   /**
@@ -3137,6 +3146,7 @@ export class AgentSession {
     // If no such assistant exists, context token count is unknown until the next LLM response.
     const branchEntries = this.sessionManager.getBranch();
     const latestCompaction = getLatestCompactionEntry(branchEntries);
+    let estimateFromContent = false;
 
     if (latestCompaction) {
       // Check if there's a valid assistant usage after the compaction boundary
@@ -3147,25 +3157,32 @@ export class AgentSession {
         if (entry.type === "message" && entry.message.role === "assistant") {
           const assistant = entry.message;
           if (assistant.stopReason !== "aborted" && assistant.stopReason !== "error") {
+            if (assistant.usage.contextUsage?.state === "unavailable") {
+              estimateFromContent = true;
+              continue;
+            }
             const contextTokens = calculateContextTokens(assistant.usage);
             if (contextTokens > 0) {
               hasPostCompactionUsage = true;
+              estimateFromContent = false;
             }
             break;
           }
         }
       }
 
-      if (!hasPostCompactionUsage) {
+      if (!hasPostCompactionUsage && !estimateFromContent) {
         return { tokens: null, contextWindow, percent: null };
       }
     }
 
-    const estimate = estimateContextTokens(this.messages);
-    const percent = (estimate.tokens / contextWindow) * 100;
+    const tokens = estimateFromContent
+      ? estimateMessagesFromContent(this.messages)
+      : estimateContextTokens(this.messages).tokens;
+    const percent = (tokens / contextWindow) * 100;
 
     return {
-      tokens: estimate.tokens,
+      tokens,
       contextWindow,
       percent,
     };

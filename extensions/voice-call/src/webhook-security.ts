@@ -109,8 +109,7 @@ function validateTwilioSignature(
     .update(dataToSign)
     .digest("base64");
 
-  // Use timing-safe comparison to prevent timing attacks
-  return timingSafeEqual(signature, expectedSignature);
+  return safeEqualSecret(signature, expectedSignature);
 }
 
 function buildTwilioDataToSign(url: string, params: URLSearchParams): string {
@@ -129,13 +128,6 @@ function buildCanonicalTwilioParamString(params: URLSearchParams): string {
     .toSorted((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
     .map(([key, value]) => `${key}=${value}`)
     .join("&");
-}
-
-/**
- * Timing-safe string comparison to prevent timing attacks.
- */
-function timingSafeEqual(a: string, b: string): boolean {
-  return safeEqualSecret(a, b);
 }
 
 /**
@@ -737,10 +729,6 @@ function createPlivoV3ReplayKey(params: {
   return `plivo:v3:${sha256Hex(`${baseUrl}\n${params.nonce}`)}`;
 }
 
-function timingSafeEqualString(a: string, b: string): boolean {
-  return safeEqualSecret(a, b);
-}
-
 function validatePlivoV2Signature(params: {
   authToken: string;
   signature: string;
@@ -754,7 +742,7 @@ function validatePlivoV2Signature(params: {
     .digest("base64");
   const expected = normalizeSignatureBase64(digest);
   const provided = normalizeSignatureBase64(params.signature);
-  return timingSafeEqualString(expected, provided);
+  return safeEqualSecret(expected, provided);
 }
 
 type PlivoParamMap = Record<string, string[]>;
@@ -845,7 +833,7 @@ function validatePlivoV3Signature(params: {
   );
 
   for (const sig of provided) {
-    if (timingSafeEqualString(expected, sig)) {
+    if (safeEqualSecret(expected, sig)) {
       return true;
     }
   }

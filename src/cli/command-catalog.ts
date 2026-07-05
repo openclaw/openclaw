@@ -273,6 +273,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       loadPlugins: "never",
     },
   },
+  { commandPath: ["exec-approvals"], policy: { networkProxy: "bypass" } },
   { commandPath: ["exec-policy"], policy: { networkProxy: "bypass" } },
   { commandPath: ["hooks"], policy: { networkProxy: "bypass" } },
   { commandPath: ["logs"], policy: { networkProxy: "bypass" } },

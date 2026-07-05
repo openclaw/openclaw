@@ -40,6 +40,7 @@ const env = {
 };
 const OUTPUT_SOURCE_MAPS = process.env.OUTPUT_SOURCE_MAPS === "1";
 const RUN_NODE_SKIP_DTS_BUILD = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1";
+const TSDOWN_DECLARATIONS = RUN_NODE_SKIP_DTS_BUILD ? false : true;
 
 const SUPPRESSED_EVAL_WARNING_PATHS = [
   "@protobufjs/inquire/index.js",
@@ -137,6 +138,7 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
   return {
     ...config,
     env,
+    outExtensions: () => ({ js: ".js", dts: ".d.ts" }),
     fixedExtension: false,
     platform: "node",
     sourcemap: OUTPUT_SOURCE_MAPS,
@@ -198,6 +200,7 @@ const explicitNeverBundleDependencies = [
   "@lancedb/lancedb",
   "@larksuiteoapi/node-sdk",
   "@matrix-org/matrix-sdk-crypto-nodejs",
+  "@openclaw/ai",
   "@vitest/expect",
   "jimp",
   "matrix-js-sdk",
@@ -436,10 +439,12 @@ function buildNormalizationCoreDistEntries(): Record<string, string> {
   return {
     index: "packages/normalization-core/src/index.ts",
     "boolean-coercion": "packages/normalization-core/src/boolean-coercion.ts",
+    "error-coercion": "packages/normalization-core/src/error-coercion.ts",
     "number-coercion": "packages/normalization-core/src/number-coercion.ts",
     "record-coerce": "packages/normalization-core/src/record-coerce.ts",
     "string-coerce": "packages/normalization-core/src/string-coerce.ts",
     "string-normalization": "packages/normalization-core/src/string-normalization.ts",
+    "utf16-slice": "packages/normalization-core/src/utf16-slice.ts",
   };
 }
 
@@ -455,7 +460,6 @@ function buildMediaCoreDistEntries(): Record<string, string> {
     "media-source-url": "packages/media-core/src/media-source-url.ts",
     mime: "packages/media-core/src/mime.ts",
     "read-byte-stream-with-limit": "packages/media-core/src/read-byte-stream-with-limit.ts",
-    "read-response-with-limit": "packages/media-core/src/read-response-with-limit.ts",
   };
 }
 
@@ -553,16 +557,10 @@ function buildModelCatalogCoreDistEntries(): Record<string, string> {
   };
 }
 
-function buildLlmRuntimeDistEntries(): Record<string, string> {
-  return {
-    index: "packages/llm-runtime/src/index.ts",
-    "api-registry": "packages/llm-runtime/src/api-registry.ts",
-    stream: "packages/llm-runtime/src/stream.ts",
-  };
-}
-
 function shouldExternalizeAgentCoreDependency(id: string): boolean {
   return (
+    id === "@openclaw/ai" ||
+    id.startsWith("@openclaw/ai/") ||
     id === "@openclaw/llm-core" ||
     id.startsWith("@openclaw/llm-core/") ||
     id === "ignore" ||
@@ -598,10 +596,6 @@ function shouldExternalizeSpeechCoreDependency(id: string): boolean {
 
 function shouldExternalizeLlmCoreDependency(id: string): boolean {
   return id === "typebox" || id.startsWith("typebox/");
-}
-
-function shouldExternalizeLlmRuntimeDependency(id: string): boolean {
-  return id === "@openclaw/llm-core" || id.startsWith("@openclaw/llm-core/");
 }
 
 function shouldExternalizeMarkdownCoreDependency(id: string): boolean {
@@ -673,7 +667,7 @@ function buildUnifiedDistEntries(): Record<string, string> {
 export default defineConfig([
   nodeBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildAgentCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("agent-core"),
     deps: {
@@ -682,7 +676,7 @@ export default defineConfig([
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildGatewayProtocolDistEntries(),
     outDir: tsdownPackageOutputRoot("gateway-protocol"),
     deps: {
@@ -691,7 +685,7 @@ export default defineConfig([
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildGatewayClientDistEntries(),
     outDir: tsdownPackageOutputRoot("gateway-client"),
     deps: {
@@ -700,7 +694,7 @@ export default defineConfig([
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildNetPolicyDistEntries(),
     outDir: tsdownPackageOutputRoot("net-policy"),
     deps: {
@@ -709,19 +703,19 @@ export default defineConfig([
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildMediaGenerationCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("media-generation-core"),
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildMediaUnderstandingCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("media-understanding-common"),
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildMarkdownCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("markdown-core"),
     deps: {
@@ -730,25 +724,25 @@ export default defineConfig([
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildNormalizationCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("normalization-core"),
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildMediaCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("media-core"),
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildAcpCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("acp-core"),
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildTerminalCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("terminal-core"),
     deps: {
@@ -757,13 +751,13 @@ export default defineConfig([
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildWebContentCoreDistEntries(),
     outDir: "packages/web-content-core/dist",
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildSpeechCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("speech-core"),
     deps: {
@@ -772,7 +766,7 @@ export default defineConfig([
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildLlmCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("llm-core"),
     deps: {
@@ -781,28 +775,21 @@ export default defineConfig([
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildModelCatalogCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("model-catalog-core"),
-  }),
-  nodeWorkspacePackageBuildConfig({
-    clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
-    entry: buildLlmRuntimeDistEntries(),
-    outDir: tsdownPackageOutputRoot("llm-runtime"),
-    deps: {
-      neverBundle: shouldExternalizeLlmRuntimeDependency,
-    },
   }),
   nodeBuildConfig({
     // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
     // and bundled hooks in one graph so runtime singletons are emitted once.
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: TSDOWN_DECLARATIONS,
     entry: buildUnifiedDistEntries(),
     deps: {
       alwaysBundle: shouldAlwaysBundleDependency,
       neverBundle: shouldNeverBundleDependency,
+      // Keep dts generation from inlining externalized package types.
+      dts: { neverBundle: shouldNeverBundleDependency },
     },
   }),
 ]);

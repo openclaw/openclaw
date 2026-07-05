@@ -807,10 +807,31 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun composeGatewayManualUrlRejectsBlankPortWhenTlsIsOff() {
+  fun composeGatewayManualUrlDefaultsPortTo18789ForNonTailnetTlsHostsWhenPortBlank() {
+    val url = composeGatewayManualUrl("gateway.example.com", "", tls = true)
+
+    assertEquals("https://gateway.example.com:18789", url)
+  }
+
+  @Test
+  fun composeGatewayManualUrlDefaultsPortTo443ForTailnetHostWithTrailingDotWhenPortBlank() {
+    val url = composeGatewayManualUrl("device.sample.ts.net.", "", tls = true)
+
+    assertEquals("https://device.sample.ts.net.:443", url)
+  }
+
+  @Test
+  fun composeGatewayManualUrlDoesNotTreatLookalikeTailnetSuffixAsTailnet() {
+    val url = composeGatewayManualUrl("gateway.ts.net.evil.com", "", tls = true)
+
+    assertEquals("https://gateway.ts.net.evil.com:18789", url)
+  }
+
+  @Test
+  fun composeGatewayManualUrlDefaultsBlankCleartextPortTo18789() {
     val url = composeGatewayManualUrl("127.0.0.1", "", tls = false)
 
-    assertNull(url)
+    assertEquals("http://127.0.0.1:18789", url)
   }
 
   @Test

@@ -131,15 +131,10 @@ describe("package scripts", () => {
     );
   });
 
-  it("restores plugin SDK root alias before strict smoke export checks", () => {
-    const script = readPackageJson().scripts["build:plugin-sdk:strict-smoke"];
-    const tsdownIndex = script.indexOf("node scripts/tsdown-build.mjs");
-    const copyRootAliasIndex = script.indexOf("node scripts/copy-plugin-sdk-root-alias.mjs");
-    const checkExportsIndex = script.indexOf("node scripts/check-plugin-sdk-exports.mjs");
-
-    expect(tsdownIndex).toBeGreaterThanOrEqual(0);
-    expect(copyRootAliasIndex).toBeGreaterThan(tsdownIndex);
-    expect(copyRootAliasIndex).toBeLessThan(checkExportsIndex);
+  it("runs runtime postbuild before plugin SDK strict export checks", () => {
+    expect(readPackageJson().scripts["build:plugin-sdk:strict-smoke"]).toBe(
+      "node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/run-with-env.mjs OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --experimental-strip-types scripts/write-plugin-sdk-entry-dts.ts && node scripts/check-plugin-sdk-exports.mjs",
+    );
   });
 
   it("uses the shipped package launcher for npm start", () => {

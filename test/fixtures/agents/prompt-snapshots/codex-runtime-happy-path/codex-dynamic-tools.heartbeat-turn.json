@@ -1232,7 +1232,7 @@
       },
       {
         "deferLoading": true,
-        "description": "List visible sessions; filter by kind, label, agentId, search, activity. Use before sessions_history or sessions_send target selection.",
+        "description": "List visible sessions; filter by kind, label, agentId, search, activity, archive state. Use before sessions_history or sessions_send target selection.",
         "inputSchema": {
           "properties": {
             "activeMinutes": {
@@ -1243,6 +1243,9 @@
               "maxLength": 64,
               "minLength": 1,
               "type": "string"
+            },
+            "archived": {
+              "type": "boolean"
             },
             "includeDerivedTitles": {
               "type": "boolean"

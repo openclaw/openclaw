@@ -1,8 +1,8 @@
+import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
 // Cron tool schema tests cover the provider-facing parameter shape and runtime
 // validation compatibility for cron jobs.
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { normalizeToolParameterSchema } from "../agent-tools-parameter-schema.js";
 import { isCronRecoverableObjectKey } from "./cron-tool-canonicalize.js";
 import {
   createCronFlatJobSchemaProperties,

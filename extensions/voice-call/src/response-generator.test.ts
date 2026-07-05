@@ -17,6 +17,7 @@ type TestSessionEntry = {
 };
 
 type EmbeddedAgentArgs = {
+  abortSignal?: AbortSignal;
   extraSystemPrompt: string;
   provider?: string;
   model?: string;
@@ -75,6 +76,12 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
     payloads,
     meta: { durationMs: 12, aborted: false },
   }));
+  const runWithWorkAdmission = vi.fn(
+    async (
+      _params: { storePath: string; sessionKey: string },
+      run: (signal: AbortSignal) => Promise<unknown>,
+    ) => await run(new AbortController().signal),
+  );
   const resolveAgentDir = vi.fn((_cfg: CoreConfig, agentId: string) => {
     return `/tmp/openclaw/agents/${agentId}`;
   });
@@ -113,6 +120,7 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
       getSessionEntry,
       patchSessionEntry,
       upsertSessionEntry,
+      runWithWorkAdmission,
       resolveSessionFilePath,
     },
   } as unknown as CoreAgentDeps;
@@ -120,6 +128,7 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
   return {
     runtime,
     runEmbeddedAgent,
+    runWithWorkAdmission,
     saveSessionStore,
     updateSessionStore,
     patchSessionEntry,
@@ -181,7 +190,7 @@ async function runGenerateVoiceResponse(
 
 describe("generateVoiceResponse", () => {
   it("suppresses reasoning payloads and reads structured spoken output", async () => {
-    const { runtime, runEmbeddedAgent } = createAgentRuntime([
+    const { runtime, runEmbeddedAgent, runWithWorkAdmission } = createAgentRuntime([
       { text: "Reasoning: hidden", isReasoning: true },
       { text: '{"spoken":"Hello from JSON."}' },
     ]);
@@ -193,6 +202,29 @@ describe("generateVoiceResponse", () => {
     expect(args.extraSystemPrompt).toContain('{"spoken":"..."}');
     expect(args.provider).toBe("together");
     expect(args.model).toBe("Qwen/Qwen2.5-7B-Instruct-Turbo");
+    expect(args.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(runWithWorkAdmission).toHaveBeenCalledWith(
+      {
+        storePath: "/tmp/openclaw/main/sessions.json",
+        sessionKey: "agent:main:voice:15550001111",
+      },
+      expect.any(Function),
+    );
+  });
+
+  it("returns the lifecycle rejection without starting the embedded agent", async () => {
+    const { runtime, runEmbeddedAgent, runWithWorkAdmission } = createAgentRuntime([]);
+    runWithWorkAdmission.mockRejectedValueOnce(
+      new Error('Session "agent:main:voice:15550001111" is archived.'),
+    );
+
+    const { result } = await runGenerateVoiceResponse([], { runtime });
+
+    expect(result).toEqual({
+      text: null,
+      error: 'Error: Session "agent:main:voice:15550001111" is archived.',
+    });
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it("extracts spoken text from fenced JSON", async () => {

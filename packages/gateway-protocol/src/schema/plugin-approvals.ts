@@ -30,6 +30,12 @@ export const PluginApprovalRequestParamsSchema = Type.Object(
     ),
     agentId: Type.Optional(Type.String()),
     sessionKey: Type.Optional(Type.String()),
+    approvalReviewerDeviceIds: Type.Optional(
+      Type.Array(NonEmptyString, {
+        description:
+          "Trusted approval-runtime metadata naming operator devices that may review this approval; ordinary Gateway clients may send the field, but the Gateway only binds it for internal approval-runtime requests.",
+      }),
+    ),
     turnSourceChannel: Type.Optional(Type.String()),
     turnSourceTo: Type.Optional(Type.String()),
     turnSourceAccountId: Type.Optional(Type.String()),

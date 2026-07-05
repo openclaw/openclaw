@@ -114,6 +114,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
 
 export type EmbeddedRunAttemptResult = {
   aborted: boolean;
+  /** True when the runtime made the authoritative final-assistant transcript decision. */
+  assistantTranscriptOwned?: boolean;
   /** True when the abort originated from the caller-provided abortSignal. */
   externalAbort: boolean;
   timedOut: boolean;

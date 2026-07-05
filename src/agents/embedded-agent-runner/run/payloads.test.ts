@@ -71,6 +71,18 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Done.");
   });
 
+  it("marks runtime-persisted final replies as transcript owned", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Already persisted."],
+      assistantTranscriptOwned: true,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
+      assistantTranscriptOwned: true,
+    });
+  });
+
   it("does not revive signed unphased text when explicit final-answer text is empty", () => {
     expectNoPayloads({
       lastAssistant: {
