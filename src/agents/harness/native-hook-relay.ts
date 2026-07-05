@@ -148,6 +148,8 @@ export type NativeHookRelayCommandForEventOptions = {
   timeoutMs?: number;
 };
 
+type NativeHookRelayPreToolUseUnavailableMode = "noop" | "loop-detection-only";
+
 export type InvokeNativeHookRelayParams = {
   provider: unknown;
   relayId: unknown;
@@ -450,10 +452,10 @@ export function registerNativeHookRelay(
         relayId,
         generation: registration.generation,
         event,
-        preToolUseUnavailable:
-          event === "pre_tool_use" && !nativeHookRelayEventHasLocalWork(registration, event)
-            ? "noop"
-            : undefined,
+        preToolUseUnavailable: resolveNativeHookRelayPreToolUseUnavailableMode({
+          registration,
+          event,
+        }),
         nice: params.command?.nice,
         timeoutMs: resolveNativeHookRelayCommandTimeoutMs(
           params.command?.timeoutMs,
@@ -550,7 +552,7 @@ export function buildNativeHookRelayCommand(params: {
   relayId: string;
   generation?: string;
   event: NativeHookRelayEvent;
-  preToolUseUnavailable?: "noop";
+  preToolUseUnavailable?: NativeHookRelayPreToolUseUnavailableMode;
   timeoutMs?: number;
   executable?: string;
   nice?: number | false;
@@ -581,6 +583,19 @@ export function buildNativeHookRelayCommand(params: {
     "--timeout",
     String(timeoutMs),
   ]);
+}
+
+function resolveNativeHookRelayPreToolUseUnavailableMode(params: {
+  registration: NativeHookRelayRegistration;
+  event: NativeHookRelayEvent;
+}): NativeHookRelayPreToolUseUnavailableMode | undefined {
+  if (params.event !== "pre_tool_use") {
+    return undefined;
+  }
+  if (hasBeforeToolCallPolicy()) {
+    return undefined;
+  }
+  return nativePreToolUseMayRunLoopDetection(params.registration) ? "loop-detection-only" : "noop";
 }
 
 function nativePreToolUseMayRunLoopDetection(registration: NativeHookRelayRegistration): boolean {
@@ -800,7 +815,13 @@ export function renderNativeHookRelayUnavailableResponse(params: {
     // The standalone CLI cannot reconstruct the originating registration after
     // relay lookup fails, so unavailable PreToolUse must fail closed unless the
     // generated command explicitly recorded that no before-tool policy existed.
-    if (params.preToolUseUnavailable === "noop") {
+    // Loop detection is useful, but it is not an authority boundary. If the
+    // gateway process died mid-turn, keep the Codex tool path alive instead of
+    // permanently blocking shell/git/apply_patch on a lost in-memory relay.
+    if (
+      params.preToolUseUnavailable === "noop" ||
+      params.preToolUseUnavailable === "loop-detection-only"
+    ) {
       return adapter.renderNoopResponse(event);
     }
     return adapter.renderPreToolUseBlockResponse(message);

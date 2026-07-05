@@ -979,7 +979,11 @@ describe("scoped vitest configs", () => {
 
   it("keeps tooling tests in their own lane", () => {
     const testConfig = requireTestConfig(defaultToolingConfig);
-    expect(testConfig.include).toEqual(["test/**/*.test.ts", "src/scripts/**/*.test.ts"]);
+    expect(testConfig.include).toEqual([
+      "test/**/*.test.ts",
+      "src/scripts/**/*.test.ts",
+      "scripts/*.test.mjs",
+    ]);
     expect(testConfig.exclude).toEqual(expect.arrayContaining(toolingDockerTestFiles));
     expect(testConfig.exclude).toContain("test/scripts/openclaw-e2e-instance.test.ts");
     expect(testConfig.include).not.toContain("src/config/doc-baseline.integration.test.ts");

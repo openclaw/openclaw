@@ -4756,6 +4756,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: References
   - H2: Related
 
+## operations/aerith-openclaw-runtime-resilience.md
+
+- Route: /operations/aerith-openclaw-runtime-resilience
+- Headings:
+  - H1: Aerith OpenClaw Runtime Resilience
+  - H2: Status
+  - H2: Root Cause
+  - H2: Related Failure Modes
+  - H2: Code Change
+  - H2: Diagnostic Command
+  - H2: Termius Operator Runbook
+  - H2: Memory Architecture Recommendation
+  - H2: Success Gate
+
 ## perplexity.md
 
 - Route: /perplexity

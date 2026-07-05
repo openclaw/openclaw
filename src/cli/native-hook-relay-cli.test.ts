@@ -462,6 +462,34 @@ describe("native hook relay CLI", () => {
     expect(stderr.text()).toContain("native hook relay unavailable");
   });
 
+  it("keeps loop-detection-only PreToolUse unavailable handling observational", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error("gateway closed");
+    });
+    const stdout = createWritableTextBuffer();
+    const stderr = createWritableTextBuffer();
+
+    const exitCode = await runNativeHookRelayCli(
+      {
+        provider: "codex",
+        relayId: "relay-1",
+        generation: "generation-1",
+        event: "pre_tool_use",
+        preToolUseUnavailable: "loop-detection-only",
+      },
+      {
+        stdin: createReadableTextStream("{}"),
+        stdout,
+        stderr,
+        callGateway: callGateway as never,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdout.text()).toBe("");
+    expect(stderr.text()).toContain("native hook relay unavailable");
+  });
+
   it("fails closed for PermissionRequest when the gateway relay is unavailable", async () => {
     const callGateway = vi.fn(async () => {
       throw new Error("gateway closed");

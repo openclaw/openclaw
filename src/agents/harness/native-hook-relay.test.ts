@@ -247,15 +247,15 @@ describe("native hook relay registry", () => {
     );
     expect(relay.commandForEvent("pre_tool_use")).toBe(
       "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
-        `${relay.relayId} --generation ${relay.generation} --event pre_tool_use --timeout 1234`,
+        `${relay.relayId} --generation ${relay.generation} --event pre_tool_use --pre-tool-use-unavailable loop-detection-only --timeout 1234`,
     );
     expect(relay.commandForEvent("pre_tool_use", { timeoutMs: 900 })).toBe(
       "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
-        `${relay.relayId} --generation ${relay.generation} --event pre_tool_use --timeout 900`,
+        `${relay.relayId} --generation ${relay.generation} --event pre_tool_use --pre-tool-use-unavailable loop-detection-only --timeout 900`,
     );
     expect(relay.commandForEvent("pre_tool_use", { timeoutMs: 2_000 })).toBe(
       "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
-        `${relay.relayId} --generation ${relay.generation} --event pre_tool_use --timeout 1234`,
+        `${relay.relayId} --generation ${relay.generation} --event pre_tool_use --pre-tool-use-unavailable loop-detection-only --timeout 1234`,
     );
   });
 
@@ -584,7 +584,7 @@ describe("native hook relay registry", () => {
     expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
     expect(relay.commandForEvent("pre_tool_use")).toBe(
       "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
-        `${relay.relayId} --generation ${relay.generation} --event pre_tool_use --timeout 1234`,
+        `${relay.relayId} --generation ${relay.generation} --event pre_tool_use --pre-tool-use-unavailable loop-detection-only --timeout 1234`,
     );
   });
 
@@ -1040,7 +1040,7 @@ describe("native hook relay registry", () => {
       allowedEvents: ["pre_tool_use"],
     });
 
-    expect(kill).not.toHaveBeenCalled();
+    expect(kill).not.toHaveBeenCalledWith(9_999_992, 0);
     await expect(fs.stat(stalePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
