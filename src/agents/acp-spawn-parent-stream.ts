@@ -28,6 +28,7 @@ import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { normalizeAssistantPhase } from "../shared/chat-message-content.js";
 import { recordTaskRunProgressByRunId } from "../tasks/detached-task-runtime.js";
+import { truncateUtf16Safe } from "../utils.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 const DEFAULT_STREAM_FLUSH_MS = 2_500;
@@ -50,9 +51,9 @@ function truncate(value: string, maxChars: number): string {
     return value;
   }
   if (maxChars <= 1) {
-    return value.slice(0, maxChars);
+    return truncateUtf16Safe(value, maxChars);
   }
-  return `${value.slice(0, maxChars - 1)}…`;
+  return `${truncateUtf16Safe(value, maxChars - 1)}…`;
 }
 
 function normalizeStringArray(value: unknown): string[] {

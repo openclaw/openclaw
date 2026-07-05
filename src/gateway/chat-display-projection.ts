@@ -20,6 +20,7 @@ import {
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
+import { truncateUtf16Safe } from "../utils.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
@@ -57,7 +58,7 @@ function truncateChatHistoryText(
     return { text, truncated: false };
   }
   return {
-    text: `${text.slice(0, maxChars)}\n...(truncated)...`,
+    text: `${truncateUtf16Safe(text, maxChars)}\n...(truncated)...`,
     truncated: true,
   };
 }

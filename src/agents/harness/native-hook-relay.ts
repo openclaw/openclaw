@@ -31,6 +31,7 @@ import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
+import { truncateUtf16Safe } from "../../utils.js";
 import {
   cancelDeferredPluginToolApproval,
   hasBeforeToolCallPolicy,
@@ -2134,7 +2135,7 @@ function truncateText(value: string, maxLength: number): string {
   if (value.length <= maxLength) {
     return value;
   }
-  return `${value.slice(0, Math.max(0, maxLength - 3))}...`;
+  return `${truncateUtf16Safe(value, Math.max(0, maxLength - 3))}...`;
 }
 
 function resolveOpenClawCliExecutable(): string {
