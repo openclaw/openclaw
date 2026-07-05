@@ -41,6 +41,11 @@ export function normalizeSignalAccountInput(value: string | null | undefined): s
   if (!trimmed) {
     return null;
   }
+  // Setup accepts formatting punctuation, but embedded or duplicate pluses are invalid input.
+  const plusCount = trimmed.match(/\+/g)?.length ?? 0;
+  if (plusCount > 1 || (plusCount === 1 && !trimmed.startsWith("+"))) {
+    return null;
+  }
   const normalized = normalizeE164(trimmed);
   const digits = normalized.slice(1);
   if (!DIGITS_ONLY.test(digits)) {
