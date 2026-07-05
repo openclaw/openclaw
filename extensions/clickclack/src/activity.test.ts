@@ -172,7 +172,7 @@ describe("createClickClackActivityPublisher", () => {
     expect(updateMessageBody).not.toHaveBeenCalled();
   });
 
-  it("renders non-tool item kinds as commentary rows and skips ephemeral lanes", async () => {
+  it("renders non-tool item kinds as commentary rows and skips lifecycle lanes", async () => {
     const { client, createActivityMessage } = createClientMock();
     const publisher = createClickClackActivityPublisher({
       client,
@@ -181,7 +181,7 @@ describe("createClickClackActivityPublisher", () => {
     });
 
     publisher.onItemEvent({ itemId: "p1", kind: "plan", title: "Plan", summary: "step one" });
-    publisher.onItemEvent({ itemId: "t1", kind: "analysis", progressText: "hidden thinking" });
+    publisher.onItemEvent({ itemId: "life1", kind: "lifecycle", progressText: "internal state" });
     await publisher.finalize();
 
     expect(createActivityMessage).toHaveBeenCalledTimes(1);
@@ -189,6 +189,61 @@ describe("createClickClackActivityPublisher", () => {
       kind: "agent_commentary",
       body: "step one",
     });
+  });
+
+  it("normalizes reasoning-style progress lanes into durable commentary rows", async () => {
+    const { client, createActivityMessage, updateMessageBody } = createClientMock();
+    const publisher = createClickClackActivityPublisher({
+      client,
+      target: { channelId: "chn_1" },
+      turnId: "msg_turn",
+      flushMs: 10,
+    });
+
+    publisher.onItemEvent({ itemId: "empty1", kind: "thinking", progressText: " " });
+    publisher.onItemEvent({
+      itemId: "think1",
+      kind: "thinking",
+      progressText: "Checking the runtime",
+    });
+    await vi.advanceTimersByTimeAsync(20);
+    publisher.onItemEvent({
+      itemId: "think1",
+      kind: "thinking",
+      progressText: "Checking the runtime and recent rows",
+    });
+    publisher.onItemEvent({
+      itemId: "reason1",
+      kind: "reasoning",
+      progressText: "Comparing provider lanes",
+    });
+    publisher.onItemEvent({
+      itemId: "analysis1",
+      kind: "analysis",
+      summary: "Mapping this to ClickClack",
+    });
+    await publisher.finalize();
+
+    expect(createActivityMessage).toHaveBeenCalledTimes(3);
+    expect(createActivityMessage.mock.calls.map((call) => call[0])).toEqual([
+      expect.objectContaining({
+        body: "**Thinking**\n\nChecking the runtime",
+        kind: "agent_commentary",
+      }),
+      expect.objectContaining({
+        body: "**Thinking**\n\nComparing provider lanes",
+        kind: "agent_commentary",
+      }),
+      expect.objectContaining({
+        body: "**Thinking**\n\nMapping this to ClickClack",
+        kind: "agent_commentary",
+      }),
+    ]);
+    expect(updateMessageBody).toHaveBeenCalledTimes(1);
+    expect(updateMessageBody).toHaveBeenCalledWith(
+      "msg_1",
+      "**Thinking**\n\nChecking the runtime and recent rows",
+    );
   });
 
   it("reports transport failures through onError without rejecting finalize", async () => {

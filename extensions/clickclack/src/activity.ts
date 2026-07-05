@@ -6,10 +6,10 @@
  * Ported from the clickglass agent-bridge sidecar, adapted from gateway
  * websocket frames to the in-process `replyOptions.onItemEvent` seam:
  *
- * - Commentary arrives as cumulative text snapshots per item id
- *   (`kind: "preamble"`). Each commentary segment becomes one durable row:
- *   POSTed when the segment starts streaming and PATCHed (debounced) as the
- *   snapshot grows, so prose interleaves chronologically with tool rows.
+ * - Commentary/reasoning arrives as cumulative text snapshots per item id.
+ *   Each segment becomes one durable row: POSTed when the segment starts
+ *   streaming and PATCHed (debounced) as the snapshot grows, so prose
+ *   interleaves chronologically with tool rows.
  * - Tool/step items can emit several frames (start/update/complete) for the
  *   same call, sometimes with lane-prefixed ids (`tool:X`, `command:X`).
  *   Normalize the prefix away to one key per call, POST one row on the first
@@ -58,7 +58,36 @@ export type ClickClackActivityClient = {
 const TOOL_ITEM_KINDS = new Set(["tool", "command", "command_output", "patch", "search", "api"]);
 
 /** Item kinds that never become durable rows (ephemeral or plumbing lanes). */
-const SKIPPED_ITEM_KINDS = new Set(["analysis", "thinking", "reasoning", "lifecycle"]);
+const SKIPPED_ITEM_KINDS = new Set(["lifecycle"]);
+
+/** Item kinds emitted as cumulative commentary snapshots. */
+const STREAMING_COMMENTARY_ITEM_KINDS = new Set([
+  "preamble",
+  "commentary",
+  "analysis",
+  "thinking",
+  "reasoning",
+]);
+
+/** Provider-specific reasoning lanes normalized into one ClickClack label. */
+const THINKING_ITEM_KINDS = new Set(["analysis", "thinking", "reasoning"]);
+
+function normalizedItemKind(payload: ClickClackItemEventPayload): string {
+  return payload.kind?.trim().toLowerCase() ?? "";
+}
+
+function commentaryBody(payload: ClickClackItemEventPayload): string {
+  const text =
+    payload.progressText?.trim() || payload.summary?.trim() || payload.meta?.trim() || "";
+  if (!text) {
+    return "";
+  }
+  const kind = normalizedItemKind(payload);
+  if (THINKING_ITEM_KINDS.has(kind)) {
+    return `**Thinking**\n\n${text}`;
+  }
+  return text;
+}
 
 function activityBody(payload: ClickClackItemEventPayload): string {
   // Reuse the shared channel progress-line renderer so ClickClack rows show
@@ -185,8 +214,8 @@ export function createClickClackActivityPublisher(params: {
   };
 
   const handleCommentary = (payload: ClickClackItemEventPayload): void => {
-    const text = payload.progressText ?? "";
-    if (!text.trim()) {
+    const body = commentaryBody(payload);
+    if (!body.trim()) {
       return;
     }
     const key = payload.itemId?.trim() || "turn";
@@ -199,10 +228,10 @@ export function createClickClackActivityPublisher(params: {
     // shorter (stale or whitespace-normalized) frame, and skip identical
     // snapshots entirely so out-of-order frames cannot queue redundant
     // PATCHes.
-    if (text.length < segment.body.length || text === segment.body) {
+    if (body.length < segment.body.length || body === segment.body) {
       return;
     }
-    segment.body = text;
+    segment.body = body;
     segment.dirty = true;
     if (!segment.timer) {
       segment.timer = setTimeout(() => {
@@ -268,11 +297,12 @@ export function createClickClackActivityPublisher(params: {
 
   return {
     onItemEvent: (payload) => {
-      if (payload.kind === "preamble") {
+      const kind = normalizedItemKind(payload);
+      if (STREAMING_COMMENTARY_ITEM_KINDS.has(kind)) {
         handleCommentary(payload);
         return;
       }
-      if (SKIPPED_ITEM_KINDS.has(payload.kind?.trim().toLowerCase() ?? "")) {
+      if (SKIPPED_ITEM_KINDS.has(kind)) {
         return;
       }
       handleDiscreteItem(payload);
