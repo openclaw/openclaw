@@ -620,9 +620,10 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       }
       devicePairSetupState.pendingCount = 0;
       const setupOperation = openDevicePairSetupState(devicePairSetupState);
-      const pendingCountOperation = refreshDevicePairPendingCount();
+      // Pairing-list latency must not keep a ready setup code behind the loading state.
+      void refreshDevicePairPendingCount();
       publish();
-      await Promise.all([setupOperation, pendingCountOperation]);
+      await setupOperation;
       if (!disposed) {
         publish();
       }
