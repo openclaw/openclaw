@@ -188,40 +188,61 @@ export class TranscriptsStore {
     const transcriptPath = path.join(dir, "transcript.jsonl");
     const maxUtterances = resolveOptionalIntegerOption(options.maxUtterances, { min: 1 });
     if (maxUtterances !== undefined) {
-      const utterances: TranscriptUtterance[] = [];
-      try {
+      return await new Promise<TranscriptUtterance[]>((resolve, reject) => {
+        const utterances: TranscriptUtterance[] = [];
         const stream = createReadStream(transcriptPath, { encoding: "utf8" });
         const lines = createInterface({
           input: stream,
           crlfDelay: Infinity,
         });
-        try {
-          for await (const line of lines) {
-            if (!line) {
-              continue;
-            }
-            utterances.push(JSON.parse(line) as TranscriptUtterance);
-            if (utterances.length > maxUtterances) {
-              // Stream and keep only the tail so large transcripts do not require full-file memory.
-              utterances.shift();
-            }
-          }
-        } finally {
+        let settled = false;
+
+        const cleanup = () => {
           lines.close();
           stream.destroy();
-          if (!stream.closed) {
-            await new Promise<void>((resolve) => {
-              stream.once("close", () => resolve());
-            });
+        };
+        const finish = (value: TranscriptUtterance[]) => {
+          if (settled) {
+            return;
           }
-        }
-      } catch (err) {
-        if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
-          return [];
-        }
-        throw err;
-      }
-      return utterances;
+          settled = true;
+          cleanup();
+          resolve(value);
+        };
+        const fail = (err: unknown) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          cleanup();
+          reject(err);
+        };
+
+        stream.on("error", (err) => {
+          if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
+            finish([]);
+            return;
+          }
+          finish(utterances);
+        });
+        lines.on("error", () => finish(utterances));
+        lines.on("line", (line) => {
+          if (!line) {
+            return;
+          }
+          try {
+            utterances.push(JSON.parse(line) as TranscriptUtterance);
+          } catch (err) {
+            fail(err);
+            return;
+          }
+          if (utterances.length > maxUtterances) {
+            // Stream and keep only the tail so large transcripts do not require full-file memory.
+            utterances.shift();
+          }
+        });
+        lines.on("close", () => finish(utterances));
+      });
     }
     let raw: string;
     try {
