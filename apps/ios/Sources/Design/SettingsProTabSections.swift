@@ -784,11 +784,11 @@ extension SettingsProTab {
 
     var manualGatewayCard: some View {
         Section("Manual Gateway") {
-            Toggle(isOn: self.$manualGatewayEnabled) {
+            Toggle(isOn: self.manualGatewayEnabledBinding) {
                 Text("Use Manual Gateway")
                     .font(OpenClawType.body)
             }
-            TextField("Host", text: self.$manualGatewayHost)
+            TextField("Host", text: self.manualHostBinding)
                 .font(OpenClawType.body)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -819,8 +819,8 @@ extension SettingsProTab {
                 Text("Auto-connect on launch")
                     .font(OpenClawType.body)
             }
-            self.gatewaySecureField("Gateway Auth Token", text: self.$gatewayToken)
-            self.gatewaySecureField("Gateway Password", text: self.$gatewayPassword)
+            self.gatewaySecureField("Gateway Auth Token", text: self.gatewayTokenBinding)
+            self.gatewaySecureField("Gateway Password", text: self.gatewayPasswordBinding)
             Button(role: .destructive) {
                 self.showResetOnboardingAlert = true
             } label: {

@@ -4821,6 +4821,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /platforms/android
 - Headings:
   - H2: Support snapshot
+  - H2: Mirror and control Android from a remote Mac
+  - H3: Before you begin
+  - H3: Enable ADB over TCP
+  - H3: Allow only the controller Mac
+  - H3: Connect and start mirroring
+  - H3: Troubleshooting
   - H2: Connection runbook
   - H3: Prerequisites
   - H3: 1. Start the Gateway
@@ -5516,6 +5522,25 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Configuration
   - H2: Native Runtime
   - H2: Troubleshooting
+
+## plugins/logbook.md
+
+- Route: /plugins/logbook
+- Headings:
+  - H2: Before you begin
+  - H2: Quickstart
+  - H2: How it works
+  - H2: Model and data flow
+  - H2: Configuration
+  - H3: Vision model selection
+  - H2: Dashboard tab
+  - H2: Gateway methods
+  - H2: Privacy notes
+  - H2: Troubleshooting
+  - H3: The Logbook tab is missing
+  - H3: Capture reports an error
+  - H3: Captures succeed but no cards appear
+  - H2: Related
 
 ## plugins/manage-plugins.md
 
@@ -9755,6 +9780,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Runtime config endpoint
   - H2: Language support
   - H2: Appearance themes
+  - H2: Sidebar navigation
   - H2: What it can do (today)
   - H2: MCP page
   - H2: Activity tab

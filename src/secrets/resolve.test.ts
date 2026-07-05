@@ -267,22 +267,35 @@ describe("secret ref resolver", () => {
     const scriptPath = await writeForkingNoOutputScript(root);
     const pidPath = path.join(root, "forked.pid");
     let childPid: number | undefined;
+    const nativeSetTimeout = globalThis.setTimeout;
+    const noOutputTimeouts: Array<() => void> = [];
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, delay, ...args) => {
+        if (delay === 1_000) {
+          noOutputTimeouts.push(() => callback(...args));
+          return nativeSetTimeout(() => undefined, 60_000);
+        }
+        return nativeSetTimeout(callback, delay, ...args);
+      });
 
     try {
-      await expect(
-        resolveExecSecret(scriptPath, {
-          env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
-          // The first no-output window must absorb shell spawn latency under
-          // parallel-suite load; the script's readiness byte then pins the
-          // killing silence window after the pid write.
-          noOutputTimeoutMs: 1000,
-          timeoutMs: 10_000,
-        }),
-      ).rejects.toThrow('Exec provider "execmain" produced no output');
-
+      const resultPromise = resolveExecSecret(scriptPath, {
+        env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
+        // Preserve production-like startup headroom; the test fires the
+        // re-armed timer only after the readiness byte arrives.
+        noOutputTimeoutMs: 1_000,
+        timeoutMs: 10_000,
+      });
+      await vi.waitFor(() => {
+        expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
+      });
       childPid = await readPidFile(pidPath);
+      noOutputTimeouts.at(-1)?.();
+      await expect(resultPromise).rejects.toThrow('Exec provider "execmain" produced no output');
       expect(await waitForPidToExit(childPid, 5_000)).toBe(true);
     } finally {
+      setTimeoutSpy.mockRestore();
       killPidIfAlive(childPid);
     }
   });

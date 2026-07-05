@@ -346,7 +346,20 @@ describe("context notice", () => {
       inputTokens: 757_300,
       totalTokens: 46_000,
       contextTokens: 200_000,
+      estimatedCostUsd: 0.007725,
+      model: "gpt-5.5",
+      modelProvider: "openai",
     };
+    const providerCostMessages = [
+      { role: "assistant", cost: { input: 99, output: 99 } },
+      { role: "user", content: "Current turn" },
+      {
+        role: "assistant",
+        model: "openrouter/auto",
+        responseModel: "gpt-5.5",
+        cost: { input: 0.001225, output: 0.006, cacheRead: 0.0005, cacheWrite: 0 },
+      },
+    ];
     const lowUsage = getContextNoticeViewModel(lowUsageSession, 200_000);
     if (!lowUsage) {
       throw new Error("expected low usage context notice");
@@ -355,9 +368,13 @@ describe("context notice", () => {
     expect(lowUsage.detail).toBe("46k / 200k");
     expect(lowUsage.input).toBe(757_300);
     expect(lowUsage.output).toBeNull();
+    expect(lowUsage.cost).toBe(0.007725);
     expect(lowUsage.warning).toBe(false);
     expect(lowUsage.compactRecommended).toBe(false);
-    render(renderContextNotice(lowUsageSession, 200_000), container);
+    render(
+      renderContextNotice(lowUsageSession, 200_000, { messages: providerCostMessages }),
+      container,
+    );
     const lowNotice = container.querySelector<HTMLElement>(".context-ring");
     expect(lowNotice).toBeInstanceOf(HTMLElement);
     expect([...lowNotice!.classList]).toEqual(["context-ring"]);
@@ -370,7 +387,20 @@ describe("context notice", () => {
     expect(usageDetails?.open).toBe(true);
     expect(
       container.querySelector(".context-usage__popover")?.textContent?.replace(/\s+/gu, " ").trim(),
-    ).toBe("Context window 46k / 200k · 23% Latest run tokens Input 757.3k Output —");
+    ).toBe(
+      "Context window 46k / 200k · 23% Latest run tokens Input 757.3k Output — Est. cost $0.0077 Cost by Type Input $0.0012 Output $0.0060 Cache Read $0.0005 Cache Write $0.00 Provider openai Model gpt-5.5",
+    );
+    expect(
+      container.querySelectorAll(".context-usage__stats:not(.context-usage__stats--cost) > div"),
+    ).toHaveLength(3);
+    expect(container.querySelectorAll(".context-usage__stats--cost > div")).toHaveLength(4);
+    render(
+      renderContextNotice(lowUsageSession, 200_000, {
+        messages: [...providerCostMessages, { role: "user", content: "Steer before response" }],
+      }),
+      container,
+    );
+    expect(container.querySelector(".context-usage__stats--cost")).toBeNull();
     const lowFill = lowNotice!.querySelector(".context-ring__fill");
     expect(lowFill?.tagName.toLowerCase()).toBe("circle");
     // 23% of the 40.84 circumference stays hidden via dashoffset.
@@ -378,6 +408,8 @@ describe("context notice", () => {
       40.84 * 0.77,
       1,
     );
+    render(renderContextNotice({ ...lowUsageSession, estimatedCostUsd: 0 }, 200_000), container);
+    expect(container.querySelector(".context-usage__stats")?.textContent).toContain("$0.00");
 
     const session: GatewaySessionRow = {
       key: "main",
@@ -398,6 +430,7 @@ describe("context notice", () => {
     const usage = container.querySelector<HTMLElement>(".context-usage");
     expect(usage!.style.getPropertyValue("--ctx-color")).toBe("rgb(4, 5, 6)");
     expect(usage!.style.getPropertyValue("--ctx-bg")).toBe("rgba(4, 5, 6, 0.15999999999999998)");
+    expect(container.querySelectorAll(".context-usage__stats > div")).toHaveLength(2);
 
     const onCompact = vi.fn();
     render(renderContextNotice(session, 200_000, { onCompact }), container);

@@ -123,14 +123,6 @@
       opacity var(--shell-focus-duration) var(--shell-focus-ease);
   }
 
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .shell-nav {
-    width: var(--shell-nav-rail-width);
-    transform: translateX(0);
-    opacity: 1;
-    pointer-events: auto;
-    box-shadow: none;
-  }
-
   .shell--nav-drawer-open .shell-nav,
   .shell--nav-collapsed.shell--nav-drawer-open .shell-nav {
     transform: translateX(0);
@@ -155,9 +147,14 @@
     pointer-events: auto;
   }
 
-  /* Show the hamburger toggle at the same breakpoint where the drawer takes over. */
+  /* Show the hamburger toggle at the same breakpoint where the drawer takes over;
+     the desktop rail toggle makes no sense once the sidebar is a drawer. */
   .topbar-nav-toggle {
     display: inline-flex;
+  }
+
+  .topbar-sidebar-toggle {
+    display: none;
   }
 
   .sidebar,
@@ -176,32 +173,9 @@
     border-radius: 0;
   }
 
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar-shell,
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .sidebar-shell {
-    padding: 12px 8px 10px;
-  }
-
   .sidebar-shell__header {
     min-height: 0;
     padding: 0 4px 16px;
-  }
-
-  .sidebar-shell__header .nav-collapse-toggle {
-    display: none;
-  }
-
-  .shell--nav-drawer-open .sidebar-shell__header .nav-collapse-toggle {
-    display: flex;
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
-  }
-
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar-shell__header {
-    justify-content: center;
-    align-items: center;
-    gap: 0;
-    padding: 0 2px 16px;
   }
 
   .sidebar-nav,
@@ -242,15 +216,6 @@
     width: auto;
   }
 
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .nav-item {
-    justify-content: center;
-    width: 44px;
-    min-height: 44px;
-    padding: 0;
-    margin: 0 auto;
-    border-radius: var(--radius-lg);
-  }
-
   .sidebar--collapsed .nav-item--active::before,
   .sidebar--collapsed .nav-item.active::before {
     content: none;
@@ -261,24 +226,6 @@
     display: inline-flex;
   }
 
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .nav-item__text,
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .nav-item__external-icon {
-    display: none;
-  }
-
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .nav-item--active::before,
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .nav-item.active::before {
-    content: "";
-    position: absolute;
-    left: 8px;
-    top: 10px;
-    bottom: 10px;
-    width: 3px;
-    border-radius: var(--radius-full);
-    background: color-mix(in srgb, var(--accent) 86%, transparent);
-    box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 34%, transparent);
-  }
-
   .sidebar--collapsed .sidebar-shell__footer {
     padding: 12px 8px 0;
   }
@@ -287,21 +234,6 @@
     width: auto;
     min-height: 32px;
     padding: 0 12px;
-  }
-
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .sidebar-shell__footer {
-    padding: 8px 0 2px;
-  }
-
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .sidebar-status {
-    width: 44px;
-    min-height: 36px;
-    padding: 0;
-    justify-content: center;
-  }
-
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar-mode-switch {
-    display: none;
   }
 }
 
@@ -382,13 +314,6 @@
   .shell-nav,
   .shell--nav-collapsed .shell-nav {
     width: min(92vw, 320px);
-  }
-
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .shell-nav {
-    width: min(92vw, 320px);
-    transform: translateX(-100%);
-    opacity: 0;
-    pointer-events: none;
   }
 
   .sidebar-shell,

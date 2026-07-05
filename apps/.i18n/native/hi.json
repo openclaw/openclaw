@@ -3149,9 +3149,9 @@
       "translated": "संदेश टाइप करें…"
     },
     {
-      "id": "native.android.6522139155c1eebd",
-      "source": "Gateway is offline. Open Settings to reconnect.",
-      "translated": "Gateway ऑफ़लाइन है। फिर से कनेक्ट करने के लिए सेटिंग्स खोलें।"
+      "id": "native.android.8e06942aa080e420",
+      "source": "Gateway is offline. Text messages are queued and sent after reconnecting.",
+      "translated": "Gateway ऑफ़लाइन है। टेक्स्ट संदेश कतार में रखे गए हैं और फिर से कनेक्ट होने के बाद भेजे जाते हैं।"
     },
     {
       "id": "native.android.d6227e983e46ca7c",
@@ -3222,6 +3222,16 @@
       "id": "native.android.29021f925bf290c7",
       "source": "... +${toolCalls.size - 6} more",
       "translated": "... +${toolCalls.size - 6} और"
+    },
+    {
+      "id": "native.android.9bd31c23ebdf7c7a",
+      "source": "Retry",
+      "translated": "पुनः प्रयास करें"
+    },
+    {
+      "id": "native.android.b728b15914267f57",
+      "source": "Delete",
+      "translated": "हटाएँ"
     },
     {
       "id": "native.android.1d0bb431f08154a6",
@@ -4529,6 +4539,21 @@
       "translated": "तैयार"
     },
     {
+      "id": "native.apple.e5524d5756a62744",
+      "source": "Unable to Export Transcript",
+      "translated": "प्रतिलेख निर्यात नहीं किया जा सका"
+    },
+    {
+      "id": "native.apple.942d6a10fd90d6e3",
+      "source": "OK",
+      "translated": "ठीक है"
+    },
+    {
+      "id": "native.apple.3548c8d1ab43e85e",
+      "source": "OpenClaw could not prepare the Markdown file.",
+      "translated": "OpenClaw Markdown फ़ाइल तैयार नहीं कर सका।"
+    },
+    {
       "id": "native.apple.202b97e93b938049",
       "source": "What would you like to work on?",
       "translated": "आप किस पर काम करना चाहेंगे?"
@@ -4542,6 +4567,16 @@
       "id": "native.apple.d19c9577e0fdfea7",
       "source": "Opens Settings / Gateway",
       "translated": "Settings / Gateway खोलता है"
+    },
+    {
+      "id": "native.apple.ced228bb4d20a726",
+      "source": "Export Transcript",
+      "translated": "प्रतिलेख निर्यात करें"
+    },
+    {
+      "id": "native.apple.940e1f943750c94b",
+      "source": "Chat actions",
+      "translated": "चैट कार्रवाइयाँ"
     },
     {
       "id": "native.apple.b635acd93246d67b",
@@ -7132,6 +7167,36 @@
       "id": "native.apple.378c2c7be159c1f2",
       "source": "Back to Mode Selection",
       "translated": "मोड चयन पर वापस जाएँ"
+    },
+    {
+      "id": "native.apple.4014217851d06190",
+      "source": "Plaintext (local network)",
+      "translated": "सादा टेक्स्ट (स्थानीय नेटवर्क)"
+    },
+    {
+      "id": "native.apple.cf616b515da5bc19",
+      "source": "Security",
+      "translated": "सुरक्षा"
+    },
+    {
+      "id": "native.apple.db7b52a1bbc6fac5",
+      "source": "Use Manual Setup",
+      "translated": "मैन्युअल सेटअप का उपयोग करें"
+    },
+    {
+      "id": "native.apple.7dbdf9a439f64f08",
+      "source": "Setup Link",
+      "translated": "सेटअप लिंक"
+    },
+    {
+      "id": "native.apple.6bfb611862fb1687",
+      "source": "Plaintext may expose credentials. Continue only if you trust this local network and host.",
+      "translated": "सादा टेक्स्ट क्रेडेंशियल्स को उजागर कर सकता है। केवल तभी जारी रखें जब आप इस स्थानीय नेटवर्क और होस्ट पर भरोसा करते हों।"
+    },
+    {
+      "id": "native.apple.3329c7f367f10c78",
+      "source": "Review this endpoint. Credentials are applied only after you tap Connect.",
+      "translated": "इस एंडपॉइंट की समीक्षा करें। क्रेडेंशियल्स केवल तब लागू होते हैं जब आप Connect पर टैप करते हैं।"
     },
     {
       "id": "native.apple.2f00ef4bc35ecb8d",

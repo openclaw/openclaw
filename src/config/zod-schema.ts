@@ -318,6 +318,10 @@ const TalkRealtimeSchema = z
     instructions: z.string().optional(),
     mode: z.enum(["realtime", "stt-tts", "transcription"]).optional(),
     transport: z.enum(["webrtc", "provider-websocket", "gateway-relay", "managed-room"]).optional(),
+    vadThreshold: z.number().min(0).max(1).optional(),
+    silenceDurationMs: z.number().int().positive().optional(),
+    prefixPaddingMs: z.number().int().nonnegative().optional(),
+    reasoningEffort: z.string().min(1).optional(),
     brain: z.enum(["agent-consult", "direct-tools", "none"]).optional(),
     consultRouting: z.enum(["provider-direct", "force-agent-consult"]).optional(),
   })

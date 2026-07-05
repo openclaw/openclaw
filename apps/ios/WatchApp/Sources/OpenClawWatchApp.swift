@@ -27,12 +27,13 @@ struct OpenClawWatchApp: App {
                         self.inboxStore.markReplyResult(result, actionLabel: action.label)
                     }
                 },
-                onExecApprovalDecision: { approvalId, decision in
+                onExecApprovalDecision: { approvalId, gatewayStableID, decision in
                     guard let receiver = self.receiver else { return }
                     self.inboxStore.markExecApprovalSending(approvalId: approvalId, decision: decision)
                     Task { @MainActor in
                         let result = await receiver.sendExecApprovalResolve(
                             approvalId: approvalId,
+                            gatewayStableID: gatewayStableID,
                             decision: decision)
                         self.inboxStore.markExecApprovalSendResult(
                             approvalId: approvalId,
@@ -144,10 +145,11 @@ struct OpenClawWatchApp: App {
 extension WatchInboxStore {
     fileprivate func configureScreenshotFixture() {
         let sentAtMs = Int(Date().timeIntervalSince1970 * 1000)
-        self.greetingTextOverride = "Good morning"
+        greetingTextOverride = "Good morning"
         self.consume(
             execApprovalSnapshot: WatchExecApprovalSnapshotMessage(
                 approvals: [],
+                gatewayStableID: "watch-screenshot-gateway",
                 sentAtMs: sentAtMs,
                 snapshotId: nil),
             transport: "screenshot")

@@ -440,12 +440,13 @@ export const hi: TranslationMap = {
   },
   nav: {
     chat: "चैट",
-    control: "नियंत्रण",
-    agent: "एजेंट",
     settings: "सेटिंग्स",
     expand: "साइडबार फैलाएँ",
     collapse: "साइडबार समेटें",
     resize: "साइडबार का आकार बदलें",
+    more: "अधिक",
+    customize: "साइडबार कस्टमाइज़ करें",
+    customizeReset: "डिफ़ॉल्ट पर रीसेट करें",
   },
   terminal: {
     title: "टर्मिनल",
@@ -489,6 +490,7 @@ export const hi: TranslationMap = {
     debug: "डीबग",
     logs: "लॉग्स",
     dreams: "ड्रीमिंग",
+    plugin: "प्लगइन",
   },
   subtitles: {
     agents: "वर्कस्पेस, टूल्स, पहचान।",
@@ -514,6 +516,7 @@ export const hi: TranslationMap = {
     debug: "स्नैपशॉट, इवेंट, RPC।",
     logs: "लाइव gateway लॉग।",
     dreams: "मेमोरी ड्रीमिंग, कंसॉलिडेशन, और रिफ्लेक्शन।",
+    plugin: "प्लगइन द्वारा उपलब्ध कराया गया पैनल।",
   },
   skillWorkshop: {
     header: {
@@ -572,6 +575,66 @@ export const hi: TranslationMap = {
     file: "फ़ाइल: {file}",
     truncated: "लॉग आउटपुट छोटा कर दिया गया है; नवीनतम भाग दिखाया जा रहा है।",
     empty: "कोई लॉग प्रविष्टि नहीं।",
+  },
+  pluginTabs: {
+    unavailableTitle: "Plugin panel unavailable",
+    unavailableSubtitle:
+      "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
+  },
+  logbook: {
+    duration: {
+      minutes: "{minutes}m",
+      hours: "{hours}h {minutes}m",
+    },
+    nav: {
+      previousDay: "Previous day",
+      nextDay: "Next day",
+      today: "आज",
+    },
+    status: {
+      capturing: "Capturing every {seconds}s",
+      paused: "Capture paused",
+      disabled: "Capture off",
+      nodeHelp: "Node providing screen snapshots.",
+      pending: "{count} frames queued",
+      pendingHelp: "Snapshots waiting for the next analysis batch.",
+      analyzing: "Analyzing…",
+      captureError: "Capture error",
+      batchError: "Analysis error",
+      modelMissing: "No vision model",
+      modelMissingHelp:
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+    },
+    actions: {
+      pause: "Pause",
+      resume: "Resume",
+      analyzeNow: "Analyze now",
+    },
+    empty: {
+      title: "Nothing on the timeline yet.",
+      subtitle:
+        "Logbook is collecting snapshots; cards appear after the first analysis batch completes.",
+    },
+    card: {
+      keyframeAlt: "Screen snapshot from this activity",
+      distractions: "Distractions",
+    },
+    stats: {
+      title: "Day at a glance",
+      focus: "{pct}% focus",
+      tracked: "{duration} tracked",
+    },
+    standup: {
+      title: "Daily standup",
+      generate: "Generate",
+      refresh: "Regenerate",
+      empty: "Turn today's timeline into a ready-to-paste standup update.",
+    },
+    ask: {
+      title: "Ask your day",
+      placeholder: "When did I review the gateway PR?",
+      submit: "पूछें",
+    },
   },
   workboard: {
     disabledHelpStart: "Workboard अक्षम है। सक्षम करें",
@@ -1437,7 +1500,7 @@ export const hi: TranslationMap = {
       badge: "समाप्त",
     },
     composer: {
-      placeholder: "{name} को संदेश भेजें (भेजने के लिए Enter)",
+      placeholder: "{name} को संदेश भेजें",
       placeholderWithAttachments: "संदेश जोड़ें या और छवियाँ पेस्ट करें...",
       placeholderDisconnected: "चैट शुरू करने के लिए gateway से कनेक्ट करें...",
       attachFile: "फ़ाइल संलग्न करें",
@@ -1447,6 +1510,7 @@ export const hi: TranslationMap = {
         summary: "सत्र संदर्भ उपयोग: {limit} में से {used} ({pct}%)",
         contextWindow: "संदर्भ विंडो",
         latestRunTokens: "नवीनतम रन टोकन",
+        estimatedCost: "अनुमानित लागत",
       },
       dismissTalkError: "Talk त्रुटि खारिज करें",
       startTalk: "Talk शुरू करें",

@@ -3395,6 +3395,32 @@ describe("agent event handler", () => {
     );
   });
 
+  it("logs when start session persistence fails", async () => {
+    const { chatRunState, handler, sessionEventSubscribers } = createHarness();
+    sessionEventSubscribers.subscribe("conn-1");
+    chatRunState.registry.add("run-global-work", {
+      sessionKey: "global",
+      agentId: "work",
+      clientRunId: "client-global-work",
+    });
+    persistGatewaySessionLifecycleEventMock.mockRejectedValueOnce(new Error("start disk full"));
+
+    handler({
+      runId: "run-global-work",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "start" },
+    });
+
+    await vi.waitFor(() => {
+      expect(logErrorMock).toHaveBeenCalledTimes(1);
+    });
+    expect(logErrorMock).toHaveBeenCalledWith(
+      "gateway: start session persistence failed session=global run=run-global-work error=Error: start disk full",
+    );
+  });
+
   it("routes hidden selected-agent global chat events only to matching subscribers", () => {
     const { broadcastToConnIds, chatRunState, handler, sessionMessageSubscribers } =
       createHarness();

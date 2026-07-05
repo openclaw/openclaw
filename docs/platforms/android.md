@@ -3,6 +3,7 @@ summary: "Android app (node): connection runbook + Connect/Chat/Voice/Canvas com
 read_when:
   - Pairing or reconnecting the Android node
   - Debugging Android gateway discovery or auth
+  - Mirroring or controlling an Android device from a remote Mac
   - Verifying chat history parity across clients
 title: "Android app"
 ---
@@ -20,6 +21,100 @@ The official Android app is available on [Google Play](https://play.google.com/s
   - Protocols: [Gateway protocol](/gateway/protocol) (nodes + control plane).
 
 System control (launchd/systemd) lives on the Gateway host — see [Gateway](/gateway).
+
+## Mirror and control Android from a remote Mac
+
+[scrcpy](https://github.com/Genymobile/scrcpy) mirrors an Android screen in a macOS window and
+forwards keyboard and pointer input through Android Debug Bridge (ADB). This is an operator-side
+workflow, separate from the OpenClaw node connection. It is useful when the Android device and the
+Mac are in different locations but share a private Tailscale network.
+
+### Before you begin
+
+- Install Tailscale on the Android device and the Mac, and connect both to the same tailnet.
+- On Android, enable **Developer options** and **USB debugging**. Android 16 places **Wireless
+  debugging** under **Settings > System > Developer options**. See [Android developer
+  options](https://developer.android.com/studio/debug/dev-options).
+- Install scrcpy and ADB on the Mac:
+
+  ```bash
+  brew install scrcpy
+  brew install --cask android-platform-tools
+  ```
+
+- Keep the Android device available for the first connection. Android must approve each Mac's ADB
+  key before that Mac can control the device.
+
+### Enable ADB over TCP
+
+For the initial setup, connect the Android device by USB to a trusted computer and approve its
+debugging prompt. Then run:
+
+```bash
+adb devices
+adb tcpip 5555
+```
+
+You can now disconnect USB. If port 5555 stops listening after a device reboot or debugging reset,
+repeat this local setup step. Android 11 and later can also establish the initial trust with
+**Wireless debugging > Pair device with pairing code** and `adb pair`.
+
+### Allow only the controller Mac
+
+Tailnets with restrictive grants must explicitly allow the controller Mac to reach TCP port 5555
+on the Android device. Add a narrow rule to the tailnet policy, replacing the example addresses
+with the two devices' stable Tailscale IPs:
+
+```json5
+{
+  grants: [
+    {
+      src: ["<remote-mac-tailnet-ip>"],
+      dst: ["<android-tailnet-ip>"],
+      ip: ["tcp:5555"],
+    },
+  ],
+}
+```
+
+See [Tailscale grants](https://tailscale.com/docs/reference/syntax/grants) for host aliases and other
+selectors. Do not grant this port to the public internet or expose it with Funnel: an authorized ADB
+client has broad control of the device.
+
+### Connect and start mirroring
+
+On the remote Mac:
+
+```bash
+adb connect <android-tailnet-ip>:5555
+adb devices
+scrcpy --serial <android-tailnet-ip>:5555
+```
+
+The first `adb connect` from this Mac shows an authorization dialog on Android. Unlock the device,
+confirm the key fingerprint, and select **Always allow from this computer** only when the Mac is
+trusted. A successful `adb devices` entry ends in `device`; `unauthorized` means the on-device prompt
+has not been approved.
+
+Once the scrcpy window opens, use it directly or target it with a macOS screen-automation tool such
+as [Peekaboo](https://peekaboo.sh/). scrcpy carries the display and input; Tailscale provides only the
+private network path.
+
+### Troubleshooting
+
+- `Connection timed out`: verify the tailnet grant for TCP 5555. A successful `tailscale ping` proves
+  peer reachability, not that policy permits this TCP port. Test with
+  `nc -vz <android-tailnet-ip> 5555` from the Mac.
+- `unauthorized`: unlock Android and approve the remote Mac's ADB key, or remove the stale workstation
+  under **Wireless debugging > Paired devices** and pair it again.
+- `Connection refused`: reconnect locally and run `adb tcpip 5555` again.
+- More than one device listed: keep the explicit `--serial <android-tailnet-ip>:5555` argument.
+
+When finished, close scrcpy and disconnect ADB:
+
+```bash
+adb disconnect <android-tailnet-ip>:5555
+```
 
 ## Connection runbook
 

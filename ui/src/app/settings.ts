@@ -27,6 +27,11 @@ type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActive
   sessionsByGateway?: Record<string, ScopedSessionSelection>;
 };
 
+import {
+  DEFAULT_SIDEBAR_PINNED_ROUTES,
+  normalizeSidebarPinnedRoutes,
+  type SidebarNavRoute,
+} from "../app-navigation.ts";
 import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
@@ -97,7 +102,8 @@ export type UiSettings = {
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
-  navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
+  sidebarPinnedRoutes: SidebarNavRoute[]; // Nav routes shown above the "More" section
+  sidebarMoreExpanded: boolean; // Whether the sidebar "More" section is expanded
   recentSessionsCollapsed?: boolean; // Collapse recent sessions list in sidebar
   borderRadius: number; // Corner roundness (0–100, default 50)
   textScale?: TextScaleStop; // Browser-local text scale percentage
@@ -459,7 +465,8 @@ export function loadSettings(): UiSettings {
     splitRatio: 0.6,
     navCollapsed: false,
     navWidth: 220,
-    navGroupsCollapsed: {},
+    sidebarPinnedRoutes: [...DEFAULT_SIDEBAR_PINNED_ROUTES],
+    sidebarMoreExpanded: false,
     recentSessionsCollapsed: false,
     borderRadius: 50,
     textScale: 100,
@@ -517,10 +524,12 @@ export function loadSettings(): UiSettings {
         typeof parsed.navWidth === "number" && parsed.navWidth >= 200 && parsed.navWidth <= 400
           ? parsed.navWidth
           : defaults.navWidth,
-      navGroupsCollapsed:
-        typeof parsed.navGroupsCollapsed === "object" && parsed.navGroupsCollapsed !== null
-          ? parsed.navGroupsCollapsed
-          : defaults.navGroupsCollapsed,
+      sidebarPinnedRoutes:
+        normalizeSidebarPinnedRoutes(parsed.sidebarPinnedRoutes) ?? defaults.sidebarPinnedRoutes,
+      sidebarMoreExpanded:
+        typeof parsed.sidebarMoreExpanded === "boolean"
+          ? parsed.sidebarMoreExpanded
+          : defaults.sidebarMoreExpanded,
       recentSessionsCollapsed:
         typeof parsed.recentSessionsCollapsed === "boolean"
           ? parsed.recentSessionsCollapsed
@@ -626,7 +635,8 @@ function persistSettings(next: UiSettings) {
     splitRatio: next.splitRatio,
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
-    navGroupsCollapsed: next.navGroupsCollapsed,
+    sidebarPinnedRoutes: next.sidebarPinnedRoutes,
+    sidebarMoreExpanded: next.sidebarMoreExpanded,
     recentSessionsCollapsed: next.recentSessionsCollapsed ?? false,
     borderRadius: next.borderRadius,
     textScale: normalizeTextScale(next.textScale),

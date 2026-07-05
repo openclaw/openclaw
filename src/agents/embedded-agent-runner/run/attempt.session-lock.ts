@@ -25,7 +25,6 @@ import type {
   SessionInfoEntry,
   SessionMessageEntry,
 } from "../../sessions/session-manager.js";
-import { log } from "../logger.js";
 import { resolveEmbeddedSessionFileKey } from "../session-file-key.js";
 
 type SessionLock = Awaited<ReturnType<typeof acquireSessionWriteLock>>;
@@ -249,6 +248,8 @@ type PromptReleasedSessionMetadataEntry = CustomEntry | LabelEntry | SessionInfo
 type PromptReleasedOpaqueEntry = {
   type: "prompt_released_opaque";
   record: unknown;
+  /** Unowned side-leaf rows may extend only the current delivery side branch. */
+  preserveActiveLeaf?: true;
 };
 
 type PromptReleasedSessionEntry =
@@ -326,7 +327,9 @@ function parsePromptReleasedOpaqueLine(line: string): PromptReleasedOpaqueEntry 
   }
 }
 
-function parsePromptReleasedLeafControlLine(line: string): PromptReleasedOpaqueEntry | undefined {
+function parsePromptReleasedSideLeafControlLine(
+  line: string,
+): PromptReleasedOpaqueEntry | undefined {
   try {
     const record = JSON.parse(line) as unknown;
     if (
@@ -341,7 +344,7 @@ function parsePromptReleasedLeafControlLine(line: string): PromptReleasedOpaqueE
     ) {
       return undefined;
     }
-    return { type: "prompt_released_opaque", record };
+    return { type: "prompt_released_opaque", record, preserveActiveLeaf: true };
   } catch {
     return undefined;
   }
@@ -382,7 +385,6 @@ function classifyPromptReleasedSessionLines(
     : undefined;
   let hasGlobalMetadata = false;
   let hasOpaqueEntries = false;
-  let sideLeafControlCount = 0;
   let expectedParentId = options?.initialParentId ?? null;
   for (const line of lines) {
     const matchExpectedEntry = (
@@ -453,17 +455,9 @@ function classifyPromptReleasedSessionLines(
       hasGlobalMetadata = true;
       continue;
     }
-    const opaqueEntry =
-      parsePromptReleasedLeafControlLine(line) ??
-      (options?.allowAnyMessage ? parsePromptReleasedOpaqueLine(line) : undefined);
-    if (
-      opaqueEntry &&
-      isJsonRecord(opaqueEntry.record) &&
-      opaqueEntry.record.type === "leaf" &&
-      opaqueEntry.record.appendMode === "side"
-    ) {
-      sideLeafControlCount += 1;
-    }
+    const opaqueEntry = options?.allowAnyMessage
+      ? parsePromptReleasedOpaqueLine(line)
+      : parsePromptReleasedSideLeafControlLine(line);
     const opaqueId =
       opaqueEntry && isJsonRecord(opaqueEntry.record)
         ? normalizeTranscriptEntryId(opaqueEntry.record.id)
@@ -478,13 +472,6 @@ function classifyPromptReleasedSessionLines(
   }
   if (remainingExpectedEntries?.length) {
     return undefined;
-  }
-  if (sideLeafControlCount > 0) {
-    log.debug("prompt-released session side leaf accepted", {
-      entryCount: entries.length,
-      sideLeafControlCount,
-      kind: hasOpaqueEntries ? "opaque" : hasGlobalMetadata ? "global-metadata" : "transcript-only",
-    });
   }
   if (hasOpaqueEntries) {
     return { kind: "opaque", entries, publishedEntries };
@@ -1301,13 +1288,6 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       takeoverDetected = true;
       throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
     }
-    log.debug("prompt-released session change merged", {
-      kind: change.kind,
-      entryCount: change.entries.length,
-      publishedEntryCount: change.publishedEntries.length,
-      postMergePublishedEntryCount: mergeResult?.publishedEntries?.length ?? 0,
-      requiresReload: mergeResult?.requiresReload === true,
-    });
     return {
       snapshot: refreshedSnapshot,
       publishedEntries: mergeResult?.requiresReload

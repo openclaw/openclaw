@@ -43,13 +43,14 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     private var pendingAPNsDeviceToken: Data?
     private var pendingWatchPromptActions: [PendingWatchPromptAction] = []
     private var pendingExecApprovalPrompts: [PendingExecApprovalPrompt] = []
-    private var pendingExecApprovalRequestedPushIDs: [String] = []
-    private var pendingExecApprovalResolvedPushIDs: [String] = []
+    private var pendingExecApprovalRequestedPushes: [ExecApprovalNotificationPrompt] = []
+    private var pendingExecApprovalResolvedPushes: [ExecApprovalNotificationPrompt] = []
+    private var pendingOpenURLs: [URL] = []
 
     weak var appModel: NodeAppModel? {
         didSet {
-            guard let model = self.resolvedAppModel() else { return }
-            if let token = self.pendingAPNsDeviceToken {
+            guard let model = resolvedAppModel() else { return }
+            if let token = pendingAPNsDeviceToken {
                 self.pendingAPNsDeviceToken = nil
                 Task { @MainActor in
                     model.updateAPNsDeviceToken(token)
@@ -78,21 +79,30 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                     }
                 }
             }
-            if !self.pendingExecApprovalRequestedPushIDs.isEmpty {
-                let pending = self.pendingExecApprovalRequestedPushIDs
-                self.pendingExecApprovalRequestedPushIDs.removeAll()
+            if !self.pendingExecApprovalRequestedPushes.isEmpty {
+                let pending = self.pendingExecApprovalRequestedPushes
+                self.pendingExecApprovalRequestedPushes.removeAll()
                 Task { @MainActor in
-                    for approvalId in pending {
-                        _ = await model.handleExecApprovalRequestedRemotePush(approvalId: approvalId)
+                    for push in pending {
+                        _ = await model.handleExecApprovalRequestedRemotePush(push)
                     }
                 }
             }
-            if !self.pendingExecApprovalResolvedPushIDs.isEmpty {
-                let pending = self.pendingExecApprovalResolvedPushIDs
-                self.pendingExecApprovalResolvedPushIDs.removeAll()
+            if !self.pendingExecApprovalResolvedPushes.isEmpty {
+                let pending = self.pendingExecApprovalResolvedPushes
+                self.pendingExecApprovalResolvedPushes.removeAll()
                 Task { @MainActor in
-                    for approvalId in pending {
-                        await model.handleExecApprovalResolvedRemotePush(approvalId: approvalId)
+                    for push in pending {
+                        _ = await model.handleExecApprovalResolvedRemotePush(push)
+                    }
+                }
+            }
+            if !self.pendingOpenURLs.isEmpty {
+                let pending = self.pendingOpenURLs
+                self.pendingOpenURLs.removeAll()
+                Task { @MainActor in
+                    for url in pending {
+                        await self.handleOpenURL(url, model: model)
                     }
                 }
             }
@@ -115,7 +125,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
 
     func application(
         _ application: UIApplication,
-        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool
+        didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool
     {
         GatewayDiagnostics.log("app delegate: didFinishLaunching")
         if self.appModel == nil {
@@ -129,6 +139,33 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
             await self.registerForRemoteNotificationsIfEnrollmentReady(application)
         }
         return true
+    }
+
+    func application(
+        _ app: UIApplication,
+        open url: URL,
+        options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool
+    {
+        guard DeepLinkParser.parse(url) != nil else { return false }
+        guard let model = resolvedAppModel() else {
+            self.pendingOpenURLs.append(url)
+            return true
+        }
+        Task { @MainActor in
+            await self.handleOpenURL(url, model: model)
+        }
+        return true
+    }
+
+    func handleOpenURL(_ url: URL, model: NodeAppModel) async {
+        guard let route = DeepLinkParser.parse(url) else { return }
+
+        switch route {
+        case .agent, .dashboard:
+            await model.handleDeepLink(url: url)
+        case let .gateway(link):
+            model.stageGatewaySetupLink(link)
+        }
     }
 
     private func registerForRemoteNotificationsIfEnrollmentReady(_ application: UIApplication) async {
@@ -149,8 +186,8 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         }
     }
 
-    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        if let appModel = self.resolvedAppModel() {
+    func application(_: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        if let appModel = resolvedAppModel() {
             Task { @MainActor in
                 appModel.updateAPNsDeviceToken(deviceToken)
             }
@@ -160,38 +197,30 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         self.pendingAPNsDeviceToken = deviceToken
     }
 
-    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
+    func application(_: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
         self.logger.error("APNs registration failed: \(error.localizedDescription, privacy: .public)")
     }
 
     func application(
-        _ application: UIApplication,
+        _: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void)
     {
         self.logger.info("APNs remote notification received keys=\(userInfo.keys.count, privacy: .public)")
         Task { @MainActor in
-            let notificationCenter = LiveNotificationCenter()
-            if await ExecApprovalNotificationBridge.handleResolvedPushIfNeeded(
-                userInfo: userInfo,
-                notificationCenter: notificationCenter)
-            {
-                if let approvalId = ExecApprovalNotificationBridge.approvalID(from: userInfo) {
-                    if let appModel = self.resolvedAppModel() {
-                        await appModel.handleExecApprovalResolvedRemotePush(approvalId: approvalId)
-                    } else {
-                        self.pendingExecApprovalResolvedPushIDs.append(approvalId)
-                    }
+            if let push = ExecApprovalNotificationBridge.parseResolvedPush(userInfo: userInfo) {
+                if let appModel = self.resolvedAppModel() {
+                    let handled = await appModel.handleExecApprovalResolvedRemotePush(push)
+                    completionHandler(handled ? .newData : .noData)
+                } else {
+                    self.pendingExecApprovalResolvedPushes.append(push)
+                    completionHandler(.newData)
                 }
-                completionHandler(.newData)
                 return
             }
             guard let appModel = self.resolvedAppModel() else {
-                if ExecApprovalNotificationBridge.payloadKind(userInfo: userInfo)
-                    == ExecApprovalNotificationBridge.requestedKind,
-                    let approvalId = ExecApprovalNotificationBridge.approvalID(from: userInfo)
-                {
-                    self.pendingExecApprovalRequestedPushIDs.append(approvalId)
+                if let push = ExecApprovalNotificationBridge.parseRequestedPush(userInfo: userInfo) {
+                    self.pendingExecApprovalRequestedPushes.append(push)
                 }
                 self.logger.info("APNs wake skipped: appModel unavailable")
                 self.scheduleBackgroundWakeRefresh(afterSeconds: 90, reason: "silent_push_no_model")
@@ -340,7 +369,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     private func routeWatchPromptAction(_ action: PendingWatchPromptAction) async {
-        guard let appModel = self.resolvedAppModel() else {
+        guard let appModel = resolvedAppModel() else {
             self.pendingWatchPromptActions.append(action)
             return
         }
@@ -354,7 +383,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     private func routeExecApprovalPrompt(_ prompt: PendingExecApprovalPrompt) {
-        guard let appModel = self.resolvedAppModel() else {
+        guard let appModel = resolvedAppModel() else {
             self.pendingExecApprovalPrompts.append(prompt)
             return
         }
@@ -364,7 +393,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
+        _: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void)
     {
@@ -379,7 +408,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
+        _: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void)
     {
@@ -451,18 +480,18 @@ enum WatchPromptNotificationBridge {
         let center = UNUserNotificationCenter.current()
         var categoryIdentifier = ""
         if !displayedActions.isEmpty {
-            let categoryID = "\(self.categoryPrefix)\(invokeID)"
+            let categoryID = "\(categoryPrefix)\(invokeID)"
             let category = UNNotificationCategory(
                 identifier: categoryID,
-                actions: self.categoryActions(displayedActions),
+                actions: categoryActions(displayedActions),
                 intentIdentifiers: [],
                 options: [])
-            await self.upsertNotificationCategory(category, center: center)
+            await upsertNotificationCategory(category, center: center)
             categoryIdentifier = categoryID
         }
 
         var userInfo: [AnyHashable: Any] = [
-            self.typeKey: self.typeValue,
+            typeKey: typeValue,
         ]
         if let promptId = params.promptId?.trimmingCharacters(in: .whitespacesAndNewlines), !promptId.isEmpty {
             userInfo[self.promptIDKey] = promptId
@@ -510,7 +539,7 @@ enum WatchPromptNotificationBridge {
             identifier: "watch.prompt.\(invokeID)",
             content: content,
             trigger: nil)
-        try? await self.addNotificationRequest(request, center: center)
+        try? await addNotificationRequest(request, center: center)
     }
 
     static func actionIDKey(index: Int) -> String {
@@ -552,7 +581,7 @@ enum WatchPromptNotificationBridge {
 
     private static func isNotificationAuthorizationAllowed() async -> Bool {
         let center = UNUserNotificationCenter.current()
-        let status = await self.notificationAuthorizationStatus(center: center)
+        let status = await notificationAuthorizationStatus(center: center)
         return self.isAuthorizationStatusAllowed(status)
     }
 
@@ -629,7 +658,7 @@ extension NodeAppModel {
             note: "source=ios.notification",
             sentAtMs: Int(Date().timeIntervalSince1970 * 1000),
             transport: "ios.notification")
-        await self._bridgeConsumeMirroredWatchReply(event)
+        await _bridgeConsumeMirroredWatchReply(event)
     }
 }
 
@@ -693,7 +722,9 @@ struct OpenClawApp: App {
                         OpenClawType.refreshUIKitAppearance(in: Self.connectedWindows())
                     })
                 .onOpenURL { url in
-                    Task { await self.handleOpenURL(url) }
+                    // SwiftUI owns normal scene delivery; the delegate also queues URLs
+                    // that arrive before the scene has installed its model.
+                    Task { await self.appDelegate.handleOpenURL(url, model: self.appModel) }
                 }
                 .onChange(of: self.scenePhase) { _, newValue in
                     self.appModel.setScenePhase(newValue)
@@ -736,18 +767,6 @@ struct OpenClawApp: App {
 }
 
 extension OpenClawApp {
-    @MainActor
-    private func handleOpenURL(_ url: URL) async {
-        guard let route = DeepLinkParser.parse(url) else { return }
-
-        switch route {
-        case .agent, .dashboard:
-            await self.appModel.handleDeepLink(url: url)
-        case let .gateway(link):
-            self.appModel.stageGatewaySetupLink(link)
-        }
-    }
-
     private static func installUncaughtExceptionLogger() {
         NSLog("OpenClaw: installing uncaught exception handler")
         NSSetUncaughtExceptionHandler { exception in

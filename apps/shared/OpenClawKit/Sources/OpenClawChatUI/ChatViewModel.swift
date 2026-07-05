@@ -49,6 +49,7 @@ public final class OpenClawChatViewModel {
     private(set) var timelineRevision: UInt64 = 0
     public private(set) var sessions: [OpenClawChatSessionEntry] = []
     private let transport: any OpenClawChatTransport
+    let haptics: OpenClawChatHaptics
     private var sessionDefaults: OpenClawChatSessionsDefaults?
     private let prefersExplicitThinkingLevel: Bool
     private let onSessionChanged: (@MainActor (String) -> Void)?
@@ -164,6 +165,7 @@ public final class OpenClawChatViewModel {
     public init(
         sessionKey: String,
         transport: any OpenClawChatTransport,
+        haptics: OpenClawChatHaptics = OpenClawChatHaptics(),
         initialThinkingLevel: String? = nil,
         onSessionChanged: (@MainActor (String) -> Void)? = nil,
         onThinkingLevelChanged: (@MainActor @Sendable (String) -> Void)? = nil,
@@ -171,6 +173,7 @@ public final class OpenClawChatViewModel {
     {
         self.sessionKey = sessionKey
         self.transport = transport
+        self.haptics = haptics
         let normalizedThinkingLevel = Self.normalizedThinkingLevel(initialThinkingLevel)
         let initialResolvedThinkingLevel = normalizedThinkingLevel ?? "off"
         self.thinkingLevel = initialResolvedThinkingLevel
@@ -571,8 +574,8 @@ public final class OpenClawChatViewModel {
         await self.refreshHistoryAfterRun(historyRequest: context)
         await self.pollHealthIfNeeded(force: true, sessionSnapshot: context.session)
         guard self.isCurrentSession(context.session) else { return }
-        if self.hasAssistantMessageAfterLatestUser() {
-            self.clearPendingRuns(reason: nil)
+        if let hapticEvent = self.assistantHapticEventAfterLatestUser() {
+            self.clearPendingRuns(reason: nil, hapticEvent: hapticEvent)
             self.pendingToolCallsById = [:]
             self.updateStreamingAssistantText(nil)
         }
@@ -1491,6 +1494,9 @@ public final class OpenClawChatViewModel {
             self.logDiagnostic(
                 "chat.ui transport send accepted sessionKey=\(sessionKey) "
                     + "localRunId=\(runId) remoteRunId=\(response.runId)")
+            if response.status != "error", response.status != "timeout" {
+                self.haptics.perform(.messageSent)
+            }
             var reusedRunAlreadyFinal = false
             if response.runId != runId {
                 let pendingUserMessageID = self.pendingLocalUserEchoMessageIDsByRunID.removeValue(forKey: runId)
@@ -1509,7 +1515,7 @@ public final class OpenClawChatViewModel {
                 self.rescopeProvisionalFinalMessages(runId: response.runId, scope: remoteRunScope)
                 reusedRunAlreadyFinal = self.hasRecordedFinalMessage(runId: response.runId)
                 if reusedRunAlreadyFinal {
-                    self.clearPendingRun(response.runId)
+                    self.clearPendingRun(response.runId, hapticEvent: .runCompleted)
                     self.pendingToolCallsById = [:]
                     self.updateStreamingAssistantText(nil)
                 } else {
@@ -1545,8 +1551,8 @@ public final class OpenClawChatViewModel {
             guard self.isCurrentSession(sessionSnapshot) else { return }
             self.removePendingLocalUserEcho(for: runId)
             self.runMessageScopesByRunID.removeValue(forKey: runId)
-            self.clearPendingRun(runId)
             self.errorText = error.localizedDescription
+            self.clearPendingRun(runId, hapticEvent: .runFailed)
             self.logDiagnostic(
                 "chat.ui send failed sessionKey=\(sessionKey) "
                     + "localRunId=\(runId) error=\(error.localizedDescription)")
@@ -2227,10 +2233,15 @@ public final class OpenClawChatViewModel {
             if chat.state == "error" {
                 self.errorText = chat.errorMessage ?? "Chat failed"
             }
+            let hapticEvent: OpenClawChatHaptics.Event? = switch chat.state {
+            case "final": .runCompleted
+            case "error": .runFailed
+            default: nil
+            }
             if let runId = chat.runId {
-                self.clearPendingRun(runId)
+                self.clearPendingRun(runId, hapticEvent: hapticEvent)
             } else if self.pendingRuns.count <= 1 {
-                self.clearPendingRuns(reason: nil)
+                self.clearPendingRuns(reason: nil, hapticEvent: hapticEvent)
             }
             self.pendingToolCallsById = [:]
             self.updateStreamingAssistantText(nil)
@@ -2371,7 +2382,9 @@ public final class OpenClawChatViewModel {
             self.errorText = Self.agentLifecycleErrorMessage(evt, aborted: aborted)
         }
         if isPendingRun {
-            self.clearPendingRun(evt.runId)
+            self.clearPendingRun(
+                evt.runId,
+                hapticEvent: isFailure || aborted ? .runFailed : .runCompleted)
         }
         self.pendingToolCallsById = [:]
         self.updateStreamingAssistantText(nil)
@@ -2411,7 +2424,7 @@ public final class OpenClawChatViewModel {
     }
 
     private func finishPendingRunAfterTerminalOkSendAck(_ response: OpenClawChatSendResponse) {
-        self.clearPendingRun(response.runId)
+        self.clearPendingRun(response.runId, hapticEvent: .runCompleted)
         self.pendingToolCallsById = [:]
         self.updateStreamingAssistantText(nil)
         self.logDiagnostic(
@@ -2423,20 +2436,20 @@ public final class OpenClawChatViewModel {
         switch response.status {
         case "timeout":
             self.removePendingLocalUserEcho(for: response.runId)
-            self.clearPendingRun(response.runId)
             self.pendingToolCallsById = [:]
             self.updateStreamingAssistantText(nil)
             self.errorText = "Chat failed before the run started; try again."
+            self.clearPendingRun(response.runId, hapticEvent: .runFailed)
             self.logDiagnostic(
                 "chat.ui send terminal ack sessionKey=\(self.sessionKey) "
                     + "runId=\(response.runId) status=timeout")
             return true
         case "error":
             self.removePendingLocalUserEcho(for: response.runId)
-            self.clearPendingRun(response.runId)
             self.pendingToolCallsById = [:]
             self.updateStreamingAssistantText(nil)
             self.errorText = "Chat failed before the run started; try again."
+            self.clearPendingRun(response.runId, hapticEvent: .runFailed)
             self.logDiagnostic(
                 "chat.ui send terminal ack sessionKey=\(self.sessionKey) "
                     + "runId=\(response.runId) status=error")
@@ -2519,15 +2532,11 @@ public final class OpenClawChatViewModel {
 
     @discardableResult
     private func clearPendingRunIfAssistantMessagePresent(runId: String, after timestamp: Double) -> Bool {
-        guard self.hasAssistantMessage(after: timestamp) else { return false }
-        self.clearPendingRun(runId)
+        guard let hapticEvent = self.assistantHapticEvent(after: timestamp) else { return false }
+        self.clearPendingRun(runId, hapticEvent: hapticEvent)
         self.pendingToolCallsById = [:]
         self.updateStreamingAssistantText(nil)
         return true
-    }
-
-    private func hasAssistantMessageAfterLatestUser() -> Bool {
-        Self.hasAssistantMessageAfterLatestUser(in: self.messages)
     }
 
     private static func hasUnansweredLatestUser(in messages: [OpenClawChatMessage]) -> Bool {
@@ -2637,16 +2646,31 @@ public final class OpenClawChatViewModel {
         }
     }
 
-    private func hasAssistantMessage(after timestamp: Double) -> Bool {
-        self.messages.contains { message in
-            guard message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "assistant" else {
-                return false
-            }
-            guard (message.timestamp ?? 0) >= timestamp else { return false }
-            let text = message.content.compactMap(\.text).joined(separator: "\n")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return !text.isEmpty || message.errorMessage != nil
+    private static func assistantHapticEvent(
+        for message: OpenClawChatMessage) -> OpenClawChatHaptics.Event?
+    {
+        guard message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "assistant" else {
+            return nil
         }
+        let text = message.content.compactMap(\.text).joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty || message.errorMessage != nil else { return nil }
+        let stopReason = message.stopReason?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return stopReason == "error" || stopReason == "aborted" ? .runFailed : .runCompleted
+    }
+
+    private func assistantHapticEventAfterLatestUser() -> OpenClawChatHaptics.Event? {
+        guard let userIndex = self.messages.lastIndex(where: { $0.role.lowercased() == "user" }) else { return nil }
+        let nextIndex = self.messages.index(after: userIndex)
+        guard nextIndex < self.messages.endIndex else { return nil }
+        return self.messages[nextIndex...].reversed().lazy.compactMap(Self.assistantHapticEvent).first
+    }
+
+    private func assistantHapticEvent(after timestamp: Double) -> OpenClawChatHaptics.Event? {
+        self.messages.reversed().lazy.compactMap { message in
+            guard (message.timestamp ?? 0) >= timestamp else { return nil }
+            return Self.assistantHapticEvent(for: message)
+        }.first
     }
 
     @discardableResult
@@ -2675,13 +2699,16 @@ public final class OpenClawChatViewModel {
                 self.logDiagnostic(
                     "chat.ui pending timeout sessionKey=\(self.sessionKey) "
                         + "runId=\(runId)")
-                self.clearPendingRun(runId)
                 self.errorText = "Timed out waiting for a reply; try again or refresh."
+                self.clearPendingRun(runId, hapticEvent: .runFailed)
             }
         }
     }
 
-    private func clearPendingRun(_ runId: String) {
+    private func clearPendingRun(
+        _ runId: String,
+        hapticEvent: OpenClawChatHaptics.Event? = nil)
+    {
         let wasPending = self.pendingRuns.contains(runId)
         self.pendingRuns.remove(runId)
         self.pendingLocalUserEchoMessageIDsByRunID[runId] = nil
@@ -2691,10 +2718,16 @@ public final class OpenClawChatViewModel {
             self.logDiagnostic(
                 "chat.ui pending cleared sessionKey=\(self.sessionKey) "
                     + "runId=\(runId)")
+            if self.pendingRuns.isEmpty, let hapticEvent {
+                self.haptics.perform(hapticEvent)
+            }
         }
     }
 
-    private func clearPendingRuns(reason: String?) {
+    private func clearPendingRuns(
+        reason: String?,
+        hapticEvent: OpenClawChatHaptics.Event? = nil)
+    {
         let runIds = Array(pendingRuns)
         for runId in self.pendingRuns {
             self.pendingRunTimeoutTasks[runId]?.cancel()
@@ -2702,6 +2735,9 @@ public final class OpenClawChatViewModel {
         self.pendingRunTimeoutTasks.removeAll()
         self.pendingRuns.removeAll()
         self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
+        if !runIds.isEmpty, let hapticEvent {
+            self.haptics.perform(hapticEvent)
+        }
         if let reason, !reason.isEmpty {
             self.errorText = reason
             for runId in runIds {

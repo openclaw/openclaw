@@ -24,6 +24,7 @@ export const APP_ROUTE_DEFINITIONS = {
   skills: { path: "/skills" },
   cron: { path: "/cron" },
   nodes: { path: "/nodes" },
+  plugin: { path: "/plugin" },
   dreams: { path: "/dreaming", aliases: ["/dreams"] },
 } as const;
 

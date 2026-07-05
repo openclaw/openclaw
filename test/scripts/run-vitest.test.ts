@@ -31,6 +31,8 @@ import {
 } from "../../scripts/run-vitest.mjs";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
+// These bounds only guard broken fixtures; readiness and exit are asserted via process signals.
+const LOAD_SENSITIVE_PROCESS_TIMEOUT_MS = process.env.CI ? 30_000 : 15_000;
 
 describe("scripts/run-vitest", () => {
   it("adds --no-maglev to vitest child processes by default", () => {
@@ -659,8 +661,10 @@ describe("scripts/run-vitest", () => {
     let descendantPid = 0;
 
     try {
-      await waitFor(() => fs.existsSync(childPidPath), 10_000);
-      await waitFor(() => fs.existsSync(descendantPidPath), 10_000);
+      await waitFor(
+        () => fs.existsSync(childPidPath) && fs.existsSync(descendantPidPath),
+        LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
+      );
       childPid = Number(fs.readFileSync(childPidPath, "utf8"));
       descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
       expect(Number.isInteger(childPid)).toBe(true);
@@ -670,11 +674,11 @@ describe("scripts/run-vitest", () => {
 
       expect(runner.pid).toBeGreaterThan(0);
       process.kill(runner.pid!, "SIGTERM");
-      const result = await waitForClose(runner);
+      const result = await waitForClose(runner, LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
 
       expect(result).toEqual({ code: null, signal: "SIGTERM" });
-      await waitFor(() => !isProcessAlive(childPid), 5_000);
-      await waitFor(() => !isProcessAlive(descendantPid), 5_000);
+      await waitFor(() => !isProcessAlive(childPid), LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
+      await waitFor(() => !isProcessAlive(descendantPid), LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
     } finally {
       if (runner.pid && isProcessAlive(runner.pid)) {
         process.kill(runner.pid, "SIGKILL");

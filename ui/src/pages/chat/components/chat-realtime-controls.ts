@@ -1,12 +1,6 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../../i18n/index.ts";
-import {
-  REALTIME_TALK_FALLBACK_PROVIDERS,
-  listSelectableRealtimeTalkProviders,
-  resolveControlUiRealtimeTalkProviderTransports,
-  type RealtimeTalkCatalogProvider,
-} from "../realtime-talk-catalog.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 
 type TalkSelectOption = { label: string; value: string };
@@ -30,44 +24,18 @@ const TALK_SENSITIVITY_OPTIONS: TalkSelectOption[] = [
   { label: "Medium", value: "0.5" },
   { label: "High", value: "0.35" },
 ];
-const TALK_PROVIDER_AUTO_OPTION: TalkSelectOption = { label: "Auto", value: "" };
-const TALK_PROVIDER_FALLBACK_OPTIONS: TalkSelectOption[] = [
-  TALK_PROVIDER_AUTO_OPTION,
-  ...REALTIME_TALK_FALLBACK_PROVIDERS.map((provider) => ({
-    label: provider.label,
-    value: provider.id,
-  })),
-];
-const TALK_TRANSPORT_OPTIONS: TalkSelectOption[] = [
-  { label: "Auto", value: "" },
-  { label: "WebRTC", value: "webrtc" },
-  { label: "Gateway relay", value: "gateway-relay" },
-  { label: "Provider WebSocket", value: "provider-websocket" },
-];
-const TALK_REASONING_OPTIONS: TalkSelectOption[] = [
-  { label: "Default", value: "" },
-  { label: "Minimal", value: "minimal" },
-  { label: "Low", value: "low" },
-  { label: "Medium", value: "medium" },
-  { label: "High", value: "high" },
-];
-
 export type RealtimeTalkOptions = {
-  provider: string;
   model: string;
   voice: string;
-  transport: string;
   vadThreshold: string;
-  silenceDurationMs: string;
-  prefixPaddingMs: string;
-  reasoningEffort: string;
 };
 
 export type ChatRealtimeTalkOptionsProps = {
   realtimeTalkOptionsOpen?: boolean;
-  realtimeTalkCatalogProviders?: RealtimeTalkCatalogProvider[] | null;
   realtimeTalkOptions?: RealtimeTalkOptions;
   onRealtimeTalkOptionsChange?: (next: Partial<RealtimeTalkOptions>) => void;
+  canOpenRealtimeTalkSettings?: boolean;
+  onOpenRealtimeTalkSettings?: () => void;
 };
 
 export type ChatRealtimeTalkConversationProps = {
@@ -115,48 +83,6 @@ export function renderRealtimeTalkOptions(props: ChatRealtimeTalkOptionsProps) {
   if (!props.realtimeTalkOptionsOpen || !options || !onChange) {
     return nothing;
   }
-  const catalogProviders = props.realtimeTalkCatalogProviders;
-  const selectableProviders = listSelectableRealtimeTalkProviders(catalogProviders ?? []);
-  const providerOptions: TalkSelectOption[] = catalogProviders
-    ? [
-        TALK_PROVIDER_AUTO_OPTION,
-        ...selectableProviders.map((provider) => ({ label: provider.label, value: provider.id })),
-      ]
-    : TALK_PROVIDER_FALLBACK_OPTIONS;
-  const selectedCatalogProvider = options.provider
-    ? selectableProviders.find((provider) => provider.id === options.provider)
-    : null;
-  const selectedProviderTransports = selectedCatalogProvider
-    ? resolveControlUiRealtimeTalkProviderTransports(selectedCatalogProvider)
-    : undefined;
-  const transportOptions: TalkSelectOption[] = selectedProviderTransports
-    ? [
-        { label: "Auto", value: "" },
-        ...TALK_TRANSPORT_OPTIONS.filter(
-          (opt) => opt.value !== "" && selectedProviderTransports.includes(opt.value),
-        ),
-      ]
-    : TALK_TRANSPORT_OPTIONS;
-  const update = (key: keyof RealtimeTalkOptions) => (event: Event) => {
-    const value = (event.currentTarget as HTMLInputElement | HTMLSelectElement).value;
-    onChange({ [key]: value });
-  };
-  const isDefaultSensitivity = options.vadThreshold === "";
-  const isPresetSensitivity = ["0.65", "0.5", "0.35"].includes(options.vadThreshold);
-  const isCustomSensitivity = !isDefaultSensitivity && !isPresetSensitivity;
-  const sensitivityValue = isDefaultSensitivity
-    ? ""
-    : isPresetSensitivity
-      ? options.vadThreshold
-      : "__custom";
-  const sensitivityOptions = isCustomSensitivity
-    ? [...TALK_SENSITIVITY_OPTIONS, { label: "Custom", value: "__custom" }]
-    : TALK_SENSITIVITY_OPTIONS;
-  const updateSensitivity = (value: string) => {
-    if (value !== "__custom") {
-      onChange({ vadThreshold: value });
-    }
-  };
   return html`
     <div class="agent-chat__talk-options" aria-label="Talk options">
       <div class="agent-chat__talk-options-primary">
@@ -170,86 +96,36 @@ export function renderRealtimeTalkOptions(props: ChatRealtimeTalkOptionsProps) {
           <span>Model</span>
           <input
             .value=${options.model}
-            @input=${update("model")}
+            @input=${(event: Event) =>
+              onChange({ model: (event.currentTarget as HTMLInputElement).value })}
             placeholder="Auto"
             spellcheck="false"
           />
         </label>
         ${renderNativeTalkSelect({
           label: "Sensitivity",
-          value: sensitivityValue,
-          options: sensitivityOptions,
-          onSelect: updateSensitivity,
+          value: options.vadThreshold,
+          options: TALK_SENSITIVITY_OPTIONS,
+          onSelect: (vadThreshold) => onChange({ vadThreshold }),
         })}
       </div>
-      <details class="agent-chat__talk-options-advanced">
-        <summary>Advanced</summary>
-        <div class="agent-chat__talk-options-grid">
-          ${renderNativeTalkSelect({
-            label: "Provider",
-            value: options.provider,
-            options: providerOptions,
-            onSelect: (provider) => {
-              const selectedProvider = selectableProviders.find((entry) => entry.id === provider);
-              const transports = selectedProvider
-                ? resolveControlUiRealtimeTalkProviderTransports(selectedProvider)
-                : null;
-              const transport = options.transport;
-              onChange(
-                transports && transport && !transports.includes(transport)
-                  ? { provider, transport: "" }
-                  : { provider },
-              );
-            },
-          })}
-          ${renderNativeTalkSelect({
-            label: "Transport",
-            value: options.transport,
-            options: transportOptions,
-            onSelect: (transport) => onChange({ transport }),
-          })}
-          ${renderNativeTalkSelect({
-            label: "Reasoning",
-            value: options.reasoningEffort,
-            options: TALK_REASONING_OPTIONS,
-            onSelect: (reasoningEffort) => onChange({ reasoningEffort }),
-          })}
-          <label class="agent-chat__talk-field">
-            <span>Exact VAD</span>
-            <input
-              type="number"
-              min="0"
-              max="1"
-              step="0.05"
-              .value=${options.vadThreshold}
-              @input=${update("vadThreshold")}
-              placeholder="0.5"
-            />
-          </label>
-          <label class="agent-chat__talk-field">
-            <span>Pause before send</span>
-            <input
-              type="number"
-              min="1"
-              step="50"
-              .value=${options.silenceDurationMs}
-              @input=${update("silenceDurationMs")}
-              placeholder="500"
-            />
-          </label>
-          <label class="agent-chat__talk-field">
-            <span>Lead-in</span>
-            <input
-              type="number"
-              min="0"
-              step="50"
-              .value=${options.prefixPaddingMs}
-              @input=${update("prefixPaddingMs")}
-              placeholder="300"
-            />
-          </label>
-        </div>
-      </details>
+      ${props.onOpenRealtimeTalkSettings
+        ? html`
+            <button
+              type="button"
+              class="agent-chat__talk-settings-link"
+              @click=${props.onOpenRealtimeTalkSettings}
+              ?disabled=${props.canOpenRealtimeTalkSettings === false}
+              title=${props.canOpenRealtimeTalkSettings === false
+                ? "Advanced Talk settings require operator.admin access."
+                : ""}
+            >
+              ${props.canOpenRealtimeTalkSettings === false
+                ? "Advanced settings require admin"
+                : "More in Settings"}
+            </button>
+          `
+        : nothing}
     </div>
   `;
 }

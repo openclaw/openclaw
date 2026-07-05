@@ -872,9 +872,17 @@ function startSweeper() {
     if (sweepInProgress) {
       return;
     }
-    void sweepSubagentRuns();
+    void runSubagentSweep();
   }, 60_000);
   sweeper.unref?.();
+}
+
+async function runSubagentSweep() {
+  try {
+    await sweepSubagentRuns();
+  } catch (err) {
+    log.warn(`subagent run sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 function stopSweeper() {
@@ -1619,6 +1627,9 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
 export const testing = {
   async sweepOnceForTests() {
     await sweepSubagentRuns();
+  },
+  async runSweeperTickForTests() {
+    await runSubagentSweep();
   },
   setDepsForTest(overrides?: Partial<SubagentRegistryDeps>) {
     subagentRegistryDeps = overrides
