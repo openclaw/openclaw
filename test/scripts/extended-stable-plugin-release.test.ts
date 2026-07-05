@@ -101,27 +101,7 @@ function validSelectorHandoff(releaseVersion = "2026.6.33") {
       ],
     },
     acceptances,
-    publicationPackages,
-    acceptancePackages: acceptances.map((acceptance, index) => ({
-      packageName: acceptance.packageName,
-      acceptanceProfile: ["codex-provider-v1", "discord-channel-v1", "slack-channel-v1"][index],
-      runId: acceptance.acceptanceRunId,
-      runAttempt: acceptance.acceptanceRunAttempt,
-      artifactName: `extended-stable-plugin-acceptance-${acceptance.acceptanceRunId}-${acceptance.acceptanceRunAttempt}`,
-      artifactDigest: acceptance.acceptanceArtifactDigest,
-    })),
     selectorPackages: publicationPackageNames,
-    snapshotReadbacks: [
-      {
-        packageName: "@openclaw/matrix",
-        version: "2026.6.33",
-        npmIntegrity: "sha512-matrix",
-        installProofRunId: 101,
-        installProofRunAttempt: 1,
-        installProofArtifactName: "extended-stable-plugin-publication-101-1",
-        installProofArtifactDigest: `sha256:${"2".repeat(64)}`,
-      },
-    ],
     selectorsBefore: selectorState,
     selectorsAfter: structuredClone(selectorState),
     selectorOrder: ["plugins", "core"],
@@ -190,7 +170,6 @@ describe("extended-stable plugin release artifacts", () => {
     const mismatchedSnapshot = validSelectorHandoff();
     mismatchedSnapshot.pluginPublication.snapshotReadbacks[0]!.npmIntegrity =
       "sha512-wrong-snapshot";
-    mismatchedSnapshot.snapshotReadbacks[0]!.npmIntegrity = "sha512-wrong-snapshot";
     expect(() => verifySelectorHandoff(mismatchedSnapshot, rootDir)).toThrow(
       /snapshot integrity must match its patch 33 publication integrity/u,
     );
@@ -266,10 +245,10 @@ describe("extended-stable plugin release artifacts", () => {
     expect(orchestrator).toContain('selectorOrder: ["plugins", "core"]');
     expect(orchestrator).toContain('conclusion: "ready_for_protected_selector_promotion"');
     expect(orchestrator).toContain("schemaVersion: 2");
-    expect(orchestrator).toContain("publicationPackages: pluginProof.plugins");
-    expect(orchestrator).toContain("acceptancePackages");
     expect(orchestrator).toContain("selectorPackages: selectorPackageNames");
-    expect(orchestrator).toContain("snapshotReadbacks: pluginProof.snapshotReadbacks");
+    expect(orchestrator).not.toContain("publicationPackages:");
+    expect(orchestrator).not.toContain("acceptancePackages:");
+    expect(orchestrator).not.toContain("installProofRunId:");
     expect(orchestrator).not.toContain("verifyMonthlyCohortProof");
     expect(orchestrator).not.toContain("parseEligibleCohortEvidence");
     expect(orchestrator).toContain("verifySelectorHandoff(handoff, rootDir)");

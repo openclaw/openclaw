@@ -457,7 +457,6 @@ export async function orchestrate(args: Args, rootDir = resolve(".")): Promise<v
   }
 
   const acceptanceProofs = [];
-  const acceptancePackages = [];
   for (const plugin of support.plugins) {
     const acceptanceRunId = await dispatchWorkflow(
       repository,
@@ -510,14 +509,6 @@ export async function orchestrate(args: Args, rootDir = resolve(".")): Promise<v
       ],
     );
     acceptanceProofs.push(acceptanceProof);
-    acceptancePackages.push({
-      packageName: plugin.packageName,
-      acceptanceProfile: plugin.acceptanceProfile,
-      runId: acceptanceRunId,
-      runAttempt: acceptanceRun.run_attempt,
-      artifactName: artifact.name,
-      artifactDigest: artifact.digest,
-    });
   }
 
   const selectorsAfter = Object.fromEntries(
@@ -542,16 +533,7 @@ export async function orchestrate(args: Args, rootDir = resolve(".")): Promise<v
     },
     pluginPublication: pluginProof,
     acceptances: acceptanceProofs,
-    publicationPackages: pluginProof.plugins,
-    acceptancePackages,
     selectorPackages: selectorPackageNames,
-    snapshotReadbacks: pluginProof.snapshotReadbacks.map((entry) => ({
-      ...entry,
-      installProofRunId: pluginRunId,
-      installProofRunAttempt: pluginRun.run_attempt,
-      installProofArtifactName: pluginArtifact.name,
-      installProofArtifactDigest: pluginArtifact.digest,
-    })),
     selectorsBefore,
     selectorsAfter,
     selectorOrder: ["plugins", "core"],

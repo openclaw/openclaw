@@ -74,10 +74,7 @@ export function verifySelectorHandoff(value: unknown, rootDir = resolve(".")): v
       "core",
       "pluginPublication",
       "acceptances",
-      "publicationPackages",
-      "acceptancePackages",
       "selectorPackages",
-      "snapshotReadbacks",
       "selectorsBefore",
       "selectorsAfter",
       "selectorOrder",
@@ -163,21 +160,12 @@ export function verifySelectorHandoff(value: unknown, rootDir = resolve(".")): v
   ) {
     throw new Error("selector handoff plugin publication identity is invalid.");
   }
-  const publicationRunId = positiveInteger(
-    publication.publicationRunId,
-    "plugin publication run id",
-  );
-  const publicationRunAttempt = positiveInteger(
-    publication.publicationRunAttempt,
-    "plugin publication run attempt",
-  );
-  const publicationArtifactDigest = artifactDigest(
-    publication.publicationArtifactDigest,
-    "plugin publication artifact digest",
-  );
+  positiveInteger(publication.publicationRunId, "plugin publication run id");
+  positiveInteger(publication.publicationRunAttempt, "plugin publication run attempt");
+  artifactDigest(publication.publicationArtifactDigest, "plugin publication artifact digest");
   sha256(publication.publicationResultSha256, "plugin publication result SHA-256");
   const publicationIntegrityByPackage = new Map<string, string>();
-  const publicationProof = publication.plugins.map((entry, index) => {
+  const publishedPackages = publication.plugins.map((entry, index) => {
     const plugin = record(entry, `plugin publication plugins[${index}]`);
     keys(
       plugin,
@@ -207,45 +195,15 @@ export function verifySelectorHandoff(value: unknown, rootDir = resolve(".")): v
       throw new Error(`plugin publication plugins[${index}] candidate tag is invalid.`);
     }
     publicationIntegrityByPackage.set(packageName, integrity);
-    return {
-      packageName,
-      version: releaseVersion,
-      npmIntegrity: integrity,
-      candidateTag: expectedTag,
-    };
+    return packageName;
   });
-  if (
-    JSON.stringify(publicationProof.map((entry) => entry.packageName)) !==
-    JSON.stringify(expectedPublicationNames)
-  ) {
+  if (JSON.stringify(publishedPackages) !== JSON.stringify(expectedPublicationNames)) {
     throw new Error("selector handoff publication must contain the derived package set.");
-  }
-
-  if (!Array.isArray(handoff.publicationPackages)) {
-    throw new Error("selector handoff.publicationPackages must be an array.");
-  }
-  const publicationPackages = handoff.publicationPackages.map((entry, index) => {
-    const plugin = record(entry, `selector handoff.publicationPackages[${index}]`);
-    keys(
-      plugin,
-      ["packageName", "version", "npmIntegrity", "candidateTag"],
-      `selector handoff.publicationPackages[${index}]`,
-    );
-    return {
-      packageName: text(plugin.packageName, `publicationPackages[${index}].packageName`),
-      version: text(plugin.version, `publicationPackages[${index}].version`),
-      npmIntegrity: text(plugin.npmIntegrity, `publicationPackages[${index}].npmIntegrity`),
-      candidateTag: text(plugin.candidateTag, `publicationPackages[${index}].candidateTag`),
-    };
-  });
-  if (JSON.stringify(publicationPackages) !== JSON.stringify(publicationProof)) {
-    throw new Error("selector handoff publicationPackages must match aggregate publication proof.");
   }
 
   if (!Array.isArray(handoff.acceptances)) {
     throw new Error("selector handoff.acceptances must be an array.");
   }
-  const acceptanceProofByPackage = new Map<string, Record<string, unknown>>();
   const acceptedPackages = handoff.acceptances.map((entry, index) => {
     const acceptance = record(entry, `selector handoff.acceptances[${index}]`);
     keys(
@@ -274,47 +232,10 @@ export function verifySelectorHandoff(value: unknown, rootDir = resolve(".")): v
     if (acceptance.npmIntegrity !== publicationIntegrityByPackage.get(packageName)) {
       throw new Error(`acceptances[${index}] integrity does not match publication.`);
     }
-    acceptanceProofByPackage.set(packageName, acceptance);
     return packageName;
   });
   if (JSON.stringify(acceptedPackages) !== JSON.stringify(expectedAcceptanceNames)) {
     throw new Error("selector handoff acceptances must contain exactly the covered packages.");
-  }
-
-  if (!Array.isArray(handoff.acceptancePackages)) {
-    throw new Error("selector handoff.acceptancePackages must be an array.");
-  }
-  const acceptancePackages = handoff.acceptancePackages.map((entry, index) => {
-    const acceptance = record(entry, `selector handoff.acceptancePackages[${index}]`);
-    keys(
-      acceptance,
-      ["packageName", "acceptanceProfile", "runId", "runAttempt", "artifactName", "artifactDigest"],
-      `selector handoff.acceptancePackages[${index}]`,
-    );
-    const packageName = text(acceptance.packageName, `acceptancePackages[${index}].packageName`);
-    const supportEntry = support.plugins[index];
-    const proof = acceptanceProofByPackage.get(packageName);
-    const runId = positiveInteger(acceptance.runId, `acceptancePackages[${index}].runId`);
-    const runAttempt = positiveInteger(
-      acceptance.runAttempt,
-      `acceptancePackages[${index}].runAttempt`,
-    );
-    if (
-      !supportEntry ||
-      supportEntry.packageName !== packageName ||
-      acceptance.acceptanceProfile !== supportEntry.acceptanceProfile ||
-      proof?.acceptanceRunId !== runId ||
-      proof.acceptanceRunAttempt !== runAttempt ||
-      acceptance.artifactName !== `extended-stable-plugin-acceptance-${runId}-${runAttempt}` ||
-      acceptance.artifactDigest !== proof.acceptanceArtifactDigest
-    ) {
-      throw new Error(`acceptancePackages[${index}] does not match covered acceptance proof.`);
-    }
-    artifactDigest(acceptance.artifactDigest, `acceptancePackages[${index}].artifactDigest`);
-    return packageName;
-  });
-  if (JSON.stringify(acceptancePackages) !== JSON.stringify(expectedAcceptanceNames)) {
-    throw new Error("selector handoff acceptancePackages must contain exactly covered packages.");
   }
 
   const aggregateSnapshotIntegrity = new Map<string, string>();
@@ -356,50 +277,6 @@ export function verifySelectorHandoff(value: unknown, rootDir = resolve(".")): v
         );
       }
     }
-  }
-
-  if (!Array.isArray(handoff.snapshotReadbacks)) {
-    throw new Error("selector handoff.snapshotReadbacks must be an array.");
-  }
-  const snapshotReadbacks = handoff.snapshotReadbacks.map((entry, index) => {
-    const snapshot = record(entry, `selector handoff.snapshotReadbacks[${index}]`);
-    keys(
-      snapshot,
-      [
-        "packageName",
-        "version",
-        "npmIntegrity",
-        "installProofRunId",
-        "installProofRunAttempt",
-        "installProofArtifactName",
-        "installProofArtifactDigest",
-      ],
-      `selector handoff.snapshotReadbacks[${index}]`,
-    );
-    const packageName = text(snapshot.packageName, `snapshotReadbacks[${index}].packageName`);
-    if (
-      snapshot.version !== snapshotVersion ||
-      snapshot.npmIntegrity !== aggregateSnapshotIntegrity.get(packageName) ||
-      positiveInteger(
-        snapshot.installProofRunId,
-        `snapshotReadbacks[${index}].installProofRunId`,
-      ) !== publicationRunId ||
-      positiveInteger(
-        snapshot.installProofRunAttempt,
-        `snapshotReadbacks[${index}].installProofRunAttempt`,
-      ) !== publicationRunAttempt ||
-      snapshot.installProofArtifactName !==
-        `extended-stable-plugin-publication-${publicationRunId}-${publicationRunAttempt}` ||
-      snapshot.installProofArtifactDigest !== publicationArtifactDigest
-    ) {
-      throw new Error(`snapshotReadbacks[${index}] is not bound to aggregate install proof.`);
-    }
-    return packageName;
-  });
-  if (JSON.stringify(snapshotReadbacks) !== JSON.stringify(expectedSnapshotNames)) {
-    throw new Error(
-      "selector handoff snapshotReadbacks must contain exactly snapshot-only packages.",
-    );
   }
 
   const selectorPackages = packageNames(
