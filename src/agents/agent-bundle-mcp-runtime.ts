@@ -196,7 +196,9 @@ export function createBundleMcpJsonSchemaValidator(): jsonSchemaValidator {
         );
       } catch (error) {
         const setupError = toErrorObject(error, "schema setup failed");
-        throw new Error(`Invalid MCP draft-2020-12 JSON Schema: ${setupError.message}`);
+        throw new Error(`Invalid MCP draft-2020-12 JSON Schema: ${setupError.message}`, {
+          cause: setupError,
+        });
       }
       return (input: unknown) => {
         const valid = validator.Check(input);
