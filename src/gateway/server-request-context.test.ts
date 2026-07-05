@@ -49,6 +49,7 @@ function makeContextParams(
     nodeRegistry: {} as never,
     agentRunSeq: new Map(),
     chatAbortControllers: new Map(),
+    chatQueuedTurns: new Map(),
     chatAbortedRuns: new Map(),
     chatRunBuffers: new Map(),
     chatDeltaSentAt: new Map(),

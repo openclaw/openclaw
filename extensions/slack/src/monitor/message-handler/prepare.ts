@@ -624,6 +624,8 @@ export async function prepareSlackMessage(params: {
     source: "message" | "app_mention";
     wasMentioned?: boolean;
     relayIdentity?: SlackSendIdentity;
+    /** Handler-owned race check for suppressing a duplicate dropped-history record. */
+    shouldRecordDroppedHistory?: () => boolean;
   };
 }): Promise<PreparedSlackMessage | null> {
   const { ctx, account, message, opts } = params;
@@ -867,7 +869,7 @@ export async function prepareSlackMessage(params: {
     return resolvedSenderName;
   };
   const recordDroppedHistory = async (
-    reason: "slack-no-mention" | "slack-other-mention",
+    reason: "slack-mention-detection-unavailable" | "slack-no-mention" | "slack-other-mention",
   ): Promise<void> => {
     const pendingText = (message.text ?? "").trim();
     const historyMediaCandidate = buildSlackHistoryMediaCandidateMessage(message);
@@ -911,6 +913,7 @@ export async function prepareSlackMessage(params: {
           limit: ctx.historyLimit,
           recordOnDrop: true,
           mediaLimit: SLACK_HISTORY_MEDIA_MAX_ATTACHMENTS,
+          shouldRecord: opts.shouldRecordDroppedHistory,
         },
         media: () =>
           resolveSlackHistoryMediaForPendingRecord({
@@ -1032,6 +1035,15 @@ export async function prepareSlackMessage(params: {
       reason: "control command (unauthorized)",
       target: senderId,
     });
+    return null;
+  }
+
+  if (isRoom && shouldRequireMention && !canDetectMention && !effectiveWasMentioned) {
+    ctx.logger.info(
+      { channel: message.channel, reason: "mention-detection-unavailable" },
+      "skipping channel message",
+    );
+    await recordDroppedHistory("slack-mention-detection-unavailable");
     return null;
   }
 
@@ -1179,6 +1191,17 @@ export async function prepareSlackMessage(params: {
     storePath,
     sessionKey,
   });
+  if (opts.source === "app_mention" && !ctx.botUserId && message.ts) {
+    // The Slack message event can arrive first and queue the same timestamp as dropped history.
+    // Remove only this route's copy before the trusted app_mention builds prompt context.
+    const pendingHistory = ctx.channelHistories.get(historyKey);
+    if (pendingHistory) {
+      ctx.channelHistories.set(
+        historyKey,
+        pendingHistory.filter((entry) => entry.messageId !== message.ts),
+      );
+    }
+  }
   const channelHistory = createChannelHistoryWindow({ historyMap: ctx.channelHistories });
   const dmHistoryLimit = isDirectMessage
     ? resolveSlackDmHistoryLimit({
