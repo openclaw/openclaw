@@ -768,6 +768,16 @@ test("sessions.compact skips post-compaction lifecycle when no delegates exist",
     "utf-8",
   );
   await writeSessionStore({ entries: { main: sessionStoreEntry("sess-post-compaction-empty") } });
+  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce({
+    ok: true,
+    compacted: true,
+    result: {
+      summary: "summary",
+      firstKeptEntryId: "entry-1",
+      tokensBefore: 120,
+      tokensAfter: 80,
+    },
+  });
 
   const beforeEvents = peekSystemEvents("agent:main:main").length;
 
@@ -779,6 +789,7 @@ test("sessions.compact skips post-compaction lifecycle when no delegates exist",
   );
 
   expectMainCompactionResult(compacted, true);
+  expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledTimes(1);
   expect(stagedPostCompactionDelegateCount("agent:main:main")).toBe(0);
   expect(peekSystemEvents("agent:main:main").slice(beforeEvents)).not.toContainEqual(
     expect.stringContaining("[system:post-compaction]"),
