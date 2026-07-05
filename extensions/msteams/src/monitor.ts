@@ -595,13 +595,15 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
 }
 
 /**
- * Build a minimal ActivityHandler-compatible object that supports
- * onMessage / onMembersAdded registration and a run() method.
+ * Build a minimal ActivityHandler-compatible object that supports Teams
+ * message, lifecycle, and reaction handlers plus a run() method.
  */
 function buildActivityHandler(): MSTeamsActivityHandler {
   type Handler = (context: unknown, next: () => Promise<void>) => Promise<void>;
   const messageHandlers: Handler[] = [];
   const membersAddedHandlers: Handler[] = [];
+  const membersRemovedHandlers: Handler[] = [];
+  const installationUpdateHandlers: Handler[] = [];
   const reactionsAddedHandlers: Handler[] = [];
   const reactionsRemovedHandlers: Handler[] = [];
 
@@ -612,6 +614,14 @@ function buildActivityHandler(): MSTeamsActivityHandler {
     },
     onMembersAdded(cb) {
       membersAddedHandlers.push(cb);
+      return handler;
+    },
+    onMembersRemoved(cb) {
+      membersRemovedHandlers.push(cb);
+      return handler;
+    },
+    onInstallationUpdate(cb) {
+      installationUpdateHandlers.push(cb);
       return handler;
     },
     onReactionsAdded(cb) {
@@ -632,7 +642,21 @@ function buildActivityHandler(): MSTeamsActivityHandler {
           await h(context, noop);
         }
       } else if (activityType === "conversationUpdate") {
-        for (const h of membersAddedHandlers) {
+        const activity = (
+          ctx as { activity?: { membersAdded?: unknown[]; membersRemoved?: unknown[] } }
+        )?.activity;
+        if (activity?.membersAdded?.length) {
+          for (const h of membersAddedHandlers) {
+            await h(context, noop);
+          }
+        }
+        if (activity?.membersRemoved?.length) {
+          for (const h of membersRemovedHandlers) {
+            await h(context, noop);
+          }
+        }
+      } else if (activityType === "installationUpdate") {
+        for (const h of installationUpdateHandlers) {
           await h(context, noop);
         }
       } else if (activityType === "messageReaction") {
