@@ -5527,13 +5527,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /plugins/logbook
 - Headings:
-  - H2: Default state
-  - H2: Requirements
+  - H2: Before you begin
+  - H2: Quickstart
   - H2: How it works
+  - H2: Model and data flow
   - H2: Configuration
+  - H3: Vision model selection
   - H2: Dashboard tab
   - H2: Gateway methods
   - H2: Privacy notes
+  - H2: Troubleshooting
+  - H3: The Logbook tab is missing
+  - H3: Capture reports an error
+  - H3: Captures succeed but no cards appear
+  - H2: Related
 
 ## plugins/manage-plugins.md
 

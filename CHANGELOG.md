@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - **Unicode and plugin package verification:** match native slice semantics for reversed UTF-16 bounds, and reject published plugin packages that omit `openclaw.plugin.json`. (#100014, #99904) Thanks @Simon-XYDT and @849261680.
 - **Android invoke cancellation:** preserve coroutine cancellation through camera handlers and the Gateway invoke boundary so cancelled work cannot emit a stale result. (#99916) Thanks @xialonglee.
 - **Codex native hook relay diagnostics:** avoid bridge registry writes before the local relay server begins listening. (#100300) Thanks @nankingjing.
+- **Voice Call completed status:** resolve finalized calls from the full retained event store across Gateway, tool, and CLI status paths while preserving active-call lookup performance. (#99797) Thanks @Darren2030.
 - **Agent stop recovery:** prevent late-aborting prompts from reacquiring orphaned session locks after teardown, so `/stop` leaves the conversation ready for the next turn.
 - **Message delivery status:** report failed and partially failed best-effort channel delivery instead of returning a success-shaped message-tool result. (#99928) Thanks @masatohoshino.
 - **WhatsApp credential recovery:** restore malformed primary auth state from a valid backup during startup. (#99070) Thanks @LeonidasLux.
