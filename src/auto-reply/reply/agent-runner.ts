@@ -2,7 +2,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import {
   hasSessionAutoModelFallbackProvenance,
   hasConfiguredModelFallbacks,
@@ -11,8 +10,11 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import { hasVisibleAgentPayload } from "../../agents/embedded-agent-runner/delivery-evidence.js";
-import { hasDeliberateSilentTerminalReply } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
+import {
+  hasCommittedSourceReplyDeliveryEvidence,
+  hasVisibleCommittedMessagingToolDeliveryEvidence,
+  hasVisibleOutboundDeliveryEvidence,
+} from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
@@ -69,7 +71,6 @@ import type { VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
-  buildEmptyInteractiveReplyPayload,
   buildKnownAgentRunFailureReplyPayload,
   runAgentTurnWithFallback,
 } from "./agent-runner-execution.js";
@@ -97,6 +98,7 @@ import {
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
+import { buildEmptyInteractiveReplyFallbackPayload } from "./empty-interactive-reply.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
@@ -166,7 +168,7 @@ function buildSilentFallbackFailurePayload(params: {
   fallbackTransition: ReturnType<typeof resolveFallbackTransition>;
   fallbackFailureKnown: boolean;
   isHeartbeat: boolean;
-  hasSuccessfulTerminalDelivery: boolean;
+  hasSuccessfulSideEffectDelivery: boolean;
   allowEmptyAssistantReplyAsSilent?: boolean;
   silentExpected?: boolean;
 }): ReplyPayload | undefined {
@@ -174,7 +176,7 @@ function buildSilentFallbackFailurePayload(params: {
     params.isHeartbeat ||
     params.allowEmptyAssistantReplyAsSilent === true ||
     params.silentExpected === true ||
-    params.hasSuccessfulTerminalDelivery ||
+    params.hasSuccessfulSideEffectDelivery ||
     !params.fallbackTransition.fallbackActive ||
     !params.fallbackFailureKnown
   ) {
@@ -251,53 +253,7 @@ function hasSuccessfulSourceReplyDelivery(params: {
   return (
     (params.blockReplyPipeline?.didStream() && !params.blockReplyPipeline.isAborted()) ||
     (params.directlySentBlockKeys?.size ?? 0) > 0 ||
-    hasNonEmptyStringArray(params.messagingToolSentTexts) ||
-    hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
-    hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets)
-  );
-}
-
-function hasNonEmptyStringArray(value: unknown): boolean {
-  return Array.isArray(value) && value.some((entry) => typeof entry === "string" && entry.trim());
-}
-
-function hasCommittedMessagingTargetDeliveryEvidence(value: unknown): boolean {
-  if (!Array.isArray(value)) {
-    return false;
-  }
-  return value.some((entry) => {
-    if (!entry || typeof entry !== "object") {
-      return false;
-    }
-    const record = entry as { text?: unknown; mediaUrls?: unknown };
-    if ("text" in record || "mediaUrls" in record) {
-      return (
-        (typeof record.text === "string" && record.text.trim().length > 0) ||
-        hasNonEmptyStringArray(record.mediaUrls)
-      );
-    }
-    return true;
-  });
-}
-
-function hasSuccessfulTerminalSourceReplyDelivery(params: {
-  blockReplyPipeline: {
-    didStreamTerminalReply?: () => boolean;
-    isAborted: () => boolean;
-  } | null;
-  directlySentBlockPayloads?: ReplyPayload[];
-}): boolean {
-  const sentTerminalBlock = params.directlySentBlockPayloads?.some(
-    (payload) =>
-      payload.isReasoning !== true &&
-      payload.isCommentary !== true &&
-      !isReplyPayloadStatusNotice(payload) &&
-      normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
-  );
-  return (
-    (params.blockReplyPipeline?.didStreamTerminalReply?.() === true &&
-      !params.blockReplyPipeline.isAborted()) ||
-    sentTerminalBlock === true
+    hasVisibleCommittedMessagingToolDeliveryEvidence(params)
   );
 }
 
@@ -1979,23 +1935,6 @@ export async function runReplyAgent(params: {
       preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     });
 
-    const committedOutboundDelivery =
-      runResult.didSendViaMessagingTool === true ||
-      hasNonEmptyStringArray(runResult.messagingToolSentTexts) ||
-      hasNonEmptyStringArray(runResult.messagingToolSentMediaUrls) ||
-      hasCommittedMessagingTargetDeliveryEvidence(runResult.messagingToolSentTargets) ||
-      hasAcceptedSessionSpawn(runResult.acceptedSessionSpawns) ||
-      (runResult.successfulCronAdds ?? 0) > 0 ||
-      runResult.didSendDeterministicApprovalPrompt === true;
-    const successfulSideEffectDelivery =
-      committedOutboundDelivery ||
-      hasSuccessfulSourceReplyDelivery({ blockReplyPipeline, directlySentBlockKeys });
-    const successfulTerminalEffectDelivery =
-      committedOutboundDelivery ||
-      hasSuccessfulTerminalSourceReplyDelivery({
-        blockReplyPipeline,
-        directlySentBlockPayloads,
-      });
     const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
       blockReplyPipeline,
       directlySentBlockKeys,
@@ -2004,37 +1943,15 @@ export async function runReplyAgent(params: {
       messagingToolSentTargets: runResult.messagingToolSentTargets,
     });
     const committedMessagingToolSourceReplyDelivery =
-      runResult.didDeliverSourceReplyViaMessageTool === true ||
-      hasVisibleAgentPayload({ payloads: runResult.messagingToolSourceReplyPayloads });
+      hasCommittedSourceReplyDeliveryEvidence(runResult);
+    const successfulSideEffectDelivery =
+      successfulSourceReplyDelivery ||
+      committedMessagingToolSourceReplyDelivery ||
+      hasVisibleOutboundDeliveryEvidence(runResult) ||
+      runResult.didSendDeterministicApprovalPrompt === true;
     const shouldDeliverTerminalFailure = Boolean(
-      terminalFailurePayload &&
-      !successfulTerminalEffectDelivery &&
-      !committedMessagingToolSourceReplyDelivery,
+      terminalFailurePayload && !successfulSideEffectDelivery,
     );
-    const fallbackFailureKnown =
-      fallbackAttempts.length > 0 || configuredFallbackModel.persistedAutoFallback;
-    const hasSpecificFallbackFailure = fallbackTransition.fallbackActive && fallbackFailureKnown;
-    const emptyInteractiveReplyPayload = terminalFailurePayload
-      ? undefined
-      : buildEmptyInteractiveReplyPayload({
-          isInteractive:
-            followupRun.currentInboundEventKind !== "room_event" &&
-            (followupRun.run.inputProvenance?.kind === undefined ||
-              followupRun.run.inputProvenance.kind === "external_user"),
-          isHeartbeat,
-          silentExpected: followupRun.run.silentExpected,
-          allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
-          isMessageToolOnly:
-            (opts?.sourceReplyDeliveryMode ?? followupRun.run.sourceReplyDeliveryMode) ===
-            "message_tool_only",
-          hasPendingContinuation:
-            runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,
-          hasExplicitSilentReply: hasDeliberateSilentTerminalReply(runResult),
-          hasCommittedDelivery:
-            successfulTerminalEffectDelivery || committedMessagingToolSourceReplyDelivery,
-          sessionCtx,
-          cfg,
-        });
     if (
       opts?.sourceReplyDeliveryMode === "message_tool_only" &&
       committedMessagingToolSourceReplyDelivery
@@ -2044,9 +1961,10 @@ export async function runReplyAgent(params: {
     const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
       const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
         fallbackTransition,
-        fallbackFailureKnown,
+        fallbackFailureKnown:
+          fallbackAttempts.length > 0 || configuredFallbackModel.persistedAutoFallback,
         isHeartbeat,
-        hasSuccessfulTerminalDelivery: successfulTerminalEffectDelivery,
+        hasSuccessfulSideEffectDelivery: successfulSideEffectDelivery,
         allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
         silentExpected: followupRun.run.silentExpected,
       });
@@ -2061,6 +1979,25 @@ export async function runReplyAgent(params: {
       );
       await signalTypingIfNeeded([silentFallbackFailurePayload], typingSignals);
       return returnWithQueuedFollowupDrain(silentFallbackFailurePayload);
+    };
+    const returnEmptyInteractiveReplyIfNeeded = async (): Promise<ReplyPayload | undefined> => {
+      const emptyInteractiveReplyPayload = buildEmptyInteractiveReplyFallbackPayload({
+        isHeartbeat,
+        hasSuccessfulSideEffectDelivery: successfulSideEffectDelivery,
+        allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
+        silentExpected: followupRun.run.silentExpected,
+        sourceReplyDeliveryMode:
+          opts?.sourceReplyDeliveryMode ?? followupRun.run.sourceReplyDeliveryMode,
+      });
+      if (!emptyInteractiveReplyPayload) {
+        return undefined;
+      }
+      replyOperation.fail(
+        "run_failed",
+        new Error("empty interactive reply produced no visible payload"),
+      );
+      await signalTypingIfNeeded([emptyInteractiveReplyPayload], typingSignals);
+      return returnWithQueuedFollowupDrain(emptyInteractiveReplyPayload);
     };
 
     const fallbackNoticePayloads: ReplyPayload[] = [];
@@ -2137,12 +2074,15 @@ export async function runReplyAgent(params: {
     if (
       payloadArray.length === 0 &&
       fallbackNoticePayloads.length === 0 &&
-      !shouldDeliverTerminalFailure &&
-      (!emptyInteractiveReplyPayload || hasSpecificFallbackFailure)
+      !shouldDeliverTerminalFailure
     ) {
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
+      }
+      const emptyInteractiveReplyPayload = await returnEmptyInteractiveReplyIfNeeded();
+      if (emptyInteractiveReplyPayload) {
+        return emptyInteractiveReplyPayload;
       }
       return returnWithQueuedFollowupDrain(undefined);
     }
@@ -2214,22 +2154,6 @@ export async function runReplyAgent(params: {
       const terminalPayloadResult = await buildFinalPayloads([terminalFailurePayload]);
       replyPayloads = [...replyPayloads, ...terminalPayloadResult.replyPayloads];
       didLogHeartbeatStrip = terminalPayloadResult.didLogHeartbeatStrip;
-    } else if (hasSpecificFallbackFailure && !hasTerminalReplyPayload) {
-      const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
-      if (silentFallbackFailurePayload) {
-        return silentFallbackFailurePayload;
-      }
-    } else if (emptyInteractiveReplyPayload && !hasTerminalReplyPayload) {
-      const emptyPayloadResult = await buildFinalPayloads([emptyInteractiveReplyPayload]);
-      replyPayloads = [...replyPayloads, ...emptyPayloadResult.replyPayloads];
-      didLogHeartbeatStrip = emptyPayloadResult.didLogHeartbeatStrip;
-      if (emptyPayloadResult.replyPayloads.length > 0) {
-        replyOperation.retainFailureUntilComplete();
-        replyOperation.fail(
-          "run_failed",
-          new Error("interactive agent run completed without a visible reply"),
-        );
-      }
     }
 
     const hasReplyPayloadBeyondFallbackNotice = replyPayloads.some(
@@ -2247,6 +2171,10 @@ export async function runReplyAgent(params: {
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
+      }
+      const emptyInteractiveReplyPayload = await returnEmptyInteractiveReplyIfNeeded();
+      if (emptyInteractiveReplyPayload) {
+        return emptyInteractiveReplyPayload;
       }
       return returnWithQueuedFollowupDrain(undefined);
     }
