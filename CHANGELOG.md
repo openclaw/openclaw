@@ -33,7 +33,7 @@ Docs: https://docs.openclaw.ai
 
 - **Status signal:** omit the redundant `Plugins: OK` row from compact `/status` output while retaining actionable plugin-health warnings and detailed plugin status.
 - **Control UI terminal rendering:** adopt the shared `@openclaw/libterminal` browser lifecycle and add Nerd Font fallbacks so icon-enabled shell listings render their glyphs when a compatible local font is installed.
-- **Control UI chat history:** hide redundant channel-final delivery mirrors when the preceding app-server assistant reply already shows the same text.
+- **Slack transcript history:** let Codex app-server own its persisted assistant replies so Slack does not append redundant delivery-mirror rows, while the Control UI keeps legacy duplicate mirrors hidden.
 - **Control UI chat spacing:** keep the first message comfortably clear of the topbar with a responsive minimum transcript inset.
 - **ClawRouter auth profiles:** resolve credential-scoped catalog models during agent runs when the proxy key is stored in an auth profile, and document plugin and model allowlists.
 - **Telegram durability:** recover stalled ingress claims, retry restart-dropped media, survive transient polling errors, dead-letter poison updates, preserve forwarded rich text, route plugin callbacks correctly, keep progress updates in one stable multi-line window, map self-hosted Bot API container paths through trusted host roots, and fall back safely when Telegram rejects rich final replies. (#97118, #98102, #98735, #98775, #98776, #97174, #98907, #91984, #98786) Thanks @vincentkoc, @luoyanglang, @DaveArcher18, @obviyus, @goldmar, @Marvinthebored, @Dizesales, and @shakkernerd.
