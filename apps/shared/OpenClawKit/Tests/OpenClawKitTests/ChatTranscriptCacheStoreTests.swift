@@ -172,6 +172,56 @@ struct ChatTranscriptCacheStoreTests {
         #expect(await store.loadTranscript(sessionKey: "main").isEmpty)
     }
 
+    @Test func `reset retirement permits physical removal of all gateway rows`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let storeA = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        let storeB = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-b")
+        await storeA.storeTranscript(
+            sessionKey: "main",
+            messages: [cacheMessage(role: "user", text: "gateway A", timestamp: 1)])
+        await storeA.storeSessions([cacheSessionEntry(key: "main", updatedAt: 1)])
+        await storeB.storeTranscript(
+            sessionKey: "main",
+            messages: [cacheMessage(role: "user", text: "gateway B", timestamp: 2)])
+
+        await storeA.retire()
+        await storeB.retire()
+        OpenClawChatSQLiteTranscriptCache.removeDatabaseFiles(at: url)
+        await storeA.storeTranscript(
+            sessionKey: "main",
+            messages: [cacheMessage(role: "user", text: "late write", timestamp: 3)])
+
+        let readerA = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        let readerB = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-b")
+        #expect(await storeA.loadTranscript(sessionKey: "main").isEmpty)
+        #expect(await storeA.loadSessions().isEmpty)
+        #expect(await readerA.loadTranscript(sessionKey: "main").isEmpty)
+        #expect(await readerB.loadTranscript(sessionKey: "main").isEmpty)
+    }
+
+    @Test func `target purge preserves other gateway rows`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let storeA = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        let storeB = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-b")
+        await storeA.storeSessions([cacheSessionEntry(key: "a", updatedAt: 1)])
+        await storeA.storeTranscript(
+            sessionKey: "a",
+            messages: [cacheMessage(role: "user", text: "gateway A", timestamp: 1)])
+        await storeB.storeSessions([cacheSessionEntry(key: "b", updatedAt: 2)])
+        await storeB.storeTranscript(
+            sessionKey: "b",
+            messages: [cacheMessage(role: "user", text: "gateway B", timestamp: 2)])
+
+        await storeA.purgeGatewayRows()
+
+        #expect(await storeA.loadSessions().isEmpty)
+        #expect(await storeA.loadTranscript(sessionKey: "a").isEmpty)
+        #expect(await storeB.loadSessions().map(\.key) == ["b"])
+        #expect(await messageTexts(storeB.loadTranscript(sessionKey: "b")) == ["gateway B"])
+    }
+
     @Test func `attachment payloads are not persisted`() async throws {
         let url = try makeDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }

@@ -503,7 +503,11 @@ public final class OpenClawChatViewModel {
         // is written through so the next cold open pre-paints current rows.
         self.hasAppliedLiveHistory = true
         self.isShowingCachedTranscript = false
-        self.persistTranscriptToCache(sessionKey: request.session.key)
+        // An empty post-send refresh is incomplete by contract: reconciliation
+        // preserves the visible transcript, so preserve its last canonical cache too.
+        if !preservingOptimisticLocalMessages || !incoming.isEmpty {
+            self.persistTranscriptToCache(sessionKey: request.session.key, messages: incoming)
+        }
         return true
     }
 

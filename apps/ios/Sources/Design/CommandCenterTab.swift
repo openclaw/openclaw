@@ -401,29 +401,32 @@ struct CommandCenterTab: View {
     private func refreshRecentSessionsIfNeeded() async {
         guard self.scenePhase == .active else { return }
         guard self.sessionListAvailable else {
-            if self.defaultChatSessionEntry != nil {
-                self.defaultChatSessionEntry = nil
-            }
-            if !self.recentChatSessions.isEmpty {
-                self.recentChatSessions = []
-            }
+            await self.applyCachedSessions()
             return
         }
 
         do {
             let transport = self.appModel.makeChatTransport()
             let response = try await transport.listSessions(limit: Self.recentSessionsFetchLimit)
-            self.defaultChatSessionEntry = response.sessions.first {
-                $0.key == self.appModel.defaultChatSessionKey
-            }
-            self.recentChatSessions = Self.sessionChoices(
-                response.sessions,
-                currentSessionKey: self.appModel.chatSessionKey,
-                defaultSessionKey: self.appModel.defaultChatSessionKey)
+            self.applySessions(response.sessions)
+            await self.appModel.storeCachedChatSessions(response.sessions)
         } catch {
-            self.defaultChatSessionEntry = nil
-            self.recentChatSessions = []
+            await self.applyCachedSessions()
         }
+    }
+
+    private func applyCachedSessions() async {
+        self.applySessions(await self.appModel.loadCachedChatSessions())
+    }
+
+    private func applySessions(_ sessions: [OpenClawChatSessionEntry]) {
+        self.defaultChatSessionEntry = sessions.first {
+            $0.key == self.appModel.defaultChatSessionKey
+        }
+        self.recentChatSessions = Self.sessionChoices(
+            sessions,
+            currentSessionKey: self.appModel.chatSessionKey,
+            defaultSessionKey: self.appModel.defaultChatSessionKey)
     }
 
     private static func sessionChoices(
@@ -759,7 +762,7 @@ struct CommandSessionsScreen: View {
 
     private func refreshSessions() async {
         guard self.appModel.isCommandSessionListAvailable else {
-            self.sessions = []
+            self.sessions = await self.appModel.loadCachedChatSessions()
             self.loadErrorText = nil
             return
         }
@@ -772,9 +775,10 @@ struct CommandSessionsScreen: View {
             let transport = self.appModel.makeChatTransport()
             let response = try await transport.listSessions(limit: CommandCenterTab.recentSessionsFetchLimit)
             self.sessions = response.sessions
+            await self.appModel.storeCachedChatSessions(response.sessions)
         } catch {
-            self.sessions = []
-            self.loadErrorText = "Try again after the gateway reconnects."
+            self.sessions = await self.appModel.loadCachedChatSessions()
+            self.loadErrorText = self.sessions.isEmpty ? "Try again after the gateway reconnects." : nil
         }
     }
 }

@@ -1,6 +1,9 @@
 import Foundation
 import OSLog
 import SQLite3
+#if os(iOS)
+import UIKit
+#endif
 
 private let cacheLogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatTranscriptCache")
 
@@ -48,6 +51,7 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache {
     private let databaseURL: URL
     private let gatewayID: String
     private var db: Connection?
+    private var isRetired = false
     /// After a failed drop-and-rebuild the cache becomes a no-op instead of
     /// erroring the chat surface; a fresh launch retries from scratch.
     private var isBroken = false
@@ -57,10 +61,20 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache {
         self.gatewayID = gatewayID
     }
 
+    /// Startup-only cleanup, before any cache actor can own an open handle.
+    public static func removeDatabaseFiles(at databaseURL: URL) {
+        let fm = FileManager.default
+        try? fm.removeItem(at: databaseURL)
+        for suffix in ["-wal", "-shm", "-journal"] {
+            try? fm.removeItem(at: URL(fileURLWithPath: databaseURL.path + suffix))
+        }
+    }
+
     // MARK: - OpenClawChatTranscriptCache
 
     public func loadSessions() async -> [OpenClawChatSessionEntry] {
-        guard let db = self.handle() else { return [] }
+        guard !self.isRetired else { return [] }
+        guard let db = await self.handle() else { return [] }
         guard let payload = self.selectPayload(
             db,
             sql: "SELECT payload FROM cached_sessions WHERE gateway_id = ?1",
@@ -80,7 +94,8 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache {
     }
 
     public func loadTranscript(sessionKey: String) async -> [OpenClawChatMessage] {
-        guard let db = self.handle() else { return [] }
+        guard !self.isRetired else { return [] }
+        guard let db = await self.handle() else { return [] }
         guard let payload = self.selectPayload(
             db,
             sql: "SELECT payload FROM cached_transcripts WHERE gateway_id = ?1 AND session_key = ?2",
@@ -102,7 +117,8 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache {
     }
 
     public func storeSessions(_ sessions: [OpenClawChatSessionEntry]) async {
-        guard let db = self.handle() else { return }
+        guard !self.isRetired else { return }
+        guard let db = await self.handle() else { return }
         let bounded = Self.boundedSessions(sessions)
         guard !bounded.isEmpty else {
             self.execute(db, sql: "DELETE FROM cached_sessions WHERE gateway_id = ?1", bindings: [self.gatewayID])
@@ -119,7 +135,8 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache {
     }
 
     public func storeTranscript(sessionKey: String, messages: [OpenClawChatMessage]) async {
-        guard let db = self.handle() else { return }
+        guard !self.isRetired else { return }
+        guard let db = await self.handle() else { return }
         let bounded = Self.cacheableMessages(messages)
         guard !bounded.isEmpty else {
             // An emptied live transcript must also empty the cache, or the next
@@ -149,6 +166,33 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache {
             )
             """,
             bindings: [self.gatewayID])
+    }
+
+    public func retire() async {
+        // A queued write then either finishes before retirement or becomes a
+        // no-op. Closing the handle lets the owner delete the whole cache file.
+        self.isRetired = true
+        self.db = nil
+    }
+
+    /// Retire this gateway scope and delete only its rows. Bootstrap replacement
+    /// must not erase cached conversations for other paired gateways.
+    public func purgeGatewayRows() async {
+        guard !self.isRetired else { return }
+        guard let db = await self.handle() else {
+            self.isRetired = true
+            return
+        }
+        self.isRetired = true
+        self.execute(
+            db,
+            sql: "DELETE FROM cached_transcripts WHERE gateway_id = ?1",
+            bindings: [self.gatewayID])
+        self.execute(
+            db,
+            sql: "DELETE FROM cached_sessions WHERE gateway_id = ?1",
+            bindings: [self.gatewayID])
+        self.db = nil
     }
 
     // MARK: - Cached shapes
@@ -198,20 +242,25 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache {
 
     // MARK: - Connection lifecycle
 
-    private func handle() -> OpaquePointer? {
+    private func handle() async -> OpaquePointer? {
+        guard !self.isRetired else { return nil }
         if let db { return db.raw }
         if self.isBroken { return nil }
+        #if os(iOS)
+        // Complete protection intentionally makes the cache unavailable while
+        // locked. Treat that as a temporary miss, never as corruption.
+        guard await self.isProtectedDataAvailable(), !self.isRetired else { return nil }
+        #endif
         if let opened = self.openConnection() {
             self.db = Connection(raw: opened)
             return opened
         }
+        #if os(iOS)
+        guard await self.isProtectedDataAvailable(), !self.isRetired else { return nil }
+        #endif
         // Cache is disposable: on any open/schema failure drop the file
         // (and SQLite sidecars) and rebuild once, silently.
-        let fm = FileManager.default
-        try? fm.removeItem(at: self.databaseURL)
-        for suffix in ["-wal", "-shm", "-journal"] {
-            try? fm.removeItem(at: URL(fileURLWithPath: self.databaseURL.path + suffix))
-        }
+        self.removeDatabaseFiles()
         if let reopened = self.openConnection() {
             self.db = Connection(raw: reopened)
             return reopened
@@ -221,13 +270,24 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache {
         return nil
     }
 
+    #if os(iOS)
+    private func isProtectedDataAvailable() async -> Bool {
+        await MainActor.run { UIApplication.shared.isProtectedDataAvailable }
+    }
+    #endif
+
     private func openConnection() -> OpaquePointer? {
         let fm = FileManager.default
         try? fm.createDirectory(
             at: self.databaseURL.deletingLastPathComponent(),
             withIntermediateDirectories: true)
         var opened: OpaquePointer?
-        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
+        var flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
+        #if os(iOS)
+        // Apply Complete protection through the SQLite VFS so auxiliary files
+        // receive the same class as the main transcript database.
+        flags |= SQLITE_OPEN_FILEPROTECTION_COMPLETE
+        #endif
         guard sqlite3_open_v2(self.databaseURL.path, &opened, flags, nil) == SQLITE_OK, let opened else {
             sqlite3_close_v2(opened)
             return nil
@@ -247,10 +307,9 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache {
             return nil
         }
         #if os(iOS)
-        // Transcripts are sensitive: readable only after first unlock so
-        // background refresh keeps working while the device stays locked.
+        // Upgrade a database created by an older build to the stricter class.
         try? fm.setAttributes(
-            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+            [.protectionKey: FileProtectionType.complete],
             ofItemAtPath: self.databaseURL.path)
         #endif
         return opened
@@ -294,15 +353,16 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache {
 
     // MARK: - Statement helpers
 
-    private func execute(_ db: OpaquePointer, sql: String, bindings: [Any]) {
+    @discardableResult
+    private func execute(_ db: OpaquePointer, sql: String, bindings: [Any]) -> Bool {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             cacheLogger.error("cache statement prepare failed")
-            return
+            return false
         }
         defer { sqlite3_finalize(statement) }
-        guard self.bind(statement, bindings: bindings) else { return }
-        _ = sqlite3_step(statement)
+        guard self.bind(statement, bindings: bindings) else { return false }
+        return sqlite3_step(statement) == SQLITE_DONE
     }
 
     private func selectPayload(_ db: OpaquePointer, sql: String, bindings: [Any]) -> String? {
@@ -331,5 +391,10 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache {
             guard result == SQLITE_OK else { return false }
         }
         return true
+    }
+
+    private func removeDatabaseFiles() {
+        self.db = nil
+        Self.removeDatabaseFiles(at: self.databaseURL)
     }
 }

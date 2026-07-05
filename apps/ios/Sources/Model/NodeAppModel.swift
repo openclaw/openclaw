@@ -283,6 +283,7 @@ final class NodeAppModel {
     @ObservationIgnored private var watchMessageRetryAttempts: [String: Int] = [:]
     @ObservationIgnored private var watchMessageRetryTask: Task<Void, Never>?
     @ObservationIgnored private let appleReviewDemoChatTransport = AppleReviewDemoChatTransport()
+    @ObservationIgnored private var chatTranscriptCachesByGatewayID: [String: OpenClawChatSQLiteTranscriptCache] = [:]
     private var watchExecApprovalPromptsByID: [String: ExecApprovalPrompt] = [:]
     private var pendingWatchExecApprovalRecoveryPushes: [ExecApprovalNotificationPrompt] = []
     private var pendingExecApprovalResolvedPushes: [ExecApprovalNotificationPrompt] = []
@@ -351,15 +352,70 @@ final class NodeAppModel {
     /// "operator" must rebuild the view model so transcripts are never read
     /// from or written under another gateway's cache scope.
     var chatViewModelIdentityID: String {
-        "\(self.chatTransportModeID)|\(self.chatTranscriptCacheGatewayID ?? "")"
+        "\(self.chatTransportModeID)|\(self.chatTranscriptCacheGatewayID ?? "")|\(self.chatTranscriptCacheGeneration)"
     }
+
+    private var chatTranscriptCacheGeneration = 0
 
     /// Offline transcript cache scoped to the paired gateway identity.
     func makeChatTranscriptCache() -> (any OpenClawChatTranscriptCache)? {
         guard let gatewayID = self.chatTranscriptCacheGatewayID else { return nil }
-        guard let supportDir = try? OpenClawNodeStorage.appSupportDir() else { return nil }
-        let databaseURL = supportDir.appendingPathComponent("chat-cache.sqlite", isDirectory: false)
-        return OpenClawChatSQLiteTranscriptCache(databaseURL: databaseURL, gatewayID: gatewayID)
+        if let cache = self.chatTranscriptCachesByGatewayID[gatewayID] {
+            return cache
+        }
+        guard let databaseURL = self.chatTranscriptCacheDatabaseURL() else { return nil }
+        let cache = OpenClawChatSQLiteTranscriptCache(databaseURL: databaseURL, gatewayID: gatewayID)
+        self.chatTranscriptCachesByGatewayID[gatewayID] = cache
+        return cache
+    }
+
+    func loadCachedChatSessions() async -> [OpenClawChatSessionEntry] {
+        guard let cache = self.makeChatTranscriptCache() else { return [] }
+        return await cache.loadSessions()
+    }
+
+    func storeCachedChatSessions(_ sessions: [OpenClawChatSessionEntry]) async {
+        guard let cache = self.makeChatTranscriptCache() else { return }
+        await cache.storeSessions(sessions)
+    }
+
+    /// Delete one gateway's cache during bootstrap replacement, or the whole
+    /// disposable database during a full onboarding reset.
+    func purgeChatTranscriptCache(gatewayID: String? = nil) async {
+        if let gatewayID, !gatewayID.isEmpty {
+            guard let databaseURL = self.chatTranscriptCacheDatabaseURL() else { return }
+            let cache = self.chatTranscriptCachesByGatewayID[gatewayID]
+                ?? OpenClawChatSQLiteTranscriptCache(databaseURL: databaseURL, gatewayID: gatewayID)
+            await cache.purgeGatewayRows()
+            self.chatTranscriptCachesByGatewayID.removeValue(forKey: gatewayID)
+            self.chatTranscriptCacheGeneration &+= 1
+            return
+        }
+
+        // Full reset retires every open handle before removing SQLite sidecars,
+        // so deleted transcript bytes cannot survive in WAL or journal pages.
+        for cache in self.chatTranscriptCachesByGatewayID.values {
+            await cache.retire()
+        }
+        if let databaseURL = self.chatTranscriptCacheDatabaseURL() {
+            OpenClawChatSQLiteTranscriptCache.removeDatabaseFiles(at: databaseURL)
+        }
+        self.chatTranscriptCachesByGatewayID.removeAll()
+        self.chatTranscriptCacheGeneration &+= 1
+    }
+
+    /// Debug launch reset runs before Chat can create a cache actor, so direct
+    /// file removal preserves the launch flag's synchronous startup contract.
+    func purgeChatTranscriptCacheBeforeStartup() {
+        guard let databaseURL = self.chatTranscriptCacheDatabaseURL() else { return }
+        OpenClawChatSQLiteTranscriptCache.removeDatabaseFiles(at: databaseURL)
+        self.chatTranscriptCachesByGatewayID.removeAll()
+        self.chatTranscriptCacheGeneration &+= 1
+    }
+
+    private func chatTranscriptCacheDatabaseURL() -> URL? {
+        try? OpenClawNodeStorage.appSupportDir()
+            .appendingPathComponent("chat-cache.sqlite", isDirectory: false)
     }
 
     private(set) var activeGatewayConnectConfig: GatewayConnectConfig?

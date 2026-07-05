@@ -5,9 +5,8 @@ import Foundation
 // of truth and replace cached rows wholesale.
 
 extension OpenClawChatViewModel {
-    func persistTranscriptToCache(sessionKey: String) {
+    func persistTranscriptToCache(sessionKey: String, messages: [OpenClawChatMessage]) {
         guard let transcriptCache else { return }
-        let messages = self.messages
         // Chain writes so an older snapshot can never land after a newer one;
         // detached tasks alone give no ordering guarantee across awaits.
         let previous = self.pendingCacheWriteTask
