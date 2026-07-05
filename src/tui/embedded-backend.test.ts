@@ -1335,6 +1335,65 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
+  it("treats deferred validation-loop terminal summaries as aborted chat events", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockImplementationOnce(() => pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "repeat invalid arguments",
+      runId: "run-validation-loop-finishing",
+    });
+
+    registeredListener?.({
+      runId: "run-validation-loop-finishing",
+      stream: "tool",
+      data: {
+        phase: "result",
+        toolErrorSummary: "edit tool validation failed: invalid arguments",
+      },
+    });
+    registeredListener?.({
+      runId: "run-validation-loop-finishing",
+      stream: "lifecycle",
+      data: {
+        phase: "finishing",
+        toolErrorSummary: "edit tool validation failed: invalid arguments",
+      },
+    });
+    await flushMicrotasks();
+
+    expect(events).toContainEqual({
+      event: "chat",
+      payload: {
+        runId: "run-validation-loop-finishing",
+        sessionKey: "agent:main:main",
+        state: "aborted",
+        errorMessage: "edit tool validation failed: invalid arguments",
+      },
+    });
+
+    pending.resolve({
+      payloads: [
+        { text: "Stopped after 2 identical failed edit tool calls. Received arguments: {}" },
+      ],
+      meta: { stopReason: "error" },
+    });
+    await flushMicrotasks();
+
+    expect(JSON.stringify(events)).not.toContain("Received arguments");
+  });
+
   it.each([
     { stream: "assistant", data: { text: "Recovered" } },
     { stream: "tool", data: { phase: "start", name: "read" } },

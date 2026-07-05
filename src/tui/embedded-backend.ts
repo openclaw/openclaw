@@ -1122,6 +1122,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const aborted = evt.data?.aborted === true || run.controller.signal.aborted;
     const toolErrorSummary = readToolValidationErrorSummary(evt.data?.toolErrorSummary);
     if (phase === "finishing") {
+      if (toolErrorSummary) {
+        this.emitChatAborted(evt.runId, run, toolErrorSummary);
+        return;
+      }
       run.finishing = true;
       run.markQueuedRunReady();
       run.lifecycleStopReason =
@@ -1143,7 +1147,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
     if (phase === "error") {
       run.finishing = false;
-      if (aborted) {
+      if (aborted || toolErrorSummary) {
         this.emitChatAborted(evt.runId, run, toolErrorSummary);
         return;
       }

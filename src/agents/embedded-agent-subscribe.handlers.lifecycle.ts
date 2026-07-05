@@ -176,10 +176,11 @@ export function handleAgentEnd(
       typeof ctx.state.terminalAborted === "boolean"
         ? ctx.state.terminalAborted
         : ctx.params.isTerminalAborted?.();
-    // Aborted validation loops lose their final tool result. Preserve only the
-    // argument-free validator summary; arbitrary tool errors can contain secrets.
+    // Validation loops lose their final safe tool result on abort/error
+    // terminal paths. Preserve only the argument-free validator summary;
+    // arbitrary tool errors can contain secrets.
     const toolErrorSummary =
-      terminalAborted === true && ctx.state.lastToolError
+      (terminalAborted === true || isError) && ctx.state.lastToolError
         ? summarizeToolValidationError(ctx.state.lastToolError)
         : undefined;
     const terminalMeta = {
