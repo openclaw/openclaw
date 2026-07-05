@@ -694,7 +694,25 @@ qa_status=0
 run_mantis_remote_body() {
   set -e
   echo "remote pwd: $(pwd)"
-  sudo corepack enable || sudo npm install -g pnpm@11
+  sudo corepack enable >/dev/null 2>&1 || true
+  pnpm_version="$(node -e '
+const value = require("./package.json").packageManager ?? "";
+const match = /^pnpm@([0-9]+\\.[0-9]+\\.[0-9]+)(?:\\+sha512\\.[0-9a-f]+)?$/.exec(value);
+if (!match) process.exit(1);
+process.stdout.write(match[1]);
+')"
+  active_pnpm_version="$(pnpm --version 2>/dev/null || true)"
+  if [ "$active_pnpm_version" != "$pnpm_version" ]; then
+    # Some desktop images ship an old distro Corepack that enables its shim but
+    # cannot execute current pnpm. Install the repository-pinned version directly.
+    sudo npm install --global --force "pnpm@$pnpm_version"
+    hash -r
+    active_pnpm_version="$(pnpm --version)"
+  fi
+  if [ "$active_pnpm_version" != "$pnpm_version" ]; then
+    echo "Expected pnpm $pnpm_version, got $active_pnpm_version." >&2
+    exit 3
+  fi
   if [ "$hydrate_mode" = "source" ]; then
     if ! command -v make >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
       sudo apt-get update -y >>"$out/apt.log" 2>&1 || true
