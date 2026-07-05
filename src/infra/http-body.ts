@@ -193,20 +193,13 @@ async function readResponsePrefix(
   options?: {
     chunkTimeoutMs?: number;
     onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
+    cancelAtMaxBytes?: boolean;
   },
 ): Promise<ReadResponsePrefixResult> {
   validateMaxBytes(maxBytes);
   const body = response.body;
   if (!body || typeof body.getReader !== "function") {
-    const fallback = Buffer.from(await response.arrayBuffer());
-    if (fallback.length > maxBytes) {
-      return {
-        buffer: fallback.subarray(0, maxBytes),
-        size: fallback.length,
-        truncated: true,
-      };
-    }
-    return { buffer: fallback, size: fallback.length, truncated: false };
+    return { buffer: Buffer.alloc(0), size: 0, truncated: false };
   }
 
   const reader = body.getReader();
@@ -227,11 +220,11 @@ async function readResponsePrefix(
         continue;
       }
       const nextTotal = total + value.length;
-      if (nextTotal > maxBytes) {
+      if (nextTotal > maxBytes || (options?.cancelAtMaxBytes && nextTotal >= maxBytes)) {
         const remaining = maxBytes - total;
         if (remaining > 0) {
           chunks.push(value.subarray(0, remaining));
-          total += remaining;
+          total += Math.min(value.length, remaining);
         }
         size = nextTotal;
         truncated = true;
@@ -299,6 +292,7 @@ export async function readResponseTextSnippet(
   const prefix = await readResponsePrefix(response, maxBytes, {
     chunkTimeoutMs: options?.chunkTimeoutMs,
     onIdleTimeout: options?.onIdleTimeout,
+    cancelAtMaxBytes: true,
   });
   if (prefix.buffer.length === 0) {
     return undefined;
