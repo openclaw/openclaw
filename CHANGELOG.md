@@ -31,6 +31,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Control UI activity alignment:** keep tool-call bubbles and per-tool error badges on one consistent right edge across desktop and narrow chat layouts.
 - **Status signal:** omit the redundant `Plugins: OK` row from compact `/status` output while retaining actionable plugin-health warnings and detailed plugin status.
 - **Control UI terminal rendering:** adopt the shared `@openclaw/libterminal` browser lifecycle and add Nerd Font fallbacks so icon-enabled shell listings render their glyphs when a compatible local font is installed.
 - **Slack transcript history:** let Codex app-server own its persisted assistant replies so Slack does not append redundant delivery-mirror rows, while the Control UI keeps legacy duplicate mirrors hidden.

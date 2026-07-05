@@ -82,6 +82,43 @@ function iconSvg() {
   return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>`;
 }
 
+function activityErrorAlignmentHtml() {
+  return `
+    <div class="chat-thread" role="log">
+      <div class="chat-thread-inner">
+        <div class="chat-group tool chat-group--activity">
+          <div class="chat-avatar tool">A</div>
+          <div class="chat-group-messages">
+            <div class="chat-activity-group is-open">
+              <button class="chat-activity-group__summary chat-activity-group__summary--error" type="button">
+                <span class="chat-activity-group__icon">${iconSvg()}</span>
+                <span class="chat-activity-group__label">Activity: 2 tools</span>
+                <span class="chat-activity-group__preview">Bash, Gateway</span>
+                <span class="chat-activity-group__badge">${iconSvg()}<span>Error</span></span>
+              </button>
+              <div class="chat-activity-group__body">
+                <div class="chat-bubble" data-activity-call-bubble>
+                  <div class="chat-text">Bash searched a deliberately long workspace path with enough detail to occupy the activity row and expose mismatched width constraints.</div>
+                </div>
+                <div class="chat-bubble chat-bubble--tool-shell">
+                  <div class="chat-tool-msg-collapse">
+                    <button class="chat-tool-msg-summary chat-tool-msg-summary--error" type="button">
+                      <span class="chat-tool-msg-summary__icon">${iconSvg()}</span>
+                      <span class="chat-tool-msg-summary__label">Tool error</span>
+                      <span class="chat-tool-msg-summary__names">Bash</span>
+                      <span class="chat-tool-msg-summary__error-badge">${iconSvg()}<span>Error</span></span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function chatBubbleActionsHtml() {
   return `
     <div class="chat-bubble-actions">
@@ -451,6 +488,27 @@ describeBrowserLayout("chat responsive browser layout", () => {
       expect(spacing).not.toBeNull();
       expect(spacing?.paddingTop).toBeGreaterThanOrEqual(20);
       expect(spacing?.inset).toBeCloseTo(spacing?.paddingTop ?? 0, 0);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it.each([
+    [430, 720],
+    [1366, 900],
+  ] as const)("right-aligns activity errors with call bubbles at %sx%s", async (width, height) => {
+    const page = await openBrowserPage(width, height);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${activityErrorAlignmentHtml()}</body></html>`,
+      );
+
+      await expectNoHorizontalOverflow(page);
+      const callBubble = await getRect(page, "[data-activity-call-bubble]");
+      const errorSummary = await getRect(page, ".chat-tool-msg-summary--error");
+      const errorBadge = await getRect(page, ".chat-tool-msg-summary__error-badge");
+      expect(Math.abs(callBubble.right - errorSummary.right)).toBeLessThanOrEqual(1);
+      expect(Math.abs(errorBadge.right - (errorSummary.right - 8))).toBeLessThanOrEqual(1);
     } finally {
       await closeBrowserPage(page);
     }
