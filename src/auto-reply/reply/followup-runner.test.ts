@@ -13,6 +13,7 @@ import {
   type PersistedUserTurnMessage,
 } from "../../sessions/user-turn-transcript.js";
 import type { GetReplyOptions } from "../types.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 
 const runEmbeddedAgentMock = vi.fn();
@@ -362,6 +363,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
   vi.resetModules();
   vi.doUnmock("../../config/config.js");
   vi.doMock("../../agents/model-fallback.js", () => ({
+    isFallbackSummaryError: (err: unknown) =>
+      err instanceof Error && err.name === "FallbackSummaryError",
     runWithModelFallback: (params: unknown) => runWithModelFallbackMock(params),
   }));
   vi.doMock("../../agents/session-write-lock.js", () => ({
@@ -4917,6 +4920,187 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       replyDelivery: { chatType: "direct", replyToMode: "off" },
       replyDeliverySource: { channel: "discord" },
     });
+  });
+
+  it.each([
+    [
+      "reasoning",
+      { text: "internal reasoning", isReasoning: true },
+      { reasoningPayloadsEnabled: true },
+    ],
+    [
+      "commentary",
+      { text: "internal commentary", isCommentary: true },
+      { commentaryPayloadsEnabled: true },
+    ],
+  ] satisfies Array<[string, Record<string, unknown>, GetReplyOptions]>)(
+    "keeps enabled %s progress and appends the terminal fallback",
+    async (_label, progressPayload, opts) => {
+      await runMessagingCase({
+        agentResult: { payloads: [progressPayload] },
+        runnerOverrides: { opts },
+        queued: {
+          ...baseQueuedRun("discord"),
+          originatingChannel: "discord",
+          originatingTo: "channel:C1",
+        } as FollowupRun,
+      });
+
+      expect(routeReplyMock).toHaveBeenCalledTimes(2);
+      const routedPayloads = routeReplyMock.mock.calls.map((call) =>
+        requireRecord(requireRecord(call[0], "route reply params").payload, "payload"),
+      );
+      expect(routedPayloads).toContainEqual(expect.objectContaining(progressPayload));
+      expect(routedPayloads).toContainEqual(
+        expect.objectContaining({
+          text: expect.stringContaining("did not produce a visible reply"),
+          isError: true,
+        }),
+      );
+    },
+  );
+
+  it("routes the shared terminal failure for an empty failed followup", async () => {
+    const queued = baseQueuedRun("discord");
+    await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        meta: { error: { kind: "tool_result_mismatch", message: "private detail" } },
+      },
+      queued: {
+        ...queued,
+        currentInboundEventKind: "user_request",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      },
+    });
+
+    expect(requireMockCallArg(routeReplyMock, 0).payload).toMatchObject({
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isError: true,
+    });
+  });
+
+  it("routes a terminal failure when an empty result exhausts model fallback", async () => {
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: {
+        provider: string;
+        model: string;
+        run: (provider: string, model: string) => Promise<unknown>;
+        classifyResult: (attempt: {
+          result: unknown;
+          provider: string;
+          model: string;
+          attempt: number;
+          total: number;
+        }) => Promise<Record<string, unknown>> | Record<string, unknown>;
+      }) => {
+        const result = await params.run(params.provider, params.model);
+        const classification = await params.classifyResult({
+          result,
+          provider: params.provider,
+          model: params.model,
+          attempt: 1,
+          total: 1,
+        });
+        expect(classification).toMatchObject({
+          code: "empty_result",
+          preserveResultOnExhaustion: true,
+          preserveResultPriority: -1,
+        });
+        return {
+          outcome: "exhausted",
+          result,
+          provider: params.provider,
+          model: params.model,
+          attempts: [{ reason: "format", code: "empty_result" }],
+        };
+      },
+    );
+    const queued = baseQueuedRun("discord");
+    await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        meta: { agentHarnessResultClassification: "empty" },
+      },
+      queued: {
+        ...queued,
+        currentInboundEventKind: "user_request",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      },
+    });
+
+    expect(requireMockCallArg(routeReplyMock, 0).payload).toMatchObject({
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isError: true,
+    });
+  });
+
+  it("routes a terminal failure when fallback throws without a preserved result", async () => {
+    const exhaustionError = new Error("All model fallback candidates failed");
+    exhaustionError.name = "FallbackSummaryError";
+    runWithModelFallbackMock.mockRejectedValueOnce(exhaustionError);
+    const queued = baseQueuedRun("discord");
+    await runMessagingCase({
+      agentResult: { payloads: [] },
+      queued: {
+        ...queued,
+        currentInboundEventKind: "user_request",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      },
+    });
+
+    expect(requireMockCallArg(routeReplyMock, 0).payload).toMatchObject({
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isError: true,
+    });
+  });
+
+  it.each([
+    [
+      "NO_REPLY",
+      { payloads: [{ text: "NO_REPLY" }], meta: { finalAssistantVisibleText: "NO_REPLY" } },
+      {},
+    ],
+    ["a yielded continuation", { payloads: [], meta: { yielded: true } }, {}],
+    [
+      "a pending tool continuation",
+      { payloads: [], meta: { pendingToolCalls: [{ name: "hosted_tool" }] } },
+      {},
+    ],
+    ["a room event", { payloads: [] }, { currentInboundEventKind: "room_event" }],
+    [
+      "an internal handoff",
+      { payloads: [] },
+      { run: { inputProvenance: { kind: "internal_system" } } },
+    ],
+  ] satisfies Array<
+    [
+      string,
+      Record<string, unknown>,
+      {
+        currentInboundEventKind?: FollowupRun["currentInboundEventKind"];
+        run?: Partial<FollowupRun["run"]>;
+      },
+    ]
+  >)("keeps %s silent", async (_label, agentResult, queuedOverrides) => {
+    const queued = baseQueuedRun("discord");
+    const runOverride = queuedOverrides.run;
+    const { onBlockReply } = await runMessagingCase({
+      agentResult,
+      queued: {
+        ...queued,
+        ...queuedOverrides,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: { ...queued.run, ...runOverride },
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
   });
 
   it("retains reply-lane ownership until empty fallback delivery settles", async () => {

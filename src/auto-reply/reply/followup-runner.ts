@@ -15,11 +15,18 @@ import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasVisibleOutboundDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
-import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
+import {
+  hasDeliberateSilentTerminalReply,
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
+} from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
-import { runWithModelFallback } from "../../agents/model-fallback.js";
+import {
+  isFallbackSummaryError,
+  runWithModelFallback,
+  type ModelFallbackResultClassification,
+} from "../../agents/model-fallback.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
 import {
@@ -48,6 +55,7 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   getReplyPayloadMetadata,
+  isReplyPayloadStatusNotice,
   markReplyPayloadForSourceSuppressionDelivery,
 } from "../reply-payload.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -64,6 +72,7 @@ import {
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
 import {
+  buildTerminalAgentRunFailureReplyPayload,
   buildCommandOutputFromToolResultEvent,
   buildPreflightCompactionFailureText,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
@@ -105,6 +114,33 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedAgent>>;
+
+const PRESERVED_FOLLOWUP_RESULT_CODES = new Set([
+  "empty_result",
+  "reasoning_only_result",
+  "planning_only_result",
+]);
+
+function preserveNonVisibleFollowupResult(
+  classification: ModelFallbackResultClassification,
+): ModelFallbackResultClassification {
+  if (
+    !classification ||
+    !("code" in classification) ||
+    !classification.code ||
+    !PRESERVED_FOLLOWUP_RESULT_CODES.has(classification.code)
+  ) {
+    return classification;
+  }
+  // Follow-up delivery owns its terminal fallback. Preserve the classified result
+  // so that owner can route a visible failure instead of losing it to a thrown summary.
+  return {
+    ...classification,
+    preserveResultOnExhaustion: true,
+    // Prefer any earlier result that carries a user-facing terminal presentation.
+    preserveResultPriority: -1,
+  };
+}
 
 function resolveFollowupAbortSignal(
   run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">,
@@ -693,6 +729,7 @@ export function createFollowupRunner(params: {
       let fallbackProvider = run.provider;
       let fallbackModel = run.model;
       let fallbackExhausted = false;
+      let terminalRunFailed = false;
       const resolveFollowupCurrentMessageId = () =>
         run.inputProvenance?.kind === "internal_system" &&
         run.inputProvenance.sourceTool === "restart-sentinel"
@@ -944,7 +981,9 @@ export function createFollowupRunner(params: {
             });
           },
           classifyResult: ({ result, provider, model }) =>
-            outcomePlan.classifyRunResult({ result, provider, model }),
+            preserveNonVisibleFollowupResult(
+              outcomePlan.classifyRunResult({ result, provider, model }),
+            ),
           mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
           run: async (provider, model, runOptions) => {
             const suppressQueuedUserPersistenceForCandidate =
@@ -1402,10 +1441,12 @@ export function createFollowupRunner(params: {
             fallbackExhaustedFailure: true,
           });
           replyOperation.fail("run_failed", exhaustionError);
+          terminalRunFailed = true;
         } else if (deferredLifecycleError || runResult.meta?.error) {
           const terminalError = new Error(terminalErrorMessage ?? "Agent run failed");
           emitSettledLifecycleError(terminalError, terminalMetadata);
           replyOperation.fail("run_failed", terminalError);
+          terminalRunFailed = true;
         } else {
           settledLifecycleTerminal?.emit("end", runResult);
         }
@@ -1429,6 +1470,7 @@ export function createFollowupRunner(params: {
           return;
         }
         const message = formatErrorMessage(err);
+        const shouldRouteFallbackExhaustion = isFallbackSummaryError(err);
         replyOperation.freezeAbort();
         replyOperation.fail("run_failed", err);
         pendingLifecycleTerminal?.backstop.emit("error", err);
@@ -1436,9 +1478,16 @@ export function createFollowupRunner(params: {
         if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
           clearAgentRunContext(runId, lifecycleGeneration);
         }
-        await drainProgressDeliveries();
         defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);
-        return;
+        if (!shouldRouteFallbackExhaustion) {
+          await drainProgressDeliveries();
+          return;
+        }
+        // Fallback exhaustion can throw without preserving a candidate result.
+        // Continue through the owner delivery path so interactive turns still get safe failure copy.
+        runResult = { payloads: [], meta: { durationMs: 0 } };
+        fallbackExhausted = true;
+        terminalRunFailed = true;
       }
 
       await drainProgressDeliveries();
@@ -1448,45 +1497,6 @@ export function createFollowupRunner(params: {
       const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
       const providerUsed =
         runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? queued.run.provider;
-      const sendEmptyInteractiveFallbackIfNeeded = async (): Promise<void> => {
-        const payload = buildEmptyInteractiveReplyFallbackPayload({
-          isHeartbeat: opts?.isHeartbeat === true,
-          silentExpected: run.silentExpected,
-          allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
-          sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
-          hasSuccessfulSideEffectDelivery:
-            hasVisibleOutboundDeliveryEvidence(runResult) ||
-            hasCommittedSourceReplyDeliveryEvidence(runResult) ||
-            runResult.didSendDeterministicApprovalPrompt === true,
-        });
-        if (!payload) {
-          return;
-        }
-        replyOperation?.fail(
-          "run_failed",
-          new Error("empty interactive follow-up produced no visible payload"),
-        );
-        const deliveryPayloads = resolveFollowupDeliveryPayloads({
-          cfg: runtimeConfig,
-          payloads: [payload],
-          messageProvider: run.messageProvider,
-          originatingAccountId: queued.originatingAccountId ?? run.agentAccountId,
-          originatingChannel: queued.originatingChannel,
-          originatingChatType: queued.originatingChatType,
-          originatingReplyToMode: queued.originatingReplyToMode,
-          originatingTo: queued.originatingTo,
-          originatingThreadId: queued.originatingThreadId,
-        });
-        await sendRunPayloads(
-          deliveryPayloads,
-          effectiveQueued,
-          {
-            provider: providerUsed,
-            modelId: modelUsed,
-          },
-          { runId },
-        );
-      };
       const usedCliProvider = isCliProvider(providerUsed, runtimeConfig);
       const contextTokensUsed =
         resolveContextTokensForModel({
@@ -1522,31 +1532,97 @@ export function createFollowupRunner(params: {
         });
       }
 
-      const payloadArray = runResult.payloads ?? [];
-      if (payloadArray.length === 0) {
-        await sendEmptyInteractiveFallbackIfNeeded();
-        return;
-      }
-      const finalPayloads = resolveFollowupDeliveryPayloads({
-        cfg: runtimeConfig,
-        payloads: payloadArray,
-        messageProvider: run.messageProvider,
-        originatingAccountId: queued.originatingAccountId ?? run.agentAccountId,
-        originatingChannel: queued.originatingChannel,
-        originatingChatType: queued.originatingChatType,
-        originatingReplyToMode: queued.originatingReplyToMode,
-        originatingTo: queued.originatingTo,
-        originatingThreadId: queued.originatingThreadId,
-        reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,
-        commentaryPayloadsEnabled: opts?.commentaryPayloadsEnabled === true,
-        sentMediaUrls: runResult.messagingToolSentMediaUrls,
-        sentTargets: runResult.messagingToolSentTargets,
-        sentTexts: runResult.messagingToolSentTexts,
+      const hasCommittedDelivery =
+        hasVisibleOutboundDeliveryEvidence(runResult) ||
+        hasCommittedSourceReplyDeliveryEvidence(runResult) ||
+        runResult.didSendDeterministicApprovalPrompt === true;
+      const hasDeliveryDestination = Boolean(
+        (isRoutableChannel(queued.originatingChannel) && queued.originatingTo) ||
+        opts?.onBlockReply,
+      );
+      const isInteractive =
+        hasDeliveryDestination &&
+        queued.currentInboundEventKind !== "room_event" &&
+        (run.inputProvenance?.kind === undefined || run.inputProvenance.kind === "external_user");
+      const failureConversationContext = {
+        ChatType: queued.originatingChatType,
+        Provider: run.messageProvider,
+        SessionKey: replySessionKey,
+        Surface: queued.originatingChannel,
+      };
+      const fallbackPayload = terminalRunFailed
+        ? isInteractive &&
+          run.sourceReplyDeliveryMode !== "message_tool_only" &&
+          !hasCommittedDelivery
+          ? buildTerminalAgentRunFailureReplyPayload({
+              isHeartbeat: opts?.isHeartbeat,
+              sessionCtx: failureConversationContext,
+              cfg: runtimeConfig,
+            })
+          : undefined
+        : buildEmptyInteractiveReplyFallbackPayload({
+            isInteractive,
+            isHeartbeat: opts?.isHeartbeat,
+            silentExpected: run.silentExpected,
+            allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
+            sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
+            hasPendingContinuation:
+              runResult.meta?.yielded === true ||
+              (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,
+            hasExplicitSilentReply: hasDeliberateSilentTerminalReply(runResult),
+            hasSuccessfulTerminalDelivery: hasCommittedDelivery,
+          });
+      const deliveryPlan = buildAgentRuntimeDeliveryPlan({
+        provider: providerUsed,
+        modelId: modelUsed,
+        config: runtimeConfig,
+        workspaceDir: run.workspaceDir,
+        agentDir: run.agentDir,
       });
+      const resolveDeliveryPayloads = (payloads: ReplyPayload[]) =>
+        resolveFollowupDeliveryPayloads({
+          cfg: runtimeConfig,
+          payloads,
+          messageProvider: run.messageProvider,
+          originatingAccountId: queued.originatingAccountId ?? run.agentAccountId,
+          originatingChannel: queued.originatingChannel,
+          originatingChatType: queued.originatingChatType,
+          originatingReplyToMode: queued.originatingReplyToMode,
+          originatingTo: queued.originatingTo,
+          originatingThreadId: queued.originatingThreadId,
+          reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,
+          commentaryPayloadsEnabled: opts?.commentaryPayloadsEnabled === true,
+          sentMediaUrls: runResult.messagingToolSentMediaUrls,
+          sentTargets: runResult.messagingToolSentTargets,
+          sentTexts: runResult.messagingToolSentTexts,
+        }).filter(
+          (payload) => hasOutboundReplyContent(payload) && !deliveryPlan.isSilentPayload(payload),
+        );
+      let finalPayloads = resolveDeliveryPayloads(runResult.payloads ?? []);
+      const hasTerminalReplyPayload = finalPayloads.some(
+        (payload) =>
+          payload.isReasoning !== true &&
+          payload.isCommentary !== true &&
+          !isReplyPayloadStatusNotice(payload),
+      );
+      if (!hasTerminalReplyPayload && fallbackPayload) {
+        finalPayloads = [...finalPayloads, ...resolveDeliveryPayloads([fallbackPayload])];
+      }
 
       if (finalPayloads.length === 0) {
-        await sendEmptyInteractiveFallbackIfNeeded();
         return;
+      }
+      if (
+        !terminalRunFailed &&
+        fallbackPayload &&
+        finalPayloads.some(
+          (payload) => payload.isError === true && payload.text === fallbackPayload.text,
+        )
+      ) {
+        replyOperation.fail(
+          "run_failed",
+          new Error("interactive follow-up completed without a visible reply"),
+        );
       }
 
       let deliveryPayloads = finalPayloads;
