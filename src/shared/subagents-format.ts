@@ -30,7 +30,9 @@ export function truncateLine(value: string, maxLength: number) {
   if (value.length <= maxLength) {
     return value;
   }
-  return `${truncateUtf16Safe(value, maxLength).trimEnd()}...`;
+  // Account for the "..." suffix so the result stays within maxLength (#99979).
+  const contentLen = Math.max(0, maxLength - 3);
+  return `${truncateUtf16Safe(value, contentLen).trimEnd()}...`;
 }
 
 type TokenUsageLike = {

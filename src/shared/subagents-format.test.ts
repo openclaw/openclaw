@@ -37,14 +37,14 @@ describe("shared/subagents-format", () => {
 
   it("truncates lines only when needed", () => {
     expect(truncateLine("short", 10)).toBe("short");
-    expect(truncateLine("trim me   ", 7)).toBe("trim me...");
+    expect(truncateLine("trim me   ", 7)).toBe("trim...");
   });
 
   it("truncates without breaking surrogate pairs", () => {
     // Emoji at the cut point: the surrogate pair must not be split.
-    expect(truncateLine("AB🤖CD", 3)).toBe("AB...");
+    expect(truncateLine("AB🤖CD", 3)).toBe("...");
     // Cut point in the middle of a 3-emoji string.
-    expect(truncateLine("🤖🤖🤖", 5)).toBe("🤖🤖...");
+    expect(truncateLine("🤖🤖🤖", 5)).toBe("🤖...");
     // CJK Extension B (surrogate pair) at boundary: character stays intact.
     expect(truncateLine("AB𠮷CD", 5)).toBe("AB𠮷C...");
     // No broken surrogates in output.
