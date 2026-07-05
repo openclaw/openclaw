@@ -38,18 +38,21 @@ Dreaming runs three cooperative phases per sweep, in order: light -> REM -> deep
     - Writes a managed `## Light Sleep` block when storage includes inline output.
     - Records reinforcement signals for later deep ranking.
     - Never writes to `MEMORY.md`.
+
   </Accordion>
   <Accordion title="REM phase">
     - Builds theme and reflection summaries from recent short-term traces.
     - Writes a managed `## REM Sleep` block when storage includes inline output.
     - Records REM reinforcement signals used by deep ranking.
     - Never writes to `MEMORY.md`.
+
   </Accordion>
   <Accordion title="Deep phase">
     - Ranks candidates with weighted scoring and threshold gates (`minScore`, `minRecallCount`, `minUniqueQueries` must all pass).
     - Rehydrates snippets from live daily files before writing, so stale/deleted snippets are skipped.
     - Appends promoted entries to `MEMORY.md`.
     - Writes a `## Deep Sleep` summary into `DREAMS.md` and optionally `memory/dreaming/deep/YYYY-MM-DD.md`.
+
   </Accordion>
 </AccordionGroup>
 
@@ -73,6 +76,7 @@ There is also a grounded historical backfill lane for review and recovery work:
     - `memory rem-backfill --path ...` writes reversible grounded diary entries into `DREAMS.md`.
     - `memory rem-backfill --path ... --stage-short-term` stages grounded durable candidates into the same short-term evidence store the normal deep phase uses.
     - `memory rem-backfill --rollback` and `--rollback-short-term` remove those staged backfill artifacts without touching ordinary diary entries or live short-term recall.
+
   </Accordion>
 </AccordionGroup>
 

@@ -64,6 +64,7 @@ SecretRefs are validated only on effectively active surfaces:
   - `gateway.tailscale.mode` is `serve` or `funnel`
   - In local mode without those remote surfaces: `gateway.remote.token` is active when token auth can win and no env/auth token is configured; `gateway.remote.password` is active only when password auth can win and no env/auth password is configured.
 - `gateway.auth.token` SecretRef is inactive for startup auth resolution when `OPENCLAW_GATEWAY_TOKEN` is set, because env token input wins for that runtime.
+
 </Accordion>
 
 ## Gateway auth surface diagnostics
@@ -184,6 +185,7 @@ Define providers under `secrets.providers`:
 <Accordion title="Env provider">
 - Optional exact-name allowlist via `allowlist`.
 - Missing or empty env values fail resolution.
+
 </Accordion>
 
 <Accordion title="File provider">
@@ -192,6 +194,7 @@ Define providers under `secrets.providers`:
 - `mode: "singleValue"` expects ref id `"value"` and returns the raw file contents (trailing newline stripped).
 - Path must pass ownership/permission checks; `timeoutMs` (default 5000) and `maxBytes` (default 1 MiB) bound the read.
 - Windows fail-closed: if ACL verification is unavailable for the path, resolution fails. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass the check.
+
 </Accordion>
 
 <Accordion title="Exec provider">

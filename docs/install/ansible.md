@@ -167,6 +167,7 @@ This is idempotent and safe to run multiple times.
   <Accordion title="Firewall blocks my connection">
     - Connect via Tailscale VPN first; the gateway is only reachable that way by design.
     - SSH (port 22) is always allowed.
+
   </Accordion>
   <Accordion title="Service will not start">
     ```bash

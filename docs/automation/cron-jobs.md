@@ -56,6 +56,7 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
     - Run-level agent failures count as job errors even with no reply payload, so model/provider failures increment error counters and trigger failure notifications instead of clearing the job as successful.
     - When a job hits `timeoutSeconds`, cron aborts the run and gives it a short cleanup window. If it does not drain, Gateway-owned cleanup force-clears that run's session ownership before cron records the timeout, so queued chat work is not stuck behind a stale processing session.
     - Setup/startup stalls get a phase-specific timeout (for example `cron: isolated agent setup timed out before runner start` or `cron: isolated agent run stalled before execution start (last phase: context-engine)`). These watchdogs cover embedded and CLI-backed providers even before their external CLI process starts, and are capped independently of long `timeoutSeconds` values so cold-start/auth/context failures surface quickly.
+
   </Accordion>
   <Accordion title="Task reconciliation">
     Cron task reconciliation is runtime-owned first, durable-history-backed second: an active cron task stays live while the cron runtime still tracks that job as running, even if an old child session row still exists. Once the runtime stops owning the job and a 5-minute grace window expires, maintenance checks persisted run logs and job state for the matching `cron:<jobId>:<startedAt>` run. A terminal result there finalizes the task ledger; otherwise Gateway-owned maintenance can mark the task `lost`. Offline CLI audit can recover from durable history, but its own empty in-process active-job set is not proof a Gateway-owned run is gone.
@@ -552,6 +553,7 @@ openclaw doctor
     - Confirm the Gateway is running continuously.
     - For `cron` schedules, verify timezone (`--tz`) vs the host timezone.
     - `reason: not-due` in run output means the manual run was checked with `openclaw cron run <jobId> --due` and the job was not due yet.
+
   </Accordion>
   <Accordion title="Cron fired but no delivery">
     - Delivery mode `none` means no runner fallback send is expected. The agent can still send directly with the `message` tool when a chat route is available.
@@ -560,16 +562,19 @@ openclaw doctor
     - Channel auth errors (`unauthorized`, `Forbidden`) mean delivery was blocked by credentials.
     - If the isolated run returns only the silent token (`NO_REPLY` / `no_reply`), OpenClaw suppresses direct outbound delivery and the fallback queued-summary path, so nothing is posted back to chat.
     - If the agent should message the user itself, check that the job has a usable route (`channel: "last"` with a previous chat, or an explicit channel/target).
+
   </Accordion>
   <Accordion title="Cron or heartbeat appears to prevent /new-style rollover">
     - Daily and idle reset freshness is not based on `updatedAt`; see [Session management](/concepts/session#session-lifecycle).
     - Cron wakeups, heartbeat runs, exec notifications, and gateway bookkeeping may update the session row for routing/status, but they do not extend `sessionStartedAt` or `lastInteractionAt`.
     - For legacy rows created before those fields existed, OpenClaw can recover `sessionStartedAt` from the transcript JSONL session header when the file is still available. Legacy idle rows without `lastInteractionAt` use that recovered start time as their idle baseline.
+
   </Accordion>
   <Accordion title="Timezone gotchas">
     - Cron without `--tz` uses the gateway host timezone.
     - `at` schedules without timezone are treated as UTC.
     - Heartbeat `activeHours` uses configured timezone resolution.
+
   </Accordion>
 </AccordionGroup>
 

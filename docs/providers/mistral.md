@@ -204,6 +204,7 @@ OpenClaw defaults Mistral realtime STT to `pcm_mulaw` at 8 kHz so Voice Call can
     - Provider base URL defaults to `https://api.mistral.ai/v1` and accepts the standard OpenAI-compatible chat-completions request shape.
     - Onboarding default model is `mistral/mistral-large-latest`.
     - Override the base URL under `models.providers.mistral.baseUrl` only when Mistral explicitly publishes a regional endpoint you need.
+
   </Accordion>
 </AccordionGroup>
 

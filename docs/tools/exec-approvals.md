@@ -413,6 +413,7 @@ allowlists.
 - This is an **implicit convenience allowlist**, separate from manual path allowlist entries.
 - It is intended for trusted operator environments where Gateway and node are in the same trust boundary.
 - If you require strict explicit trust, keep `autoAllowSkills: false` and use manual path allowlist entries only.
+
 </Warning>
 
 ## Safe bins and approval forwarding

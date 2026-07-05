@@ -408,6 +408,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     - Linux quick path + service install: [Linux](/platforms/linux).
     - Full walkthrough: [Getting Started](/start/getting-started).
     - Installer + updates: [Install & updates](/install/updating).
+
   </Accordion>
 
   <Accordion title="How do I install OpenClaw on a VPS?">

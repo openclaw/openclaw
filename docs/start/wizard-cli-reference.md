@@ -80,6 +80,7 @@ not install or modify anything on the remote host.
   <Step title="Web search">
     - Pick a provider (Brave, DuckDuckGo, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search, Ollama Web Search, Perplexity, SearXNG, Tavily) or skip.
     - Skip this step with `--skip-search`; reconfigure later with `openclaw configure --section web`.
+
   </Step>
   <Step title="Daemon install">
     - macOS: LaunchAgent

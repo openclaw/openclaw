@@ -204,6 +204,7 @@ A single auth flow writes region-matched profiles for both `stepfun` and `stepfu
   <Accordion title="Notes">
     - `step-3.5-flash-2603` is currently exposed only on `stepfun-plan`.
     - Use `openclaw models list` and `openclaw models set <provider/model>` to inspect or switch models.
+
   </Accordion>
 </AccordionGroup>
 

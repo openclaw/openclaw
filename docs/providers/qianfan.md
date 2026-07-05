@@ -122,6 +122,7 @@ Model refs use the `qianfan/` prefix (for example `qianfan/deepseek-v3.2`).
     - Ensure your API key starts with `bce-v3/ALTAK-` and has Qianfan API access enabled in the Baidu Cloud console.
     - If models are not listed, confirm your account has the Qianfan service activated.
     - Only change the base URL if you use a custom endpoint or proxy.
+
   </Accordion>
 </AccordionGroup>
 

@@ -62,6 +62,7 @@ so the agent does not suggest an unavailable backend.
     - Other target harness adapters may be fetched on demand with `npx` on first use.
     - Vendor auth must already exist on the host for that harness.
     - If the host has no npm or network access, first-run adapter fetches fail until caches are pre-warmed or the adapter is installed another way.
+
   </Accordion>
   <Accordion title="Runtime prerequisites">
     ACP launches a real external harness process. OpenClaw owns routing,
@@ -158,6 +159,7 @@ Quick `/acp` flow from chat:
     - `close` ends the ACP session from OpenClaw's point of view and removes the binding. A harness may still keep its own upstream history if it supports resume.
     - The acpx plugin cleans up OpenClaw-owned wrapper and adapter process trees after `close`, and reaps stale OpenClaw-owned ACPX orphans during Gateway startup.
     - Idle runtime workers are eligible for cleanup after `acp.runtime.ttlMinutes`; stored session metadata remains available for `/acp sessions`.
+
   </Accordion>
   <Accordion title="Native Codex routing rules">
     Natural-language triggers that should route to the **native Codex plugin**
@@ -187,6 +189,7 @@ Quick `/acp` flow from chat:
     - `openai/*` - native Codex app-server embedded runtime for OpenAI agent turns.
     - `/codex ...` - native Codex conversation control.
     - `/acp ...` or `runtime: "acp"` - explicit ACP/acpx control.
+
   </Accordion>
   <Accordion title="ACP-routing natural-language triggers">
     Triggers that should route to the ACP runtime:
@@ -286,6 +289,7 @@ Examples:
     - On Discord, `spawnSessions` gates child thread creation for `--thread auto|here` - not `--bind here`.
     - If you spawn to a different ACP agent without `--cwd`, OpenClaw inherits the **target agent's** workspace by default. Missing inherited paths (`ENOENT`/`ENOTDIR`) fall back to the backend default; other access errors (e.g. `EACCES`) surface as spawn errors.
     - Gateway management commands stay local in bound conversations - `/acp ...` commands are handled by OpenClaw even when normal follow-up text routes to the bound ACP session; `/status` and `/unfocus` also stay local whenever command handling is enabled for that surface.
+
   </Accordion>
   <Accordion title="Thread-bound sessions">
     When thread bindings are enabled for a channel adapter:
@@ -313,6 +317,7 @@ Examples:
     - Any channel adapter that exposes session/thread binding capability.
     - Current built-in support: **Discord** threads/channels, **Telegram** topics (forum topics in groups/supergroups and DM topics).
     - Plugin channels can add support through the same binding interface.
+
   </Accordion>
 </AccordionGroup>
 

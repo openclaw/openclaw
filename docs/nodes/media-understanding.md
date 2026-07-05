@@ -168,6 +168,7 @@ When `tools.media.<capability>.enabled` is not `false` and no models are configu
     - `sherpa-onnx-offline` (requires `SHERPA_ONNX_MODEL_DIR` with `tokens.txt`/`encoder.onnx`/`decoder.onnx`/`joiner.onnx`)
     - `whisper-cli` (`whisper-cpp`; uses `WHISPER_CPP_MODEL` or a bundled tiny model)
     - `whisper` (Python CLI; defaults to the `turbo` model, downloads automatically)
+
   </Step>
   <Step title="Provider auth (image/video)">
     Configured `models.providers.*` entries that support the capability are tried before the bundled fallback order. Image-only config providers with an image-capable model auto-register for media understanding even when they are not a bundled vendor plugin.

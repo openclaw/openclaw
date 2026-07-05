@@ -98,6 +98,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     - **Reminders and follow-ups**: cron- or heartbeat-driven nudges and checklists.
     - **Browser automation**: filling forms, collecting data, repeating web tasks.
     - **Cross-device coordination**: send a task from your phone, let the Gateway run it on a server, get the result back in chat.
+
   </Accordion>
 
   <Accordion title="Can OpenClaw help with lead gen, outreach, ads, and blogs for a SaaS?">

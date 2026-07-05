@@ -375,6 +375,7 @@ Internal is simplest for a Google Workspace organization. External works for per
 - `https://www.googleapis.com/auth/meetings.conference.media.readonly`
 - `https://www.googleapis.com/auth/calendar.events.readonly` (Calendar lookup)
 - `https://www.googleapis.com/auth/drive.meet.readonly` (transcript/smart-note document body export)
+
 </Step>
 <Step title="Create an OAuth client ID">
 Application type **Web application**. Authorized redirect URI:

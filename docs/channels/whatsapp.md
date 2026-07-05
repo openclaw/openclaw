@@ -501,6 +501,7 @@ Notes: `channels.whatsapp.ackReaction` still controls eligibility for direct mes
   <Accordion title="Credential paths and legacy compatibility">
     - current auth path: `~/.openclaw/credentials/whatsapp/<accountId>/creds.json` (backup: `creds.json.bak`)
     - legacy default auth in `~/.openclaw/credentials/` is still recognized/migrated for default-account flows
+
   </Accordion>
 
   <Accordion title="Logout behavior">

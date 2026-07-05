@@ -61,6 +61,7 @@ Once approved, the device is remembered and won't require re-approval unless you
 - Tailscale Serve can skip the pairing round trip for Control UI operator sessions when `gateway.auth.allowTailscale: true`, Tailscale identity verifies, and the browser presents its device identity. Device-less browsers and node-role connections still follow the normal device checks.
 - Direct Tailnet binds, LAN browser connects, and browser profiles without device identity still require explicit approval.
 - Each browser profile generates a unique device ID, so switching browsers or clearing browser data requires re-pairing.
+
 </Note>
 
 ## Pair a mobile device
@@ -119,6 +120,7 @@ Appearance also has a browser-local Text size setting, stored with the rest of C
     - Talk through browser realtime sessions. OpenAI uses direct WebRTC, Google Live uses a constrained one-use browser token over WebSocket, and backend-only realtime voice plugins use the Gateway relay transport. Client-owned provider sessions start with `talk.client.create`; Gateway relay sessions start with `talk.session.create`. The relay keeps provider credentials on the Gateway while the browser streams microphone PCM through `talk.session.appendAudio`, forwards `openclaw_agent_consult` provider tool calls through `talk.client.toolCall` for Gateway policy and the larger configured OpenClaw model, and routes active-run voice steering through `talk.client.steer` or `talk.session.steer`.
     - Stream tool calls and live tool output cards in Chat (agent events).
     - Activity tab with browser-local, redaction-first summaries of live tool activity from existing `session.tool` / tool event delivery.
+
   </Accordion>
   <Accordion title="Channels, instances, sessions, dreams">
     - Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`).
@@ -126,12 +128,14 @@ Appearance also has a browser-local Text size setting, stored with the rest of C
     - Instances: presence list and refresh (`system-presence`).
     - Sessions: list configured-agent sessions by default, pin frequent sessions, rename them, archive or restore inactive sessions, fall back from stale unconfigured agent session keys, and apply per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`). Pinned sessions sort above recent unpinned sessions; archived sessions live in the Sessions page's archived view and keep their transcripts.
     - Dreams: dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`).
+
   </Accordion>
   <Accordion title="Cron, skills, nodes, exec approvals">
     - Cron jobs: list/add/edit/run/enable/disable plus run history (`cron.*`).
     - Skills: status, enable/disable, install, API key updates (`skills.*`).
     - Nodes: list plus caps (`node.list`), create mobile setup codes, and approve device pairing (`device.pair.*`).
     - Exec approvals: edit gateway or node allowlists and ask policy for `exec host=gateway/node` (`exec.approvals.*`).
+
   </Accordion>
   <Accordion title="Config">
     - View/edit `~/.openclaw/openclaw.json` (`config.get`, `config.set`).
@@ -143,12 +147,14 @@ Appearance also has a browser-local Text size setting, stored with the rest of C
     - Schema and form rendering come from `config.schema` / `config.schema.lookup`, including field `title`/`description`, matched UI hints, immediate child summaries, docs metadata on nested object/wildcard/array/composition nodes, plus plugin and channel schemas when available. Raw JSON editor is available only when the snapshot has a safe raw round-trip; otherwise Control UI forces Form mode.
     - Raw JSON editor "Reset to saved" preserves the raw-authored shape (formatting, comments, `$include` layout) instead of re-rendering a flattened snapshot, so external edits survive a reset when the snapshot can safely round-trip.
     - Structured SecretRef object values render read-only in form text inputs, to prevent accidental object-to-string corruption.
+
   </Accordion>
   <Accordion title="Debug, logs, update">
     - Debug: status/health/models snapshots, event log, and manual RPC calls (`status`, `health`, `models.list`).
     - The event log includes Control UI refresh/RPC timings, slow chat/config render timings, and browser responsiveness entries for long animation frames or long tasks when the browser exposes those PerformanceObserver entry types.
     - Logs: live tail of gateway file logs with filter/export (`logs.tail`).
     - Update: run a package/git update plus restart (`update.run`) with a restart report, then poll `update.status` after reconnect to verify the running gateway version.
+
   </Accordion>
   <Accordion title="Cron jobs panel notes">
     - For isolated jobs, delivery defaults to announce summary; switch to none for internal-only runs.
@@ -159,6 +165,7 @@ Appearance also has a browser-local Text size setting, stored with the rest of C
     - Form validation is inline with field-level errors; invalid values disable the save button until fixed.
     - Set `cron.webhookToken` to send a dedicated bearer token; if omitted, the webhook is sent without an auth header.
     - `cron.webhook` is a deprecated legacy fallback: run `openclaw doctor --fix` to migrate stored jobs that still use `notify: true` to explicit per-job webhook or completion delivery.
+
   </Accordion>
 </AccordionGroup>
 
@@ -221,6 +228,7 @@ The terminal is also available as a full-screen, terminal-only document at `/?vi
     - Typing `/new` creates and switches to the same fresh dashboard session as New Chat, except when `session.dmScope: "main"` is configured and the current parent is the agent's main session; then it resets the main session in place. Typing `/reset` keeps the Gateway's explicit in-place reset for the current session.
     - The chat model picker requests the Gateway's configured model view. If `agents.defaults.models` is present, that allowlist drives the picker, including `provider/*` entries that keep provider-scoped catalogs dynamic. Otherwise the picker shows explicit `models.providers.*.models` entries plus providers with usable auth. The full catalog stays available through the debug `models.list` RPC with `view: "all"`.
     - When fresh Gateway session usage reports include current context tokens, the chat composer toolbar shows a small context usage ring with the used percentage; full token detail lives in its tooltip. The ring switches to warning styling at high context pressure and, at recommended compaction levels, shows a compact button that runs the normal session compaction path. Stale token snapshots are hidden until the Gateway reports fresh usage again.
+
   </Accordion>
   <Accordion title="Talk mode (browser realtime)">
     Talk mode uses a registered realtime voice provider. Configure OpenAI with `talk.realtime.provider: "openai"` plus an `openai` API-key auth profile, `talk.realtime.providers.openai.apiKey`, or `OPENAI_API_KEY`; OpenAI OAuth profiles do not configure Realtime voice. Configure Google with `talk.realtime.provider: "google"` plus `talk.realtime.providers.google.apiKey`. The browser never receives a standard provider API key: OpenAI receives an ephemeral Realtime client secret for WebRTC, and Google Live receives a one-use constrained Live API auth token for a browser WebSocket session, with instructions and tool declarations locked into the token by the Gateway. Providers that only expose a backend realtime bridge run through the Gateway relay transport, so credentials and vendor sockets stay server-side while browser audio moves through authenticated Gateway RPCs. The Realtime session prompt is assembled by the Gateway; `talk.client.create` does not accept caller-provided instruction overrides.
@@ -237,11 +245,13 @@ The terminal is also available as a full-screen, terminal-only document at `/?vi
     - While a run is active, normal follow-ups queue. Click **Steer** on a queued message to inject that follow-up into the running turn.
     - Type `/stop` (or standalone abort phrases like `stop`, `stop action`, `stop run`, `stop openclaw`, `please stop`) to abort out-of-band.
     - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session.
+
   </Accordion>
   <Accordion title="Abort partial retention">
     - When a run is aborted, partial assistant text can still be shown in the UI.
     - Gateway persists aborted partial assistant text into transcript history when buffered output exists.
     - Persisted entries include abort metadata so transcript consumers can tell abort partials from normal completion output.
+
   </Accordion>
 </AccordionGroup>
 
@@ -407,6 +417,7 @@ Documented exceptions:
     - Successful trusted-proxy auth can admit **operator** Control UI sessions without device identity.
     - This does **not** extend to node-role Control UI sessions.
     - Same-host loopback reverse proxies still do not satisfy trusted-proxy auth; see [Trusted proxy auth](/gateway/trusted-proxy-auth).
+
   </Accordion>
 </AccordionGroup>
 
@@ -514,6 +525,7 @@ The Control UI is static files; the WebSocket target is configurable and can dif
     - Gateway startup may seed local origins such as `http://localhost:<port>` and `http://127.0.0.1:<port>` from the effective runtime bind and port, but remote browser origins still need explicit entries.
     - Do not use `gateway.controlUi.allowedOrigins: ["*"]` except for tightly controlled local testing; it means allow any browser origin, not "match whatever host I am using."
     - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables Host-header origin fallback mode, but it is a dangerous security mode.
+
   </Accordion>
 </AccordionGroup>
 

@@ -75,9 +75,11 @@ Onboarding opens with a choice between **QuickStart** (defaults) and
     - DM isolation: `session.dmScope: "per-channel-peer"` for new setups. Details: [CLI setup reference](/start/wizard-cli-reference#outputs-and-internals)
     - Tailscale exposure **Off**
     - Telegram and WhatsApp DMs default to **allowlist**: Telegram asks for a numeric Telegram user ID, WhatsApp asks for a phone number
+
   </Tab>
   <Tab title="Advanced (full control)">
     - Exposes every step: mode, workspace, gateway, channels, daemon, skills
+
   </Tab>
 </Tabs>
 

@@ -42,6 +42,7 @@ Bare plugin specs try ClawHub first, then npm fallback. Force a source with `ope
   <Step title="Link or register the account">
     - **QR link (fastest):** `signal-cli link -n "OpenClaw"`, then scan with Signal. See [Path A](#setup-path-a-link-existing-signal-account-qr).
     - **SMS registration:** dedicated number with captcha + SMS verification. See [Path B](#setup-path-b-register-dedicated-bot-number-sms-linux).
+
   </Step>
   <Step title="Verify and pair">
     ```bash

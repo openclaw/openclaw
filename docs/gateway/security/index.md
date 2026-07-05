@@ -662,6 +662,7 @@ The Control UI needs a secure context (HTTPS or localhost) to generate device id
     - `hooks.mappings[<index>].allowUnsafeExternalContent=true`
     - `tools.exec.applyPatch.workspaceOnly=false`
     - `plugins.entries.acpx.config.permissionMode=approve-all`
+
   </Accordion>
 
   <Accordion title="All dangerous*/dangerously* keys in the config schema">

@@ -78,6 +78,7 @@ Prints the generated JSON schema for `openclaw.json` to stdout.
     - `anyOf` / `oneOf` / `allOf` branches inherit the same docs metadata too.
     - Best-effort live plugin + channel schema metadata when runtime manifests can be loaded.
     - A clean fallback schema even when the current config is invalid.
+
   </Accordion>
   <Accordion title="Related runtime RPC">
     `config.schema.lookup` returns one normalized config path with a shallow schema node (`title`, `description`, `type`, `enum`, `const`, common bounds), matched UI hint metadata, and immediate child summaries. Use it for path-scoped drill-down in Control UI or custom clients.
@@ -203,15 +204,18 @@ Provider builder targets must use `secrets.providers.<alias>` as the path.
   <Accordion title="Common flags">
     - `--provider-source <env|file|exec>`
     - `--provider-timeout-ms <ms>` (`file`, `exec`)
+
   </Accordion>
   <Accordion title="Env provider (--provider-source env)">
     - `--provider-allowlist <ENV_VAR>` (repeatable)
+
   </Accordion>
   <Accordion title="File provider (--provider-source file)">
     - `--provider-path <path>` (required)
     - `--provider-mode <singleValue|json>`
     - `--provider-max-bytes <bytes>`
     - `--provider-allow-insecure-path`
+
   </Accordion>
   <Accordion title="Exec provider (--provider-source exec)">
     - `--provider-command <path>` (required)
@@ -224,6 +228,7 @@ Provider builder targets must use `secrets.providers.<alias>` as the path.
     - `--provider-trusted-dir <path>` (repeatable)
     - `--provider-allow-insecure-path`
     - `--provider-allow-symlink-command`
+
   </Accordion>
 </AccordionGroup>
 
@@ -323,6 +328,7 @@ openclaw config set channels.discord.token \
     - JSON mode (`--strict-json`, `--json`, or batch mode): runs schema validation plus SecretRef resolvability checks.
     - Policy validation runs against the full post-change config, so parent-object writes (for example setting `hooks` as an object) cannot bypass unsupported-surface validation.
     - Exec SecretRef checks are skipped by default to avoid command side effects; pass `--allow-exec` to opt in (this may execute provider commands). `--allow-exec` is dry-run only and errors without `--dry-run`.
+
   </Accordion>
   <Accordion title="--dry-run --json fields">
     - `ok`: whether dry-run passed
@@ -332,6 +338,7 @@ openclaw config set channels.discord.token \
     - `refsChecked`: number of refs actually resolved during dry-run
     - `skippedExecRefs`: number of exec refs skipped because `--allow-exec` was not set
     - `errors`: structured missing-path, schema, or resolvability failures when `ok=false`
+
   </Accordion>
 </AccordionGroup>
 
@@ -411,6 +418,7 @@ openclaw config set channels.discord.token \
     - `SecretRef assignment(s) could not be resolved`: the referenced provider/ref cannot currently resolve (missing env var, invalid file pointer, exec provider failure, or provider/source mismatch).
     - `Dry run note: skipped <n> exec SecretRef resolvability check(s)`: rerun with `--allow-exec` if you need exec resolvability validation.
     - For batch mode, fix failing entries and rerun `--dry-run` before writing.
+
   </Accordion>
 </AccordionGroup>
 
