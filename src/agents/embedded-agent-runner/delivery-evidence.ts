@@ -258,6 +258,14 @@ export function hasVisibleCommittedMessagingToolDeliveryEvidence(
   );
 }
 
+function hasGranularMessagingToolDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
+  return (
+    result.messagingToolSentTexts !== undefined ||
+    result.messagingToolSentMediaUrls !== undefined ||
+    result.messagingToolSentTargets !== undefined
+  );
+}
+
 /** Returns whether a source reply was visibly delivered through the message tool. */
 export function hasCommittedSourceReplyDeliveryEvidence(
   result: SourceReplyDeliveryEvidence,
@@ -271,8 +279,11 @@ export function hasCommittedSourceReplyDeliveryEvidence(
 /** Returns whether outbound metadata proves a visible message, spawn, or cron side effect. */
 export function hasVisibleOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
   return (
-    result.didSendViaMessagingTool === true ||
     hasVisibleCommittedMessagingToolDeliveryEvidence(result) ||
+    // The coarse flag is the only evidence available for older callers. Once detailed
+    // metadata exists, it owns visibility so blank sends cannot suppress recovery.
+    (result.didSendViaMessagingTool === true &&
+      !hasGranularMessagingToolDeliveryEvidence(result)) ||
     (Array.isArray(result.acceptedSessionSpawns) &&
       hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
     hasPositiveNumber(result.successfulCronAdds)
