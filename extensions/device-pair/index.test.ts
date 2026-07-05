@@ -900,7 +900,7 @@ describe("device-pair /pair default setup code", () => {
     expect(requireText(result)).toContain("Gateway: ws://10.211.55.3:18789");
   });
 
-  it("includes a Tailscale Serve fallback for bind-derived setup urls", async () => {
+  it("includes a Tailscale Serve fallback for LAN bind-derived setup urls", async () => {
     vi.mocked(resolveAdvertisedLanHost).mockResolvedValueOnce("192.168.139.3");
     vi.mocked(resolveGatewayBindUrl).mockImplementationOnce((params) => ({
       url: `ws://${params.pickLanHost()}:18789`,
@@ -930,6 +930,36 @@ describe("device-pair /pair default setup code", () => {
 
     expect(requireText(result)).toContain("Gateway: ws://192.168.139.3:18789");
     expect(requireText(result)).toContain("Fallback: wss://clawmac.tail.ts.net:8443");
+  });
+
+  it("does not advertise a loopback Serve route for a custom bind", async () => {
+    vi.mocked(resolveGatewayBindUrl).mockReturnValueOnce({
+      url: "ws://192.168.139.3:18789",
+      source: "gateway.bind=custom",
+    });
+    const command = registerPairCommand({
+      config: {
+        gateway: {
+          bind: "custom",
+          customBindHost: "192.168.139.3",
+          auth: { mode: "token", token: "gateway-token" },
+        },
+      },
+      pluginConfig: { publicUrl: undefined },
+    });
+
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
+      }),
+    );
+
+    expect(resolveTailscaleServeGatewayUrlsWithRunner).not.toHaveBeenCalled();
+    expect(requireText(result)).toContain("Gateway: ws://192.168.139.3:18789");
+    expect(requireText(result)).not.toContain("Fallback:");
   });
 
   it("rejects public cleartext setup urls before issuing setup codes", async () => {

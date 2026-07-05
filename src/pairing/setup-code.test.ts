@@ -687,6 +687,30 @@ describe("pairing setup code", () => {
     });
   });
 
+  it("does not advertise a loopback Serve route for a custom bind", async () => {
+    const runCommandWithTimeout = vi.fn(async () => {
+      throw new Error("Tailscale Serve discovery must not run for a custom bind");
+    });
+
+    await expectResolvedSetupSuccessCase({
+      config: {
+        gateway: {
+          bind: "custom",
+          customBindHost: "192.168.139.3",
+          auth: { mode: "token", token: "tok_123" },
+        },
+      } satisfies ResolveSetupConfig,
+      options: { runCommandWithTimeout } satisfies ResolveSetupOptions,
+      expected: {
+        authLabel: "token",
+        url: "ws://192.168.139.3:18789",
+        urlSource: "gateway.bind=custom",
+      },
+      runCommandWithTimeout,
+      expectedRunCommandCalls: 0,
+    });
+  });
+
   it("allows tailnet bind setup urls when gateway TLS is enabled", async () => {
     await expectResolvedSetupSuccessCase({
       config: {

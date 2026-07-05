@@ -165,10 +165,12 @@ for loopback, private LAN addresses, `.local` Bonjour hosts, and the Android
 emulator host. Tailnet CGNAT addresses, `.ts.net` names, and public hosts still
 fail closed before QR/setup-code issuance.
 
-For bind-derived setup URLs, OpenClaw detects persistent Tailscale Serve HTTPS
-roots that proxy the active Gateway port and advertises them alongside the LAN
-route. The iOS app probes those routes in order and saves the first reachable
-endpoint.
+For `gateway.bind=lan` setup URLs, OpenClaw detects persistent Tailscale Serve
+HTTPS roots that proxy the active Gateway's loopback port and advertises them
+alongside the LAN route. Specific-interface `custom` and `tailnet` binds do not
+receive that fallback because a loopback Serve proxy cannot reach those
+listeners. The iOS app probes the advertised routes in order and saves the first
+reachable endpoint.
 
 ### Approve a node device
 
