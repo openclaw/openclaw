@@ -39,6 +39,9 @@ the public npm `extended-stable` selector, verifies the selected exact package,
 and installs that exact version. Missing or inconsistent registry data fails
 closed; it never falls back to `latest`. If the selected version is older than
 the installed version, the normal downgrade confirmation still applies.
+After the core swap, eligible official npm plugins with bare/default or
+`latest` intent converge to that exact core version. Explicit pins and tags,
+third-party plugins, and non-npm sources remain unchanged.
 
 `--channel dev` gives a persistent moving GitHub `main` checkout. For a one-off
 package update, `--tag main` maps to the `github:openclaw/openclaw#main` package
