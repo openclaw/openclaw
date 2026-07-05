@@ -27,6 +27,7 @@ import {
 } from "../../infra/agent-events.js";
 import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../reply-payload.js";
 import { formatToolAggregate } from "../tool-meta.js";
+import type { GetReplyOptions } from "../types.js";
 import { resolveAgentLifecycleTerminalMetadata } from "./agent-lifecycle-terminal.js";
 
 function createAgentEventBridge<T>(params: {
@@ -113,6 +114,21 @@ export type ReasoningTextPayload = {
   text: string;
   isReasoningSnapshot?: boolean;
 };
+
+export function createCliReasoningStreamBridge(
+  onReasoningStream: GetReplyOptions["onReasoningStream"] | undefined,
+): ((payload: ReasoningTextPayload) => Promise<void>) | undefined {
+  if (!onReasoningStream) {
+    return undefined;
+  }
+  return async ({ text, isReasoningSnapshot }) => {
+    await onReasoningStream({
+      text,
+      ...(isReasoningSnapshot ? { isReasoningSnapshot } : {}),
+      requiresReasoningProgressOptIn: true,
+    });
+  };
+}
 
 function createReasoningTextBridge(params: {
   runId: string;
@@ -520,10 +536,7 @@ async function runCliAgentWithLifecycleInternal(
     const resultWithReasoning = durableReasoningText
       ? {
           ...result,
-          payloads: [
-            { text: durableReasoningText, isReasoning: true },
-            ...(result.payloads ?? []),
-          ],
+          payloads: [{ text: durableReasoningText, isReasoning: true }, ...(result.payloads ?? [])],
         }
       : result;
     if (cliText) {

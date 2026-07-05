@@ -117,6 +117,7 @@ import {
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
   clearDroppedCliSessionBinding,
+  createCliReasoningStreamBridge,
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
@@ -2368,13 +2369,7 @@ async function runAgentTurnWithFallbackInternal(
                     }
                     await params.opts.onPartialReply({ text: textForTyping });
                   },
-                  onReasoningText: async ({ text, isReasoningSnapshot }) => {
-                    await params.opts?.onReasoningStream?.({
-                      text,
-                      ...(isReasoningSnapshot ? { isReasoningSnapshot } : {}),
-                      requiresReasoningProgressOptIn: true,
-                    });
-                  },
+                  onReasoningText: createCliReasoningStreamBridge(params.opts?.onReasoningStream),
                   onToolEvent: async (payload) => {
                     await cliToolSummaryTracker.noteToolEvent(payload);
                     if (payload.phase === "result") {
